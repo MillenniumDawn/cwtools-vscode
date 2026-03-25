@@ -48,8 +48,15 @@ export async function activate(context: ExtensionContext) {
 		}
 	}
 
+	// Use globalStorageUri for dev/VSCodium environments, extensionPath otherwise.
+	// Bug fix: globalStorageUri is a Uri object — concatenating it with a string
+	// produced a "vscode-userdata:" URI the server can't resolve. Use .fsPath instead.
+	// VSCodium is affected because it sets machineId to "someValue.machineId".
 	const isDevDir = env.machineId === "someValue.machineId"
-	const cacheDir = isDevDir ? context.globalStorageUri + '/.cwtools' : context.extensionPath + '/.cwtools'
+	const cacheDir = isDevDir ? context.globalStorageUri.fsPath + '/.cwtools' : context.extensionPath + '/.cwtools'
+	if (isDevDir) {
+		fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true })
+	}
 
 	const init = async function(language : string, isVanillaFolder : boolean) {
 		vs.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ })
