@@ -654,17 +654,6 @@
         "editor.acceptSuggestionOnEnter": "off",
         "editor.suggest.insertMode": "replace"
       },
-      "[customparadox]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
-      },
       "[yaml]": {
         "files.autoGuessEncoding": true,
         "files.encoding": "utf8bom",

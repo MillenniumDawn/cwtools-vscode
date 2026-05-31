@@ -6,7 +6,9 @@
 
 import * as path from 'path';
 import * as os from 'os';
-import * as fs from 'fs';
+import { existsSync as fsExistsSync, statSync as fsStatSync, chmodSync as fsChmodSync, mkdirSync as fsMkdirSync } from 'fs';
+import { promises as fsp } from 'fs';
+import { spawn } from 'child_process';
 import * as vs from 'vscode';
 import { workspace, ExtensionContext, window, Disposable, Uri, WorkspaceEdit, TextEdit, Range, commands, env } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind, NotificationType, ExecuteCommandRequest, ExecuteCommandParams, RevealOutputChannelOn } from 'vscode-languageclient/node';
@@ -26,10 +28,22 @@ const vic3Remote = `https://github.com/cwtools/cwtools-vic3-config`;
 const ck3Remote = `https://github.com/cwtools/cwtools-ck3-config`;
 const eu5Remote = `https://github.com/kaiser-chris/cwtools-eu5-config`;
 
+const LANGUAGE_REPOS: Record<string, string> = {
+	stellaris: stellarisRemote,
+	eu4: eu4Remote,
+	hoi4: hoi4Remote,
+	ck2: ck2Remote,
+	imperator: irRemote,
+	vic2: vic2Remote,
+	vic3: vic3Remote,
+	ck3: ck3Remote,
+	eu5: eu5Remote,
+};
+
 export let defaultClient: LanguageClient;
-let fileList : FileListItem[];
-let fileExplorer : FileExplorer;
 export async function activate(context: ExtensionContext) {
+	let fileList : FileListItem[];
+	let fileExplorer : FileExplorer;
 
 
 	class CwtoolsProvider implements vs.TextDocumentContentProvider
@@ -37,7 +51,9 @@ export async function activate(context: ExtensionContext) {
 		private disposables: Disposable[] = [];
 
 		constructor(){
-			workspace.registerTextDocumentContentProvider("cwtools", this)
+			this.disposables.push(
+				workspace.registerTextDocumentContentProvider("cwtools", this)
+			);
 		}
 		async provideTextDocumentContent() {
 			return '';
@@ -53,40 +69,78 @@ export async function activate(context: ExtensionContext) {
 	// produced a "vscode-userdata:" URI the server can't resolve. Use .fsPath instead.
 	// VSCodium is affected because it sets machineId to "someValue.machineId".
 	const isDevDir = env.machineId === "someValue.machineId"
-	const cacheDir = isDevDir ? context.globalStorageUri.fsPath + '/.cwtools' : context.extensionPath + '/.cwtools'
+	const cacheDir = isDevDir ? path.join(context.globalStorageUri.fsPath, '.cwtools') : path.join(context.extensionPath, '.cwtools')
 	if (isDevDir) {
-		fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true })
+		fsMkdirSync(context.globalStorageUri.fsPath, { recursive: true })
 	}
 
 	const init = async function(language : string, isVanillaFolder : boolean) {
-		vs.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ })
-		// The server is implemented using dotnet core
-		let serverExe: string;
-		if (os.platform() == "win32") {
-			serverExe = context.asAbsolutePath(path.join('bin', 'server', 'win-x64', 'CWTools Server.exe'))
+		const langConfigDisposable = vs.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
+		context.subscriptions.push(langConfigDisposable);
+
+		const serverExe = findServerExe(context);
+		if (!serverExe) {
+			await window.showErrorMessage('CWTools language server binary not found. Re-install the extension or place cwtools-server under bin/server/cwtools-server/');
+			return;
 		}
-		else if (os.platform() == "darwin") {
-			serverExe = context.asAbsolutePath(path.join('bin', 'server', 'osx-x64', 'CWTools Server'))
-			fs.chmodSync(serverExe, '755');
+
+			// Ensure executable on non-Windows platforms
+		if (os.platform() !== 'win32') {
+			try {
+				const stat = fsStatSync(serverExe);
+				const isExec = (stat.mode & parseInt('111', 8)) !== 0;
+				if (!isExec) {
+					fsChmodSync(serverExe, 0o755);
+				}
+			} catch (e: unknown) {
+				console.error('[CWTools] stat/chmod error on server binary:', e);
+			}
 		}
-		else {
-			serverExe = context.asAbsolutePath(path.join('bin', 'server', 'linux-x64', 'CWTools Server'))
-			fs.chmodSync(serverExe, '755');
+		
+		// Look up the correct remote repo for the detected language.  If the
+		// language is completely unknown we leave repoPath "undefined" so that
+		// we skip the remote fetch entirely rather than silently pulling the
+		// Stellaris config.
+		let repoPath = LANGUAGE_REPOS[language];
+		if (!repoPath) {
+			console.warn('[CWTools] No config repository for language "' + language + '"; rule cloning skipped.');
 		}
-		let repoPath = undefined;
-		switch (language) {
-			case "stellaris": repoPath = stellarisRemote; break;
-			case "eu4": repoPath = eu4Remote; break;
-			case "hoi4": repoPath = hoi4Remote; break;
-			case "ck2": repoPath = ck2Remote; break;
-			case "imperator": repoPath = irRemote; break;
-			case "vic2": repoPath = vic2Remote; break;
-			case "vic3": repoPath = vic3Remote; break;
-			case "ck3": repoPath = ck3Remote; break;
-			case "eu5": repoPath = eu5Remote; break;
-			default: repoPath = stellarisRemote; break;
+		console.log(language + " " + (repoPath || '(no remote)'));
+
+		// ---------------------------------------------------------------
+		// Rule-cache logic: the Rust server does not download rules itself,
+		// so the extension clones / pulls the config repo to cacheDir.
+		// We do NOT mkdirSync the languageRulesCache here because git clone
+		// will create it; doing it ourselves can cause git to refuse the
+		// existing directory on some versions.
+		// ---------------------------------------------------------------
+		// Ensure the parent cache directory exists so git clone can create
+		// the per-language subdirectory inside it.
+		fsMkdirSync(cacheDir, { recursive: true });
+		const languageRulesCache = path.join(cacheDir, language);
+
+		const manualRules = workspace.getConfiguration('cwtools').get<string>('rules_folder');
+		const effectiveRulesCache = (manualRules && fsExistsSync(manualRules)) ? manualRules : languageRulesCache;
+		if (manualRules && fsExistsSync(manualRules)) {
+			// User pointed to a local folder — skip remote fetch
+			console.log(`[CWTools] Using manual rules folder: ${manualRules}`);
+		} else if (repoPath) {
+			try {
+				const gitDir = path.join(languageRulesCache, '.git');
+				if (!fsExistsSync(gitDir)) {
+					console.log(`[CWTools] Cloning rules from ${repoPath} into ${languageRulesCache}`);
+					await runGit(['clone', '--depth', '1', repoPath, languageRulesCache]);
+				} else {
+					console.log(`[CWTools] Fetching latest rules for ${language} ...`);
+					await runGit(['-C', languageRulesCache, 'pull', '--depth=1', '--ff-only']);
+				}
+			} catch (err: unknown) {
+				const msg = err instanceof Error ? err.message : String(err);
+				const channel = window.createOutputChannel('CWTools');
+				channel.appendLine(`[CWTools] Rule fetch failed for ${language}: ${msg}`);
+				channel.show(true);
+			}
 		}
-		console.log(language + " " + repoPath);
 
 		// If the extension is launched in debug mode then the debug server options are used
 		// Otherwise the run options are used
@@ -95,32 +149,39 @@ export async function activate(context: ExtensionContext) {
 			debug : { command: serverExe, transport: TransportKind.stdio }
 		}
 
-		const fileEvents = [
-			workspace.createFileSystemWatcher("**/{events,common,map,map_data,prescripted_countries,flags,decisions,missions}/**/*.txt"),
-			workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gui"),
-			workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gfx"),
-			workspace.createFileSystemWatcher("**/{interface}/**/*.sfx"),
-			workspace.createFileSystemWatcher("**/{interface,gfx,fonts,music,sound}/**/*.asset"),
-			workspace.createFileSystemWatcher("**/{localisation,localisation_synced,localization}/**/*.yml")
-		]
+        const fileEvents = [
+            workspace.createFileSystemWatcher("**/{events,common,map,map_data,prescripted_countries,flags,decisions,missions}/**/*.txt"),
+            workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gui"),
+            workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gfx"),
+            workspace.createFileSystemWatcher("**/{interface}/**/*.sfx"),
+            workspace.createFileSystemWatcher("**/{interface,gfx,fonts,music,sound}/**/*.asset"),
+            workspace.createFileSystemWatcher("**/{localisation,localisation_synced,localization}/**/*.yml"),
+            // Watch cached CWT rule files — use posix separators so glob works on Windows too.
+            workspace.createFileSystemWatcher(cacheDir.replace(/\\/g, '/') + '/**/*.cwt')
+        ]
 
-		// Options to control the language client
-		const clientOptions: LanguageClientOptions = {
-			// Register the server for F# documents
-			documentSelector: [{ scheme: 'file', language: 'paradox' }, { scheme: 'file', language: 'yaml' }, { scheme: 'file', language: 'stellaris' },
-				{ scheme: 'file', language: 'hoi4' }, { scheme: 'file', language: 'eu4' }, { scheme: 'file', language: 'ck2' }, { scheme: 'file', language: 'imperator' }
-				, { scheme: 'file', language: 'vic2' }, { scheme: 'file', language: 'vic3' }, { scheme: 'file', language: 'ck3' }, { scheme: 'file', language: 'eu5' }, { scheme: 'file', language: 'paradox'}],
-			synchronize: {
-				// Synchronize the setting section 'languageServerExample' to the server
-				configurationSection: 'cwtools',
-				// Notify the server about file changes to F# project files contain in the workspace
-
-				fileEvents: fileEvents
-			},
+        // Options to control the language client
+        const clientOptions: LanguageClientOptions = {
+            documentSelector: [
+                { scheme: 'file', language: 'paradox' },
+                { scheme: 'file', language: 'stellaris' },
+                { scheme: 'file', language: 'hoi4' },
+                { scheme: 'file', language: 'eu4' },
+                { scheme: 'file', language: 'ck2' },
+                { scheme: 'file', language: 'imperator' },
+                { scheme: 'file', language: 'vic2' },
+                { scheme: 'file', language: 'vic3' },
+                { scheme: 'file', language: 'ck3' },
+                { scheme: 'file', language: 'eu5' }
+            ],
+		synchronize: {
+			configurationSection: 'cwtools',
+			fileEvents: fileEvents
+		},
 			initializationOptions: {
 				language: language === 'eu5' ? 'paradox' : language,
 				isVanillaFolder: isVanillaFolder,
-				rulesCache: cacheDir,
+				rulesCache: effectiveRulesCache,
 				rules_version: workspace.getConfiguration('cwtools').get('rules_version'),
 				repoPath: repoPath,
 				diagnosticLogging: workspace.getConfiguration('cwtools').get('logging.diagnostic') },
@@ -142,34 +203,38 @@ export async function activate(context: ExtensionContext) {
 		const promptVanillaPath = new NotificationType<string>('promptVanillaPath')
 		interface DidFocusFile { uri : string }
 		const didFocusFile = new NotificationType<DidFocusFile>('didFocusFile')
-		let status: Disposable;
+		let status: Disposable | undefined;
 		interface UpdateFileList { fileList: FileListItem[] }
 		const updateFileList = new NotificationType<UpdateFileList>('updateFileList');
 
-		let latestType : string;
+		let latestType : string = '';
 
 		async function didChangeActiveTextEditor(editor : vs.TextEditor | undefined): Promise<void> {
-			if (editor){
-				const path = editor.document.uri.toString();
-				if (languageId == "paradox" && editor.document.languageId == "plaintext") {
-					await vs.languages.setTextDocumentLanguage(editor.document, "paradox")
+			try {
+				if (editor){
+					const path = editor.document.uri.toString();
+					if (languageId == "paradox" && editor.document.languageId == "plaintext") {
+						await vs.languages.setTextDocumentLanguage(editor.document, "paradox")
+					}
+					if(editor.document.languageId == language)
+					{
+						await client.sendNotification(didFocusFile, {uri: path});
+					}
+					const params: ExecuteCommandParams = {
+						command: "getFileTypes",
+						arguments: [path]
+					};
+					const data = await client.sendRequest(ExecuteCommandRequest.type, params);
+					if (data !== undefined && data && data[0]) {
+						latestType = data[0];
+						await commands.executeCommand('setContext', 'cwtoolsGraphFile', true);
+					}
+					else {
+						await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
+					}
 				}
-				if(editor.document.languageId == language)
-				{
-					await client.sendNotification(didFocusFile, {uri: path});
-				}
-				const params: ExecuteCommandParams = {
-					command: "getFileTypes",
-					arguments: [path]
-				};
-				const data = await client.sendRequest(ExecuteCommandRequest.type, params);
-				if (data !== undefined && data && data[0]) {
-					latestType = data[0];
-					await commands.executeCommand('setContext', 'cwtoolsGraphFile', true);
-				}
-				else {
-					await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
-				}
+			} catch (err: unknown) {
+				console.error('[CWTools] didChangeActiveTextEditor error:', err);
 			}
 		}
 
@@ -189,13 +254,10 @@ export async function activate(context: ExtensionContext) {
 					status.dispose();
 				}
 				status = window.setStatusBarMessage(param.value);
-				context.subscriptions.push(status);
-			}
-			else if (!param.enable) {
-				status.dispose();
 			}
 			else if (status !== undefined) {
 				status.dispose();
+				status = undefined;
 			}
 		})
 		const debugStatusBar = window.createStatusBarItem(vs.StatusBarAlignment.Left);
@@ -210,87 +272,91 @@ export async function activate(context: ExtensionContext) {
 			}
 		})
 		client.onNotification(createVirtualFile, async (param: CreateVirtualFile) => {
-			const uri = Uri.parse(param.uri);
-			const doc = await workspace.openTextDocument(uri);
-			const edit = new WorkspaceEdit();
-			const range = new Range(0, 0, doc.lineCount, doc.getText().length);
-			edit.set(uri, [new TextEdit(range, param.fileContent)]);
-			await workspace.applyEdit(edit);
-			await window.showTextDocument(uri);
+			try {
+				const uri = Uri.parse(param.uri);
+				const doc = await workspace.openTextDocument(uri);
+				const edit = new WorkspaceEdit();
+				const lastLine = doc.lineCount - 1;
+				const lastChar = doc.lineAt(lastLine).text.length;
+				const range = new Range(0, 0, lastLine, lastChar);
+				edit.set(uri, [new TextEdit(range, param.fileContent)]);
+				await workspace.applyEdit(edit);
+				await window.showTextDocument(uri);
+			} catch (err: unknown) {
+				console.error('[CWTools] createVirtualFile error:', err);
+			}
 		})
 		client.onNotification(promptReload, async (param: string) => {
-			await reloadExtension(param, "Reload")
+			try { await reloadExtension(param, "Reload"); } catch (e) { console.error(e); }
 		})
 		client.onNotification(forceReload, async (param: string) => {
-			await reloadExtension(param, undefined, true);
+			try { await reloadExtension(param, undefined, true); } catch (e) { console.error(e); }
 		})
 		client.onNotification(promptVanillaPath, async (param: string) => {
-			let gameDisplay = ""
-			switch (param) {
-				case "stellaris": gameDisplay = "Stellaris"; break;
-				case "hoi4": gameDisplay = "Hearts of Iron IV"; break;
-				case "eu4": gameDisplay = "Europa Universalis IV"; break;
-				case "ck2": gameDisplay = "Crusader Kings II"; break;
-				case "imperator": gameDisplay = "Imperator"; break;
-				case "vic2": gameDisplay = "Victoria II"; break;
-				case "vic3": gameDisplay = "Victoria 3"; break;
-				case "ck3": gameDisplay = "Crusader Kings III"; break;
-				case "eu5": gameDisplay = "Europa Universalis V"; break;
-			}
-			const result = await window.showInformationMessage("Please select the vanilla installation folder for " + gameDisplay, "Select folder");
-			if(!result) {
-				return;
-			}
-			const uri = await window.showOpenDialog({
-						canSelectFiles: false,
-						canSelectFolders: true,
-						canSelectMany: false,
-						openLabel: "Select vanilla installation folder for " + gameDisplay
-					});
-			if(!uri) {
-				return;
-			}
-			const directory = uri[0];
-			const gameFolder = path.basename(directory.fsPath)
-			let dir = directory.fsPath
-			let game = ""
-			switch (gameFolder) {
-				case "Stellaris": game = "stellaris"; break;
-				case "Hearts of Iron IV": game = "hoi4"; break;
-				case "Europa Universalis IV": game = "eu4"; break;
-				case "Crusader Kings II": game = "ck2"; break;
-				case "Crusader Kings III":
-					game = "ck3";
-					dir = path.join(dir, "game");
-					break;
-				case "Victoria II": game = "vic2"; break;
-				case "Victoria 2": game = "vic2"; break;
-				case "Victoria 3":
-					game = "vic3";
-					dir = path.join(dir, "game");
-					break;
-				case "ImperatorRome":
-					game = "imperator";
-					dir = path.join(dir, "game");
-					break;
-				case "Imperator":
-					game = "imperator";
-					dir = path.join(dir, "game");
-					break;
-                case "Europa Universalis V":
-                    game = "eu5";
-                    dir = path.join(dir, "game");
-                    break;
-			}
-			console.log(path.join(dir, "common"));
-			if (game === "" || !(fs.existsSync(path.join(dir, "common")))) {
-				await window.showErrorMessage("The selected folder does not appear to be a supported game folder")
-			}
-			else {
-				log.appendLine("path" + dir)
-				log.appendLine("log" + game)
-				await workspace.getConfiguration("cwtools").update("cache." + game, dir, true)
-				await reloadExtension("Reloading to generate vanilla cache", undefined, true);
+			try {
+				let gameDisplay = "";
+				switch (param) {
+					case "stellaris": gameDisplay = "Stellaris"; break;
+					case "hoi4": gameDisplay = "Hearts of Iron IV"; break;
+					case "eu4": gameDisplay = "Europa Universalis IV"; break;
+					case "ck2": gameDisplay = "Crusader Kings II"; break;
+					case "imperator": gameDisplay = "Imperator"; break;
+					case "vic2": gameDisplay = "Victoria II"; break;
+					case "vic3": gameDisplay = "Victoria 3"; break;
+					case "ck3": gameDisplay = "Crusader Kings III"; break;
+					case "eu5": gameDisplay = "Europa Universalis V"; break;
+				}
+				const result = await window.showInformationMessage("Please select the vanilla installation folder for " + gameDisplay, "Select folder");
+				if(!result) { return; }
+				const uri = await window.showOpenDialog({
+					canSelectFiles: false,
+					canSelectFolders: true,
+					canSelectMany: false,
+					openLabel: "Select vanilla installation folder for " + gameDisplay
+				});
+				if (!uri || uri.length === 0) { return; }
+				const directory = uri[0];
+				const gameFolder = path.basename(directory.fsPath).toLowerCase();
+				let dir = directory.fsPath;
+				let game = "";
+				switch (gameFolder) {
+					case "stellaris": game = "stellaris"; break;
+					case "hearts of iron iv": game = "hoi4"; break;
+					case "europa universalis iv": game = "eu4"; break;
+					case "crusader kings ii": game = "ck2"; break;
+					case "crusader kings iii":
+						game = "ck3";
+						dir = path.join(dir, "game");
+						break;
+					case "victoria ii": game = "vic2"; break;
+					case "victoria 2": game = "vic2"; break;
+					case "victoria 3":
+						game = "vic3";
+						dir = path.join(dir, "game");
+						break;
+					case "imperatorrome":
+						game = "imperator";
+						dir = path.join(dir, "game");
+						break;
+					case "imperator":
+						game = "imperator";
+						dir = path.join(dir, "game");
+						break;
+					case "europa universalis v":
+						game = "eu5";
+						dir = path.join(dir, "game");
+						break;
+				}
+				if (game === "" || !(fsExistsSync(path.join(dir, "common")))) {
+					await window.showErrorMessage("The selected folder does not appear to be a supported game folder");
+				} else {
+					log.appendLine("path: " + dir);
+					log.appendLine("game: " + game);
+					await workspace.getConfiguration("cwtools").update("cache." + game, dir, true);
+					await reloadExtension("Reloading to generate vanilla cache", undefined, true);
+				}
+			} catch (err: unknown) {
+				console.error('[CWTools] promptVanillaPath error:', err);
 			}
 		})
 		client.onNotification(updateFileList, (params: UpdateFileList) => {
@@ -306,24 +372,6 @@ export async function activate(context: ExtensionContext) {
 		if (workspace.name === undefined) {
 			await window.showWarningMessage("You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using \"File, Open Folder\"")
 		}
-
-/// TODO graph
-		// let disposable2 = commands.registerCommand('techGraph', () => {
-		// 	commands.executeCommand("gettech").then((t: any) => {
-		// 		//console.log(t);
-		// 		let uri = Uri.parse("cwgraph://test.html")
-
-		// 		workspace.openTextDocument(uri).then(_ => {
-		// 			// let exponentPage = vscode.window.createWebviewPanel("Expo QR Code", "Expo QR Code", vscode.ViewColumn.Two, {});
-		// 			// exponentPage.webview.html = this.qrCodeContentProvider.provideTextDocumentContent(vscode.Uri.parse(exponentUrl));
-
-		// 			// vscode.commands.executeCommand("vscode.previewHtml", vscode.Uri.parse(exponentUrl), 1, "Expo QR code");
-		// 			// commands.executeCommand('vscode.previewHtml', uri, ViewColumn.Active, "test")
-		// 			let graphPage = window.createWebviewPanel("CWTools graph", "Technology graph", ViewColumn.Active, { enableScripts: true, localResourceRoots: [Uri.file(context.extensionPath)]});
-		// 			graphPage.webview.html = graphProvider.provideTextDocumentContent(uri);
-		// 		})
-		// 	});
-		// });
 
 		let currentGraphDepth = 3;
 		const showGraph = async function() {
@@ -365,25 +413,52 @@ export async function activate(context: ExtensionContext) {
 		// Push the disposable to the context's subscriptions so that the
 		// client can be deactivated on extension deactivation
 		context.subscriptions.push(new CwtoolsProvider());
-		context.subscriptions.push(vs.commands.registerCommand("cwtools.reloadExtension", async () => {
-			for (const sub of context.subscriptions) {
-				try {
-					sub.dispose();
-				} catch (e) {
-					console.error(e);
-				}
-			}
-			await activate(context);
-		}));
-		await client.start();
+		// cwtools.reloadExtension: full-window reload is safer than manual reactivation
+		context.subscriptions.push(vs.commands.registerCommand("cwtools.reloadExtension", () =>
+			commands.executeCommand('workbench.action.reloadWindow')
+		));
+		context.subscriptions.push(client);
+		try {
+			await client.start();
+		} catch (err: unknown) {
+			const msg = err instanceof Error ? err.message : String(err);
+			window.showErrorMessage(`CWTools language server failed to start: ${msg}`);
+			console.error('[CWTools] client.start() error:', err);
+			return; // Don't continue with half-initialized extension
+		}
 	}
 
 	let languageId : string;
 	const knownLanguageIds = ["stellaris", "eu4", "hoi4", "ck2", "imperator", "vic2", "vic3", "ck3", "eu5"];
 	const getLanguageIdFallback = async function() {
-		const markerFiles = await workspace.findFiles("**/*.txt", null, 1);
+		// 1. Detect from file extension / VS Code language mode
+		const markerFiles = await workspace.findFiles("**/*.txt", "**/{.git,node_modules,out,dist}/**", 1);
 		if (markerFiles.length == 1) {
-			return (await workspace.openTextDocument(markerFiles[0])).languageId;
+			const doc = await workspace.openTextDocument(markerFiles[0]);
+			if (knownLanguageIds.includes(doc.languageId)) {
+				return doc.languageId;
+			}
+		}
+		// 2. Detect from workspace folder name
+		if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
+			const root = workspace.workspaceFolders[0].uri.fsPath.toLowerCase();
+			if (root.includes('stellaris')) return 'stellaris';
+			if (root.includes('hoi4') || root.includes('hearts')) return 'hoi4';
+			if (root.includes('eu4') || root.includes('europa')) return 'eu4';
+			if (root.includes('ck2') || root.includes('crusader kings ii')) return 'ck2';
+			if (root.includes('ck3') || root.includes('crusader kings iii')) return 'ck3';
+			if (root.includes('vic2') || root.includes('victoria ii')) return 'vic2';
+			if (root.includes('vic3') || root.includes('victoria 3')) return 'vic3';
+			if (root.includes('imperator') || root.includes('rome')) return 'imperator';
+			if (root.includes('eu5')) return 'eu5';
+		}
+		// 3. Detect from folder contents — look for game-specific subfolders
+		if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
+			const root = workspace.workspaceFolders[0].uri.fsPath;
+			if (fsExistsSync(path.join(root, 'common', 'ai_strategy'))) return 'hoi4';
+			if (fsExistsSync(path.join(root, 'common', 'species_classes'))) return 'stellaris';
+			if (fsExistsSync(path.join(root, 'common', 'great_projects'))) return 'eu4';
+			if (fsExistsSync(path.join(root, 'common', 'dynasties'))) return 'ck3';
 		}
 		return null;
 	}
@@ -449,7 +524,7 @@ export async function activate(context: ExtensionContext) {
 
 	for (let i = 0; i < results.length; i++) {
 		const { id } = games[i];
-		if (results[i].length > 0 && (languageId === null || languageId === id)) {
+		if (results[i].length > 0 && (languageId === "paradox" || languageId === id)) {
 			isVanillaFolder = true;
 			languageId = id;
 		}
@@ -471,8 +546,8 @@ export async function reloadExtension(prompt: string, buttonText?: string, force
 	const restartAction = buttonText || "Restart";
 	const actions = [restartAction];
 	if (force) {
-		const result = await window.showInformationMessage(prompt);
-		if(result){
+		const result = await window.showInformationMessage(prompt, ...actions);
+		if(result === restartAction){
 			await commands.executeCommand("cwtools.reloadExtension");
 		}
 	}
@@ -484,3 +559,60 @@ export async function reloadExtension(prompt: string, buttonText?: string, force
 	}
 }
 // export default defaultClient;
+
+// ------------------------------------------------------------------
+// Helper: discover the language server binary.
+// Prefers the new Rust LSP binary; falls back to the legacy .NET binary.
+// ------------------------------------------------------------------
+function findServerExe(context: ExtensionContext): string | undefined {
+	const exeName = os.platform() === 'win32' ? 'cwtools-server.exe' : 'cwtools-server';
+	const rustBin = context.asAbsolutePath(path.join('bin', 'server', 'cwtools-server', exeName));
+	if (fsExistsSync(rustBin)) {
+		return rustBin;
+	}
+	const legacyBin = context.asAbsolutePath(
+		path.join('bin', 'server',
+			os.platform() === 'win32' ? 'win-x64' :
+			os.platform() === 'darwin' ? 'osx-x64' : 'linux-x64',
+			os.platform() === 'win32' ? 'CWTools Server.exe' : 'CWTools Server')
+	);
+	if (fsExistsSync(legacyBin)) {
+		return legacyBin;
+	}
+	return undefined;
+}
+
+// ------------------------------------------------------------------
+// Helper: execute a git command.
+// If a VS Code OutputChannel is supplied, output is streamed there;
+// otherwise it falls back to console.*.
+// ------------------------------------------------------------------
+function runGit(args: string[], logChannel?: vs.OutputChannel): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const git = spawn('git', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+		let out = '';
+		let err = '';
+		git.stdout?.on('data', d => { out += d.toString(); });
+		git.stderr?.on('data', d => { err += d.toString(); });
+		git.on('error', (e) => {
+			const msg = `[CWTools] git ${args.join(' ')} error: ${e.message}`;
+			if (logChannel) { logChannel.appendLine(msg); } else { console.error(msg); }
+			reject(e);
+		});
+		git.on('close', (code, signal) => {
+			if (out) {
+				const msg = `[CWTools] git stdout: ${out.trimEnd()}`;
+				if (logChannel) { logChannel.appendLine(msg); } else { console.log(msg); }
+			}
+			if (err) {
+				const msg = `[CWTools] git stderr: ${err.trimEnd()}`;
+				if (logChannel) { logChannel.appendLine(msg); } else { console.error(msg); }
+			}
+			if (code === 0 && !signal) {
+				resolve();
+			} else {
+				reject(new Error(`git exited with code ${code} (signal: ${signal || 'none'})`));
+			}
+		});
+	});
+}
