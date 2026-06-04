@@ -89,22 +89,12 @@
             }
         },
         {
-            "label": "PaketUpdate",
-            "command": "dotnet",
-            "args": ["paket", "update", "-g", "git", "--no-install"]
-        },
-        {
             "label": "UpdateBuild",
-            "dependsOn" :[ "PaketUpdate" ,"Build" ],
-            "dependsOrder": "sequence"
+            "dependsOn": ["Build"]
         },
         {
             "label": "UpdateBuildDebug",
-            "dependsOn": [
-                "PaketUpdate",
-                "BuildDebug"
-            ],
-            "dependsOrder": "sequence"
+            "dependsOn": ["BuildDebug"]
         }
     ]
 }

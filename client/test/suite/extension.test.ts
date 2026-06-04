@@ -20,17 +20,6 @@ import * as os from "node:os";
 import {State} from "../../extension/graphPanel";
 const root = path.resolve(__dirname, '../../../../client/test/sample');  // Assumes tests are one level deep in 'test/'
 
-// Defines a Mocha test suite to group tests of similar kind together
-suite("Extension Tests", () => {
-
-    // Defines a Mocha unit test
-    test("Something 1", () => {
-        assert.equal(-1, [1, 2, 3].indexOf(5));
-        assert.equal(-1, [1, 2, 3].indexOf(0));
-    });
-});
-// retryAsync moved to shared test utils
-
 suite(`Debug Integration Test: `, function() {
 	test('Extension should be present', () => {
 		assert.ok(vscode.extensions.getExtension('tboby.cwtools-vscode'));
@@ -279,15 +268,4 @@ describe('GraphPanel Tests', function () {
 		assert.strictEqual(gp.GraphPanel.currentPanel, undefined, 'GraphPanel should be undefined after disposal');
 		after();
 	});
-});
-suite.skip('Manual Testing Suite', () => {
-    // suiteSetup(async () => {
-    // });
-	test('Manual test', async function () {
-		this.timeout(300000);
-		await activate();
-		await wait(300000);
-
-	});
-
 });

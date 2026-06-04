@@ -419,19 +419,8 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,jso
     cy.on("resize", function () {
         debounce(resizeme, 10, false);
     });
-    //$("#cy").width(10);
-    //cy.resize();
 
     console.log("done");
-    // var layer = cy.cyCanvas();
-    // var canvas = layer.getCanvas();
-    // var ctx = canvas.getContext('2d');
-
-    // cy.on("resize", function (_) {
-    //     $("#cy").width(10);
-    //     cy.resize();
-    //     cy.center();
-    // });
 }
 
 export function goToNode(location : techNode["location"]) {

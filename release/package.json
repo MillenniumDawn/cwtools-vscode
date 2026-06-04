@@ -247,6 +247,20 @@
           "type": "string",
           "description": "%configuration.cwtools.rules_folder.description%"
         },
+        "cwtools.engine": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "rust",
+            "fsharp"
+          ],
+          "enumDescriptions": [
+            "%configuration.cwtools.engine.rust.description%",
+            "%configuration.cwtools.engine.fsharp.description%"
+          ],
+          "default": "rust",
+          "description": "%configuration.cwtools.engine.description%"
+        },
         "cwtools.ignore_patterns": {
           "scope": "window",
           "type": "array",
@@ -644,17 +658,6 @@
         "editor.suggest.insertMode": "replace"
       },
       "[eu5]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
-      },
-      "[customparadox]": {
         "files.autoGuessEncoding": true,
         "editor.quickSuggestions": {
           "other": true,
