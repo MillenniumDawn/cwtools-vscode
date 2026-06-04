@@ -19,3 +19,4 @@ nupkgs/
 *.user
 cwtools.local.props
 .vs/
+.opencode/
