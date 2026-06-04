@@ -78,11 +78,30 @@ export async function activate(context: ExtensionContext) {
 		const langConfigDisposable = vs.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
 		context.subscriptions.push(langConfigDisposable);
 
-		const serverExe = findServerExe(context);
+		// Engine selection: the Rust server (cwtools-rs, default) and the original
+		// F# server are shipped side by side so users can pick. `cwtools.engine`
+		// chooses; if the chosen engine's binary isn't deployed we fall back to the
+		// other with a visible warning rather than silently doing the wrong thing.
+		const requestedEngine = workspace.getConfiguration('cwtools').get<string>('engine') ?? 'rust';
+		let activeEngine = requestedEngine;
+		let serverExe = serverExeForEngine(context, requestedEngine);
 		if (!serverExe) {
-			await window.showErrorMessage('CWTools language server binary not found. Re-install the extension or place cwtools-server under bin/server/cwtools-server/');
-			return;
+			const otherEngine = requestedEngine === 'fsharp' ? 'rust' : 'fsharp';
+			const fallback = serverExeForEngine(context, otherEngine);
+			if (fallback) {
+				activeEngine = otherEngine;
+				serverExe = fallback;
+				window.showWarningMessage(
+					`CWTools: the '${requestedEngine}' engine binary isn't deployed; falling back to the '${otherEngine}' engine. ` +
+					`Build the '${requestedEngine}' server or change the cwtools.engine setting.`);
+			} else {
+				await window.showErrorMessage(
+					`CWTools: no language server binary found for engine '${requestedEngine}'. ` +
+					`Re-install the extension or build the server.`);
+				return;
+			}
 		}
+		console.log(`[CWTools] Using '${activeEngine}' engine server: ${serverExe}`);
 
 			// Ensure executable on non-Windows platforms
 		if (os.platform() !== 'win32') {
@@ -121,6 +140,13 @@ export async function activate(context: ExtensionContext) {
 
 		const manualRules = workspace.getConfiguration('cwtools').get<string>('rules_folder');
 		const effectiveRulesCache = (manualRules && fsExistsSync(manualRules)) ? manualRules : languageRulesCache;
+		// The two engines disagree on the shape of `rulesCache`: the Rust server
+		// loads .cwt straight from the path given (per-language dir, or a manual
+		// folder), whereas the F# server appends the per-game subdir itself
+		// (`rulesCache + "/hoi4"`). Hand each the shape it expects. For F# + a
+		// manual rules folder, set cwtools.rules_version = "manual" so the F#
+		// server reads cwtools.rules_folder directly.
+		const rulesCacheForServer = activeEngine === 'fsharp' ? cacheDir : effectiveRulesCache;
 		if (manualRules && fsExistsSync(manualRules)) {
 			// User pointed to a local folder — skip remote fetch
 			console.log(`[CWTools] Using manual rules folder: ${manualRules}`);
@@ -181,7 +207,7 @@ export async function activate(context: ExtensionContext) {
 			initializationOptions: {
 				language: language === 'eu5' ? 'paradox' : language,
 				isVanillaFolder: isVanillaFolder,
-				rulesCache: effectiveRulesCache,
+				rulesCache: rulesCacheForServer,
 				rules_version: workspace.getConfiguration('cwtools').get('rules_version'),
 				repoPath: repoPath,
 				diagnosticLogging: workspace.getConfiguration('cwtools').get('logging.diagnostic') },
@@ -564,22 +590,22 @@ export async function reloadExtension(prompt: string, buttonText?: string, force
 // Helper: discover the language server binary.
 // Prefers the new Rust LSP binary; falls back to the legacy .NET binary.
 // ------------------------------------------------------------------
-function findServerExe(context: ExtensionContext): string | undefined {
+// Resolve the server binary for a specific engine, or undefined if that
+// engine isn't deployed. 'rust' -> bin/server/cwtools-server/<exe>;
+// 'fsharp' -> the platform-specific bin/server/<platform>/"CWTools Server".
+function serverExeForEngine(context: ExtensionContext, engine: string): string | undefined {
+	if (engine === 'fsharp') {
+		const fsharpBin = context.asAbsolutePath(
+			path.join('bin', 'server',
+				os.platform() === 'win32' ? 'win-x64' :
+				os.platform() === 'darwin' ? 'osx-x64' : 'linux-x64',
+				os.platform() === 'win32' ? 'CWTools Server.exe' : 'CWTools Server')
+		);
+		return fsExistsSync(fsharpBin) ? fsharpBin : undefined;
+	}
 	const exeName = os.platform() === 'win32' ? 'cwtools-server.exe' : 'cwtools-server';
 	const rustBin = context.asAbsolutePath(path.join('bin', 'server', 'cwtools-server', exeName));
-	if (fsExistsSync(rustBin)) {
-		return rustBin;
-	}
-	const legacyBin = context.asAbsolutePath(
-		path.join('bin', 'server',
-			os.platform() === 'win32' ? 'win-x64' :
-			os.platform() === 'darwin' ? 'osx-x64' : 'linux-x64',
-			os.platform() === 'win32' ? 'CWTools Server.exe' : 'CWTools Server')
-	);
-	if (fsExistsSync(legacyBin)) {
-		return legacyBin;
-	}
-	return undefined;
+	return fsExistsSync(rustBin) ? rustBin : undefined;
 }
 
 // ------------------------------------------------------------------

@@ -247,6 +247,20 @@
           "type": "string",
           "description": "%configuration.cwtools.rules_folder.description%"
         },
+        "cwtools.engine": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "rust",
+            "fsharp"
+          ],
+          "enumDescriptions": [
+            "%configuration.cwtools.engine.rust.description%",
+            "%configuration.cwtools.engine.fsharp.description%"
+          ],
+          "default": "rust",
+          "description": "%configuration.cwtools.engine.description%"
+        },
         "cwtools.ignore_patterns": {
           "scope": "window",
           "type": "array",
