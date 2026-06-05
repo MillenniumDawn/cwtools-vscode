@@ -1,8 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { activate, waitForLSP, currentEngine, EXTENSION_ID } from '../utils';
-import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../lspErrorMonitor';
+import { activate, waitForLSP, currentEngine, EXTENSION_ID } from '../support/utils';
+import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../support/lspErrorMonitor';
 import { expect } from 'chai';
 
 const sampleRoot = path.resolve(__dirname, '../sample');

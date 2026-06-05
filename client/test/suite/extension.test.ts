@@ -7,7 +7,7 @@
 import * as assert from 'assert';
 import path from 'path';
 import * as vscode from 'vscode';
-import { activate, retryAsync, wait, EXTENSION_ID } from '../utils';
+import { activate, retryAsync, wait, EXTENSION_ID } from '../support/utils';
 import { it, describe } from 'mocha';
 import * as gp from '../../extension/graphPanel';
 import { GraphData } from '../../common/graphTypes';

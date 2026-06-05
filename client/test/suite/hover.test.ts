@@ -7,8 +7,8 @@ import {
 	waitForLanguageServer,
 	currentEngine,
 	EXTENSION_ID,
-} from '../utils';
-import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../lspErrorMonitor';
+} from '../support/utils';
+import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../support/lspErrorMonitor';
 import { checkHoverContains } from './hoverChecks';
 import { expect } from 'chai';
 

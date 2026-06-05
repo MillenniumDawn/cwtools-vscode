@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { defaultClient } from '../extension/extension';
+import { defaultClient } from '../../extension/extension';
 
 interface ErrorEntry {
     timestamp: number;
