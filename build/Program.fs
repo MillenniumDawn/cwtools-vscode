@@ -305,6 +305,8 @@ let initTargets () =
     Target.create "DryRelease" ignore
     Target.description "Package into the vsix, and publish it"
     Target.create "Release" ignore
+    Target.description "Package + publish a vsix whose server binaries are already staged (multi-platform CI release)"
+    Target.create "ReleasePrebuilt" ignore
 
 
 let buildTargetTree () =
@@ -340,15 +342,32 @@ let buildTargetTree () =
     "BuildServer" ?=> "PrePackage" |> ignore
     "BuildServerDebug" ?=> "PrePackage" |> ignore
 
-    // "Format" ==>
-    "Clean"
-    ==> "PublishServer"
-    ==> "SetVersion"
+    // Shared packaging + publishing steps. From SetVersion on, the chain is
+    // engine-agnostic: it just packages and ships whatever server binaries are
+    // already staged under release/bin/server, so both release paths funnel
+    // through here.
+    "SetVersion"
     ==> "PackageNpmInstall"
     ==> "BuildPackage"
     ==> "ReleaseGitHub"
     ==> "PublishToGallery"
-    ==>! "Release"
+    |> ignore
+
+    // Full single-runner release: clean, build the Rust server here, then
+    // package. Clean and PublishServer are only ordered before the packaging
+    // chain (soft ?=>); only Release hard-requires them, so ReleasePrebuilt can
+    // skip both.
+    "Clean" ?=> "PublishServer" |> ignore
+    "PublishServer" ?=> "SetVersion" |> ignore
+    "Clean" ==> "Release" |> ignore
+    "PublishServer" ==> "Release" |> ignore
+    "PublishToGallery" ==>! "Release"
+
+    // Multi-platform release: the win/osx/linux Rust binaries are built per
+    // platform in CI and downloaded into
+    // release/bin/server/cwtools-server/<platform>/ before this runs, so it only
+    // packages + publishes — no Clean, no server build.
+    "PublishToGallery" ==>! "ReleasePrebuilt"
 
     "Clean" ==> "BuildPackage" ==>! "DryRelease"
 

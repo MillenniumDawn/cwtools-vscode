@@ -87,8 +87,19 @@ export function serverExeForEngine(
 		return exists(fsharpBin) ? fsharpBin : undefined;
 	}
 	const exe = isWin ? 'cwtools-server.exe' : 'cwtools-server';
-	const rustBin = context.asAbsolutePath(path.join('bin', 'server', 'cwtools-server', exe));
-	return exists(rustBin) ? rustBin : undefined;
+	const platform = isWin ? 'win-x64' : os.platform() === 'darwin' ? 'osx-x64' : 'linux-x64';
+	// Dev and single-platform builds drop the binary straight in
+	// cwtools-server/; the packaged multi-platform vsix nests one binary per
+	// platform subdir. Check the flat layout first, then the per-platform one.
+	const candidates = [
+		path.join('bin', 'server', 'cwtools-server', exe),
+		path.join('bin', 'server', 'cwtools-server', platform, exe),
+	];
+	for (const rel of candidates) {
+		const full = context.asAbsolutePath(rel);
+		if (exists(full)) return full;
+	}
+	return undefined;
 }
 
 export function runGit(
