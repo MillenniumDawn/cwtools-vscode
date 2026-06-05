@@ -74,20 +74,27 @@ export function detectFromFolder(root: string, fileExists: (p: string) => boolea
 	return null;
 }
 
+function serverPlatformDir(): string {
+	switch (os.platform()) {
+		case 'win32': return 'win-x64';
+		case 'darwin': return 'osx-x64';
+		default: return 'linux-x64';
+	}
+}
+
 export function serverExeForEngine(
 	context: ExtensionContext,
 	engine: string,
 	exists: (p: string) => boolean = fsExistsSync
 ): string | undefined {
 	const isWin = os.platform() === 'win32';
+	const platform = serverPlatformDir();
 	if (engine === 'fsharp') {
-		const platform = isWin ? 'win-x64' : os.platform() === 'darwin' ? 'osx-x64' : 'linux-x64';
 		const exe = isWin ? 'CWTools Server.exe' : 'CWTools Server';
 		const fsharpBin = context.asAbsolutePath(path.join('bin', 'server', platform, exe));
 		return exists(fsharpBin) ? fsharpBin : undefined;
 	}
 	const exe = isWin ? 'cwtools-server.exe' : 'cwtools-server';
-	const platform = isWin ? 'win-x64' : os.platform() === 'darwin' ? 'osx-x64' : 'linux-x64';
 	// Dev and single-platform builds drop the binary straight in
 	// cwtools-server/; the packaged multi-platform vsix nests one binary per
 	// platform subdir. Check the flat layout first, then the per-platform one.
@@ -104,19 +111,35 @@ export function serverExeForEngine(
 
 export function runGit(
 	args: string[],
-	spawnFn: typeof spawn = spawn
+	spawnFn: typeof spawn = spawn,
+	timeoutMs = 60000
 ): Promise<void> {
 	return new Promise((resolve, reject) => {
 		const git = spawnFn('git', args, { stdio: ['ignore', 'pipe', 'pipe'] });
 		let out = '';
 		let err = '';
+		let settled = false;
+		// Don't let a hung git (auth prompt, dead network) block activation forever.
+		const timer = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			git.kill();
+			reject(new Error(`git ${args.join(' ')} timed out after ${timeoutMs}ms`));
+		}, timeoutMs);
+		timer.unref?.();
 		git.stdout?.on('data', d => { out += d.toString(); });
 		git.stderr?.on('data', d => { err += d.toString(); });
 		git.on('error', e => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
 			console.error(`[CWTools] git ${args.join(' ')} error: ${e.message}`);
 			reject(e);
 		});
 		git.on('close', (code, signal) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
 			if (out) console.log(`[CWTools] git stdout: ${out.trimEnd()}`);
 			if (err) console.error(`[CWTools] git stderr: ${err.trimEnd()}`);
 			if (code === 0 && !signal) resolve();

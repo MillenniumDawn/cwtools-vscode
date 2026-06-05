@@ -53,7 +53,6 @@ export async function openDocumentAndShow(uri: vscode.Uri): Promise<vscode.TextD
 export async function waitForLSP(uri: vscode.Uri, maxRetries = 60, delayMs = 500): Promise<void> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      vscode.languages.getDiagnostics(uri);
       const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
         'vscode.executeCompletionItemProvider',
         uri,
@@ -108,7 +107,7 @@ export async function waitForLanguageServer(uri: vscode.Uri, maxRetries = 30, de
  */
 export function currentEngine(): 'rust' | 'fsharp' {
   const value = vscode.workspace.getConfiguration('cwtools').get<string>('engine');
-  return value === 'fsharp' ? 'fsharp' : 'rust';
+  return value?.toLowerCase() === 'fsharp' ? 'fsharp' : 'rust';
 }
 
 /**

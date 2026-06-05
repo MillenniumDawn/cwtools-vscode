@@ -23,12 +23,17 @@ let serializeVIC3 = serializeToCache CWTools.Serializer.serializeVIC3 "vic3.cwb"
 let serializeEU5 = serializeToCache CWTools.Serializer.serializeEU5 "eu5.cwb"
 
 let deserialize path =
-    try
-        let result = deserialize path
-        let entities = fst result
-        let files = snd result
-        CWTools.Utilities.Utils.logInfo (sprintf "Loaded cache from %s (%d entities, %d files)" path entities.Length files.Length)
-        result
-    with ex ->
-        CWTools.Utilities.Utils.logWarning (sprintf "Failed to load cache from %s: %s (vanilla definitions will be missing)" path ex.Message)
+    if not (File.Exists path) then
+        CWTools.Utilities.Utils.logInfo (
+            sprintf "No cache at %s yet (vanilla definitions will be missing until it is generated)" path)
         [], []
+    else
+        try
+            let (entities, files) = deserialize path
+            CWTools.Utilities.Utils.logInfo (
+                sprintf "Loaded cache from %s (%d entities, %d files)" path (List.length entities) (List.length files))
+            entities, files
+        with ex ->
+            CWTools.Utilities.Utils.logWarning (
+                sprintf "Failed to load cache from %s: %s (cache is likely corrupt; vanilla definitions will be missing)" path ex.Message)
+            [], []

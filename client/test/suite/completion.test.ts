@@ -18,7 +18,7 @@ async function getCompletions(uri: vscode.Uri, position: vscode.Position): Promi
 	);
 	assert.ok(completions?.items?.length, 'No completions received');
 	const textTypeCount = completions.items.filter(item => (item.kind || 0) === 0).length;
-	assert.ok(textTypeCount == 0,
+	assert.ok(textTypeCount === 0,
 		`Too many Text type completions (${textTypeCount}/${completions.items.length}) - LSP may not be working`);
 	return completions;
 }

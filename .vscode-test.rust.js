@@ -5,17 +5,14 @@
 const path = require('path');
 const fs = require('fs');
 
-const userDataDirs = [
-	path.resolve(__dirname, '.vscode-test/user-data/User'),
-	path.resolve(__dirname, '.vscode-test/rust-profile/User'),
-];
-for (const userDir of userDataDirs) {
-	fs.mkdirSync(userDir, { recursive: true });
-	fs.writeFileSync(
-		path.join(userDir, 'settings.json'),
-		JSON.stringify({ 'cwtools.engine': 'rust' }, null, 2)
-	);
-}
+// Seed only this engine's own profile (launchArgs pins it below). Writing into
+// the shared default profile would leak the engine pin into `npm run test:host`.
+const userDir = path.resolve(__dirname, '.vscode-test/rust-profile/User');
+fs.mkdirSync(userDir, { recursive: true });
+fs.writeFileSync(
+	path.join(userDir, 'settings.json'),
+	JSON.stringify({ 'cwtools.engine': 'rust' }, null, 2)
+);
 
 /** @type {import('@vscode/test-cli').IBaseTestConfiguration} */
 module.exports = {

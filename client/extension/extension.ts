@@ -24,16 +24,6 @@ import {
 	runGit,
 } from './engine';
 
-const stellarisRemote = `https://github.com/cwtools/cwtools-stellaris-config`;
-const eu4Remote = `https://github.com/cwtools/cwtools-eu4-config`;
-const hoi4Remote = `https://github.com/cwtools/cwtools-hoi4-config`;
-const ck2Remote = `https://github.com/cwtools/cwtools-ck2-config`;
-const irRemote = `https://github.com/cwtools/cwtools-ir-config`;
-const vic2Remote = `https://github.com/cwtools/cwtools-vic2-config`;
-const vic3Remote = `https://github.com/cwtools/cwtools-vic3-config`;
-const ck3Remote = `https://github.com/cwtools/cwtools-ck3-config`;
-const eu5Remote = `https://github.com/kaiser-chris/cwtools-eu5-config`;
-
 export let defaultClient: LanguageClient;
 export async function activate(context: ExtensionContext) {
 	let fileList : FileListItem[];
@@ -62,9 +52,6 @@ export async function activate(context: ExtensionContext) {
 	// installs from a real VS Code and pick the right cache directory.
 	const isDevDir = env.machineId === "someValue.machineId"
 	const cacheDir = isDevDir ? path.join(context.globalStorageUri.fsPath, '.cwtools') : path.join(context.extensionPath, '.cwtools')
-	if (isDevDir) {
-		fsMkdirSync(context.globalStorageUri.fsPath, { recursive: true })
-	}
 
 	const init = async function(language : string, isVanillaFolder : boolean) {
 		const langConfigDisposable = vs.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
@@ -115,10 +102,18 @@ export async function activate(context: ExtensionContext) {
 		const languageRulesCache = path.join(cacheDir, language);
 
 		const manualRules = workspace.getConfiguration('cwtools').get<string>('rules_folder');
-		const effectiveRulesCache = (manualRules && fsExistsSync(manualRules)) ? manualRules : languageRulesCache;
-		// F# server appends the per-game subdir itself; Rust server gets the leaf.
-		const rulesCacheForServer = activeEngine === 'fsharp' ? cacheDir : effectiveRulesCache;
-		if (manualRules && fsExistsSync(manualRules)) {
+		const hasManualRules = !!(manualRules && fsExistsSync(manualRules));
+		const effectiveRulesCache = hasManualRules ? manualRules! : languageRulesCache;
+		// Rust gets the leaf rules folder; F# gets the parent and appends the game
+		// subdir itself. Keep that split for a manual rules_folder too, or F# ignores it.
+		const rulesCacheForServer = activeEngine === 'fsharp'
+			? (hasManualRules ? path.dirname(manualRules!) : cacheDir)
+			: effectiveRulesCache;
+		if (hasManualRules && activeEngine === 'fsharp' && path.basename(manualRules!) !== language) {
+			console.warn(`[CWTools] The F# engine appends the game subdir to the rules folder, ` +
+				`so a manual rules_folder should be named "${language}" to be found (got "${manualRules}").`);
+		}
+		if (hasManualRules) {
 			console.log(`[CWTools] Using manual rules folder: ${manualRules}`);
 		} else if (repoPath) {
 			try {
@@ -217,7 +212,7 @@ export async function activate(context: ExtensionContext) {
 				ExecuteCommandRequest.type,
 				{ command: "getFileTypes", arguments: [path] }
 			);
-			if (data !== undefined && data && data[0]) {
+			if (data && data[0]) {
 				latestType = data[0];
 				await commands.executeCommand('setContext', 'cwtoolsGraphFile', true);
 			} else {
@@ -284,11 +279,17 @@ export async function activate(context: ExtensionContext) {
 
 			const directory = uri[0];
 			const game = GAME_FOLDER[path.basename(directory.fsPath).toLowerCase()];
-			if (!game || !fsExistsSync(path.join(directory.fsPath, "common"))) {
+			if (!game) {
 				await window.showErrorMessage("The selected folder does not appear to be a supported game folder");
 				return;
 			}
+			// CK3/Vic3/Imperator/EU5 keep `common` under a `game/` subdir, so the
+			// folder check has to run against the resolved path, not the root.
 			const dir = game.subdir ? path.join(directory.fsPath, game.subdir) : directory.fsPath;
+			if (!fsExistsSync(path.join(dir, "common"))) {
+				await window.showErrorMessage("The selected folder does not appear to be a supported game folder");
+				return;
+			}
 			log.appendLine("path: " + dir);
 			log.appendLine("game: " + game.id);
 			await workspace.getConfiguration("cwtools").update("cache." + game.id, dir, true);

@@ -67,6 +67,21 @@ suite('FileExplorer — filesToTreeNodes', () => {
 		assert.strictEqual(filesToTreeNodes(leaf)[0].children[0].isDirectory, false);
 		assert.strictEqual(filesToTreeNodes(nested)[0].children[0].isDirectory, true);
 	});
+
+	test('promotes a node to a directory when a deeper path arrives after the leaf', () => {
+		// 'shared' first appears as a leaf file, then as a parent. It must end up
+		// a directory so its children aren't hidden.
+		const files: FileListItem[] = [
+			{ scope: 'common', uri: 'file:///common/shared', logicalpath: 'shared' },
+			{ scope: 'common', uri: 'file:///common/shared/child.txt', logicalpath: 'shared/child.txt' }
+		];
+		const tree = filesToTreeNodes(files);
+		const shared = tree[0].children.find(c => c.fileName === 'shared')!;
+		assert.ok(shared, 'expected a shared node');
+		assert.strictEqual(shared.isDirectory, true);
+		assert.strictEqual(shared.children.length, 1);
+		assert.strictEqual(shared.children[0].fileName, 'child.txt');
+	});
 });
 
 suite('FileExplorer — FilesProvider', () => {

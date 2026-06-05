@@ -66,29 +66,35 @@ let releaseDir = "release"
 
 // The server is the Rust LSP server (cwtools-rs), built in the sibling
 // `cwtools` repo. It produces a single standalone binary that the
-// extension launches over stdio.
-let rustWorkspace = "../cwtools/cwtools-rs"
+// extension launches over stdio. Defaults to the sibling layout used in CI;
+// set CWTOOLS_RUST_WORKSPACE to build from a checkout somewhere else.
+let rustWorkspace =
+    match Environment.environVarOrNone "CWTOOLS_RUST_WORKSPACE" with
+    | Some p when not (String.IsNullOrWhiteSpace p) -> p
+    | _ -> "../cwtools/cwtools-rs"
 let rustServerBinName =
     if Environment.isWindows then "cwtools-server.exe" else "cwtools-server"
 let rustServerBin = rustWorkspace </> "target/release" </> rustServerBinName
 // Deploy to the path the client actually loads first; the old
 // bin/server/<platform>/"CWTools Server" path is only a legacy fallback.
 let serverOutDir = releaseDir </> "bin/server/cwtools-server"
-let deployedServerName = rustServerBinName
 
 let buildAndDeployRustServer () =
     run "cargo" "build --release -p cwtools_lsp" rustWorkspace
+    if not (File.Exists rustServerBin) then
+        failwithf
+            $"Rust server binary not found at '%s{rustServerBin}' after build. Check the crate name/target, or point CWTOOLS_RUST_WORKSPACE at the right cwtools-rs checkout (currently '%s{rustWorkspace}')."
     // Clean the server dir so stale F# .NET files (hostfxr, *.dll,
     // *.deps.json) don't linger next to the standalone Rust binary.
     Shell.cleanDir serverOutDir
-    let dest = serverOutDir </> deployedServerName
+    let dest = serverOutDir </> rustServerBinName
     System.IO.File.Copy(rustServerBin, dest, true)
     if Environment.isUnix then
         System.IO.File.SetUnixFileMode(
             dest,
             UnixFileMode.UserRead ||| UnixFileMode.UserWrite ||| UnixFileMode.UserExecute
             ||| UnixFileMode.GroupRead ||| UnixFileMode.GroupExecute
-            ||| UnixFileMode.OtherRead ||| UnixFileMode.OtherExecute
+            ||| UnixFileMode.OtherRead
         )
 
 // The original F# language server (src/Main/Main.fsproj), deployed
@@ -216,32 +222,6 @@ let initTargets () =
         Shell.copyFiles "release" [ "README.md"; "LICENSE.md" ]
         Shell.copyFile "release/CHANGELOG.md" "CHANGELOG.md")
 
-    let publishParams (framework: string) =
-        fun (p: DotNet.PublishOptions) ->
-            { p with
-                Common =
-                    { p.Common with
-                        CustomParams = Some "--self-contained true /p:PublishReadyToRun=true /p:UseLocalCwtools=False" }
-                OutputPath = Some(releaseDir </> "bin/server" </> framework)
-                Runtime = Some framework
-                Configuration = DotNet.BuildConfiguration.Release
-                MSBuildParams =
-                    { MSBuild.CliArguments.Create() with
-                        DisableInternalBinLog = true } }
-
-    let buildParams (release: bool) =
-        fun (b: DotNet.BuildOptions) ->
-            { b with
-                OutputPath = Some(releaseDir </> "bin/server" </> platformShortCode)
-                Configuration =
-                    if release then
-                        DotNet.BuildConfiguration.Release
-                    else
-                        DotNet.BuildConfiguration.Debug
-                MSBuildParams =
-                    { MSBuild.CliArguments.Create() with
-                        DisableInternalBinLog = true } }
-
     // Dev builds deploy both engines so cwtools.engine can switch without
     // a rebuild. Cross-platform packaging stays Rust-only.
     Target.create "BuildServer" <| fun _ ->
@@ -256,23 +236,20 @@ let initTargets () =
     Target.create "PublishServer" <| fun _ -> buildAndDeployRustServer ()
 
     Target.create "BuildClient" (fun _ ->
-        match ProcessUtils.tryFindFileOnPath "npx" with
-        | Some tsc ->
-            CreateProcess.fromRawCommand tsc [ "tsc"; "-p"; "./tsconfig.extension.json" ]
-            |> Proc.run
-            |> (fun r ->
-                if r.ExitCode <> 0 then
-                    failwith "tsc fail")
-        | _ -> failwith "didn't find tsc"
+        let npx =
+            match ProcessUtils.tryFindFileOnPath "npx" with
+            | Some p -> p
+            | None -> failwith "didn't find npx"
 
-        match ProcessUtils.tryFindFileOnPath "npx" with
-        | Some tsc ->
-            CreateProcess.fromRawCommand tsc [ "rollup"; "-c"; "-o"; "./release/bin/client/webview/graph.js" ]
+        let runNpx label args =
+            CreateProcess.fromRawCommand npx args
             |> Proc.run
             |> (fun r ->
                 if r.ExitCode <> 0 then
-                    failwith "rollup fail")
-        | _ -> failwith "didn't find rollup")
+                    failwithf "%s fail" label)
+
+        runNpx "tsc" [ "tsc"; "-p"; "./tsconfig.extension.json" ]
+        runNpx "rollup" [ "rollup"; "-c"; "-o"; "./release/bin/client/webview/graph.js" ])
 
     Target.create "CopyHtml" (fun _ -> !!("client/webview/*.css") |> Shell.copyFiles "release/bin/client/webview")
 
