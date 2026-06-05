@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 
+// The published extension id: publisher.name from release/package.json.
+export const EXTENSION_ID = 'milleniumdawnmodteam.cwtools-md-edition';
+
 export async function activate() {
-  const ext = vscode.extensions.getExtension('tboby.cwtools-vscode')!;
+  const ext = vscode.extensions.getExtension(EXTENSION_ID)!;
   try {
     await ext.activate();
     return ext.exports;

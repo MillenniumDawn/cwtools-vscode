@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { activate, waitForLSP, currentEngine } from '../utils';
+import { activate, waitForLSP, currentEngine, EXTENSION_ID } from '../utils';
 import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../lspErrorMonitor';
 import { expect } from 'chai';
 
@@ -35,7 +35,7 @@ suite('LSP Completion Tests', function () {
 	setup(async function () {
 		setupLSPErrorMonitoring();
 		await activate();
-		const extension = vscode.extensions.getExtension('tboby.cwtools-vscode')!;
+		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, 'Extension should be active');
 		const document = await openAndShow(testEventFile);
 		await waitForLSP(document.uri);
