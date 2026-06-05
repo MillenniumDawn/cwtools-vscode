@@ -30,17 +30,21 @@ jobs:
       run: /bin/sh ./build.sh DryRelease
     - name: Test
       run: xvfb-run -a npm test
-    # Non-gating: prints a coverage summary to the log and saves lcov for the
-    # extension-host TypeScript. No threshold yet, so it only fails if the tests
-    # themselves do (same suites as `npm test`).
+    # Non-gating: measures coverage of the extension-host TypeScript. No
+    # threshold yet, so it only fails if the tests themselves do (same suites as
+    # `npm test`).
     - name: Coverage
       run: xvfb-run -a npm run test:coverage
+    # Render the coverage table on the job summary page in the Actions UI.
+    - name: Coverage summary
+      if: always()
+      run: node scripts/coverage-summary.mjs
     - name: 'Upload coverage'
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
-        name: coverage-lcov
-        path: coverage/lcov.info
+        name: coverage-html
+        path: coverage
         retention-days: 5
     - name: 'Upload Artifact'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
