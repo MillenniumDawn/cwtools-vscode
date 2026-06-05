@@ -69,6 +69,10 @@ jobs:
   publish:
     needs: build-server
     runs-on: ubuntu-latest
+    # The GitHub release is created via GITHUB_TOKEN, which defaults to
+    # read-only. Creating a release needs contents: write.
+    permissions:
+      contents: write
     # Exposed at job level so the Open VSX step's `if:` can check whether a PAT
     # is configured (secrets aren't directly readable in step conditions).
     env:
