@@ -4,6 +4,7 @@
     "test": "npm run compile && vscode-test -c ./.vscode-test.js",
     "test:watch": "tsc -w -p . & vscode-test -c ./.vscode-test.js -w",
     "test:host": "npm run compile && vscode-test -c ./.vscode-test.host.js",
+    "test:coverage": "npm run compile && vscode-test -c ./.vscode-test.coverage.js --coverage --coverage-reporter text-summary --coverage-reporter text --coverage-reporter html --coverage-reporter lcov",
     "test:engine:fsharp": "npm run compile && vscode-test -c ./.vscode-test.fsharp.js",
     "test:engine:rust": "npm run compile && vscode-test -c ./.vscode-test.rust.js",
     "test:engine:parity": "npm run test:engine:fsharp && npm run test:engine:rust",
