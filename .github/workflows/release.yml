@@ -1,6 +1,6 @@
 on:
-  # Tag-driven release: push a v* tag and CI builds, packages, and publishes the
-  # GitHub release at that tag. workflow_dispatch is kept as a manual fallback.
+  # Push a v* tag to build, package, and publish the release. workflow_dispatch
+  # is a manual fallback.
   push:
     tags:
       - 'v*'
@@ -19,9 +19,8 @@ on:
 name: Release
 
 jobs:
-  # Build the Rust server natively on each platform. macOS uses the x86_64
-  # target (osx-x64), which runs under Rosetta 2 on Apple Silicon; add
-  # osx-arm64 here later for a native arm build.
+  # Build the Rust server natively on each platform. osx-x64 runs under Rosetta
+  # on Apple Silicon; add osx-arm64 here later for a native arm build.
   build-server:
     strategy:
       fail-fast: false
@@ -64,25 +63,23 @@ jobs:
         path: cwtools-rs/target/${{ matrix.target }}/release/${{ matrix.bin }}
         if-no-files-found: error
 
-  # Stage all three binaries into one release tree, package a single universal
-  # vsix, and publish it.
+  # Stage the three binaries, package one vsix, and publish it.
   publish:
     needs: build-server
     runs-on: ubuntu-latest
-    # The GitHub release is created via GITHUB_TOKEN, which defaults to
-    # read-only. Creating a release needs contents: write.
+    # Creating the GitHub release needs write access; GITHUB_TOKEN is read-only
+    # by default.
     permissions:
       contents: write
-    # Exposed at job level so the Open VSX step's `if:` can check whether a PAT
-    # is configured (secrets aren't directly readable in step conditions).
+    # Job-level so the Open VSX step's `if:` can read it (secrets aren't visible
+    # in step conditions).
     env:
       OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
 
     steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       with:
-        # workflow_dispatch doesn't populate head_ref; fall back to the branch
-        # the release was dispatched from instead of silently using the default.
+        # workflow_dispatch has no head_ref; fall back to the dispatched branch.
         ref: ${{ github.head_ref || github.ref_name }}
         submodules: recursive
     - name: Download server binaries
@@ -114,11 +111,10 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         vsce-token: ${{ secrets.VSCE_TOKEN }}
         user-email: ${{ github.event.inputs.email }}
-        # When triggered by a pushed tag, the version comes from the tag
-        # (GITHUB_REF_NAME) and the build skips committing/re-tagging.
+        # On a tag push the version comes from the tag and the build skips
+        # committing/re-tagging.
         TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
-      # Packages + publishes the staged binaries without cleaning the release
-      # tree or rebuilding the server.
+      # Packages and publishes the staged binaries. No clean, no server rebuild.
       run: dotnet run --project build -- -t ReleasePrebuilt
     - name: Publish to Open VSX Registry
       # Skip cleanly when no Open VSX PAT is configured (GitHub release only).

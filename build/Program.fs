@@ -31,11 +31,8 @@ let release = List.head releaseNotesData
 
 let githubToken = Environment.environVarOrNone "GITHUB_TOKEN"
 
-// Tag-triggered CI exports TAG_RELEASE=true; GITHUB_REF_NAME holds the pushed
-// tag (e.g. "v1.2.3"). In that mode the commit and tag already exist, so the
-// build takes its version from the tag and ships without bumping CHANGELOG,
-// committing, or re-tagging. Manual/local runs fall back to the top
-// CHANGELOG.md entry and keep creating the tag themselves.
+// On a tag push CI sets TAG_RELEASE=true and the version comes from the tag.
+// Manual/local runs fall back to the top CHANGELOG.md entry and create the tag.
 let isTagRelease = Environment.environVarAsBoolOrDefault "TAG_RELEASE" false
 
 let releaseTag =
@@ -149,8 +146,8 @@ let buildPackage dir =
     Process.killAllByName "npx"
     run npxTool.Value "--yes @vscode/vsce package" dir
 
-    // ReleaseGitHub picks the vsix up from ./temp. Ensure it exists here rather
-    // than relying on Clean, which the prebuilt release path deliberately skips.
+    // ReleaseGitHub reads the vsix from ./temp. The prebuilt path skips Clean,
+    // so ensure it exists here rather than relying on Clean to create it.
     Directory.ensure "./temp"
     !! $"%s{dir}/*.vsix" |> Seq.iter (Shell.moveFile "./temp/")
 
@@ -187,9 +184,8 @@ let ensureGitUser user email =
         CommandHelper.directRunGitCommandAndFail "." $"config user.email %s{email}"
 
 let releaseGithub () =
-    // Manual/local release: bump CHANGELOG version, commit, push, and create the
-    // tag. Tag-triggered CI skips all of this because the commit and tag already
-    // exist; it only drafts the GitHub release at the pushed tag.
+    // Manual/local release bumps CHANGELOG, commits, pushes, and tags. Tag CI
+    // skips this (commit and tag exist) and only drafts the release at the tag.
     if not isTagRelease then
         let user =
             match Environment.environVarOrDefault "github-user" "" with
@@ -225,7 +221,6 @@ let releaseGithub () =
             failwith
                 "please set the github_token environment variable to a github personal access token with repo access."
 
-    // release on github
     let cl =
         GitHub.createClientWithToken token
         |> GitHub.draftNewRelease
@@ -354,10 +349,9 @@ let buildTargetTree () =
     "BuildServer" ?=> "PrePackage" |> ignore
     "BuildServerDebug" ?=> "PrePackage" |> ignore
 
-    // Shared packaging + publishing steps. From SetVersion on, the chain is
-    // engine-agnostic: it just packages and ships whatever server binaries are
-    // already staged under release/bin/server, so both release paths funnel
-    // through here.
+    // Shared packaging + publishing chain. From SetVersion on it just packages
+    // and ships whatever binaries are staged under release/bin/server, so both
+    // release paths funnel through here.
     "SetVersion"
     ==> "PackageNpmInstall"
     ==> "BuildPackage"
@@ -365,26 +359,23 @@ let buildTargetTree () =
     ==> "PublishToGallery"
     |> ignore
 
-    // Full single-runner release: clean, build the Rust server here, then
-    // package. Clean and PublishServer are only ordered before the packaging
-    // chain (soft ?=>); only Release hard-requires them, so ReleasePrebuilt can
-    // skip both.
+    // Full single-runner release: clean, build the Rust server, then package.
+    // Clean and PublishServer are soft-ordered (?=>) before packaging; only
+    // Release hard-requires them, so ReleasePrebuilt skips both.
     "Clean" ?=> "PublishServer" |> ignore
     "PublishServer" ?=> "SetVersion" |> ignore
     "Clean" ==> "Release" |> ignore
     "PublishServer" ==> "Release" |> ignore
     "PublishToGallery" ==>! "Release"
 
-    // Multi-platform release: the win/osx/linux Rust binaries are built per
-    // platform in CI and downloaded into
-    // release/bin/server/cwtools-server/<platform>/ before this runs, so it only
-    // packages + publishes — no Clean, no server build.
+    // Multi-platform release: CI builds the per-platform Rust binaries and stages
+    // them under release/bin/server/cwtools-server/<platform>/ before this runs,
+    // so it only packages and publishes. No Clean, no server build.
     "PublishToGallery" ==>! "ReleasePrebuilt"
 
-    // Clean wipes release/bin (server binaries included), so it must NOT be a
-    // hard prerequisite of BuildPackage. Otherwise ReleasePrebuilt, which stages
-    // prebuilt binaries before running, would have them deleted before packaging.
-    // Keep it soft here; DryRelease still cleans via its own explicit edge.
+    // Clean wipes release/bin, so it must stay a soft prerequisite of
+    // BuildPackage. A hard edge would delete the binaries ReleasePrebuilt stages
+    // before packaging. DryRelease still cleans via its own edge below.
     "Clean" ?=> "BuildPackage" |> ignore
     "Clean" ==> "DryRelease" |> ignore
     "BuildPackage" ==>! "DryRelease"

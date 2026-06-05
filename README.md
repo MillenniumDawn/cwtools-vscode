@@ -1,4 +1,4 @@
-# [CWTools: Paradox Language Services](https://marketplace.visualstudio.com/items/tboby.cwtools-vscode)
+# [CWTools MD Edition](https://github.com/MillenniumDawn/cwtools-vscode)
 
 **Paradox Language Features for Visual Studio Code**
 
@@ -63,31 +63,31 @@ If you want to browse vanilla files, you can use the "CWTOOLS LOADED FILES" sect
 
 ### Completion
 
-![Completion](https://raw.githubusercontent.com/cwtools/cwtools-vscode/refs/heads/main/release/docs/completion.gif)
+![Completion](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/completion.gif)
 
 ### Tooltips
 
-![Tooltips](https://raw.githubusercontent.com/cwtools/cwtools-vscode/refs/heads/main/release/docs/tooltips.gif)
+![Tooltips](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/tooltips.gif)
 
 ### Scope tooltips
 
-![Scope tooltips](https://raw.githubusercontent.com/cwtools/cwtools-vscode/refs/heads/main/release/docs/scopetooltip.gif)
+![Scope tooltips](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/scopetooltip.gif)
 
 ### Scope errors
 
-![Scope ](https://raw.githubusercontent.com/cwtools/cwtools-vscode/refs/heads/main/release/docs/scopeerror.gif)
+![Scope ](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/scopeerror.gif)
 
 ### Localisation error
 
-![Localisation error](https://raw.githubusercontent.com/cwtools/cwtools-vscode/refs/heads/main/release/docs/localisationerror.gif)
+![Localisation error](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/localisationerror.gif)
 
 ### Go to definition
 
-![Go to definition](https://raw.githubusercontent.com/cwtools/cwtools-vscode/refs/heads/main/release/docs/gotodef.gif)
+![Go to definition](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/gotodef.gif)
 
 ### Find all references
 
-![Find all references](https://raw.githubusercontent.com/cwtools/cwtools-vscode/refs/heads/main/release/docs/findallrefs.png)
+![Find all references](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/findallrefs.png)
 
 ## Links
 
