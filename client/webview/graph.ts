@@ -145,11 +145,6 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,jso
     const canvas = layer.getCanvas();
     const ctx = canvas.getContext('2d');
 
-    console.log("nodes");
-
-
-    //console.log(nodes);
-
     /// Initial setup
     if (!importingJson){
 
@@ -258,8 +253,6 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,jso
 
     /// Layout
     if(!importingJson){
-        console.log("fit");
-
         cy.fit();
         //var opts = { name: 'dagre', ranker: 'network-simplex', nodeDimensionsIncludeLabels: true };
         const opts = {
@@ -368,59 +361,6 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,jso
         drawExtra(cy.nodes(), ctx!, cy.zoom())
     });
 
-    function debounce<T, A>(func: ((this: T, input: A) => void), wait: number, immediate: boolean) {
-        // 'private' variable for instance
-        // The returned function will be able to reference this due to closure.
-        // Each call to the returned function will share this common timer.
-        let timeout: NodeJS.Timeout | null;
-
-        // Calling debounce returns a new anonymous function
-        return function (this: T, input: A) {
-            // Should the function be called now? If immediate is true
-            //   and not already in a timeout then the answer is: Yes
-            const callNow = immediate && !timeout;
-
-            // This is the basic debounce behaviour where you can call this
-            //   function several times, but it will only execute once
-            //   [before or after imposing a delay].
-            //   Each time the returned function is called, the timer starts over.
-            if (timeout) {
-                clearTimeout(timeout);
-            }
-
-            // Set the new timeout
-            timeout = setTimeout(() => {
-
-                // Inside the timeout function, clear the timeout variable
-                // which will let the next execution run when in 'immediate' mode
-                timeout = null;
-
-                // Check if the function already ran with the immediate flag
-                if (!immediate) {
-                    // Call the original function with apply
-                    //    (both captured before setTimeout)
-                    func.apply(this, [input]);
-                }
-            }, wait);
-
-            // Immediate mode and no wait timer? Execute the function..
-            if (callNow) func.apply(this, [input]);
-        }
-    }
-
-    function resizeme() {
-        const cyElement = document.getElementById('cy');
-        if (cyElement) {
-            cyElement.style.width = `10px`;
-        }
-        cy.resize();
-        cy.center();
-    }
-    cy.on("resize", function () {
-        debounce(resizeme, 10, false);
-    });
-
-    console.log("done");
 }
 
 export function goToNode(location : techNode["location"]) {
@@ -502,20 +442,9 @@ interface EdgeInput {
 }
 
 export function go(nodesJ: Array<techNode>, settings: settings) {
-    //console.log(nodesJ);
-    const nodes: Array<techNode> = nodesJ//JSON.parse(nodesJ);
-    //console.log(nodes);
-    // var nodes2 = nodes.map((a) => a.id);
+    const nodes: Array<techNode> = nodesJ;
     const edges = nodes.map((a) => a.references.map((b)  => b.isOutgoing ? { source: a.id, target: b.key, label: b.label } : { source: b.key, target: a.id, label: b.label }));
     const edges2 = edges.flat();
-    // const edges2 : EdgeInput[] = [].concat(...edges)
-    // var nodes3 = edges2.map(a => a[1])
-    // let nodes4 : string[] = [].concat(nodes2, nodes3);
-    // console.log(nodes2);
-    // console.log(edges2);
-    //document.getElementById('detailsTarget')!.innerHTML = "Parsing data...";
-    //tech(["a", "b", "c", "d"], [["a", "b"],["c","d"]]);
-    // var nodesfin = new Set(nodes4)
     const edgesfin = new Set(edges2)
     tech(nodes, [...edgesfin], settings);
 }

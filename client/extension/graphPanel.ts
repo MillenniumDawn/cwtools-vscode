@@ -85,7 +85,6 @@ export class GraphPanel {
 
         // Handle messages from the webview
         this._disposables.push((this._panel.webview.onDidReceiveMessage(async message => {
-            console.log(message)
             try {
                 switch (message.command) {
                     case 'goToFile':

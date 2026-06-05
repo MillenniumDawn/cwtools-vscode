@@ -150,6 +150,7 @@ export async function activate(context: ExtensionContext) {
 			// Watch cached CWT rule files; force posix separators so the glob works on Windows.
 			workspace.createFileSystemWatcher(cacheDir.replace(/\\/g, '/') + '/**/*.cwt')
 		]
+		context.subscriptions.push(...fileEvents);
 
 		const clientOptions: LanguageClientOptions = {
 			documentSelector: [
@@ -310,11 +311,11 @@ export async function activate(context: ExtensionContext) {
 		}
 
 		let currentGraphDepth = 3;
+		const wheelSensitivity = (): number => workspace.getConfiguration('cwtools.graph').get('zoomSensitivity') ?? 1;
 		const showGraph = async function() {
 			const graphData = await getGraphData(latestType, currentGraphDepth);
-			const wheelSensitivity : number = workspace.getConfiguration('cwtools.graph').get('zoomSensitivity') ?? 1;
 			gp.GraphPanel.create(context.extensionPath);
-			gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity);
+			gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity());
 		}
 		context.subscriptions.push(commands.registerCommand('showGraph', async () => {
 			await showGraph();
@@ -340,9 +341,8 @@ export async function activate(context: ExtensionContext) {
 			}
 			const bytes = await vs.workspace.fs.readFile(uri[0]);
 			const data = new TextDecoder('utf-8').decode(bytes);
-			const wheelSensitivity: number = workspace.getConfiguration('cwtools.graph').get('zoomSensitivity') ?? 1;
 			gp.GraphPanel.create(context.extensionPath);
-			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity);
+			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
 		}));
 		// Subscriptions are pushed here so the client is disposed with the extension.
 		context.subscriptions.push(new CwtoolsProvider());
@@ -380,18 +380,7 @@ export async function activate(context: ExtensionContext) {
 		guessedLanguageId = await getLanguageIdFallback();
 	}
 
-	switch (guessedLanguageId) {
-		case "stellaris": languageId = "stellaris"; break;
-		case "eu4": languageId = "eu4"; break;
-		case "hoi4": languageId = "hoi4"; break;
-		case "ck2": languageId = "ck2"; break;
-		case "imperator": languageId = "imperator"; break;
-		case "vic2": languageId = "vic2"; break;
-		case "vic3": languageId = "vic3"; break;
-		case "ck3": languageId = "ck3"; break;
-        case "eu5": languageId = "eu5"; break;
-		default: languageId = "paradox"; break;
-	}
+	languageId = (guessedLanguageId && knownLanguageIds.includes(guessedLanguageId)) ? guessedLanguageId : "paradox";
 	async function findExeInFiles(gameExeName: string, binariesPrefix = false) {
 		if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
 			return [];
@@ -456,15 +445,14 @@ export async function reloadExtension(prompt: string, buttonText?: string, force
 	const actions = [restartAction];
 	if (force) {
 		const result = await window.showInformationMessage(prompt, ...actions);
-		if(result === restartAction){
+		if (result === restartAction) {
 			await commands.executeCommand("cwtools.reloadExtension");
 		}
 	}
-		else {
-			const chosenAction = prompt && await window.showInformationMessage(prompt, ...actions);
-			if (!prompt || chosenAction === restartAction) {
-				await commands.executeCommand("cwtools.reloadExtension");
-			}
+	else {
+		const chosenAction = prompt && await window.showInformationMessage(prompt, ...actions);
+		if (!prompt || chosenAction === restartAction) {
+			await commands.executeCommand("cwtools.reloadExtension");
 		}
 	}
-// export default defaultClient;
+}
