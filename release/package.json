@@ -9,7 +9,7 @@
   "preview": true,
   "publisher": "milleniumdawnmodteam",
   "qna": "https://github.com/MillenniumDawn/cwtools-vscode/issues",
-  "icon": "docs/cwtools_logo.png",
+  "icon": "docs/millennium_dawn_logo.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/MillenniumDawn/cwtools-vscode"
