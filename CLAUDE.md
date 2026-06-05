@@ -4,27 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CWTools is a Visual Studio Code extension that provides language services for Paradox Interactive game modding, supporting games like Stellaris, Hearts of Iron IV, Europa Universalis IV, Crusader Kings II/III, Victoria 2/3, and Imperator: Rome. The extension offers syntax validation, autocomplete, tooltips, localization checking, and visual graph analysis for game scripts.
+CWTools MD Edition is the Millennium Dawn fork of the CWTools VS Code extension. It provides language services for Paradox Interactive game modding, supporting games like Stellaris, Hearts of Iron IV, Europa Universalis IV, Crusader Kings II/III, Victoria 2/3, and Imperator: Rome. The extension offers syntax validation, autocomplete, tooltips, localization checking, and visual graph analysis for game scripts.
 
 ## Architecture
 
-This is a hybrid .NET/TypeScript VS Code extension with three main components:
+This is a VS Code extension with a TypeScript client and a language server that comes in two engines. The `cwtools.engine` setting (`rust` or `fsharp`) picks which one the extension launches.
 
-### Backend (.NET/F#)
-- **Main** (`src/Main/`): Core F# language server providing validation, completion, and analysis
-- **LSP** (`src/LSP/`): Language Server Protocol implementation in F#  
-- **CSharpExtensions** (`src/CSharpExtensions/`): C# helper utilities
-- Dependencies: Uses CWTools library via Paket (git submodule in `paket-files/`)
+### Server engines
+- **Rust** (default): the `cwtools-rs` workspace in the cwtools repo. Builds to a single standalone binary (`cwtools-server`) launched over stdio.
+- **F#**: `src/Main` (server), `src/LSP` (LSP protocol), `src/Languages`, `src/CSharpExtensions` (C# helpers). Wraps the CWTools library and stays as a fallback.
+- The CWTools library and the Rust port are a git submodule at `submodules/cwtools` (Rust under `submodules/cwtools/cwtools-rs`). The F# server references CWTools by project reference; `src/Main/cwtools.local.props` can repoint it at a local checkout.
 
 ### Frontend (TypeScript)
 - **Client Extension** (`client/extension/`): VS Code extension host and commands
 - **Webview** (`client/webview/`): Graph visualization using Cytoscape.js
-- **Test Suite** (`client/test/`): Extension tests with sample Stellaris mod files
+- **Test Suite** (`client/test/`): Host-based extension tests, plus a host-free engine parity harness in `client/test/parity/`
 
 ### Build System
-- **FAKE build script** (`build/Program.fs`): Cross-platform F# build automation
+- **FAKE build script** (`build/Program.fs`): Cross-platform F# build automation. `QuickBuild` builds and deploys both engines.
 - **TypeScript compilation**: Uses `tsc` and `rollup` for client bundling
-- **Release packaging**: Creates `.vsix` files for VS Code marketplace
+- **Release packaging**: Creates `.vsix` files. CI builds the Rust server per platform and `ReleasePrebuilt` packages the staged binaries into one vsix.
 
 ## Development Commands
 
@@ -47,31 +46,34 @@ npm run compile  # Compile TypeScript + bundle webview
 npm test        # Run VS Code extension tests
 ```
 
+The Rust server builds from the `cwtools-rs` workspace, which the build expects as a sibling checkout (`../cwtools/cwtools-rs`) by default. Set `CWTOOLS_RUST_WORKSPACE` to build from the submodule (`submodules/cwtools/cwtools-rs`) or elsewhere.
+
 ### Available Build Targets
-- `QuickBuild`: Build for local development (Release)
-- `QuickBuildDebug`: Build for local development (Debug)  
-- `DryRelease`: Full package build without publishing
-- `Release`: Full build + publish to marketplace
+- `QuickBuild`: Build both engines + client for local development (Release)
+- `QuickBuildDebug`: Same, Debug
+- `DryRelease`: Package a vsix without publishing
+- `Release`: Full build + publish
+- `ReleasePrebuilt`: Package server binaries already staged by CI
 
 ### Testing
-VS Code extension tests are located in `client/test/suite/` and use the sample Stellaris mod in `client/test/sample/` for validation scenarios.
+Run `npm test` for the host-based extension tests, which use the sample mod in `client/test/sample/`. `npm run test:parity` runs the host-free F#-vs-Rust parity suite (see `client/test/parity/README.md`); `test:engine:fsharp` and `test:engine:rust` run the host suite against a specific engine.
 
 ## Key Files
 
-- `package.json`: Node.js dependencies and scripts for TypeScript client
+- `package.json`: Node.js dependencies and scripts for the TypeScript client
 - `release/package.json`: VS Code extension manifest and configuration
-- `fsharp-language-server.sln`: .NET solution with F# projects
-- `paket.dependencies`: .NET package management
+- `cwtools-vscode.slnx`: .NET solution with the F# server projects
+- `build/Program.fs`: FAKE build automation
 - Build scripts: `build.cmd` (Windows) / `build.sh` (Unix)
 
 ## Development Workflow
 
-1. Use `./build.cmd QuickBuild` for initial setup and F# server compilation
-2. Use `npm run compile` for TypeScript changes during development  
-3. Debug by launching "Launch Extension" configuration in VS Code
+1. Run `git submodule update --init --recursive`, then `./build.sh QuickBuild` for initial setup and server compilation
+2. Use `npm run compile` for TypeScript changes during development
+3. Debug by launching "Quick update, Build and Launch Extension" in VS Code
 4. Test with sample Paradox game mod files in `client/test/sample/`
 5. Run tests with `npm test` before committing changes
 
 ## CWTools Integration
 
-The extension integrates with the CWTools library (F# game script parser/validator) via git submodule. The build system automatically pulls the latest CWTools when building the language server.
+The extension bundles both the Rust port and the F# CWTools library, pulled in via the `submodules/cwtools` git submodule. The build compiles and deploys both engines so `cwtools.engine` can switch between them without a rebuild.

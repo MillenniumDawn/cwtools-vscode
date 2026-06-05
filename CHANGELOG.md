@@ -1,3 +1,11 @@
+### 1.0.8-beta
+* Millennium Dawn fork (CWTools MD Edition). The changes below are relative to upstream 0.10.31.
+* Rust language server (cwtools-rs) is now the default engine, shipped as a standalone per-platform binary. Switch engines with the `cwtools.engine` setting.
+* The F# server is still bundled and selectable as a fallback.
+* Linux, macOS, and Windows server binaries are packaged into a single vsix.
+* Tag-driven release pipeline: push a `v*` tag to build, package, and publish the GitHub release.
+* Rebranded to CWTools MD Edition under the `milleniumdawnmodteam` publisher.
+
 ### 0.10.31
 * Stellaris: Allow "(", ")" as values, to allow parsing (but not proper support for) `@[()]`
 * Fix a bug with document symbols
