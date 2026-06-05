@@ -25,7 +25,7 @@ import {
 	setupLSPErrorMonitoring,
 	teardownLSPErrorMonitoring,
 } from '../lspErrorMonitor';
-import { checkHoverContains, getCompletionLabels, HoverCheckResult } from './hoverChecks';
+import { checkHoverContains, getCompletionLabels } from './hoverChecks';
 
 const sampleRoot = path.resolve(__dirname, '../sample');
 const testEventFile = path.join(sampleRoot, 'events', 'irm.txt');

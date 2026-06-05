@@ -3,7 +3,6 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { activate, waitForLSP, currentEngine } from '../utils';
 import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../lspErrorMonitor';
-import { getCompletionLabels } from './hoverChecks';
 import { expect } from 'chai';
 
 const sampleRoot = path.resolve(__dirname, '../sample');

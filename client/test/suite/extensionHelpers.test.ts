@@ -6,8 +6,6 @@ import {
 	LANGUAGE_REPOS,
 	GAME_DISPLAY,
 	GAME_FOLDER,
-	FOLDER_HINTS,
-	CONTENT_HINTS,
 	detectFromFolder,
 	serverExeForEngine,
 	runGit,
@@ -148,8 +146,6 @@ suite('engine — serverExeForEngine', () => {
 });
 
 suite('engine — runGit', () => {
-	type Handler = (chunk: Buffer | string) => void;
-
 	function makeChild(opts: { code: number | null; signal: NodeJS.Signals | null; stdout?: string; stderr?: string; error?: Error }): EventEmitter & { stdout: EventEmitter; stderr: EventEmitter } {
 		const child = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
 		child.stdout = new EventEmitter();
