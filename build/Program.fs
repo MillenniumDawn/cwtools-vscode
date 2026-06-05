@@ -64,23 +64,22 @@ let cwtoolsProjectName = "Main.fsproj"
 let cwtoolsProjectPath = "src/Main/Main.fsproj"
 let releaseDir = "release"
 
-// The server is now the Rust LSP server (cwtools-rs), not the F# Main.fsproj.
-// It lives in the sibling `cwtools` repo and builds to a single standalone binary
-// that the extension launches over stdio (same contract as the old F# server).
+// The server is the Rust LSP server (cwtools-rs), built in the sibling
+// `cwtools` repo. It produces a single standalone binary that the
+// extension launches over stdio.
 let rustWorkspace = "../cwtools/cwtools-rs"
 let rustServerBinName =
     if Environment.isWindows then "cwtools-server.exe" else "cwtools-server"
 let rustServerBin = rustWorkspace </> "target/release" </> rustServerBinName
-// The extension's findServerExe() looks here FIRST (bin/server/cwtools-server/<exe>);
-// the old bin/server/<platform>/"CWTools Server" path is only a legacy fallback.
-// Deploy to the path the client actually loads.
+// Deploy to the path the client actually loads first; the old
+// bin/server/<platform>/"CWTools Server" path is only a legacy fallback.
 let serverOutDir = releaseDir </> "bin/server/cwtools-server"
 let deployedServerName = rustServerBinName
 
 let buildAndDeployRustServer () =
     run "cargo" "build --release -p cwtools_lsp" rustWorkspace
-    // Clean the server dir so stale F# .NET files (hostfxr, *.dll, *.deps.json)
-    // don't linger next to the standalone Rust binary.
+    // Clean the server dir so stale F# .NET files (hostfxr, *.dll,
+    // *.deps.json) don't linger next to the standalone Rust binary.
     Shell.cleanDir serverOutDir
     let dest = serverOutDir </> deployedServerName
     System.IO.File.Copy(rustServerBin, dest, true)
@@ -92,11 +91,8 @@ let buildAndDeployRustServer () =
             ||| UnixFileMode.OtherRead ||| UnixFileMode.OtherExecute
         )
 
-// The original F# language server (src/Main/Main.fsproj), deployed alongside the
-// Rust one so the extension's `cwtools.engine` setting can switch between them.
-// The extension's serverExeForEngine('fsharp') loads it from this platform path.
-// Builds against the in-repo F# CWTools by default (cwtools.local.props
-// UseLocalCwtools=True), so the fallback engine tracks the F# ground truth.
+// The original F# language server (src/Main/Main.fsproj), deployed
+// alongside the Rust one so cwtools.engine can switch between them.
 let fsharpServerOutDir = releaseDir </> "bin/server" </> platformShortCode
 
 let buildAndDeployFSharpServer (release: bool) =
@@ -246,9 +242,8 @@ let initTargets () =
                     { MSBuild.CliArguments.Create() with
                         DisableInternalBinLog = true } }
 
-    // Dev/local builds deploy BOTH engines so `cwtools.engine` can switch between
-    // them without a rebuild. Cross-platform packaging of the F# server in the
-    // released vsix (PublishServer) is a separate step and stays Rust-only below.
+    // Dev builds deploy both engines so cwtools.engine can switch without
+    // a rebuild. Cross-platform packaging stays Rust-only.
     Target.create "BuildServer" <| fun _ ->
         buildAndDeployRustServer ()
         buildAndDeployFSharpServer true
@@ -257,9 +252,7 @@ let initTargets () =
         buildAndDeployRustServer ()
         buildAndDeployFSharpServer false
 
-    // Rust-first: packaging deploys the Rust server for the current platform.
-    // (Cross-compiling the Rust server for win/osx from one host is a separate
-    // step; these branches build/run the Rust server only.)
+    // PublishServer: Rust-only. Cross-compiling for win/osx is a separate step.
     Target.create "PublishServer" <| fun _ -> buildAndDeployRustServer ()
 
     Target.create "BuildClient" (fun _ ->

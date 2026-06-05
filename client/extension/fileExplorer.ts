@@ -32,7 +32,7 @@ import * as vscode from 'vscode';
 
         function addnode(obj: FileListItem): void {
             const path = obj.scope + "/" + obj.logicalpath;
-            const splitpath = path.replace(/^\/|\/$/g, "").split('/');
+            const splitpath = path.replace(/^\/+|\/+$/g, "").split('/').filter(s => s.length > 0);
             let ptr = tree;
 
             for (let i = 0; i < splitpath.length; i++) {

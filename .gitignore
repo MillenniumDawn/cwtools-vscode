@@ -20,3 +20,6 @@ nupkgs/
 cwtools.local.props
 .vs/
 .opencode/
+
+# Parity harness rules cache (cloned, not tracked)
+.cwtools-parity/

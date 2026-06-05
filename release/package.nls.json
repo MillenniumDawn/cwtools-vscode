@@ -39,9 +39,9 @@
   "configuration.cwtools.logging.diagnostic.description": "Whether to output diagnostic level logs",
   "configuration.cwtools.rules_version.description": "Which version of rules to auto-update to. Manual will use the local path set in rules_folder",
   "configuration.cwtools.rules_folder.description": "A folder containing custom rules to use",
-  "configuration.cwtools.engine.description": "Which language server engine to run. Rust is the new in-progress engine (default); F# is the original engine, kept as a fallback while the Rust rewrite reaches parity. Reload the window after changing.",
-  "configuration.cwtools.engine.rust.description": "Rust engine (cwtools-rs) - the new default daily driver",
-  "configuration.cwtools.engine.fsharp.description": "F# engine (original) - proven fallback while the Rust rewrite catches up",
+  "configuration.cwtools.engine.description": "Which language server engine to run. Rust is the default; F# is kept as a fallback while the Rust rewrite reaches parity. Reload the window after changing.",
+  "configuration.cwtools.engine.rust.description": "Rust engine (cwtools-rs) - the default",
+  "configuration.cwtools.engine.fsharp.description": "F# engine - the original, kept as a fallback",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "File paths to ignore (not load into cwtools), list of glob patterns",
   "configuration.cwtools.cache.eu4.description": "The location of a vanilla EU4 installation",
