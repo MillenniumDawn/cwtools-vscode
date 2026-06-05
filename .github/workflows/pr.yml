@@ -28,8 +28,20 @@ jobs:
       run: chmod +x ./build.sh
     - name: Test build
       run: /bin/sh ./build.sh DryRelease
-    - name: Test
-      run: xvfb-run -a npm test
+    # Runs the unit suites with V8 coverage. Same suites as the old `npm test`
+    # step, so it gates the same way; the coverage is non-gating (no threshold).
+    - name: Test (with coverage)
+      run: xvfb-run -a npm run test:coverage
+    - name: Coverage summary
+      if: always()
+      run: node scripts/coverage-summary.mjs
+    - name: 'Upload coverage'
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: coverage-html
+        path: coverage
+        retention-days: 5
     - name: 'Upload Artifact'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:

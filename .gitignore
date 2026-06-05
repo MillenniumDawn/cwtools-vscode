@@ -14,6 +14,7 @@ nupkgs/
 .cwtools/
 .ionide/
 .vscode-test/
+coverage/
 .fake
 .ionide
 *.user
