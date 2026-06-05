@@ -2,6 +2,10 @@
 
 **Paradox Language Features for Visual Studio Code**
 
+## Origin
+
+This is a fork of [cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vscode). The original F# language server comes from [cwtools/cwtools](https://github.com/cwtools/cwtools). Long term, this fork is heading in its own direction with a Rust-based server binary, while continuing to maintain and ship the original F# backend.
+
 ## Disclaimer
 
 This extension is still in preview, it may not work, it may stop working at any time.
