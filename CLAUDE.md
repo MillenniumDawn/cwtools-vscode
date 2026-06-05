@@ -22,8 +22,8 @@ This is a VS Code extension with a TypeScript client and a language server that 
 
 ### Build System
 - **FAKE build script** (`build/Program.fs`): Cross-platform F# build automation. `QuickBuild` builds and deploys both engines.
-- **TypeScript compilation**: Uses `tsc` and `rollup` for client bundling
-- **Release packaging**: Creates `.vsix` files. CI builds the Rust server per platform and `ReleasePrebuilt` packages the staged binaries into one vsix.
+- **TypeScript compilation**: `tsc` type-checks and emits the per-file client output (which the tests run against); `esbuild` (`build/esbuild.ts`, run via `tsx`) bundles the two shipped artifacts: the extension host (`extension.js`) and the webview graph (`graph.js`).
+- **Release packaging**: Creates `.vsix` files with `vsce package --no-dependencies`. The client is bundled, so `node_modules` is excluded from the vsix (`release/.vscodeignore`). CI builds the Rust server per platform and `ReleasePrebuilt` packages the staged binaries into one vsix.
 
 ## Development Commands
 
@@ -42,8 +42,9 @@ This is a VS Code extension with a TypeScript client and a language server that 
 ### TypeScript Client
 ```bash
 npm install
-npm run compile  # Compile TypeScript + bundle webview
-npm test        # Run VS Code extension tests
+npm run compile    # tsc + esbuild (bundle extension + webview)
+npm run check      # typecheck + lint
+npm test           # Run VS Code extension tests
 ```
 
 The Rust server builds from the `cwtools-rs` workspace, which the build expects as a sibling checkout (`../cwtools/cwtools-rs`) by default. Set `CWTOOLS_RUST_WORKSPACE` to build from the submodule (`submodules/cwtools/cwtools-rs`) or elsewhere.
@@ -64,6 +65,8 @@ Run `npm test` for the host-based extension tests, which use the sample mod in `
 - `release/package.json`: VS Code extension manifest and configuration
 - `cwtools-vscode.slnx`: .NET solution with the F# server projects
 - `build/Program.fs`: FAKE build automation
+- `build/esbuild.ts`: esbuild bundler driver for the client (extension + webview)
+- `.vscode-test.mjs`: host test runner config (labeled: unit/host/fsharp/rust)
 - Build scripts: `build.cmd` (Windows) / `build.sh` (Unix)
 
 ## Development Workflow
