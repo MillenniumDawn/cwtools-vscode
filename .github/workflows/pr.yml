@@ -37,3 +37,56 @@ jobs:
         path: temp/*.vsix
         retention-days: 5
 
+  parity:
+    runs-on: ubuntu-latest
+
+    steps:
+    # This repo and the Rust source live in separate repos, so check both out
+    # as siblings: the build expects the Rust workspace at ../cwtools/cwtools-rs.
+    - name: Checkout cwtools-vscode
+      uses: actions/checkout@v4
+      with:
+        path: cwtools-vscode
+        submodules: recursive
+    - name: Checkout cwtools (Rust + F# server sources)
+      uses: actions/checkout@v4
+      with:
+        repository: MillenniumDawn/cwtools
+        path: cwtools
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: 9.0.x
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 20
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: cwtools/cwtools-rs
+    - name: npm install
+      working-directory: cwtools-vscode
+      run: npm install
+    - name: Set chmod
+      working-directory: cwtools-vscode
+      run: chmod +x ./build.sh
+    # Builds both engine binaries the harness drives: the Rust port
+    # (release/bin/server/cwtools-server) and the F# reference
+    # (release/bin/server/linux-x64).
+    - name: Build both engine servers
+      working-directory: cwtools-vscode
+      run: /bin/sh ./build.sh BuildServer
+    # The F# reference is the spec; if it can't answer, the rules or setup is
+    # broken, so this gates the build.
+    - name: 'Parity: F# reference (gate)'
+      working-directory: cwtools-vscode
+      run: npm run test:parity:fsharp
+    # The Rust port chases the reference and is expected to fail until it
+    # reaches parity, so its red is informational, not a build failure.
+    - name: 'Parity: Rust port (informational)'
+      working-directory: cwtools-vscode
+      continue-on-error: true
+      run: npm run test:parity:rust
+
