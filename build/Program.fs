@@ -149,6 +149,9 @@ let buildPackage dir =
     Process.killAllByName "npx"
     run npxTool.Value "--yes @vscode/vsce package" dir
 
+    // ReleaseGitHub picks the vsix up from ./temp. Ensure it exists here rather
+    // than relying on Clean, which the prebuilt release path deliberately skips.
+    Directory.ensure "./temp"
     !! $"%s{dir}/*.vsix" |> Seq.iter (Shell.moveFile "./temp/")
 
 let setPackageJsonField (name: string) (value: string) releaseDir =
@@ -378,7 +381,13 @@ let buildTargetTree () =
     // packages + publishes — no Clean, no server build.
     "PublishToGallery" ==>! "ReleasePrebuilt"
 
-    "Clean" ==> "BuildPackage" ==>! "DryRelease"
+    // Clean wipes release/bin (server binaries included), so it must NOT be a
+    // hard prerequisite of BuildPackage. Otherwise ReleasePrebuilt, which stages
+    // prebuilt binaries before running, would have them deleted before packaging.
+    // Keep it soft here; DryRelease still cleans via its own explicit edge.
+    "Clean" ?=> "BuildPackage" |> ignore
+    "Clean" ==> "DryRelease" |> ignore
+    "BuildPackage" ==>! "DryRelease"
 
     "BuildServer" ==>! "QuickBuild"
 
