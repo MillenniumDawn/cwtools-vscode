@@ -7,7 +7,7 @@
 import * as assert from 'assert';
 import path from 'path';
 import * as vscode from 'vscode';
-import { activate, retryAsync, wait } from '../utils';
+import { activate, retryAsync, wait, EXTENSION_ID } from '../support/utils';
 import { it, describe } from 'mocha';
 import * as gp from '../../extension/graphPanel';
 import { GraphData } from '../../common/graphTypes';
@@ -20,7 +20,7 @@ const root = path.resolve(__dirname, '../../../../client/test/sample');  // Assu
 
 suite(`Debug Integration Test: `, function() {
 	test('Extension should be present', () => {
-		assert.ok(vscode.extensions.getExtension('tboby.cwtools-vscode'));
+		assert.ok(vscode.extensions.getExtension(EXTENSION_ID));
 	});
 
 	test('should activate', async function () {
@@ -35,7 +35,7 @@ suite(`Debug Integration Test: `, function() {
 
 	test('Extension activation status', async function () {
 		this.timeout(1 * 60 * 1000);
-		const extension = vscode.extensions.getExtension('tboby.cwtools-vscode');
+		const extension = vscode.extensions.getExtension(EXTENSION_ID);
 		assert.ok(extension, 'Extension should be found');
 
 		// Test activation status
@@ -96,7 +96,7 @@ suite(`Debug Integration Test: `, function() {
 			// Test that language configurations are set
 			// This is harder to test directly, but we can verify the extension activated
 			// and the language server client should be initialized
-			const extension = vscode.extensions.getExtension('tboby.cwtools-vscode');
+			const extension = vscode.extensions.getExtension(EXTENSION_ID);
 			assert.ok(extension?.isActive, 'Extension should be active');
 
 			// The extension exports might be undefined due to server startup issues in test env
@@ -165,7 +165,7 @@ describe('GraphPanel Tests', function () {
 	const before = (async function() {
 		// Arrange: Activate the extension and get its path
 		await activate();
-		const extensionMaybe = vscode.extensions.getExtension('tboby.cwtools-vscode');
+		const extensionMaybe = vscode.extensions.getExtension(EXTENSION_ID);
 		assert.ok(extensionMaybe, 'Extension should be found');
 		extension = extensionMaybe!;
 
@@ -285,7 +285,7 @@ suite('GraphPanel — UI integration', function () {
 
 	const setupPanel = async () => {
 		await activate();
-		const ext = vscode.extensions.getExtension('tboby.cwtools-vscode');
+		const ext = vscode.extensions.getExtension(EXTENSION_ID);
 		assert.ok(ext, 'Extension should be found');
 		extension = ext!;
 		tempFile = path.join(os.tmpdir(), `cwtools-graph-${Date.now()}.json`);

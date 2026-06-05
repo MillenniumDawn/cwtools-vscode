@@ -1,16 +1,19 @@
 {
   "scripts": {
-    "compile": "tsc -p ./tsconfig.extension.json && rollup -c -o ./release/bin/client/webview/graph.js",
-    "test": "npm run compile && vscode-test -c ./.vscode-test.js",
-    "test:watch": "tsc -w -p . & vscode-test -c ./.vscode-test.js -w",
-    "test:host": "npm run compile && vscode-test -c ./.vscode-test.host.js",
-    "test:coverage": "npm run compile && vscode-test -c ./.vscode-test.coverage.js --coverage --coverage-reporter text-summary --coverage-reporter html --coverage-reporter lcov --coverage-reporter json-summary",
-    "test:engine:fsharp": "npm run compile && vscode-test -c ./.vscode-test.fsharp.js",
-    "test:engine:rust": "npm run compile && vscode-test -c ./.vscode-test.rust.js",
+    "compile": "tsc -p ./tsconfig.extension.json && tsx build/esbuild.ts",
+    "typecheck": "tsc -p ./tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "check": "npm run typecheck && npm run lint",
+    "test": "npm run compile && vscode-test --label unit",
+    "test:watch": "tsc -w -p . & vscode-test --label unit -w",
+    "test:host": "npm run compile && vscode-test --label host",
+    "test:coverage": "npm run compile && vscode-test --label unit --coverage --coverage-reporter text-summary --coverage-reporter html --coverage-reporter lcov --coverage-reporter json-summary",
+    "test:engine:fsharp": "npm run compile && vscode-test --label fsharp",
+    "test:engine:rust": "npm run compile && vscode-test --label rust",
     "test:engine:parity": "npm run test:engine:fsharp && npm run test:engine:rust",
-    "test:parity": "tsc -p ./tsconfig.extension.json && node client/test/parity/prepare.mjs && mocha ./release/bin/client/test/parity/parity.test.js",
-    "test:parity:fsharp": "tsc -p ./tsconfig.extension.json && node client/test/parity/prepare.mjs && mocha ./release/bin/client/test/parity/parity.test.js --grep \"\\[fsharp\\]\"",
-    "test:parity:rust": "tsc -p ./tsconfig.extension.json && node client/test/parity/prepare.mjs && mocha ./release/bin/client/test/parity/parity.test.js --grep \"\\[rust\\]\""
+    "test:parity": "tsc -p ./tsconfig.extension.json && tsx client/test/parity/prepare.ts && mocha ./release/bin/client/test/parity/parity.test.js",
+    "test:parity:fsharp": "tsc -p ./tsconfig.extension.json && tsx client/test/parity/prepare.ts && mocha ./release/bin/client/test/parity/parity.test.js --grep \"\\[fsharp\\]\"",
+    "test:parity:rust": "tsc -p ./tsconfig.extension.json && tsx client/test/parity/prepare.ts && mocha ./release/bin/client/test/parity/parity.test.js --grep \"\\[rust\\]\""
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -18,9 +21,6 @@
   "devDependencies": {
     "@eslint/compat": "^1.3.1",
     "@eslint/js": "^9.32.0",
-    "@rollup/plugin-commonjs": "^28.0.6",
-    "@rollup/plugin-node-resolve": "^16.0.1",
-    "@rollup/plugin-replace": "^6.0.2",
     "@types/chai": "^5.2.2",
     "@types/cytoscape-popper": "^2.0.4",
     "@types/merge-images": "^1.2.4",
@@ -35,20 +35,21 @@
     "cytoscape": "^3.32.1",
     "cytoscape-elk": "github:jfstephe/cytoscape.js-elk",
     "cytoscape-popper": "^2.0.0",
+    "esbuild": "^0.24.0",
     "eslint": "^9.32.0",
     "glob": "^11.0.3",
+    "globals": "^14.0.0",
     "merge-images": "1.2.0",
     "mocha": "^11.7.1",
     "popper.js": "^1.16.1",
-    "rollup-plugin-hypothetical": "^2.1.0",
-    "rollup-plugin-typescript2": "^0.36.0",
     "sinon": "21.0.0",
     "tippy.js": "^6.3.7",
     "tslib": "^2.8.1",
+    "tsx": "^4.19.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.38.0"
   },
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.83.0"
   }
 }

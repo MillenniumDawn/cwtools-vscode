@@ -33,6 +33,8 @@ npm install            # client dependencies
 
 `QuickBuild` builds and deploys both engines into `release/bin/server`, compiles the client, and leaves a runnable extension in `release/`. Use `QuickBuildDebug` for debug binaries.
 
+The client is bundled with esbuild (`build/esbuild.ts`): `tsc` type-checks and emits the per-file output the tests run against, then esbuild produces the two shipped bundles (`extension.js`, `webview/graph.js`). `npm run compile` does both; `npm run check` runs the typecheck and lint.
+
 The Rust server builds from the `cwtools-rs` workspace. By default the build looks for it as a sibling checkout (`../cwtools/cwtools-rs`), which matches CI. To build from the submodule or another checkout, point it there:
 
 ```bash

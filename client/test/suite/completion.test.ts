@@ -1,9 +1,8 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { activate, waitForLSP, currentEngine } from '../utils';
-import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../lspErrorMonitor';
-import { getCompletionLabels } from './hoverChecks';
+import { activate, waitForLSP, currentEngine, EXTENSION_ID } from '../support/utils';
+import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../support/lspErrorMonitor';
 import { expect } from 'chai';
 
 const sampleRoot = path.resolve(__dirname, '../sample');
@@ -36,7 +35,7 @@ suite('LSP Completion Tests', function () {
 	setup(async function () {
 		setupLSPErrorMonitoring();
 		await activate();
-		const extension = vscode.extensions.getExtension('tboby.cwtools-vscode')!;
+		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, 'Extension should be active');
 		const document = await openAndShow(testEventFile);
 		await waitForLSP(document.uri);

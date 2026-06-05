@@ -144,7 +144,10 @@ let buildAndDeployFSharpServer (release: bool) =
 
 let buildPackage dir =
     Process.killAllByName "npx"
-    run npxTool.Value "--yes @vscode/vsce package" dir
+    // The client is bundled with esbuild, so node_modules is excluded from the
+    // vsix (see .vscodeignore). --no-dependencies stops vsce from trying to
+    // resolve/include them.
+    run npxTool.Value "--yes @vscode/vsce package --no-dependencies" dir
 
     // ReleaseGitHub reads the vsix from ./temp. The prebuilt path skips Clean,
     // so ensure it exists here rather than relying on Clean to create it.
@@ -245,9 +248,6 @@ let initTargets () =
 
     Target.create "NpmInstall" <| fun _ -> run npmTool.Value "install" "."
 
-    Target.create "PackageNpmInstall"
-    <| fun _ -> run npmTool.Value "install" "release"
-
     Target.create "CopyDocs" (fun _ ->
         Shell.copyFiles "release" [ "README.md"; "LICENSE.md" ]
         Shell.copyFile "release/CHANGELOG.md" "CHANGELOG.md")
@@ -279,7 +279,7 @@ let initTargets () =
                     failwithf "%s fail" label)
 
         runNpx "tsc" [ "tsc"; "-p"; "./tsconfig.extension.json" ]
-        runNpx "rollup" [ "rollup"; "-c"; "-o"; "./release/bin/client/webview/graph.js" ])
+        runNpx "esbuild" [ "tsx"; "build/esbuild.ts" ])
 
     Target.create "CopyHtml" (fun _ -> !!("client/webview/*.css") |> Shell.copyFiles "release/bin/client/webview")
 
@@ -353,7 +353,6 @@ let buildTargetTree () =
     // and ships whatever binaries are staged under release/bin/server, so both
     // release paths funnel through here.
     "SetVersion"
-    ==> "PackageNpmInstall"
     ==> "BuildPackage"
     ==> "ReleaseGitHub"
     ==> "PublishToGallery"

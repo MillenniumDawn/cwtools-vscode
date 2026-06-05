@@ -1,3 +1,7 @@
+### 1.0.9-beta
+* Bundle the client with esbuild. The vsix now ships two bundles instead of the full `node_modules` tree, dropping it from 353 files to 90 (173 JS files to 2) and speeding up activation.
+* Internal cleanup with no user-facing change: removed dead build artifacts and the unused Paket tooling, unified the five host-test configs into one, aligned the toolchain version pins, and moved the build/test helper scripts to TypeScript.
+
 ### 1.0.8-beta
 * Millennium Dawn fork (CWTools MD Edition). The changes below are relative to upstream 0.10.31.
 * Rust language server (cwtools-rs) is now the default engine, shipped as a standalone per-platform binary. Switch engines with the `cwtools.engine` setting.

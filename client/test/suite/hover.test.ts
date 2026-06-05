@@ -6,8 +6,9 @@ import {
 	waitForLSP,
 	waitForLanguageServer,
 	currentEngine,
-} from '../utils';
-import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../lspErrorMonitor';
+	EXTENSION_ID,
+} from '../support/utils';
+import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../support/lspErrorMonitor';
 import { checkHoverContains } from './hoverChecks';
 import { expect } from 'chai';
 
@@ -23,7 +24,7 @@ suite('LSP Hover Tests', function () {
 	setup(async function () {
 		setupLSPErrorMonitoring();
 		await activate();
-		const extension = vscode.extensions.getExtension('tboby.cwtools-vscode')!;
+		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, 'Extension should be active');
 
 		const uri = vscode.Uri.file(testEventFile);

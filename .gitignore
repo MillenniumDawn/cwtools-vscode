@@ -1,12 +1,12 @@
 bin/
 obj/
 out/
+src/*/output/
 packages/
 node_modules/
 .idea/
 *.vsix
 Scratch.*
-paket-files/
 .fake/
 BuildPackages/
 nupkgs/
