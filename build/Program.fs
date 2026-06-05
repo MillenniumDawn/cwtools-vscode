@@ -30,6 +30,31 @@ let releaseNotesData = File.ReadAllLines "CHANGELOG.md" |> ReleaseNotes.parseAll
 let release = List.head releaseNotesData
 
 let githubToken = Environment.environVarOrNone "GITHUB_TOKEN"
+
+// Tag-triggered CI exports TAG_RELEASE=true; GITHUB_REF_NAME holds the pushed
+// tag (e.g. "v1.2.3"). In that mode the commit and tag already exist, so the
+// build takes its version from the tag and ships without bumping CHANGELOG,
+// committing, or re-tagging. Manual/local runs fall back to the top
+// CHANGELOG.md entry and keep creating the tag themselves.
+let isTagRelease = Environment.environVarAsBoolOrDefault "TAG_RELEASE" false
+
+let releaseTag =
+    match isTagRelease, Environment.environVarOrNone "GITHUB_REF_NAME" with
+    | true, Some t when not (String.IsNullOrWhiteSpace t) -> t
+    | _ -> release.NugetVersion
+
+// package.json wants a bare semver, so drop any leading "v".
+let releaseVersion = releaseTag.TrimStart('v')
+let isPreRelease = releaseVersion.Contains "-"
+
+// Notes for the GitHub release: the CHANGELOG entry matching the released
+// version, falling back to the top entry when there's no exact match.
+let releaseNotes =
+    releaseNotesData
+    |> List.tryFind (fun r -> $"%O{r.NugetVersion}" = releaseVersion)
+    |> Option.defaultValue release
+    |> fun r -> r.Notes
+
 // open Fake.BuildServer
 let platformShortCode =
     match Environment.isWindows, Environment.isMacOS, Environment.isLinux with
@@ -135,18 +160,21 @@ let setPackageJsonField (name: string) (value: string) releaseDir =
     let opts = JsonSerializerOptions(WriteIndented = true, AllowTrailingCommas = false)
     File.WriteAllText(fileName, node.ToJsonString(opts))
 
-let setVersion (release: ReleaseNotes.ReleaseNotes) releaseDir =
-    let versionString = $"%O{release.NugetVersion}"
-    setPackageJsonField "version" versionString releaseDir
+let setVersion releaseDir =
+    setPackageJsonField "version" releaseVersion releaseDir
 
 let publishToGallery releaseDir =
-    let token =
-        match Environment.environVarOrDefault "vsce-token" "" with
-        | s when not (String.IsNullOrWhiteSpace s) -> s
-        | _ -> UserInput.getUserPassword "VSCE Token: "
+    let publish token =
+        Process.killAllByName "npx"
+        run npxTool.Value $"@vscode/vsce publish --pat %s{token}" releaseDir
 
-    Process.killAllByName "npx"
-    run npxTool.Value $"@vscode/vsce publish --pat %s{token}" releaseDir
+    match Environment.environVarOrDefault "vsce-token" "" with
+    | s when not (String.IsNullOrWhiteSpace s) -> publish s
+    // Non-interactive (CI): no token means skip the Marketplace publish rather
+    // than block on a prompt. The GitHub release is still the deliverable.
+    | _ when Option.isSome (Environment.environVarOrNone "CI") ->
+        Trace.traceImportant "No vsce-token set; skipping VS Code Marketplace publish."
+    | _ -> publish (UserInput.getUserPassword "VSCE Token: ")
 
 let ensureGitUser user email =
     match CommandHelper.runGitCommand "." "config user.name" with
@@ -155,31 +183,35 @@ let ensureGitUser user email =
         CommandHelper.directRunGitCommandAndFail "." $"config user.name %s{user}"
         CommandHelper.directRunGitCommandAndFail "." $"config user.email %s{email}"
 
-let releaseGithub (release: ReleaseNotes.ReleaseNotes) =
-    let user =
-        match Environment.environVarOrDefault "github-user" "" with
-        | s when not (String.IsNullOrWhiteSpace s) -> s
-        | _ -> UserInput.getUserInput "Username: "
+let releaseGithub () =
+    // Manual/local release: bump CHANGELOG version, commit, push, and create the
+    // tag. Tag-triggered CI skips all of this because the commit and tag already
+    // exist; it only drafts the GitHub release at the pushed tag.
+    if not isTagRelease then
+        let user =
+            match Environment.environVarOrDefault "github-user" "" with
+            | s when not (String.IsNullOrWhiteSpace s) -> s
+            | _ -> UserInput.getUserInput "Username: "
 
-    let email =
-        match Environment.environVarOrDefault "user-email" "" with
-        | s when not (String.IsNullOrWhiteSpace s) -> s
-        | _ -> UserInput.getUserInput "Email: "
+        let email =
+            match Environment.environVarOrDefault "user-email" "" with
+            | s when not (String.IsNullOrWhiteSpace s) -> s
+            | _ -> UserInput.getUserInput "Email: "
 
-    let remote =
-        CommandHelper.getGitResult "" "remote -v"
-        |> Seq.filter (fun (s: string) -> s.EndsWith("(push)"))
-        |> Seq.tryFind (fun (s: string) -> s.Contains(gitOwner + "/" + gitName))
-        |> function
-            | None -> gitHome + "/" + gitName
-            | Some(s: string) -> s.Split().[0]
+        let remote =
+            CommandHelper.getGitResult "" "remote -v"
+            |> Seq.filter (fun (s: string) -> s.EndsWith("(push)"))
+            |> Seq.tryFind (fun (s: string) -> s.Contains(gitOwner + "/" + gitName))
+            |> function
+                | None -> gitHome + "/" + gitName
+                | Some(s: string) -> s.Split().[0]
 
-    Staging.stageAll ""
-    ensureGitUser user email
-    Commit.exec "." $"Bump version to %s{release.NugetVersion}"
-    Branches.pushBranch "" remote "main"
-    Branches.tag "" release.NugetVersion
-    Branches.pushTag "" remote release.NugetVersion
+        Staging.stageAll ""
+        ensureGitUser user email
+        Commit.exec "." $"Bump version to %s{releaseVersion}"
+        Branches.pushBranch "" remote "main"
+        Branches.tag "" releaseTag
+        Branches.pushTag "" remote releaseTag
 
     let files = !!("./temp" </> "*.vsix")
 
@@ -196,9 +228,9 @@ let releaseGithub (release: ReleaseNotes.ReleaseNotes) =
         |> GitHub.draftNewRelease
             gitOwner
             gitName
-            release.NugetVersion
-            (release.SemVer.PreRelease <> None)
-            release.Notes
+            releaseTag
+            isPreRelease
+            releaseNotes
 
     (cl, files)
     ||> Seq.fold (fun acc e -> acc |> GitHub.uploadFile e)
@@ -259,11 +291,11 @@ let initTargets () =
 
     Target.create "BuildPackage" (fun _ -> buildPackage "release")
 
-    Target.create "SetVersion" (fun _ -> setVersion release "release")
+    Target.create "SetVersion" (fun _ -> setVersion "release")
 
     Target.create "PublishToGallery" (fun _ -> publishToGallery "release")
 
-    Target.create "ReleaseGitHub" (fun _ -> releaseGithub release)
+    Target.create "ReleaseGitHub" (fun _ -> releaseGithub ())
 
 
     Target.description "Assemble the extension"
