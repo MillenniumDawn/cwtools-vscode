@@ -74,7 +74,7 @@ export type GraphData = GraphNode[];
  * @returns Promise with the graph data
  */
 export async function getGraphData(entityType: string, depth: number): Promise<GraphData> {
-    const commands = await import('vscode').then(vscode => vscode.commands);
+    const { commands } = await import('vscode');
     const result = await commands.executeCommand<any[]>("getGraphData", entityType, depth);
     return result as GraphData;
 }

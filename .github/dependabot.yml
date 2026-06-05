@@ -1,0 +1,34 @@
+version: 2
+updates:
+  # GitHub Actions are SHA-pinned; dependabot bumps the pin and the # version
+  # comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Extension client (root) and the packaged manifest (release/).
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /release
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns:
+          - "*"
+
+  # .NET packages via central management (Directory.Packages.props).
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      nuget:
+        patterns:
+          - "*"

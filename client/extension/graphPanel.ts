@@ -1,6 +1,7 @@
 import vscode from "vscode";
 import * as path from 'path';
 import * as fs from 'fs'
+import * as crypto from 'crypto';
 import { GraphData } from "../common/graphTypes";
 
 export enum State {
@@ -29,6 +30,10 @@ export class GraphPanel {
 
     // Method to check if cytoscape has rendered elements
     public async checkCytoscapeRendered() {
+        // Settle any in-flight check before replacing it, so it isn't orphaned.
+        if (this.pendingRequest != null) {
+            this.pendingRequest(false);
+        }
         const promise = new Promise<boolean>((resolve) => {
             this.pendingRequest = resolve;
         });
@@ -36,6 +41,7 @@ export class GraphPanel {
         return promise;
     }
 
+    private _disposed = false;
     private _disposables: vscode.Disposable[] = [];
     private readonly _webviewRootPath: string;
 
@@ -80,50 +86,54 @@ export class GraphPanel {
         // Handle messages from the webview
         this._disposables.push((this._panel.webview.onDidReceiveMessage(async message => {
             console.log(message)
-            switch (message.command) {
-                case 'goToFile':
-                    {
-                        const uri = vscode.Uri.file(message.uri);
-                        const range = new vscode.Range(message.line, message.column, message.line, message.column);
-                        const texteditor = await vscode.window.showTextDocument(uri);
-                        texteditor.revealRange(range, vscode.TextEditorRevealType.AtTop);
-                        return;
-                    }
-                case 'saveImage':
-                    {
-                        const image = message.image;
-                        const dest = await vscode.window.showSaveDialog({ filters: { 'Image': ['png'] } });
-                        if(dest){
-                            fs.writeFile(dest.fsPath, image, "base64", (error) => console.error(error));
+            try {
+                switch (message.command) {
+                    case 'goToFile':
+                        {
+                            const uri = vscode.Uri.file(message.uri);
+                            const range = new vscode.Range(message.line, message.column, message.line, message.column);
+                            const texteditor = await vscode.window.showTextDocument(uri);
+                            texteditor.revealRange(range, vscode.TextEditorRevealType.AtTop);
+                            return;
+                        }
+                    case 'saveImage':
+                        {
+                            const image = message.image;
+                            const dest = await vscode.window.showSaveDialog({ filters: { 'Image': ['png'] } });
+                            if(dest){
+                                fs.writeFile(dest.fsPath, image, "base64", (error) => { if (error) console.error(error); });
+                            }
+                            return;
+                        }
+                    case 'saveJson':
+                        {
+                            const json = message.json;
+                            const dest = await vscode.window.showSaveDialog({ filters: { 'Json': ['json'] } });
+                            if(dest){
+                                fs.writeFile(dest.fsPath, json, "utf-8", (error) => { if (error) console.error(error); });
+                            }
+                            return;
+                        }
+                    case 'ready':
+                        if (this._state == State.DataReady) {
+                            this._state = State.Done;
+                            this._onLoad.fire(undefined);
+                        } else {
+                            this._state = State.ClientReady;
                         }
                         return;
-                    }
-                case 'saveJson':
-                    {
-                        const json = message.json;
-                        const dest = await vscode.window.showSaveDialog({ filters: { 'Json': ['json'] } });
-                        if(dest){
-                            fs.writeFile(dest.fsPath, json, "utf-8", (error) => console.error(error));
+                    case 'cytoscapeRenderedResult':
+                        {
+                            if(this.pendingRequest != null){
+                                const resolve = this.pendingRequest;
+                                this.pendingRequest = null;
+                                resolve(message.rendered as boolean); // Use 'rendered' property from webview response
+                            }
+                            return;
                         }
-                        return;
-                    }
-                case 'ready':
-                    if (this._state == State.DataReady) {
-                        this._state = State.Done;
-                        this._onLoad.fire(undefined);
-                    } else {
-                        this._state = State.ClientReady;
-                    }
-                    return;
-                case 'cytoscapeRenderedResult':
-                    {
-                        if(this.pendingRequest != null){
-                            const resolve = this.pendingRequest;
-                            this.pendingRequest = null;
-                            resolve(message.rendered as boolean); // Use 'rendered' property from webview response
-                        }
-                        return;
-                    }
+                }
+            } catch (error) {
+                console.error('[CWTools] graph webview message handler failed:', error);
             }
         }, null, this._disposables)));
 
@@ -165,6 +175,12 @@ export class GraphPanel {
     }
 
     public dispose() {
+        // onDidDispose calls back in here when the panel closes, so guard against
+        // a double pass.
+        if (this._disposed) {
+            return;
+        }
+        this._disposed = true;
         vscode.commands.executeCommand('setContext', "cwtoolsWebview", false);
 
         // Clean up our resources
@@ -183,10 +199,6 @@ export class GraphPanel {
 
     private _getHtmlForWebview() {
         const scriptUri = this._panel.webview.asWebviewUri(vscode.Uri.file(path.join(this._webviewRootPath, 'graph.js')));
-        // const scriptPathOnDisk = vscode.Uri.file(path.join(this._webviewRootPath, 'graph.js'));
-        // const scriptUri = scriptPathOnDisk.with({ scheme: 'vscode-resource' });
-        // const stylePathOnDisk = vscode.Uri.file(path.join(this._webviewRootPath, 'site.css'));
-        // const styleUri = stylePathOnDisk.with({ scheme: 'vscode-resource' });
         const styleUri = this._panel.webview.asWebviewUri(vscode.Uri.file(path.join(this._webviewRootPath, 'site.css')));
 
         const nonce = this.getNonce();
@@ -205,7 +217,6 @@ export class GraphPanel {
     <div class="vbox viewport body-content">
 
         <div class="hbox cy-container">
-    <!-- <div class="cy-row"><div class="test" id="cy"%></div></div> -->
     <div class="cy-row" id="cy"></div>
 </div>
 
@@ -222,11 +233,7 @@ export class GraphPanel {
 
     }
     private getNonce() {
-        let text = '';
-        const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        for (let i = 0; i < 32; i++) {
-            text += possible.charAt(Math.floor(Math.random() * possible.length));
-        }
-        return text;
+        // CSP nonce: use a CSPRNG, not Math.random(). hex keeps it 32 chars.
+        return crypto.randomBytes(16).toString('hex');
     };
 }

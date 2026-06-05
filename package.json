@@ -2,7 +2,14 @@
   "scripts": {
     "compile": "tsc -p ./tsconfig.extension.json && rollup -c -o ./release/bin/client/webview/graph.js",
     "test": "npm run compile && vscode-test -c ./.vscode-test.js",
-    "test:watch": "tsc -w -p . & vscode-test -c ./.vscode-test.js -w"
+    "test:watch": "tsc -w -p . & vscode-test -c ./.vscode-test.js -w",
+    "test:host": "npm run compile && vscode-test -c ./.vscode-test.host.js",
+    "test:engine:fsharp": "npm run compile && vscode-test -c ./.vscode-test.fsharp.js",
+    "test:engine:rust": "npm run compile && vscode-test -c ./.vscode-test.rust.js",
+    "test:engine:parity": "npm run test:engine:fsharp && npm run test:engine:rust",
+    "test:parity": "tsc -p ./tsconfig.extension.json && node client/test/parity/prepare.mjs && mocha ./release/bin/client/test/parity/parity.test.js",
+    "test:parity:fsharp": "tsc -p ./tsconfig.extension.json && node client/test/parity/prepare.mjs && mocha ./release/bin/client/test/parity/parity.test.js --grep \"\\[fsharp\\]\"",
+    "test:parity:rust": "tsc -p ./tsconfig.extension.json && node client/test/parity/prepare.mjs && mocha ./release/bin/client/test/parity/parity.test.js --grep \"\\[rust\\]\""
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

@@ -8,9 +8,6 @@ import * as vscode from 'vscode';
         fileName: string
         uri: string
     }
-    export interface File {
-        fileName: string
-    }
     export interface FileListItem {
         scope: string;
         uri: string;
@@ -32,7 +29,7 @@ import * as vscode from 'vscode';
 
         function addnode(obj: FileListItem): void {
             const path = obj.scope + "/" + obj.logicalpath;
-            const splitpath = path.replace(/^\/|\/$/g, "").split('/');
+            const splitpath = path.replace(/^\/+|\/+$/g, "").split('/').filter(s => s.length > 0);
             let ptr = tree;
 
             for (let i = 0; i < splitpath.length; i++) {
@@ -50,6 +47,10 @@ import * as vscode from 'vscode';
                     if (isLastSegment) {
                         ptr[segment].uri = obj.uri;
                     }
+                } else if (!isLastSegment) {
+                    // A node that first arrived as a leaf now has children; make
+                    // it a directory so they aren't hidden.
+                    ptr[segment].isDirectory = true;
                 }
 
                 ptr = ptr[segment].children;
@@ -74,11 +75,6 @@ import * as vscode from 'vscode';
         // Convert the tree to the expected format
         return Object.values(tree).map(convertToTreeNode);
       }
-
-    // interface Entry {
-    //     uri: vscode.Uri;
-    //     type: vscode.FileType;
-    // }
 
     export class FilesProvider implements vscode.TreeDataProvider<TreeNode> {
         private readonly _tree : TreeNode = {
@@ -110,25 +106,10 @@ import * as vscode from 'vscode';
         async getChildren(element?: TreeNode): Promise<TreeNode[]> {
             if (element) {
                 return element.children;
-                // const children = await this.readDirectory(element.uri);
-                // return children.map(([name, type]) => ({ uri: vscode.Uri.file(path.join(element.uri.fsPath, name)), type }));
             }
             else {
                 return this._tree.children;
             }
-
-            // const workspaceFolder = vscode.workspace.workspaceFolders.filter(folder => folder.uri.scheme === 'file')[0];
-            // if (workspaceFolder) {
-            //     const children = await this.readDirectory(workspaceFolder.uri);
-            //     children.sort((a, b) => {
-            //         if (a[1] === b[1]) {
-            //             return a[0].localeCompare(b[0]);
-            //         }
-            //         return a[1] === vscode.FileType.Directory ? -1 : 1;
-            //     });
-            //     return children.map(([name, type]) => ({ uri: vscode.Uri.file(path.join(workspaceFolder.uri.fsPath, name)), type }));
-            // }
-
         }
         refresh(files : FileListItem[]) {
             this.parseTree(files);
@@ -145,6 +126,7 @@ import * as vscode from 'vscode';
 	constructor(context: vscode.ExtensionContext, files : FileListItem[]) {
 		this.treeDataProvider = new FilesProvider(files);
 		this.fileExplorer = vscode.window.createTreeView('cwtools-files', { treeDataProvider: this.treeDataProvider });
+		context.subscriptions.push(this.fileExplorer);
 		context.subscriptions.push(vscode.commands.registerCommand('cwtools-files.openFile', (resource) => this.openResource(resource)));
 	}
 
@@ -154,8 +136,5 @@ import * as vscode from 'vscode';
 
     refresh(files : FileListItem[]): void {
         this.treeDataProvider.refresh(files);
-        // this.fileExplorer.dispose();
-        // const treeDataProvider = new FilesProvider(files);
-        // this.fileExplorer = vscode.window.createTreeView('cwtools-files', { treeDataProvider });
     }
 }

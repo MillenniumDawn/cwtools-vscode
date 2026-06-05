@@ -6,9 +6,6 @@
 // The module 'assert' provides assertion methods from node
 import * as assert from 'assert';
 import path from 'path';
-
-// You can import and use all API from the 'vscode' module
-// as well as import your extension to test it
 import * as vscode from 'vscode';
 import { activate, retryAsync, wait } from '../utils';
 import { it, describe } from 'mocha';
@@ -18,18 +15,8 @@ import sinon from 'sinon';
 import * as fs from "node:fs";
 import * as os from "node:os";
 import {State} from "../../extension/graphPanel";
+import { FileExplorer } from '../../extension/fileExplorer';
 const root = path.resolve(__dirname, '../../../../client/test/sample');  // Assumes tests are one level deep in 'test/'
-
-// Defines a Mocha test suite to group tests of similar kind together
-suite("Extension Tests", () => {
-
-    // Defines a Mocha unit test
-    test("Something 1", () => {
-        assert.equal(-1, [1, 2, 3].indexOf(5));
-        assert.equal(-1, [1, 2, 3].indexOf(0));
-    });
-});
-// retryAsync moved to shared test utils
 
 suite(`Debug Integration Test: `, function() {
 	test('Extension should be present', () => {
@@ -280,14 +267,127 @@ describe('GraphPanel Tests', function () {
 		after();
 	});
 });
-suite.skip('Manual Testing Suite', () => {
-    // suiteSetup(async () => {
-    // });
-	test('Manual test', async function () {
-		this.timeout(300000);
-		await activate();
-		await wait(300000);
 
+suite('GraphPanel — UI integration', function () {
+	this.timeout(2 * 60 * 1000);
+	const sampleJson = JSON.stringify({
+		elements: {
+			nodes: [
+				{ data: { id: 'a', label: 'A', isPrimary: true, entityType: 'x', location: { filename: 'a.txt', line: 1, column: 0 } } },
+				{ data: { id: 'b', label: 'B', isPrimary: false, entityType: 'x', location: { filename: 'b.txt', line: 1, column: 0 } } }
+			]
+		}
 	});
 
+	let sandbox: sinon.SinonSandbox;
+	let extension: vscode.Extension<unknown>;
+	let tempFile: string;
+
+	const setupPanel = async () => {
+		await activate();
+		const ext = vscode.extensions.getExtension('tboby.cwtools-vscode');
+		assert.ok(ext, 'Extension should be found');
+		extension = ext!;
+		tempFile = path.join(os.tmpdir(), `cwtools-graph-${Date.now()}.json`);
+		fs.writeFileSync(tempFile, sampleJson, 'utf8');
+		if (gp.GraphPanel.currentPanel) gp.GraphPanel.currentPanel.dispose();
+		gp.GraphPanel.create(extension.extensionPath);
+	};
+
+	const teardownPanel = () => {
+		if (gp.GraphPanel.currentPanel) gp.GraphPanel.currentPanel.dispose();
+		if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+	};
+
+	setup(() => { sandbox = sinon.createSandbox(); });
+	teardown(() => {
+		sandbox.restore();
+		teardownPanel();
+	});
+
+	test('starts in the New state before the webview posts ready', async function () {
+		await setupPanel();
+		assert.strictEqual(await gp.GraphPanel.currentPanel!.getState(), State.New);
+	});
+
+	test('saveGraphImage and saveGraphJson are registered once a GraphPanel exists', async function () {
+		await setupPanel();
+		const commands = await vscode.commands.getCommands();
+		assert.ok(commands.includes('saveGraphImage'), 'saveGraphImage should be registered');
+		assert.ok(commands.includes('saveGraphJson'), 'saveGraphJson should be registered');
+	});
+
+	test('saveGraphImage forwards an exportImage message to the webview', async function () {
+		await setupPanel();
+		const postMessage = sinon.spy(gp.GraphPanel.currentPanel!['_panel'].webview, 'postMessage');
+		await vscode.commands.executeCommand('saveGraphImage');
+		assert.ok(postMessage.called, 'webview.postMessage should be called');
+		assert.deepStrictEqual(postMessage.firstCall.args[0], { command: 'exportImage' });
+	});
+
+	test('saveGraphJson forwards an exportJson message to the webview', async function () {
+		await setupPanel();
+		const postMessage = sinon.spy(gp.GraphPanel.currentPanel!['_panel'].webview, 'postMessage');
+		await vscode.commands.executeCommand('saveGraphJson');
+		assert.ok(postMessage.called, 'webview.postMessage should be called');
+		assert.deepStrictEqual(postMessage.firstCall.args[0], { command: 'exportJson' });
+	});
+
+	test('initialiseGraph transitions out of New once data is queued', async function () {
+		await setupPanel();
+		const data: GraphData = [
+			{ id: 'a', name: 'A', references: [], isPrimary: true, entityType: 'x' },
+			{ id: 'b', name: 'B', references: [], isPrimary: false, entityType: 'x' }
+		];
+		gp.GraphPanel.currentPanel!.initialiseGraph(data, 1.0);
+		const finalState = await retryAsync(
+			async () => (await gp.GraphPanel.currentPanel!.getState()) === State.Done,
+			3, 500
+		);
+		assert.ok(finalState, 'expected GraphPanel to reach Done after initialiseGraph');
+	});
+
+	test('initialiseGraph with a JSON string queues an import handler', async function () {
+		await setupPanel();
+		// Calling initialiseGraph with a string should not throw and should leave the
+		// panel in a non-New state (it wires an onLoad listener to post importJson
+		// once the webview signals ready).
+		gp.GraphPanel.currentPanel!.initialiseGraph(sampleJson, 1.0);
+		const state = await gp.GraphPanel.currentPanel!.getState();
+		assert.notStrictEqual(state, State.New, 'panel should have left New after initialiseGraph');
+	});
+});
+
+suite('FileExplorer — UI integration', function () {
+	this.timeout(2 * 60 * 1000);
+	let sandbox: sinon.SinonSandbox;
+	let fakeContext: vscode.ExtensionContext;
+
+	setup(() => { sandbox = sinon.createSandbox(); });
+	teardown(() => sandbox.restore());
+
+	test('instantiating FileExplorer registers the openFile command', async function () {
+		await activate();
+		fakeContext = {
+			subscriptions: [] as { dispose(): unknown }[],
+		} as unknown as vscode.ExtensionContext;
+		new FileExplorer(fakeContext, [
+			{ scope: 'events', uri: 'file:///events/irm.txt', logicalpath: 'irm.txt' }
+		]);
+		const commands = await vscode.commands.getCommands();
+		assert.ok(commands.includes('cwtools-files.openFile'), 'openFile command should be registered once FileExplorer exists');
+	});
+
+	test('openFile command shows the document', async function () {
+		await activate();
+		// Reuse the FileExplorer created by the previous test — registering
+		// the same command twice throws in VS Code.
+		const uri = vscode.Uri.file(path.join(root, 'events/irm.txt'));
+		const showStub = sandbox.stub(vscode.window, 'showTextDocument').resolves();
+
+		await vscode.commands.executeCommand('cwtools-files.openFile', uri);
+
+		assert.ok(showStub.called, 'showTextDocument should be called');
+		assert.ok(showStub.firstCall.args[0].fsPath.endsWith('events/irm.txt'));
+	});
 });
