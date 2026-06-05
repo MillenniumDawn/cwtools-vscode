@@ -4,10 +4,8 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '../../..');
+const repoRoot = path.resolve(__dirname, '../../..');
 const REPO = 'https://github.com/cwtools/cwtools-stellaris-config';
 
 if (process.env.CWTOOLS_PARITY_RULES) {
