@@ -175,6 +175,7 @@ export async function activate(context: ExtensionContext) {
 				rulesCache: rulesCacheForServer,
 				rules_version: workspace.getConfiguration('cwtools').get('rules_version'),
 				repoPath: repoPath,
+				localisationLanguages: workspace.getConfiguration('cwtools').get('localisation.languages'),
 				diagnosticLogging: workspace.getConfiguration('cwtools').get('logging.diagnostic') },
 				revealOutputChannelOn: RevealOutputChannelOn.Error
 		}
