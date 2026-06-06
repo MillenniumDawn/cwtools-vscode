@@ -19,8 +19,9 @@ on:
 name: Release
 
 jobs:
-  # Build the Rust server natively on each platform. osx-x64 runs under Rosetta
-  # on Apple Silicon; add osx-arm64 here later for a native arm build.
+  # Build the Rust server natively on each platform. osx-x64 (Intel) and
+  # osx-arm64 (Apple Silicon) are both built natively so neither requires
+  # Rosetta.
   build-server:
     strategy:
       fail-fast: false
@@ -34,9 +35,13 @@ jobs:
             platform: win-x64
             target: x86_64-pc-windows-msvc
             bin: cwtools-server.exe
-          - os: macos-latest
+          - os: macos-13
             platform: osx-x64
             target: x86_64-apple-darwin
+            bin: cwtools-server
+          - os: macos-latest
+            platform: osx-arm64
+            target: aarch64-apple-darwin
             bin: cwtools-server
     runs-on: ${{ matrix.os }}
     steps:
@@ -92,8 +97,9 @@ jobs:
         base=release/bin/server/cwtools-server
         install -D artifacts/server-linux-x64/cwtools-server     "$base/linux-x64/cwtools-server"
         install -D artifacts/server-osx-x64/cwtools-server       "$base/osx-x64/cwtools-server"
+        install -D artifacts/server-osx-arm64/cwtools-server     "$base/osx-arm64/cwtools-server"
         install -D artifacts/server-win-x64/cwtools-server.exe   "$base/win-x64/cwtools-server.exe"
-        chmod +x "$base/linux-x64/cwtools-server" "$base/osx-x64/cwtools-server"
+        chmod +x "$base/linux-x64/cwtools-server" "$base/osx-x64/cwtools-server" "$base/osx-arm64/cwtools-server"
         ls -R "$base"
     - name: Setup .NET Core
       uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0

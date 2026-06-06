@@ -77,7 +77,7 @@ export function detectFromFolder(root: string, fileExists: (p: string) => boolea
 function serverPlatformDir(): string {
 	switch (os.platform()) {
 		case 'win32': return 'win-x64';
-		case 'darwin': return 'osx-x64';
+		case 'darwin': return os.arch() === 'arm64' ? 'osx-arm64' : 'osx-x64';
 		default: return 'linux-x64';
 	}
 }
