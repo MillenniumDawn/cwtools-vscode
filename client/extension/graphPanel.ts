@@ -1,6 +1,6 @@
 import vscode from "vscode";
 import * as path from 'path';
-import * as fs from 'fs'
+import { writeFile } from 'fs/promises';
 import * as crypto from 'crypto';
 import { GraphData } from "../common/graphTypes";
 
@@ -100,7 +100,7 @@ export class GraphPanel {
                             const image = message.image;
                             const dest = await vscode.window.showSaveDialog({ filters: { 'Image': ['png'] } });
                             if(dest){
-                                fs.writeFile(dest.fsPath, image, "base64", (error) => { if (error) console.error(error); });
+                                await writeFile(dest.fsPath, image, "base64");
                             }
                             return;
                         }
@@ -109,7 +109,7 @@ export class GraphPanel {
                             const json = message.json;
                             const dest = await vscode.window.showSaveDialog({ filters: { 'Json': ['json'] } });
                             if(dest){
-                                fs.writeFile(dest.fsPath, json, "utf-8", (error) => { if (error) console.error(error); });
+                                await writeFile(dest.fsPath, json, "utf-8");
                             }
                             return;
                         }
@@ -207,10 +207,8 @@ export class GraphPanel {
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta id="__________cytoscape_stylesheet">
-   <meta http-equiv="Content-Security-Policy" content="default-src 'nonce-${nonce}'; img-src vscode-resource: https: data:; script-src 'nonce-${nonce}' 'strict-dynamic'; font-src https://ajax.aspnetcdn.com/ajax/bootstrap/3.3.7; base-uri 'self'; object-src 'none'; style-src vscode-resource: https:">
-          <link href="${styleUri}" rel="stylesheet" type="text/css" nonce="${nonce}" />
-          <link href="https://unpkg.com/tippy.js@4.3.5/index.css" rel="stylesheet" type="text/css" nonce="${nonce}" />
+   <meta http-equiv="Content-Security-Policy" content="default-src 'nonce-${nonce}'; img-src vscode-resource: https: data:; script-src 'nonce-${nonce}' 'strict-dynamic'; base-uri 'self'; object-src 'none'; style-src vscode-resource: 'unsafe-inline'">
+           <link href="${styleUri}" rel="stylesheet" type="text/css" nonce="${nonce}" />
     </head>
 <body>
     <div class="vbox viewport body-content">
@@ -219,10 +217,6 @@ export class GraphPanel {
     <div class="cy-row" id="cy"></div>
 </div>
 
- <script src="https://cdnjs.cloudflare.com/ajax/libs/systemjs/5.0.0/system.js" nonce="${nonce}"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/systemjs/5.0.0/extras/amd.js" nonce="${nonce}"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/systemjs/5.0.0/extras/named-register.js" nonce="${nonce}"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/systemjs/5.0.0/extras/named-exports.js" nonce="${nonce}"></script>
          <script src="${scriptUri}" nonce="${nonce}"></script>
 </div>
 </body>

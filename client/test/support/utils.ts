@@ -112,12 +112,3 @@ export function currentEngine(): 'rust' | 'fsharp' {
   const value = vscode.workspace.getConfiguration('cwtools').get<string>('engine');
   return value?.toLowerCase() === 'fsharp' ? 'fsharp' : 'rust';
 }
-
-/**
- * Set the engine and reload the window so the next activation picks it up.
- * Used by the parity suite to test both engines in one run.
- */
-export async function setEngineAndReload(engine: 'rust' | 'fsharp'): Promise<void> {
-  await vscode.workspace.getConfiguration('cwtools').update('engine', engine, vscode.ConfigurationTarget.Global);
-  await vscode.commands.executeCommand('workbench.action.reloadWindow');
-}

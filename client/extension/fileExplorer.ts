@@ -14,7 +14,7 @@ import * as vscode from 'vscode';
         logicalpath: string
     }
 
-    export type fileToTreeNodeType = (files: FileListItem[]) => TreeNode[]
+    type fileToTreeNodeType = (files: FileListItem[]) => TreeNode[]
 
     // Intermediate node type used during tree construction
     interface TreeNodeInternal {

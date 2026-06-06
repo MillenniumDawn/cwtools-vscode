@@ -83,17 +83,3 @@ export function teardownLSPErrorMonitoring(): void {
     errorLog = [];
     testStartTime = 0;
 }
-
-/**
- * Gets the current error count for debugging purposes
- */
-export function getErrorCount(): number {
-    return errorLog.filter(entry => entry.timestamp >= testStartTime).length;
-}
-
-/**
- * Clears errors that occurred before the current test (for cleanup between test suites)
- */
-export function clearPreviousErrors(): void {
-    errorLog = errorLog.filter(entry => entry.timestamp >= testStartTime);
-}

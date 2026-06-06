@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { activate, waitForLSP, currentEngine, EXTENSION_ID } from '../support/utils';
+import { activate, waitForLSP, currentEngine, EXTENSION_ID, openDocumentAndShow } from '../support/utils';
 import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../support/lspErrorMonitor';
 import { expect } from 'chai';
 
@@ -22,11 +22,8 @@ async function getCompletions(uri: vscode.Uri, position: vscode.Position): Promi
 	return completions;
 }
 
-async function openAndShow(file: string): Promise<vscode.TextDocument> {
-	const uri = vscode.Uri.file(file);
-	const document = await vscode.workspace.openTextDocument(uri);
-	await vscode.window.showTextDocument(document);
-	return document;
+function extractLabels(items: vscode.CompletionItem[]): string[] {
+	return items.map(item => typeof item.label === 'string' ? item.label : item.label.label);
 }
 
 suite('LSP Completion Tests', function () {
@@ -37,7 +34,7 @@ suite('LSP Completion Tests', function () {
 		await activate();
 		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, 'Extension should be active');
-		const document = await openAndShow(testEventFile);
+		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
 		await waitForLSP(document.uri);
 	});
 
@@ -49,11 +46,9 @@ suite('LSP Completion Tests', function () {
 	suiteTeardown(() => teardownLSPErrorMonitoring());
 
 	test('should provide completions in niche context', async function () {
-		const document = await openAndShow(testNicheFile);
+		const document = await openDocumentAndShow(vscode.Uri.file(testNicheFile));
 		const completions = await getCompletions(document.uri, new vscode.Position(26, 41));
-		const labels = completions.items.map(item =>
-			typeof item.label === 'string' ? item.label : item.label.label
-		);
+		const labels = extractLabels(completions.items);
 		const expected = ["regionalist_dublicated", "sector_policy_leadership"];
 		const missing = expected.filter(e => !labels.includes(e));
 		if (currentEngine() === 'rust' && missing.length > 0) {
@@ -63,11 +58,9 @@ suite('LSP Completion Tests', function () {
 	});
 
 	test('should provide completions in trigger context', async function () {
-		const document = await openAndShow(testEventFile);
+		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
 		const completions = await getCompletions(document.uri, new vscode.Position(12, 0));
-		const labels = completions.items.map(item =>
-			typeof item.label === 'string' ? item.label : item.label.label
-		);
+		const labels = extractLabels(completions.items);
 		const hasRelevantTriggers = labels.some(label =>
 			label.includes('is_ai') || label.includes('limit') || label.includes('country_type')
 		);
@@ -76,17 +69,15 @@ suite('LSP Completion Tests', function () {
 	});
 
 	test('should provide completions in effect context', async function () {
-		const document = await openAndShow(testEventFile);
+		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
 		const completions = await getCompletions(document.uri, new vscode.Position(17, 8));
-		const labels = completions.items.map(item =>
-			typeof item.label === 'string' ? item.label : item.label.label
-		);
+		const labels = extractLabels(completions.items);
 		assert.ok(labels.length > 0);
 		assert.ok(completions.items.length > 0, 'Should have completion items in effect context');
 	});
 
 	test('should respond to completion requests quickly', async function () {
-		const document = await openAndShow(testEventFile);
+		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
 		const start = Date.now();
 		const completions = await getCompletions(document.uri, new vscode.Position(12, 0));
 		const duration = Date.now() - start;
@@ -95,7 +86,7 @@ suite('LSP Completion Tests', function () {
 	});
 
 	test('should provide LSP-based completions not just text fallback', async function () {
-		const document = await openAndShow(testEventFile);
+		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
 		const completions = await getCompletions(document.uri, new vscode.Position(12, 0));
 		const hasLSPFeatures = completions.items.some(item =>
 			item.detail || item.documentation || item.sortText ||

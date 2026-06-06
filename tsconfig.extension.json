@@ -1,6 +1,10 @@
 {
 	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"lib": ["es2020"],
+		"skipLibCheck": true
+	},
 	"exclude": [
-		"client/webview/*.ts"
+		"client/webview/**/*.ts"
 	]
 }

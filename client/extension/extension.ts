@@ -2,7 +2,6 @@
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
-'use strict';
 
 import * as path from 'path';
 import * as os from 'os';
@@ -12,17 +11,21 @@ import { workspace, ExtensionContext, window, Disposable, Uri, WorkspaceEdit, Te
 import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind, NotificationType, ExecuteCommandRequest, RevealOutputChannelOn } from 'vscode-languageclient/node';
 
 import { FileExplorer, FileListItem } from './fileExplorer';
-import * as gp from './graphPanel';
-import * as exe from './executable';
 import { getGraphData } from '../common/graphTypes';
 import {
 	LANGUAGE_REPOS,
 	GAME_DISPLAY,
 	GAME_FOLDER,
-	detectFromFolder,
 	serverExeForEngine,
 	runGit,
 } from './engine';
+import { detectGameAndVanilla } from './detectGame';
+
+interface LoadingBarParams { enable: boolean; value: string }
+interface DebugStatusBarParams { enable: boolean; value: string }
+interface CreateVirtualFile { uri: string; fileContent: string }
+interface DidFocusFile { uri: string }
+interface UpdateFileList { fileList: FileListItem[] }
 
 export let defaultClient: LanguageClient;
 export async function activate(context: ExtensionContext) {
@@ -190,19 +193,14 @@ export async function activate(context: ExtensionContext) {
 		const log = client.outputChannel
 		defaultClient = client;
 		client.registerProposedFeatures();
-		interface loadingBarParams { enable: boolean; value: string }
-		const loadingBarNotification = new NotificationType<loadingBarParams>('loadingBar');
-		interface debugStatusBarParams { enable: boolean; value: string }
-		const debugStatusBarParamsNotification = new NotificationType<debugStatusBarParams>('debugBar');
-		interface CreateVirtualFile { uri: string; fileContent: string }
+		const loadingBarNotification = new NotificationType<LoadingBarParams>('loadingBar');
+		const debugStatusBarParamsNotification = new NotificationType<DebugStatusBarParams>('debugBar');
 		const createVirtualFile = new NotificationType<CreateVirtualFile>('createVirtualFile');
 		const promptReload = new NotificationType<string>('promptReload')
 		const forceReload = new NotificationType<string>('forceReload')
 		const promptVanillaPath = new NotificationType<string>('promptVanillaPath')
-		interface DidFocusFile { uri : string }
 		const didFocusFile = new NotificationType<DidFocusFile>('didFocusFile')
 		let status: Disposable | undefined;
-		interface UpdateFileList { fileList: FileListItem[] }
 		const updateFileList = new NotificationType<UpdateFileList>('updateFileList');
 
 		let latestType : string = '';
@@ -238,7 +236,7 @@ export async function activate(context: ExtensionContext) {
 			}
 		}
 
-		client.onNotification(loadingBarNotification, (param: loadingBarParams) => {
+		client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
 			if (param.enable) {
 				if (status !== undefined) {
 					status.dispose();
@@ -252,7 +250,7 @@ export async function activate(context: ExtensionContext) {
 		})
 		const debugStatusBar = window.createStatusBarItem(vs.StatusBarAlignment.Left);
 		context.subscriptions.push(debugStatusBar);
-		client.onNotification(debugStatusBarParamsNotification, (param: debugStatusBarParams) => {
+		client.onNotification(debugStatusBarParamsNotification, (param: DebugStatusBarParams) => {
 			if (param.enable) {
 				debugStatusBar.text = param.value;
 				debugStatusBar.show();
@@ -320,7 +318,10 @@ export async function activate(context: ExtensionContext) {
 		let currentGraphDepth = 3;
 		const wheelSensitivity = (): number => workspace.getConfiguration('cwtools.graph').get('zoomSensitivity') ?? 1;
 		const showGraph = async function() {
-			const graphData = await getGraphData(latestType, currentGraphDepth);
+			const [gp, graphData] = await Promise.all([
+				import('./graphPanel'),
+				getGraphData(latestType, currentGraphDepth),
+			]);
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity());
 		}
@@ -348,6 +349,7 @@ export async function activate(context: ExtensionContext) {
 			}
 			const bytes = await vs.workspace.fs.readFile(uri[0]);
 			const data = new TextDecoder('utf-8').decode(bytes);
+			const gp = await import('./graphPanel');
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
 		}));
@@ -367,81 +369,7 @@ export async function activate(context: ExtensionContext) {
 		}
 	}
 
-	let languageId : string;
-	const knownLanguageIds = ["stellaris", "eu4", "hoi4", "ck2", "imperator", "vic2", "vic3", "ck3", "eu5"];
-
-	const getLanguageIdFallback = async function() {
-		const markerFiles = await workspace.findFiles("**/*.txt", "**/{.git,node_modules,out,dist}/**", 1);
-		if (markerFiles.length === 1) {
-			const doc = await workspace.openTextDocument(markerFiles[0]);
-			if (knownLanguageIds.includes(doc.languageId)) return doc.languageId;
-		}
-		if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
-			return detectFromFolder(workspace.workspaceFolders[0].uri.fsPath, fsExistsSync);
-		}
-		return null;
-	}
-
-	let guessedLanguageId: string | undefined | null = window.activeTextEditor?.document?.languageId;
-	if(guessedLanguageId === undefined || !knownLanguageIds.includes(guessedLanguageId)){
-		guessedLanguageId = await getLanguageIdFallback();
-	}
-
-	languageId = (guessedLanguageId && knownLanguageIds.includes(guessedLanguageId)) ? guessedLanguageId : "paradox";
-	async function findExeInFiles(gameExeName: string, binariesPrefix = false) {
-		if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
-			return [];
-		}
-
-		const root = workspace.workspaceFolders[0];
-		const isWin = os.platform() === "win32";
-		const ext = isWin ? "*.exe" : "*";
-		const prefix = binariesPrefix ? "binaries/" : "";
-		const names = [gameExeName, gameExeName.toUpperCase(), gameExeName.toLowerCase()];
-		const patterns = names.map(name => new vs.RelativePattern(root, `${prefix}${name}${ext}`));
-
-		const results = await Promise.all(patterns.map(p => workspace.findFiles(p)));
-		const allFiles = results.flat();
-		const validFiles = (await Promise.all(
-			allFiles.map(async v => (await exe.existAndIsExe(v.fsPath)) ? v : null)
-		)).filter(Boolean);
-		return validFiles;
-	}
-	const games = [
-		{ id: "eu4", exeName: "eu4", binariesPrefix: false },
-		{ id: "hoi4", exeName: "hoi4", binariesPrefix: false },
-		{ id: "stellaris", exeName: "stellaris", binariesPrefix: false },
-		{ id: "ck2", exeName: "CK2", binariesPrefix: false },
-		{ id: "imperator", exeName: "imperator", binariesPrefix: true },
-		{ id: "vic2", exeName: "v2game", binariesPrefix: false },
-		{ id: "ck3", exeName: "ck3", binariesPrefix: true },
-		{ id: "vic3", exeName: "victoria3", binariesPrefix: true },
-        { id: "eu5", exeName: "eu5", binariesPrefix: true },
-	];
-
-	const promises = games.map(({ exeName, binariesPrefix }) =>
-		findExeInFiles(exeName, binariesPrefix)
-	);
-
-	const results = await Promise.all(promises);
-
-	let isVanillaFolder = false;
-
-	for (let i = 0; i < results.length; i++) {
-		const { id } = games[i];
-		if (results[i].length > 0 && (languageId === "paradox" || languageId === id)) {
-			isVanillaFolder = true;
-			languageId = id;
-		}
-	}
-
-	if (
-		workspace.workspaceFolders &&
-		workspace.workspaceFolders.length > 0 &&
-		path.basename(workspace.workspaceFolders[0].uri.fsPath) === "game"
-	) {
-		isVanillaFolder = true;
-	}
+	const { languageId, isVanillaFolder } = await detectGameAndVanilla();
 
 	await init(languageId, isVanillaFolder);
 }
