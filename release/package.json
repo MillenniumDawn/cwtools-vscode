@@ -142,196 +142,234 @@
         "enablement": "cwtoolsWebview == true"
       }
     ],
-    "configuration": {
-      "type": "object",
-      "title": "%configuration.title%",
-      "properties": {
-        "cwtools.trace.server": {
-          "scope": "window",
-          "type": "string",
-          "enum": [
-            "off",
-            "messages",
-            "verbose"
-          ],
-          "default": "off",
-          "description": "%configuration.cwtools.trace.server.description%"
-        },
-        "cwtools.localisation.languages": {
-          "scope": "window",
-          "type": "array",
-          "items": {
+    "configuration": [
+      {
+        "type": "object",
+        "title": "CWTools",
+        "order": 1,
+        "properties": {
+          "cwtools.engine": {
+            "scope": "window",
             "type": "string",
             "enum": [
-              "English",
-              "French",
-              "German",
-              "Spanish",
-              "Russian",
-              "Braz_Por",
-              "Polish",
-              "Chinese",
-              "Korean",
-              "Japanese",
-              "Turkish"
+              "rust",
+              "fsharp"
+            ],
+            "enumDescriptions": [
+              "%configuration.cwtools.engine.rust.description%",
+              "%configuration.cwtools.engine.fsharp.description%"
+            ],
+            "default": "rust",
+            "description": "%configuration.cwtools.engine.description%"
+          },
+          "cwtools.rules_version": {
+            "scope": "window",
+            "type": "string",
+            "enum": [
+              "stable",
+              "latest",
+              "manual"
+            ],
+            "default": "latest",
+            "description": "%configuration.cwtools.rules_version.description%"
+          },
+          "cwtools.rules_folder": {
+            "scope": "window",
+            "type": "string",
+            "description": "%configuration.cwtools.rules_folder.description%"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "title": "CWTools: Localisation",
+        "order": 2,
+        "properties": {
+          "cwtools.localisation.languages": {
+            "scope": "window",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "English",
+                "French",
+                "German",
+                "Spanish",
+                "Russian",
+                "Braz_Por",
+                "Polish",
+                "Chinese",
+                "Korean",
+                "Japanese",
+                "Turkish"
+              ]
+            },
+            "default": [
+              "English"
+            ],
+            "description": "%configuration.cwtools.localisation.languages.description%",
+            "uniqueItems": true
+          },
+          "cwtools.localisation.generated_strings": {
+            "scope": "window",
+            "type": "string",
+            "default": ":0 \"REPLACE_ME\"",
+            "description": "%configuration.cwtools.localisation.generated_strings.description%"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "title": "CWTools: Errors & diagnostics",
+        "order": 3,
+        "properties": {
+          "cwtools.errors.vanilla": {
+            "scope": "window",
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.cwtools.errors.vanilla.description%"
+          },
+          "cwtools.errors.ignore": {
+            "scope": "window",
+            "type": "array",
+            "description": "%configuration.cwtools.errors.ignore.description%",
+            "uniqueItems": true
+          },
+          "cwtools.errors.ignorefiles": {
+            "scope": "window",
+            "type": "array",
+            "description": "%configuration.cwtools.errors.ignorefiles.description%",
+            "uniqueItems": true,
+            "default": [
+              "README.txt",
+              "credits.txt",
+              "credits_l_simp_chinese.txt",
+              "reference.txt",
+              "startup_info.txt"
             ]
           },
-          "default": [
-            "English"
-          ],
-          "description": "%configuration.cwtools.localisation.languages.description%",
-          "uniqueItems": true
-        },
-        "cwtools.localisation.generated_strings": {
-          "scope": "window",
-          "type": "string",
-          "default": ":0 \u0022REPLACE_ME\u0022",
-          "description": "%configuration.cwtools.localisation.generated_strings.description%"
-        },
-        "cwtools.errors.vanilla": {
-          "scope": "window",
-          "type": "boolean",
-          "default": false,
-          "description": "%configuration.cwtools.errors.vanilla.description%"
-        },
-        "cwtools.errors.ignore": {
-          "scope": "window",
-          "type": "array",
-          "description": "%configuration.cwtools.errors.ignore.description%",
-          "uniqueItems": true
-        },
-        "cwtools.errors.ignorefiles": {
-          "scope": "window",
-          "type": "array",
-          "description": "%configuration.cwtools.errors.ignorefiles.description%",
-          "uniqueItems": true,
-          "default": [
-            "README.txt",
-            "credits.txt",
-            "credits_l_simp_chinese.txt",
-            "reference.txt",
-            "startup_info.txt"
-          ]
-        },
-        "cwtools.experimental": {
-          "scope": "window",
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.cwtools.experimental.description%"
-        },
-        "cwtools.debug_mode": {
-          "scope": "window",
-          "type": "boolean",
-          "default": false,
-          "description": "%configuration.cwtools.debug_mode.description%"
-        },
-        "cwtools.logging.diagnostic": {
-          "scope": "window",
-          "type": "boolean",
-          "default": false,
-          "description": "%configuration.cwtools.logging.diagnostic.description%"
-        },
-        "cwtools.rules_version": {
-          "scope": "window",
-          "type": "string",
-          "enum": [
-            "stable",
-            "latest",
-            "manual"
-          ],
-          "default": "latest",
-          "description": "%configuration.cwtools.rules_version.description%"
-        },
-        "cwtools.rules_folder": {
-          "scope": "window",
-          "type": "string",
-          "description": "%configuration.cwtools.rules_folder.description%"
-        },
-        "cwtools.engine": {
-          "scope": "window",
-          "type": "string",
-          "enum": [
-            "rust",
-            "fsharp"
-          ],
-          "enumDescriptions": [
-            "%configuration.cwtools.engine.rust.description%",
-            "%configuration.cwtools.engine.fsharp.description%"
-          ],
-          "default": "rust",
-          "description": "%configuration.cwtools.engine.description%"
-        },
-        "cwtools.ignore_patterns": {
-          "scope": "window",
-          "type": "array",
-          "description": "%configuration.cwtools.ignore_patterns.description%",
-          "uniqueItems": true,
-          "default": [
-            "**/99_README**.txt"
-          ]
-        },
-        "cwtools.cache.eu4": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.eu4.description%"
-        },
-        "cwtools.cache.hoi4": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.hoi4.description%"
-        },
-        "cwtools.cache.stellaris": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.stellaris.description%"
-        },
-        "cwtools.cache.ck2": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.ck2.description%"
-        },
-        "cwtools.cache.imperator": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.imperator.description%"
-        },
-        "cwtools.cache.vic2": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.vic2.description%"
-        },
-        "cwtools.cache.ck3": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.ck3.description%"
-        },
-        "cwtools.cache.vic3": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.vic3.description%"
-        },
-        "cwtools.cache.eu5": {
-          "scope": "application",
-          "type": "string",
-          "description": "%configuration.cwtools.cache.eu5.description%"
-        },
-        "cwtools.graph.zoomSensitivity": {
-          "scope": "resource",
-          "type": "number",
-          "maximum": 2,
-          "minimum": 0,
-          "description": "%configuration.cwtools.graph.zoomSensitivity.description%",
-          "default": 1
-        },
-        "cwtools.maxFileSize": {
-          "scope": "resource",
-          "type": "integer",
-          "minimum": 1,
-          "default": 2,
-          "description": "%configuration.cwtools.maxFileSize.description%"
+          "cwtools.ignore_patterns": {
+            "scope": "window",
+            "type": "array",
+            "description": "%configuration.cwtools.ignore_patterns.description%",
+            "uniqueItems": true,
+            "default": [
+              "**/99_README**.txt"
+            ]
+          },
+          "cwtools.maxFileSize": {
+            "scope": "resource",
+            "type": "integer",
+            "minimum": 1,
+            "default": 2,
+            "description": "%configuration.cwtools.maxFileSize.description%"
+          },
+          "cwtools.logging.diagnostic": {
+            "scope": "window",
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.cwtools.logging.diagnostic.description%"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "title": "CWTools: Game install paths",
+        "order": 4,
+        "properties": {
+          "cwtools.cache.eu4": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.eu4.description%"
+          },
+          "cwtools.cache.hoi4": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.hoi4.description%"
+          },
+          "cwtools.cache.stellaris": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.stellaris.description%"
+          },
+          "cwtools.cache.ck2": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.ck2.description%"
+          },
+          "cwtools.cache.imperator": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.imperator.description%"
+          },
+          "cwtools.cache.vic2": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.vic2.description%"
+          },
+          "cwtools.cache.ck3": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.ck3.description%"
+          },
+          "cwtools.cache.vic3": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.vic3.description%"
+          },
+          "cwtools.cache.eu5": {
+            "scope": "application",
+            "type": "string",
+            "description": "%configuration.cwtools.cache.eu5.description%"
+          }
+        }
+      },
+      {
+        "type": "object",
+        "title": "CWTools: Graph",
+        "order": 5,
+        "properties": {
+          "cwtools.graph.zoomSensitivity": {
+            "scope": "resource",
+            "type": "number",
+            "maximum": 2,
+            "minimum": 0,
+            "description": "%configuration.cwtools.graph.zoomSensitivity.description%",
+            "default": 1
+          }
+        }
+      },
+      {
+        "type": "object",
+        "title": "CWTools: Advanced",
+        "order": 6,
+        "properties": {
+          "cwtools.trace.server": {
+            "scope": "window",
+            "type": "string",
+            "enum": [
+              "off",
+              "messages",
+              "verbose"
+            ],
+            "default": "off",
+            "description": "%configuration.cwtools.trace.server.description%"
+          },
+          "cwtools.experimental": {
+            "scope": "window",
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.cwtools.experimental.description%"
+          },
+          "cwtools.debug_mode": {
+            "scope": "window",
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.cwtools.debug_mode.description%"
+          }
         }
       }
-    },
+    ],
     "languages": [
       {
         "id": "stellaris",
