@@ -1,8 +1,9 @@
-import vscode from "vscode";
+import * as vscode from "vscode";
 import * as path from 'path';
 import { writeFile } from 'fs/promises';
 import * as crypto from 'crypto';
-import { GraphData } from "../common/graphTypes";
+import type { GraphData } from "../common/graphTypes";
+import { logError } from './logger';
 
 export enum State {
     New,
@@ -31,7 +32,7 @@ export class GraphPanel {
     // Method to check if cytoscape has rendered elements
     public async checkCytoscapeRendered() {
         // Settle any in-flight check before replacing it, so it isn't orphaned.
-        if (this.pendingRequest != null) {
+        if (this.pendingRequest !== null) {
             this.pendingRequest(false);
         }
         const promise = new Promise<boolean>((resolve) => {
@@ -51,7 +52,7 @@ export class GraphPanel {
 
         // If we already have a panel, dispose of it.
         // Create a new panel.
-        if (GraphPanel.currentPanel && GraphPanel.currentPanel._state != State.New && GraphPanel.currentPanel._state != State.ClientReady) {
+        if (GraphPanel.currentPanel && GraphPanel.currentPanel._state !== State.New && GraphPanel.currentPanel._state !== State.ClientReady) {
             GraphPanel.currentPanel.dispose();
         }
         if (!GraphPanel.currentPanel) {
@@ -114,7 +115,7 @@ export class GraphPanel {
                             return;
                         }
                     case 'ready':
-                        if (this._state == State.DataReady) {
+                        if (this._state === State.DataReady) {
                             this._state = State.Done;
                             this._onLoad.fire(undefined);
                         } else {
@@ -123,7 +124,7 @@ export class GraphPanel {
                         return;
                     case 'cytoscapeRenderedResult':
                         {
-                            if(this.pendingRequest != null){
+                            if(this.pendingRequest !== null){
                                 const resolve = this.pendingRequest;
                                 this.pendingRequest = null;
                                 resolve(message.rendered as boolean); // Use 'rendered' property from webview response
@@ -132,7 +133,7 @@ export class GraphPanel {
                         }
                 }
             } catch (error) {
-                console.error('[CWTools] graph webview message handler failed:', error);
+                logError('graph webview message handler failed', error);
             }
         }, null, this._disposables)));
 
@@ -162,10 +163,10 @@ export class GraphPanel {
         } else {
             this._disposables.push(this.onLoad(() => this._panel.webview.postMessage({ "command": "go", "data": data, "settings": settings })));
         }
-        if (this._state == State.Done) {
+        if (this._state === State.Done) {
             return;
         }
-        else if (this._state == State.ClientReady) {
+        else if (this._state === State.ClientReady) {
             this._state = State.Done;
             this._onLoad.fire(undefined);
         } else {

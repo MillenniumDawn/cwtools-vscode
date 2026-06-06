@@ -374,7 +374,6 @@
       {
         "id": "stellaris",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -396,7 +395,6 @@
       {
         "id": "hoi4",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -418,7 +416,6 @@
       {
         "id": "eu4",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -440,7 +437,6 @@
       {
         "id": "ck2",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -464,7 +460,6 @@
       {
         "id": "imperator",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -487,7 +482,6 @@
       {
         "id": "vic2",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -513,7 +507,6 @@
       {
         "id": "ck3",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -536,7 +529,6 @@
       {
         "id": "vic3",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -559,7 +551,6 @@
       {
         "id": "eu5",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],
@@ -585,7 +576,6 @@
       {
         "id": "paradox",
         "aliases": [
-          "",
           "paradox",
           "pdxscript"
         ],

@@ -1,6 +1,8 @@
 {
 	"compilerOptions": {
 		"noImplicitReturns": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
 		"target": "es2020",
 		"module": "commonjs",
 		"moduleResolution": "node",

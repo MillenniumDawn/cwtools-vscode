@@ -20,7 +20,8 @@
 import * as assert from 'assert';
 import { existsSync } from 'fs';
 import * as path from 'path';
-import { EngineSession, Engine } from './engineSession';
+import type { Engine } from './engineSession';
+import { EngineSession } from './engineSession';
 
 const repoRoot = path.resolve(__dirname, '../../../../..');
 const sampleRoot = path.join(repoRoot, 'client/test/sample');

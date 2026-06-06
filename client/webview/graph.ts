@@ -1,9 +1,10 @@
 import * as cyM from 'cytoscape';
-import { CollectionReturnValue, EventObject, StylesheetJsonBlock } from 'cytoscape'
+import type { CollectionReturnValue, EventObject, StylesheetJsonBlock } from 'cytoscape'
 import { registerCytoscapeCanvas } from './canvas'
 import cytoscapeelk from 'cytoscape-elk'
 import popper from 'cytoscape-popper';
-import tippy, { Props, type Instance } from 'tippy.js';
+import type { Props} from 'tippy.js';
+import tippy, { type Instance } from 'tippy.js';
 import 'tippy.js/dist/tippy.css';
 import mergeimages from 'merge-images'
 import type { GraphLocation, GraphReference, GraphNodeDetail } from '../common/graphTypes'
@@ -27,6 +28,11 @@ interface vscode {
 
 declare const acquireVsCodeApi : () => vscode;
 const vscode : vscode = acquireVsCodeApi();
+
+/** Escape HTML entities to prevent XSS from server-supplied data. */
+function escapeHtml(str: string): string {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 function drawExtra(nodes : cytoscape.NodeCollection, ctx : CanvasRenderingContext2D, zoom : number){
     // Draw shadows under nodes
@@ -154,18 +160,18 @@ function populateGraph(cy: cytoscape.Core, data: techNode[], edges: EdgeInput[])
         }
     });
     data.forEach(function (element) {
-        if(element.isPrimary == false){
-            cy.edges().filter((n) => n.target().id() == element.id || n.source().id() == element.id).forEach((e) => {e.data("isPrimary", false);});
+        if(element.isPrimary === false){
+            cy.edges().filter((n) => n.target().id() === element.id || n.source().id() === element.id).forEach((e) => {e.data("isPrimary", false);});
         }
     });
 }
 
 function setupTooltips(cy: cytoscape.Core) {
     cy.nodes().forEach(function(node) {
-        const simpleTooltip = `<strong>${node.data("entityTypeDisplayName")}</strong>: ${node.data("id")}`;
+        const simpleTooltip = `<strong>${escapeHtml(String(node.data("entityTypeDisplayName")))}</strong>: ${escapeHtml(String(node.data("id")))}`;
         const createRow = function (details : { key : string, values : string[]}) {
             const vals = details.values.join(", ");
-            return `<tr><td>${details.key}</td><td>${vals}</td></tr>`;
+            return `<tr><td>${escapeHtml(details.key)}</td><td>${escapeHtml(vals)}</td></tr>`;
         };
         const detailsText = node.data("details") ? node.data("details").map(createRow).join("") : "";
         const detailsTable =
@@ -182,7 +188,6 @@ function setupTooltips(cy: cytoscape.Core) {
                 content.innerHTML = simpleTooltip;
                 return content;
             },
-            onHidden: (() => {}),
             sticky: true,
             trigger: "manual",
             delay: [null, 200]
@@ -357,14 +362,15 @@ export async function exportImage(pixelRatio: number) {
     vscode.postMessage({ "command": "saveImage", "image": mergedImages.substring(mergedImages.indexOf(',') + 1) });
 }
 
-function blobToDataURL(blob: Blob): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
-        reader.onabort = () => reject(new Error("Read aborted"));
-        reader.readAsDataURL(blob);
-    });
+async function blobToDataURL(blob: Blob): Promise<string> {
+    const buffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]!);
+    }
+    const base64 = btoa(binary);
+    return `data:${blob.type};base64,${base64}`;
 }
 
 export function exportJson() {

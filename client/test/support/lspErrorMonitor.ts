@@ -62,7 +62,6 @@ export function checkForLSPErrors(testName: string): void {
 
         // Remove the errors we're reporting so they don't affect future tests
         errorLog = errorLog.filter(entry => entry.timestamp < testStartTime);
-        console.log(errorMessages)
 
         assert.fail(`LSP Server errors detected during test "${testName}":\n${errorMessages}`);
     }

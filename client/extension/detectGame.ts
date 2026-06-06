@@ -1,6 +1,7 @@
 import * as os from 'os';
 import * as path from 'path';
-import { workspace, window, RelativePattern, Uri } from 'vscode';
+import type { Uri } from 'vscode';
+import { workspace, window, RelativePattern } from 'vscode';
 import { existsSync as fsExistsSync } from 'fs';
 import { detectFromFolder } from './engine';
 import { existAndIsExe } from './executable';

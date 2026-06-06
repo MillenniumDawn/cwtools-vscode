@@ -1,6 +1,7 @@
 import * as assert from 'assert';
-import * as vscode from 'vscode';
-import { filesToTreeNodes, FilesProvider, FileListItem, TreeNode } from '../../extension/fileExplorer';
+import type * as vscode from 'vscode';
+import type { FileListItem, TreeNode } from '../../extension/fileExplorer';
+import { filesToTreeNodes, FilesProvider } from '../../extension/fileExplorer';
 
 suite('FileExplorer — filesToTreeNodes', () => {
 	test('returns an empty array for an empty input', () => {

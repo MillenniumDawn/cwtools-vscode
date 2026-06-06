@@ -20,6 +20,7 @@ import {
 	waitForLanguageServer,
 	currentEngine,
 	openDocumentAndShow,
+	SAMPLE_ROOT,
 } from '../support/utils';
 import {
 	setupLSPErrorMonitoring,
@@ -27,10 +28,9 @@ import {
 } from '../support/lspErrorMonitor';
 import { checkHoverContains, getCompletionLabels } from './hoverChecks';
 
-const sampleRoot = path.resolve(__dirname, '../sample');
-const testEventFile = path.join(sampleRoot, 'events', 'irm.txt');
-const testEffectsFile = path.join(sampleRoot, 'common', 'scripted_effects', 'irm_scripted_effects.txt');
-const testNicheFile = path.join(sampleRoot, 'common', 'pop_faction_types', 'irm_regionalist.txt');
+const testEventFile = path.join(SAMPLE_ROOT, 'events', 'irm.txt');
+const testEffectsFile = path.join(SAMPLE_ROOT, 'common', 'scripted_effects', 'irm_scripted_effects.txt');
+const testNicheFile = path.join(SAMPLE_ROOT, 'common', 'pop_faction_types', 'irm_regionalist.txt');
 
 interface ParityCheck {
 	name: string;

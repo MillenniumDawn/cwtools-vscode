@@ -14,10 +14,13 @@ export default tseslint.config(
 	{
 		languageOptions: { globals: globals.node },
 		rules: {
+			"eqeqeq": "error",
 			"@typescript-eslint/no-unused-vars": [
 				"error",
 				{ argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
 			],
+			"@typescript-eslint/no-explicit-any": "error",
+			"@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports" }],
 		},
 	},
 	// The webview runs in a browser context.

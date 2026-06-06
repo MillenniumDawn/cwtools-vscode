@@ -3,7 +3,8 @@
  * a cwtools server binary (Rust or F#) directly, with no VS Code host. Used by
  * the host-free engine parity harness.
  */
-import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
+import type { ChildProcessWithoutNullStreams} from 'child_process';
+import { spawn } from 'child_process';
 
 type Pending = (msg: { id: number; result?: unknown; error?: unknown }) => void;
 export type NotificationHandler = (method: string, params: unknown) => void;

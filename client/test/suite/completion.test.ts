@@ -1,13 +1,12 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { activate, waitForLSP, currentEngine, EXTENSION_ID, openDocumentAndShow } from '../support/utils';
+import { activate, waitForLSP, currentEngine, EXTENSION_ID, openDocumentAndShow, SAMPLE_ROOT, extractCompletionLabel } from '../support/utils';
 import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../support/lspErrorMonitor';
 import { expect } from 'chai';
 
-const sampleRoot = path.resolve(__dirname, '../sample');
-const testEventFile = path.join(sampleRoot, 'events', 'irm.txt');
-const testNicheFile = path.join(sampleRoot, 'common', 'pop_faction_types', 'irm_regionalist.txt');
+const testEventFile = path.join(SAMPLE_ROOT, 'events', 'irm.txt');
+const testNicheFile = path.join(SAMPLE_ROOT, 'common', 'pop_faction_types', 'irm_regionalist.txt');
 
 async function getCompletions(uri: vscode.Uri, position: vscode.Position): Promise<vscode.CompletionList> {
 	const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
@@ -23,7 +22,7 @@ async function getCompletions(uri: vscode.Uri, position: vscode.Position): Promi
 }
 
 function extractLabels(items: vscode.CompletionItem[]): string[] {
-	return items.map(item => typeof item.label === 'string' ? item.label : item.label.label);
+	return items.map(item => extractCompletionLabel(item));
 }
 
 suite('LSP Completion Tests', function () {

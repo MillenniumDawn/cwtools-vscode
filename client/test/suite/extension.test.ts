@@ -1,15 +1,15 @@
 import * as assert from 'assert';
 import path from 'path';
 import * as vscode from 'vscode';
-import { activate, retryAsync, wait, EXTENSION_ID } from '../support/utils';
+import { activate, retryAsync, wait, EXTENSION_ID, SAMPLE_ROOT } from '../support/utils';
 import { it, describe } from 'mocha';
 import * as gp from '../../extension/graphPanel';
-import { GraphData } from '../../common/graphTypes';
+import type { GraphData } from '../../common/graphTypes';
 import sinon from 'sinon';
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { FileExplorer } from '../../extension/fileExplorer';
-const root = path.resolve(__dirname, '../../../../client/test/sample');  // Assumes tests are one level deep in 'test/'
+const root = SAMPLE_ROOT;
 
 suite(`Debug Integration Test: `, function() {
 	test('Extension should be present', () => {

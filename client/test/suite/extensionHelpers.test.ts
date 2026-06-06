@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import { EventEmitter } from 'events';
-import { ExtensionContext } from 'vscode';
+import type { ExtensionContext } from 'vscode';
 import {
 	LANGUAGE_REPOS,
 	GAME_DISPLAY,

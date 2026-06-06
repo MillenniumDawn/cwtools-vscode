@@ -14,6 +14,7 @@ import { readFileSync } from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { LspClient } from './lspClient';
+import { extractCompletionLabel } from '../support/utils';
 
 export type Engine = 'rust' | 'fsharp';
 
@@ -149,7 +150,7 @@ export class EngineSession {
 			{ items?: { label?: string | { label?: string } }[] } | { label?: string | { label?: string } }[]
 		>('textDocument/completion', { textDocument: { uri: this.uri(file) }, position: { line, character } });
 		const items = Array.isArray(res) ? res : (res?.items ?? []);
-		return items.map(i => (typeof i.label === 'string' ? i.label : i.label?.label ?? '')).filter(Boolean);
+		return items.map(i => extractCompletionLabel(i)).filter(Boolean);
 	}
 
 	async definition(file: string, line: number, character: number): Promise<{ uri: string; range: { start: { line: number; character: number } } }[]> {

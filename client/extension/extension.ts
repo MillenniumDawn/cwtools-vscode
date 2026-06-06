@@ -6,11 +6,14 @@
 import * as path from 'path';
 import * as os from 'os';
 import { existsSync as fsExistsSync, statSync as fsStatSync, chmodSync as fsChmodSync, mkdirSync as fsMkdirSync } from 'fs';
-import * as vs from 'vscode';
-import { workspace, ExtensionContext, window, Disposable, Uri, WorkspaceEdit, TextEdit, Range, commands, env } from 'vscode';
-import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind, NotificationType, ExecuteCommandRequest, RevealOutputChannelOn } from 'vscode-languageclient/node';
+import * as vscode from 'vscode';
+import type { ExtensionContext, Disposable} from 'vscode';
+import { workspace, window, Uri, WorkspaceEdit, TextEdit, Range, commands, env } from 'vscode';
+import type { LanguageClientOptions, ServerOptions} from 'vscode-languageclient/node';
+import { LanguageClient, TransportKind, NotificationType, ExecuteCommandRequest, RevealOutputChannelOn } from 'vscode-languageclient/node';
 
-import { FileExplorer, FileListItem } from './fileExplorer';
+import type { FileListItem } from './fileExplorer';
+import { FileExplorer } from './fileExplorer';
 import { getGraphData } from '../common/graphTypes';
 import {
 	LANGUAGE_REPOS,
@@ -20,6 +23,7 @@ import {
 	runGit,
 } from './engine';
 import { detectGameAndVanilla } from './detectGame';
+import { logInfo, logWarn, logError } from './logger';
 
 interface LoadingBarParams { enable: boolean; value: string }
 interface DebugStatusBarParams { enable: boolean; value: string }
@@ -33,7 +37,7 @@ export async function activate(context: ExtensionContext) {
 	let fileExplorer : FileExplorer;
 
 
-	class CwtoolsProvider implements vs.TextDocumentContentProvider
+	class CwtoolsProvider implements vscode.TextDocumentContentProvider
 	{
 		private disposables: Disposable[] = [];
 
@@ -57,7 +61,7 @@ export async function activate(context: ExtensionContext) {
 	const cacheDir = isDevDir ? path.join(context.globalStorageUri.fsPath, '.cwtools') : path.join(context.extensionPath, '.cwtools')
 
 	const init = async function(language : string, isVanillaFolder : boolean) {
-		const langConfigDisposable = vs.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
+		const langConfigDisposable = vscode.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
 		context.subscriptions.push(langConfigDisposable);
 
 		// cwtools.engine picks between the Rust server (default) and the
@@ -82,7 +86,7 @@ export async function activate(context: ExtensionContext) {
 				return;
 			}
 		}
-		console.log(`[CWTools] Using '${activeEngine}' engine: ${serverExe}`);
+		logInfo(`Using '${activeEngine}' engine: ${serverExe}`);
 
 		if (os.platform() !== 'win32') {
 			try {
@@ -91,15 +95,15 @@ export async function activate(context: ExtensionContext) {
 					fsChmodSync(serverExe, 0o755);
 				}
 			} catch (e) {
-				console.error('[CWTools] stat/chmod error on server binary:', e);
+				logError('stat/chmod error on server binary', e);
 			}
 		}
 
 		const repoPath = LANGUAGE_REPOS[language];
 		if (!repoPath) {
-			console.warn(`[CWTools] No config repository for language "${language}"; rule cloning skipped.`);
+			logWarn(`No config repository for language "${language}"; rule cloning skipped.`);
 		}
-		console.log(`${language} ${repoPath || '(no remote)'}`);
+		logInfo(`${language} ${repoPath || '(no remote)'}`);
 
 		fsMkdirSync(cacheDir, { recursive: true });
 		const languageRulesCache = path.join(cacheDir, language);
@@ -113,26 +117,24 @@ export async function activate(context: ExtensionContext) {
 			? (hasManualRules ? path.dirname(manualRules!) : cacheDir)
 			: effectiveRulesCache;
 		if (hasManualRules && activeEngine === 'fsharp' && path.basename(manualRules!) !== language) {
-			console.warn(`[CWTools] The F# engine appends the game subdir to the rules folder, ` +
+			logWarn(`The F# engine appends the game subdir to the rules folder, ` +
 				`so a manual rules_folder should be named "${language}" to be found (got "${manualRules}").`);
 		}
 		if (hasManualRules) {
-			console.log(`[CWTools] Using manual rules folder: ${manualRules}`);
+			logInfo(`Using manual rules folder: ${manualRules}`);
 		} else if (repoPath) {
 			try {
 				const gitDir = path.join(languageRulesCache, '.git');
 				if (!fsExistsSync(gitDir)) {
-					console.log(`[CWTools] Cloning rules from ${repoPath} into ${languageRulesCache}`);
+					logInfo(`Cloning rules from ${repoPath} into ${languageRulesCache}`);
 					await runGit(['clone', '--depth', '1', repoPath, languageRulesCache]);
 				} else {
-					console.log(`[CWTools] Fetching latest rules for ${language} ...`);
+					logInfo(`Fetching latest rules for ${language} ...`);
 					await runGit(['-C', languageRulesCache, 'pull', '--depth=1', '--ff-only']);
 				}
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				const channel = window.createOutputChannel('CWTools');
-				channel.appendLine(`[CWTools] Rule fetch failed for ${language}: ${msg}`);
-				channel.show(true);
+				logError(`Rule fetch failed for ${language}`, msg);
 			}
 		}
 
@@ -205,13 +207,13 @@ export async function activate(context: ExtensionContext) {
 
 		let latestType : string = '';
 
-		async function didChangeActiveTextEditor(editor : vs.TextEditor | undefined): Promise<void> {
+		async function didChangeActiveTextEditor(editor : vscode.TextEditor | undefined): Promise<void> {
 			if (!editor) return;
 			const path = editor.document.uri.toString();
-			if (languageId == "paradox" && editor.document.languageId == "plaintext") {
-				await vs.languages.setTextDocumentLanguage(editor.document, "paradox")
+			if (languageId === "paradox" && editor.document.languageId === "plaintext") {
+				await vscode.languages.setTextDocumentLanguage(editor.document, "paradox")
 			}
-			if (editor.document.languageId == language) {
+			if (editor.document.languageId === language) {
 				await client.sendNotification(didFocusFile, {uri: path});
 			}
 			const data = await client.sendRequest(
@@ -228,10 +230,10 @@ export async function activate(context: ExtensionContext) {
 
 		context.subscriptions.push(window.onDidChangeActiveTextEditor(didChangeActiveTextEditor));
 
-		if (languageId == "paradox") {
+		if (languageId === "paradox") {
 			for (const textDocument of workspace.textDocuments){
-				if (textDocument.languageId == "plaintext"){
-					await vs.languages.setTextDocumentLanguage(textDocument, "paradox")
+				if (textDocument.languageId === "plaintext"){
+					await vscode.languages.setTextDocumentLanguage(textDocument, "paradox")
 				}
 			}
 		}
@@ -248,7 +250,7 @@ export async function activate(context: ExtensionContext) {
 				status = undefined;
 			}
 		})
-		const debugStatusBar = window.createStatusBarItem(vs.StatusBarAlignment.Left);
+		const debugStatusBar = window.createStatusBarItem(vscode.StatusBarAlignment.Left);
 		context.subscriptions.push(debugStatusBar);
 		client.onNotification(debugStatusBarParamsNotification, (param: DebugStatusBarParams) => {
 			if (param.enable) {
@@ -347,7 +349,7 @@ export async function activate(context: ExtensionContext) {
 			if(!uri){
 				return;
 			}
-			const bytes = await vs.workspace.fs.readFile(uri[0]);
+			const bytes = await vscode.workspace.fs.readFile(uri[0]);
 			const data = new TextDecoder('utf-8').decode(bytes);
 			const gp = await import('./graphPanel');
 			gp.GraphPanel.create(context.extensionPath);
@@ -355,7 +357,7 @@ export async function activate(context: ExtensionContext) {
 		}));
 		// Subscriptions are pushed here so the client is disposed with the extension.
 		context.subscriptions.push(new CwtoolsProvider());
-		context.subscriptions.push(vs.commands.registerCommand("cwtools.reloadExtension", () =>
+		context.subscriptions.push(vscode.commands.registerCommand("cwtools.reloadExtension", () =>
 			commands.executeCommand('workbench.action.reloadWindow')
 		));
 		context.subscriptions.push(client);
@@ -364,7 +366,7 @@ export async function activate(context: ExtensionContext) {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			window.showErrorMessage(`CWTools language server failed to start: ${msg}`);
-			console.error('[CWTools] client.start() error:', err);
+			logError('client.start() error', err);
 			return;
 		}
 	}
