@@ -5,7 +5,8 @@
 
 import * as path from 'path';
 import * as os from 'os';
-import { existsSync as fsExistsSync, statSync as fsStatSync, chmodSync as fsChmodSync, mkdirSync as fsMkdirSync } from 'fs';
+import { existsSync as fsExistsSync } from 'fs';
+import * as fsPromises from 'fs/promises';
 import * as vscode from 'vscode';
 import type { ExtensionContext, Disposable} from 'vscode';
 import { workspace, window, Uri, WorkspaceEdit, TextEdit, Range, commands, env } from 'vscode';
@@ -88,16 +89,16 @@ export async function activate(context: ExtensionContext) {
 		}
 		logInfo(`Using '${activeEngine}' engine: ${serverExe}`);
 
-		if (os.platform() !== 'win32') {
-			try {
-				const stat = fsStatSync(serverExe);
-				if ((stat.mode & 0o111) === 0) {
-					fsChmodSync(serverExe, 0o755);
-				}
-			} catch (e) {
-				logError('stat/chmod error on server binary', e);
+	if (os.platform() !== 'win32') {
+		try {
+			const stat = await fsPromises.stat(serverExe);
+			if ((stat.mode & 0o111) === 0) {
+				await fsPromises.chmod(serverExe, 0o755);
 			}
+		} catch (e) {
+			logError('stat/chmod error on server binary', e);
 		}
+	}
 
 		const repoPath = LANGUAGE_REPOS[language];
 		if (!repoPath) {
@@ -105,7 +106,7 @@ export async function activate(context: ExtensionContext) {
 		}
 		logInfo(`${language} ${repoPath || '(no remote)'}`);
 
-		fsMkdirSync(cacheDir, { recursive: true });
+		await fsPromises.mkdir(cacheDir, { recursive: true });
 		const languageRulesCache = path.join(cacheDir, language);
 
 		const manualRules = workspace.getConfiguration('cwtools').get<string>('rules_folder');
@@ -205,28 +206,47 @@ export async function activate(context: ExtensionContext) {
 		let status: Disposable | undefined;
 		const updateFileList = new NotificationType<UpdateFileList>('updateFileList');
 
-		let latestType : string = '';
+	let latestType : string = '';
+	let getFileTypesInFlight = false;
+	const getFileTypesTimeoutMs = 5000;
 
-		async function didChangeActiveTextEditor(editor : vscode.TextEditor | undefined): Promise<void> {
-			if (!editor) return;
-			const path = editor.document.uri.toString();
-			if (languageId === "paradox" && editor.document.languageId === "plaintext") {
-				await vscode.languages.setTextDocumentLanguage(editor.document, "paradox")
-			}
-			if (editor.document.languageId === language) {
-				await client.sendNotification(didFocusFile, {uri: path});
-			}
-			const data = await client.sendRequest(
-				ExecuteCommandRequest.type,
-				{ command: "getFileTypes", arguments: [path] }
-			);
+	async function didChangeActiveTextEditor(editor : vscode.TextEditor | undefined): Promise<void> {
+		if (!editor) return;
+		const editorPath = editor.document.uri.toString();
+		if (languageId === "paradox" && editor.document.languageId === "plaintext") {
+			await vscode.languages.setTextDocumentLanguage(editor.document, "paradox")
+		}
+		if (editor.document.languageId === language) {
+			await client.sendNotification(didFocusFile, {uri: editorPath});
+		}
+		// Guard against rapid tab switches piling up requests to a busy server.
+		// Only one getFileTypes request can be in flight at a time; subsequent
+		// tab switches are skipped until the in-flight request completes or times out.
+		if (getFileTypesInFlight) return;
+		getFileTypesInFlight = true;
+		try {
+			const data = await Promise.race([
+				client.sendRequest(
+					ExecuteCommandRequest.type,
+					{ command: "getFileTypes", arguments: [editorPath] }
+				),
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error('getFileTypes request timed out')), getFileTypesTimeoutMs)
+				)
+			]);
 			if (data && data[0]) {
 				latestType = data[0];
 				await commands.executeCommand('setContext', 'cwtoolsGraphFile', true);
 			} else {
 				await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
 			}
+		} catch (err) {
+			logError('didChangeActiveTextEditor getFileTypes failed', err);
+			await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
+		} finally {
+			getFileTypesInFlight = false;
 		}
+	}
 
 		context.subscriptions.push(window.onDidChangeActiveTextEditor(didChangeActiveTextEditor));
 
