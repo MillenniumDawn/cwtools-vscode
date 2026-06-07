@@ -11,6 +11,14 @@ name: Test
 jobs:
   test:
     runs-on: ubuntu-latest
+    # pull-requests: write lets the coverage comment post/update on the PR.
+    permissions:
+      contents: read
+      pull-requests: write
+    # Exposed at job level so the Codecov step's `if` can detect whether the
+    # secret is configured (secrets can't be read directly in `if` conditions).
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
     steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -35,6 +43,22 @@ jobs:
     - name: Coverage summary
       if: always()
       run: npx tsx build/coverage-summary.ts
+    # Readable coverage table straight on the PR, kept in place across pushes.
+    # Open source, uses the built-in GITHUB_TOKEN, so it needs no extra secrets.
+    - name: Coverage PR comment
+      if: always() && github.event_name == 'pull_request'
+      uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+      with:
+        header: coverage
+        path: coverage/summary.md
+    # Hosted dashboard, trend tracking and diff/patch coverage. Needs the
+    # CODECOV_TOKEN repo secret; the step is skipped when it isn't set.
+    - name: Upload coverage to Codecov
+      if: always() && env.CODECOV_TOKEN != ''
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+      with:
+        files: coverage/lcov.info
+        fail_ci_if_error: false
     - name: 'Upload coverage'
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

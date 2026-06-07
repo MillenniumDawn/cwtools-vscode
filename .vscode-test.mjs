@@ -64,7 +64,11 @@ export default defineConfig({
 		},
 	],
 	coverage: {
+		// Only the hand-written client source counts. Without the node_modules
+		// exclude, instrumented dependencies (semver, vscode-jsonrpc, ...) drown
+		// the real numbers — that was ~20k of 22k statements and dragged function
+		// coverage down to a meaningless 25%.
 		include: ['**/client/extension/**', '**/client/common/**'],
-		exclude: ['**/client/test/**', '**/client/webview/**'],
+		exclude: ['**/client/test/**', '**/client/webview/**', '**/node_modules/**'],
 	},
 });
