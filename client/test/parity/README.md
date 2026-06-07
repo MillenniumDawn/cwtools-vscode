@@ -54,10 +54,17 @@ determines what to assert:
 | `completion` | Completion list includes expected labels | `file`, `line`, `character`, `expected` |
 | `definition` | Goto-definition resolves to expected file | `file`, `line`, `character`, `expectedTargetFile` |
 | `references` | Find-references returns at least N hits | `file`, `line`, `character`, `expectedMinCount` |
-| `diagnostics` | publishDiagnostics for a file | `file`, `expectAny` |
+| `diagnostics` | publishDiagnostics surfaces at least N issues | `file`, `expectedMinCount` |
 | `formatting` | documentFormatting returns edits | `file`, `expectAny` |
 
 Both engines get a test automatically.
+
+A `references` or `formatting` probe can set `pending` to a short reason; both
+its engine tests then register as pending (skipped) instead of running. Use this
+only when neither server answers the request headless, so the gap is documented
+without a misleading red or a hung request. Today `find-refs` and `formatting`
+are pending: F# returns no references over stdio in this harness and neither
+server answers `documentFormatting` (Rust replies "Method not found").
 
 ## Notes
 

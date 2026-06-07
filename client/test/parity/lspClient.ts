@@ -27,10 +27,17 @@ export class LspClient {
 		this.handlers.push(handler);
 	}
 
-	request<T = unknown>(method: string, params: unknown): Promise<T> {
+	request<T = unknown>(method: string, params: unknown, timeoutMs = 30000): Promise<T> {
 		const id = this.nextId++;
 		return new Promise<T>((resolve, reject) => {
+			// A server that silently drops a request must not hang the whole suite
+			// until mocha's timeout; reject after timeoutMs instead.
+			const timer = setTimeout(() => {
+				this.pending.delete(id);
+				reject(new Error(`${method} timed out after ${timeoutMs}ms`));
+			}, timeoutMs);
 			this.pending.set(id, msg => {
+				clearTimeout(timer);
 				if (msg.error) reject(new Error(`${method} failed: ${JSON.stringify(msg.error)}`));
 				else resolve(msg.result as T);
 			});

@@ -14,7 +14,7 @@ import { readFileSync } from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { LspClient } from './lspClient';
-import { extractCompletionLabel } from '../support/utils';
+import { extractCompletionLabel } from '../support/labels';
 
 export type Engine = 'rust' | 'fsharp';
 
