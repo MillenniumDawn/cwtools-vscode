@@ -41,12 +41,25 @@ const cell = (m: Metric) => `${light(m?.pct)} ${num(m)}`;
 const row = (name: string, m: FileCoverage) =>
 	`| ${name} | ${cell(m.lines)} | ${cell(m.statements)} | ${cell(m.branches)} | ${cell(m.functions)} |`;
 
+// vscode-test instruments every file the extension loads, including its
+// dependencies, and its coverage `exclude` doesn't drop them from the report.
+// So filter node_modules out here and recompute the total from the real client
+// source, otherwise the dependencies dwarf the numbers we care about.
+const isSource = (k: string) => k !== 'total' && !k.includes('node_modules');
+
 // Worst-covered files first, so the gaps are what you see.
 const files = Object.keys(data)
-	.filter((k) => k !== 'total')
+	.filter(isSource)
 	.sort((a, b) => (data[a].lines.pct ?? 0) - (data[b].lines.pct ?? 0));
 
-const t = data.total;
+const metrics = ['lines', 'statements', 'branches', 'functions'] as const;
+const t: FileCoverage = Object.fromEntries(
+	metrics.map((m) => {
+		const covered = files.reduce((n, f) => n + (data[f][m].covered ?? 0), 0);
+		const total = files.reduce((n, f) => n + (data[f][m].total ?? 0), 0);
+		return [m, { covered, total, pct: total ? (100 * covered) / total : 100 }];
+	}),
+) as FileCoverage;
 const headline = `${light(t.lines.pct)} **${num(t.lines)}% lines** · ${num(t.functions)}% functions · ${num(t.branches)}% branches`;
 
 const lines = [
