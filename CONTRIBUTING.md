@@ -55,9 +55,12 @@ npm run test:host      # host-based suite
 npm run test:parity    # host-free F#-vs-Rust engine parity
 npm run test:engine:fsharp
 npm run test:engine:rust
+npm run test:coverage  # unit suite with V8 coverage
 ```
 
 The parity suite treats the F# server as the spec and checks the Rust port against it. Its `[rust]` tests are expected to fail until the port reaches parity. See `client/test/parity/README.md`.
+
+`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/` — open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The numbers count only the hand-written client source (`client/extension`, `client/common`); dependencies are filtered out so the figures mean something. CI renders the same summary as a markdown table in the job summary and as a sticky PR comment, and uploads the HTML report as the `coverage-html` artifact. It's all local/OSS, no external service. Coverage is informational, not a merge gate (see issue #7).
 
 ## Building against a local cwtools
 

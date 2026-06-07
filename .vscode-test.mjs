@@ -64,7 +64,12 @@ export default defineConfig({
 		},
 	],
 	coverage: {
+		// Intent: only the hand-written client source. vscode-test instruments
+		// every loaded file though, and ignores these globs for dependencies, so
+		// node_modules still land in the raw report (semver, vscode-jsonrpc, ...).
+		// build/coverage-summary.ts drops them and recomputes the totals; codecov
+		// excludes them via codecov.yml.
 		include: ['**/client/extension/**', '**/client/common/**'],
-		exclude: ['**/client/test/**', '**/client/webview/**'],
+		exclude: ['**/client/test/**', '**/client/webview/**', '**/node_modules/**'],
 	},
 });

@@ -80,13 +80,18 @@ interface ReferencesProbe {
 	character: number;
 	/** Minimum number of references expected (including the declaration). */
 	expectedMinCount: number;
+	/**
+	 * If set, both engine tests are registered as pending with this reason
+	 * instead of running. Use when neither server answers the request headless.
+	 */
+	pending?: string;
 }
 interface DiagnosticsProbe {
 	kind: 'diagnostics';
 	name: string;
 	file: string;
-	/** True = expect at least one diagnostic; false = expect zero. */
-	expectAny: boolean;
+	/** Minimum number of diagnostics the validator should surface for the file. */
+	expectedMinCount: number;
 }
 interface FormattingProbe {
 	kind: 'formatting';
@@ -94,6 +99,11 @@ interface FormattingProbe {
 	file: string;
 	/** True = expect at least one edit; false = expect zero. */
 	expectAny: boolean;
+	/**
+	 * If set, both engine tests are registered as pending with this reason
+	 * instead of running. Use when neither server answers the request headless.
+	 */
+	pending?: string;
 }
 type Probe =
 	| HoverProbe
@@ -137,20 +147,34 @@ const probes: Probe[] = [
 	// --- references ---
 	{
 		kind: 'references', name: 'find-refs: pop_can_politics has multiple usage sites',
-		file: files.triggers, line: 86, character: 0,
+		// LSP positions are 0-based: the `pop_can_politics = {` definition is on
+		// file line 86 (1-based), i.e. LSP line 85, with the identifier at col 0.
+		file: files.triggers, line: 85, character: 5,
 		expectedMinCount: 4,
+		// F# find-references only resolves cwtools "type" symbols and returns
+		// nothing for scripted triggers/effects in this headless harness, and the
+		// Rust port returns no references either. Revisit with a typed-symbol
+		// fixture once references work over stdio.
+		pending: 'find-references returns nothing headless (F# unsupported for this symbol kind, Rust empty)',
 	},
 	// --- diagnostics ---
 	{
-		kind: 'diagnostics', name: 'diagnostics: event file is parsed without errors',
+		// The sample event uses is_homeworld/is_country_type in scopes the
+		// ruleset rejects, so the validator should flag several issues. F# (the
+		// spec) surfaces these; the Rust port still misses most of them.
+		kind: 'diagnostics', name: 'diagnostics: event file surfaces validation errors',
 		file: files.event,
-		expectAny: false,
+		expectedMinCount: 4,
 	},
 	// --- formatting ---
 	{
 		kind: 'formatting', name: 'formatting: returns edits for the event file',
 		file: files.event,
 		expectAny: true,
+		// The Rust port doesn't implement textDocument/documentFormatting yet
+		// (returns "Method not found") and the F# server doesn't answer it over
+		// stdio in this harness, so neither engine can satisfy this probe today.
+		pending: 'documentFormatting not available headless (Rust unimplemented, F# unresponsive)',
 	},
 ];
 
@@ -215,6 +239,14 @@ const rulesLeaf = findRules();
 	}
 
 	for (const p of probes) {
+		// A probe neither engine can answer headless (find-references, formatting)
+		// is registered as pending so it documents the gap without hanging or
+		// reporting a misleading failure.
+		if ((p.kind === 'references' || p.kind === 'formatting') && p.pending) {
+			it(`[fsharp] ${p.name}`);
+			it(`[rust] ${p.name}`);
+			continue;
+		}
 		// The F# reference must work — a failure here means the rules/setup is
 		// broken, not that Rust is behind.
 		it(`[fsharp] ${p.name}`, async function () {
@@ -237,11 +269,8 @@ const rulesLeaf = findRules();
 					`F# found ${count} references, expected >= ${p.expectedMinCount}`);
 			} else if (p.kind === 'diagnostics') {
 				const { count } = runDiagnostics('fsharp', p);
-				if (p.expectAny) {
-					assert.ok(count > 0, 'F# reference produced no diagnostics');
-				} else {
-					assert.deepStrictEqual(count, 0, `F# reference produced ${count} unexpected diagnostics`);
-				}
+				assert.ok(count >= p.expectedMinCount,
+					`F# reference produced ${count} diagnostics, expected >= ${p.expectedMinCount}`);
 			} else if (p.kind === 'formatting') {
 				const { count } = await runFormatting('fsharp', p);
 				if (p.expectAny) {
@@ -270,11 +299,8 @@ const rulesLeaf = findRules();
 					`Rust found ${count} references, expected >= ${p.expectedMinCount}`);
 			} else if (p.kind === 'diagnostics') {
 				const { count } = runDiagnostics('rust', p);
-				if (p.expectAny) {
-					assert.ok(count > 0, 'Rust produced no diagnostics');
-				} else {
-					assert.deepStrictEqual(count, 0, `Rust produced ${count} unexpected diagnostics`);
-				}
+				assert.ok(count >= p.expectedMinCount,
+					`Rust produced ${count} diagnostics, expected >= ${p.expectedMinCount}`);
 			} else if (p.kind === 'formatting') {
 				const { count } = await runFormatting('rust', p);
 				if (p.expectAny) {

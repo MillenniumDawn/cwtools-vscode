@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 
+// Re-exported so host suites can keep importing it from here. The function
+// itself lives in a vscode-free module so the parity harness can share it.
+export { extractCompletionLabel } from './labels';
+
 // The published extension id: publisher.name from release/package.json.
 export const EXTENSION_ID = 'milleniumdawnmodteam.cwtools-md-edition';
 
@@ -115,12 +119,4 @@ export async function waitForLanguageServer(uri: vscode.Uri, maxRetries = 30, de
 export function currentEngine(): 'rust' | 'fsharp' {
   const value = vscode.workspace.getConfiguration('cwtools').get<string>('engine');
   return value?.toLowerCase() === 'fsharp' ? 'fsharp' : 'rust';
-}
-
-/**
- * Extract the display label from a CompletionItem, handling both the plain
- * string form and the { label: string } form used by some LSP responses.
- */
-export function extractCompletionLabel(item: { label?: string | { label?: string } }): string {
-  return typeof item.label === 'string' ? item.label : item.label?.label ?? '';
 }
