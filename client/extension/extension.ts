@@ -140,10 +140,16 @@ export async function activate(context: ExtensionContext) {
 		}
 
 		// If the extension is launched in debug mode then the debug server options are used
-		// Otherwise the run options are used
+		// Otherwise the run options are used.
+		// When cwtools.profiling is on, launch the server with CWTOOLS_PROFILE=1 so
+		// it emits per-phase timing + RSS (to the CWTools output channel) and keeps
+		// a buffer the 'Export profiling log' command can save. Takes effect on the
+		// next server start, so toggling it needs a reload.
+		const profilingEnabled = workspace.getConfiguration('cwtools').get<boolean>('profiling') ?? false;
+		const serverEnv = profilingEnabled ? { ...process.env, CWTOOLS_PROFILE: '1' } : process.env;
 		const serverOptions: ServerOptions = {
-			run: { command: serverExe, transport: TransportKind.stdio },
-			debug : { command: serverExe, transport: TransportKind.stdio }
+			run: { command: serverExe, transport: TransportKind.stdio, options: { env: serverEnv } },
+			debug : { command: serverExe, transport: TransportKind.stdio, options: { env: serverEnv } }
 		}
 
 		const fileEvents = [
@@ -374,6 +380,27 @@ export async function activate(context: ExtensionContext) {
 			const gp = await import('./graphPanel');
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
+		}));
+		// Fetch the server's accumulated profiling report and save it to a file.
+		// The server only fills the buffer when launched with CWTOOLS_PROFILE=1
+		// (the cwtools.profiling setting), so prompt to enable it if empty.
+		context.subscriptions.push(commands.registerCommand('cwtools.exportProfilingLog', async () => {
+			let log: unknown;
+			try {
+				log = await client.sendRequest(ExecuteCommandRequest.type, { command: 'exportProfilingLog', arguments: [] });
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				window.showErrorMessage(`CWTools: could not fetch profiling log: ${msg}`);
+				return;
+			}
+			if (typeof log !== 'string' || log.length === 0) {
+				window.showWarningMessage("CWTools: profiling log is empty. Turn on 'cwtools.profiling', reload the window, reproduce the slowdown, then export.");
+				return;
+			}
+			const uri = await window.showSaveDialog({ filters: { 'Log': ['log', 'txt'] }, saveLabel: 'Export CWTools profiling log' });
+			if (!uri) { return; }
+			await workspace.fs.writeFile(uri, Buffer.from(log, 'utf8'));
+			window.showInformationMessage(`CWTools: profiling log written to ${uri.fsPath}`);
 		}));
 		// Subscriptions are pushed here so the client is disposed with the extension.
 		context.subscriptions.push(new CwtoolsProvider());

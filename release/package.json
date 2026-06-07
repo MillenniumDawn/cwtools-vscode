@@ -84,6 +84,16 @@
         "category": "cwtools"
       },
       {
+        "command": "clearAllCaches",
+        "title": "Clear all caches and reindex",
+        "category": "cwtools"
+      },
+      {
+        "command": "cwtools.exportProfilingLog",
+        "title": "Export profiling log",
+        "category": "cwtools"
+      },
+      {
         "command": "listAllFiles",
         "title": "%commands.listAllFiles.title%",
         "category": "cwtools"
@@ -366,6 +376,12 @@
             "type": "boolean",
             "default": false,
             "description": "%configuration.cwtools.debug_mode.description%"
+          },
+          "cwtools.profiling": {
+            "scope": "window",
+            "type": "boolean",
+            "default": false,
+            "description": "Launch the language server with profiling on. Emits per-phase timing and memory (RSS) to the CWTools output channel and keeps a buffer you can save with 'cwtools: Export profiling log'. Reload the window after changing this. Slightly slower; leave off for normal use."
           }
         }
       }
