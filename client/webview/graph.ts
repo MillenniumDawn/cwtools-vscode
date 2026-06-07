@@ -1,10 +1,13 @@
 import * as cyM from 'cytoscape';
-import { CollectionReturnValue, EventObject, StylesheetJsonBlock } from 'cytoscape'
+import type { CollectionReturnValue, EventObject, StylesheetJsonBlock } from 'cytoscape'
 import { registerCytoscapeCanvas } from './canvas'
 import cytoscapeelk from 'cytoscape-elk'
 import popper from 'cytoscape-popper';
-import tippy, { Props, type Instance } from 'tippy.js';
+import type { Props} from 'tippy.js';
+import tippy, { type Instance } from 'tippy.js';
+import 'tippy.js/dist/tippy.css';
 import mergeimages from 'merge-images'
+import type { GraphLocation, GraphReference, GraphNodeDetail } from '../common/graphTypes'
 
 declare module 'cytoscape' {
     interface Core {
@@ -25,6 +28,11 @@ interface vscode {
 
 declare const acquireVsCodeApi : () => vscode;
 const vscode : vscode = acquireVsCodeApi();
+
+/** Escape HTML entities to prevent XSS from server-supplied data. */
+function escapeHtml(str: string): string {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 function drawExtra(nodes : cytoscape.NodeCollection, ctx : CanvasRenderingContext2D, zoom : number){
     // Draw shadows under nodes
@@ -83,7 +91,6 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
             'mid-target-arrow-shape': 'triangle',
             'curve-style': 'haystack',
             'line-style': function (ele) { if (ele.data("isPrimary")) { return 'solid' } else { return 'dashed' } }
-            // 'haystack-radius': 0.5
         }
     },
     {
@@ -116,198 +123,147 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
     }
 ]
 let _cy: cytoscape.Core;
-function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,json?: { elements: { nodes?: cytoscape.ElementDefinition[]; edges?: cytoscape.ElementDefinition[]; } | cytoscape.ElementDefinition[]; } & Record<string, unknown>){
-    const importingJson = json !== undefined;
-    // Rest of your imports
 
-    // Then when calling the function:
+function initCytoscape(settings: settings): cytoscape.Core {
     registerCytoscapeCanvas(cyM.default());
-    cyM.default.use(cytoscapeelk)
+    cyM.default.use(cytoscapeelk);
     cyM.default.use(popper);
     const cy = cyM.default({
         container: document.getElementById('cy'),
         minZoom: 0.1,
         maxZoom: 5,
-        layout: {
-            name: 'preset',
-            padding: 10
-        },
+        layout: { name: 'preset', padding: 10 },
         pixelRatio: 1,
         wheelSensitivity: settings.wheelSensitivity
-    })
-    // }
-    _cy = cy;
-
-    const layer = cy.cyCanvas({
-        zIndex: 1,
-        pixelRatio: "auto",
     });
-    const canvas = layer.getCanvas();
-    const ctx = canvas.getContext('2d');
+    _cy = cy;
+    return cy;
+}
 
-    /// Initial setup
-    if (!importingJson){
-
-        data.forEach(function (element) {
-            cy.add({ group: 'nodes', data: {
-                id: element.id,
-                label: element.name || element.id,
-                isPrimary: element.isPrimary,
-                entityType: element.entityType,
-                abbreviation: element.abbreviation,
-                entityTypeDisplayName: element.entityTypeDisplayName ? element.entityTypeDisplayName : element.entityType,
-                details: element.details,
-                location: element.location
-            }});
-        });
-        const allIDs = data.map((el) => el.id);
-        edges.forEach(function (edge) {
-            if (allIDs.includes(edge.source) && allIDs.includes(edge.target)){
-                cy.add({ group: 'edges', data: { source: edge.source, target: edge.target, label: edge.label } }).data("isPrimary", true)
-            }
-        });
-        data.forEach(function (element) {
-            if(element.isPrimary == false){
-                cy.edges().filter((n) => n.target().id() == element.id || n.source().id() == element.id).forEach((e) => {e.data("isPrimary", false);});
-            }
-        });
-
-    }
-    else {
-        cy.json(json);
-    }
-    cy.style(style)
-    /// Tooltips
-    cy.nodes().forEach(function(node) {
-
-        const simpleTooltip = `<strong>${node.data("entityTypeDisplayName")}</strong>: ${node.data("id")}`
-        const createRow = function (details : { key : string, values : string[]}) {
-            const vals = details.values.join(", ")
-            return `<tr><td>${details.key}</td><td>${vals}</td></tr>`
+function populateGraph(cy: cytoscape.Core, data: techNode[], edges: EdgeInput[]) {
+    data.forEach(function (element) {
+        cy.add({ group: 'nodes', data: {
+            id: element.id,
+            label: element.name || element.id,
+            isPrimary: element.isPrimary,
+            entityType: element.entityType,
+            abbreviation: element.abbreviation,
+            entityTypeDisplayName: element.entityTypeDisplayName ? element.entityTypeDisplayName : element.entityType,
+            details: element.details,
+            location: element.location
+        }});
+    });
+    const allIDs = data.map((el) => el.id);
+    edges.forEach(function (edge) {
+        if (allIDs.includes(edge.source) && allIDs.includes(edge.target)){
+            cy.add({ group: 'edges', data: { source: edge.source, target: edge.target, label: edge.label } }).data("isPrimary", true);
         }
-        const detailsText = node.data("details") ? node.data("details").map(createRow).join("") : ""
+    });
+    data.forEach(function (element) {
+        if(element.isPrimary === false){
+            cy.edges().filter((n) => n.target().id() === element.id || n.source().id() === element.id).forEach((e) => {e.data("isPrimary", false);});
+        }
+    });
+}
+
+function setupTooltips(cy: cytoscape.Core) {
+    cy.nodes().forEach(function(node) {
+        const simpleTooltip = `<strong>${escapeHtml(String(node.data("entityTypeDisplayName")))}</strong>: ${escapeHtml(String(node.data("id")))}`;
+        const createRow = function (details : { key : string, values : string[]}) {
+            const vals = details.values.join(", ");
+            return `<tr><td>${escapeHtml(details.key)}</td><td>${escapeHtml(vals)}</td></tr>`;
+        };
+        const detailsText = node.data("details") ? node.data("details").map(createRow).join("") : "";
         const detailsTable =
             `${simpleTooltip}
             <table class="cwtools-table">
             ${detailsText ? detailsText : "<tr><td class=\"cwtools-text-center\">-</td></tr>"}
-            </table>`
+            </table>`;
         const ref = node.popperRef();
         let isSimple = true;
         const simpleOptions : Partial<Props> = {
             getReferenceClientRect: ref.getBoundingClientRect,
             content: () => {
                 const content = document.createElement('div');
-
                 content.innerHTML = simpleTooltip;
-
                 return content;
             },
-            onHidden: (() => {}),
             sticky: true,
-            // flipOnUpdate: true,
             trigger: "manual",
             delay: [null, 200]
-        }
+        };
         let hoverTimeout : NodeJS.Timeout;
         const complexOptions = {
             getReferenceClientRect: ref.getBoundingClientRect,
             content: () => {
                 const content = document.createElement('div');
-
                 content.innerHTML = detailsTable;
-
                 return content;
             },
             onHidden: (instance: Instance) =>
             {
-                clearTimeout(hoverTimeout)
-                instance.setProps(simpleOptions)
-                isSimple = true
+                clearTimeout(hoverTimeout);
+                instance.setProps(simpleOptions);
+                isSimple = true;
             },
             sticky: true,
             flipOnUpdate: true,
             interactive: true,
             trigger: "manual"
-
-        }
+        };
         const dummyDomEle = document.createElement("div");
-
         const tip = tippy(dummyDomEle, simpleOptions);
         const expandTooltip = function(element : Instance) {
             element.setProps(complexOptions);
-            isSimple = false
-        }
+            isSimple = false;
+        };
         node.on('mouseover', () => {
             tip.show();
             hoverTimeout = setTimeout(expandTooltip, 1000, tip);
         });
         node.on('mouseout', () =>
         {
-            clearTimeout(hoverTimeout)
+            clearTimeout(hoverTimeout);
             if(isSimple) {
-                tip.hide()
+                tip.hide();
             }
         });
-
     });
+}
 
-    /// Layout
-    if(!importingJson){
-        cy.fit();
-        //var opts = { name: 'dagre', ranker: 'network-simplex', nodeDimensionsIncludeLabels: true };
-        const opts = {
-            name: 'elk',
-            //ranker: 'network-simplex',
-            nodeDimensionsIncludeLabels: true,
-            elk: {
-                "elk.edgeRouting": "SPLINES",
-                "elk.direction": "DOWN",
-                "elk.aspectRatio": (cy.width() / cy.height()),
-                "elk.algorithm": "layered",
-                "elk.layered.nodePlacement.bk.edgeStraightening": "NONE",
+function runLayout(cy: cytoscape.Core) {
+    cy.fit();
+    const opts = {
+        name: 'elk',
+        nodeDimensionsIncludeLabels: true,
+        elk: {
+            "elk.edgeRouting": "SPLINES",
+            "elk.direction": "DOWN",
+            "elk.aspectRatio": (cy.width() / cy.height()),
+            "elk.algorithm": "layered",
+            "elk.layered.nodePlacement.bk.edgeStraightening": "NONE",
+            "elk.layered.compaction.connectedComponents": true,
+            "elk.hierarchyHandling": "SEPARATE_CHILDREN",
+        }
+    };
 
-                "elk.layered.compaction.connectedComponents": true,
-                "elk.hierarchyHandling": "SEPARATE_CHILDREN",
-                // "elk.layered.unnecessaryBendpoints": true
-                // "elk.disco.componentCompaction.strategy": "POLYOMINO",
-                // "elk.layered.compaction.connectedComponents": "true",
-                // "org.eclipse.elk.separateConnectedComponents": "false",
-                //"org.eclipse.elk.layered.highDegreeNodes.treatment": "true"
-                // "elk.layered.layering.nodePromotion.strategy": "NIKOLOV",
-                // "elk.layered.layering.nodePromotion.maxIterations": 10
-            }
-        };
+    const t = cy.elements();
+    const groups: CollectionReturnValue[] = t.components();
+    const singles = groups.filter((f) => f.length === 1);
+    const singles2 = singles.reduce((p, c) => p.union(c), cy.collection());
+    const rest = groups.filter((f) => f.length !== 1);
+    const rest2 = rest.reduce((p, c) => p.union(c), cy.collection());
 
+    const lrest = rest2.layout(opts);
+    lrest.run();
+    const opts2 = { name: 'grid', condense: true, nodeDimensionsIncludeLabels: true };
+    const lsingles = singles2.layout(opts2);
+    lsingles.run();
+    singles2.shift("y", (singles2.boundingBox({}).y2 + 10) * -1);
+    cy.fit();
+}
 
-        cy.fit();
-
-
-        const t = cy.elements();
-        const groups: CollectionReturnValue[] = t.components();
-        const singles = groups.filter((f) => f.length === 1);
-        const singles2 = singles.reduce((p, c) => p.union(c), cy.collection())
-        const rest = groups.filter((f) => f.length !== 1);
-
-        const rest2 = rest.reduce((p, c) => p.union(c), cy.collection())
-
-        const lrest = rest2.layout(opts);
-        lrest.run();
-        const opts2 = { name: 'grid', condense: true, nodeDimensionsIncludeLabels: true }
-        const lsingles = singles2.layout(opts2);
-        lsingles.run();
-        singles2.shift("y", (singles2.boundingBox({}).y2 + 10) * -1);
-        cy.fit();
-
-        // cy.on('select', 'node', function (_: any) {
-        //     var node = cy.$('node:selected');
-        //     if (node.nonempty()) {
-        //         goToNode(node.data('id'));
-        //     }
-        // });
-    }
-
-
-    /// Double click
+function setupInteraction(cy: cytoscape.Core, layer: ReturnType<typeof cy.cyCanvas>, ctx: CanvasRenderingContext2D) {
     let tappedBefore : EventTarget | null;
     let tappedTimeout : NodeJS.Timeout;
 
@@ -319,7 +275,6 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,jso
         if (tappedBefore === tappedNow) {
             tappedNow.trigger('doubleTap', event);
             tappedBefore = null;
-            //originalTapEvent = null;
         } else {
             tappedTimeout = setTimeout(function () { tappedBefore = null; }, 300);
             tappedBefore = tappedNow;
@@ -332,8 +287,7 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,jso
     cy.on('mouseover', 'node', function (e) {
         const sel = e.target;
         cy.elements()
-            .difference(sel.outgoers()
-                .union(sel.incomers()))
+            .difference(sel.outgoers().union(sel.incomers()))
             .not(sel)
             .addClass('semitransp');
         sel.addClass('highlight')
@@ -343,8 +297,7 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,jso
     });
     cy.on('mouseout', 'node', function (e) {
         const sel = e.target;
-        cy.elements()
-            .removeClass('semitransp');
+        cy.elements().removeClass('semitransp');
         sel.removeClass('highlight')
             .outgoers()
             .union(sel.incomers())
@@ -352,19 +305,38 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings : settings,jso
     });
 
     cy.on("render", function () {
-        layer.resetTransform(ctx!);
-        layer.clear(ctx!);
-
-
-        layer.setTransform(ctx!);
-
-        drawExtra(cy.nodes(), ctx!, cy.zoom())
+        layer.resetTransform(ctx);
+        layer.clear(ctx);
+        layer.setTransform(ctx);
+        drawExtra(cy.nodes(), ctx, cy.zoom());
     });
-
 }
 
-export function goToNode(location : techNode["location"]) {
-    // var node = _data.filter(x => x.id === id)[0];
+function tech(data: techNode[], edges: Array<EdgeInput>, settings: settings, json?: { elements: { nodes?: cytoscape.ElementDefinition[]; edges?: cytoscape.ElementDefinition[]; } | cytoscape.ElementDefinition[]; } & Record<string, unknown>) {
+    const importingJson = json !== undefined;
+    const cy = initCytoscape(settings);
+
+    const layer = cy.cyCanvas({ zIndex: 1, pixelRatio: "auto" });
+    const canvas = layer.getCanvas();
+    const ctx = canvas.getContext('2d')!;
+
+    if (!importingJson) {
+        populateGraph(cy, data, edges);
+    } else {
+        cy.json(json);
+    }
+    cy.style(style);
+
+    setupTooltips(cy);
+
+    if (!importingJson) {
+        runLayout(cy);
+    }
+
+    setupInteraction(cy, layer, ctx);
+}
+
+export function goToNode(location : GraphLocation) {
     const uri = location.filename
     const line = location.line
     const column = location.column
@@ -390,14 +362,15 @@ export async function exportImage(pixelRatio: number) {
     vscode.postMessage({ "command": "saveImage", "image": mergedImages.substring(mergedImages.indexOf(',') + 1) });
 }
 
-function blobToDataURL(blob: Blob): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
-        reader.onabort = () => reject(new Error("Read aborted"));
-        reader.readAsDataURL(blob);
-    });
+async function blobToDataURL(blob: Blob): Promise<string> {
+    const buffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]!);
+    }
+    const base64 = btoa(binary);
+    return `data:${blob.type};base64,${base64}`;
 }
 
 export function exportJson() {
@@ -406,27 +379,14 @@ export function exportJson() {
 }
 
 
-interface Location
-{
-    filename : string
-    line : number
-    column : number
-}
-interface ReferenceDetails
-{
-    key : string
-    isOutgoing : boolean
-    label : string
-}
 interface techNode
 {
     name : string
-    prereqs : Array<string>
-    references: Array<ReferenceDetails>
+    references: Array<GraphReference>
     id : string
-    location: Location
+    location: GraphLocation
     isPrimary : boolean
-    details? : Array<{ key: string, values : Array<string> }>
+    details? : Array<GraphNodeDetail>
     entityTypeDisplayName? : string
     abbreviation? : string
     entityType : string
@@ -443,7 +403,7 @@ interface EdgeInput {
 
 export function go(nodesJ: Array<techNode>, settings: settings) {
     const nodes: Array<techNode> = nodesJ;
-    const edges = nodes.map((a) => a.references.map((b)  => b.isOutgoing ? { source: a.id, target: b.key, label: b.label } : { source: b.key, target: a.id, label: b.label }));
+    const edges = nodes.map((a) => a.references.map((b)  => b.isOutgoing ? { source: a.id, target: b.key, label: b.label ?? '' } : { source: b.key, target: a.id, label: b.label ?? '' }));
     const edges2 = edges.flat();
     const edgesfin = new Set(edges2)
     tech(nodes, [...edgesfin], settings);
@@ -480,5 +440,3 @@ window.addEventListener('message', event => {
 });
 
 vscode.postMessage({ "command": "ready"});
-
-//go("test");

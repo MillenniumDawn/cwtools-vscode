@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { extractCompletionLabel } from '../support/utils';
 
 /**
  * Result of a hover assertion. Either passed=true with the actual content,
@@ -54,6 +55,6 @@ export async function getCompletionLabels(
 		position
 	);
 	return (completions?.items ?? []).map(item =>
-		typeof item.label === 'string' ? item.label : item.label.label
+		extractCompletionLabel(item)
 	);
 }

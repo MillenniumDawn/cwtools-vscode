@@ -45,9 +45,19 @@ enough of it.
 
 ## Adding a probe
 
-Add an entry to `probes` in `parity.test.ts`: a file, a position, and the
-`expected` substrings (hover) or labels (completion) that vanilla produces. Both
-engines get a test automatically.
+Add an entry to `probes` in `parity.test.ts`. Each probe has a `kind` that
+determines what to assert:
+
+| Kind | What it checks | Key fields |
+|---|---|---|
+| `hover` | Hover content contains expected substrings | `file`, `line`, `character`, `expected` |
+| `completion` | Completion list includes expected labels | `file`, `line`, `character`, `expected` |
+| `definition` | Goto-definition resolves to expected file | `file`, `line`, `character`, `expectedTargetFile` |
+| `references` | Find-references returns at least N hits | `file`, `line`, `character`, `expectedMinCount` |
+| `diagnostics` | publishDiagnostics for a file | `file`, `expectAny` |
+| `formatting` | documentFormatting returns edits | `file`, `expectAny` |
+
+Both engines get a test automatically.
 
 ## Notes
 

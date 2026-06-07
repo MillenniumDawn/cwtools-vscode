@@ -14,6 +14,7 @@ import { readFileSync } from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { LspClient } from './lspClient';
+import { extractCompletionLabel } from '../support/utils';
 
 export type Engine = 'rust' | 'fsharp';
 
@@ -48,14 +49,18 @@ function cwtoolsSettings(rulesLeaf: string) {
 export class EngineSession {
 	private readonly client: LspClient;
 	private loaded = false;
+	private readonly diagnostics = new Map<string, unknown[]>();
 
 	private constructor(private readonly opts: SessionOptions) {
 		this.client = new LspClient(opts.serverExe);
 		this.client.onNotification((method, params) => {
-			// The servers signal "first pass finished" by closing the loading bar.
 			if (method === 'loadingBar') {
 				const p = params as { enable?: boolean };
 				if (p && p.enable === false) this.loaded = true;
+			}
+			if (method === 'textDocument/publishDiagnostics') {
+				const p = params as { uri: string; diagnostics: unknown[] };
+				if (p?.uri) this.diagnostics.set(p.uri, p.diagnostics);
 			}
 		});
 	}
@@ -82,6 +87,9 @@ export class EngineSession {
 				textDocument: {
 					hover: { contentFormat: ['markdown', 'plaintext'] },
 					completion: { completionItem: { snippetSupport: true } },
+					definition: {},
+					references: {},
+					formatting: { dynamicRegistration: false },
 				},
 			},
 			initializationOptions: {
@@ -142,7 +150,42 @@ export class EngineSession {
 			{ items?: { label?: string | { label?: string } }[] } | { label?: string | { label?: string } }[]
 		>('textDocument/completion', { textDocument: { uri: this.uri(file) }, position: { line, character } });
 		const items = Array.isArray(res) ? res : (res?.items ?? []);
-		return items.map(i => (typeof i.label === 'string' ? i.label : i.label?.label ?? '')).filter(Boolean);
+		return items.map(i => extractCompletionLabel(i)).filter(Boolean);
+	}
+
+	async definition(file: string, line: number, character: number): Promise<{ uri: string; range: { start: { line: number; character: number } } }[]> {
+		const res = await this.client.request<
+			| { uri: string; range: { start: { line: number; character: number } } }
+			| { uri: string; range: { start: { line: number; character: number } } }[]
+			| null
+		>('textDocument/definition', { textDocument: { uri: this.uri(file) }, position: { line, character } });
+		if (!res) return [];
+		return Array.isArray(res) ? res : [res];
+	}
+
+	async references(file: string, line: number, character: number): Promise<{ uri: string; range: { start: { line: number; character: number } } }[]> {
+		const res = await this.client.request<
+			{ uri: string; range: { start: { line: number; character: number } } }[] | null
+		>('textDocument/references', {
+			textDocument: { uri: this.uri(file) },
+			position: { line, character },
+			context: { includeDeclaration: true },
+		});
+		return res ?? [];
+	}
+
+	getDiagnostics(file: string): unknown[] {
+		return this.diagnostics.get(this.uri(file)) ?? [];
+	}
+
+	async formatting(file: string): Promise<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }[]> {
+		const res = await this.client.request<
+			{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }[] | null
+		>('textDocument/documentFormatting', {
+			textDocument: { uri: this.uri(file) },
+			options: { tabSize: 4, insertSpaces: true },
+		});
+		return res ?? [];
 	}
 
 	dispose(): void {

@@ -1,8 +1,9 @@
 import * as os from 'os';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { ExtensionContext } from 'vscode';
+import type { ExtensionContext } from 'vscode';
 import { existsSync as fsExistsSync } from 'fs';
+import { logInfo, logError } from './logger';
 
 export const LANGUAGE_REPOS: Record<string, string> = {
 	stellaris: 'https://github.com/cwtools/cwtools-stellaris-config',
@@ -77,7 +78,7 @@ export function detectFromFolder(root: string, fileExists: (p: string) => boolea
 function serverPlatformDir(): string {
 	switch (os.platform()) {
 		case 'win32': return 'win-x64';
-		case 'darwin': return 'osx-x64';
+		case 'darwin': return os.arch() === 'arm64' ? 'osx-arm64' : 'osx-x64';
 		default: return 'linux-x64';
 	}
 }
@@ -133,15 +134,15 @@ export function runGit(
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
-			console.error(`[CWTools] git ${args.join(' ')} error: ${e.message}`);
+			logError(`git ${args.join(' ')} error`, e);
 			reject(e);
 		});
 		git.on('close', (code, signal) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
-			if (out) console.log(`[CWTools] git stdout: ${out.trimEnd()}`);
-			if (err) console.error(`[CWTools] git stderr: ${err.trimEnd()}`);
+			if (out) logInfo(`git stdout: ${out.trimEnd()}`);
+			if (err) logError(`git stderr: ${err.trimEnd()}`);
 			if (code === 0 && !signal) resolve();
 			else reject(new Error(`git exited with code ${code} (signal: ${signal || 'none'})`));
 		});

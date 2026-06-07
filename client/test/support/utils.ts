@@ -1,7 +1,11 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 
 // The published extension id: publisher.name from release/package.json.
 export const EXTENSION_ID = 'milleniumdawnmodteam.cwtools-md-edition';
+
+/** Resolved path to the sample mod used by all test suites. */
+export const SAMPLE_ROOT = path.resolve(__dirname, '../sample');
 
 export async function activate() {
   const ext = vscode.extensions.getExtension(EXTENSION_ID)!;
@@ -114,10 +118,9 @@ export function currentEngine(): 'rust' | 'fsharp' {
 }
 
 /**
- * Set the engine and reload the window so the next activation picks it up.
- * Used by the parity suite to test both engines in one run.
+ * Extract the display label from a CompletionItem, handling both the plain
+ * string form and the { label: string } form used by some LSP responses.
  */
-export async function setEngineAndReload(engine: 'rust' | 'fsharp'): Promise<void> {
-  await vscode.workspace.getConfiguration('cwtools').update('engine', engine, vscode.ConfigurationTarget.Global);
-  await vscode.commands.executeCommand('workbench.action.reloadWindow');
+export function extractCompletionLabel(item: { label?: string | { label?: string } }): string {
+  return typeof item.label === 'string' ? item.label : item.label?.label ?? '';
 }

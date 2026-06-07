@@ -1,10 +1,12 @@
 {
     "compilerOptions": {
-        "module": "ES2020"
+        "module": "ES2020",
+        "lib": ["es2020", "dom"]
     },
     "extends": "./tsconfig.json",
     "exclude": [
-        "client/extension/*.ts",
-        "client/test/*.ts"
+        "client/extension/**/*.ts",
+        "client/test/**/*.ts",
+        "client/common/**/*.ts"
     ]
 }

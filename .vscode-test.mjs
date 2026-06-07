@@ -23,6 +23,7 @@ const unitFiles = [
 	'./release/bin/client/test/suite/graphTypes.test.js',
 	'./release/bin/client/test/suite/fileExplorer.test.js',
 	'./release/bin/client/test/suite/extensionHelpers.test.js',
+	'./release/bin/client/test/suite/executable.test.js',
 ];
 const allFiles = './release/bin/client/test/suite/**/*.test.js';
 

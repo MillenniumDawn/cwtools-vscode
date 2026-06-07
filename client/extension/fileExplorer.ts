@@ -14,7 +14,7 @@ import * as vscode from 'vscode';
         logicalpath: string
     }
 
-    export type fileToTreeNodeType = (files: FileListItem[]) => TreeNode[]
+    type fileToTreeNodeType = (files: FileListItem[]) => TreeNode[]
 
     // Intermediate node type used during tree construction
     interface TreeNodeInternal {
@@ -83,7 +83,7 @@ import * as vscode from 'vscode';
             children: [] ,
             uri: ""
         }
-        constructor(private files: FileListItem[]) {
+        constructor(files: FileListItem[]) {
             this.parseTree(files);
         }
         private _onDidChangeTreeData: vscode.EventEmitter<TreeNode | null> = new vscode.EventEmitter<TreeNode | null>();

@@ -7,14 +7,14 @@ import {
 	waitForLanguageServer,
 	currentEngine,
 	EXTENSION_ID,
+	SAMPLE_ROOT,
 } from '../support/utils';
 import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../support/lspErrorMonitor';
 import { checkHoverContains } from './hoverChecks';
 import { expect } from 'chai';
 
-const sampleRoot = path.resolve(__dirname, '../sample');
-const testEventFile = path.join(sampleRoot, 'events', 'irm.txt');
-const testEffectsFile = path.join(sampleRoot, 'common', 'scripted_effects', 'irm_scripted_effects.txt');
+const testEventFile = path.join(SAMPLE_ROOT, 'events', 'irm.txt');
+const testEffectsFile = path.join(SAMPLE_ROOT, 'common', 'scripted_effects', 'irm_scripted_effects.txt');
 
 suite('LSP Hover Tests', function () {
 	this.timeout(60000);

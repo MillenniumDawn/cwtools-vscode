@@ -20,13 +20,15 @@
 import * as assert from 'assert';
 import { existsSync } from 'fs';
 import * as path from 'path';
-import { EngineSession, Engine } from './engineSession';
+import type { Engine } from './engineSession';
+import { EngineSession } from './engineSession';
 
 const repoRoot = path.resolve(__dirname, '../../../../..');
 const sampleRoot = path.join(repoRoot, 'client/test/sample');
 const files = {
 	event: path.join(sampleRoot, 'events/irm.txt'),
 	effects: path.join(sampleRoot, 'common/scripted_effects/irm_scripted_effects.txt'),
+	triggers: path.join(sampleRoot, 'common/scripted_triggers/irm_scripted_triggers.txt'),
 	niche: path.join(sampleRoot, 'common/pop_faction_types/irm_regionalist.txt'),
 };
 
@@ -61,11 +63,50 @@ interface CompletionProbe {
 	character: number;
 	expected: string[];
 }
-type Probe = HoverProbe | CompletionProbe;
+interface DefinitionProbe {
+	kind: 'definition';
+	name: string;
+	file: string;
+	line: number;
+	character: number;
+	/** Expected target file (basename) the definition should resolve to. */
+	expectedTargetFile: string;
+}
+interface ReferencesProbe {
+	kind: 'references';
+	name: string;
+	file: string;
+	line: number;
+	character: number;
+	/** Minimum number of references expected (including the declaration). */
+	expectedMinCount: number;
+}
+interface DiagnosticsProbe {
+	kind: 'diagnostics';
+	name: string;
+	file: string;
+	/** True = expect at least one diagnostic; false = expect zero. */
+	expectAny: boolean;
+}
+interface FormattingProbe {
+	kind: 'formatting';
+	name: string;
+	file: string;
+	/** True = expect at least one edit; false = expect zero. */
+	expectAny: boolean;
+}
+type Probe =
+	| HoverProbe
+	| CompletionProbe
+	| DefinitionProbe
+	| ReferencesProbe
+	| DiagnosticsProbe
+	| FormattingProbe;
 
 // Positions and expectations mirror the host-based suite. `expected` is the
 // vanilla (F#) behavior; the F# test proves it, the Rust test chases it.
 const probes: Probe[] = [
+	// --- hover ---
 	{
 		kind: 'hover', name: 'trigger hover: is_country_type documents the check + scope chain',
 		file: files.event, line: 37, character: 45,
@@ -81,10 +122,35 @@ const probes: Probe[] = [
 		file: files.effects, line: 36, character: 70,
 		expected: ['Faction Governance'],
 	},
+	// --- completion ---
 	{
 		kind: 'completion', name: 'completion: niche context offers the scripted effect labels',
 		file: files.niche, line: 26, character: 41,
 		expected: ['regionalist_dublicated', 'sector_policy_leadership'],
+	},
+	// --- definition ---
+	{
+		kind: 'definition', name: 'goto-def: pop_can_politics resolves to the scripted trigger',
+		file: files.niche, line: 35, character: 3,
+		expectedTargetFile: 'irm_scripted_triggers.txt',
+	},
+	// --- references ---
+	{
+		kind: 'references', name: 'find-refs: pop_can_politics has multiple usage sites',
+		file: files.triggers, line: 86, character: 0,
+		expectedMinCount: 4,
+	},
+	// --- diagnostics ---
+	{
+		kind: 'diagnostics', name: 'diagnostics: event file is parsed without errors',
+		file: files.event,
+		expectAny: false,
+	},
+	// --- formatting ---
+	{
+		kind: 'formatting', name: 'formatting: returns edits for the event file',
+		file: files.event,
+		expectAny: true,
 	},
 ];
 
@@ -125,6 +191,29 @@ const rulesLeaf = findRules();
 		return { count: labels.length, missing: p.expected.filter(s => !labels.includes(s)) };
 	}
 
+	async function runDefinition(engine: Engine, p: DefinitionProbe): Promise<{ targets: string[] }> {
+		const defs = await sessions[engine]!.definition(p.file, p.line, p.character);
+		const targets = defs.map(d => path.basename(new URL(d.uri).pathname));
+		return { targets };
+	}
+
+	async function runReferences(engine: Engine, p: ReferencesProbe): Promise<{ count: number }> {
+		const refs = await sessions[engine]!.references(p.file, p.line, p.character);
+		return { count: refs.length };
+	}
+
+	function runDiagnostics(engine: Engine, p: DiagnosticsProbe): { count: number } {
+		const diags = sessions[engine]!.getDiagnostics(p.file);
+		return { count: diags.length };
+	}
+
+	async function runFormatting(engine: Engine, p: FormattingProbe): Promise<{ count: number }> {
+		// Give the server a moment to finish any lingering parse before formatting.
+		await new Promise<void>(r => setTimeout(r, 500));
+		const edits = await sessions[engine]!.formatting(p.file);
+		return { count: edits.length };
+	}
+
 	for (const p of probes) {
 		// The F# reference must work — a failure here means the rules/setup is
 		// broken, not that Rust is behind.
@@ -133,10 +222,33 @@ const rulesLeaf = findRules();
 				const { actual, missing } = await runHover('fsharp', p);
 				assert.ok(actual.length > 0, 'F# reference returned an empty hover — rules not loaded?');
 				assert.deepStrictEqual(missing, [], `F# hover missing ${JSON.stringify(missing)}\nactual: ${actual}`);
-			} else {
+			} else if (p.kind === 'completion') {
 				const { count, missing } = await runCompletion('fsharp', p);
 				assert.ok(count > 0, 'F# reference returned no completions');
 				assert.deepStrictEqual(missing, [], `F# completion missing ${JSON.stringify(missing)} (got ${count} labels)`);
+			} else if (p.kind === 'definition') {
+				const { targets } = await runDefinition('fsharp', p);
+				assert.ok(targets.length > 0, 'F# reference returned no definition');
+				assert.ok(targets.some(t => t === p.expectedTargetFile),
+					`F# definition resolved to [${targets}], expected ${p.expectedTargetFile}`);
+			} else if (p.kind === 'references') {
+				const { count } = await runReferences('fsharp', p);
+				assert.ok(count >= p.expectedMinCount,
+					`F# found ${count} references, expected >= ${p.expectedMinCount}`);
+			} else if (p.kind === 'diagnostics') {
+				const { count } = runDiagnostics('fsharp', p);
+				if (p.expectAny) {
+					assert.ok(count > 0, 'F# reference produced no diagnostics');
+				} else {
+					assert.deepStrictEqual(count, 0, `F# reference produced ${count} unexpected diagnostics`);
+				}
+			} else if (p.kind === 'formatting') {
+				const { count } = await runFormatting('fsharp', p);
+				if (p.expectAny) {
+					assert.ok(count > 0, 'F# reference returned no formatting edits');
+				} else {
+					assert.deepStrictEqual(count, 0, `F# reference returned ${count} unexpected formatting edits`);
+				}
 			}
 		});
 
@@ -145,9 +257,31 @@ const rulesLeaf = findRules();
 			if (p.kind === 'hover') {
 				const { actual, missing } = await runHover('rust', p);
 				assert.deepStrictEqual(missing, [], `Rust hover missing ${JSON.stringify(missing)}\nactual: ${actual}`);
-			} else {
+			} else if (p.kind === 'completion') {
 				const { count, missing } = await runCompletion('rust', p);
 				assert.deepStrictEqual(missing, [], `Rust completion missing ${JSON.stringify(missing)} (got ${count} labels)`);
+			} else if (p.kind === 'definition') {
+				const { targets } = await runDefinition('rust', p);
+				assert.ok(targets.some(t => t === p.expectedTargetFile),
+					`Rust definition resolved to [${targets}], expected ${p.expectedTargetFile}`);
+			} else if (p.kind === 'references') {
+				const { count } = await runReferences('rust', p);
+				assert.ok(count >= p.expectedMinCount,
+					`Rust found ${count} references, expected >= ${p.expectedMinCount}`);
+			} else if (p.kind === 'diagnostics') {
+				const { count } = runDiagnostics('rust', p);
+				if (p.expectAny) {
+					assert.ok(count > 0, 'Rust produced no diagnostics');
+				} else {
+					assert.deepStrictEqual(count, 0, `Rust produced ${count} unexpected diagnostics`);
+				}
+			} else if (p.kind === 'formatting') {
+				const { count } = await runFormatting('rust', p);
+				if (p.expectAny) {
+					assert.ok(count > 0, 'Rust returned no formatting edits');
+				} else {
+					assert.deepStrictEqual(count, 0, `Rust returned ${count} unexpected formatting edits`);
+				}
 			}
 		});
 	}

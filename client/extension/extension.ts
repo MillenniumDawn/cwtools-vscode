@@ -2,27 +2,35 @@
  * Copyright (c) Microsoft Corporation. All rights reserved.
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
-'use strict';
 
 import * as path from 'path';
 import * as os from 'os';
-import { existsSync as fsExistsSync, statSync as fsStatSync, chmodSync as fsChmodSync, mkdirSync as fsMkdirSync } from 'fs';
-import * as vs from 'vscode';
-import { workspace, ExtensionContext, window, Disposable, Uri, WorkspaceEdit, TextEdit, Range, commands, env } from 'vscode';
-import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind, NotificationType, ExecuteCommandRequest, RevealOutputChannelOn } from 'vscode-languageclient/node';
+import { existsSync as fsExistsSync } from 'fs';
+import * as fsPromises from 'fs/promises';
+import * as vscode from 'vscode';
+import type { ExtensionContext, Disposable} from 'vscode';
+import { workspace, window, Uri, WorkspaceEdit, TextEdit, Range, commands, env } from 'vscode';
+import type { LanguageClientOptions, ServerOptions} from 'vscode-languageclient/node';
+import { LanguageClient, TransportKind, NotificationType, ExecuteCommandRequest, RevealOutputChannelOn } from 'vscode-languageclient/node';
 
-import { FileExplorer, FileListItem } from './fileExplorer';
-import * as gp from './graphPanel';
-import * as exe from './executable';
+import type { FileListItem } from './fileExplorer';
+import { FileExplorer } from './fileExplorer';
 import { getGraphData } from '../common/graphTypes';
 import {
 	LANGUAGE_REPOS,
 	GAME_DISPLAY,
 	GAME_FOLDER,
-	detectFromFolder,
 	serverExeForEngine,
 	runGit,
 } from './engine';
+import { detectGameAndVanilla } from './detectGame';
+import { logInfo, logWarn, logError } from './logger';
+
+interface LoadingBarParams { enable: boolean; value: string }
+interface DebugStatusBarParams { enable: boolean; value: string }
+interface CreateVirtualFile { uri: string; fileContent: string }
+interface DidFocusFile { uri: string }
+interface UpdateFileList { fileList: FileListItem[] }
 
 export let defaultClient: LanguageClient;
 export async function activate(context: ExtensionContext) {
@@ -30,7 +38,7 @@ export async function activate(context: ExtensionContext) {
 	let fileExplorer : FileExplorer;
 
 
-	class CwtoolsProvider implements vs.TextDocumentContentProvider
+	class CwtoolsProvider implements vscode.TextDocumentContentProvider
 	{
 		private disposables: Disposable[] = [];
 
@@ -54,7 +62,7 @@ export async function activate(context: ExtensionContext) {
 	const cacheDir = isDevDir ? path.join(context.globalStorageUri.fsPath, '.cwtools') : path.join(context.extensionPath, '.cwtools')
 
 	const init = async function(language : string, isVanillaFolder : boolean) {
-		const langConfigDisposable = vs.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
+		const langConfigDisposable = vscode.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
 		context.subscriptions.push(langConfigDisposable);
 
 		// cwtools.engine picks between the Rust server (default) and the
@@ -79,26 +87,26 @@ export async function activate(context: ExtensionContext) {
 				return;
 			}
 		}
-		console.log(`[CWTools] Using '${activeEngine}' engine: ${serverExe}`);
+		logInfo(`Using '${activeEngine}' engine: ${serverExe}`);
 
-		if (os.platform() !== 'win32') {
-			try {
-				const stat = fsStatSync(serverExe);
-				if ((stat.mode & 0o111) === 0) {
-					fsChmodSync(serverExe, 0o755);
-				}
-			} catch (e) {
-				console.error('[CWTools] stat/chmod error on server binary:', e);
+	if (os.platform() !== 'win32') {
+		try {
+			const stat = await fsPromises.stat(serverExe);
+			if ((stat.mode & 0o111) === 0) {
+				await fsPromises.chmod(serverExe, 0o755);
 			}
+		} catch (e) {
+			logError('stat/chmod error on server binary', e);
 		}
+	}
 
 		const repoPath = LANGUAGE_REPOS[language];
 		if (!repoPath) {
-			console.warn(`[CWTools] No config repository for language "${language}"; rule cloning skipped.`);
+			logWarn(`No config repository for language "${language}"; rule cloning skipped.`);
 		}
-		console.log(`${language} ${repoPath || '(no remote)'}`);
+		logInfo(`${language} ${repoPath || '(no remote)'}`);
 
-		fsMkdirSync(cacheDir, { recursive: true });
+		await fsPromises.mkdir(cacheDir, { recursive: true });
 		const languageRulesCache = path.join(cacheDir, language);
 
 		const manualRules = workspace.getConfiguration('cwtools').get<string>('rules_folder');
@@ -110,34 +118,38 @@ export async function activate(context: ExtensionContext) {
 			? (hasManualRules ? path.dirname(manualRules!) : cacheDir)
 			: effectiveRulesCache;
 		if (hasManualRules && activeEngine === 'fsharp' && path.basename(manualRules!) !== language) {
-			console.warn(`[CWTools] The F# engine appends the game subdir to the rules folder, ` +
+			logWarn(`The F# engine appends the game subdir to the rules folder, ` +
 				`so a manual rules_folder should be named "${language}" to be found (got "${manualRules}").`);
 		}
 		if (hasManualRules) {
-			console.log(`[CWTools] Using manual rules folder: ${manualRules}`);
+			logInfo(`Using manual rules folder: ${manualRules}`);
 		} else if (repoPath) {
 			try {
 				const gitDir = path.join(languageRulesCache, '.git');
 				if (!fsExistsSync(gitDir)) {
-					console.log(`[CWTools] Cloning rules from ${repoPath} into ${languageRulesCache}`);
+					logInfo(`Cloning rules from ${repoPath} into ${languageRulesCache}`);
 					await runGit(['clone', '--depth', '1', repoPath, languageRulesCache]);
 				} else {
-					console.log(`[CWTools] Fetching latest rules for ${language} ...`);
+					logInfo(`Fetching latest rules for ${language} ...`);
 					await runGit(['-C', languageRulesCache, 'pull', '--depth=1', '--ff-only']);
 				}
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				const channel = window.createOutputChannel('CWTools');
-				channel.appendLine(`[CWTools] Rule fetch failed for ${language}: ${msg}`);
-				channel.show(true);
+				logError(`Rule fetch failed for ${language}`, msg);
 			}
 		}
 
 		// If the extension is launched in debug mode then the debug server options are used
-		// Otherwise the run options are used
+		// Otherwise the run options are used.
+		// When cwtools.profiling is on, launch the server with CWTOOLS_PROFILE=1 so
+		// it emits per-phase timing + RSS (to the CWTools output channel) and keeps
+		// a buffer the 'Export profiling log' command can save. Takes effect on the
+		// next server start, so toggling it needs a reload.
+		const profilingEnabled = workspace.getConfiguration('cwtools').get<boolean>('profiling') ?? false;
+		const serverEnv = profilingEnabled ? { ...process.env, CWTOOLS_PROFILE: '1' } : process.env;
 		const serverOptions: ServerOptions = {
-			run: { command: serverExe, transport: TransportKind.stdio },
-			debug : { command: serverExe, transport: TransportKind.stdio }
+			run: { command: serverExe, transport: TransportKind.stdio, options: { env: serverEnv } },
+			debug : { command: serverExe, transport: TransportKind.stdio, options: { env: serverEnv } }
 		}
 
 		const fileEvents = [
@@ -175,6 +187,13 @@ export async function activate(context: ExtensionContext) {
 				rulesCache: rulesCacheForServer,
 				rules_version: workspace.getConfiguration('cwtools').get('rules_version'),
 				repoPath: repoPath,
+				localisationLanguages: workspace.getConfiguration('cwtools').get('localisation.languages'),
+				// Persistent cache dir + the user's vanilla install path. The Rust
+				// server caches the base-game index here keyed by game version, so
+				// it isn't re-parsed every startup. Passing the explicit install
+				// path avoids relying on Steam auto-discovery.
+				cacheDir: path.join(cacheDir, 'vanilla'),
+				vanilla: workspace.getConfiguration('cwtools').get('cache.' + language),
 				diagnosticLogging: workspace.getConfiguration('cwtools').get('logging.diagnostic') },
 				revealOutputChannelOn: RevealOutputChannelOn.Error
 		}
@@ -183,55 +202,69 @@ export async function activate(context: ExtensionContext) {
 		const log = client.outputChannel
 		defaultClient = client;
 		client.registerProposedFeatures();
-		interface loadingBarParams { enable: boolean; value: string }
-		const loadingBarNotification = new NotificationType<loadingBarParams>('loadingBar');
-		interface debugStatusBarParams { enable: boolean; value: string }
-		const debugStatusBarParamsNotification = new NotificationType<debugStatusBarParams>('debugBar');
-		interface CreateVirtualFile { uri: string; fileContent: string }
+		const loadingBarNotification = new NotificationType<LoadingBarParams>('loadingBar');
+		const debugStatusBarParamsNotification = new NotificationType<DebugStatusBarParams>('debugBar');
 		const createVirtualFile = new NotificationType<CreateVirtualFile>('createVirtualFile');
 		const promptReload = new NotificationType<string>('promptReload')
 		const forceReload = new NotificationType<string>('forceReload')
 		const promptVanillaPath = new NotificationType<string>('promptVanillaPath')
-		interface DidFocusFile { uri : string }
 		const didFocusFile = new NotificationType<DidFocusFile>('didFocusFile')
 		let status: Disposable | undefined;
-		interface UpdateFileList { fileList: FileListItem[] }
 		const updateFileList = new NotificationType<UpdateFileList>('updateFileList');
 
-		let latestType : string = '';
+	let latestType : string = '';
+	let getFileTypesInFlight = false;
+	const getFileTypesTimeoutMs = 5000;
 
-		async function didChangeActiveTextEditor(editor : vs.TextEditor | undefined): Promise<void> {
-			if (!editor) return;
-			const path = editor.document.uri.toString();
-			if (languageId == "paradox" && editor.document.languageId == "plaintext") {
-				await vs.languages.setTextDocumentLanguage(editor.document, "paradox")
-			}
-			if (editor.document.languageId == language) {
-				await client.sendNotification(didFocusFile, {uri: path});
-			}
-			const data = await client.sendRequest(
-				ExecuteCommandRequest.type,
-				{ command: "getFileTypes", arguments: [path] }
-			);
+	async function didChangeActiveTextEditor(editor : vscode.TextEditor | undefined): Promise<void> {
+		if (!editor) return;
+		const editorPath = editor.document.uri.toString();
+		if (languageId === "paradox" && editor.document.languageId === "plaintext") {
+			await vscode.languages.setTextDocumentLanguage(editor.document, "paradox")
+		}
+		if (editor.document.languageId === language) {
+			await client.sendNotification(didFocusFile, {uri: editorPath});
+		}
+		// Guard against rapid tab switches piling up requests to a busy server.
+		// Only one getFileTypes request can be in flight at a time; subsequent
+		// tab switches are skipped until the in-flight request completes or times out.
+		if (getFileTypesInFlight) return;
+		getFileTypesInFlight = true;
+		try {
+			const data = await Promise.race([
+				client.sendRequest(
+					ExecuteCommandRequest.type,
+					{ command: "getFileTypes", arguments: [editorPath] }
+				),
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error('getFileTypes request timed out')), getFileTypesTimeoutMs)
+				)
+			]);
 			if (data && data[0]) {
 				latestType = data[0];
 				await commands.executeCommand('setContext', 'cwtoolsGraphFile', true);
 			} else {
 				await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
 			}
+		} catch (err) {
+			logError('didChangeActiveTextEditor getFileTypes failed', err);
+			await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
+		} finally {
+			getFileTypesInFlight = false;
 		}
+	}
 
 		context.subscriptions.push(window.onDidChangeActiveTextEditor(didChangeActiveTextEditor));
 
-		if (languageId == "paradox") {
+		if (languageId === "paradox") {
 			for (const textDocument of workspace.textDocuments){
-				if (textDocument.languageId == "plaintext"){
-					await vs.languages.setTextDocumentLanguage(textDocument, "paradox")
+				if (textDocument.languageId === "plaintext"){
+					await vscode.languages.setTextDocumentLanguage(textDocument, "paradox")
 				}
 			}
 		}
 
-		client.onNotification(loadingBarNotification, (param: loadingBarParams) => {
+		client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
 			if (param.enable) {
 				if (status !== undefined) {
 					status.dispose();
@@ -243,9 +276,9 @@ export async function activate(context: ExtensionContext) {
 				status = undefined;
 			}
 		})
-		const debugStatusBar = window.createStatusBarItem(vs.StatusBarAlignment.Left);
+		const debugStatusBar = window.createStatusBarItem(vscode.StatusBarAlignment.Left);
 		context.subscriptions.push(debugStatusBar);
-		client.onNotification(debugStatusBarParamsNotification, (param: debugStatusBarParams) => {
+		client.onNotification(debugStatusBarParamsNotification, (param: DebugStatusBarParams) => {
 			if (param.enable) {
 				debugStatusBar.text = param.value;
 				debugStatusBar.show();
@@ -313,7 +346,10 @@ export async function activate(context: ExtensionContext) {
 		let currentGraphDepth = 3;
 		const wheelSensitivity = (): number => workspace.getConfiguration('cwtools.graph').get('zoomSensitivity') ?? 1;
 		const showGraph = async function() {
-			const graphData = await getGraphData(latestType, currentGraphDepth);
+			const [gp, graphData] = await Promise.all([
+				import('./graphPanel'),
+				getGraphData(latestType, currentGraphDepth),
+			]);
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity());
 		}
@@ -339,14 +375,36 @@ export async function activate(context: ExtensionContext) {
 			if(!uri){
 				return;
 			}
-			const bytes = await vs.workspace.fs.readFile(uri[0]);
+			const bytes = await vscode.workspace.fs.readFile(uri[0]);
 			const data = new TextDecoder('utf-8').decode(bytes);
+			const gp = await import('./graphPanel');
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
 		}));
+		// Fetch the server's accumulated profiling report and save it to a file.
+		// The server only fills the buffer when launched with CWTOOLS_PROFILE=1
+		// (the cwtools.profiling setting), so prompt to enable it if empty.
+		context.subscriptions.push(commands.registerCommand('cwtools.exportProfilingLog', async () => {
+			let log: unknown;
+			try {
+				log = await client.sendRequest(ExecuteCommandRequest.type, { command: 'exportProfilingLog', arguments: [] });
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				window.showErrorMessage(`CWTools: could not fetch profiling log: ${msg}`);
+				return;
+			}
+			if (typeof log !== 'string' || log.length === 0) {
+				window.showWarningMessage("CWTools: profiling log is empty. Turn on 'cwtools.profiling', reload the window, reproduce the slowdown, then export.");
+				return;
+			}
+			const uri = await window.showSaveDialog({ filters: { 'Log': ['log', 'txt'] }, saveLabel: 'Export CWTools profiling log' });
+			if (!uri) { return; }
+			await workspace.fs.writeFile(uri, Buffer.from(log, 'utf8'));
+			window.showInformationMessage(`CWTools: profiling log written to ${uri.fsPath}`);
+		}));
 		// Subscriptions are pushed here so the client is disposed with the extension.
 		context.subscriptions.push(new CwtoolsProvider());
-		context.subscriptions.push(vs.commands.registerCommand("cwtools.reloadExtension", () =>
+		context.subscriptions.push(vscode.commands.registerCommand("cwtools.reloadExtension", () =>
 			commands.executeCommand('workbench.action.reloadWindow')
 		));
 		context.subscriptions.push(client);
@@ -355,86 +413,12 @@ export async function activate(context: ExtensionContext) {
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			window.showErrorMessage(`CWTools language server failed to start: ${msg}`);
-			console.error('[CWTools] client.start() error:', err);
+			logError('client.start() error', err);
 			return;
 		}
 	}
 
-	let languageId : string;
-	const knownLanguageIds = ["stellaris", "eu4", "hoi4", "ck2", "imperator", "vic2", "vic3", "ck3", "eu5"];
-
-	const getLanguageIdFallback = async function() {
-		const markerFiles = await workspace.findFiles("**/*.txt", "**/{.git,node_modules,out,dist}/**", 1);
-		if (markerFiles.length === 1) {
-			const doc = await workspace.openTextDocument(markerFiles[0]);
-			if (knownLanguageIds.includes(doc.languageId)) return doc.languageId;
-		}
-		if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
-			return detectFromFolder(workspace.workspaceFolders[0].uri.fsPath, fsExistsSync);
-		}
-		return null;
-	}
-
-	let guessedLanguageId: string | undefined | null = window.activeTextEditor?.document?.languageId;
-	if(guessedLanguageId === undefined || !knownLanguageIds.includes(guessedLanguageId)){
-		guessedLanguageId = await getLanguageIdFallback();
-	}
-
-	languageId = (guessedLanguageId && knownLanguageIds.includes(guessedLanguageId)) ? guessedLanguageId : "paradox";
-	async function findExeInFiles(gameExeName: string, binariesPrefix = false) {
-		if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
-			return [];
-		}
-
-		const root = workspace.workspaceFolders[0];
-		const isWin = os.platform() === "win32";
-		const ext = isWin ? "*.exe" : "*";
-		const prefix = binariesPrefix ? "binaries/" : "";
-		const names = [gameExeName, gameExeName.toUpperCase(), gameExeName.toLowerCase()];
-		const patterns = names.map(name => new vs.RelativePattern(root, `${prefix}${name}${ext}`));
-
-		const results = await Promise.all(patterns.map(p => workspace.findFiles(p)));
-		const allFiles = results.flat();
-		const validFiles = (await Promise.all(
-			allFiles.map(async v => (await exe.existAndIsExe(v.fsPath)) ? v : null)
-		)).filter(Boolean);
-		return validFiles;
-	}
-	const games = [
-		{ id: "eu4", exeName: "eu4", binariesPrefix: false },
-		{ id: "hoi4", exeName: "hoi4", binariesPrefix: false },
-		{ id: "stellaris", exeName: "stellaris", binariesPrefix: false },
-		{ id: "ck2", exeName: "CK2", binariesPrefix: false },
-		{ id: "imperator", exeName: "imperator", binariesPrefix: true },
-		{ id: "vic2", exeName: "v2game", binariesPrefix: false },
-		{ id: "ck3", exeName: "ck3", binariesPrefix: true },
-		{ id: "vic3", exeName: "victoria3", binariesPrefix: true },
-        { id: "eu5", exeName: "eu5", binariesPrefix: true },
-	];
-
-	const promises = games.map(({ exeName, binariesPrefix }) =>
-		findExeInFiles(exeName, binariesPrefix)
-	);
-
-	const results = await Promise.all(promises);
-
-	let isVanillaFolder = false;
-
-	for (let i = 0; i < results.length; i++) {
-		const { id } = games[i];
-		if (results[i].length > 0 && (languageId === "paradox" || languageId === id)) {
-			isVanillaFolder = true;
-			languageId = id;
-		}
-	}
-
-	if (
-		workspace.workspaceFolders &&
-		workspace.workspaceFolders.length > 0 &&
-		path.basename(workspace.workspaceFolders[0].uri.fsPath) === "game"
-	) {
-		isVanillaFolder = true;
-	}
+	const { languageId, isVanillaFolder } = await detectGameAndVanilla();
 
 	await init(languageId, isVanillaFolder);
 }

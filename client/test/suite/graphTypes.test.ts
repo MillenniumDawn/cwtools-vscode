@@ -1,7 +1,8 @@
 import * as assert from 'assert';
 import sinon from 'sinon';
 import * as vscode from 'vscode';
-import { getGraphData, GraphData, GraphNode } from '../../common/graphTypes';
+import type { GraphData, GraphNode } from '../../common/graphTypes';
+import { getGraphData } from '../../common/graphTypes';
 
 suite('graphTypes — getGraphData', () => {
 	let executeCommandStub: sinon.SinonStub;

@@ -1,22 +1,15 @@
-//
-// Note: This example test is leveraging the Mocha test framework.
-// Please refer to their documentation on https://mochajs.org/ for help.
-//
-
-// The module 'assert' provides assertion methods from node
 import * as assert from 'assert';
 import path from 'path';
 import * as vscode from 'vscode';
-import { activate, retryAsync, wait, EXTENSION_ID } from '../support/utils';
+import { activate, retryAsync, wait, EXTENSION_ID, SAMPLE_ROOT } from '../support/utils';
 import { it, describe } from 'mocha';
 import * as gp from '../../extension/graphPanel';
-import { GraphData } from '../../common/graphTypes';
+import type { GraphData } from '../../common/graphTypes';
 import sinon from 'sinon';
 import * as fs from "node:fs";
 import * as os from "node:os";
-import {State} from "../../extension/graphPanel";
 import { FileExplorer } from '../../extension/fileExplorer';
-const root = path.resolve(__dirname, '../../../../client/test/sample');  // Assumes tests are one level deep in 'test/'
+const root = SAMPLE_ROOT;
 
 suite(`Debug Integration Test: `, function() {
 	test('Extension should be present', () => {
@@ -244,7 +237,7 @@ describe('GraphPanel Tests', function () {
 		gp.GraphPanel.currentPanel!.initialiseGraph(testRawData, 1.0);
 
 		const testStatus = async function() {
-			return await gp.GraphPanel.currentPanel!.getState() === State.Done;
+			return await gp.GraphPanel.currentPanel!.getState() === gp.State.Done;
 		}
 		const result = await retryAsync(testStatus, 3, 500);
 		assert.strictEqual(result, true, 'GraphPanel should be in the Done state');
@@ -307,7 +300,7 @@ suite('GraphPanel — UI integration', function () {
 
 	test('starts in the New state before the webview posts ready', async function () {
 		await setupPanel();
-		assert.strictEqual(await gp.GraphPanel.currentPanel!.getState(), State.New);
+		assert.strictEqual(await gp.GraphPanel.currentPanel!.getState(), gp.State.New);
 	});
 
 	test('saveGraphImage and saveGraphJson are registered once a GraphPanel exists', async function () {
@@ -341,7 +334,7 @@ suite('GraphPanel — UI integration', function () {
 		];
 		gp.GraphPanel.currentPanel!.initialiseGraph(data, 1.0);
 		const finalState = await retryAsync(
-			async () => (await gp.GraphPanel.currentPanel!.getState()) === State.Done,
+			async () => (await gp.GraphPanel.currentPanel!.getState()) === gp.State.Done,
 			3, 500
 		);
 		assert.ok(finalState, 'expected GraphPanel to reach Done after initialiseGraph');
@@ -354,7 +347,7 @@ suite('GraphPanel — UI integration', function () {
 		// once the webview signals ready).
 		gp.GraphPanel.currentPanel!.initialiseGraph(sampleJson, 1.0);
 		const state = await gp.GraphPanel.currentPanel!.getState();
-		assert.notStrictEqual(state, State.New, 'panel should have left New after initialiseGraph');
+		assert.notStrictEqual(state, gp.State.New, 'panel should have left New after initialiseGraph');
 	});
 });
 

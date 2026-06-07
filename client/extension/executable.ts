@@ -1,5 +1,4 @@
 // Vendored and adapted from https://github.com/kevva/executable, Copyright (c) Kevin Mårtensson <kevinmartensson@gmail.com>
-'use strict';
 
 import { access, constants, stat } from "fs/promises";
 

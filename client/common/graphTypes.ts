@@ -38,8 +38,6 @@ export interface GraphNode {
     references: GraphReference[];
     /** Location of the node in a file */
     location?: GraphLocation;
-    /** Documentation for the node */
-    documentation?: string;
     /** Additional details as key-value pairs */
     details?: GraphNodeDetail[];
     /** Whether this is a primary node */
