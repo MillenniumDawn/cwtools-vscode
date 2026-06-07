@@ -35,10 +35,6 @@ jobs:
             platform: win-x64
             target: x86_64-pc-windows-msvc
             bin: cwtools-server.exe
-          - os: macos-13
-            platform: osx-x64
-            target: x86_64-apple-darwin
-            bin: cwtools-server
           - os: macos-latest
             platform: osx-arm64
             target: aarch64-apple-darwin
