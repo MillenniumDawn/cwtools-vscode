@@ -27,7 +27,7 @@ jobs:
     - name: Typecheck and lint
       run: npm run check
     - name: Unit tests
-      run: npm test
+      run: xvfb-run -a npm test
 
   # Full build: compile client, package vsix, run coverage. Validates the
   # complete packaging pipeline and produces the artifact.
