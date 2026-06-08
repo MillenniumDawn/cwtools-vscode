@@ -4,7 +4,7 @@
 // Both write into release/bin/client, overwriting the per-file tsc output for
 // their entry points. Run via `tsx build/esbuild.ts` (see package.json).
 //
-// Flags: --watch (rebuild on change), --dev (skip minify, keep it readable).
+// Flags: --watch (rebuild on change), --dev (NODE_ENV=development for the webview).
 
 import { build, context, type BuildOptions } from 'esbuild';
 
@@ -14,7 +14,10 @@ const dev = process.argv.includes('--dev') || watch;
 const shared: BuildOptions = {
 	bundle: true,
 	sourcemap: true,
-	minify: !dev,
+	// Ship unminified. Both bundles load locally inside VS Code, so minifying
+	// buys nothing, and minified Cytoscape/ELK trips heuristic "FakeUpdate"
+	// (SocGholish) AV signatures as a false positive. Readable output sidesteps it.
+	minify: false,
 	logLevel: 'info',
 };
 
