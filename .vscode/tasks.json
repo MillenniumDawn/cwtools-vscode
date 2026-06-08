@@ -7,16 +7,14 @@
             "label": "Wait For Process",
             "type": "shell",
             "problemMatcher": [],
-            // --- Linux & macOS Command ---
             "linux": {
-                "command": "echo 'Waiting for process to start...'; while ! pgrep -f 'CWTools Server'; do sleep 1; done; echo 'Process found. Continuing!'"
+                "command": "echo 'Waiting for process to start...'; while ! pgrep -f 'cwtools-server'; do sleep 1; done; echo 'Process found. Continuing!'"
             },
             "osx": {
-                "command": "echo 'Waiting for process to start...'; while ! pgrep -f 'CWTools Server'; do sleep 1; done; echo 'Process found. Continuing!'"
+                "command": "echo 'Waiting for process to start...'; while ! pgrep -f 'cwtools-server'; do sleep 1; done; echo 'Process found. Continuing!'"
             },
-            // --- Windows Command (using PowerShell) ---
             "windows": {
-                "command": "echo 'Waiting for process to start...'; while (-not (Get-Process -Name 'CWTools Server' -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }; echo 'Process found. Continuing!'"
+                "command": "echo 'Waiting for process to start...'; while (-not (Get-Process -Name 'cwtools-server' -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }; echo 'Process found. Continuing!'"
             }
         },
         {
@@ -27,34 +25,6 @@
             "presentation": {
                 "reveal": "never"
             },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
-        },
-        {
-            "command": "${workspaceRoot}/build.sh",
-            "windows": {
-                "command": "${workspaceRoot}/build.cmd"
-            },
-            "label": "BuildLocal",
-            "args": [
-                "QuickBuildLocal"
-            ],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
-        },
-        {
-            "command": "${workspaceRoot}/build.sh",
-            "windows": {
-                "command": "${workspaceRoot}/build.cmd"
-            },
-            "label": "BuildLocalDebug",
-            "args": [
-                "QuickBuildLocalDebug"
-            ],
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -87,14 +57,6 @@
                 "kind": "build",
                 "isDefault": true
             }
-        },
-        {
-            "label": "UpdateBuild",
-            "dependsOn": ["Build"]
-        },
-        {
-            "label": "UpdateBuildDebug",
-            "dependsOn": ["BuildDebug"]
         }
     ]
 }
