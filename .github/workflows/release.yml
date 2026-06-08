@@ -127,9 +127,11 @@ jobs:
         # Extract and verify server binaries are present
         workdir=$(mktemp -d)
         unzip -q "$vsix" -d "$workdir"
+        # VSIX archives nest all extension content under extension/.
+        root="$workdir/extension"
         echo "Checking for platform server binaries..."
         for platform in linux-x64 win-x64 osx-arm64; do
-          bin="$workdir/bin/server/cwtools-server/$platform"
+          bin="$root/bin/server/cwtools-server/$platform"
           if [ ! -d "$bin" ]; then
             echo "::error::Missing server binary directory: $platform"
             exit 1
@@ -142,7 +144,7 @@ jobs:
           echo "  $platform: $count file(s) OK"
         done
         # Verify extension manifest is valid JSON
-        if ! python3 -m json.tool "$workdir/package.json" > /dev/null 2>&1; then
+        if ! python3 -m json.tool "$root/package.json" > /dev/null 2>&1; then
           echo "::error::extension package.json is not valid JSON"
           exit 1
         fi
