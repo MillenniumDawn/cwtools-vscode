@@ -18,6 +18,11 @@ on:
 
 name: Release
 
+# Central version pins — update these when bumping toolchains.
+env:
+  NODE_VERSION: '20'
+  DOTNET_VERSION: '9.0.x'
+
 jobs:
   # Build the Rust server natively on each platform. To add or remove a
   # platform, edit the matrix below -- the staging step is platform-agnostic.
@@ -92,10 +97,10 @@ jobs:
     - name: Setup .NET Core
       uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
       with:
-        dotnet-version: 9.0.x
+        dotnet-version: ${{ env.DOTNET_VERSION }}
     - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
       with:
-        node-version: 20
+        node-version: ${{ env.NODE_VERSION }}
     - run: npm install
     - name: Restore dotnet tools
       run: dotnet tool restore
@@ -110,6 +115,40 @@ jobs:
         TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
       # Packages and publishes the staged binaries. No clean, no server rebuild.
       run: dotnet run --project build -- -t ReleasePrebuilt
+    - name: Smoke test vsix
+      run: |
+        set -euo pipefail
+        vsix=$(ls temp/*.vsix 2>/dev/null | head -1)
+        if [ -z "$vsix" ]; then
+          echo "::error::No .vsix file found in temp/"
+          exit 1
+        fi
+        echo "Found vsix: $vsix"
+        # Extract and verify server binaries are present
+        workdir=$(mktemp -d)
+        unzip -q "$vsix" -d "$workdir"
+        echo "Checking for platform server binaries..."
+        for platform in linux-x64 win-x64 osx-arm64; do
+          bin="$workdir/bin/server/cwtools-server/$platform"
+          if [ ! -d "$bin" ]; then
+            echo "::error::Missing server binary directory: $platform"
+            exit 1
+          fi
+          count=$(find "$bin" -type f | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No files in server binary directory: $platform"
+            exit 1
+          fi
+          echo "  $platform: $count file(s) OK"
+        done
+        # Verify extension manifest is valid JSON
+        if ! python3 -m json.tool "$workdir/package.json" > /dev/null 2>&1; then
+          echo "::error::extension package.json is not valid JSON"
+          exit 1
+        fi
+        echo "Extension manifest: OK"
+        rm -rf "$workdir"
+        echo "Smoke test passed"
     - name: Publish to Open VSX Registry
       # Skip cleanly when no Open VSX PAT is configured (GitHub release only).
       if: ${{ env.OPEN_VSX_TOKEN != '' }}

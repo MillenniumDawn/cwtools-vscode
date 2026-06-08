@@ -1,0 +1,61 @@
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v1.0.13-beta)'
+        required: true
+      dry-run:
+        description: 'Dry run — validate without publishing'
+        type: boolean
+        default: false
+
+name: Publish to Marketplace
+
+# Central version pins — update these when bumping toolchains.
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+    - run: npm install
+
+    # Download the vsix asset from the specified GitHub release.
+    - name: Download vsix from release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release download "${{ inputs.tag }}" \
+          --repo "${{ github.repository }}" \
+          --pattern "*.vsix" \
+          --dir vsix-artifacts
+        echo "Downloaded vsix:"
+        ls -la vsix-artifacts/
+
+    - name: Publish to VS Code Marketplace
+      if: ${{ inputs.dry-run == false }}
+      env:
+        vsce-token: ${{ secrets.VSCE_TOKEN }}
+      run: |
+        if [ -z "$vsce-token" ]; then
+          echo "::error::VSCE_TOKEN secret is not set. Add it to the repository secrets."
+          exit 1
+        fi
+        vsix=$(ls vsix-artifacts/*.vsix | head -1)
+        npx @vscode/vsce publish --pat "$vsce-token" --packagePath "$vsix"
+
+    - name: Dry run (validate only)
+      if: ${{ inputs.dry-run == true }}
+      run: |
+        vsix=$(ls vsix-artifacts/*.vsix | head -1)
+        echo "Dry run — would publish: $vsix"
+        npx @vscode/vsce ls-publish --pat dummy --packagePath "$vsix" || true
+        echo "Dry run complete. No changes published."

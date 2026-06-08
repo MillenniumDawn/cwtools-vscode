@@ -1,8 +1,12 @@
 @echo off
 cls
 
-dotnet tool restore
-REM Ensure git submodules (cwtools) are available when not using a local override
-git submodule update --init --recursive
+REM Skip submodule update if already initialized
+if not exist "submodules\cwtools\.git" (
+  git submodule update --init --recursive
+) else (
+  echo Submodules already initialized, skipping update
+)
 
+dotnet tool restore
 dotnet run --project build -- -t %*

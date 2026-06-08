@@ -9,7 +9,7 @@
             "name": ".NET Core Attach",
             "type": "coreclr",
             "request": "attach",
-            "processName": "CWTools Server.exe",
+            "processName": "cwtools-server",
             "symbolOptions": {
                 "searchPaths": ["${workspaceFolder}/release/bin/server/win-x64","${workspaceFolder}/release/bin/server/linux-x64","${workspaceFolder}/release/bin/server/osx-x64" ],
                 "searchMicrosoftSymbolServer": true
@@ -23,9 +23,9 @@
     "name": "Extension Tests",
     "type": "extensionHost",
     "request": "launch",
-    "preLaunchTask": "UpdateBuild",
+    "preLaunchTask": "Build",
     // "runtimeExecutable": "${execPath}",
-    "testConfiguration": "${workspaceFolder}/.vscode-test.js",
+    "testConfiguration": "${workspaceFolder}/.vscode-test.mjs",
     // "args": [
         // "--extensionDevelopmentPath=${workspaceFolder}/release",
         // "--extensionTestsPath=${workspaceFolder}/release/bin/client/test/suite/index"
@@ -35,12 +35,12 @@
     // ]
 },
         {
-            "preLaunchTask": "UpdateBuildDebug",
+            "preLaunchTask": "BuildDebug",
             "name": "Quick update, Build and Launch Extension (Debug)",
             "type": "extensionHost",
             "runtimeExecutable": "${execPath}",
             "args": [
-                "D:\\Games\\Steam\\steamapps\\common\\Stellaris",
+                "${env:CWTOOLS_GAME_PATH}",
                 "--extensionDevelopmentPath=${workspaceRoot}/release",
                 "--disable-extensions"
             ],
@@ -51,12 +51,12 @@
             }
         },
         {
-            "preLaunchTask": "UpdateBuild",
+            "preLaunchTask": "Build",
             "name": "Quick update, Build and Launch Extension",
             "type": "extensionHost",
             "runtimeExecutable": "${execPath}",
             "args": [
-                "D:\\Games\\Steam\\steamapps\\common\\Stellaris",
+                "${env:CWTOOLS_GAME_PATH}",
                 "--extensionDevelopmentPath=${workspaceRoot}/release"
             ],
             "request": "launch",
