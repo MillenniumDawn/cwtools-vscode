@@ -19,9 +19,8 @@ on:
 name: Release
 
 jobs:
-  # Build the Rust server natively on each platform. osx-x64 (Intel) and
-  # osx-arm64 (Apple Silicon) are both built natively so neither requires
-  # Rosetta.
+  # Build the Rust server natively on each platform. To add or remove a
+  # platform, edit the matrix below -- the staging step is platform-agnostic.
   build-server:
     strategy:
       fail-fast: false
@@ -64,7 +63,7 @@ jobs:
         path: cwtools-rs/target/${{ matrix.target }}/release/${{ matrix.bin }}
         if-no-files-found: error
 
-  # Stage the three binaries, package one vsix, and publish it.
+  # Stage the binaries, package one vsix, and publish it.
   publish:
     needs: build-server
     runs-on: ubuntu-latest
@@ -89,14 +88,7 @@ jobs:
         pattern: server-*
         path: artifacts
     - name: Stage binaries into release/
-      run: |
-        base=release/bin/server/cwtools-server
-        install -D artifacts/server-linux-x64/cwtools-server     "$base/linux-x64/cwtools-server"
-        install -D artifacts/server-osx-x64/cwtools-server       "$base/osx-x64/cwtools-server"
-        install -D artifacts/server-osx-arm64/cwtools-server     "$base/osx-arm64/cwtools-server"
-        install -D artifacts/server-win-x64/cwtools-server.exe   "$base/win-x64/cwtools-server.exe"
-        chmod +x "$base/linux-x64/cwtools-server" "$base/osx-x64/cwtools-server" "$base/osx-arm64/cwtools-server"
-        ls -R "$base"
+      run: .github/scripts/stage-release-binaries.sh artifacts release
     - name: Setup .NET Core
       uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
       with:
