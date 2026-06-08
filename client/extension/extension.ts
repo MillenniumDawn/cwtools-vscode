@@ -412,8 +412,32 @@ export async function activate(context: ExtensionContext) {
 			await client.start();
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			window.showErrorMessage(`CWTools language server failed to start: ${msg}`);
 			logError('client.start() error', err);
+			// EPERM/EACCES means the OS refused to execute the server binary,
+			// almost always antivirus (Defender) quarantining the unsigned exe
+			// or a corporate exec policy. A raw "spawn EPERM" tells a modder
+			// nothing, so surface the cause and a self-serve fix instead.
+			const code = (err as NodeJS.ErrnoException | undefined)?.code;
+			if (code === 'EPERM' || code === 'EACCES') {
+				const reveal = 'Reveal Server Binary';
+				const help = 'Antivirus Help';
+				void window.showErrorMessage(
+					`CWTools server was blocked from running (${code}). This is almost always ` +
+					`antivirus (e.g. Windows Defender) quarantining the unsigned server binary. ` +
+					`Restore it from quarantine and add an exclusion for the extension's server folder, ` +
+					`then reload the window.`,
+					reveal, help
+				).then(choice => {
+					if (choice === reveal && serverExe) {
+						void commands.executeCommand('revealFileInOS', Uri.file(serverExe));
+					} else if (choice === help) {
+						void env.openExternal(Uri.parse(
+							'https://support.microsoft.com/windows/add-an-exclusion-to-windows-security-811816c0-4dfd-af4a-47e4-c301afe13b26'));
+					}
+				});
+				return;
+			}
+			window.showErrorMessage(`CWTools language server failed to start: ${msg}`);
 			return;
 		}
 	}
