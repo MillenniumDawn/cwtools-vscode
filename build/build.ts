@@ -230,6 +230,11 @@ function cmdPackage(): void {
 function cmdReleasePrebuilt(): void {
 	const { version, tag, preRelease } = resolveVersion();
 	setReleaseVersion(version);
+	// Build the client bundles (extension.js, webview/graph.js) into release/bin
+	// so vsce finds the entrypoint. No cleanReleaseBin here: the per-platform
+	// server binaries are already staged under release/bin/server and assembling
+	// the client doesn't touch them.
+	assembleClient();
 	packageVsix();
 	const vsix = findVsix();
 	publishGithubRelease(tag, version, preRelease, vsix);
