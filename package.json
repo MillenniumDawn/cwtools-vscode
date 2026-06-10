@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "build": "tsx build/build.ts",
     "compile": "tsc -p ./tsconfig.extension.json && tsx build/esbuild.ts",
     "typecheck": "tsc -p ./tsconfig.json --noEmit",
     "lint": "eslint .",
@@ -7,13 +8,7 @@
     "test": "npm run compile && vscode-test --label unit",
     "test:watch": "tsc -w -p . & vscode-test --label unit -w",
     "test:host": "npm run compile && vscode-test --label host",
-    "test:coverage": "npm run compile && vscode-test --label unit --coverage --coverage-reporter text-summary --coverage-reporter html --coverage-reporter lcov --coverage-reporter json-summary",
-    "test:engine:fsharp": "npm run compile && vscode-test --label fsharp",
-    "test:engine:rust": "npm run compile && vscode-test --label rust",
-    "test:engine:parity": "npm run test:engine:fsharp && npm run test:engine:rust",
-    "test:parity": "tsc -p ./tsconfig.extension.json && tsx client/test/parity/prepare.ts && mocha ./release/bin/client/test/parity/parity.test.js",
-    "test:parity:fsharp": "tsc -p ./tsconfig.extension.json && tsx client/test/parity/prepare.ts && mocha ./release/bin/client/test/parity/parity.test.js --grep \"\\[fsharp\\]\"",
-    "test:parity:rust": "tsc -p ./tsconfig.extension.json && tsx client/test/parity/prepare.ts && mocha ./release/bin/client/test/parity/parity.test.js --grep \"\\[rust\\]\""
+    "test:coverage": "npm run compile && vscode-test --label unit --coverage --coverage-reporter text-summary --coverage-reporter html --coverage-reporter lcov --coverage-reporter json-summary"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

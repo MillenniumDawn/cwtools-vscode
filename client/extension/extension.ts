@@ -20,7 +20,7 @@ import {
 	LANGUAGE_REPOS,
 	GAME_DISPLAY,
 	GAME_FOLDER,
-	serverExeForEngine,
+	serverExe as resolveServerExe,
 	runGit,
 } from './engine';
 import { detectGameAndVanilla } from './detectGame';
@@ -65,29 +65,16 @@ export async function activate(context: ExtensionContext) {
 		const langConfigDisposable = vscode.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
 		context.subscriptions.push(langConfigDisposable);
 
-		// cwtools.engine picks between the Rust server (default) and the
-		// original F# server. If the chosen engine isn't deployed, fall
-		// back to whichever one is.
-		const requestedEngine = workspace.getConfiguration('cwtools').get<string>('engine') ?? 'rust';
-		let activeEngine = requestedEngine;
-		let serverExe = serverExeForEngine(context, requestedEngine);
+		// The Rust language server, bundled per-platform. Resolve the binary for
+		// this platform or bail with a clear message.
+		const serverExe = resolveServerExe(context);
 		if (!serverExe) {
-			const otherEngine = requestedEngine === 'fsharp' ? 'rust' : 'fsharp';
-			const fallback = serverExeForEngine(context, otherEngine);
-			if (fallback) {
-				activeEngine = otherEngine;
-				serverExe = fallback;
-				window.showWarningMessage(
-					`CWTools: '${requestedEngine}' engine binary missing, falling back to '${otherEngine}'. ` +
-					`Build the '${requestedEngine}' server or change cwtools.engine.`);
-			} else {
-				await window.showErrorMessage(
-					`CWTools: no language server binary found for engine '${requestedEngine}'. ` +
-					`Re-install the extension or build the server.`);
-				return;
-			}
+			await window.showErrorMessage(
+				`CWTools: no language server binary found. ` +
+				`Re-install the extension or build the server.`);
+			return;
 		}
-		logInfo(`Using '${activeEngine}' engine: ${serverExe}`);
+		logInfo(`Using server: ${serverExe}`);
 
 	if (os.platform() !== 'win32') {
 		try {
@@ -112,15 +99,7 @@ export async function activate(context: ExtensionContext) {
 		const manualRules = workspace.getConfiguration('cwtools').get<string>('rules_folder');
 		const hasManualRules = !!(manualRules && fsExistsSync(manualRules));
 		const effectiveRulesCache = hasManualRules ? manualRules! : languageRulesCache;
-		// Rust gets the leaf rules folder; F# gets the parent and appends the game
-		// subdir itself. Keep that split for a manual rules_folder too, or F# ignores it.
-		const rulesCacheForServer = activeEngine === 'fsharp'
-			? (hasManualRules ? path.dirname(manualRules!) : cacheDir)
-			: effectiveRulesCache;
-		if (hasManualRules && activeEngine === 'fsharp' && path.basename(manualRules!) !== language) {
-			logWarn(`The F# engine appends the game subdir to the rules folder, ` +
-				`so a manual rules_folder should be named "${language}" to be found (got "${manualRules}").`);
-		}
+		const rulesCacheForServer = effectiveRulesCache;
 		if (hasManualRules) {
 			logInfo(`Using manual rules folder: ${manualRules}`);
 		} else if (repoPath) {

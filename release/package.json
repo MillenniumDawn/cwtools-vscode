@@ -158,20 +158,6 @@
         "title": "CWTools",
         "order": 1,
         "properties": {
-          "cwtools.engine": {
-            "scope": "window",
-            "type": "string",
-            "enum": [
-              "rust",
-              "fsharp"
-            ],
-            "enumDescriptions": [
-              "%configuration.cwtools.engine.rust.description%",
-              "%configuration.cwtools.engine.fsharp.description%"
-            ],
-            "default": "rust",
-            "description": "%configuration.cwtools.engine.description%"
-          },
           "cwtools.rules_version": {
             "scope": "window",
             "type": "string",

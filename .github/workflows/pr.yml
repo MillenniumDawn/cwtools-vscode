@@ -11,11 +11,10 @@ name: Test
 # Central version pins — update these when bumping toolchains.
 env:
   NODE_VERSION: '20'
-  DOTNET_VERSION: '9.0.x'
 
 jobs:
-  # Fast gate: typecheck, lint, and unit tests. No .NET needed — gives
-  # contributors quick feedback while the heavier jobs catch up.
+  # Fast gate: typecheck, lint, and unit tests. Gives contributors quick
+  # feedback while the heavier jobs catch up.
   check:
     runs-on: ubuntu-latest
     steps:
@@ -42,18 +41,12 @@ jobs:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       with:
         submodules: recursive
-    - name: Setup .NET Core
-      uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
     - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
       with:
         node-version: ${{ env.NODE_VERSION }}
     - run: npm install
-    - name: Set chmod
-      run: chmod +x ./build.sh
     - name: Test build
-      run: /bin/sh ./build.sh DryRelease
+      run: npm run build -- package
     # Runs the unit suites with V8 coverage. Same suites as the old `npm test`
     # step, so it gates the same way; the coverage is non-gating (no threshold).
     - name: Test (with coverage)
@@ -84,60 +77,3 @@ jobs:
         name: cwtools-vscode-pipeline.vsix
         path: temp/*.vsix
         retention-days: 5
-
-  # Server parity: build both engines, verify F# reference matches Rust port.
-  # Only runs on main pushes — expensive (Rust compile) and informational.
-  parity:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-
-    steps:
-    # This repo and the Rust source live in separate repos, so check both out
-    # as siblings: the build expects the Rust workspace at ../cwtools/cwtools-rs.
-    - name: Checkout cwtools-vscode
-      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      with:
-        path: cwtools-vscode
-        submodules: recursive
-    - name: Checkout cwtools (Rust + F# server sources)
-      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      with:
-        repository: MillenniumDawn/cwtools
-        path: cwtools
-        submodules: recursive
-    - name: Setup .NET Core
-      uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-    - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-      with:
-        node-version: ${{ env.NODE_VERSION }}
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-    - name: Cache Rust build
-      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      with:
-        workspaces: cwtools/cwtools-rs
-    - name: npm install
-      working-directory: cwtools-vscode
-      run: npm install
-    - name: Set chmod
-      working-directory: cwtools-vscode
-      run: chmod +x ./build.sh
-    # Builds both engine binaries the harness drives: the Rust port
-    # (release/bin/server/cwtools-server) and the F# reference
-    # (release/bin/server/linux-x64).
-    - name: Build both engine servers
-      working-directory: cwtools-vscode
-      run: /bin/sh ./build.sh BuildServer
-    # The F# reference is the spec; if it can't answer, the rules or setup is
-    # broken, so this gates the build.
-    - name: 'Parity: F# reference (gate)'
-      working-directory: cwtools-vscode
-      run: npm run test:parity:fsharp
-    # The Rust port chases the reference and is expected to fail until it
-    # reaches parity, so its red is informational, not a build failure.
-    - name: 'Parity: Rust port (informational)'
-      working-directory: cwtools-vscode
-      continue-on-error: true
-      run: npm run test:parity:rust

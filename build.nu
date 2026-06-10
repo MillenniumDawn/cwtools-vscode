@@ -1,6 +1,5 @@
 def main [profile? : string] {
 
-dotnet tool restore
 git submodule update --init --recursive
-dotnet run --project build -- -t ($profile | default "QuickBuild")
+npx --yes tsx build/build.ts ($profile | default "quick")
 }

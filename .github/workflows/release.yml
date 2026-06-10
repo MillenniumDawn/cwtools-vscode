@@ -21,7 +21,6 @@ name: Release
 # Central version pins — update these when bumping toolchains.
 env:
   NODE_VERSION: '20'
-  DOTNET_VERSION: '9.0.x'
 
 jobs:
   # Build the Rust server natively on each platform. To add or remove a
@@ -94,27 +93,20 @@ jobs:
         path: artifacts
     - name: Stage binaries into release/
       run: .github/scripts/stage-release-binaries.sh artifacts release
-    - name: Setup .NET Core
-      uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
     - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
       with:
         node-version: ${{ env.NODE_VERSION }}
     - run: npm install
-    - name: Restore dotnet tools
-      run: dotnet tool restore
     - name: Publish Release
       env:
-        github-user: ${{ github.event.inputs.username }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         vsce-token: ${{ secrets.VSCE_TOKEN }}
-        user-email: ${{ github.event.inputs.email }}
-        # On a tag push the version comes from the tag and the build skips
-        # committing/re-tagging.
+        # The version comes from the pushed tag; the build doesn't commit or
+        # re-tag.
         TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
       # Packages and publishes the staged binaries. No clean, no server rebuild.
-      run: dotnet run --project build -- -t ReleasePrebuilt
+      run: npm run build -- release-prebuilt
     - name: Smoke test vsix
       run: |
         set -euo pipefail

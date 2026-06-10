@@ -1,11 +1,13 @@
+### 1.0.13-beta
+* Fix release pipeline: the staging step referenced a removed `osx-x64` artifact after the macOS build switched to native ARM. Extracted staging into a platform-agnostic script so adding or removing platforms only requires editing the CI matrix.
+
 ### 1.0.9-beta
 * Bundle the client with esbuild. The vsix now ships two bundles instead of the full `node_modules` tree, dropping it from 353 files to 90 (173 JS files to 2) and speeding up activation.
 * Internal cleanup with no user-facing change: removed dead build artifacts and the unused Paket tooling, unified the five host-test configs into one, aligned the toolchain version pins, and moved the build/test helper scripts to TypeScript.
 
 ### 1.0.8-beta
 * Millennium Dawn fork (CWTools MD Edition). The changes below are relative to upstream 0.10.31.
-* Rust language server (cwtools-rs) is now the default engine, shipped as a standalone per-platform binary. Switch engines with the `cwtools.engine` setting.
-* The F# server is still bundled and selectable as a fallback.
+* Rust language server (cwtools-rs) is the only engine, shipped as a standalone per-platform binary.
 * Linux, macOS, and Windows server binaries are packaged into a single vsix.
 * Tag-driven release pipeline: push a `v*` tag to build, package, and publish the GitHub release.
 * Rebranded to CWTools MD Edition under the `milleniumdawnmodteam` publisher.

@@ -8,5 +8,4 @@ if not exist "submodules\cwtools\.git" (
   echo Submodules already initialized, skipping update
 )
 
-dotnet tool restore
-dotnet run --project build -- -t %*
+call npx --yes tsx build/build.ts %*
