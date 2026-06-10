@@ -6,20 +6,6 @@
 	"version": "0.2.0",
     "configurations": [
         {
-            "name": ".NET Core Attach",
-            "type": "coreclr",
-            "request": "attach",
-            "processName": "cwtools-server",
-            "symbolOptions": {
-                "searchPaths": ["${workspaceFolder}/release/bin/server/win-x64","${workspaceFolder}/release/bin/server/linux-x64","${workspaceFolder}/release/bin/server/osx-x64" ],
-                "searchMicrosoftSymbolServer": true
-            },
-            "preLaunchTask": "Wait For Process",
-            "presentation": {
-                "hidden": true
-            }
-        },
-        {
     "name": "Extension Tests",
     "type": "extensionHost",
     "request": "launch",
@@ -69,7 +55,7 @@
     "compounds": [
         {
             "name": "Debug cwtools",
-            "configurations": ["Quick update, Build and Launch Extension (Debug)", ".NET Core Attach"],
+            "configurations": ["Quick update, Build and Launch Extension (Debug)"],
             "presentation": {
                 "group": "Full",
                 "order": 2

@@ -4,20 +4,6 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Wait For Process",
-            "type": "shell",
-            "problemMatcher": [],
-            "linux": {
-                "command": "echo 'Waiting for process to start...'; while ! pgrep -f 'cwtools-server'; do sleep 1; done; echo 'Process found. Continuing!'"
-            },
-            "osx": {
-                "command": "echo 'Waiting for process to start...'; while ! pgrep -f 'cwtools-server'; do sleep 1; done; echo 'Process found. Continuing!'"
-            },
-            "windows": {
-                "command": "echo 'Waiting for process to start...'; while (-not (Get-Process -Name 'cwtools-server' -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }; echo 'Process found. Continuing!'"
-            }
-        },
-        {
             "type": "npm",
             "script": "watch-client",
             "problemMatcher": "$tsc-watch",
