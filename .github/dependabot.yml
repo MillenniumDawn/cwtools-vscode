@@ -22,13 +22,3 @@ updates:
       npm:
         patterns:
           - "*"
-
-  # .NET packages via central management (Directory.Packages.props).
-  - package-ecosystem: nuget
-    directory: /
-    schedule:
-      interval: weekly
-    groups:
-      nuget:
-        patterns:
-          - "*"

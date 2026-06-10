@@ -37,7 +37,7 @@
             },
             "label": "Build",
             "args": [
-                "QuickBuild"
+                "quick"
             ],
             "group": {
                 "kind": "build",
@@ -51,7 +51,7 @@
             },
             "label": "BuildDebug",
             "args": [
-                "QuickBuildDebug"
+                "quick"
             ],
             "group": {
                 "kind": "build",

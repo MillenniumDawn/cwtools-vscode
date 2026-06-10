@@ -83,18 +83,12 @@ function serverPlatformDir(): string {
 	}
 }
 
-export function serverExeForEngine(
+export function serverExe(
 	context: ExtensionContext,
-	engine: string,
 	exists: (p: string) => boolean = fsExistsSync
 ): string | undefined {
 	const isWin = os.platform() === 'win32';
 	const platform = serverPlatformDir();
-	if (engine === 'fsharp') {
-		const exe = isWin ? 'CWTools Server.exe' : 'CWTools Server';
-		const fsharpBin = context.asAbsolutePath(path.join('bin', 'server', platform, exe));
-		return exists(fsharpBin) ? fsharpBin : undefined;
-	}
 	const exe = isWin ? 'cwtools-server.exe' : 'cwtools-server';
 	// Dev and single-platform builds drop the binary straight in
 	// cwtools-server/; the packaged multi-platform vsix nests one binary per

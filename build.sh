@@ -7,5 +7,4 @@ else
   echo "Submodules already initialized, skipping update"
 fi
 
-dotnet tool restore
-dotnet run --project build -- -t $@
+npx --yes tsx build/build.ts "$@"

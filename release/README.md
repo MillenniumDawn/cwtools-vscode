@@ -4,7 +4,7 @@
 
 ## Origin
 
-This is a fork of [cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vscode). The original F# language server comes from [cwtools/cwtools](https://github.com/cwtools/cwtools). Long term, this fork is heading in its own direction with a Rust-based server binary, while continuing to maintain and ship the original F# backend.
+This is a fork of [cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vscode). The original extension wrapped an F# language server from [cwtools/cwtools](https://github.com/cwtools/cwtools); this fork has moved to a Rust-based server binary (cwtools-rs) and ships that.
 
 ## Disclaimer
 

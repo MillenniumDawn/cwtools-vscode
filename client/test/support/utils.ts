@@ -113,10 +113,9 @@ export async function waitForLanguageServer(uri: vscode.Uri, maxRetries = 30, de
 }
 
 /**
- * The currently active language server engine, as configured in
- * cwtools.engine. Defaults to 'rust'.
+ * The active language server engine. Only the Rust server ships now; kept as a
+ * function so the test diagnostics that label gaps still read naturally.
  */
-export function currentEngine(): 'rust' | 'fsharp' {
-  const value = vscode.workspace.getConfiguration('cwtools').get<string>('engine');
-  return value?.toLowerCase() === 'fsharp' ? 'fsharp' : 'rust';
+export function currentEngine(): 'rust' {
+  return 'rust';
 }

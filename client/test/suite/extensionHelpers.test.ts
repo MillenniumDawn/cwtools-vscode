@@ -7,7 +7,7 @@ import {
 	GAME_DISPLAY,
 	GAME_FOLDER,
 	detectFromFolder,
-	serverExeForEngine,
+	serverExe,
 	runGit,
 } from '../../extension/engine';
 
@@ -92,52 +92,41 @@ suite('engine — detectFromFolder', () => {
 	});
 });
 
-suite('engine — serverExeForEngine', () => {
+suite('engine — serverExe', () => {
 	const fakeContext = (abs: string): ExtensionContext =>
 		({ asAbsolutePath: (_p: string) => abs } as unknown as ExtensionContext);
 
-	test('returns the Rust binary path when it exists', () => {
+	test('returns the server binary path when it exists', () => {
 		const ctx = fakeContext('/ext/bin/server/cwtools-server/cwtools-server');
-		const out = serverExeForEngine(ctx, 'rust', () => true);
+		const out = serverExe(ctx, () => true);
 		assert.strictEqual(out, '/ext/bin/server/cwtools-server/cwtools-server');
 	});
 
-	test('returns undefined for Rust when the binary is not deployed', () => {
+	test('returns undefined when the binary is not deployed', () => {
 		const ctx = fakeContext('/ext/bin/server/cwtools-server/cwtools-server');
-		assert.strictEqual(serverExeForEngine(ctx, 'rust', () => false), undefined);
+		assert.strictEqual(serverExe(ctx, () => false), undefined);
 	});
 
-	test('returns the F# binary path when it exists', () => {
-		const ctx = fakeContext('/ext/bin/server/linux-x64/CWTools Server');
-		const out = serverExeForEngine(ctx, 'fsharp', () => true);
-		assert.strictEqual(out, '/ext/bin/server/linux-x64/CWTools Server');
-	});
-
-	test('returns undefined for F# when the binary is not deployed', () => {
-		const ctx = fakeContext('/ext/bin/server/linux-x64/CWTools Server');
-		assert.strictEqual(serverExeForEngine(ctx, 'fsharp', () => false), undefined);
-	});
-
-	test('Rust falls back to the per-platform subdir of a packaged vsix', () => {
+	test('falls back to the per-platform subdir of a packaged vsix', () => {
 		const original = Object.getOwnPropertyDescriptor(process, 'platform');
 		Object.defineProperty(process, 'platform', { value: 'linux' });
 		try {
 			const ctx = { asAbsolutePath: (p: string) => '/ext/' + p } as unknown as ExtensionContext;
 			const nested = '/ext/' + path.join('bin', 'server', 'cwtools-server', 'linux-x64', 'cwtools-server');
 			// Flat path absent (no single-platform binary), nested one present.
-			const out = serverExeForEngine(ctx, 'rust', p => p === nested);
+			const out = serverExe(ctx, p => p === nested);
 			assert.strictEqual(out, nested);
 		} finally {
 			if (original) Object.defineProperty(process, 'platform', original);
 		}
 	});
 
-	test('Rust path uses the .exe extension on Windows', () => {
+	test('uses the .exe extension on Windows', () => {
 		const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
 		Object.defineProperty(process, 'platform', { value: 'win32' });
 		try {
 			const ctx = fakeContext('C:\\ext\\bin\\server\\cwtools-server\\cwtools-server.exe');
-			const out = serverExeForEngine(ctx, 'rust', () => true);
+			const out = serverExe(ctx, () => true);
 			assert.ok(out!.endsWith('cwtools-server.exe'));
 		} finally {
 			if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform);
