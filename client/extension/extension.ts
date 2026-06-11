@@ -195,12 +195,32 @@ export async function activate(context: ExtensionContext) {
 	let getFileTypesInFlight = false;
 	const getFileTypesTimeoutMs = 5000;
 
+	// The static filenamePatterns in package.json only match game files under a
+	// folder named like the game ("hearts of iron iv"), so a mod workspace with
+	// any other name opens its .txt files as plaintext (no grammar, no LSP).
+	// When we detected a concrete game, upgrade plaintext docs that look like
+	// game script. Scoped to the usual game dirs so unrelated .txt notes aren't
+	// hijacked.
+	const gameScriptDirs = /[\\/](events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
+	function looksLikeGameScript(doc : vscode.TextDocument): boolean {
+		if (doc.uri.scheme !== 'file') return false;
+		const p = doc.uri.fsPath;
+		if (/\.(gui|gfx|asset|sfx|cwt)$/i.test(p)) return true;
+		return /\.txt$/i.test(p) && gameScriptDirs.test(p);
+	}
+	async function upgradePlaintextDocument(doc : vscode.TextDocument): Promise<void> {
+		if (doc.languageId !== "plaintext") return;
+		if (languageId === "paradox") {
+			await vscode.languages.setTextDocumentLanguage(doc, "paradox")
+		} else if (looksLikeGameScript(doc)) {
+			await vscode.languages.setTextDocumentLanguage(doc, languageId)
+		}
+	}
+
 	async function didChangeActiveTextEditor(editor : vscode.TextEditor | undefined): Promise<void> {
 		if (!editor) return;
 		const editorPath = editor.document.uri.toString();
-		if (languageId === "paradox" && editor.document.languageId === "plaintext") {
-			await vscode.languages.setTextDocumentLanguage(editor.document, "paradox")
-		}
+		await upgradePlaintextDocument(editor.document);
 		if (editor.document.languageId === language) {
 			await client.sendNotification(didFocusFile, {uri: editorPath});
 		}
@@ -235,13 +255,10 @@ export async function activate(context: ExtensionContext) {
 
 		context.subscriptions.push(window.onDidChangeActiveTextEditor(didChangeActiveTextEditor));
 
-		if (languageId === "paradox") {
-			for (const textDocument of workspace.textDocuments){
-				if (textDocument.languageId === "plaintext"){
-					await vscode.languages.setTextDocumentLanguage(textDocument, "paradox")
-				}
-			}
+		for (const textDocument of workspace.textDocuments){
+			await upgradePlaintextDocument(textDocument)
 		}
+		context.subscriptions.push(workspace.onDidOpenTextDocument(upgradePlaintextDocument));
 
 		client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
 			if (param.enable) {
@@ -360,6 +377,24 @@ export async function activate(context: ExtensionContext) {
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
 		}));
+		// Cache maintenance commands, forwarded to the language server. These are
+		// long-running (the server re-parses the base game); the server drives
+		// the status bar while they run.
+		const forwardServerCommand = (commandId : string) =>
+			commands.registerCommand(commandId, async () => {
+				try {
+					const result = await client.sendRequest(ExecuteCommandRequest.type, { command: commandId, arguments: [] });
+					if (typeof result === 'string' && result.length > 0) {
+						window.showInformationMessage(`CWTools: ${result}`);
+					}
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					window.showErrorMessage(`CWTools: ${commandId} failed: ${msg}`);
+				}
+			});
+		context.subscriptions.push(forwardServerCommand('cacheVanilla'));
+		context.subscriptions.push(forwardServerCommand('clearAllCaches'));
+
 		// Fetch the server's accumulated profiling report and save it to a file.
 		// The server only fills the buffer when launched with CWTOOLS_PROFILE=1
 		// (the cwtools.profiling setting), so prompt to enable it if empty.
