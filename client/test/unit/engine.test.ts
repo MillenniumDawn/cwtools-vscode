@@ -1,3 +1,4 @@
+import { suite, test } from 'vitest';
 import * as assert from 'assert';
 import * as path from 'path';
 import { EventEmitter } from 'events';

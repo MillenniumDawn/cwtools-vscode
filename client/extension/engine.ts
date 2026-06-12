@@ -43,7 +43,7 @@ export const GAME_FOLDER: Record<string, { id: string; subdir?: string }> = {
 	'europa universalis v':   { id: 'eu5',    subdir: 'game' },
 };
 
-export const FOLDER_HINTS: Array<[RegExp | string, string]> = [
+const FOLDER_HINTS: Array<[RegExp | string, string]> = [
 	[/stellaris/, 'stellaris'],
 	[/(hoi4|hearts)/, 'hoi4'],
 	[/(eu4|europa)/, 'eu4'],
@@ -55,7 +55,7 @@ export const FOLDER_HINTS: Array<[RegExp | string, string]> = [
 	['eu5', 'eu5'],
 ];
 
-export const CONTENT_HINTS: Array<[string, string]> = [
+const CONTENT_HINTS: Array<[string, string]> = [
 	['common/ai_strategy', 'hoi4'],
 	['common/species_classes', 'stellaris'],
 	['common/great_projects', 'eu4'],

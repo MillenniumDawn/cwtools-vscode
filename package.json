@@ -8,7 +8,10 @@
     "test": "npm run compile && vscode-test --label unit",
     "test:watch": "tsc -w -p . & vscode-test --label unit -w",
     "test:host": "npm run compile && vscode-test --label host",
-    "test:coverage": "npm run compile && vscode-test --label unit --coverage --coverage-reporter text-summary --coverage-reporter html --coverage-reporter lcov --coverage-reporter json-summary"
+    "test:coverage": "npm run compile && vscode-test --label unit --coverage",
+    "test:node": "vitest run",
+    "test:node:watch": "vitest",
+    "test:node:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
@@ -23,6 +26,7 @@
     "@types/node": "^20.9",
     "@types/sinon": "17.0.4",
     "@types/vscode": "^1.83.0",
+    "@vitest/coverage-v8": "^4.1.8",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.6.0",
@@ -32,7 +36,6 @@
     "cytoscape-popper": "^2.0.0",
     "esbuild": "^0.25.0",
     "eslint": "^9.32.0",
-    "glob": "^11.0.3",
     "globals": "^14.0.0",
     "merge-images": "1.2.0",
     "mocha": "^11.7.1",
@@ -40,7 +43,8 @@
     "tippy.js": "^6.3.7",
     "tsx": "^4.19.0",
     "typescript": "^5.8.3",
-    "typescript-eslint": "^8.38.0"
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^4.1.8"
   },
   "overrides": {
     "minimatch@3": "3.1.5",

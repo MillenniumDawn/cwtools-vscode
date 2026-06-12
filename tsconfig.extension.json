@@ -5,6 +5,7 @@
 		"skipLibCheck": true
 	},
 	"exclude": [
-		"client/webview/**/*.ts"
+		"client/webview/**/*.ts",
+		"client/test/unit/**/*.ts"
 	]
 }
