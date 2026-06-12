@@ -181,10 +181,13 @@ export async function activate(context: ExtensionContext) {
 			// throw "command already exists", so the toast UX lives here instead.
 			middleware: {
 				executeCommand: async (command, args, next) => {
+					const isCacheCommand = command === 'cacheVanilla' || command === 'clearAllCaches';
+					if (!isCacheCommand) {
+						return next(command, args);
+					}
 					try {
 						const result = await next(command, args);
-						if ((command === 'cacheVanilla' || command === 'clearAllCaches')
-							&& typeof result === 'string' && result.length > 0) {
+						if (typeof result === 'string' && result.length > 0) {
 							window.showInformationMessage(`CWTools: ${result}`);
 						}
 						return result;
@@ -218,23 +221,21 @@ export async function activate(context: ExtensionContext) {
 	// The static filenamePatterns in package.json only match game files under a
 	// folder named like the game ("hearts of iron iv"), so a mod workspace with
 	// any other name opens its .txt files as plaintext (no grammar, no LSP).
-	// When we detected a concrete game, upgrade plaintext docs that look like
-	// game script. Scoped to the usual game dirs so unrelated .txt notes aren't
-	// hijacked.
+	// Upgrade plaintext docs that look like game script to the detected language.
+	// Scoped to the usual game dirs (and known extensions) so unrelated .txt
+	// notes and scratch buffers aren't hijacked, in both the concrete-game and
+	// generic "paradox" cases.
 	const gameScriptDirs = /[\\/](events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
 	function looksLikeGameScript(doc : vscode.TextDocument): boolean {
 		if (doc.uri.scheme !== 'file') return false;
 		const p = doc.uri.fsPath;
-		if (/\.(gui|gfx|asset|sfx|cwt)$/i.test(p)) return true;
+		if (/\.(gui|gfx|asset|sfx)$/i.test(p)) return true;
 		return /\.txt$/i.test(p) && gameScriptDirs.test(p);
 	}
 	async function upgradePlaintextDocument(doc : vscode.TextDocument): Promise<void> {
 		if (doc.languageId !== "plaintext") return;
-		if (languageId === "paradox") {
-			await vscode.languages.setTextDocumentLanguage(doc, "paradox")
-		} else if (looksLikeGameScript(doc)) {
-			await vscode.languages.setTextDocumentLanguage(doc, languageId)
-		}
+		if (!looksLikeGameScript(doc)) return;
+		await vscode.languages.setTextDocumentLanguage(doc, languageId)
 	}
 
 	async function didChangeActiveTextEditor(editor : vscode.TextEditor | undefined): Promise<void> {
