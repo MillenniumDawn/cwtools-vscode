@@ -8,6 +8,7 @@ Scratch.*
 .cwtools/
 .vscode-test/
 coverage/
+coverage-node/
 *.user
 .vs/
 .opencode/

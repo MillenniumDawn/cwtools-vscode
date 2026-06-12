@@ -6,6 +6,21 @@
 	"version": "0.2.0",
     "configurations": [
         {
+            "preLaunchTask": "Build",
+            "name": "Quick update, Build and Launch Extension",
+            "type": "extensionHost",
+            "runtimeExecutable": "${execPath}",
+            "args": [
+                "${input:gamePath}",
+                "--extensionDevelopmentPath=${workspaceRoot}/release"
+            ],
+            "request": "launch",
+            "sourceMaps": false,
+            "presentation": {
+                "hidden": true
+            }
+        },
+        {
     "name": "Extension Tests",
     "type": "extensionHost",
     "request": "launch",
@@ -26,24 +41,9 @@
             "type": "extensionHost",
             "runtimeExecutable": "${execPath}",
             "args": [
-                "${env:CWTOOLS_GAME_PATH}",
+                "${input:gamePath}",
                 "--extensionDevelopmentPath=${workspaceRoot}/release",
                 "--disable-extensions"
-            ],
-            "request": "launch",
-            "sourceMaps": false,
-            "presentation": {
-                "hidden": true
-            }
-        },
-        {
-            "preLaunchTask": "Build",
-            "name": "Quick update, Build and Launch Extension",
-            "type": "extensionHost",
-            "runtimeExecutable": "${execPath}",
-            "args": [
-                "${env:CWTOOLS_GAME_PATH}",
-                "--extensionDevelopmentPath=${workspaceRoot}/release"
             ],
             "request": "launch",
             "sourceMaps": false,
@@ -70,6 +70,14 @@
                 "group": "Full",
                 "order": 1
             }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "gamePath",
+            "type": "promptString",
+            "description": "Game/mod folder to open in the Extension Host",
+            "default": "/mnt/Linux/Millennium-Dawn"
         }
     ]
 }

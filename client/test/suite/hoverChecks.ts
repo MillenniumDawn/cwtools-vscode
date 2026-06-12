@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import { extractCompletionLabel } from '../support/utils';
 
 /**
  * Result of a hover assertion. Either passed=true with the actual content,
@@ -39,22 +38,4 @@ export async function checkHoverContains(
 	const actual = content instanceof vscode.MarkdownString ? content.value : String(content);
 	const missing = required.filter(s => !actual.includes(s));
 	return { passed: missing.length === 0, actual, missing };
-}
-
-/**
- * Run a completion at the given position and return the labels.
- * Used by the parity suite to compare completion sets.
- */
-export async function getCompletionLabels(
-	uri: vscode.Uri,
-	position: vscode.Position
-): Promise<string[]> {
-	const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
-		'vscode.executeCompletionItemProvider',
-		uri,
-		position
-	);
-	return (completions?.items ?? []).map(item =>
-		extractCompletionLabel(item)
-	);
 }

@@ -53,7 +53,7 @@ Run as `npm run build -- <command>` or `./build.sh <command>`:
 - `release-prebuilt`: Package server binaries already staged by CI, then publish
 
 ### Testing
-Run `npm test` for the host-based extension tests, which use the sample mod in `client/test/sample/`. `npm run test:host` runs the full host suite; `npm run test:coverage` adds V8 coverage.
+Two test layers. `npm test` runs the host-based extension tests (vscode-test, real Electron), which use the sample mod in `client/test/sample/`; `npm run test:host` runs the full host suite and `npm run test:coverage` adds V8 coverage. `npm run test:node` runs the fast node-only unit tests for the runtime-pure modules (vitest, no Electron) under `client/test/unit/`; `npm run test:node:coverage` reports their coverage to `coverage-node/`. The two coverage runs cover disjoint modules (engine.ts and executable.ts are vitest-owned), and `build/coverage-summary.ts` renders both into the PR comment.
 
 ## Key Files
 

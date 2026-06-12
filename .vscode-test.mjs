@@ -14,8 +14,6 @@ const sampleFile = './client/test/sample/events/irm.txt';
 const unitFiles = [
 	'./release/bin/client/test/suite/graphTypes.test.js',
 	'./release/bin/client/test/suite/fileExplorer.test.js',
-	'./release/bin/client/test/suite/extensionHelpers.test.js',
-	'./release/bin/client/test/suite/executable.test.js',
 ];
 const allFiles = './release/bin/client/test/suite/**/*.test.js';
 
@@ -31,12 +29,22 @@ export default defineConfig({
 		{ ...base, label: 'host', files: allFiles, launchArgs: [sampleFile] },
 	],
 	coverage: {
+		reporter: ['text-summary', 'html', 'lcov', 'json-summary'],
 		// Intent: only the hand-written client source. vscode-test instruments
-		// every loaded file though, and ignores these globs for dependencies, so
-		// node_modules still land in the raw report (semver, vscode-jsonrpc, ...).
-		// build/coverage-summary.ts drops them and recomputes the totals; codecov
-		// excludes them via codecov.yml.
+		// every loaded file though, and doesn't reliably honor these globs: it
+		// leaks node_modules into the raw report (semver, vscode-jsonrpc, ...)
+		// and still reports engine.ts / executable.ts even when excluded. Those
+		// two are owned by the node unit tests (vitest, see vitest.config.ts);
+		// build/coverage-summary.ts is what actually drops node_modules and the
+		// vitest-owned files from the rendered report and recomputes the totals.
+		// The excludes below are kept as declared intent.
 		include: ['**/client/extension/**', '**/client/common/**'],
-		exclude: ['**/client/test/**', '**/client/webview/**', '**/node_modules/**'],
+		exclude: [
+			'**/client/extension/engine.ts',
+			'**/client/extension/executable.ts',
+			'**/client/test/**',
+			'**/client/webview/**',
+			'**/node_modules/**',
+		],
 	},
 });

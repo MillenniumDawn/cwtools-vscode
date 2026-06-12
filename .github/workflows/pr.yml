@@ -25,6 +25,8 @@ jobs:
     - run: npm install
     - name: Typecheck and lint
       run: npm run check
+    - name: Node unit tests
+      run: npm run test:node
     - name: Unit tests
       run: xvfb-run -a npm test
 
@@ -51,6 +53,11 @@ jobs:
     # step, so it gates the same way; the coverage is non-gating (no threshold).
     - name: Test (with coverage)
       run: xvfb-run -a npm run test:coverage
+    # Node-only unit suites (vitest + v8); no Electron, so no xvfb. Covers the
+    # modules the host run excludes (engine.ts, executable.ts).
+    - name: Node unit tests (with coverage)
+      if: always()
+      run: npm run test:node:coverage
     - name: Coverage summary
       if: always()
       run: npx tsx build/coverage-summary.ts
@@ -70,6 +77,13 @@ jobs:
       with:
         name: coverage-html
         path: coverage
+        retention-days: 5
+    - name: 'Upload node coverage'
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: coverage-node
+        path: coverage-node
         retention-days: 5
     - name: 'Upload Artifact'
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

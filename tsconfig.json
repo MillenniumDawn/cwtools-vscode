@@ -11,7 +11,8 @@
 		"lib": [ "es2020", "dom" ],
 		"sourceMap": true,
 		"esModuleInterop": true,
-		"strict": true
+		"strict": true,
+		"skipLibCheck": true
 	},
 	"include": [
 		"client"

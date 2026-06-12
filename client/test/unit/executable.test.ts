@@ -1,3 +1,4 @@
+import { suite, test, afterEach } from 'vitest';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -11,7 +12,7 @@ suite('executable — existAndIsExe', () => {
 		return path.join(tmpDir, `cwtools-test-${Date.now()}-${name}`);
 	}
 
-	// Track files we create so teardown always cleans up.
+	// Track files we create so cleanup always runs.
 	const created: string[] = [];
 
 	function makeFile(name: string, opts?: { executable?: boolean }): string {
@@ -21,7 +22,7 @@ suite('executable — existAndIsExe', () => {
 		return p;
 	}
 
-	teardown(() => {
+	afterEach(() => {
 		for (const p of created) {
 			try { fs.unlinkSync(p); } catch { /* already gone */ }
 		}

@@ -56,10 +56,10 @@ export async function activate(context: ExtensionContext) {
 		}
 	}
 
-	// VSCodium reports a placeholder machineId, which is how we tell dev
-	// installs from a real VS Code and pick the right cache directory.
-	const isDevDir = env.machineId === "someValue.machineId"
-	const cacheDir = isDevDir ? path.join(context.globalStorageUri.fsPath, '.cwtools') : path.join(context.extensionPath, '.cwtools')
+	// Writable, per-extension cache dir. globalStorage survives extension
+	// updates and is writable everywhere; the install dir (extensionPath) is
+	// wiped on every update and can be read-only.
+	const cacheDir = path.join(context.globalStorageUri.fsPath, '.cwtools')
 
 	const init = async function(language : string, isVanillaFolder : boolean) {
 		const langConfigDisposable = vscode.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
@@ -167,6 +167,7 @@ export async function activate(context: ExtensionContext) {
 				rules_version: workspace.getConfiguration('cwtools').get('rules_version'),
 				repoPath: repoPath,
 				localisationLanguages: workspace.getConfiguration('cwtools').get('localisation.languages'),
+				hoverShowAllLanguages: workspace.getConfiguration('cwtools').get('localisation.hoverShowAllLanguages') ?? false,
 				// Persistent cache dir + the user's vanilla install path. The Rust
 				// server caches the base-game index here keyed by game version, so
 				// it isn't re-parsed every startup. Passing the explicit install
@@ -174,7 +175,30 @@ export async function activate(context: ExtensionContext) {
 				cacheDir: path.join(cacheDir, 'vanilla'),
 				vanilla: workspace.getConfiguration('cwtools').get('cache.' + language),
 				diagnosticLogging: workspace.getConfiguration('cwtools').get('logging.diagnostic') },
-				revealOutputChannelOn: RevealOutputChannelOn.Error
+				revealOutputChannelOn: RevealOutputChannelOn.Error,
+			// The server advertises its commands (cacheVanilla, clearAllCaches, ...)
+			// in executeCommandProvider, and vscode-languageclient registers each as
+			// a VS Code command. Registering them ourselves too makes client.start()
+			// throw "command already exists", so the toast UX lives here instead.
+			middleware: {
+				executeCommand: async (command, args, next) => {
+					const isCacheCommand = command === 'cacheVanilla' || command === 'clearAllCaches';
+					if (!isCacheCommand) {
+						return next(command, args);
+					}
+					try {
+						const result = await next(command, args);
+						if (typeof result === 'string' && result.length > 0) {
+							window.showInformationMessage(`CWTools: ${result}`);
+						}
+						return result;
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						window.showErrorMessage(`CWTools: ${command} failed: ${msg}`);
+						return undefined;
+					}
+				}
+			}
 		}
 
 		const client = new LanguageClient('cwtools', 'Paradox Language Server', serverOptions, clientOptions);
@@ -195,12 +219,30 @@ export async function activate(context: ExtensionContext) {
 	let getFileTypesInFlight = false;
 	const getFileTypesTimeoutMs = 5000;
 
+	// The static filenamePatterns in package.json only match game files under a
+	// folder named like the game ("hearts of iron iv"), so a mod workspace with
+	// any other name opens its .txt files as plaintext (no grammar, no LSP).
+	// Upgrade plaintext docs that look like game script to the detected language.
+	// Scoped to the usual game dirs (and known extensions) so unrelated .txt
+	// notes and scratch buffers aren't hijacked, in both the concrete-game and
+	// generic "paradox" cases.
+	const gameScriptDirs = /[\\/](events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
+	function looksLikeGameScript(doc : vscode.TextDocument): boolean {
+		if (doc.uri.scheme !== 'file') return false;
+		const p = doc.uri.fsPath;
+		if (/\.(gui|gfx|asset|sfx)$/i.test(p)) return true;
+		return /\.txt$/i.test(p) && gameScriptDirs.test(p);
+	}
+	async function upgradePlaintextDocument(doc : vscode.TextDocument): Promise<void> {
+		if (doc.languageId !== "plaintext") return;
+		if (!looksLikeGameScript(doc)) return;
+		await vscode.languages.setTextDocumentLanguage(doc, languageId)
+	}
+
 	async function didChangeActiveTextEditor(editor : vscode.TextEditor | undefined): Promise<void> {
 		if (!editor) return;
 		const editorPath = editor.document.uri.toString();
-		if (languageId === "paradox" && editor.document.languageId === "plaintext") {
-			await vscode.languages.setTextDocumentLanguage(editor.document, "paradox")
-		}
+		await upgradePlaintextDocument(editor.document);
 		if (editor.document.languageId === language) {
 			await client.sendNotification(didFocusFile, {uri: editorPath});
 		}
@@ -235,13 +277,10 @@ export async function activate(context: ExtensionContext) {
 
 		context.subscriptions.push(window.onDidChangeActiveTextEditor(didChangeActiveTextEditor));
 
-		if (languageId === "paradox") {
-			for (const textDocument of workspace.textDocuments){
-				if (textDocument.languageId === "plaintext"){
-					await vscode.languages.setTextDocumentLanguage(textDocument, "paradox")
-				}
-			}
+		for (const textDocument of workspace.textDocuments){
+			await upgradePlaintextDocument(textDocument)
 		}
+		context.subscriptions.push(workspace.onDidOpenTextDocument(upgradePlaintextDocument));
 
 		client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
 			if (param.enable) {
@@ -360,6 +399,10 @@ export async function activate(context: ExtensionContext) {
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
 		}));
+		// cacheVanilla / clearAllCaches are NOT registered here: the language
+		// client registers them from the server's executeCommandProvider, and
+		// the executeCommand middleware above surfaces their results.
+
 		// Fetch the server's accumulated profiling report and save it to a file.
 		// The server only fills the buffer when launched with CWTOOLS_PROFILE=1
 		// (the cwtools.profiling setting), so prompt to enable it if empty.
