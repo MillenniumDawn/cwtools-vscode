@@ -56,10 +56,10 @@ export async function activate(context: ExtensionContext) {
 		}
 	}
 
-	// VSCodium reports a placeholder machineId, which is how we tell dev
-	// installs from a real VS Code and pick the right cache directory.
-	const isDevDir = env.machineId === "someValue.machineId"
-	const cacheDir = isDevDir ? path.join(context.globalStorageUri.fsPath, '.cwtools') : path.join(context.extensionPath, '.cwtools')
+	// Writable, per-extension cache dir. globalStorage survives extension
+	// updates and is writable everywhere; the install dir (extensionPath) is
+	// wiped on every update and can be read-only.
+	const cacheDir = path.join(context.globalStorageUri.fsPath, '.cwtools')
 
 	const init = async function(language : string, isVanillaFolder : boolean) {
 		const langConfigDisposable = vscode.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
@@ -174,7 +174,27 @@ export async function activate(context: ExtensionContext) {
 				cacheDir: path.join(cacheDir, 'vanilla'),
 				vanilla: workspace.getConfiguration('cwtools').get('cache.' + language),
 				diagnosticLogging: workspace.getConfiguration('cwtools').get('logging.diagnostic') },
-				revealOutputChannelOn: RevealOutputChannelOn.Error
+				revealOutputChannelOn: RevealOutputChannelOn.Error,
+			// The server advertises its commands (cacheVanilla, clearAllCaches, ...)
+			// in executeCommandProvider, and vscode-languageclient registers each as
+			// a VS Code command. Registering them ourselves too makes client.start()
+			// throw "command already exists", so the toast UX lives here instead.
+			middleware: {
+				executeCommand: async (command, args, next) => {
+					try {
+						const result = await next(command, args);
+						if ((command === 'cacheVanilla' || command === 'clearAllCaches')
+							&& typeof result === 'string' && result.length > 0) {
+							window.showInformationMessage(`CWTools: ${result}`);
+						}
+						return result;
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						window.showErrorMessage(`CWTools: ${command} failed: ${msg}`);
+						return undefined;
+					}
+				}
+			}
 		}
 
 		const client = new LanguageClient('cwtools', 'Paradox Language Server', serverOptions, clientOptions);
@@ -377,23 +397,9 @@ export async function activate(context: ExtensionContext) {
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
 		}));
-		// Cache maintenance commands, forwarded to the language server. These are
-		// long-running (the server re-parses the base game); the server drives
-		// the status bar while they run.
-		const forwardServerCommand = (commandId : string) =>
-			commands.registerCommand(commandId, async () => {
-				try {
-					const result = await client.sendRequest(ExecuteCommandRequest.type, { command: commandId, arguments: [] });
-					if (typeof result === 'string' && result.length > 0) {
-						window.showInformationMessage(`CWTools: ${result}`);
-					}
-				} catch (err) {
-					const msg = err instanceof Error ? err.message : String(err);
-					window.showErrorMessage(`CWTools: ${commandId} failed: ${msg}`);
-				}
-			});
-		context.subscriptions.push(forwardServerCommand('cacheVanilla'));
-		context.subscriptions.push(forwardServerCommand('clearAllCaches'));
+		// cacheVanilla / clearAllCaches are NOT registered here: the language
+		// client registers them from the server's executeCommandProvider, and
+		// the executeCommand middleware above surfaces their results.
 
 		// Fetch the server's accumulated profiling report and save it to a file.
 		// The server only fills the buffer when launched with CWTOOLS_PROFILE=1

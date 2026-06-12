@@ -6,6 +6,18 @@
 	"version": "0.2.0",
     "configurations": [
         {
+            "preLaunchTask": "Build",
+            "name": "Quick update, Build and Launch Extension",
+            "type": "extensionHost",
+            "runtimeExecutable": "${execPath}",
+            "args": [
+                "/mnt/Linux/Millennium-Dawn",
+                "--extensionDevelopmentPath=${workspaceRoot}/release",
+            ],
+            "request": "launch",
+            "sourceMaps": false
+        },
+        {
     "name": "Extension Tests",
     "type": "extensionHost",
     "request": "launch",
@@ -29,21 +41,6 @@
                 "${env:CWTOOLS_GAME_PATH}",
                 "--extensionDevelopmentPath=${workspaceRoot}/release",
                 "--disable-extensions"
-            ],
-            "request": "launch",
-            "sourceMaps": false,
-            "presentation": {
-                "hidden": true
-            }
-        },
-        {
-            "preLaunchTask": "Build",
-            "name": "Quick update, Build and Launch Extension",
-            "type": "extensionHost",
-            "runtimeExecutable": "${execPath}",
-            "args": [
-                "${env:CWTOOLS_GAME_PATH}",
-                "--extensionDevelopmentPath=${workspaceRoot}/release"
             ],
             "request": "launch",
             "sourceMaps": false,
