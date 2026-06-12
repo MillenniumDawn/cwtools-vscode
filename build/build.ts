@@ -37,6 +37,17 @@ function run(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.Pro
 	}
 }
 
+/** Like run(), but returns the exit code instead of throwing on failure. */
+function runOrNull(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): number | null {
+	const r = spawnSync(cmd, args, {
+		cwd: opts.cwd ?? repoRoot,
+		env: opts.env ?? process.env,
+		stdio: 'ignore',
+		shell: isWindows,
+	});
+	return r.status;
+}
+
 // --- Rust server -----------------------------------------------------------
 
 function rustWorkspace(): string {
@@ -187,6 +198,8 @@ function setReleaseVersion(version: string): void {
 }
 
 // Draft and publish the GitHub release with the vsix attached, via the gh CLI.
+// If a release with the same tag already exists (e.g. from a previous failed
+// run), delete it first so the workflow is idempotent.
 function publishGithubRelease(tag: string, version: string, preRelease: boolean, vsix: string): void {
 	const notes = changelogNotes(version);
 	const notesArgs = notes
@@ -196,6 +209,13 @@ function publishGithubRelease(tag: string, version: string, preRelease: boolean,
 			return ['--notes-file', f];
 		})()
 		: ['--generate-notes'];
+
+	// If the release already exists (e.g. retried workflow), remove it first.
+	if (runOrNull('gh', ['release', 'view', tag]) === 0) {
+		console.log(`release ${tag} already exists; deleting before recreate`);
+		run('gh', ['release', 'delete', tag, '--yes']);
+	}
+
 	const args = ['release', 'create', tag, vsix, '--title', tag, ...notesArgs];
 	if (preRelease) args.push('--prerelease');
 	run('gh', args);
