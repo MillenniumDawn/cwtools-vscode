@@ -1,3 +1,6 @@
+### 1.0.22
+* First stable (non-preview) release of CWTools MD Edition.
+
 ### 1.0.13-beta
 * Fix release pipeline: the staging step referenced a removed `osx-x64` artifact after the macOS build switched to native ARM. Extracted staging into a platform-agnostic script so adding or removing platforms only requires editing the CI matrix.
 
