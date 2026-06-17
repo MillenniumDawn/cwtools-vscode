@@ -265,6 +265,12 @@
             "type": "boolean",
             "default": false,
             "description": "%configuration.cwtools.logging.diagnostic.description%"
+          },
+          "cwtools.hover.debug": {
+            "scope": "window",
+            "type": "boolean",
+            "default": false,
+            "description": "Show raw rule classification (field / type / scope) in hover tooltips. For extension developers; off by default."
           }
         }
       },
@@ -608,7 +614,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[hoi4]": {
         "files.autoGuessEncoding": true,
@@ -619,7 +626,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[eu4]": {
         "files.autoGuessEncoding": true,
@@ -630,7 +638,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[ck2]": {
         "files.autoGuessEncoding": true,
@@ -641,7 +650,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[imperator]": {
         "files.autoGuessEncoding": true,
@@ -652,7 +662,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[vic2]": {
         "files.autoGuessEncoding": true,
@@ -663,7 +674,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[ck3]": {
         "files.autoGuessEncoding": true,
@@ -674,7 +686,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[vic3]": {
         "files.autoGuessEncoding": true,
@@ -685,7 +698,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[eu5]": {
         "files.autoGuessEncoding": true,
@@ -696,7 +710,8 @@
         },
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace"
+        "editor.suggest.insertMode": "replace",
+        "editor.definitionLinkOpensInPeek": true
       },
       "[yaml]": {
         "files.autoGuessEncoding": true,
