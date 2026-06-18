@@ -1,3 +1,17 @@
+### 1.0.23
+* Order of battle references (`load_oob`, `oob`, `set_naval_oob`, `set_air_oob`) resolve on Windows again instead of being reported as missing from `history/units`.
+* `NOT = { AND = { ... } }` is no longer flagged as an unnecessary AND. HOI4 `NOT` acts as a NOR, so the AND is a meaningful NAND.
+* Built-in game variables like `faction_leader` work without the `var:` prefix instead of being flagged as unset.
+* Event and news pictures set through scripted localisation (`picture = "[SomeFunction]"`) are no longer flagged as an unknown sprite.
+* Localisation `$...$` references to dynamic modifiers, game objects, and script variables no longer show as undefined. Real typos still do.
+* Filepath references with a redundant double slash (`gfx//interface/...`) resolve the way the engine treats them.
+* Windows: trigger and effect documentation tooltips (the `###` lines), Ctrl+Click, and validation now work for files whose paths use backslashes.
+* Hover tooltips show the current scope at the cursor.
+* Hover and Ctrl+Click work on nested `$KEY$` references inside localisation .yml files. Hover shows the referenced entry's text, Ctrl+Click jumps to it.
+* A broken rules config is flagged: a `.cwt` rule that references an undefined type, enum, or single_alias reports an error on the offending line.
+* Autocomplete on a field key inserts `name = ` with the cursor after the `=`, and works on a fresh line after a field again (it was only offering plain word suggestions, most noticeable in shared_focus and focus files).
+* Objects whose type declares required localisation are flagged when that loc key is missing, so missing localisation is visible again.
+
 ### 1.0.22
 * First stable (non-preview) release of CWTools MD Edition.
 
