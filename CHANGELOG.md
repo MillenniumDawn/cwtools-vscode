@@ -1,6 +1,8 @@
-### 1.0.23
+### 1.1.0
 * Order of battle references (`load_oob`, `oob`, `set_naval_oob`, `set_air_oob`) resolve on Windows again instead of being reported as missing from `history/units`.
 * `NOT = { AND = { ... } }` is no longer flagged as an unnecessary AND. HOI4 `NOT` acts as a NOR, so the AND is a meaningful NAND.
+* An `AND` inside a `count_triggers` block is no longer flagged as unnecessary. Each direct child is a separately counted condition, so the AND groups several into one counted unit.
+* A localisation value that embeds an inline `[...]` command with a literal suffix (e.g. a `meta_effect` variable `"[?ROOT...GetTokenKey]_subtype"`) is no longer flagged as undefined localisation. It resolves at runtime.
 * Built-in game variables like `faction_leader` work without the `var:` prefix instead of being flagged as unset.
 * Event and news pictures set through scripted localisation (`picture = "[SomeFunction]"`) are no longer flagged as an unknown sprite.
 * Localisation `$...$` references to dynamic modifiers, game objects, and script variables no longer show as undefined. Real typos still do.
