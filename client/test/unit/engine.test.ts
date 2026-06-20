@@ -8,6 +8,7 @@ import {
 	GAME_DISPLAY,
 	GAME_FOLDER,
 	detectFromFolder,
+	resolveRulesFolder,
 	serverExe,
 	runGit,
 } from '../../extension/engine';
@@ -90,6 +91,119 @@ suite('engine — detectFromFolder', () => {
 	test('prefers folder-name hint over content hint', () => {
 		const exists = () => true;
 		assert.strictEqual(detectFromFolder('/mods/HOI4', exists), 'hoi4');
+	});
+});
+
+suite('engine — resolveRulesFolder', () => {
+	test('returns undefined for an unset value', () => {
+		const r = resolveRulesFolder(undefined, { exists: () => true });
+		assert.strictEqual(r.path, undefined);
+		assert.strictEqual(r.existed, false);
+	});
+
+	test('returns undefined for an empty/whitespace value', () => {
+		const r = resolveRulesFolder('   ', { exists: () => true });
+		assert.strictEqual(r.path, undefined);
+		assert.strictEqual(r.existed, false);
+	});
+
+	test('regression: a Linux path that exists is returned verbatim and unaltered', () => {
+		const raw = '/home/user/cwtools-hoi4-config';
+		const r = resolveRulesFolder(raw, {
+			platform: 'linux',
+			exists: p => p === raw,
+		});
+		assert.strictEqual(r.path, raw);
+		assert.strictEqual(r.existed, true);
+	});
+
+	test('regression: a Linux path containing backslashes is never separator-rewritten', () => {
+		// Backslash is a legal filename char on Linux; the raw value must win as-is.
+		const raw = '/home/user/odd\\dir/config';
+		const r = resolveRulesFolder(raw, {
+			platform: 'linux',
+			exists: p => p === raw,
+		});
+		assert.strictEqual(r.path, raw);
+		assert.strictEqual(r.existed, true);
+	});
+
+	test('win32: a JSON-escaped backslash path resolves once normalized', () => {
+		// settings.json value "C:\\Users\\me\\config" arrives as this string;
+		// only the normalized form exists on disk.
+		const raw = 'C:\\Users\\me\\config';
+		const normalized = path.win32.normalize(raw);
+		const r = resolveRulesFolder(raw, {
+			platform: 'win32',
+			exists: p => p === normalized,
+		});
+		assert.strictEqual(r.path, normalized);
+		assert.strictEqual(r.existed, true);
+	});
+
+	test('expands a leading ~ to the home directory', () => {
+		const home = '/home/user';
+		const expanded = path.join(home, 'cwtools-config');
+		const r = resolveRulesFolder('~/cwtools-config', {
+			platform: 'linux',
+			home,
+			exists: p => p === expanded,
+		});
+		assert.strictEqual(r.path, expanded);
+		assert.strictEqual(r.existed, true);
+	});
+
+	test('expands $VAR / ${VAR} env vars on non-win32', () => {
+		const env = { RULES: '/opt/rules' };
+		const r = resolveRulesFolder('$RULES/hoi4', {
+			platform: 'linux',
+			env,
+			exists: p => p === '/opt/rules/hoi4',
+		});
+		assert.strictEqual(r.path, '/opt/rules/hoi4');
+		assert.strictEqual(r.existed, true);
+	});
+
+	test('expands %VAR% env vars on win32', () => {
+		const env = { RULES: 'C:\\rules' };
+		const expected = path.win32.normalize('C:\\rules\\hoi4');
+		const r = resolveRulesFolder('%RULES%\\hoi4', {
+			platform: 'win32',
+			env,
+			exists: p => p === expected,
+		});
+		assert.strictEqual(r.path, expected);
+		assert.strictEqual(r.existed, true);
+	});
+
+	test('trims surrounding whitespace and quotes', () => {
+		const raw = '  "/home/user/config"  ';
+		const r = resolveRulesFolder(raw, {
+			platform: 'linux',
+			exists: p => p === '/home/user/config',
+		});
+		assert.strictEqual(r.path, '/home/user/config');
+		assert.strictEqual(r.existed, true);
+	});
+
+	test('resolves a relative path against the workspace root', () => {
+		const r = resolveRulesFolder('rules', {
+			platform: 'linux',
+			workspaceRoot: '/mods/mymod',
+			exists: p => p === path.resolve('/mods/mymod', 'rules'),
+		});
+		assert.strictEqual(r.path, path.resolve('/mods/mymod', 'rules'));
+		assert.strictEqual(r.existed, true);
+	});
+
+	test('set-but-missing returns existed:false with a defined best-effort path', () => {
+		const r = resolveRulesFolder('  "C:\\Users\\me\\missing"  ', {
+			platform: 'win32',
+			exists: () => false,
+		});
+		assert.strictEqual(r.existed, false);
+		assert.ok(r.path, 'best-effort path must be defined so the caller can warn');
+		assert.ok(!r.path!.includes('"'), 'best-effort path should be trimmed of quotes');
 	});
 });
 
