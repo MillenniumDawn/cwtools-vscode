@@ -165,7 +165,13 @@ export async function activate(context: ExtensionContext) {
 				{ scheme: 'file', language: 'vic2' },
 				{ scheme: 'file', language: 'vic3' },
 				{ scheme: 'file', language: 'ck3' },
-				{ scheme: 'file', language: 'eu5' }
+				{ scheme: 'file', language: 'eu5' },
+				// Localisation .yml files open as the built-in 'yaml' language, so
+				// they never matched a game-language selector and the server never
+				// saw them (no loc-key completion / hover / goto). Match them by
+				// path so YAML highlighting is preserved and unrelated yaml files
+				// stay untouched.
+				{ scheme: 'file', language: 'yaml', pattern: '**/{localisation,localisation_synced,localization}/**/*.yml' }
 			],
 			synchronize: {
 				configurationSection: 'cwtools',
@@ -179,6 +185,7 @@ export async function activate(context: ExtensionContext) {
 				repoPath: repoPath,
 				localisationLanguages: workspace.getConfiguration('cwtools').get('localisation.languages'),
 				hoverShowAllLanguages: workspace.getConfiguration('cwtools').get('localisation.hoverShowAllLanguages') ?? false,
+					hoverDebug: workspace.getConfiguration('cwtools').get('hover.debug') ?? false,
 				// Persistent cache dir + the user's vanilla install path. The Rust
 				// server caches the base-game index here keyed by game version, so
 				// it isn't re-parsed every startup. Passing the explicit install
