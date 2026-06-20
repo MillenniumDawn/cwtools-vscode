@@ -20,6 +20,7 @@ import {
 	LANGUAGE_REPOS,
 	GAME_DISPLAY,
 	GAME_FOLDER,
+	resolveRulesFolder,
 	serverExe as resolveServerExe,
 	runGit,
 } from './engine';
@@ -96,13 +97,23 @@ export async function activate(context: ExtensionContext) {
 		await fsPromises.mkdir(cacheDir, { recursive: true });
 		const languageRulesCache = path.join(cacheDir, language);
 
-		const manualRules = workspace.getConfiguration('cwtools').get<string>('rules_folder');
-		const hasManualRules = !!(manualRules && fsExistsSync(manualRules));
-		const effectiveRulesCache = hasManualRules ? manualRules! : languageRulesCache;
+		const rawManualRules = workspace.getConfiguration('cwtools').get<string>('rules_folder');
+		const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const manualRules = resolveRulesFolder(rawManualRules, { workspaceRoot });
+		const hasManualRules = !!(rawManualRules && rawManualRules.trim() !== '');
+		const effectiveRulesCache = manualRules.existed ? manualRules.path! : languageRulesCache;
 		const rulesCacheForServer = effectiveRulesCache;
-		if (hasManualRules) {
-			logInfo(`Using manual rules folder: ${manualRules}`);
-		} else if (repoPath) {
+		if (manualRules.existed) {
+			logInfo(`Using manual rules folder: ${manualRules.path}`);
+		} else if (hasManualRules) {
+			// rules_folder is set but unusable. Warn loudly instead of silently
+			// cloning upstream, so the user knows their local rules were ignored.
+			logWarn(`rules_folder "${rawManualRules}" does not exist (tried "${manualRules.path}"); falling back to bundled/upstream rules.`);
+			void window.showWarningMessage(
+				`CWTools: the rules_folder "${rawManualRules}" could not be found (tried "${manualRules.path}"). Falling back to the bundled/upstream rules.`
+			);
+		}
+		if (!manualRules.existed && repoPath) {
 			try {
 				const gitDir = path.join(languageRulesCache, '.git');
 				if (!fsExistsSync(gitDir)) {

@@ -104,6 +104,90 @@ export function serverExe(
 	return undefined;
 }
 
+export interface ResolveRulesFolderOpts {
+	workspaceRoot?: string;
+	platform?: NodeJS.Platform;
+	home?: string;
+	env?: Record<string, string | undefined>;
+	exists?: (p: string) => boolean;
+}
+
+export interface ResolvedRulesFolder {
+	path: string | undefined;
+	existed: boolean;
+}
+
+/**
+ * Resolve the user's `cwtools.rules_folder` setting to a usable on-disk path.
+ *
+ * The raw setting value is tried first and, if it already exists, returned
+ * UNCHANGED — so every configuration that works today short-circuits before any
+ * normalization runs.  Only when the raw value does not exist do we try
+ * progressively normalized candidates (trim/unquote, ~, env vars, separator
+ * normalization, workspace-relative).  Separator/`%VAR%` handling is gated on
+ * win32 because a backslash is a legal filename char on Linux.
+ *
+ * Returns the first candidate that `exists()`.  If none exist, returns a
+ * best-effort normalized path with `existed:false` so the caller can report
+ * what it tried.
+ */
+export function resolveRulesFolder(
+	raw: string | undefined,
+	opts: ResolveRulesFolderOpts = {}
+): ResolvedRulesFolder {
+	const exists = opts.exists ?? fsExistsSync;
+	const platform = opts.platform ?? os.platform();
+	const isWin = platform === 'win32';
+	const home = opts.home ?? os.homedir();
+	const env = opts.env ?? process.env;
+	const p = isWin ? path.win32 : path.posix;
+
+	if (raw === undefined || raw.trim() === '') {
+		return { path: undefined, existed: false };
+	}
+
+	// (a) raw value as-is — regression-safe first try.
+	if (exists(raw)) return { path: raw, existed: true };
+
+	const candidates: string[] = [];
+	const add = (c: string) => { if (c && !candidates.includes(c)) candidates.push(c); };
+
+	// (b) trimmed + surrounding quotes stripped.
+	let value = raw.trim().replace(/^["']+|["']+$/g, '').trim();
+	add(value);
+
+	// (c) ~ / home expansion.
+	if (value === '~') {
+		value = home;
+	} else if (value.startsWith('~/') || (isWin && value.startsWith('~\\'))) {
+		value = path.join(home, value.slice(2));
+	}
+	add(value);
+
+	// (d) env var expansion (%VAR% on win32, $VAR / ${VAR} elsewhere).
+	value = isWin
+		? value.replace(/%([^%]+)%/g, (m, name) => env[name] ?? m)
+		: value.replace(/\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, braced, bare) => env[braced ?? bare] ?? m);
+	add(value);
+
+	// (e) separator normalization (win32 accepts backslashes natively).
+	const normalized = p.normalize(value);
+	add(normalized);
+
+	// (f) workspace-relative resolution.
+	if (opts.workspaceRoot && !p.isAbsolute(normalized)) {
+		add(p.resolve(opts.workspaceRoot, normalized));
+	}
+
+	for (const c of candidates) {
+		if (exists(c)) return { path: c, existed: true };
+	}
+
+	// Nothing exists — hand back the best-effort normalized form so the caller
+	// can name what it tried in a warning.
+	return { path: candidates[candidates.length - 1] ?? value, existed: false };
+}
+
 export function runGit(
 	args: string[],
 	spawnFn: typeof spawn = spawn,

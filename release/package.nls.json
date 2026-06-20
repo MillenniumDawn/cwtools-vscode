@@ -35,7 +35,7 @@
   "configuration.cwtools.debug_mode.description": "Debug features for helping write rules",
   // Referring to log levels (Error, Warning, Info, Diagnostic)
   "configuration.cwtools.logging.diagnostic.description": "Whether to output diagnostic level logs",
-  "configuration.cwtools.rules_version.description": "Which version of rules to auto-update to. Manual will use the local path set in rules_folder",
+  "configuration.cwtools.rules_version.description": "Which version of rules to auto-update to. If rules_folder is set to an existing folder it is always used, regardless of this setting.",
   "configuration.cwtools.rules_folder.description": "A folder containing custom rules to use",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "File paths to ignore (not load into cwtools), list of glob patterns",
