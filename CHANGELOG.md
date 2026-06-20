@@ -1,3 +1,9 @@
+### 1.1.0
+* Updated to v1.7.0 of the cwtools engine.
+* Fixed `cwtools.rules_folder` being ignored on Windows: backslash paths, `~`, `%VAR%` environment variables, quoted values, and workspace-relative paths now resolve instead of silently cloning the upstream rules.
+* Changed the extension to warn (log + popup) when `cwtools.rules_folder` is set but the folder can't be found, instead of silently falling back to the bundled rules.
+* Fixed the `cwtools.rules_version` setting description to match its actual behavior.
+
 ### 1.0.22
 * First stable (non-preview) release of CWTools MD Edition.
 
