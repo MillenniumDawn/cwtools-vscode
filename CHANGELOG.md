@@ -1,3 +1,7 @@
+### 1.3.4
+* Updated to v1.8.4 of the cwtools engine.
+* Fixed the hover for a resource trigger (`oil`, `steel`, …) showing the wrong tooltip: it read "Check ratio of this type of unit for commander" with scopes `unit_leader`/`combat` instead of "Check amount of resource state or country has" with scopes `country`/`state`. The engine was skipping `common/resources` when it indexed the mod, so resources were never recognized and the hover fell through to an unrelated rule. It now indexes `common/resources` and resolves the resource trigger correctly.
+
 ### 1.3.3
 * Updated to v1.8.3 of the cwtools engine.
 * Autocomplete now finishes effects and triggers as usable snippets. Block ones like `if` complete to `if = { limit = { } }` with the brackets and required fields filled in and tab stops to move between them; value ones like `add_political_power` complete to `add_political_power = ` with the cursor ready for the value.
