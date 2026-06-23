@@ -271,6 +271,20 @@
             "type": "boolean",
             "default": false,
             "description": "Show raw rule classification (field / type / scope) in hover tooltips. For extension developers; off by default."
+          },
+          "cwtools.hover.scopeDisplay": {
+            "scope": "window",
+            "type": "string",
+            "enum": [
+              "context",
+              "resolved"
+            ],
+            "enumDescriptions": [
+              "Show the ambient scope the hovered field is in.",
+              "Also show the scope the hovered link or FROM/ROOT/PREV keyword resolves to."
+            ],
+            "default": "context",
+            "description": "What scope a hover tooltip shows: the ambient scope the field is in (context), or additionally the scope it resolves to (resolved)."
           }
         }
       },
@@ -389,8 +403,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -410,8 +423,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -431,8 +443,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -453,8 +464,7 @@
           "gui",
           "gfx",
           "sfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -475,8 +485,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -499,7 +508,6 @@
           "gfx",
           "sfx",
           "asset",
-          "cwt",
           "map"
         ],
         "configuration": "./language-configuration.json",
@@ -522,8 +530,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -544,8 +551,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -566,8 +572,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -593,9 +598,26 @@
           "gui",
           "gfx",
           "sfx",
-          "asset",
-          "cwt"
+          "asset"
         ]
+      },
+      {
+        "id": "cwt",
+        "aliases": [
+          "CWTools rules",
+          "cwt"
+        ],
+        "extensions": [
+          "cwt"
+        ],
+        "configuration": "./cwt-language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cwt",
+        "scopeName": "source.cwt",
+        "path": "./syntaxes/cwt.tmLanguage.json"
       }
     ],
     "snippets": [

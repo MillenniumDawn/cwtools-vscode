@@ -63,7 +63,10 @@ export async function activate(context: ExtensionContext) {
 	const cacheDir = path.join(context.globalStorageUri.fsPath, '.cwtools')
 
 	const init = async function(language : string, isVanillaFolder : boolean) {
-		const langConfigDisposable = vscode.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s.]+)"?/ });
+		// Include `.` in the word pattern so a dotted event/decision id
+		// (`namespace.1`) selects whole on double-click and resolves via
+		// go-to-definition, instead of splitting at the dot. (#39)
+		const langConfigDisposable = vscode.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s]+)"?/ });
 		context.subscriptions.push(langConfigDisposable);
 
 		// The Rust language server, bundled per-platform. Resolve the binary for
@@ -166,6 +169,10 @@ export async function activate(context: ExtensionContext) {
 				{ scheme: 'file', language: 'vic3' },
 				{ scheme: 'file', language: 'ck3' },
 				{ scheme: 'file', language: 'eu5' },
+				// .cwt rule-config files: the server lints them structurally
+				// (undefined type/enum/single_alias refs + parse errors) rather
+				// than running the game-script validator. See cwtools-vscode#43.
+				{ scheme: 'file', language: 'cwt' },
 				// Localisation .yml files open as the built-in 'yaml' language, so
 				// they never matched a game-language selector and the server never
 				// saw them (no loc-key completion / hover / goto). Match them by
@@ -186,6 +193,7 @@ export async function activate(context: ExtensionContext) {
 				localisationLanguages: workspace.getConfiguration('cwtools').get('localisation.languages'),
 				hoverShowAllLanguages: workspace.getConfiguration('cwtools').get('localisation.hoverShowAllLanguages') ?? false,
 					hoverDebug: workspace.getConfiguration('cwtools').get('hover.debug') ?? false,
+					hoverScopeDisplay: workspace.getConfiguration('cwtools').get('hover.scopeDisplay') ?? 'context',
 				// Persistent cache dir + the user's vanilla install path. The Rust
 				// server caches the base-game index here keyed by game version, so
 				// it isn't re-parsed every startup. Passing the explicit install

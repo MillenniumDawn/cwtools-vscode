@@ -1,0 +1,148 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "CWTools rules",
+	"scopeName": "source.cwt",
+	"patterns": [
+		{ "include": "#comments" },
+		{ "include": "#construct" },
+		{ "include": "#typeRef" },
+		{ "include": "#valueTypes" },
+		{ "include": "#blockKeywords" },
+		{ "include": "#scopeKeywords" },
+		{ "include": "#cardinality" },
+		{ "include": "#constants" },
+		{ "include": "#strings" },
+		{ "include": "#numbers" },
+		{ "include": "#operators" }
+	],
+	"repository": {
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment.block.documentation.cwt",
+					"match": "###.*$"
+				},
+				{
+					"name": "comment.line.directive.cwt",
+					"begin": "##(?!#)",
+					"beginCaptures": {
+						"0": { "name": "punctuation.definition.comment.cwt" }
+					},
+					"end": "$",
+					"patterns": [
+						{
+							"name": "keyword.control.directive.cwt",
+							"match": "\\b(cardinality|replace_scope|scope|scopes|push_scope|severity|type_key_filter|starts_with|graph_related_types|display_name|abbreviation|error_if_only_match|unique|required|primary|optional|color)\\b"
+						}
+					]
+				},
+				{
+					"name": "comment.line.number-sign.cwt",
+					"begin": "#(?!#)",
+					"beginCaptures": {
+						"0": { "name": "punctuation.definition.comment.cwt" }
+					},
+					"end": "$"
+				}
+			]
+		},
+		"typeRef": {
+			"patterns": [
+				{
+					"name": "meta.type-reference.cwt",
+					"match": "(<)([\\w.]+)(>)",
+					"captures": {
+						"1": { "name": "punctuation.definition.type.begin.cwt" },
+						"2": { "name": "entity.name.type.reference.cwt" },
+						"3": { "name": "punctuation.definition.type.end.cwt" }
+					}
+				}
+			]
+		},
+		"construct": {
+			"patterns": [
+				{
+					"name": "meta.construct.cwt",
+					"match": "\\b(type|subtype|enum|complex_enum|value|value_set|single_alias|single_alias_right|alias|alias_name|alias_match_left|inline)(\\[)([\\w.:]*)(\\])",
+					"captures": {
+						"1": { "name": "keyword.declaration.construct.cwt" },
+						"2": { "name": "punctuation.definition.construct.begin.cwt" },
+						"3": { "name": "entity.name.tag.construct.cwt" },
+						"4": { "name": "punctuation.definition.construct.end.cwt" }
+					}
+				}
+			]
+		},
+		"valueTypes": {
+			"patterns": [
+				{
+					"name": "support.type.primitive.cwt",
+					"match": "\\b(scalar|bool|int|float|percentage_field|date_field|variable_field|int_variable_field|value_field|int_value_field|scope_field|scope_group|filepath|icon|colour|color|localisation|localisation_synced|localisation_inline|any)\\b"
+				}
+			]
+		},
+		"blockKeywords": {
+			"patterns": [
+				{
+					"name": "keyword.other.block.cwt",
+					"match": "\\b(types|enums|values|path|path_strict|path_file|path_extension|name_field|name|localisation|skip_root_key|type_per_file|unique|starts_with|severity|subtype|modifiers|aliases|single_aliases)\\b"
+				}
+			]
+		},
+		"scopeKeywords": {
+			"patterns": [
+				{
+					"name": "variable.language.scope.cwt",
+					"match": "\\b(ROOT|root|THIS|this|FROM|from|FROMFROM|fromfrom|PREV|prev|PREVPREV|prevprev)\\b"
+				}
+			]
+		},
+		"cardinality": {
+			"patterns": [
+				{
+					"name": "constant.numeric.cardinality.cwt",
+					"match": "~?\\d+\\.\\.(\\d+|inf)"
+				}
+			]
+		},
+		"constants": {
+			"patterns": [
+				{
+					"name": "constant.language.boolean.cwt",
+					"match": "\\b(yes|no)\\b"
+				},
+				{
+					"name": "variable.other.constant.cwt",
+					"match": "@\\w+"
+				}
+			]
+		},
+		"strings": {
+			"name": "string.quoted.double.cwt",
+			"begin": "\"",
+			"beginCaptures": {
+				"0": { "name": "punctuation.definition.string.begin.cwt" }
+			},
+			"end": "\"",
+			"endCaptures": {
+				"0": { "name": "punctuation.definition.string.end.cwt" }
+			}
+		},
+		"numbers": {
+			"patterns": [
+				{
+					"name": "constant.numeric.cwt",
+					"match": "(?<![\\w.])-?\\b(([0-9]+\\.?[0-9]*)|(\\.[0-9]+))\\b"
+				}
+			]
+		},
+		"operators": {
+			"patterns": [
+				{
+					"name": "keyword.operator.comparison.cwt",
+					"match": "(==|!=|<>|>=|<=|=|<|>)"
+				}
+			]
+		}
+	}
+}
