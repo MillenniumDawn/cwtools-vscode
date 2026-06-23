@@ -1,3 +1,13 @@
+### 1.3.3
+* Updated to v1.8.3 of the cwtools engine.
+* Autocomplete now finishes effects and triggers as usable snippets. Block ones like `if` complete to `if = { limit = { } }` with the brackets and required fields filled in and tab stops to move between them; value ones like `add_political_power` complete to `add_political_power = ` with the cursor ready for the value.
+
+### 1.3.2
+* Updated to v1.8.2 of the cwtools engine.
+* Fixed a parser bug where a names/callsigns list mixing quoted and unquoted entries (e.g. `{ "Sunshine" Demon }`) reported a false "unclosed clause" error and dropped the rest of the file. Affected `common/names` and unit name files.
+* Fixed resource triggers (`oil`, `steel`, …) being wrongly flagged "used in incorrect scope … expected combat or unit_leader" when used in a state scope.
+* A numeric state-id block (`129 = { ... }`) now resolves to the state scope, so triggers and effects inside it (and the hover) show state. `random_list` weight buckets keep the surrounding scope.
+
 ### 1.3.1
 * Updated to v1.8.1 of the cwtools engine.
 * Adding a localisation key now clears the missing-localisation warning on the event (or other game file) that uses it as you type, instead of only after a window reload or rescan.
