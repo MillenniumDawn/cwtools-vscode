@@ -190,6 +190,7 @@ export async function activate(context: ExtensionContext) {
 				localisationLanguages: workspace.getConfiguration('cwtools').get('localisation.languages'),
 				hoverShowAllLanguages: workspace.getConfiguration('cwtools').get('localisation.hoverShowAllLanguages') ?? false,
 					hoverDebug: workspace.getConfiguration('cwtools').get('hover.debug') ?? false,
+					hoverScopeDisplay: workspace.getConfiguration('cwtools').get('hover.scopeDisplay') ?? 'context',
 				// Persistent cache dir + the user's vanilla install path. The Rust
 				// server caches the base-game index here keyed by game version, so
 				// it isn't re-parsed every startup. Passing the explicit install
