@@ -1,3 +1,8 @@
+### 1.3.1
+* Updated to v1.8.1 of the cwtools engine.
+* Adding a localisation key now clears the missing-localisation warning on the event (or other game file) that uses it as you type, instead of only after a window reload or rescan.
+* Fixed the status bar getting stuck on "Indexing workspace…" when the scan hit an empty workspace or an error mid-scan.
+
 ### 1.3.0
 * Updated to v1.8.0 of the cwtools engine.
 * `.cwt` rule config files now open as their own language with dedicated syntax highlighting, and are linted against the loaded ruleset (undefined type, enum, or single_alias references) instead of being validated as game script. Opening the rules folder no longer floods every field with errors or hangs on indexing.

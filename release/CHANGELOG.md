@@ -1,3 +1,46 @@
+### 1.3.1
+* Updated to v1.8.1 of the cwtools engine.
+* Adding a localisation key now clears the missing-localisation warning on the event (or other game file) that uses it as you type, instead of only after a window reload or rescan.
+* Fixed the status bar getting stuck on "Indexing workspace…" when the scan hit an empty workspace or an error mid-scan.
+
+### 1.3.0
+* Updated to v1.8.0 of the cwtools engine.
+* `.cwt` rule config files now open as their own language with dedicated syntax highlighting, and are linted against the loaded ruleset (undefined type, enum, or single_alias references) instead of being validated as game script. Opening the rules folder no longer floods every field with errors or hangs on indexing.
+* Added the `cwtools.hover.scopeDisplay` setting. `resolved` adds a `Resolves to` line to hover tooltips showing the scope a link or FROM/ROOT/PREV keyword evaluates to; `context` (default) shows only the current scope.
+* Go-to-definition and double-click treat a dotted event/decision id (`namespace.1`) as one word instead of splitting at the dot, so Ctrl+Click jumps to the event or decision.
+* Hovering an event id shows its localised title.
+* Localisation errors appear and clear as you type instead of only after reloading the window.
+* Autocomplete recovers to real rule suggestions after a partial edit instead of getting stuck on generic word suggestions.
+* Hover tooltips separate their sections (documentation, required scope, current scope) with a divider for readability.
+
+### 1.2.1
+* Updated to v1.7.1 of the cwtools engine
+
+### 1.2.0
+* Updated to v1.7.0 of the cwtools engine.
+* Fixed `cwtools.rules_folder` being ignored on Windows: backslash paths, `~`, `%VAR%` environment variables, quoted values, and workspace-relative paths now resolve instead of silently cloning the upstream rules.
+* Changed the extension to warn (log + popup) when `cwtools.rules_folder` is set but the folder can't be found, instead of silently falling back to the bundled rules.
+* Fixed the `cwtools.rules_version` setting description to match its actual behavior.
+
+### 1.1.0
+* Order of battle references (`load_oob`, `oob`, `set_naval_oob`, `set_air_oob`) resolve on Windows again instead of being reported as missing from `history/units`.
+* `NOT = { AND = { ... } }` is no longer flagged as an unnecessary AND. HOI4 `NOT` acts as a NOR, so the AND is a meaningful NAND.
+* An `AND` inside a `count_triggers` block is no longer flagged as unnecessary. Each direct child is a separately counted condition, so the AND groups several into one counted unit.
+* A localisation value that embeds an inline `[...]` command with a literal suffix (e.g. a `meta_effect` variable `"[?ROOT...GetTokenKey]_subtype"`) is no longer flagged as undefined localisation. It resolves at runtime.
+* Built-in game variables like `faction_leader` work without the `var:` prefix instead of being flagged as unset.
+* Event and news pictures set through scripted localisation (`picture = "[SomeFunction]"`) are no longer flagged as an unknown sprite.
+* Localisation `$...$` references to dynamic modifiers, game objects, and script variables no longer show as undefined. Real typos still do.
+* Filepath references with a redundant double slash (`gfx//interface/...`) resolve the way the engine treats them.
+* Windows: trigger and effect documentation tooltips (the `###` lines), Ctrl+Click, and validation now work for files whose paths use backslashes.
+* Hover tooltips show the current scope at the cursor.
+* Hover and Ctrl+Click work on nested `$KEY$` references inside localisation .yml files. Hover shows the referenced entry's text, Ctrl+Click jumps to it.
+* A broken rules config is flagged: a `.cwt` rule that references an undefined type, enum, or single_alias reports an error on the offending line.
+* Autocomplete on a field key inserts `name = ` with the cursor after the `=`, and works on a fresh line after a field again (it was only offering plain word suggestions, most noticeable in shared_focus and focus files).
+* Objects whose type declares required localisation are flagged when that loc key is missing, so missing localisation is visible again.
+
+### 1.0.22
+* First stable (non-preview) release of CWTools MD Edition.
+
 ### 1.0.13-beta
 * Fix release pipeline: the staging step referenced a removed `osx-x64` artifact after the macOS build switched to native ARM. Extracted staging into a platform-agnostic script so adding or removing platforms only requires editing the CI matrix.
 
