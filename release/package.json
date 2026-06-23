@@ -389,8 +389,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -410,8 +409,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -431,8 +429,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -453,8 +450,7 @@
           "gui",
           "gfx",
           "sfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -475,8 +471,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -499,7 +494,6 @@
           "gfx",
           "sfx",
           "asset",
-          "cwt",
           "map"
         ],
         "configuration": "./language-configuration.json",
@@ -522,8 +516,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -544,8 +537,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -566,8 +558,7 @@
           "txt",
           "gui",
           "gfx",
-          "asset",
-          "cwt"
+          "asset"
         ],
         "configuration": "./language-configuration.json",
         "filenamePatterns": [
@@ -593,9 +584,26 @@
           "gui",
           "gfx",
           "sfx",
-          "asset",
-          "cwt"
+          "asset"
         ]
+      },
+      {
+        "id": "cwt",
+        "aliases": [
+          "CWTools rules",
+          "cwt"
+        ],
+        "extensions": [
+          "cwt"
+        ],
+        "configuration": "./cwt-language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cwt",
+        "scopeName": "source.cwt",
+        "path": "./syntaxes/cwt.tmLanguage.json"
       }
     ],
     "snippets": [

@@ -166,6 +166,10 @@ export async function activate(context: ExtensionContext) {
 				{ scheme: 'file', language: 'vic3' },
 				{ scheme: 'file', language: 'ck3' },
 				{ scheme: 'file', language: 'eu5' },
+				// .cwt rule-config files: the server lints them structurally
+				// (undefined type/enum/single_alias refs + parse errors) rather
+				// than running the game-script validator. See cwtools-vscode#43.
+				{ scheme: 'file', language: 'cwt' },
 				// Localisation .yml files open as the built-in 'yaml' language, so
 				// they never matched a game-language selector and the server never
 				// saw them (no loc-key completion / hover / goto). Match them by
