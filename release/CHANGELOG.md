@@ -1,3 +1,6 @@
+### 1.4.0
+* Updated to v1.9.0 of the cwtools engine.
+
 ### 1.3.4
 * Updated to v1.8.4 of the cwtools engine.
 * Fixed the hover for a resource trigger (`oil`, `steel`, …) showing the wrong tooltip: it read "Check ratio of this type of unit for commander" with scopes `unit_leader`/`combat` instead of "Check amount of resource state or country has" with scopes `country`/`state`. The engine was skipping `common/resources` when it indexed the mod, so resources were never recognized and the hover fell through to an unrelated rule. It now indexes `common/resources` and resolves the resource trigger correctly.
