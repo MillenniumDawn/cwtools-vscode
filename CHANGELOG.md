@@ -1,3 +1,13 @@
+### 1.3.0
+* Updated to v1.8.0 of the cwtools engine.
+* `.cwt` rule config files now open as their own language with dedicated syntax highlighting, and are linted against the loaded ruleset (undefined type, enum, or single_alias references) instead of being validated as game script. Opening the rules folder no longer floods every field with errors or hangs on indexing.
+* Added the `cwtools.hover.scopeDisplay` setting. `resolved` adds a `Resolves to` line to hover tooltips showing the scope a link or FROM/ROOT/PREV keyword evaluates to; `context` (default) shows only the current scope.
+* Go-to-definition and double-click treat a dotted event/decision id (`namespace.1`) as one word instead of splitting at the dot, so Ctrl+Click jumps to the event or decision.
+* Hovering an event id shows its localised title.
+* Localisation errors appear and clear as you type instead of only after reloading the window.
+* Autocomplete recovers to real rule suggestions after a partial edit instead of getting stuck on generic word suggestions.
+* Hover tooltips separate their sections (documentation, required scope, current scope) with a divider for readability.
+
 ### 1.2.1
 * Updated to v1.7.1 of the cwtools engine
 
