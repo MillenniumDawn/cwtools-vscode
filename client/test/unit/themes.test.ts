@@ -1,0 +1,129 @@
+import { suite, test } from 'vitest';
+import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// The shipped color themes are hand-authored JSON. These checks guard the two
+// things that silently rot: the picker labels (must read "Paradox - <name>")
+// and token coverage — every scope the bundled TextMate grammars emit must be
+// painted by every registered theme, or that token renders as plain text.
+//
+// Coverage is anchored on the two grammars the LSP server actually serves:
+// paradox (game scripts, `source.mod`) and cwt (rule files, `source.cwt`). The
+// game is detected at runtime from the mod, not from a per-language grammar;
+// the per-game `stellaris`/`hoi4`/`eu4`/`ck2` grammars are intermediate and on
+// the way out, so we do not require their extra scopes here.
+
+const repoRoot = path.resolve(__dirname, '../../..');
+const releaseDir = path.join(repoRoot, 'release');
+const syntaxesDir = path.join(releaseDir, 'syntaxes');
+const LSP_GRAMMARS = ['paradox.tmLanguage.json', 'cwt.tmLanguage.json'];
+
+// Container scopes wrap other tokens; painting them would tint whole blocks, so
+// themes intentionally leave them alone. Root scope names never carry a token.
+const NOT_REQUIRED = new Set([
+	'source.mod',
+	'source.cwt',
+	'meta.block.paradox',
+	'meta.construct.cwt',
+	'meta.type-reference.cwt',
+]);
+
+interface ThemeEntry {
+	label: string;
+	path: string;
+}
+
+function registeredThemes(): ThemeEntry[] {
+	const manifest = JSON.parse(fs.readFileSync(path.join(releaseDir, 'package.json'), 'utf8'));
+	return manifest.contributes.themes;
+}
+
+// Every `name`/`contentName` scope string the paradox + cwt grammars assign to
+// a token.
+function grammarScopes(): Set<string> {
+	const found = new Set<string>();
+	const collect = (node: unknown): void => {
+		if (Array.isArray(node)) {
+			node.forEach(collect);
+		} else if (node && typeof node === 'object') {
+			for (const [key, value] of Object.entries(node)) {
+				if ((key === 'name' || key === 'contentName') && typeof value === 'string' && value.includes('.')) {
+					found.add(value);
+				} else {
+					collect(value);
+				}
+			}
+		}
+	};
+	for (const file of LSP_GRAMMARS) {
+		const full = path.join(syntaxesDir, file);
+		assert.ok(fs.existsSync(full), `missing grammar: ${file}`);
+		collect(JSON.parse(fs.readFileSync(full, 'utf8')));
+	}
+	return found;
+}
+
+function themeScopes(theme: { tokenColors?: { scope?: string | string[] }[] }): Set<string> {
+	const out = new Set<string>();
+	for (const rule of theme.tokenColors ?? []) {
+		if (!rule.scope) continue;
+		const list = Array.isArray(rule.scope) ? rule.scope : rule.scope.split(',');
+		for (const raw of list) {
+			const s = raw.trim();
+			if (s) out.add(s);
+		}
+	}
+	return out;
+}
+
+// A theme covers a scope when a rule targets it exactly or targets a less
+// specific prefix (TextMate scope-selector matching).
+function covers(rules: Set<string>, scope: string): boolean {
+	for (const rule of rules) {
+		if (rule === scope || scope.startsWith(rule + '.')) return true;
+	}
+	return false;
+}
+
+const required = [...grammarScopes()].filter((s) => !NOT_REQUIRED.has(s)).sort();
+const themes = registeredThemes();
+
+suite('themes — registration', () => {
+	test('every registered theme is labelled "Paradox - <name>"', () => {
+		assert.ok(themes.length > 0, 'no themes registered');
+		for (const t of themes) {
+			assert.match(t.label, /^Paradox - \S/, `bad label: ${t.label}`);
+		}
+	});
+
+	test('every theme file exists, parses, and its name matches its label', () => {
+		for (const t of themes) {
+			const file = path.join(releaseDir, t.path);
+			assert.ok(fs.existsSync(file), `missing theme file: ${t.path}`);
+			const theme = JSON.parse(fs.readFileSync(file, 'utf8'));
+			assert.strictEqual(theme.name, t.label, `name/label mismatch in ${t.path}`);
+			assert.ok(theme.type === 'dark' || theme.type === 'light', `bad type in ${t.path}`);
+			assert.ok(Array.isArray(theme.tokenColors), `no tokenColors in ${t.path}`);
+		}
+	});
+});
+
+suite('themes — scope coverage', () => {
+	test('grammars emit a non-trivial scope set', () => {
+		assert.ok(required.length > 40, `only ${required.length} required scopes found`);
+	});
+
+	for (const t of themes) {
+		test(`${t.label} paints every grammar scope`, () => {
+			const theme = JSON.parse(fs.readFileSync(path.join(releaseDir, t.path), 'utf8'));
+			const rules = themeScopes(theme);
+			const uncovered = required.filter((s) => !covers(rules, s));
+			assert.strictEqual(
+				uncovered.length,
+				0,
+				`${t.label} leaves ${uncovered.length} scope(s) unstyled: ${uncovered.join(', ')}`,
+			);
+		});
+	}
+});

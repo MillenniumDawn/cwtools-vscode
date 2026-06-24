@@ -93,23 +93,22 @@ If you want to browse vanilla files, you can use the "CWTOOLS LOADED FILES" sect
 
 The extension ships its own [TextMate grammars](https://github.com/cwtools/paradox-syntax/tree/master/syntaxes) for all the supported games, so syntax highlighting works out of the box. No second extension to install.
 
-The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) (see [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh) to refresh them). Themes are owned in this repo and live under [`release/themes/`](release/themes/). Pick one with the Color Theme picker:
+The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) (see [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh) to refresh them); the `.cwt` rules grammar is owned here. Themes live under [`release/themes/`](release/themes/). Every theme paints the full scope set from both grammars (game scripts and `.cwt` rule files) plus a generic baseline, so coloring is consistent whatever file you're in. Pick one with the Color Theme picker:
 
-* [**Paradox-Syntax**](release/themes/Paradox-Syntax.tmLanguage.json). Minimal, defers to your editor's default token colors.
-* [**Paradox-Kate**](release/themes/Paradox-Kate.tmLanguage.json) and
-  [**Paradox-Kate Light**](release/themes/Paradox-Kate-Light.tmLanguage.json).
-  Token categories map to the
-  [Kate syntax highlighting](https://invent.kde.org/frameworks/syntax-highlighting)
-  framework's `defStyleNum` slots (effects=function, triggers=attribute,
-  modifiers=type, scopes=builtin).
-* [**Paradox-Nord**](release/themes/Paradox-Nord.tmLanguage.json).
+* [**Paradox - Syntax**](release/themes/Paradox-Syntax.tmLanguage.json). Default
+  dark scheme modeled on VS Code's Dark+.
+* [**Paradox - Kate**](release/themes/Paradox-Kate.tmLanguage.json) and
+  [**Paradox - Kate Light**](release/themes/Paradox-Kate-Light.tmLanguage.json).
+  Inspired by KDE's
+  [Kate / Breeze](https://invent.kde.org/frameworks/syntax-highlighting)
+  palette.
+* [**Paradox - Nord**](release/themes/Paradox-Nord.tmLanguage.json).
   [Nord](https://www.nordtheme.com) palette.
-* [**Paradox-HighContrast**](release/themes/Paradox-HighContrast.tmLanguage.json)
-  and [**Paradox-HighContrast Light**](release/themes/Paradox-HighContrast-Light.tmLanguage.json).
-  Accessibility variants modeled on
-  [VS Code's Default High Contrast](https://code.visualstudio.com/docs/getstarted/themes#_high-contrast-theme).
-* [**Paradox-Dimmed**](release/themes/Paradox-Dimmed.tmLanguage.json) and
-  [**Paradox-QuietLight**](release/themes/Paradox-QuietLight.tmLanguage.json).
+* [**Paradox - High Contrast**](release/themes/Paradox-HighContrast.tmLanguage.json)
+  and [**Paradox - High Contrast Light**](release/themes/Paradox-HighContrast-Light.tmLanguage.json).
+  Accessibility variants, saturated tokens on black/white.
+* [**Paradox - Dimmed**](release/themes/Paradox-Dimmed.tmLanguage.json) and
+  [**Paradox - Quiet Light**](release/themes/Paradox-QuietLight.tmLanguage.json).
   Re-homed from the upstream
   [tboby.paradox-syntax](https://marketplace.visualstudio.com/items?itemName=tboby.paradox-syntax)
   extension.
@@ -128,20 +127,18 @@ The TextMate grammars under [`release/syntaxes/`](release/syntaxes/) are vendore
 
 The bundled themes draw on the following:
 
-* **Paradox-Dimmed** is by **Gratak** (Adam Przybylski), re-homed from the
+* **Paradox - Dimmed** is by **Gratak** (Adam Przybylski), re-homed from the
   upstream
   [Paradox-Dimmed source](https://github.com/cwtools/paradox-syntax/blob/master/themes/Paradox-Dimmed.tmLanguage.json).
-* **Paradox-QuietLight** is by **UristMcDorf**, re-homed from the upstream
+* **Paradox - Quiet Light** is by **UristMcDorf**, re-homed from the upstream
   [Paradox-QuietLight source](https://github.com/cwtools/paradox-syntax/blob/master/themes/Paradox-QuietLight.tmLanguage.json).
-* **Paradox-Kate** and **Paradox-Kate Light** model their token categories on
-  the
-  [KDE / Kate syntax highlighting](https://invent.kde.org/frameworks/syntax-highlighting)
-  framework's `defStyleNum` slots (Kate Editor,
-  [KDE community](https://kde.org)).
-* **Paradox-Nord** uses the [Nord](https://www.nordtheme.com) palette (Arctic
+* **Paradox - Kate** and **Paradox - Kate Light** take their palette from KDE's
+  [Kate / Breeze syntax highlighting](https://invent.kde.org/frameworks/syntax-highlighting)
+  (Kate Editor, [KDE community](https://kde.org)).
+* **Paradox - Nord** uses the [Nord](https://www.nordtheme.com) palette (Arctic
   Ice Studio, MIT). See the
   [Nord repo](https://github.com/nordtheme/visual-studio-code).
-* **Paradox-HighContrast** and **Paradox-HighContrast Light** are modeled on
+* **Paradox - High Contrast** and **Paradox - High Contrast Light** follow
   [VS Code's built-in Default High Contrast](https://code.visualstudio.com/docs/getstarted/themes#_high-contrast-theme)
   theme (Microsoft).
 

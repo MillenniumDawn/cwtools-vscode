@@ -1,9 +1,9 @@
 {
-	"name": "CKII - Quiet Light",
-	"author": "UristMcDorf",
-	"comment": "Based on Quiet Light; cut out the language-specific things apart from CWT",
 	"$schema": "vscode://schemas/color-theme",
+	"name": "Paradox - Quiet Light",
 	"type": "light",
+	"author": "cwtools-md-edition",
+	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Quiet Light scheme (originally CKII - Quiet Light by UristMcDorf) with its purple-accented workbench colors preserved.",
 	"colors": {
 		"activityBar.background": "#ededf5",
 		"activityBar.foreground": "#705697",
@@ -12,12 +12,15 @@
 		"button.background": "#705697",
 		"dropdown.background": "#f5f5f5",
 		"editor.background": "#f5f5f5",
+		"editor.foreground": "#333333",
 		"editor.findMatchBackground": "#bf9cac",
 		"editor.findMatchHighlightBackground": "#edc9d8",
 		"editor.lineHighlightBackground": "#e4f6d4",
 		"editor.selectionBackground": "#c9d0d9",
 		"editorCursor.foreground": "#54494b",
 		"editorGroup.dropBackground": "#c9d0d988",
+		"editorIndentGuide.background": "#d3d3d3",
+		"editorIndentGuide.activeBackground": "#939393",
 		"editorLineNumber.activeForeground": "#9769dc",
 		"editorLineNumber.foreground": "#6d705b",
 		"editorWhitespace.foreground": "#aaaaaa",
@@ -57,331 +60,302 @@
 	},
 	"tokenColors": [
 		{
-			"scope": [
-				"meta.embedded",
-				"source.groovy.embedded"
-			],
-			"settings": {
-				"background": "#F5F5F5",
-				"foreground": "#333333"
-			}
-		},
-		{
-			"name": "Comments",
+			"name": "comment",
 			"scope": [
 				"comment",
-				"punctuation.definition.comment"
+				"comment.line.number-sign.paradox",
+				"comment.line.number-sign.cwt",
+				"punctuation.definition.comment.paradox",
+				"punctuation.definition.comment.cwt"
 			],
 			"settings": {
-				"fontStyle": "italic",
-				"foreground": "#AAAAAA"
+				"foreground": "#AAAAAA",
+				"fontStyle": "italic"
 			}
 		},
 		{
-			"name": "Comments: Preprocessor",
-			"scope": "comment.block.preprocessor",
-			"settings": {
-				"fontStyle": "",
-				"foreground": "#AAAAAA"
-			}
-		},
-		{
-			"name": "Comments: Documentation",
+			"name": "docComment",
 			"scope": [
 				"comment.documentation",
 				"comment.block.documentation",
-				"comment.block.documentation punctuation.definition.comment "
+				"comment.block.documentation.cwt"
+			],
+			"settings": {
+				"foreground": "#8A9A6B",
+				"fontStyle": "italic"
+			}
+		},
+		{
+			"name": "directive",
+			"scope": "comment.line.directive.cwt",
+			"settings": {
+				"foreground": "#AAAAAA",
+				"fontStyle": "italic"
+			}
+		},
+		{
+			"name": "directiveKw",
+			"scope": "keyword.control.directive.cwt",
+			"settings": {
+				"foreground": "#7A3E9D"
+			}
+		},
+		{
+			"name": "string",
+			"scope": [
+				"string",
+				"string.quoted.double.paradox",
+				"string.quoted.double.cwt",
+				"constant.rhs.string.paradox",
+				"constant.rhs.paradox"
 			],
 			"settings": {
 				"foreground": "#448C27"
 			}
 		},
 		{
-			"name": "Invalid - Deprecated",
-			"scope": "invalid.deprecated",
-			"settings": {
-				"background": "#96000014"
-			}
-		},
-		{
-			"name": "Invalid - Illegal",
-			"scope": "invalid.illegal",
-			"settings": {
-				"background": "#96000014",
-				"foreground": "#660000"
-			}
-		},
-		{
-			"name": "Operators",
-			"scope": "keyword.operator",
-			"settings": {
-				"foreground": "#777777"
-			}
-		},
-		{
-			"name": "Keywords",
+			"name": "stringPunct",
 			"scope": [
-				"keyword",
-				"storage"
+				"punctuation.definition.string.begin.paradox",
+				"punctuation.definition.string.end.paradox",
+				"punctuation.definition.string.begin.cwt",
+				"punctuation.definition.string.end.cwt"
+			],
+			"settings": {
+				"foreground": "#448C27"
+			}
+		},
+		{
+			"name": "escape",
+			"scope": [
+				"constant.character.escape",
+				"constant.character.escape.paradox"
+			],
+			"settings": {
+				"foreground": "#AB6526"
+			}
+		},
+		{
+			"name": "number",
+			"scope": [
+				"constant.numeric",
+				"constant.numeric.paradox",
+				"constant.numeric.cwt"
+			],
+			"settings": {
+				"foreground": "#AB6526"
+			}
+		},
+		{
+			"name": "cardinality",
+			"scope": "constant.numeric.cardinality.cwt",
+			"settings": {
+				"foreground": "#AB6526"
+			}
+		},
+		{
+			"name": "langConstant",
+			"scope": [
+				"constant.language",
+				"constant.language.paradox",
+				"constant.language.boolean.cwt"
 			],
 			"settings": {
 				"foreground": "#4B69C6"
 			}
 		},
 		{
-			"name": "Types",
-			"scope": [
-				"storage.type",
-				"support.type"
-			],
+			"name": "boolOp",
+			"scope": "variable.boolean.paradox",
 			"settings": {
-				"foreground": "#7A3E9D"
-			}
-		},
-		{
-			"name": "Language Constants",
-			"scope": [
-				"constant.language",
-				"support.constant",
-				"variable.language"
-			],
-			"settings": {
-				"foreground": "#9C5D27"
-			}
-		},
-		{
-			"name": "Variables",
-			"scope": [
-				"variable",
-				"support.variable"
-			],
-			"settings": {
-				"foreground": "#7A3E9D"
-			}
-		},
-		{
-			"name": "Functions",
-			"scope": [
-				"entity.name.function",
-				"support.function"
-			],
-			"settings": {
-				"fontStyle": "bold",
-				"foreground": "#AA3731"
-			}
-		},
-		{
-			"name": "Classes",
-			"scope": [
-				"entity.name.type",
-				"entity.other.inherited-class",
-				"support.class"
-			],
-			"settings": {
-				"fontStyle": "bold",
-				"foreground": "#7A3E9D"
-			}
-		},
-		{
-			"name": "Exceptions",
-			"scope": "entity.name.exception",
-			"settings": {
-				"foreground": "#660000"
-			}
-		},
-		{
-			"name": "Sections",
-			"scope": "entity.name.section",
-			"settings": {
+				"foreground": "#4B69C6",
 				"fontStyle": "bold"
 			}
 		},
 		{
-			"name": "Numbers, Characters",
+			"name": "scriptVar",
 			"scope": [
-				"constant.numeric",
-				"constant.character",
-				"constant"
+				"constant.prefdef.paradox",
+				"variable.constant.paradox",
+				"variable.other.constant.cwt",
+				"punctuation.definition.variable.paradox"
 			],
 			"settings": {
-				"foreground": "#9C5D27"
+				"foreground": "#7A3E9D"
 			}
 		},
 		{
-			"name": "Strings",
-			"scope": "string",
-			"settings": {
-				"foreground": "#448C27"
-			}
-		},
-		{
-			"name": "Strings: Escape Sequences",
-			"scope": "constant.character.escape",
-			"settings": {
-				"foreground": "#777777"
-			}
-		},
-		{
-			"name": "Strings: Regular Expressions",
-			"scope": "string.regexp",
+			"name": "key",
+			"scope": [
+				"variable",
+				"variable.other",
+				"support.variable",
+				"variable.lhs.paradox",
+				"variable.paradox",
+				"variable.scope.paradox",
+				"variable.other.paradox",
+				"variable.other.key.cwt"
+			],
 			"settings": {
 				"foreground": "#4B69C6"
 			}
 		},
 		{
-			"name": "Strings: Symbols",
-			"scope": "constant.other.symbol",
-			"settings": {
-				"foreground": "#9C5D27"
-			}
-		},
-		{
-			"name": "Punctuation",
-			"scope": "punctuation",
-			"settings": {
-				"foreground": "#777777"
-			}
-		},
-		{
-			"name": "Embedded Source",
-			"scope": [
-				"string source",
-				"text source"
-			],
-			"settings": {
-				"background": "#EAEBE6"
-			}
-		},
-		{
-			"scope": "token.info-token",
-			"settings": {
-				"foreground": "#316bcd"
-			}
-		},
-		{
-			"scope": "token.warn-token",
-			"settings": {
-				"foreground": "#cd9731"
-			}
-		},
-		{
-			"scope": "token.error-token",
-			"settings": {
-				"foreground": "#cd3131"
-			}
-		},
-		{
-			"scope": "token.debug-token",
-			"settings": {
-				"foreground": "#800080"
-			}
-		},
-		{
-			"scope": "variable.language.multi_scopes.paradox",
-			"settings": {
-				"foreground": "#4B69C6" 
-			}
-		},
-		{
-			"scope": "constant.prefdef.paradox",
-			"settings": {
-				"foreground": "#9C5D27"
-			}
-		},
-		{
-			"scope": "variable.language.condition_scopes.paradox",
-			"settings": {
-				"foreground": "#67724a"
-			}
-		},
-		{
-			"scope": "variable.language.command_scopes.paradox",
-			"settings": {
-				"foreground": "#8A2BE2"
-			}
-		},
-		{
-			"scope": "variable.language.other.paradox",
-			"settings": {
-				"foreground": "#00BFFF"
-			}
-		},
-		{
-			"scope": "variable.language.conditions.paradox",
-			"settings": {
-				"foreground": "#67724a"
-			}
-		},
-		{
-			"scope": "variable.language.effects.paradox",
-			"settings": {
-				"foreground": "#b91d12dc" 
-			}
-		},
-		{
-			"scope": "constant.numeric.paradox",
-			"settings": {
-				"foreground": "#7A3E9D" 
-			}
-		},
-		{
-			"scope": "variable.boolean.paradox",
-			"settings": {
-				"foreground": "#4B69C6" 
-			}
-		},
-		{
-			"scope": [
-				"variable.lhs.paradox",
-				"rest.normal.paradox"
-			],
-			"settings": {
-				"foreground": "#AA3731" 
-			}
-		},
-		{
+			"name": "keyBracket",
 			"scope": "variable.lhs.bracket.paradox",
 			"settings": {
-				"foreground": "#7A3E9D" 
+				"foreground": "#7A3E9D"
 			}
 		},
 		{
-			"scope": [
-				"constant.rhs.paradox",
-				"constant.language.paradox"
-			],
-			"settings": {
-				"foreground": "#7A3E9D" 
-			}
-		},
-		{
+			"name": "defToken",
 			"scope": "variable.language.definition_tokens.paradox",
 			"settings": {
-				"foreground": "#4B69C6" 
+				"foreground": "#4B69C6"
 			}
 		},
 		{
+			"name": "scopeToken",
+			"scope": [
+				"variable.language.multi_scopes.paradox",
+				"variable.language.command_scopes.paradox",
+				"variable.language.condition_scopes.paradox",
+				"variable.language.description.scope.paradox",
+				"variable.language.scope.cwt"
+			],
+			"settings": {
+				"foreground": "#7A3E9D"
+			}
+		},
+		{
+			"name": "trigger",
+			"scope": "variable.language.conditions.paradox",
+			"settings": {
+				"foreground": "#448C27"
+			}
+		},
+		{
+			"name": "effect",
+			"scope": [
+				"variable.language.effects.paradox",
+				"variable.language.other.paradox",
+				"variable.language.keywords",
+				"variable.bracket.keywords"
+			],
+			"settings": {
+				"foreground": "#4B69C6"
+			}
+		},
+		{
+			"name": "modifier",
 			"scope": "variable.language.modifiers.paradox",
 			"settings": {
-				"foreground": "#008000"
+				"foreground": "#AB6526"
 			}
 		},
 		{
-			"scope": "source.mod",
+			"name": "description",
+			"scope": "variable.language.description.paradox",
 			"settings": {
-				"foreground": "#777777" 
+				"foreground": "#448C27"
 			}
 		},
 		{
-			"scope": "string.quoted.double.paradox",
+			"name": "keywordOp",
+			"scope": [
+				"keyword",
+				"keyword.control",
+				"keyword.operator",
+				"keyword.control.paradox",
+				"keyword.operator.comparison.cwt",
+				"keyword.other.block.cwt",
+				"keyword.declaration.construct.cwt"
+			],
 			"settings": {
-				"foreground": "#448C27" 
+				"foreground": "#7A3E9D"
 			}
 		},
 		{
-			"scope": "comment.line.number-sign.paradox",
+			"name": "type",
+			"scope": [
+				"support.type",
+				"storage.type",
+				"support.type.primitive.cwt"
+			],
 			"settings": {
-				"foreground": "#a5abaf"
+				"foreground": "#7A3E9D"
+			}
+		},
+		{
+			"name": "typeRef",
+			"scope": [
+				"entity.name.type",
+				"entity.name.type.reference.cwt",
+				"entity.name.type.namespace.txt",
+				"entity.name.type.id.txt",
+				"entity.name.type.period.txt",
+				"entity.name.type.number.txt"
+			],
+			"settings": {
+				"foreground": "#448C27"
+			}
+		},
+		{
+			"name": "construct",
+			"scope": [
+				"entity.name.tag",
+				"entity.name.tag.construct.cwt"
+			],
+			"settings": {
+				"foreground": "#4B69C6"
+			}
+		},
+		{
+			"name": "eventTarget",
+			"scope": [
+				"event_target.identifier.paradox",
+				"event_target.name.paradox",
+				"variable.event.target.paradox",
+				"punctuation.event_target.colon.paradox"
+			],
+			"settings": {
+				"foreground": "#4B69C6"
+			}
+		},
+		{
+			"name": "rhs",
+			"scope": "variable.language.rhs.paradox",
+			"settings": {
+				"foreground": "#333333"
+			}
+		},
+		{
+			"name": "namespaceMeta",
+			"scope": [
+				"meta.namespace.paradox",
+				"meta.id.paradox",
+				"keyword.other.namespace.txt",
+				"keyword.other.id.txt",
+				"meta.namespace.identifier.txt",
+				"meta.id.identifier.txt"
+			],
+			"settings": {
+				"foreground": "#AB6526"
+			}
+		},
+		{
+			"name": "blockPunct",
+			"scope": [
+				"punctuation",
+				"punctuation.section.block.begin.paradox",
+				"punctuation.section.block.end.paradox",
+				"punctuation.definition.construct.begin.cwt",
+				"punctuation.definition.construct.end.cwt",
+				"punctuation.definition.type.begin.cwt",
+				"punctuation.definition.type.end.cwt"
+			],
+			"settings": {
+				"foreground": "#777777"
 			}
 		}
 	]

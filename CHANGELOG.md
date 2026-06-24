@@ -1,3 +1,11 @@
+### 1.9.0
+
+* Reworked the bundled themes. Every theme now paints the full scope set from both grammars (game scripts and `.cwt` rule files) plus a generic baseline, so coloring no longer falls flat in `.cwt` files or on the scopes most themes used to miss.
+* Renamed the themes to `Paradox - <name>` (`Paradox - Nord`, `Paradox - Kate`, ...). If you had one of the old names set, reselect it in the Color Theme picker.
+* Retuned `Paradox - Kate`/`Kate Light`, the `High Contrast` pair, and `Paradox - Syntax` (now a Dark+ flavored default), and converted `Paradox - Dimmed` and `Paradox - Quiet Light` to the full theme format while keeping their look.
+* `.cwt` grammar: rule keys on the left of an assignment (`key = ...`) are now scoped, so they pick up theme colors instead of rendering as plain text.
+* Added a node test that fails if any shipped theme leaves a grammar scope unstyled.
+
 ### 1.8.0
 
 * Updated to v1.12.0 of the cwtools engine.
