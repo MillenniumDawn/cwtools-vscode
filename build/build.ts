@@ -224,8 +224,12 @@ function publishGithubRelease(tag: string, version: string, preRelease: boolean,
 function publishToMarketplace(vsix: string): void {
 	const token = process.env['vsce-token'];
 	if (!token || !token.trim()) {
-		if (process.env.CI) {
-			console.log('No vsce-token set; skipping VS Code Marketplace publish.');
+		const isTagRelease = /^(1|true)$/i.test(process.env.TAG_RELEASE ?? '');
+		// A real tagged release must not silently degrade to GitHub-only — that
+		// is exactly how Marketplace publishing went unnoticed. Only skip on
+		// non-tag CI runs (PR/dispatch dry runs).
+		if (process.env.CI && !isTagRelease) {
+			console.log('No vsce-token set; skipping VS Code Marketplace publish (not a tag release).');
 			return;
 		}
 		throw new Error('vsce-token is not set; cannot publish to the Marketplace.');
