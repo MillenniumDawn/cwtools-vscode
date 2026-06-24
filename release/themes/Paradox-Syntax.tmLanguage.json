@@ -1,0 +1,42 @@
+{
+	"$schema": "vscode://schemas/color-theme",
+	"name": "Paradox-Syntax",
+	"type": "dark",
+	"author": "cwtools-md-edition",
+	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Minimal dark color scheme. Lets VS Code's default token colors do most of the work and only overrides the scopes that would otherwise look unstyled. Use this if you want the standard editor experience with sane paradox highlighting layered on top.",
+	"colors": {},
+	"tokenColors": [
+		{
+			"scope": "comment.line.number-sign.paradox",
+			"settings": {
+				"fontStyle": "italic"
+			}
+		},
+		{
+			"scope": "variable.boolean.paradox",
+			"settings": {
+				"fontStyle": "bold"
+			}
+		},
+		{
+			"scope": [
+				"variable.language.effects.paradox",
+				"variable.language.conditions.paradox",
+				"variable.language.modifiers.paradox",
+				"variable.language.multi_scopes.paradox",
+				"variable.language.command_scopes.paradox",
+				"variable.language.condition_scopes.paradox",
+				"variable.language.definition_tokens.paradox",
+				"variable.language.other.paradox",
+				"variable.language.description.paradox",
+				"variable.language.description.scope.paradox",
+				"variable.language.keywords",
+				"variable.bracket.keywords",
+				"keyword.control.paradox"
+			],
+			"settings": {
+				"fontStyle": ""
+			}
+		}
+	]
+}

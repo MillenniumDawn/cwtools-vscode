@@ -39,6 +39,21 @@ CWTOOLS_RUST_WORKSPACE=submodules/cwtools/cwtools-rs ./build.sh quick
 
 Other commands: `package` packages a vsix without publishing, `release` tags and does a full build and publish, `release-prebuilt` packages binaries already staged by CI.
 
+## Syntax highlighting
+
+The TextMate grammars under `release/syntaxes/` are vendored from
+[cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) and
+re-synced with [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh).
+The script expects an upstream checkout as a sibling (`../paradox-syntax`);
+override with `PARADOX_SYNTAX_SRC=...` if you keep it elsewhere. After
+syncing, eyeball the diff before committing: the grammars are mostly
+mechanical, but scope names sometimes change.
+
+Themes under `release/themes/` are owned in this repo. The long-term direction
+is one merged `paradox.tmLanguage.json` with game-specific keywords injected,
+replacing the per-game files. The per-game split is here for now because it
+mirrors the upstream layout and makes re-vendoring a clean copy/paste.
+
 ## Running and debugging
 
 Open the repo in VS Code and launch **Quick update, Build and Launch Extension** (or the Debug variant) from the Run panel. That builds and opens an Extension Development Host with the extension loaded. Point it at a mod folder under a game directory to see validation.
