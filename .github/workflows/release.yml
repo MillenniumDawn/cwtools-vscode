@@ -75,10 +75,11 @@ jobs:
     # by default.
     permissions:
       contents: write
-    # Job-level so the Open VSX step's `if:` can read it (secrets aren't visible
+    # Job-level so step `if:`/`run:` blocks can read them (secrets aren't visible
     # in step conditions).
     env:
       OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
+      VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
 
     steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -97,6 +98,15 @@ jobs:
       with:
         node-version: ${{ env.NODE_VERSION }}
     - run: npm install
+    - name: Require Marketplace token on tagged releases
+      # Fail fast (before creating the GitHub release) when a real tag release
+      # is missing the Marketplace PAT, instead of silently skipping the publish.
+      if: ${{ startsWith(github.ref, 'refs/tags/') }}
+      run: |
+        if [ -z "$VSCE_TOKEN" ]; then
+          echo "::error::VSCE_TOKEN secret is not set; cannot publish a tagged release to the Marketplace."
+          exit 1
+        fi
     - name: Publish Release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
