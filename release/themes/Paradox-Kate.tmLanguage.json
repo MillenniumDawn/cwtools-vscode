@@ -1,0 +1,252 @@
+{
+	"$schema": "vscode://schemas/color-theme",
+	"name": "Paradox-Kate",
+	"type": "dark",
+	"author": "cwtools-md-edition",
+	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Color scheme modeled on the Kate syntax's defStyleNum categorization: effects=function, triggers=attribute, modifiers=type, scopes=builtin.",
+	"colors": {
+		"editor.background": "#1E1E1E",
+		"editor.foreground": "#D4D4D4",
+		"editor.lineHighlightBackground": "#2A2A2A",
+		"editorLineNumber.foreground": "#858585",
+		"editorLineNumber.activeForeground": "#C6C6C6"
+	},
+	"tokenColors": [
+		{
+			"scope": "comment.line.number-sign.paradox",
+			"settings": {
+				"foreground": "#6A9955",
+				"fontStyle": "italic"
+			}
+		},
+		{
+			"scope": "string.quoted.double.paradox",
+			"settings": {
+				"foreground": "#CE9178"
+			}
+		},
+		{
+			"scope": "constant.character.escape.paradox",
+			"settings": {
+				"foreground": "#D7BA7D"
+			}
+		},
+		{
+			"scope": "constant.numeric.paradox",
+			"settings": {
+				"foreground": "#B5CEA8"
+			}
+		},
+		{
+			"scope": "constant.language.paradox",
+			"settings": {
+				"foreground": "#569CD6"
+			}
+		},
+		{
+			"scope": "constant.rhs.paradox",
+			"settings": {
+				"foreground": "#CE9178"
+			}
+		},
+		{
+			"scope": "constant.rhs.string.paradox",
+			"settings": {
+				"foreground": "#CE9178"
+			}
+		},
+		{
+			"scope": "constant.prefdef.paradox",
+			"settings": {
+				"foreground": "#4FC1FF"
+			}
+		},
+		{
+			"scope": "variable.boolean.paradox",
+			"settings": {
+				"foreground": "#569CD6",
+				"fontStyle": "bold"
+			}
+		},
+		{
+			"scope": "variable.constant.paradox",
+			"settings": {
+				"foreground": "#4EC9B0"
+			}
+		},
+		{
+			"scope": "variable.lhs.paradox",
+			"settings": {
+				"foreground": "#9CDCFE"
+			}
+		},
+		{
+			"scope": "variable.lhs.bracket.paradox",
+			"settings": {
+				"foreground": "#DA70D6"
+			}
+		},
+		{
+			"scope": "variable.event.target.paradox",
+			"settings": {
+				"foreground": "#4FC1FF"
+			}
+		},
+		{
+			"scope": "event_target.identifier.paradox",
+			"settings": {
+				"foreground": "#4FC1FF"
+			}
+		},
+		{
+			"scope": "event_target.name.paradox",
+			"settings": {
+				"foreground": "#4FC1FF"
+			}
+		},
+		{
+			"scope": "variable.language.effects.paradox",
+			"settings": {
+				"foreground": "#DCDCAA"
+			}
+		},
+		{
+			"scope": "variable.language.conditions.paradox",
+			"settings": {
+				"foreground": "#9CDCFE"
+			}
+		},
+		{
+			"scope": "variable.language.modifiers.paradox",
+			"settings": {
+				"foreground": "#4EC9B0"
+			}
+		},
+		{
+			"scope": "variable.language.multi_scopes.paradox",
+			"settings": {
+				"foreground": "#C586C0"
+			}
+		},
+		{
+			"scope": "variable.language.command_scopes.paradox",
+			"settings": {
+				"foreground": "#C586C0"
+			}
+		},
+		{
+			"scope": "variable.language.condition_scopes.paradox",
+			"settings": {
+				"foreground": "#C586C0"
+			}
+		},
+		{
+			"scope": "variable.language.definition_tokens.paradox",
+			"settings": {
+				"foreground": "#9CDCFE"
+			}
+		},
+		{
+			"scope": "variable.language.other.paradox",
+			"settings": {
+				"foreground": "#C586C0"
+			}
+		},
+		{
+			"scope": "variable.language.description.paradox",
+			"settings": {
+				"foreground": "#9CDCFE"
+			}
+		},
+		{
+			"scope": "variable.language.description.scope.paradox",
+			"settings": {
+				"foreground": "#C586C0"
+			}
+		},
+		{
+			"scope": "variable.language.keywords",
+			"settings": {
+				"foreground": "#C586C0"
+			}
+		},
+		{
+			"scope": "variable.bracket.keywords",
+			"settings": {
+				"foreground": "#C586C0"
+			}
+		},
+		{
+			"scope": "keyword.control.paradox",
+			"settings": {
+				"foreground": "#C586C0"
+			}
+		},
+		{
+			"scope": "meta.namespace.paradox",
+			"settings": {
+				"foreground": "#D7BA7D"
+			}
+		},
+		{
+			"scope": "meta.id.paradox",
+			"settings": {
+				"foreground": "#D7BA7D"
+			}
+		},
+		{
+			"scope": "entity.name.type.namespace.txt",
+			"settings": {
+				"foreground": "#D7BA7D"
+			}
+		},
+		{
+			"scope": "entity.name.type.id.txt",
+			"settings": {
+				"foreground": "#D7BA7D"
+			}
+		},
+		{
+			"scope": "punctuation.definition.comment.paradox",
+			"settings": {
+				"foreground": "#6A9955"
+			}
+		},
+		{
+			"scope": "punctuation.definition.string.begin.paradox",
+			"settings": {
+				"foreground": "#CE9178"
+			}
+		},
+		{
+			"scope": "punctuation.definition.string.end.paradox",
+			"settings": {
+				"foreground": "#CE9178"
+			}
+		},
+		{
+			"scope": "punctuation.definition.variable.paradox",
+			"settings": {
+				"foreground": "#4FC1FF"
+			}
+		},
+		{
+			"scope": "punctuation.event_target.colon.paradox",
+			"settings": {
+				"foreground": "#4FC1FF"
+			}
+		},
+		{
+			"scope": "punctuation.section.block.begin.paradox",
+			"settings": {
+				"foreground": "#D4D4D4"
+			}
+		},
+		{
+			"scope": "punctuation.section.block.end.paradox",
+			"settings": {
+				"foreground": "#D4D4D4"
+			}
+		}
+	]
+}

@@ -615,9 +615,129 @@
     ],
     "grammars": [
       {
+        "language": "stellaris",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "scopeName": "source.stellaris",
+        "injectTo": [
+          "source.mod"
+        ],
+        "path": "./syntaxes/stellaris.tmLanguage.json"
+      },
+      {
+        "language": "hoi4",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "scopeName": "source.hoi4",
+        "injectTo": [
+          "source.mod"
+        ],
+        "path": "./syntaxes/hoi4.tmLanguage.json"
+      },
+      {
+        "language": "eu4",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "scopeName": "source.eu4",
+        "injectTo": [
+          "source.mod"
+        ],
+        "path": "./syntaxes/eu4.tmLanguage.json"
+      },
+      {
+        "language": "ck2",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "scopeName": "source.ck2",
+        "injectTo": [
+          "source.mod"
+        ],
+        "path": "./syntaxes/ck2.tmLanguage.json"
+      },
+      {
+        "language": "imperator",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "language": "vic2",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "language": "ck3",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "language": "vic3",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "language": "eu5",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
+        "language": "paradox",
+        "scopeName": "source.mod",
+        "path": "./syntaxes/paradox.tmLanguage.json"
+      },
+      {
         "language": "cwt",
         "scopeName": "source.cwt",
         "path": "./syntaxes/cwt.tmLanguage.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "Paradox-Syntax",
+        "uiTheme": "vs-dark",
+        "path": "./themes/Paradox-Syntax.tmLanguage.json"
+      },
+      {
+        "label": "Paradox-Kate",
+        "uiTheme": "vs-dark",
+        "path": "./themes/Paradox-Kate.tmLanguage.json"
+      },
+      {
+        "label": "Paradox-Kate Light",
+        "uiTheme": "vs",
+        "path": "./themes/Paradox-Kate-Light.tmLanguage.json"
+      },
+      {
+        "label": "Paradox-Nord",
+        "uiTheme": "vs-dark",
+        "path": "./themes/Paradox-Nord.tmLanguage.json"
+      },
+      {
+        "label": "Paradox-HighContrast",
+        "uiTheme": "vs-dark",
+        "path": "./themes/Paradox-HighContrast.tmLanguage.json"
+      },
+      {
+        "label": "Paradox-HighContrast Light",
+        "uiTheme": "vs",
+        "path": "./themes/Paradox-HighContrast-Light.tmLanguage.json"
+      },
+      {
+        "label": "Stellaris Theme (Paradox-Dimmed)",
+        "uiTheme": "vs-dark",
+        "path": "./themes/Paradox-Dimmed.tmLanguage.json"
+      },
+      {
+        "label": "Quiet Light Paradox Theme (Paradox-QuietLight)",
+        "uiTheme": "vs",
+        "path": "./themes/Paradox-QuietLight.tmLanguage.json"
       }
     ],
     "snippets": [
@@ -746,8 +866,5 @@
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
-  },
-  "extensionPack": [
-    "tboby.paradox-syntax"
-  ]
+  }
 }

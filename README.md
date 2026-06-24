@@ -47,9 +47,9 @@ This extension is still in preview, it may not work, it may stop working at any 
 
 * `C:\Users\name\Documents\Paradox Interactive\Stellaris\mod\your_mod`
 
-3. Follow the prompts to select your vanilla folder
-4. Edit files and watch syntax errors show up when you make mistakes
-5. Wait up to a minute for the extension to scan your mod and find errors
+1. Follow the prompts to select your vanilla folder
+2. Edit files and watch syntax errors show up when you make mistakes
+3. Wait up to a minute for the extension to scan your mod and find errors
 
 ### Multiple mods - workspace
 
@@ -88,6 +88,68 @@ If you want to browse vanilla files, you can use the "CWTOOLS LOADED FILES" sect
 ### Find all references
 
 ![Find all references](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/findallrefs.png)
+
+## Theming
+
+The extension ships its own [TextMate grammars](https://github.com/cwtools/paradox-syntax/tree/master/syntaxes) for all the supported games, so syntax highlighting works out of the box. No second extension to install.
+
+The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) (see [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh) to refresh them). Themes are owned in this repo and live under [`release/themes/`](release/themes/). Pick one with the Color Theme picker:
+
+* [**Paradox-Syntax**](release/themes/Paradox-Syntax.tmLanguage.json). Minimal, defers to your editor's default token colors.
+* [**Paradox-Kate**](release/themes/Paradox-Kate.tmLanguage.json) and
+  [**Paradox-Kate Light**](release/themes/Paradox-Kate-Light.tmLanguage.json).
+  Token categories map to the
+  [Kate syntax highlighting](https://invent.kde.org/frameworks/syntax-highlighting)
+  framework's `defStyleNum` slots (effects=function, triggers=attribute,
+  modifiers=type, scopes=builtin).
+* [**Paradox-Nord**](release/themes/Paradox-Nord.tmLanguage.json).
+  [Nord](https://www.nordtheme.com) palette.
+* [**Paradox-HighContrast**](release/themes/Paradox-HighContrast.tmLanguage.json)
+  and [**Paradox-HighContrast Light**](release/themes/Paradox-HighContrast-Light.tmLanguage.json).
+  Accessibility variants modeled on
+  [VS Code's Default High Contrast](https://code.visualstudio.com/docs/getstarted/themes#_high-contrast-theme).
+* [**Paradox-Dimmed**](release/themes/Paradox-Dimmed.tmLanguage.json) and
+  [**Paradox-QuietLight**](release/themes/Paradox-QuietLight.tmLanguage.json).
+  Re-homed from the upstream
+  [tboby.paradox-syntax](https://marketplace.visualstudio.com/items?itemName=tboby.paradox-syntax)
+  extension.
+
+The per-game grammars (`stellaris`, `hoi4`, `eu4`, `ck2`) are intermediate. The end state is a single merged grammar with game-specific keywords injected on top, instead of separate per-game files.
+
+## Credits
+
+The TextMate grammars under [`release/syntaxes/`](release/syntaxes/) are vendored from the [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) extension (Copyright (c) 2018 Thomas Boby, MIT). Original authors and contributors:
+
+* **Thomas Boby** (publisher
+  [`tboby`](https://marketplace.visualstudio.com/publishers/tboby)) and
+  **Dayshine**, with contributions from **Gratak** and others. See the upstream
+  [contributors list](https://github.com/cwtools/paradox-syntax/graphs/contributors)
+  and [commit history](https://github.com/cwtools/paradox-syntax/commits/master).
+
+The bundled themes draw on the following:
+
+* **Paradox-Dimmed** is by **Gratak** (Adam Przybylski), re-homed from the
+  upstream
+  [Paradox-Dimmed source](https://github.com/cwtools/paradox-syntax/blob/master/themes/Paradox-Dimmed.tmLanguage.json).
+* **Paradox-QuietLight** is by **UristMcDorf**, re-homed from the upstream
+  [Paradox-QuietLight source](https://github.com/cwtools/paradox-syntax/blob/master/themes/Paradox-QuietLight.tmLanguage.json).
+* **Paradox-Kate** and **Paradox-Kate Light** model their token categories on
+  the
+  [KDE / Kate syntax highlighting](https://invent.kde.org/frameworks/syntax-highlighting)
+  framework's `defStyleNum` slots (Kate Editor,
+  [KDE community](https://kde.org)).
+* **Paradox-Nord** uses the [Nord](https://www.nordtheme.com) palette (Arctic
+  Ice Studio, MIT). See the
+  [Nord repo](https://github.com/nordtheme/visual-studio-code).
+* **Paradox-HighContrast** and **Paradox-HighContrast Light** are modeled on
+  [VS Code's built-in Default High Contrast](https://code.visualstudio.com/docs/getstarted/themes#_high-contrast-theme)
+  theme (Microsoft).
+
+`cwtools-md-edition` itself is a fork of
+[cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vscode) maintained
+by the [Millennium Dawn mod team](https://github.com/MillenniumDawn), and
+drives a Rust language server from
+[MillenniumDawn/cwtools](https://github.com/MillenniumDawn/cwtools).
 
 ## Links
 
