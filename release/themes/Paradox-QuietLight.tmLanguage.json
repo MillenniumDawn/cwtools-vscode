@@ -1,6 +1,3 @@
-// This is absolutely a work in progress. I can't properly see how everything is supposed to be tokenised until all effects/triggers/everything is defined properly.
-// Plus maybe some adjustments to the basic tokenisation are in order - but that's, again, only after everything is done at least for the first pass.
-// For now it's just a light theme that doesn't necessarily look like crap, just a bit of a colour mismatch everywhere. So that's a good thing, I hope.
 {
 	"name": "CKII - Quiet Light",
 	"author": "UristMcDorf",
@@ -282,7 +279,7 @@
 		{
 			"scope": "variable.language.multi_scopes.paradox",
 			"settings": {
-				"foreground": "#4B69C6" // Keywords? Some fields in classes use this, some use variable.language.definition_tokens.paradox; weird
+				"foreground": "#4B69C6" 
 			}
 		},
 		{
@@ -318,19 +315,19 @@
 		{
 			"scope": "variable.language.effects.paradox",
 			"settings": {
-				"foreground": "#b91d12dc" // Made it slightly darker to fit with the rest of the theme
+				"foreground": "#b91d12dc" 
 			}
 		},
 		{
 			"scope": "constant.numeric.paradox",
 			"settings": {
-				"foreground": "#7A3E9D" // Variable
+				"foreground": "#7A3E9D" 
 			}
 		},
 		{
 			"scope": "variable.boolean.paradox",
 			"settings": {
-				"foreground": "#4B69C6" // Keyword
+				"foreground": "#4B69C6" 
 			}
 		},
 		{
@@ -339,13 +336,13 @@
 				"rest.normal.paradox"
 			],
 			"settings": {
-				"foreground": "#AA3731" // Function
+				"foreground": "#AA3731" 
 			}
 		},
 		{
 			"scope": "variable.lhs.bracket.paradox",
 			"settings": {
-				"foreground": "#7A3E9D" // Class? Since it's used for type definitions
+				"foreground": "#7A3E9D" 
 			}
 		},
 		{
@@ -354,13 +351,13 @@
 				"constant.language.paradox"
 			],
 			"settings": {
-				"foreground": "#7A3E9D" // Variable
+				"foreground": "#7A3E9D" 
 			}
 		},
 		{
 			"scope": "variable.language.definition_tokens.paradox",
 			"settings": {
-				"foreground": "#4B69C6" // Keywords? Some fields in classes use this, some use variable.language.multi_scopes.paradox; weird
+				"foreground": "#4B69C6" 
 			}
 		},
 		{
@@ -372,13 +369,13 @@
 		{
 			"scope": "source.mod",
 			"settings": {
-				"foreground": "#777777" // Punctuation since that covers =s
+				"foreground": "#777777" 
 			}
 		},
 		{
 			"scope": "string.quoted.double.paradox",
 			"settings": {
-				"foreground": "#448C27" // String
+				"foreground": "#448C27" 
 			}
 		},
 		{

@@ -123,7 +123,7 @@
                 },
                 {
                     "name": "variable.language.conditions.paradox",
-                    "match": "\\b(custom_tooltip|IF|if|hidden_trigger|exists|nor|nand|limit|yes|no|not|and|or|if|else|NOR|always|exists)\\b"
+                    "match": "\\b(custom_tooltip|IF|if|hidden_trigger|exists|nor|nand|limit|yes|no|not|and|or|else|NOR|always)\\b"
                 },
                 {
                     "name": "variable.language.definition_tokens.paradox",
@@ -164,10 +164,7 @@
                     "name": "variable.lhs.paradox",
                     "match": "(\\w|\\.|-|:)+(?=\\s?(=|>|<|<=|>=))"
                 },
-                {
-                    "name": "variable.bracket.keywords",
-                    "match": "\\{\\s+[\\w+\\s+]+\\}"
-                },
+
                 {
                     "name": "variable.language.description.paradox",
                     "match": "\\b(NOT_USED_3)\\b"
@@ -227,7 +224,7 @@
                 },
                 {
                     "comment": "RHS for value (keyword = >something<)",
-                    "begin": "[^\\S\\n]*(?<==|<|>|<=|>=)[^\\S\\n]*",
+                    "begin": "[^\\S\\n]*(?<==|<|>|<=|>=)[^\\S\\n]*(?!\")",
                     "end": "[\\s]+",
                     "contentName": "variable.language.rhs.paradox",
                     "patterns": [
@@ -278,6 +275,10 @@
                 },
                 {
                     "include": "#id"
+                },
+                {
+                    "comment": "Or a quoted string",
+                    "include": "#strings"
                 },
                 {
                     "comment": "Or a single value either LHS or RHS (variable = variable, variable = block)",
