@@ -1,4 +1,8 @@
-### Unreleased
+### 1.8.0
+
+* Updated to v1.12.0 of the cwtools engine.
+
+### 1.7.0
 
 * Vendored the TextMate grammars from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) directly into the extension, so highlighting ships with `cwtools-md-edition` and no longer needs the [tboby.paradox-syntax](https://marketplace.visualstudio.com/items?itemName=tboby.paradox-syntax) extension pack.
 * Added a themes block: `Paradox-Syntax` (minimal), `Paradox-Kate` and `Paradox-Kate-Light` (modeled on the Kate syntax's `defStyleNum` token categorization), `Paradox-Nord` (Nord palette), `Paradox-HighContrast` and `Paradox-HighContrast-Light` (accessibility), plus the upstream `Paradox-Dimmed` and `Paradox-QuietLight` re-homed here.
