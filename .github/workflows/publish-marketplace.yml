@@ -43,14 +43,14 @@ jobs:
     - name: Publish to VS Code Marketplace
       if: ${{ inputs.dry-run == false }}
       env:
-        vsce-token: ${{ secrets.VSCE_TOKEN }}
+        VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
       run: |
-        if [ -z "$vsce-token" ]; then
+        if [ -z "$VSCE_TOKEN" ]; then
           echo "::error::VSCE_TOKEN secret is not set. Add it to the repository secrets."
           exit 1
         fi
         vsix=$(ls vsix-artifacts/*.vsix | head -1)
-        npx @vscode/vsce publish --pat "$vsce-token" --packagePath "$vsix"
+        npx @vscode/vsce publish --pat "$VSCE_TOKEN" --packagePath "$vsix"
 
     - name: Dry run (validate only)
       if: ${{ inputs.dry-run == true }}

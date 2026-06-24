@@ -111,7 +111,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        vsce-token: ${{ secrets.VSCE_TOKEN }}
+        # VSCE_TOKEN is inherited from the job-level env (build.ts reads it).
         # The version comes from the pushed tag; the build doesn't commit or
         # re-tag.
         TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
