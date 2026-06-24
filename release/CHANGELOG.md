@@ -1,3 +1,6 @@
+### 1.5.0
+* Updated to v1.10.0 of the cwtools engine
+
 ### 1.4.0
 * Updated to v1.9.0 of the cwtools engine.
 
