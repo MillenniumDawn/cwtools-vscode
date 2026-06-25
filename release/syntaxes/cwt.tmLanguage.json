@@ -9,6 +9,7 @@
 		{ "include": "#valueTypes" },
 		{ "include": "#blockKeywords" },
 		{ "include": "#scopeKeywords" },
+		{ "include": "#keys" },
 		{ "include": "#cardinality" },
 		{ "include": "#constants" },
 		{ "include": "#strings" },
@@ -94,6 +95,15 @@
 				{
 					"name": "variable.language.scope.cwt",
 					"match": "\\b(ROOT|root|THIS|this|FROM|from|FROMFROM|fromfrom|PREV|prev|PREVPREV|prevprev)\\b"
+				}
+			]
+		},
+		"keys": {
+			"patterns": [
+				{
+					"comment": "A rule key on the left of an assignment (key = value)",
+					"name": "variable.other.key.cwt",
+					"match": "[A-Za-z_][\\w.:-]*(?=\\s*=)"
 				}
 			]
 		},

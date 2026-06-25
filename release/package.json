@@ -700,42 +700,42 @@
     ],
     "themes": [
       {
-        "label": "Paradox-Syntax",
+        "label": "Paradox - Syntax",
         "uiTheme": "vs-dark",
         "path": "./themes/Paradox-Syntax.tmLanguage.json"
       },
       {
-        "label": "Paradox-Kate",
+        "label": "Paradox - Kate",
         "uiTheme": "vs-dark",
         "path": "./themes/Paradox-Kate.tmLanguage.json"
       },
       {
-        "label": "Paradox-Kate Light",
+        "label": "Paradox - Kate Light",
         "uiTheme": "vs",
         "path": "./themes/Paradox-Kate-Light.tmLanguage.json"
       },
       {
-        "label": "Paradox-Nord",
+        "label": "Paradox - Nord",
         "uiTheme": "vs-dark",
         "path": "./themes/Paradox-Nord.tmLanguage.json"
       },
       {
-        "label": "Paradox-HighContrast",
+        "label": "Paradox - High Contrast",
         "uiTheme": "vs-dark",
         "path": "./themes/Paradox-HighContrast.tmLanguage.json"
       },
       {
-        "label": "Paradox-HighContrast Light",
+        "label": "Paradox - High Contrast Light",
         "uiTheme": "vs",
         "path": "./themes/Paradox-HighContrast-Light.tmLanguage.json"
       },
       {
-        "label": "Stellaris Theme (Paradox-Dimmed)",
+        "label": "Paradox - Dimmed",
         "uiTheme": "vs-dark",
         "path": "./themes/Paradox-Dimmed.tmLanguage.json"
       },
       {
-        "label": "Quiet Light Paradox Theme (Paradox-QuietLight)",
+        "label": "Paradox - Quiet Light",
         "uiTheme": "vs",
         "path": "./themes/Paradox-QuietLight.tmLanguage.json"
       }
