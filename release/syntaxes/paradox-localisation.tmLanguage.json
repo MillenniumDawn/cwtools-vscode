@@ -1,0 +1,81 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Paradox Localisation",
+	"scopeName": "source.paradox-localisation",
+	"patterns": [
+		{ "include": "#comment" },
+		{ "include": "#language-tag" },
+		{ "include": "#entry" },
+		{ "include": "#string" }
+	],
+	"repository": {
+		"comment": {
+			"comment": "A whole-line or trailing comment. A '#' inside a quoted value is handled by #string and never reaches here.",
+			"match": "(#).*$",
+			"name": "comment.line.number-sign.paradox",
+			"captures": {
+				"1": { "name": "punctuation.definition.comment.paradox" }
+			}
+		},
+		"language-tag": {
+			"comment": "The l_english: / l_french: ... header line.",
+			"match": "^(\\s*)(l_[A-Za-z]+)(:)\\s*$",
+			"captures": {
+				"2": { "name": "keyword.control.paradox" },
+				"3": { "name": "punctuation.separator.key-value.paradox" }
+			}
+		},
+		"entry": {
+			"comment": "A loc key, the ':' separator, and an optional version number directly after the colon (KEY:0). No leading whitespace is required.",
+			"match": "^(\\s*)([^\\s:#\"][^:]*?)(:)(\\d*)",
+			"captures": {
+				"2": { "name": "entity.name.tag.paradox" },
+				"3": { "name": "punctuation.separator.key-value.paradox" },
+				"4": { "name": "constant.numeric.paradox" }
+			}
+		},
+		"string": {
+			"comment": "Paradox loc strings run to the LAST unescaped quote on the line, so an embedded '\"' is data, not a terminator. The end anchor only closes at a quote followed by optional whitespace and an optional trailing comment.",
+			"name": "string.quoted.double.paradox",
+			"begin": "\"",
+			"beginCaptures": {
+				"0": { "name": "punctuation.definition.string.begin.paradox" }
+			},
+			"end": "\"(?=\\s*(?:#.*)?$)",
+			"endCaptures": {
+				"0": { "name": "punctuation.definition.string.end.paradox" }
+			},
+			"patterns": [
+				{ "include": "#escape" },
+				{ "include": "#loc-command" },
+				{ "include": "#loc-reference" },
+				{ "include": "#loc-formatting" },
+				{ "include": "#loc-icon" }
+			]
+		},
+		"escape": {
+			"name": "constant.character.escape.paradox",
+			"match": "\\\\."
+		},
+		"loc-command": {
+			"comment": "Scripted-loc command, e.g. [GetName] or [ROOT.GetNameDef].",
+			"name": "variable.language.command_scopes.paradox",
+			"match": "\\[[^\\]]*\\]"
+		},
+		"loc-reference": {
+			"comment": "A reference to another loc key, e.g. $OTHER_KEY$.",
+			"name": "variable.parameter.paradox",
+			"match": "\\$[^$]*\\$"
+		},
+		"loc-formatting": {
+			"comment": "Colour / formatting control, e.g. §Y ... §! .",
+			"name": "constant.language.paradox",
+			"match": "§."
+		},
+		"loc-icon": {
+			"comment": "An inline icon tag, e.g. £gold or £army_experience£ .",
+			"name": "keyword.other.icon.paradox",
+			"match": "£\\w+£?"
+		}
+	}
+}

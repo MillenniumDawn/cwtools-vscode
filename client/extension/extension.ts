@@ -173,11 +173,13 @@ export async function activate(context: ExtensionContext) {
 				// (undefined type/enum/single_alias refs + parse errors) rather
 				// than running the game-script validator. See cwtools-vscode#43.
 				{ scheme: 'file', language: 'cwt' },
-				// Localisation .yml files open as the built-in 'yaml' language, so
-				// they never matched a game-language selector and the server never
-				// saw them (no loc-key completion / hover / goto). Match them by
-				// path so YAML highlighting is preserved and unrelated yaml files
-				// stay untouched.
+				// Localisation .yml files: under a localisation* folder they open as
+				// our dedicated 'paradox-localisation' language (Paradox loc is not
+				// real YAML: strings run to the last quote, KEY:0 version suffixes,
+				// embedded [cmd]/$ref$/§colour/£icon). The server routes loc by path,
+				// not language id, so it attaches the same. The 'yaml'+pattern entry
+				// stays as a fallback for any loc file VS Code still opens as YAML.
+				{ scheme: 'file', language: 'paradox-localisation' },
 				{ scheme: 'file', language: 'yaml', pattern: '**/{localisation,localisation_synced,localization}/**/*.yml' }
 			],
 			synchronize: {

@@ -6,9 +6,9 @@
  * OutputChannel named "CWTools" so messages are visible in the Output panel
  * and persist across sessions.
  */
-import { window } from 'vscode';
+import { window } from "vscode";
 
-const channel = window.createOutputChannel('CWTools');
+const channel = window.createOutputChannel("CWTools");
 
 export function logInfo(message: string): void {
 	channel.appendLine(message);
@@ -19,6 +19,11 @@ export function logWarn(message: string): void {
 }
 
 export function logError(message: string, err?: unknown): void {
-	const suffix = err instanceof Error ? `: ${err.message}` : err !== null ? `: ${String(err)}` : '';
+	const suffix =
+		err instanceof Error
+			? `: ${err.message}`
+			: err !== undefined && err !== null
+				? `: ${String(err)}`
+				: "";
 	channel.appendLine(`[ERROR] ${message}${suffix}`);
 }

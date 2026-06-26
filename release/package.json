@@ -611,6 +611,17 @@
           "cwt"
         ],
         "configuration": "./cwt-language-configuration.json"
+      },
+      {
+        "id": "paradox-localisation",
+        "aliases": [
+          "Paradox Localisation",
+          "pdxloc"
+        ],
+        "filenamePatterns": [
+          "**/{localisation,localisation_synced,localization}/**/*.yml"
+        ],
+        "configuration": "./paradox-localisation-language-configuration.json"
       }
     ],
     "grammars": [
@@ -696,6 +707,11 @@
         "language": "cwt",
         "scopeName": "source.cwt",
         "path": "./syntaxes/cwt.tmLanguage.json"
+      },
+      {
+        "language": "paradox-localisation",
+        "scopeName": "source.paradox-localisation",
+        "path": "./syntaxes/paradox-localisation.tmLanguage.json"
       }
     ],
     "themes": [
@@ -856,6 +872,13 @@
         "editor.definitionLinkOpensInPeek": true
       },
       "[yaml]": {
+        "files.autoGuessEncoding": true,
+        "files.encoding": "utf8bom",
+        "editor.insertSpaces": true,
+        "editor.autoIndent": "none",
+        "editor.wordWrap": "on"
+      },
+      "[paradox-localisation]": {
         "files.autoGuessEncoding": true,
         "files.encoding": "utf8bom",
         "editor.insertSpaces": true,
