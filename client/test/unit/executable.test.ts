@@ -37,6 +37,25 @@ suite("executable — existAndIsExe", () => {
 		created.length = 0;
 	});
 
+	async function assertPermission(mode: number, expected: boolean, name: string) {
+		const p = makeFile(name, { mode });
+		const result = await existAndIsExe(p);
+		assert.strictEqual(result, expected);
+	}
+
+	async function assertSymlink(targetOpts: { executable: boolean }, expected: boolean, name: string) {
+		const target = makeFile("symlink-target-" + name, targetOpts);
+		const link = tempFile("symlink-" + name);
+		try {
+			fs.symlinkSync(target, link);
+			created.push(link);
+			const result = await existAndIsExe(link);
+			assert.strictEqual(result, expected);
+		} catch {
+			if (!created.includes(link)) created.push(link);
+		}
+	}
+
 	test("throws TypeError when called with a non-string argument", async () => {
 		await assert.rejects(() => existAndIsExe(123 as unknown as string), {
 			name: "TypeError",
@@ -77,23 +96,9 @@ suite("executable — existAndIsExe", () => {
 		assert.strictEqual(result, true);
 	});
 
-	test("returns true for a file with only owner execute permission", async () => {
-		const p = makeFile("owner-exec.txt", { mode: 0o744 });
-		const result = await existAndIsExe(p);
-		assert.strictEqual(result, true);
-	});
-
-	test("returns true for a file with only group execute permission", async () => {
-		const p = makeFile("group-exec.txt", { mode: 0o710 });
-		const result = await existAndIsExe(p);
-		assert.strictEqual(result, true);
-	});
-
-	test("returns true for a file with only others execute permission", async () => {
-		const p = makeFile("others-exec.txt", { mode: 0o701 });
-		const result = await existAndIsExe(p);
-		assert.strictEqual(result, true);
-	});
+	test("returns true for a file with only owner execute permission", () => assertPermission(0o744, true, "owner-exec"));
+	test("returns true for a file with only group execute permission", () => assertPermission(0o710, true, "group-exec"));
+	test("returns true for a file with only others execute permission", () => assertPermission(0o701, true, "others-exec"));
 
 	test("returns false for a directory (not a file)", async () => {
 		// Directories pass stat() but fail isFile().
@@ -106,41 +111,13 @@ suite("executable — existAndIsExe", () => {
 		try {
 			fs.symlinkSync("/no/such/target", p);
 			created.push(p);
-			// stat() throws ENOENT for broken symlinks, caught by the outer catch.
 			const result = await existAndIsExe(p);
 			assert.strictEqual(result, false);
 		} catch {
-			// Symlinks may not be supported on all platforms (e.g. Windows without
-			// developer mode). Skip the test gracefully.
 			if (!created.includes(p)) created.push(p);
 		}
 	});
 
-	test("returns true for a symlink to an executable file", async () => {
-		const target = makeFile("symlink-target", { executable: true });
-		const link = tempFile("working-symlink");
-		try {
-			fs.symlinkSync(target, link);
-			created.push(link);
-			const result = await existAndIsExe(link);
-			assert.strictEqual(result, true);
-		} catch {
-			// Symlinks may not be supported on all platforms.
-			if (!created.includes(link)) created.push(link);
-		}
-	});
-
-	test("returns false for a symlink to a non-executable file", async () => {
-		const target = makeFile("symlink-target-noexec", { executable: false });
-		const link = tempFile("broken-exec-symlink");
-		try {
-			fs.symlinkSync(target, link);
-			created.push(link);
-			const result = await existAndIsExe(link);
-			assert.strictEqual(result, false);
-		} catch {
-			// Symlinks may not be supported on all platforms.
-			if (!created.includes(link)) created.push(link);
-		}
-	});
+	test("returns true for a symlink to an executable file", () => assertSymlink({ executable: true }, true, "working"));
+	test("returns false for a symlink to a non-executable file", () => assertSymlink({ executable: false }, false, "noexec"));
 });

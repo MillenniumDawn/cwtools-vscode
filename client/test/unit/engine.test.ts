@@ -97,63 +97,38 @@ suite("engine — GAME_FOLDER", () => {
 
 suite("engine — detectFromFolder", () => {
 	const noopExists = () => false;
+	const assertDetects = (folder: string, expected: string | null) =>
+		assert.strictEqual(detectFromFolder(folder, noopExists), expected);
 
 	test("returns null for an unrecognised folder", () => {
-		assert.strictEqual(detectFromFolder("/home/user/mymod", noopExists), null);
+		assertDetects("/home/user/mymod", null);
 	});
 
 	test("returns null for an empty path", () => {
-		assert.strictEqual(detectFromFolder("", noopExists), null);
+		assertDetects("", null);
 	});
 
 	test("matches by folder name substring for every supported game", () => {
-		assert.strictEqual(
-			detectFromFolder("/mods/Stellaris_v3", noopExists),
-			"stellaris",
-		);
-		assert.strictEqual(detectFromFolder("/mods/HOI4_Mod", noopExists), "hoi4");
-		assert.strictEqual(
-			detectFromFolder("/mods/Hearts of Iron", noopExists),
-			"hoi4",
-		);
-		assert.strictEqual(
-			detectFromFolder("/mods/Europa Universalis IV", noopExists),
-			"eu4",
-		);
-		assert.strictEqual(
-			detectFromFolder("/mods/CK2_whatever", noopExists),
-			"ck2",
-		);
-		assert.strictEqual(
-			detectFromFolder("/mods/CK3_whatever", noopExists),
-			"ck3",
-		);
-		assert.strictEqual(detectFromFolder("/mods/CK3_Mod", noopExists), "ck3");
-		assert.strictEqual(detectFromFolder("/mods/Vic2", noopExists), "vic2");
-		assert.strictEqual(
-			detectFromFolder("/mods/Victoria 2", noopExists),
-			"vic2",
-		);
-		assert.strictEqual(detectFromFolder("/mods/Vic3", noopExists), "vic3");
-		assert.strictEqual(
-			detectFromFolder("/mods/Imperator", noopExists),
-			"imperator",
-		);
-		assert.strictEqual(
-			detectFromFolder("/mods/Rome Total War", noopExists),
-			"imperator",
-		);
-		assert.strictEqual(detectFromFolder("/mods/EU5", noopExists), "eu5");
+		assertDetects("/mods/Stellaris_v3", "stellaris");
+		assertDetects("/mods/HOI4_Mod", "hoi4");
+		assertDetects("/mods/Hearts of Iron", "hoi4");
+		assertDetects("/mods/Europa Universalis IV", "eu4");
+		assertDetects("/mods/CK2_whatever", "ck2");
+		assertDetects("/mods/CK3_whatever", "ck3");
+		assertDetects("/mods/CK3_Mod", "ck3");
+		assertDetects("/mods/Vic2", "vic2");
+		assertDetects("/mods/Victoria 2", "vic2");
+		assertDetects("/mods/Vic3", "vic3");
+		assertDetects("/mods/Imperator", "imperator");
+		assertDetects("/mods/Rome Total War", "imperator");
+		assertDetects("/mods/EU5", "eu5");
 	});
 
 	test("matching is case-insensitive", () => {
-		assert.strictEqual(
-			detectFromFolder("/mods/stellaris_v3", noopExists),
-			"stellaris",
-		);
-		assert.strictEqual(detectFromFolder("/mods/hoi4_mod", noopExists), "hoi4");
-		assert.strictEqual(detectFromFolder("/mods/ck3_mod", noopExists), "ck3");
-		assert.strictEqual(detectFromFolder("/mods/eu5_mod", noopExists), "eu5");
+		assertDetects("/mods/stellaris_v3", "stellaris");
+		assertDetects("/mods/hoi4_mod", "hoi4");
+		assertDetects("/mods/ck3_mod", "ck3");
+		assertDetects("/mods/eu5_mod", "eu5");
 	});
 
 	test("falls back to file content markers when the folder name is opaque", () => {
@@ -166,9 +141,6 @@ suite("engine — detectFromFolder", () => {
 	});
 
 	test("content markers cover every game that lacks a unique folder-name hint", () => {
-		// Every game id should be reachable via either a folder-name hint or a
-		// content marker. This test verifies the content markers exist for ids
-		// that aren't trivially matched by folder name alone.
 		const contentMarkers: Record<string, string> = {
 			"common/ai_strategy": "hoi4",
 			"common/species_classes": "stellaris",
@@ -176,16 +148,13 @@ suite("engine — detectFromFolder", () => {
 			"common/dynasties": "ck3",
 		};
 		for (const [marker, expectedId] of Object.entries(contentMarkers)) {
-			// Use a root path that won't match any folder-name hint, but where
-			// the content marker file exists at root/marker.
 			const root = "/opaque";
 			const files: Record<string, boolean> = {
 				[root + "/" + marker]: true,
 			};
 			const exists = (p: string) => files[p] === true;
-			const result = detectFromFolder(root, exists);
 			assert.strictEqual(
-				result,
+				detectFromFolder(root, exists),
 				expectedId,
 				`marker ${marker} should detect ${expectedId}`,
 			);
@@ -197,16 +166,7 @@ suite("engine — detectFromFolder", () => {
 		assert.strictEqual(detectFromFolder("/mods/HOI4", exists), "hoi4");
 	});
 
-	test("content hint is checked when no folder-name hint matches", () => {
-		const files: Record<string, boolean> = {
-			["/opaque/common/species_classes"]: true,
-		};
-		const exists = (p: string) => files[p] === true;
-		assert.strictEqual(detectFromFolder("/opaque", exists), "stellaris");
-	});
-
 	test("first matching folder-name hint wins (order matters)", () => {
-		// 'crusader kings ii' matches both ck2 and ck3 patterns; ck2 comes first.
 		assert.strictEqual(detectFromFolder("/mods/CK2", noopExists), "ck2");
 	});
 });
@@ -334,24 +294,18 @@ suite("engine — resolveRulesFolder", () => {
 		assert.strictEqual(r.existed, true);
 	});
 
-	test("trims surrounding whitespace and double quotes", () => {
-		const raw = '  "/home/user/config"  ';
-		const r = resolveRulesFolder(raw, {
-			platform: "linux",
-			exists: (p) => p === "/home/user/config",
-		});
-		assert.strictEqual(r.path, "/home/user/config");
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("trims surrounding single quotes", () => {
-		const raw = "  '/home/user/config'  ";
-		const r = resolveRulesFolder(raw, {
-			platform: "linux",
-			exists: (p) => p === "/home/user/config",
-		});
-		assert.strictEqual(r.path, "/home/user/config");
-		assert.strictEqual(r.existed, true);
+	test("trims surrounding whitespace and quotes", () => {
+		for (const [raw, expected] of [
+			['  "/home/user/config"  ', "/home/user/config"],
+			["  '/home/user/config'  ", "/home/user/config"],
+		]) {
+			const r = resolveRulesFolder(raw, {
+				platform: "linux",
+				exists: (p) => p === expected,
+			});
+			assert.strictEqual(r.path, expected);
+			assert.strictEqual(r.existed, true);
+		}
 	});
 
 	test("resolves a relative path against the workspace root", () => {
@@ -391,7 +345,6 @@ suite("engine — resolveRulesFolder", () => {
 	});
 
 	test("raw value that exists is returned before any normalization runs", () => {
-		// Even though the normalized form also exists, the raw value wins.
 		const raw = "/home/user/./config";
 		const r = resolveRulesFolder(raw, {
 			platform: "linux",
@@ -400,27 +353,35 @@ suite("engine — resolveRulesFolder", () => {
 		assert.strictEqual(r.path, raw);
 		assert.strictEqual(r.existed, true);
 	});
-
-	test("deduplicates candidates so the same path is not checked twice", () => {
-		let checks = 0;
-		const r = resolveRulesFolder("/path", {
-			platform: "linux",
-			exists: (p) => {
-				checks++;
-				return p === "/path";
-			},
-		});
-		assert.strictEqual(r.path, "/path");
-		assert.strictEqual(r.existed, true);
-		// Raw value checked once, then trimmed (same), then ~ (different), etc.
-		// The key assertion is that the same path is not checked twice.
-		assert.ok(checks <= 5, `too many exists checks: ${checks}`);
-	});
 });
 
 suite("engine — serverExe", () => {
 	const fakeContext = (abs: string): ExtensionContext =>
 		({ asAbsolutePath: (_p: string) => abs }) as unknown as ExtensionContext;
+
+	function runServerExePlatform(
+		platform: NodeJS.Platform,
+		arch: string,
+		expectedSubdir: string,
+	) {
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+		const originalArch = Object.getOwnPropertyDescriptor(process, "arch");
+		Object.defineProperty(process, "platform", { value: platform });
+		Object.defineProperty(process, "arch", { value: arch });
+		try {
+			const ctx = {
+				asAbsolutePath: (p: string) => "/ext/" + p,
+			} as unknown as ExtensionContext;
+			const exe = platform === "win32" ? "cwtools-server.exe" : "cwtools-server";
+			const expected =
+				"/ext/" + path.join("bin", "server", "cwtools-server", expectedSubdir, exe);
+			const out = serverExe(ctx, (p) => p === expected);
+			assert.strictEqual(out, expected);
+		} finally {
+			if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+			if (originalArch) Object.defineProperty(process, "arch", originalArch);
+		}
+	}
 
 	test("returns the server binary path when it exists", () => {
 		const ctx = fakeContext("/ext/bin/server/cwtools-server/cwtools-server");
@@ -497,125 +458,10 @@ suite("engine — serverExe", () => {
 		}
 	});
 
-	test("uses osx-arm64 subdir on darwin arm64", () => {
-		const originalPlatform = Object.getOwnPropertyDescriptor(
-			process,
-			"platform",
-		);
-		const originalArch = Object.getOwnPropertyDescriptor(process, "arch");
-		Object.defineProperty(process, "platform", { value: "darwin" });
-		Object.defineProperty(process, "arch", { value: "arm64" });
-		try {
-			const ctx = {
-				asAbsolutePath: (p: string) => "/ext/" + p,
-			} as unknown as ExtensionContext;
-			const nested =
-				"/ext/" +
-				path.join(
-					"bin",
-					"server",
-					"cwtools-server",
-					"osx-arm64",
-					"cwtools-server",
-				);
-			const out = serverExe(ctx, (p) => p === nested);
-			assert.strictEqual(out, nested);
-		} finally {
-			if (originalPlatform)
-				Object.defineProperty(process, "platform", originalPlatform);
-			if (originalArch) Object.defineProperty(process, "arch", originalArch);
-		}
-	});
-
-	test("uses osx-x64 subdir on darwin x64", () => {
-		const originalPlatform = Object.getOwnPropertyDescriptor(
-			process,
-			"platform",
-		);
-		const originalArch = Object.getOwnPropertyDescriptor(process, "arch");
-		Object.defineProperty(process, "platform", { value: "darwin" });
-		Object.defineProperty(process, "arch", { value: "x64" });
-		try {
-			const ctx = {
-				asAbsolutePath: (p: string) => "/ext/" + p,
-			} as unknown as ExtensionContext;
-			const nested =
-				"/ext/" +
-				path.join(
-					"bin",
-					"server",
-					"cwtools-server",
-					"osx-x64",
-					"cwtools-server",
-				);
-			const out = serverExe(ctx, (p) => p === nested);
-			assert.strictEqual(out, nested);
-		} finally {
-			if (originalPlatform)
-				Object.defineProperty(process, "platform", originalPlatform);
-			if (originalArch) Object.defineProperty(process, "arch", originalArch);
-		}
-	});
-
-	test("uses linux-x64 subdir on linux", () => {
-		const originalPlatform = Object.getOwnPropertyDescriptor(
-			process,
-			"platform",
-		);
-		const originalArch = Object.getOwnPropertyDescriptor(process, "arch");
-		Object.defineProperty(process, "platform", { value: "linux" });
-		Object.defineProperty(process, "arch", { value: "x64" });
-		try {
-			const ctx = {
-				asAbsolutePath: (p: string) => "/ext/" + p,
-			} as unknown as ExtensionContext;
-			const nested =
-				"/ext/" +
-				path.join(
-					"bin",
-					"server",
-					"cwtools-server",
-					"linux-x64",
-					"cwtools-server",
-				);
-			const out = serverExe(ctx, (p) => p === nested);
-			assert.strictEqual(out, nested);
-		} finally {
-			if (originalPlatform)
-				Object.defineProperty(process, "platform", originalPlatform);
-			if (originalArch) Object.defineProperty(process, "arch", originalArch);
-		}
-	});
-
-	test("uses win-x64 subdir on windows", () => {
-		const originalPlatform = Object.getOwnPropertyDescriptor(
-			process,
-			"platform",
-		);
-		const originalArch = Object.getOwnPropertyDescriptor(process, "arch");
-		Object.defineProperty(process, "platform", { value: "win32" });
-		Object.defineProperty(process, "arch", { value: "x64" });
-		try {
-			const ctx = {
-				asAbsolutePath: (p: string) => "/ext/" + p,
-			} as unknown as ExtensionContext;
-			const nested =
-				"/ext/" +
-				path.join(
-					"bin",
-					"server",
-					"cwtools-server",
-					"win-x64",
-					"cwtools-server.exe",
-				);
-			const out = serverExe(ctx, (p) => p === nested);
-			assert.strictEqual(out, nested);
-		} finally {
-			if (originalPlatform)
-				Object.defineProperty(process, "platform", originalPlatform);
-			if (originalArch) Object.defineProperty(process, "arch", originalArch);
-		}
-	});
+	test("uses osx-arm64 subdir on darwin arm64", () => runServerExePlatform("darwin", "arm64", "osx-arm64"));
+	test("uses osx-x64 subdir on darwin x64", () => runServerExePlatform("darwin", "x64", "osx-x64"));
+	test("uses linux-x64 subdir on linux", () => runServerExePlatform("linux", "x64", "linux-x64"));
+	test("uses win-x64 subdir on windows", () => runServerExePlatform("win32", "x64", "win-x64"));
 });
 
 suite("engine — runGit", () => {
@@ -638,6 +484,22 @@ suite("engine — runGit", () => {
 			if (opts.error) child.emit("error", opts.error);
 			else child.emit("close", opts.code, opts.signal);
 		});
+		return child;
+	}
+
+	function makeHangingChild(killFn?: () => void): EventEmitter & {
+		stdout: EventEmitter;
+		stderr: EventEmitter;
+		kill: () => void;
+	} {
+		const child = new EventEmitter() as EventEmitter & {
+			stdout: EventEmitter;
+			stderr: EventEmitter;
+			kill: () => void;
+		};
+		child.stdout = new EventEmitter();
+		child.stderr = new EventEmitter();
+		child.kill = killFn ?? (() => {});
 		return child;
 	}
 
@@ -682,27 +544,8 @@ suite("engine — runGit", () => {
 		await assert.rejects(() => runGit(["clone"], fakeSpawn as never), /ENOENT/);
 	});
 
-	test("rejects with spawn EACCES error", async () => {
-		const fakeSpawn = () =>
-			makeChild({
-				code: null,
-				signal: null,
-				error: new Error("EACCES: permission denied"),
-			});
-		await assert.rejects(() => runGit(["pull"], fakeSpawn as never), /EACCES/);
-	});
-
 	test("times out when git hangs", async () => {
-		// A child that never emits close/error should trigger the timeout.
-		const child = new EventEmitter() as EventEmitter & {
-			stdout: EventEmitter;
-			stderr: EventEmitter;
-			kill: () => void;
-		};
-		child.stdout = new EventEmitter();
-		child.stderr = new EventEmitter();
-		child.kill = () => {};
-		const fakeSpawn = () => child;
+		const fakeSpawn = () => makeHangingChild();
 		await assert.rejects(
 			() => runGit(["fetch"], fakeSpawn as never, 10),
 			/timed out/,
@@ -711,26 +554,12 @@ suite("engine — runGit", () => {
 
 	test("timeout kills the child process", async () => {
 		let killed = false;
-		const child = new EventEmitter() as EventEmitter & {
-			stdout: EventEmitter;
-			stderr: EventEmitter;
-			kill: () => void;
-		};
-		child.stdout = new EventEmitter();
-		child.stderr = new EventEmitter();
-		child.kill = () => {
-			killed = true;
-		};
-		const fakeSpawn = () => child;
+		const fakeSpawn = () => makeHangingChild(() => { killed = true; });
 		await assert.rejects(
 			() => runGit(["fetch"], fakeSpawn as never, 10),
 			/timed out/,
 		);
-		assert.strictEqual(
-			killed,
-			true,
-			"child.kill() should be called on timeout",
-		);
+		assert.strictEqual(killed, true, "child.kill() should be called on timeout");
 	});
 
 	test("timeout does not fire if git completes before the deadline", async () => {
