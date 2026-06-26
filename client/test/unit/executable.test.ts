@@ -37,13 +37,21 @@ suite("executable — existAndIsExe", () => {
 		created.length = 0;
 	});
 
-	async function assertPermission(mode: number, expected: boolean, name: string) {
+	async function assertPermission(
+		mode: number,
+		expected: boolean,
+		name: string,
+	) {
 		const p = makeFile(name, { mode });
 		const result = await existAndIsExe(p);
 		assert.strictEqual(result, expected);
 	}
 
-	async function assertSymlink(targetOpts: { executable: boolean }, expected: boolean, name: string) {
+	async function assertSymlink(
+		targetOpts: { executable: boolean },
+		expected: boolean,
+		name: string,
+	) {
 		const target = makeFile("symlink-target-" + name, targetOpts);
 		const link = tempFile("symlink-" + name);
 		try {
@@ -96,9 +104,12 @@ suite("executable — existAndIsExe", () => {
 		assert.strictEqual(result, true);
 	});
 
-	test("returns true for a file with only owner execute permission", () => assertPermission(0o744, true, "owner-exec"));
-	test("returns true for a file with only group execute permission", () => assertPermission(0o710, true, "group-exec"));
-	test("returns true for a file with only others execute permission", () => assertPermission(0o701, true, "others-exec"));
+	test("returns true for a file with only owner execute permission", () =>
+		assertPermission(0o744, true, "owner-exec"));
+	test("returns true for a file with only group execute permission", () =>
+		assertPermission(0o710, true, "group-exec"));
+	test("returns true for a file with only others execute permission", () =>
+		assertPermission(0o701, true, "others-exec"));
 
 	test("returns false for a directory (not a file)", async () => {
 		// Directories pass stat() but fail isFile().
@@ -118,6 +129,8 @@ suite("executable — existAndIsExe", () => {
 		}
 	});
 
-	test("returns true for a symlink to an executable file", () => assertSymlink({ executable: true }, true, "working"));
-	test("returns false for a symlink to a non-executable file", () => assertSymlink({ executable: false }, false, "noexec"));
+	test("returns true for a symlink to an executable file", () =>
+		assertSymlink({ executable: true }, true, "working"));
+	test("returns false for a symlink to a non-executable file", () =>
+		assertSymlink({ executable: false }, false, "noexec"));
 });

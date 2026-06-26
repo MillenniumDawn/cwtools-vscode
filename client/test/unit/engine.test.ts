@@ -364,7 +364,10 @@ suite("engine — serverExe", () => {
 		arch: string,
 		expectedSubdir: string,
 	) {
-		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+		const originalPlatform = Object.getOwnPropertyDescriptor(
+			process,
+			"platform",
+		);
 		const originalArch = Object.getOwnPropertyDescriptor(process, "arch");
 		Object.defineProperty(process, "platform", { value: platform });
 		Object.defineProperty(process, "arch", { value: arch });
@@ -372,13 +375,16 @@ suite("engine — serverExe", () => {
 			const ctx = {
 				asAbsolutePath: (p: string) => "/ext/" + p,
 			} as unknown as ExtensionContext;
-			const exe = platform === "win32" ? "cwtools-server.exe" : "cwtools-server";
+			const exe =
+				platform === "win32" ? "cwtools-server.exe" : "cwtools-server";
 			const expected =
-				"/ext/" + path.join("bin", "server", "cwtools-server", expectedSubdir, exe);
+				"/ext/" +
+				path.join("bin", "server", "cwtools-server", expectedSubdir, exe);
 			const out = serverExe(ctx, (p) => p === expected);
 			assert.strictEqual(out, expected);
 		} finally {
-			if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+			if (originalPlatform)
+				Object.defineProperty(process, "platform", originalPlatform);
 			if (originalArch) Object.defineProperty(process, "arch", originalArch);
 		}
 	}
@@ -458,10 +464,14 @@ suite("engine — serverExe", () => {
 		}
 	});
 
-	test("uses osx-arm64 subdir on darwin arm64", () => runServerExePlatform("darwin", "arm64", "osx-arm64"));
-	test("uses osx-x64 subdir on darwin x64", () => runServerExePlatform("darwin", "x64", "osx-x64"));
-	test("uses linux-x64 subdir on linux", () => runServerExePlatform("linux", "x64", "linux-x64"));
-	test("uses win-x64 subdir on windows", () => runServerExePlatform("win32", "x64", "win-x64"));
+	test("uses osx-arm64 subdir on darwin arm64", () =>
+		runServerExePlatform("darwin", "arm64", "osx-arm64"));
+	test("uses osx-x64 subdir on darwin x64", () =>
+		runServerExePlatform("darwin", "x64", "osx-x64"));
+	test("uses linux-x64 subdir on linux", () =>
+		runServerExePlatform("linux", "x64", "linux-x64"));
+	test("uses win-x64 subdir on windows", () =>
+		runServerExePlatform("win32", "x64", "win-x64"));
 });
 
 suite("engine — runGit", () => {
@@ -554,12 +564,19 @@ suite("engine — runGit", () => {
 
 	test("timeout kills the child process", async () => {
 		let killed = false;
-		const fakeSpawn = () => makeHangingChild(() => { killed = true; });
+		const fakeSpawn = () =>
+			makeHangingChild(() => {
+				killed = true;
+			});
 		await assert.rejects(
 			() => runGit(["fetch"], fakeSpawn as never, 10),
 			/timed out/,
 		);
-		assert.strictEqual(killed, true, "child.kill() should be called on timeout");
+		assert.strictEqual(
+			killed,
+			true,
+			"child.kill() should be called on timeout",
+		);
 	});
 
 	test("timeout does not fire if git completes before the deadline", async () => {
