@@ -1,7 +1,7 @@
-import { suite, test } from 'vitest';
-import * as assert from 'assert';
-import * as fs from 'fs';
-import * as path from 'path';
+import { suite, test } from "vitest";
+import * as assert from "assert";
+import * as fs from "fs";
+import * as path from "path";
 
 // The shipped color themes are hand-authored JSON. These checks guard the two
 // things that silently rot: the picker labels (must read "Paradox - <name>")
@@ -14,19 +14,19 @@ import * as path from 'path';
 // the per-game `stellaris`/`hoi4`/`eu4`/`ck2` grammars are intermediate and on
 // the way out, so we do not require their extra scopes here.
 
-const repoRoot = path.resolve(__dirname, '../../..');
-const releaseDir = path.join(repoRoot, 'release');
-const syntaxesDir = path.join(releaseDir, 'syntaxes');
-const LSP_GRAMMARS = ['paradox.tmLanguage.json', 'cwt.tmLanguage.json'];
+const repoRoot = path.resolve(__dirname, "../../..");
+const releaseDir = path.join(repoRoot, "release");
+const syntaxesDir = path.join(releaseDir, "syntaxes");
+const LSP_GRAMMARS = ["paradox.tmLanguage.json", "cwt.tmLanguage.json"];
 
 // Container scopes wrap other tokens; painting them would tint whole blocks, so
 // themes intentionally leave them alone. Root scope names never carry a token.
 const NOT_REQUIRED = new Set([
-	'source.mod',
-	'source.cwt',
-	'meta.block.paradox',
-	'meta.construct.cwt',
-	'meta.type-reference.cwt',
+	"source.mod",
+	"source.cwt",
+	"meta.block.paradox",
+	"meta.construct.cwt",
+	"meta.type-reference.cwt",
 ]);
 
 interface ThemeEntry {
@@ -35,7 +35,9 @@ interface ThemeEntry {
 }
 
 function registeredThemes(): ThemeEntry[] {
-	const manifest = JSON.parse(fs.readFileSync(path.join(releaseDir, 'package.json'), 'utf8'));
+	const manifest = JSON.parse(
+		fs.readFileSync(path.join(releaseDir, "package.json"), "utf8"),
+	);
 	return manifest.contributes.themes;
 }
 
@@ -46,9 +48,13 @@ function grammarScopes(): Set<string> {
 	const collect = (node: unknown): void => {
 		if (Array.isArray(node)) {
 			node.forEach(collect);
-		} else if (node && typeof node === 'object') {
+		} else if (node && typeof node === "object") {
 			for (const [key, value] of Object.entries(node)) {
-				if ((key === 'name' || key === 'contentName') && typeof value === 'string' && value.includes('.')) {
+				if (
+					(key === "name" || key === "contentName") &&
+					typeof value === "string" &&
+					value.includes(".")
+				) {
 					found.add(value);
 				} else {
 					collect(value);
@@ -59,16 +65,18 @@ function grammarScopes(): Set<string> {
 	for (const file of LSP_GRAMMARS) {
 		const full = path.join(syntaxesDir, file);
 		assert.ok(fs.existsSync(full), `missing grammar: ${file}`);
-		collect(JSON.parse(fs.readFileSync(full, 'utf8')));
+		collect(JSON.parse(fs.readFileSync(full, "utf8")));
 	}
 	return found;
 }
 
-function themeScopes(theme: { tokenColors?: { scope?: string | string[] }[] }): Set<string> {
+function themeScopes(theme: {
+	tokenColors?: { scope?: string | string[] }[];
+}): Set<string> {
 	const out = new Set<string>();
 	for (const rule of theme.tokenColors ?? []) {
 		if (!rule.scope) continue;
-		const list = Array.isArray(rule.scope) ? rule.scope : rule.scope.split(',');
+		const list = Array.isArray(rule.scope) ? rule.scope : rule.scope.split(",");
 		for (const raw of list) {
 			const s = raw.trim();
 			if (s) out.add(s);
@@ -81,49 +89,119 @@ function themeScopes(theme: { tokenColors?: { scope?: string | string[] }[] }): 
 // specific prefix (TextMate scope-selector matching).
 function covers(rules: Set<string>, scope: string): boolean {
 	for (const rule of rules) {
-		if (rule === scope || scope.startsWith(rule + '.')) return true;
+		if (rule === scope || scope.startsWith(rule + ".")) return true;
 	}
 	return false;
 }
 
-const required = [...grammarScopes()].filter((s) => !NOT_REQUIRED.has(s)).sort();
+const required = [...grammarScopes()]
+	.filter((s) => !NOT_REQUIRED.has(s))
+	.sort();
 const themes = registeredThemes();
 
-suite('themes — registration', () => {
+suite("themes — registration", () => {
 	test('every registered theme is labelled "Paradox - <name>"', () => {
-		assert.ok(themes.length > 0, 'no themes registered');
+		assert.ok(themes.length > 0, "no themes registered");
 		for (const t of themes) {
 			assert.match(t.label, /^Paradox - \S/, `bad label: ${t.label}`);
 		}
 	});
 
-	test('every theme file exists, parses, and its name matches its label', () => {
+	test("every theme file exists, parses, and its name matches its label", () => {
 		for (const t of themes) {
 			const file = path.join(releaseDir, t.path);
 			assert.ok(fs.existsSync(file), `missing theme file: ${t.path}`);
-			const theme = JSON.parse(fs.readFileSync(file, 'utf8'));
-			assert.strictEqual(theme.name, t.label, `name/label mismatch in ${t.path}`);
-			assert.ok(theme.type === 'dark' || theme.type === 'light', `bad type in ${t.path}`);
-			assert.ok(Array.isArray(theme.tokenColors), `no tokenColors in ${t.path}`);
+			const theme = JSON.parse(fs.readFileSync(file, "utf8"));
+			assert.strictEqual(
+				theme.name,
+				t.label,
+				`name/label mismatch in ${t.path}`,
+			);
+			assert.ok(
+				theme.type === "dark" || theme.type === "light",
+				`bad type in ${t.path}`,
+			);
+			assert.ok(
+				Array.isArray(theme.tokenColors),
+				`no tokenColors in ${t.path}`,
+			);
 		}
+	});
+
+	test("every theme has a unique label", () => {
+		const labels = themes.map((t) => t.label);
+		assert.strictEqual(
+			new Set(labels).size,
+			labels.length,
+			"duplicate theme labels found",
+		);
+	});
+
+	test("every theme file path is unique", () => {
+		const paths = themes.map((t) => t.path);
+		assert.strictEqual(
+			new Set(paths).size,
+			paths.length,
+			"duplicate theme file paths found",
+		);
+	});
+
+	test("every theme has at least one dark and one light variant", () => {
+		const types = themes.map((t) => {
+			const file = path.join(releaseDir, t.path);
+			return JSON.parse(fs.readFileSync(file, "utf8")).type;
+		});
+		assert.ok(types.includes("dark"), "no dark theme registered");
+		assert.ok(types.includes("light"), "no light theme registered");
 	});
 });
 
-suite('themes — scope coverage', () => {
-	test('grammars emit a non-trivial scope set', () => {
-		assert.ok(required.length > 40, `only ${required.length} required scopes found`);
+suite("themes — scope coverage", () => {
+	test("grammars emit a non-trivial scope set", () => {
+		assert.ok(
+			required.length > 40,
+			`only ${required.length} required scopes found`,
+		);
 	});
 
 	for (const t of themes) {
 		test(`${t.label} paints every grammar scope`, () => {
-			const theme = JSON.parse(fs.readFileSync(path.join(releaseDir, t.path), 'utf8'));
+			const theme = JSON.parse(
+				fs.readFileSync(path.join(releaseDir, t.path), "utf8"),
+			);
 			const rules = themeScopes(theme);
 			const uncovered = required.filter((s) => !covers(rules, s));
 			assert.strictEqual(
 				uncovered.length,
 				0,
-				`${t.label} leaves ${uncovered.length} scope(s) unstyled: ${uncovered.join(', ')}`,
+				`${t.label} leaves ${uncovered.length} scope(s) unstyled: ${uncovered.join(", ")}`,
 			);
 		});
 	}
+
+	test("no theme has duplicate scope rules (same scope painted more than once)", () => {
+		for (const t of themes) {
+			const theme = JSON.parse(
+				fs.readFileSync(path.join(releaseDir, t.path), "utf8"),
+			);
+			const seen = new Set<string>();
+			const duplicates: string[] = [];
+			for (const rule of theme.tokenColors ?? []) {
+				if (!rule.scope) continue;
+				const list = Array.isArray(rule.scope)
+					? rule.scope
+					: rule.scope.split(",");
+				for (const raw of list) {
+					const s = raw.trim();
+					if (s && seen.has(s)) duplicates.push(s);
+					else if (s) seen.add(s);
+				}
+			}
+			assert.strictEqual(
+				duplicates.length,
+				0,
+				`${t.label} has duplicate scope rules: ${duplicates.join(", ")}`,
+			);
+		}
+	});
 });
