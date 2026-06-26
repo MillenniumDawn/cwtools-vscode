@@ -1,3 +1,10 @@
+### 1.11.0
+
+* Improved localisation highlighting.
+* Improved themes for various theme structures.
+* Improved intellisense for localisation as a whole.
+* Updated to v1.13.0 the cwtools engine.
+
 ### 1.10.0
 
 * Added dedicated highlighting for Paradox localisation `.yml` files: a new `paradox-localisation` language, scoped to `localisation`/`localisation_synced`/`localization` folders so ordinary YAML is untouched. Strings now run to the last quote on the line (an embedded `"` or `#` no longer breaks coloring), `KEY:0` version suffixes and keys with no leading whitespace parse correctly, and `[commands]`, `$references$`, `§` colour codes and `£icons` are highlighted. It reuses the Paradox script grammar's scope names, so the bundled themes and editor defaults color it with no theme changes. (cwtools-vscode#56)
