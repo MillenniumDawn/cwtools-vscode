@@ -35,13 +35,13 @@
 			}
 		},
 		"string": {
-			"comment": "Paradox loc strings run to the LAST unescaped quote on the line, so an embedded '\"' is data, not a terminator. The end anchor only closes at a quote followed by optional whitespace and an optional trailing comment.",
+			"comment": "Paradox loc strings run to the LAST unescaped quote on the line, so an embedded '\"' is data, not a terminator. The end anchor only closes at a quote followed by optional horizontal whitespace and an optional trailing comment. Horizontal whitespace only — loc strings are single-line, so \\s* (which matches newlines) would let an unclosed quote on one line eat the rest of the file.",
 			"name": "string.quoted.double.paradox",
 			"begin": "\"",
 			"beginCaptures": {
 				"0": { "name": "punctuation.definition.string.begin.paradox" }
 			},
-			"end": "\"(?=\\s*(?:#.*)?$)",
+			"end": "\"(?=[ \\t]*(?:#.*)?$)",
 			"endCaptures": {
 				"0": { "name": "punctuation.definition.string.end.paradox" }
 			},
