@@ -1,3 +1,9 @@
+### 1.11.2
+* Updated to v1.14.1 of the cwtools engine improvine auto compleition robustness and snappiness 
+
+### 1.11.1
+* Improved minimalism of the classic theme.
+
 ### 1.11.0
 
 * Improved localisation highlighting.
