@@ -1,62 +1,19 @@
 {
 	"$schema": "vscode://schemas/color-theme",
-	"name": "Paradox - Quiet Light",
-	"type": "light",
+	"name": "Paradox - Classic",
+	"type": "dark",
 	"author": "cwtools-md-edition",
-	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Quiet Light scheme (originally CKII - Quiet Light by UristMcDorf) with its purple-accented workbench colors preserved.",
+	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Classic dark scheme modeled on VS Code's default Dark+ token colours, applied across paradox, cwt, and loc scopes.",
 	"colors": {
-		"activityBar.background": "#ededf5",
-		"activityBar.foreground": "#705697",
-		"activityBarBadge.background": "#705697",
-		"badge.background": "#705697aa",
-		"button.background": "#705697",
-		"dropdown.background": "#f5f5f5",
-		"editor.background": "#f5f5f5",
-		"editor.foreground": "#333333",
-		"editor.findMatchBackground": "#bf9cac",
-		"editor.findMatchHighlightBackground": "#edc9d8",
-		"editor.lineHighlightBackground": "#e4f6d4",
-		"editor.selectionBackground": "#c9d0d9",
-		"editorCursor.foreground": "#54494b",
-		"editorGroup.dropBackground": "#c9d0d988",
-		"editorIndentGuide.background": "#d3d3d3",
-		"editorIndentGuide.activeBackground": "#939393",
-		"editorLineNumber.activeForeground": "#9769dc",
-		"editorLineNumber.foreground": "#6d705b",
-		"editorWhitespace.foreground": "#aaaaaa",
-		"errorForeground": "#f1897f",
-		"focusBorder": "#a6b39b",
-		"inputOption.activeBorder": "#adafb7",
-		"inputValidation.errorBackground": "#ffeaea",
-		"inputValidation.errorBorder": "#f1897f",
-		"inputValidation.infoBackground": "#f2fcff",
-		"inputValidation.infoBorder": "#4ec1e5",
-		"inputValidation.warningBackground": "#fffee2",
-		"inputValidation.warningBorder": "#ffe055",
-		"list.activeSelectionBackground": "#c4d9b1",
-		"list.activeSelectionForeground": "#6c6c6c",
-		"list.focusBackground": "#cadeb9",
-		"list.highlightForeground": "#9769dc",
-		"list.hoverBackground": "#e0e0e0",
-		"list.inactiveSelectionBackground": "#d3dbcd",
-		"panel.background": "#f5f5f5",
-		"peekView.border": "#705697",
-		"peekViewEditor.background": "#f2f8fc",
-		"peekViewEditor.matchHighlightBackground": "#c2dfe3",
-		"peekViewResult.background": "#f2f8fc",
-		"peekViewResult.matchHighlightBackground": "#93c6d6",
-		"peekViewTitle.background": "#f2f8fc",
-		"pickerGroup.border": "#749351",
-		"pickerGroup.foreground": "#a6b39b",
-		"progressBar.background": "#705697",
-		"selection.background": "#c9d0d9",
-		"sideBar.background": "#f2f2f2",
-		"sideBarSectionHeader.background": "#ede8ef",
-		"statusBar.background": "#705697",
-		"statusBar.debuggingBackground": "#705697",
-		"statusBar.noFolderBackground": "#705697",
-		"titleBar.activeBackground": "#c4b7d7",
-		"walkThrough.embeddedEditorBackground": "#00000014"
+		"editor.background": "#1E1E1E",
+		"editor.foreground": "#D4D4D4",
+		"editor.lineHighlightBackground": "#2A2A2A",
+		"editor.selectionBackground": "#264F78",
+		"editorCursor.foreground": "#AEAFAD",
+		"editorLineNumber.foreground": "#858585",
+		"editorLineNumber.activeForeground": "#C6C6C6",
+		"editorIndentGuide.background": "#404040",
+		"editorIndentGuide.activeBackground": "#707070"
 	},
 	"tokenColors": [
 		{
@@ -69,7 +26,7 @@
 				"punctuation.definition.comment.cwt"
 			],
 			"settings": {
-				"foreground": "#AAAAAA",
+				"foreground": "#6A9955",
 				"fontStyle": "italic"
 			}
 		},
@@ -81,7 +38,7 @@
 				"comment.block.documentation.cwt"
 			],
 			"settings": {
-				"foreground": "#8A9A6B",
+				"foreground": "#6A9955",
 				"fontStyle": "italic"
 			}
 		},
@@ -89,7 +46,7 @@
 			"name": "directive",
 			"scope": "comment.line.directive.cwt",
 			"settings": {
-				"foreground": "#AAAAAA",
+				"foreground": "#6A9955",
 				"fontStyle": "italic"
 			}
 		},
@@ -97,7 +54,7 @@
 			"name": "directiveKw",
 			"scope": "keyword.control.directive.cwt",
 			"settings": {
-				"foreground": "#7A3E9D"
+				"foreground": "#C586C0"
 			}
 		},
 		{
@@ -110,7 +67,7 @@
 				"constant.rhs.paradox"
 			],
 			"settings": {
-				"foreground": "#448C27"
+				"foreground": "#CE9178"
 			}
 		},
 		{
@@ -122,7 +79,7 @@
 				"punctuation.definition.string.end.cwt"
 			],
 			"settings": {
-				"foreground": "#448C27"
+				"foreground": "#CE9178"
 			}
 		},
 		{
@@ -132,7 +89,7 @@
 				"constant.character.escape.paradox"
 			],
 			"settings": {
-				"foreground": "#AB6526"
+				"foreground": "#D7BA7D"
 			}
 		},
 		{
@@ -143,14 +100,14 @@
 				"constant.numeric.cwt"
 			],
 			"settings": {
-				"foreground": "#AB6526"
+				"foreground": "#B5CEA8"
 			}
 		},
 		{
 			"name": "cardinality",
 			"scope": "constant.numeric.cardinality.cwt",
 			"settings": {
-				"foreground": "#AB6526"
+				"foreground": "#B5CEA8"
 			}
 		},
 		{
@@ -161,14 +118,14 @@
 				"constant.language.boolean.cwt"
 			],
 			"settings": {
-				"foreground": "#4B69C6"
+				"foreground": "#569CD6"
 			}
 		},
 		{
 			"name": "boolOp",
 			"scope": "variable.boolean.paradox",
 			"settings": {
-				"foreground": "#4B69C6",
+				"foreground": "#569CD6",
 				"fontStyle": "bold"
 			}
 		},
@@ -181,7 +138,7 @@
 				"punctuation.definition.variable.paradox"
 			],
 			"settings": {
-				"foreground": "#7A3E9D"
+				"foreground": "#4FC1FF"
 			}
 		},
 		{
@@ -197,21 +154,21 @@
 				"variable.other.key.cwt"
 			],
 			"settings": {
-				"foreground": "#4B69C6"
+				"foreground": "#9CDCFE"
 			}
 		},
 		{
 			"name": "keyBracket",
 			"scope": "variable.lhs.bracket.paradox",
 			"settings": {
-				"foreground": "#7A3E9D"
+				"foreground": "#C586C0"
 			}
 		},
 		{
 			"name": "defToken",
 			"scope": "variable.language.definition_tokens.paradox",
 			"settings": {
-				"foreground": "#4B69C6"
+				"foreground": "#569CD6"
 			}
 		},
 		{
@@ -224,14 +181,14 @@
 				"variable.language.scope.cwt"
 			],
 			"settings": {
-				"foreground": "#7A3E9D"
+				"foreground": "#4EC9B0"
 			}
 		},
 		{
 			"name": "trigger",
 			"scope": "variable.language.conditions.paradox",
 			"settings": {
-				"foreground": "#448C27"
+				"foreground": "#4EC9B0"
 			}
 		},
 		{
@@ -243,21 +200,21 @@
 				"variable.bracket.keywords"
 			],
 			"settings": {
-				"foreground": "#4B69C6"
+				"foreground": "#DCDCAA"
 			}
 		},
 		{
 			"name": "modifier",
 			"scope": "variable.language.modifiers.paradox",
 			"settings": {
-				"foreground": "#AB6526"
+				"foreground": "#D7BA7D"
 			}
 		},
 		{
 			"name": "description",
 			"scope": "variable.language.description.paradox",
 			"settings": {
-				"foreground": "#448C27"
+				"foreground": "#4EC9B0"
 			}
 		},
 		{
@@ -272,7 +229,7 @@
 				"keyword.declaration.construct.cwt"
 			],
 			"settings": {
-				"foreground": "#7A3E9D"
+				"foreground": "#C586C0"
 			}
 		},
 		{
@@ -283,7 +240,7 @@
 				"support.type.primitive.cwt"
 			],
 			"settings": {
-				"foreground": "#7A3E9D"
+				"foreground": "#4EC9B0"
 			}
 		},
 		{
@@ -297,7 +254,7 @@
 				"entity.name.type.number.txt"
 			],
 			"settings": {
-				"foreground": "#448C27"
+				"foreground": "#4EC9B0"
 			}
 		},
 		{
@@ -307,7 +264,7 @@
 				"entity.name.tag.construct.cwt"
 			],
 			"settings": {
-				"foreground": "#4B69C6"
+				"foreground": "#DCDCAA"
 			}
 		},
 		{
@@ -319,14 +276,14 @@
 				"punctuation.event_target.colon.paradox"
 			],
 			"settings": {
-				"foreground": "#4B69C6"
+				"foreground": "#9CDCFE"
 			}
 		},
 		{
 			"name": "rhs",
 			"scope": "variable.language.rhs.paradox",
 			"settings": {
-				"foreground": "#333333"
+				"foreground": "#D4D4D4"
 			}
 		},
 		{
@@ -340,7 +297,7 @@
 				"meta.id.identifier.txt"
 			],
 			"settings": {
-				"foreground": "#AB6526"
+				"foreground": "#D7BA7D"
 			}
 		},
 		{
@@ -355,7 +312,7 @@
 				"punctuation.definition.type.end.cwt"
 			],
 			"settings": {
-				"foreground": "#777777"
+				"foreground": "#D4D4D4"
 			}
 		},
 		{
@@ -363,7 +320,7 @@
 			"comment": "Loc colour code (§Y ... §!), distinct from langConstant so the colour bar reads as a colour rather than a boolean.",
 			"scope": "string.quoted.double.paradox constant.language.paradox",
 			"settings": {
-				"foreground": "#AB6526"
+				"foreground": "#D7BA7D"
 			}
 		},
 		{
@@ -371,7 +328,7 @@
 			"comment": "Loc inline icon tag (£gold, £army_experience£). Painted separately so it stands out from £-prefixed script references.",
 			"scope": "keyword.other.icon.paradox",
 			"settings": {
-				"foreground": "#7A3E9D"
+				"foreground": "#4EC9B0"
 			}
 		}
 	]
