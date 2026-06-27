@@ -716,6 +716,11 @@
     ],
     "themes": [
       {
+        "label": "Paradox - Classic",
+        "uiTheme": "vs-dark",
+        "path": "./themes/Paradox-Classic.tmLanguage.json"
+      },
+      {
         "label": "Paradox - Syntax",
         "uiTheme": "vs-dark",
         "path": "./themes/Paradox-Syntax.tmLanguage.json"

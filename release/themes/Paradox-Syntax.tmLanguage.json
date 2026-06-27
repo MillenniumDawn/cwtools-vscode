@@ -314,6 +314,22 @@
 			"settings": {
 				"foreground": "#D4D4D4"
 			}
+		},
+		{
+			"name": "locFormat",
+			"comment": "Loc colour code (§Y ... §!), distinct from langConstant so the colour bar reads as a colour rather than a boolean.",
+			"scope": "string.quoted.double.paradox constant.language.paradox",
+			"settings": {
+				"foreground": "#D7BA7D"
+			}
+		},
+		{
+			"name": "locIcon",
+			"comment": "Loc inline icon tag (£gold, £army_experience£). Painted separately so it stands out from £-prefixed script references.",
+			"scope": "keyword.other.icon.paradox",
+			"settings": {
+				"foreground": "#C586C0"
+			}
 		}
 	]
 }
