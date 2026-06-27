@@ -169,6 +169,8 @@ suite("themes — scope coverage", () => {
 			const theme = JSON.parse(
 				fs.readFileSync(path.join(releaseDir, t.path), "utf8"),
 			);
+			// Minimal themes defer colour to VS Code — coverage check doesn't apply.
+			if (theme.minimal) return;
 			const rules = themeScopes(theme);
 			const uncovered = required.filter((s) => !covers(rules, s));
 			assert.strictEqual(
