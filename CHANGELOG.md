@@ -1,5 +1,9 @@
+### 1.12.0 
+* Updated to v1.15.0 of the cwtools engine
+  * The cwtools engine upgrade focus on math expressions support for Hearts of Iron IV + improve auto completion and context awareness
+
 ### 1.11.2
-* Updated to v1.14.1 of the cwtools engine improvine auto compleition robustness and snappiness 
+* Updated to v1.14.1 of the cwtools engine improving auto completion robustness and snappiness 
 
 ### 1.11.1
 * Improved minimalism of the classic theme.

@@ -95,8 +95,12 @@ The extension ships its own [TextMate grammars](https://github.com/cwtools/parad
 
 The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) (see [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh) to refresh them); the `.cwt` rules grammar is owned here. Themes live under [`release/themes/`](release/themes/). Every theme paints the full scope set from both grammars (game scripts and `.cwt` rule files) plus a generic baseline, so coloring is consistent whatever file you're in. Pick one with the Color Theme picker:
 
-* [**Paradox - Syntax**](release/themes/Paradox-Syntax.tmLanguage.json). Default
-  dark scheme modeled on VS Code's Dark+.
+* [**Paradox - Classic**](release/themes/Paradox-Classic.tmLanguage.json). Dark
+  scheme modeled on VS Code's default Dark+ token colours, applied to the
+  full scope set (paradox, cwt, loc). Pairs the editor colours you already
+  know with the per-scope slots the rest of the themes use.
+* [**Paradox - Syntax**](release/themes/Paradox-Syntax.tmLanguage.json). Dark
+  scheme modeled on VS Code's Dark+.
 * [**Paradox - Kate**](release/themes/Paradox-Kate.tmLanguage.json) and
   [**Paradox - Kate Light**](release/themes/Paradox-Kate-Light.tmLanguage.json).
   Inspired by KDE's

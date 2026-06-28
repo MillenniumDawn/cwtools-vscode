@@ -1,4 +1,42 @@
-### Unreleased
+### 1.12.0 
+* Updated to v1.15.0 of the cwtools engine
+  * The cwtools engine upgrade focus on math expressions support for Hearts of Iron IV + improve auto completion and context awareness
+
+### 1.11.2
+* Updated to v1.14.1 of the cwtools engine improvine auto compleition robustness and snappiness 
+
+### 1.11.1
+* Improved minimalism of the classic theme.
+
+### 1.11.0
+
+* Improved localisation highlighting.
+* Improved themes for various theme structures.
+* Improved intellisense for localisation as a whole.
+* Updated to v1.13.0 the cwtools engine.
+
+### 1.10.0
+
+* Added dedicated highlighting for Paradox localisation `.yml` files: a new `paradox-localisation` language, scoped to `localisation`/`localisation_synced`/`localization` folders so ordinary YAML is untouched. Strings now run to the last quote on the line (an embedded `"` or `#` no longer breaks coloring), `KEY:0` version suffixes and keys with no leading whitespace parse correctly, and `[commands]`, `$references$`, `§` colour codes and `£icons` are highlighted. It reuses the Paradox script grammar's scope names, so the bundled themes and editor defaults color it with no theme changes. (cwtools-vscode#56)
+* Loc hover tooltips no longer append a trailing `#` comment, and no longer truncate a value that legitimately contains a `#`. (cwtools-vscode#50)
+* Loc hover now falls back to the vanilla string for keys defined in the base game but not the mod, and refreshes live as you edit `.yml` files instead of needing a reload. (cwtools-vscode#51, cwtools-vscode#53)
+* Go-to-definition follows a focus/event/decision after it is moved to another file, without a window reload. (cwtools-vscode#52)
+* `visible`/`available` blocks in decisions now complete triggers instead of effects. (cwtools-vscode#57)
+* Added the `## default_bool = yes|no` rule directive: a bool field explicitly set to its declared default gets an info-level hint (CW282) that the line can be omitted. (cwtools-vscode#26)
+
+### 1.9.0
+
+* Reworked the bundled themes. Every theme now paints the full scope set from both grammars (game scripts and `.cwt` rule files) plus a generic baseline, so coloring no longer falls flat in `.cwt` files or on the scopes most themes used to miss.
+* Renamed the themes to `Paradox - <name>` (`Paradox - Nord`, `Paradox - Kate`, ...). If you had one of the old names set, reselect it in the Color Theme picker.
+* Retuned `Paradox - Kate`/`Kate Light`, the `High Contrast` pair, and `Paradox - Syntax` (now a Dark+ flavored default), and converted `Paradox - Dimmed` and `Paradox - Quiet Light` to the full theme format while keeping their look.
+* `.cwt` grammar: rule keys on the left of an assignment (`key = ...`) are now scoped, so they pick up theme colors instead of rendering as plain text.
+* Added a node test that fails if any shipped theme leaves a grammar scope unstyled.
+
+### 1.8.0
+
+* Updated to v1.12.0 of the cwtools engine.
+
+### 1.7.0
 
 * Vendored the TextMate grammars from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) directly into the extension, so highlighting ships with `cwtools-md-edition` and no longer needs the [tboby.paradox-syntax](https://marketplace.visualstudio.com/items?itemName=tboby.paradox-syntax) extension pack.
 * Added a themes block: `Paradox-Syntax` (minimal), `Paradox-Kate` and `Paradox-Kate-Light` (modeled on the Kate syntax's `defStyleNum` token categorization), `Paradox-Nord` (Nord palette), `Paradox-HighContrast` and `Paradox-HighContrast-Light` (accessibility), plus the upstream `Paradox-Dimmed` and `Paradox-QuietLight` re-homed here.
