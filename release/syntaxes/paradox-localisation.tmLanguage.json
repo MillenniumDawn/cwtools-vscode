@@ -41,7 +41,7 @@
 			"beginCaptures": {
 				"0": { "name": "punctuation.definition.string.begin.paradox" }
 			},
-			"end": "\"(?=[ \\t]*(?:#.*)?$)",
+			"end": "\"(?=[ \\t]*(?:#.*)?$)|$",
 			"endCaptures": {
 				"0": { "name": "punctuation.definition.string.end.paradox" }
 			},
