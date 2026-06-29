@@ -1,3 +1,12 @@
+### 1.12.1
+
+* Fixed localisation `.yml` highlighting eating across lines on an unterminated string. (cwtools-vscode#59)
+* Updated the cwtools engine with autocomplete, linting and go-to-definition fixes:
+  * Localisation now flags unterminated quotes and invalid keys. (cwtools-vscode#59)
+  * Better autocomplete context-awareness in alias blocks; scripted effects and dynamic modifiers are suggested; boolean aliases complete with `= yes/no`; duplicates removed. (cwtools-vscode#60, cwtools-vscode#64, cwtools-vscode#65, cwtools-vscode#66, cwtools-vscode#67)
+  * Go-to-definition no longer shows duplicate results. (cwtools-vscode#62)
+  * Missing required-field warnings point at the block key. (cwtools-vscode#63)
+
 ### 1.12.0 
 * Updated to v1.15.0 of the cwtools engine
   * The cwtools engine upgrade focus on math expressions support for Hearts of Iron IV + improve auto completion and context awareness
