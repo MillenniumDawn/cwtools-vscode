@@ -373,6 +373,18 @@
 			"settings": {
 				"foreground": "#7A3E9D"
 			}
+		},
+		{
+			"name": "invalid",
+			"comment": "Stray unquoted text in a loc file (bare text outside a quoted value). Painted red so mistakes stand out.",
+			"scope": [
+				"invalid",
+				"invalid.illegal",
+				"invalid.illegal.unquoted.paradox"
+			],
+			"settings": {
+				"foreground": "#AA3731"
+			}
 		}
 	]
 }

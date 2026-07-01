@@ -6,7 +6,8 @@
 		{ "include": "#comment" },
 		{ "include": "#language-tag" },
 		{ "include": "#entry" },
-		{ "include": "#string" }
+		{ "include": "#string" },
+		{ "include": "#invalid" }
 	],
 	"repository": {
 		"comment": {
@@ -35,13 +36,13 @@
 			}
 		},
 		"string": {
-			"comment": "Paradox loc strings run to the LAST unescaped quote on the line, so an embedded '\"' is data, not a terminator. The end anchor only closes at a quote followed by optional horizontal whitespace and an optional trailing comment. Horizontal whitespace only — loc strings are single-line, so \\s* (which matches newlines) would let an unclosed quote on one line eat the rest of the file.",
+			"comment": "Paradox loc strings run to the LAST unescaped quote on the line, so an embedded '\"' is data, not a terminator. The end anchor closes at a quote with no further quote after it (the last quote on the line); anything after that quote is outside the string and handled by #invalid. The trailing '$' only fires when the string is never closed on the line, which keeps an unclosed quote from eating the rest of the file.",
 			"name": "string.quoted.double.paradox",
 			"begin": "\"",
 			"beginCaptures": {
 				"0": { "name": "punctuation.definition.string.begin.paradox" }
 			},
-			"end": "\"(?=[ \\t]*(?:#.*)?$)|$",
+			"end": "\"(?=[^\"]*$)|$",
 			"endCaptures": {
 				"0": { "name": "punctuation.definition.string.end.paradox" }
 			},
@@ -76,6 +77,11 @@
 			"comment": "An inline icon tag, e.g. £gold or £army_experience£ .",
 			"name": "keyword.other.icon.paradox",
 			"match": "£\\w+£?"
+		},
+		"invalid": {
+			"comment": "Stray unquoted text outside a quoted value is not valid loc. A loc value must be a quoted string, so any bare token left over (before, after, or instead of the string) is flagged. Runs stop at whitespace, '#' (a comment) and '\"' (a string) so those keep their own scopes.",
+			"name": "invalid.illegal.unquoted.paradox",
+			"match": "[^\\s#\"]+"
 		}
 	}
 }
