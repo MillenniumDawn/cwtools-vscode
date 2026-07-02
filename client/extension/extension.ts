@@ -25,6 +25,7 @@ import {
 	runGit,
 } from './engine';
 import { detectGameAndVanilla } from './detectGame';
+import { GAME_IDS } from './games';
 import { logInfo, logWarn, logError } from './logger';
 
 interface LoadingBarParams { enable: boolean; value: string }
@@ -160,15 +161,7 @@ export async function activate(context: ExtensionContext) {
 		const clientOptions: LanguageClientOptions = {
 			documentSelector: [
 				{ scheme: 'file', language: 'paradox' },
-				{ scheme: 'file', language: 'stellaris' },
-				{ scheme: 'file', language: 'hoi4' },
-				{ scheme: 'file', language: 'eu4' },
-				{ scheme: 'file', language: 'ck2' },
-				{ scheme: 'file', language: 'imperator' },
-				{ scheme: 'file', language: 'vic2' },
-				{ scheme: 'file', language: 'vic3' },
-				{ scheme: 'file', language: 'ck3' },
-				{ scheme: 'file', language: 'eu5' },
+				...GAME_IDS.map(id => ({ scheme: 'file', language: id })),
 				// .cwt rule-config files: the server lints them structurally
 				// (undefined type/enum/single_alias refs + parse errors) rather
 				// than running the game-script validator. See cwtools-vscode#43.

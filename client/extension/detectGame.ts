@@ -5,20 +5,7 @@ import { workspace, window, RelativePattern } from 'vscode';
 import { existsSync as fsExistsSync } from 'fs';
 import { detectFromFolder } from './engine';
 import { existAndIsExe } from './executable';
-
-const KNOWN_LANGUAGE_IDS = ["stellaris", "eu4", "hoi4", "ck2", "imperator", "vic2", "vic3", "ck3", "eu5"];
-
-const GAMES = [
-	{ id: "eu4", exeName: "eu4", binariesPrefix: false },
-	{ id: "hoi4", exeName: "hoi4", binariesPrefix: false },
-	{ id: "stellaris", exeName: "stellaris", binariesPrefix: false },
-	{ id: "ck2", exeName: "CK2", binariesPrefix: false },
-	{ id: "imperator", exeName: "imperator", binariesPrefix: true },
-	{ id: "vic2", exeName: "v2game", binariesPrefix: false },
-	{ id: "ck3", exeName: "ck3", binariesPrefix: true },
-	{ id: "vic3", exeName: "victoria3", binariesPrefix: true },
-	{ id: "eu5", exeName: "eu5", binariesPrefix: true },
-];
+import { GAMES, GAME_IDS } from './games';
 
 async function findExeInFiles(gameExeName: string, binariesPrefix: boolean): Promise<Uri[]> {
 	if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
@@ -44,7 +31,7 @@ async function detectLanguageId(): Promise<string | null> {
 	const markerFiles = await workspace.findFiles("**/*.txt", "**/{.git,node_modules,out,dist}/**", 1);
 	if (markerFiles.length === 1) {
 		const doc = await workspace.openTextDocument(markerFiles[0]);
-		if (KNOWN_LANGUAGE_IDS.includes(doc.languageId)) return doc.languageId;
+		if (GAME_IDS.includes(doc.languageId)) return doc.languageId;
 	}
 	if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
 		return detectFromFolder(workspace.workspaceFolders[0].uri.fsPath, fsExistsSync);
@@ -59,11 +46,11 @@ export interface GameDetection {
 
 export async function detectGameAndVanilla(): Promise<GameDetection> {
 	let guessedLanguageId: string | undefined | null = window.activeTextEditor?.document?.languageId;
-	if (guessedLanguageId === undefined || !KNOWN_LANGUAGE_IDS.includes(guessedLanguageId)) {
+	if (guessedLanguageId === undefined || !GAME_IDS.includes(guessedLanguageId)) {
 		guessedLanguageId = await detectLanguageId();
 	}
 
-	let languageId = (guessedLanguageId && KNOWN_LANGUAGE_IDS.includes(guessedLanguageId)) ? guessedLanguageId : "paradox";
+	let languageId = (guessedLanguageId && GAME_IDS.includes(guessedLanguageId)) ? guessedLanguageId : "paradox";
 
 	const promises = GAMES.map(({ exeName, binariesPrefix }) =>
 		findExeInFiles(exeName, binariesPrefix)

@@ -4,63 +4,9 @@ import { spawn } from 'child_process';
 import type { ExtensionContext } from 'vscode';
 import { existsSync as fsExistsSync } from 'fs';
 import { logInfo, logError } from './logger';
+import { FOLDER_HINTS, CONTENT_HINTS } from './games';
 
-export const LANGUAGE_REPOS: Record<string, string> = {
-	stellaris: 'https://github.com/cwtools/cwtools-stellaris-config',
-	eu4: 'https://github.com/cwtools/cwtools-eu4-config',
-	hoi4: 'https://github.com/cwtools/cwtools-hoi4-config',
-	ck2: 'https://github.com/cwtools/cwtools-ck2-config',
-	imperator: 'https://github.com/cwtools/cwtools-ir-config',
-	vic2: 'https://github.com/cwtools/cwtools-vic2-config',
-	vic3: 'https://github.com/cwtools/cwtools-vic3-config',
-	ck3: 'https://github.com/cwtools/cwtools-ck3-config',
-	eu5: 'https://github.com/kaiser-chris/cwtools-eu5-config',
-};
-
-export const GAME_DISPLAY: Record<string, string> = {
-	stellaris: 'Stellaris',
-	hoi4: 'Hearts of Iron IV',
-	eu4: 'Europa Universalis IV',
-	ck2: 'Crusader Kings II',
-	imperator: 'Imperator',
-	vic2: 'Victoria II',
-	vic3: 'Victoria 3',
-	ck3: 'Crusader Kings III',
-	eu5: 'Europa Universalis V',
-};
-
-export const GAME_FOLDER: Record<string, { id: string; subdir?: string }> = {
-	'stellaris':              { id: 'stellaris' },
-	'hearts of iron iv':      { id: 'hoi4' },
-	'europa universalis iv':  { id: 'eu4' },
-	'crusader kings ii':      { id: 'ck2' },
-	'crusader kings iii':     { id: 'ck3',    subdir: 'game' },
-	'victoria ii':            { id: 'vic2' },
-	'victoria 2':             { id: 'vic2' },
-	'victoria 3':             { id: 'vic3',   subdir: 'game' },
-	'imperatorrome':          { id: 'imperator', subdir: 'game' },
-	'imperator':              { id: 'imperator', subdir: 'game' },
-	'europa universalis v':   { id: 'eu5',    subdir: 'game' },
-};
-
-const FOLDER_HINTS: Array<[RegExp | string, string]> = [
-	[/stellaris/, 'stellaris'],
-	[/(hoi4|hearts)/, 'hoi4'],
-	[/(eu4|europa)/, 'eu4'],
-	[/(ck2|crusader kings ii)/, 'ck2'],
-	[/(ck3|crusader kings iii)/, 'ck3'],
-	[/(vic2|victoria (ii|2))/, 'vic2'],
-	[/(vic3|victoria (iii|3))/, 'vic3'],
-	[/(imperator|rome)/, 'imperator'],
-	['eu5', 'eu5'],
-];
-
-const CONTENT_HINTS: Array<[string, string]> = [
-	['common/ai_strategy', 'hoi4'],
-	['common/species_classes', 'stellaris'],
-	['common/great_projects', 'eu4'],
-	['common/dynasties', 'ck3'],
-];
+export { LANGUAGE_REPOS, GAME_DISPLAY, GAME_FOLDER } from './games';
 
 export function detectFromFolder(root: string, fileExists: (p: string) => boolean): string | null {
 	const lower = root.toLowerCase();

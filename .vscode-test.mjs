@@ -42,6 +42,7 @@ export default defineConfig({
 		exclude: [
 			'**/client/extension/engine.ts',
 			'**/client/extension/executable.ts',
+			'**/client/extension/games.ts',
 			'**/client/test/**',
 			'**/client/webview/**',
 			'**/node_modules/**',

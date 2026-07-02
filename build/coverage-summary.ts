@@ -41,7 +41,7 @@ const sources: Source[] = [
 		title: 'extension-host client',
 		path: 'coverage/coverage-summary.json',
 		htmlArtifact: 'coverage-html',
-		drop: ['client/extension/engine.ts', 'client/extension/executable.ts'],
+		drop: ['client/extension/engine.ts', 'client/extension/executable.ts', 'client/extension/games.ts'],
 	},
 	{
 		title: 'node unit',
