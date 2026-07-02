@@ -16,11 +16,11 @@ async function findExeInFiles(gameExeName: string, binariesPrefix: boolean): Pro
 	const isWin = os.platform() === "win32";
 	const ext = isWin ? "*.exe" : "*";
 	const prefix = binariesPrefix ? "binaries/" : "";
-	const names = [gameExeName, gameExeName.toUpperCase(), gameExeName.toLowerCase()];
-	const patterns = names.map(name => new RelativePattern(root, `${prefix}${name}${ext}`));
+	const names = [...new Set([gameExeName, gameExeName.toUpperCase(), gameExeName.toLowerCase()])];
+	const namePattern = names.length === 1 ? names[0] : `{${names.join(',')}}`;
+	const pattern = new RelativePattern(root, `${prefix}${namePattern}${ext}`);
 
-	const results = await Promise.all(patterns.map(p => workspace.findFiles(p)));
-	const allFiles = results.flat();
+	const allFiles = await workspace.findFiles(pattern);
 	const validFiles = (await Promise.all(
 		allFiles.map(async v => (await existAndIsExe(v.fsPath)) ? v : null)
 	)).filter(Boolean) as Uri[];
