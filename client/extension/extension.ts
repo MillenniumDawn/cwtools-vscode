@@ -24,6 +24,7 @@ export { reloadExtension } from './serverNotifications';
 
 export let defaultClient: LanguageClient;
 export async function activate(context: ExtensionContext) {
+	void commands.executeCommand('setContext', 'cwtoolsEnabled', true);
 
 	class CwtoolsProvider implements vscode.TextDocumentContentProvider
 	{
