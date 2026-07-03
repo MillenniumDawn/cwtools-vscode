@@ -4,6 +4,10 @@
 * Fixed Crusader Kings III and Victoria 3 mod folders being detected as CK2/Vic2: the 2-numbered folder hint matched first, so a "III" folder substring-matched the "II" game. 3-suffixed games are now checked first.
 * The graph view reuses its webview when you change depth instead of tearing it down and re-parsing the 4.6MB bundle each time, so redraws are much faster. Game-exe detection, tooltips and node lookups were also trimmed along the way.
 * The rules folder download (git clone/pull, up to a minute on first run) now runs under a progress notification instead of appearing to hang silently.
+* Upgrades to 1.18.0 of the Rust cwtools engine. 
+  * Supports stellaris
+  * Auto completion improvements
+  * Memory improvements + performance improvements
 
 ### 1.14.0
 
