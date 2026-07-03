@@ -1,4 +1,11 @@
-### 1.13.0
+### 1.15.0
+
+* The extension now activates only in Paradox mod workspaces instead of every window. Activation triggers on a Paradox language, a `descriptor.mod` / `.metadata/metadata.json`, or a game executable or content folder at the workspace root, and the cwtools file view only appears once activated. (Opening a lone game script with no folder open no longer auto-activates, which previously only surfaced the "open the mod folder" warning anyway.)
+* Fixed Crusader Kings III and Victoria 3 mod folders being detected as CK2/Vic2: the 2-numbered folder hint matched first, so a "III" folder substring-matched the "II" game. 3-suffixed games are now checked first.
+* The graph view reuses its webview when you change depth instead of tearing it down and re-parsing the 4.6MB bundle each time, so redraws are much faster. Game-exe detection, tooltips and node lookups were also trimmed along the way.
+* The rules folder download (git clone/pull, up to a minute on first run) now runs under a progress notification instead of appearing to hang silently.
+
+### 1.14.0
 
 * Fixed loc highlighting: text left over outside a quoted value (e.g. a stray character after the closing quote, or bare text instead of a quoted value) was colored as part of the string. It's now flagged in red as invalid, across all bundled themes. (cwtools-vscode#70)
 
