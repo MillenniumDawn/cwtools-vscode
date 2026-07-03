@@ -9,7 +9,7 @@
 
 * Fixed loc highlighting: text left over outside a quoted value (e.g. a stray character after the closing quote, or bare text instead of a quoted value) was colored as part of the string. It's now flagged in red as invalid, across all bundled themes. (cwtools-vscode#70)
 
-### 1.12.1
+### 1.13.0
 
 * Fixed localisation `.yml` highlighting eating across lines on an unterminated string. (cwtools-vscode#59)
 * Updated the cwtools engine with autocomplete, linting and go-to-definition fixes:

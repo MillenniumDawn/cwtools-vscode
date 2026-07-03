@@ -123,9 +123,12 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
     }
 ]
 let _cy: cytoscape.Core;
+let _tips: Instance[] = [];
 
 function initCytoscape(settings: settings): cytoscape.Core {
     if (_cy) {
+        _tips.forEach(t => t.destroy());
+        _tips = [];
         _cy.destroy();
         document.getElementById('cy')!.replaceChildren();
     }
@@ -217,7 +220,10 @@ function setupTooltips(cy: cytoscape.Core) {
         };
         const dummyDomEle = document.createElement("div");
         let tip : Instance | undefined;
-        const getTip = () => (tip ??= tippy(dummyDomEle, simpleOptions));
+        const getTip = () => {
+            if (!tip) { tip = tippy(dummyDomEle, simpleOptions); _tips.push(tip); }
+            return tip;
+        };
         const expandTooltip = function(element : Instance) {
             element.setProps(complexOptions);
             isSimple = false;

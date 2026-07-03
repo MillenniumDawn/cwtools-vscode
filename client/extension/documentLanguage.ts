@@ -23,6 +23,7 @@ export async function registerDocumentLanguage(
 	const didFocusFile = new NotificationType<DidFocusFile>('didFocusFile');
 	let latestType : string = '';
 	let getFileTypesInFlight = false;
+	let pendingEditor : vscode.TextEditor | undefined;
 	const getFileTypesTimeoutMs = 5000;
 
 	// The static filenamePatterns in package.json only match game files under a
@@ -53,9 +54,14 @@ export async function registerDocumentLanguage(
 			await client.sendNotification(didFocusFile, {uri: editorPath});
 		}
 		// Guard against rapid tab switches piling up requests to a busy server.
-		// Only one getFileTypes request can be in flight at a time; subsequent
-		// tab switches are skipped until the in-flight request completes or times out.
-		if (getFileTypesInFlight) return;
+		// Only one getFileTypes request runs at a time; a switch that arrives
+		// mid-flight is remembered and processed once the in-flight one settles,
+		// so latestType and the cwtoolsGraphFile context can't stay stale on the
+		// editor the user actually landed on.
+		if (getFileTypesInFlight) {
+			pendingEditor = editor;
+			return;
+		}
 		getFileTypesInFlight = true;
 		try {
 			const data = await Promise.race([
@@ -78,6 +84,11 @@ export async function registerDocumentLanguage(
 			await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
 		} finally {
 			getFileTypesInFlight = false;
+		}
+		if (pendingEditor) {
+			const next = pendingEditor;
+			pendingEditor = undefined;
+			await didChangeActiveTextEditor(next);
 		}
 	}
 
