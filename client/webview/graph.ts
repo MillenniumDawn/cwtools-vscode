@@ -123,8 +123,15 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
     }
 ]
 let _cy: cytoscape.Core;
+let _tips: Instance[] = [];
 
 function initCytoscape(settings: settings): cytoscape.Core {
+    if (_cy) {
+        _tips.forEach(t => t.destroy());
+        _tips = [];
+        _cy.destroy();
+        document.getElementById('cy')!.replaceChildren();
+    }
     registerCytoscapeCanvas(cyM.default());
     cyM.default.use(cytoscapeelk);
     cyM.default.use(popper);
@@ -153,9 +160,9 @@ function populateGraph(cy: cytoscape.Core, data: techNode[], edges: EdgeInput[])
             location: element.location
         }});
     });
-    const allIDs = data.map((el) => el.id);
+    const allIDs = new Set(data.map((el) => el.id));
     edges.forEach(function (edge) {
-        if (allIDs.includes(edge.source) && allIDs.includes(edge.target)){
+        if (allIDs.has(edge.source) && allIDs.has(edge.target)){
             cy.add({ group: 'edges', data: { source: edge.source, target: edge.target, label: edge.label } }).data("isPrimary", true);
         }
     });
@@ -212,19 +219,24 @@ function setupTooltips(cy: cytoscape.Core) {
             trigger: "manual"
         };
         const dummyDomEle = document.createElement("div");
-        const tip = tippy(dummyDomEle, simpleOptions);
+        let tip : Instance | undefined;
+        const getTip = () => {
+            if (!tip) { tip = tippy(dummyDomEle, simpleOptions); _tips.push(tip); }
+            return tip;
+        };
         const expandTooltip = function(element : Instance) {
             element.setProps(complexOptions);
             isSimple = false;
         };
         node.on('mouseover', () => {
-            tip.show();
-            hoverTimeout = setTimeout(expandTooltip, 1000, tip);
+            const instance = getTip();
+            instance.show();
+            hoverTimeout = setTimeout(expandTooltip, 1000, instance);
         });
         node.on('mouseout', () =>
         {
             clearTimeout(hoverTimeout);
-            if(isSimple) {
+            if(isSimple && tip) {
                 tip.hide();
             }
         });

@@ -14,7 +14,6 @@
   "commands.pretriggerAllFiles.title": "将所有触发器优化为预触发器",
   // This doesn't seem to work, but it would be used to manually trigger cwtools to load for a game not supported by cwtools (e.g. if a new game comes out)
   "commands.startcustomgame.title": "为自定义游戏激活 cwtools",
-  // Show the connected graph of the current type, e.g. https://github.com/cwtools/cwtools-vscode/blob/localisaiton/release/docs/graph-bad-example.png
   "commands.showGraph.title": "显示图",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "从 JSON 重新创建图",

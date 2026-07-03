@@ -11,6 +11,9 @@ export enum State {
     ClientReady,
     Done
 }
+type GraphMessage =
+    | { command: 'importJson'; json: string; settings: { wheelSensitivity: number } }
+    | { command: 'go'; data: GraphData; settings: { wheelSensitivity: number } };
 export class GraphPanel {
 
     /**
@@ -20,8 +23,7 @@ export class GraphPanel {
     private static readonly viewType = 'cwtools-graph';
     private readonly _panel: vscode.WebviewPanel;
     private _state: State;
-    private readonly _onLoad = new vscode.EventEmitter<undefined>();
-    private readonly onLoad: vscode.Event<undefined> = this._onLoad.event;
+    private pendingMessage: GraphMessage | null = null;
 
     // Methods for testing
     public async getState(): Promise<State> {
@@ -50,14 +52,11 @@ export class GraphPanel {
     public static create(extensionPath: string) {
         const column = vscode.window.activeTextEditor ? vscode.window.activeTextEditor.viewColumn : undefined;
 
-        // If we already have a panel, dispose of it.
-        // Create a new panel.
-        if (GraphPanel.currentPanel && GraphPanel.currentPanel._state !== State.New && GraphPanel.currentPanel._state !== State.ClientReady) {
-            GraphPanel.currentPanel.dispose();
+        if (GraphPanel.currentPanel) {
+            GraphPanel.currentPanel._panel.reveal(column);
+            return;
         }
-        if (!GraphPanel.currentPanel) {
-            GraphPanel.currentPanel = new GraphPanel(extensionPath, column || vscode.ViewColumn.One);
-        }
+        GraphPanel.currentPanel = new GraphPanel(extensionPath, column || vscode.ViewColumn.One);
     }
 
     private constructor(extensionPath: string, column: vscode.ViewColumn) {
@@ -117,7 +116,7 @@ export class GraphPanel {
                     case 'ready':
                         if (this._state === State.DataReady) {
                             this._state = State.Done;
-                            this._onLoad.fire(undefined);
+                            this.flushPendingMessage();
                         } else {
                             this._state = State.ClientReady;
                         }
@@ -158,19 +157,28 @@ export class GraphPanel {
         const settings = {
             wheelSensitivity: wheelSensitivity
         }
-        if (typeof(data) === 'string') {
-            this._disposables.push(this.onLoad(() => this._panel.webview.postMessage({ "command": "importJson", "json": data, "settings": settings })));
-        } else {
-            this._disposables.push(this.onLoad(() => this._panel.webview.postMessage({ "command": "go", "data": data, "settings": settings })));
-        }
+        const msg: GraphMessage = typeof(data) === 'string'
+            ? { command: 'importJson', json: data, settings }
+            : { command: 'go', data: data, settings };
+
         if (this._state === State.Done) {
+            this._panel.webview.postMessage(msg);
             return;
         }
-        else if (this._state === State.ClientReady) {
+
+        this.pendingMessage = msg;
+        if (this._state === State.ClientReady) {
             this._state = State.Done;
-            this._onLoad.fire(undefined);
+            this.flushPendingMessage();
         } else {
             this._state = State.DataReady;
+        }
+    }
+
+    private flushPendingMessage() {
+        if (this.pendingMessage) {
+            this._panel.webview.postMessage(this.pendingMessage);
+            this.pendingMessage = null;
         }
     }
 
@@ -185,7 +193,6 @@ export class GraphPanel {
 
         // Clean up our resources
         this._panel.dispose();
-        this._onLoad.dispose();
 
         while (this._disposables.length) {
             const x = this._disposables.pop();

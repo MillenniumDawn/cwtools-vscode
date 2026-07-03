@@ -11,6 +11,12 @@ updates:
         patterns:
           - "*"
 
+  # Keeps the cwtools server submodule pin fresh.
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: weekly
+
   # Extension client (root) and the packaged manifest (release/).
   - package-ecosystem: npm
     directories:
