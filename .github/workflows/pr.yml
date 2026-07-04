@@ -21,6 +21,7 @@ jobs:
   # feedback while the heavier jobs catch up.
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
     - uses: ./.github/actions/setup-node-npm
@@ -36,6 +37,7 @@ jobs:
   build:
     needs: check
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
@@ -47,12 +49,12 @@ jobs:
     - uses: ./.github/actions/setup-node-npm
     - name: Test build
       run: npm run build -- package
-    # Runs the unit suites with V8 coverage. Same suites as the old `npm test`
-    # step, so it gates the same way; the coverage is non-gating (no threshold).
-    - name: Test (with coverage)
-      run: xvfb-run -a npm run test:coverage
-    # Node-only unit suites (vitest + v8); no Electron, so no xvfb. Covers the
-    # modules the host run excludes (engine.ts, executable.ts).
+    # Host V8 coverage (vscode-test + c8) is not run in CI: the instrumented
+    # Electron process never exits under xvfb, so c8 waits for it until the job
+    # timeout (previously the full 6h cap). The unit suites are already gated in
+    # the `check` job, so host coverage stays a local tool (`npm run
+    # test:coverage`, which completes normally outside CI). Node coverage below
+    # is the report published to the PR.
     - name: Node unit tests (with coverage)
       if: always()
       run: npm run test:node:coverage
@@ -67,15 +69,6 @@ jobs:
       with:
         header: coverage
         path: coverage/summary.md
-    # The full istanbul HTML report (generated locally by c8) for line-by-line
-    # browsing — open coverage/index.html from this artifact.
-    - name: 'Upload coverage'
-      if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: coverage-html
-        path: coverage
-        retention-days: 5
     - name: 'Upload node coverage'
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

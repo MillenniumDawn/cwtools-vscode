@@ -16,9 +16,11 @@ This extension is still in preview, it may not work, it may stop working at any 
 * Stellaris
 * Hearts of Iron IV
 * Europa Universalis IV
+* Europa Universalis V - in progress, help needed
 * Imperator: Rome - outdated, help needed
 * Crusader Kings II - partial
 * Crusader Kings III - in progress, help needed
+* Victoria 2 - in progress, help needed
 * Victoria 3 - in progress, help needed
 
 ## Features
@@ -38,7 +40,6 @@ This extension is still in preview, it may not work, it may stop working at any 
   * That event\_targets are saved before they're used
   * That referenced sprites and graphics files exist
   * and a number of other specific validators
-* "Code actions" to generate .yml for missing localisation
 
 ## Usage
 

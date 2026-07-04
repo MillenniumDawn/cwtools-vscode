@@ -47,7 +47,6 @@ suite(`Debug Integration Test: `, function() {
 		const commands = await vscode.commands.getCommands();
 		const cwtoolsCommands = commands.filter(cmd =>
 			cmd.includes('cwtools') ||
-			cmd === 'outputerrors' ||
 			cmd === 'genlocall' ||
 			cmd === 'showGraph'
 		);

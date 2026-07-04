@@ -84,7 +84,7 @@ export async function activate(context: ExtensionContext) {
 		defaultClient = client;
 		client.registerProposedFeatures();
 
-		const tracker = await registerDocumentLanguage(context, client, language);
+		const tracker = await registerDocumentLanguage(context, client, 'paradox');
 		registerServerNotifications(context, client);
 
 		if (workspace.name === undefined) {

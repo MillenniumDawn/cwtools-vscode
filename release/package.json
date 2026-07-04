@@ -5,7 +5,7 @@
   "description": "%extension.description%",
   "author": "Millennium Dawn Mod Team",
   "license": "MIT",
-  "version": "1.12.0",
+  "version": "1.16.0",
   "preview": false,
   "publisher": "milleniumdawnmodteam",
   "qna": "https://github.com/MillenniumDawn/cwtools-vscode/issues",
@@ -31,15 +31,6 @@
   "main": "./bin/client/extension/extension.js",
   "activationEvents": [
     "onLanguage:paradox",
-    "onLanguage:stellaris",
-    "onLanguage:hoi4",
-    "onLanguage:eu4",
-    "onLanguage:ck2",
-    "onLanguage:imperator",
-    "onLanguage:vic2",
-    "onLanguage:vic3",
-    "onLanguage:ck3",
-    "onLanguage:eu5",
     "onLanguage:cwt",
     "onLanguage:paradox-localisation",
     "workspaceContains:descriptor.mod",
@@ -84,11 +75,6 @@
     },
     "commands": [
       {
-        "command": "outputerrors",
-        "title": "%commands.outputerrors.title%",
-        "category": "cwtools"
-      },
-      {
         "command": "genlocall",
         "title": "%commands.genlocall.title%",
         "category": "cwtools"
@@ -114,31 +100,6 @@
         "category": "cwtools"
       },
       {
-        "command": "listAllFiles",
-        "title": "%commands.listAllFiles.title%",
-        "category": "cwtools"
-      },
-      {
-        "command": "listAllLocFiles",
-        "title": "%commands.listAllLocFiles.title%",
-        "category": "cwtools"
-      },
-      {
-        "command": "debugrules",
-        "title": "%commands.debugrules.title%",
-        "category": "cwtools"
-      },
-      {
-        "command": "pretriggerAllFiles",
-        "title": "%commands.pretriggerAllFiles.title%",
-        "category": "cwtools"
-      },
-      {
-        "command": "startcustomgame",
-        "title": "%commands.startcustomgame.title%",
-        "category": "cwtools"
-      },
-      {
         "command": "showGraph",
         "title": "%commands.showGraph.title%",
         "category": "cwtools"
@@ -146,11 +107,6 @@
       {
         "command": "graphFromJson",
         "title": "%commands.graphFromJson.title%",
-        "category": "cwtools"
-      },
-      {
-        "command": "exportTypes",
-        "title": "%commands.exportTypes.title%",
         "category": "cwtools"
       },
       {
@@ -178,17 +134,6 @@
         "title": "CWTools",
         "order": 1,
         "properties": {
-          "cwtools.rules_version": {
-            "scope": "window",
-            "type": "string",
-            "enum": [
-              "stable",
-              "latest",
-              "manual"
-            ],
-            "default": "latest",
-            "description": "%configuration.cwtools.rules_version.description%"
-          },
           "cwtools.rules_folder": {
             "scope": "window",
             "type": "string",
@@ -225,12 +170,6 @@
             ],
             "description": "%configuration.cwtools.localisation.languages.description%",
             "uniqueItems": true
-          },
-          "cwtools.localisation.generated_strings": {
-            "scope": "window",
-            "type": "string",
-            "default": ":0 \"REPLACE_ME\"",
-            "description": "%configuration.cwtools.localisation.generated_strings.description%"
           }
         }
       },
@@ -239,12 +178,6 @@
         "title": "CWTools: Errors & diagnostics",
         "order": 3,
         "properties": {
-          "cwtools.errors.vanilla": {
-            "scope": "window",
-            "type": "boolean",
-            "default": false,
-            "description": "%configuration.cwtools.errors.vanilla.description%"
-          },
           "cwtools.errors.ignore": {
             "scope": "window",
             "type": "array",
@@ -272,13 +205,6 @@
             "default": [
               "**/99_README**.txt"
             ]
-          },
-          "cwtools.maxFileSize": {
-            "scope": "resource",
-            "type": "integer",
-            "minimum": 1,
-            "default": 2,
-            "description": "%configuration.cwtools.maxFileSize.description%"
           },
           "cwtools.logging.diagnostic": {
             "scope": "window",
@@ -391,18 +317,6 @@
             "default": "off",
             "description": "%configuration.cwtools.trace.server.description%"
           },
-          "cwtools.experimental": {
-            "scope": "window",
-            "type": "boolean",
-            "default": true,
-            "description": "%configuration.cwtools.experimental.description%"
-          },
-          "cwtools.debug_mode": {
-            "scope": "window",
-            "type": "boolean",
-            "default": false,
-            "description": "%configuration.cwtools.debug_mode.description%"
-          },
           "cwtools.profiling": {
             "scope": "window",
             "type": "boolean",
@@ -413,199 +327,6 @@
       }
     ],
     "languages": [
-      {
-        "id": "stellaris",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "asset"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/stellaris*/**/*.txt",
-          "**/stellaris*/**/*.gui",
-          "**/stellaris*/**/*.gfx",
-          "**/stellaris*/**/*.asset"
-        ]
-      },
-      {
-        "id": "hoi4",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "asset"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/hearts*of*iron*iv*/**/*.txt",
-          "**/hearts*of*iron*iv*/**/*.gui",
-          "**/hearts*of*iron*iv*/**/*.gfx",
-          "**/hearts*of*iron*iv*/**/*.asset"
-        ]
-      },
-      {
-        "id": "eu4",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "asset"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/europa*universalis*iv/**/*.txt",
-          "**/europa*universalis*iv/**/*.gui",
-          "**/europa*universalis*iv/**/*.gfx",
-          "**/europa*universalis*iv/**/*.asset"
-        ]
-      },
-      {
-        "id": "ck2",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "sfx",
-          "asset"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/crusader*kings*ii/**/*.txt",
-          "**/crusader*kings*ii/**/*.gui",
-          "**/crusader*kings*ii/**/*.gfx",
-          "**/crusader*kings*ii/**/*.sfx",
-          "**/crusader*kings*ii/**/*.asset"
-        ]
-      },
-      {
-        "id": "imperator",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "asset"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/imperator*/**/*.txt",
-          "**/imperator*/**/*.gui",
-          "**/imperator*/**/*.gfx",
-          "**/imperator*/**/*.sfx",
-          "**/imperator*/**/*.asset"
-        ]
-      },
-      {
-        "id": "vic2",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "sfx",
-          "asset",
-          "map"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/victoria*2/**/*.txt",
-          "**/victoria*2/**/*.gui",
-          "**/victoria*2/**/*.gfx",
-          "**/victoria*2/**/*.sfx",
-          "**/victoria*2/**/*.asset",
-          "**/victoria*2/**/*.map"
-        ]
-      },
-      {
-        "id": "ck3",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "asset"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/crusader*kings*iii/**/*.txt",
-          "**/crusader*kings*iii/**/*.gui",
-          "**/crusader*kings*iii/**/*.gfx",
-          "**/crusader*kings*iii/**/*.sfx",
-          "**/crusader*kings*iii/**/*.asset"
-        ]
-      },
-      {
-        "id": "vic3",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "asset"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/victoria*3/**/*.txt",
-          "**/victoria*3/**/*.gui",
-          "**/victoria*3/**/*.gfx",
-          "**/victoria*3/**/*.sfx",
-          "**/victoria*3/**/*.asset"
-        ]
-      },
-      {
-        "id": "eu5",
-        "aliases": [
-          "paradox",
-          "pdxscript"
-        ],
-        "extensions": [
-          "txt",
-          "gui",
-          "gfx",
-          "asset"
-        ],
-        "configuration": "./language-configuration.json",
-        "filenamePatterns": [
-          "**/europa*universalis*v/**/*.txt",
-          "**/europa*universalis*v/**/*.gui",
-          "**/europa*universalis*v/**/*.gfx",
-          "**/europa*universalis*v/**/*.asset",
-          "**/europa*universalis*5/**/*.txt",
-          "**/europa*universalis*5/**/*.gui",
-          "**/europa*universalis*5/**/*.gfx",
-          "**/europa*universalis*5/**/*.asset"
-        ]
-      },
       {
         "id": "paradox",
         "aliases": [
@@ -618,7 +339,8 @@
           "gui",
           "gfx",
           "sfx",
-          "asset"
+          "asset",
+          "map"
         ]
       },
       {
@@ -645,79 +367,6 @@
       }
     ],
     "grammars": [
-      {
-        "language": "stellaris",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
-      {
-        "scopeName": "source.stellaris",
-        "injectTo": [
-          "source.mod"
-        ],
-        "path": "./syntaxes/stellaris.tmLanguage.json"
-      },
-      {
-        "language": "hoi4",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
-      {
-        "scopeName": "source.hoi4",
-        "injectTo": [
-          "source.mod"
-        ],
-        "path": "./syntaxes/hoi4.tmLanguage.json"
-      },
-      {
-        "language": "eu4",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
-      {
-        "scopeName": "source.eu4",
-        "injectTo": [
-          "source.mod"
-        ],
-        "path": "./syntaxes/eu4.tmLanguage.json"
-      },
-      {
-        "language": "ck2",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
-      {
-        "scopeName": "source.ck2",
-        "injectTo": [
-          "source.mod"
-        ],
-        "path": "./syntaxes/ck2.tmLanguage.json"
-      },
-      {
-        "language": "imperator",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
-      {
-        "language": "vic2",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
-      {
-        "language": "ck3",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
-      {
-        "language": "vic3",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
-      {
-        "language": "eu5",
-        "scopeName": "source.mod",
-        "path": "./syntaxes/paradox.tmLanguage.json"
-      },
       {
         "language": "paradox",
         "scopeName": "source.mod",
@@ -783,108 +432,12 @@
     ],
     "snippets": [
       {
-        "language": "stellaris",
+        "language": "paradox",
         "path": "./snippets/paradox.json"
       }
     ],
     "configurationDefaults": {
-      "[stellaris]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
-      },
-      "[hoi4]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
-      },
-      "[eu4]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
-      },
-      "[ck2]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
-      },
-      "[imperator]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
-      },
-      "[vic2]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
-      },
-      "[ck3]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
-      },
-      "[vic3]": {
-        "files.autoGuessEncoding": true,
-        "editor.quickSuggestions": {
-          "other": true,
-          "comments": false,
-          "strings": true
-        },
-        "editor.insertSpaces": false,
-        "editor.acceptSuggestionOnEnter": "off",
-        "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
-      },
-      "[eu5]": {
+      "[paradox]": {
         "files.autoGuessEncoding": true,
         "editor.quickSuggestions": {
           "other": true,

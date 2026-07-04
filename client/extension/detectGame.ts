@@ -1,11 +1,11 @@
 import * as os from 'os';
 import * as path from 'path';
 import type { Uri } from 'vscode';
-import { workspace, window, RelativePattern } from 'vscode';
+import { workspace, RelativePattern } from 'vscode';
 import { existsSync as fsExistsSync } from 'fs';
 import { detectFromFolder } from './engine';
 import { existAndIsExe } from './executable';
-import { GAMES, GAME_IDS } from './games';
+import { GAMES } from './games';
 
 async function findExeInFiles(gameExeName: string, binariesPrefix: boolean): Promise<Uri[]> {
 	if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
@@ -28,11 +28,6 @@ async function findExeInFiles(gameExeName: string, binariesPrefix: boolean): Pro
 }
 
 async function detectLanguageId(): Promise<string | null> {
-	const markerFiles = await workspace.findFiles("**/*.txt", "**/{.git,node_modules,out,dist}/**", 1);
-	if (markerFiles.length === 1) {
-		const doc = await workspace.openTextDocument(markerFiles[0]);
-		if (GAME_IDS.includes(doc.languageId)) return doc.languageId;
-	}
 	if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
 		return detectFromFolder(workspace.workspaceFolders[0].uri.fsPath, fsExistsSync);
 	}
@@ -45,12 +40,7 @@ export interface GameDetection {
 }
 
 export async function detectGameAndVanilla(): Promise<GameDetection> {
-	let guessedLanguageId: string | undefined | null = window.activeTextEditor?.document?.languageId;
-	if (guessedLanguageId === undefined || !GAME_IDS.includes(guessedLanguageId)) {
-		guessedLanguageId = await detectLanguageId();
-	}
-
-	let languageId = (guessedLanguageId && GAME_IDS.includes(guessedLanguageId)) ? guessedLanguageId : "paradox";
+	let languageId = (await detectLanguageId()) ?? "paradox";
 
 	const promises = GAMES.map(({ exeName, binariesPrefix }) =>
 		findExeInFiles(exeName, binariesPrefix)
