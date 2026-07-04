@@ -1,3 +1,14 @@
+### 1.16.0
+
+* Fixed identifier highlighting: a letter after a digit inside an id (`my_focus_2b`) was colored differently from the rest of the id. Dates, floats, negative numbers and real event ids (`civil_war.1`) are unaffected. (cwtools-vscode#73)
+* Collapsed the nine vestigial per-game language IDs down to `paradox` and `cwt`, folding the per-game keyword grammars into the base `paradox` grammar. Highlighting is unchanged (no keywords or scopes lost) and the extension manifest is about 450 lines smaller.
+* Removed dead command-palette entries and settings that no longer did anything, and wired the ignore and diagnostic-suppression settings (`ignore_patterns`, `errors.ignorefiles`, `errors.ignore`) through to the server so they take effect live. Added a manifest test that fails if a contributed command is not registered.
+* Corrected the README: removed a stale code-action claim and added Victoria 2 and EU5 to the supported games.
+* Upgrades to v1.19.0 of the Rust cwtools engine:
+  * Completion no longer dumps saved variables where a specific value is expected (`add_tech_bonus` name, focus `x`/`y`, country flags); `mio:` scope keys are suggested inside effect blocks; effect and modifier completion is scope-aware; and `has_dlc` completion inserts a well-formed snippet that quotes DLC names. (cwtools-vscode#74, cwtools-vscode#75, cwtools-vscode#76, cwtools-vscode#77, cwtools-vscode#78, cwtools-vscode#79)
+  * New editor features: document outline, folding, document highlight, and Find All References and Rename across closed files.
+  * New localisation-stub (`genlocall`) and rules-reload (`reloadrulesconfig`) commands, plus diagnostic suppression by error code.
+
 ### 1.15.0
 
 * The extension now activates only in Paradox mod workspaces instead of every window. Activation triggers on a Paradox language, a `descriptor.mod` / `.metadata/metadata.json`, or a game executable or content folder at the workspace root, and the cwtools file view only appears once activated. (Opening a lone game script with no folder open no longer auto-activates, which previously only surfaced the "open the mod folder" warning anyway.)

@@ -3,21 +3,12 @@
   "extension.description": "Paradox Interactive scripting support. Millennium Dawn Mod Team fork of CWTools.",
   // The title of the panel under Explorer which contains the extension's list of files it knows about
   "views.cwtools-files.name": "CWTools loaded files",
-  "commands.outputerrors.title": "Write errors to file",
   "commands.genlocall.title": "Generate missing loc for all files",
   "commands.reloadrulesconfig.title": "Reload config rules",
   "commands.cacheVanilla.title": "Regenerate game vanilla cache file",
-  "commands.listAllFiles.title": "Debug: list all files",
-  "commands.listAllLocFiles.title": "Debug: list all loc files",
-  "commands.debugrules.title": "Debug: list all config rules",
-  // https://stellaris.paradoxwikis.com/Event_modding#Pre-triggers - This command applies the optimisation everywhere it can be
-  "commands.pretriggerAllFiles.title": "Optimise all triggers into pretriggers",
-  // This doesn't seem to work, but it would be used to manually trigger cwtools to load for a game not supported by cwtools (e.g. if a new game comes out)
-  "commands.startcustomgame.title": "Activate cwtools for a custom game",
   "commands.showGraph.title": "Show graph",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "Recreate graph from json",
-  "commands.exportTypes.title": "Export: all types",
   "commands.saveGraphImage.title": "Save graph as image",
   // Adjust the depth of the displayed graph, which is how many links it follows outside the current file to other files
   "commands.setGraphDepth.title": "Set graph depth",
@@ -26,15 +17,10 @@
   // Trace here refers to very detailed logs
   "configuration.cwtools.trace.server.description": "Traces the communication between VSCode and the language server.",
   "configuration.cwtools.localisation.languages.description": "Languages to validate localisation against. Only the listed languages are checked, so an English-only mod isn't flagged for missing French/German/… translations the base game happens to ship. Default: English.",
-  "configuration.cwtools.localisation.generated_strings.description": "Placeholder text used when generating missing localisation strings (the \"Generate missing loc\" commands).",
-  "configuration.cwtools.errors.vanilla.description": "Also report diagnostics for the base game's own files, not just your mod. Off by default.",
   "configuration.cwtools.errors.ignore.description": "Diagnostic codes to suppress everywhere, e.g. CW100 (list of error/warning IDs).",
-  "configuration.cwtools.errors.ignorefiles.description": "File names whose diagnostics are suppressed (e.g. README.txt, credits.txt).",
-  "configuration.cwtools.experimental.description": "Whether or not to enable experimental features",
-  "configuration.cwtools.debug_mode.description": "Debug features for helping write rules",
+  "configuration.cwtools.errors.ignorefiles.description": "File names to exclude from the workspace (not load into cwtools, so references into them won't resolve), e.g. README.txt, credits.txt.",
   // Referring to log levels (Error, Warning, Info, Diagnostic)
   "configuration.cwtools.logging.diagnostic.description": "Whether to output diagnostic level logs",
-  "configuration.cwtools.rules_version.description": "Which version of rules to auto-update to. If rules_folder is set to an existing folder it is always used, regardless of this setting.",
   "configuration.cwtools.rules_folder.description": "A folder containing custom rules to use",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "File paths to ignore (not load into cwtools), list of glob patterns",
@@ -49,5 +35,4 @@
   "configuration.cwtools.cache.eu5.description": "Path to a vanilla EU5 install. Used to resolve base-game references so they aren't flagged as unknown. Usually auto-detected from Steam.",
   // zoom sensitivity in the graph
   "configuration.cwtools.graph.zoomSensitivity.description": "Control scroll wheel zoom sensitivity, <1 reduces sensitivity, >1 increases sensitivity",
-  "configuration.cwtools.maxFileSize.description": "Maximum script file size to load in megabytes (warning, very large files can cause instability or invalid diagnostics)",
 }
