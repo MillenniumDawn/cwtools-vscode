@@ -69,7 +69,9 @@ function renderSection(source: Source): string[] {
 	try {
 		data = JSON.parse(readFileSync(source.path, 'utf8')) as Summary;
 	} catch {
-		return [`## Coverage (${source.title})`, '', `_No report at ${source.path}._`, ''];
+		// Report absent (e.g. host coverage is not collected in CI). Omit the
+		// section rather than print a placeholder.
+		return [];
 	}
 
 	// vscode-test instruments every file the extension loads, including its
