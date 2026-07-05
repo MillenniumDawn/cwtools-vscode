@@ -45,9 +45,10 @@ export function registerCommands(context: ExtensionContext, client: LanguageClie
 		gp.GraphPanel.create(context.extensionPath);
 		gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
 	}));
-	// cacheVanilla / clearAllCaches are NOT registered here: the language
-	// client registers them from the server's executeCommandProvider, and
-	// the executeCommand middleware surfaces their results.
+	// cacheVanilla / clearAllCaches / reindexWorkspace are NOT registered here:
+	// the language client registers them from the server's
+	// executeCommandProvider, and the executeCommand middleware surfaces
+	// their results.
 
 	// Fetch the server's accumulated profiling report and save it to a file.
 	// The server only fills the buffer when launched with CWTOOLS_PROFILE=1
