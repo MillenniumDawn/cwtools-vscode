@@ -95,6 +95,11 @@
         "category": "cwtools"
       },
       {
+        "command": "reindexWorkspace",
+        "title": "Re-index workspace",
+        "category": "cwtools"
+      },
+      {
         "command": "cwtools.exportProfilingLog",
         "title": "Export profiling log",
         "category": "cwtools"
@@ -322,6 +327,13 @@
             "type": "boolean",
             "default": false,
             "description": "Launch the language server with profiling on. Emits per-phase timing and memory (RSS) to the CWTools output channel and keeps a buffer you can save with 'cwtools: Export profiling log'. Reload the window after changing this. Slightly slower; leave off for normal use."
+          },
+          "cwtools.backgroundReindex.intervalMinutes": {
+            "scope": "window",
+            "type": "number",
+            "minimum": 0,
+            "default": 30,
+            "description": "Minutes between background re-index passes that keep the index fresh during long sessions. Runs only while idle. 0 disables."
           }
         }
       }

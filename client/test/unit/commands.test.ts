@@ -21,6 +21,7 @@ const SERVER_COMMANDS = new Set([
 	"exportProfilingLog",
 	"cacheVanilla",
 	"clearAllCaches",
+	"reindexWorkspace",
 	"genlocall",
 	"reloadrulesconfig",
 ]);
