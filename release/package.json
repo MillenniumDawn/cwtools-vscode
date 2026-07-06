@@ -211,12 +211,6 @@
               "**/99_README**.txt"
             ]
           },
-          "cwtools.logging.diagnostic": {
-            "scope": "window",
-            "type": "boolean",
-            "default": false,
-            "description": "%configuration.cwtools.logging.diagnostic.description%"
-          },
           "cwtools.hover.debug": {
             "scope": "window",
             "type": "boolean",
