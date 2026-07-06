@@ -1,3 +1,9 @@
+### 1.17.0
+
+* Added a background reindex: the server re-scans the workspace on an interval (default 30 minutes, and only after you've gone idle), so files changed outside the editor and definitions moved between files no longer go stale until a window reload. `cwtools.backgroundReindex.intervalMinutes` tunes the interval; 0 disables it.
+* Added a "Re-index workspace" command to run the same rescan on demand.
+* `history/` script files are now watched, so external edits to them reach the server without a reload.
+
 ### 1.16.0
 
 * Fixed identifier highlighting: a letter after a digit inside an id (`my_focus_2b`) was colored differently from the rest of the id. Dates, floats, negative numbers and real event ids (`civil_war.1`) are unaffected. (cwtools-vscode#73)
