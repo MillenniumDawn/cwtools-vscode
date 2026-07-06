@@ -16,6 +16,7 @@ export default defineConfig({
 				"client/extension/executable.ts",
 				"client/extension/games.ts",
 				"client/extension/logger.ts",
+				"client/extension/reindexSettings.ts",
 			],
 			reporter: ["text-summary", "html", "lcov", "json-summary"],
 			reportsDirectory: "coverage-node",

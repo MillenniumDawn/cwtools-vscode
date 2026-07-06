@@ -3,6 +3,7 @@ import type { ExtensionContext } from 'vscode';
 import { workspace, window } from 'vscode';
 import type { LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
 import { LanguageClient, TransportKind, RevealOutputChannelOn, DidChangeConfigurationNotification } from 'vscode-languageclient/node';
+import { normalizeBackgroundReindexMinutes, buildReindexSettingsPayload } from './reindexSettings';
 
 export interface ClientConfig {
 	language: string;
@@ -35,7 +36,7 @@ function readIgnoreOptions(): { ignoreFilePatterns: string[]; ignoredErrorCodes:
 // server's key (backgroundReindexIntervalMinutes) matches the setting's leaf
 // name, just camelCased onto one word.
 function readBackgroundReindexMinutes(): number {
-	return workspace.getConfiguration('cwtools').get<number>('backgroundReindex.intervalMinutes') ?? 30;
+	return normalizeBackgroundReindexMinutes(workspace.getConfiguration('cwtools').get<number>('backgroundReindex.intervalMinutes'));
 }
 
 // genlocall returns one stub per language; open each as an untitled document so
@@ -178,7 +179,7 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 			|| e.affectsConfiguration('cwtools.ignore_patterns')
 			|| e.affectsConfiguration('cwtools.backgroundReindex.intervalMinutes');
 		if (!touched) { return; }
-		const settings = { ...readIgnoreOptions(), backgroundReindexIntervalMinutes: readBackgroundReindexMinutes() };
+		const settings = buildReindexSettingsPayload(readIgnoreOptions(), readBackgroundReindexMinutes());
 		client.sendNotification(DidChangeConfigurationNotification.type, { settings }).catch(() => {});
 	}));
 
