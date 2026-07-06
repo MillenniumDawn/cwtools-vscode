@@ -19,8 +19,6 @@
   "configuration.cwtools.localisation.languages.description": "用于验证本地化的语言列表。",
   "configuration.cwtools.errors.ignore.description": "要忽略的错误代码，ID 列表",
   "configuration.cwtools.errors.ignorefiles.description": "要从工作区中排除的文件名（不加载到 cwtools 中，因此其引用无法解析）",
-  // Referring to log levels (Error, Warning, Info, Diagnostic)
-  "configuration.cwtools.logging.diagnostic.description": "是否输出诊断级别日志",
   "configuration.cwtools.rules_folder.description": "包含要使用的自定义规则的文件夹",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "要忽略的文件路径（不加载到 cwtools 中），glob 模式列表",

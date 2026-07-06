@@ -49,7 +49,7 @@ export async function activate(context: ExtensionContext) {
 	// wiped on every update and can be read-only.
 	const cacheDir = path.join(context.globalStorageUri.fsPath, '.cwtools')
 
-	const init = async function(language : string, isVanillaFolder : boolean) {
+	const init = async function(language : string) {
 		// Include `.` in the word pattern so a dotted event/decision id
 		// (`namespace.1`) selects whole on double-click and resolves via
 		// go-to-definition, instead of splitting at the dot. (#39)
@@ -78,9 +78,9 @@ export async function activate(context: ExtensionContext) {
 			}
 		}
 
-		const { rulesCache, repoPath } = await ensureRules(language, cacheDir);
+		const { rulesCache } = await ensureRules(language, cacheDir);
 
-		const client = createLanguageClient(context, { language, isVanillaFolder, serverExe, cacheDir, rulesCache, repoPath });
+		const client = createLanguageClient(context, { language, serverExe, cacheDir, rulesCache });
 		defaultClient = client;
 		client.registerProposedFeatures();
 
@@ -130,7 +130,7 @@ export async function activate(context: ExtensionContext) {
 		}
 	}
 
-	const { languageId, isVanillaFolder } = await detectGameAndVanilla();
+	const { languageId } = await detectGameAndVanilla();
 
-	await init(languageId, isVanillaFolder);
+	await init(languageId);
 }

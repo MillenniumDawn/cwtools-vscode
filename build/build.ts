@@ -247,6 +247,7 @@ function cmdQuick(): void {
 
 function cmdPackage(): void {
 	cleanReleaseBin();
+	setReleaseVersion(resolveVersion().version);
 	assembleClient();
 	packageVsix();
 }

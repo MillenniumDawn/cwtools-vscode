@@ -4,14 +4,13 @@ import { workspace, window } from 'vscode';
 import type { LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
 import { LanguageClient, TransportKind, RevealOutputChannelOn, DidChangeConfigurationNotification } from 'vscode-languageclient/node';
 import { normalizeBackgroundReindexMinutes, buildReindexSettingsPayload } from './reindexSettings';
+import { logError } from './logger';
 
 export interface ClientConfig {
 	language: string;
-	isVanillaFolder: boolean;
 	serverExe: string;
 	cacheDir: string;
 	rulesCache: string;
-	repoPath?: string;
 }
 
 // The server reads remapped keys (ignoreFilePatterns/ignoredErrorCodes); the
@@ -180,7 +179,8 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 			|| e.affectsConfiguration('cwtools.backgroundReindex.intervalMinutes');
 		if (!touched) { return; }
 		const settings = buildReindexSettingsPayload(readIgnoreOptions(), readBackgroundReindexMinutes());
-		client.sendNotification(DidChangeConfigurationNotification.type, { settings }).catch(() => {});
+		client.sendNotification(DidChangeConfigurationNotification.type, { settings })
+			.catch(err => logError('Failed to push updated settings to the server', err));
 	}));
 
 	return client;

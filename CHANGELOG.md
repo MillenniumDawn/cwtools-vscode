@@ -1,3 +1,11 @@
+### 1.18.0
+
+* A failed first-time download of the language rules now raises a warning notification, instead of silently leaving the extension with no rules and only a line in the output log. A failed offline refresh (rules already present) stays quiet.
+* Documented the background reindex in the README: the idle-gated periodic rescan, the `Re-index workspace` command, and the `cwtools.backgroundReindex.intervalMinutes` setting.
+* Refreshed the theming docs for the single merged `paradox` grammar (the per-game grammars were folded into it in 1.16.0).
+* Removed the dead `cwtools.logging.diagnostic` setting, which did nothing.
+* Housekeeping: bumped the bundled Rust engine submodule to v1.20.0, and made local and PR-CI vsix builds stamp the CHANGELOG version instead of the committed manifest version.
+
 ### 1.17.0
 
 * Added a background reindex: the server re-scans the workspace on an interval (default 30 minutes, and only after you've gone idle), so files changed outside the editor and definitions moved between files no longer go stale until a window reload. `cwtools.backgroundReindex.intervalMinutes` tunes the interval; 0 disables it.

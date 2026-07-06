@@ -90,9 +90,13 @@ If you want to browse vanilla files, you can use the "CWTOOLS LOADED FILES" sect
 
 ![Find all references](https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/refs/heads/main/release/docs/findallrefs.png)
 
+### Background reindex
+
+The extension periodically re-scans the whole workspace in the background, so files changed outside the editor and definitions moved between files don't go stale until you reload the window. The rescan is idle-gated: it waits until you stop typing before running. To force one immediately, run **cwtools: Re-index workspace** from the command palette. The `cwtools.backgroundReindex.intervalMinutes` setting controls the interval (default 30; set it to 0 to disable the automatic pass).
+
 ## Theming
 
-The extension ships its own [TextMate grammars](https://github.com/cwtools/paradox-syntax/tree/master/syntaxes) for all the supported games, so syntax highlighting works out of the box. No second extension to install.
+The extension ships its own [TextMate grammar](https://github.com/cwtools/paradox-syntax/tree/master/syntaxes) for the supported games, so syntax highlighting works out of the box. No second extension to install.
 
 The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) (see [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh) to refresh them); the `.cwt` rules grammar is owned here. Themes live under [`release/themes/`](release/themes/). Every theme paints the full scope set from both grammars (game scripts and `.cwt` rule files) plus a generic baseline, so coloring is consistent whatever file you're in. Pick one with the Color Theme picker:
 
@@ -118,7 +122,7 @@ The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtoo
   [tboby.paradox-syntax](https://marketplace.visualstudio.com/items?itemName=tboby.paradox-syntax)
   extension.
 
-The per-game grammars (`stellaris`, `hoi4`, `eu4`, `ck2`) are intermediate. The end state is a single merged grammar with game-specific keywords injected on top, instead of separate per-game files.
+Highlighting runs off a single merged `paradox` grammar, with each game's keywords folded into it, so there are no separate per-game grammar files to keep in sync.
 
 ## Credits
 
