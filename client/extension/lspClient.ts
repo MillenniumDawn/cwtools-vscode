@@ -3,6 +3,7 @@ import type { ExtensionContext } from 'vscode';
 import { workspace, window } from 'vscode';
 import type { LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
 import { LanguageClient, TransportKind, RevealOutputChannelOn, DidChangeConfigurationNotification } from 'vscode-languageclient/node';
+import { normalizeBackgroundReindexMinutes, buildReindexSettingsPayload } from './reindexSettings';
 
 export interface ClientConfig {
 	language: string;
@@ -29,6 +30,13 @@ function readIgnoreOptions(): { ignoreFilePatterns: string[]; ignoredErrorCodes:
 		],
 		ignoredErrorCodes: cfg.get<string[]>('errors.ignore') ?? [],
 	};
+}
+
+// Minutes between the server's periodic background re-index passes; the
+// server's key (backgroundReindexIntervalMinutes) matches the setting's leaf
+// name, just camelCased onto one word.
+function readBackgroundReindexMinutes(): number {
+	return normalizeBackgroundReindexMinutes(workspace.getConfiguration('cwtools').get<number>('backgroundReindex.intervalMinutes'));
 }
 
 // genlocall returns one stub per language; open each as an untitled document so
@@ -64,7 +72,7 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 	}
 
 	const fileEvents = [
-		workspace.createFileSystemWatcher("**/{events,common,map,map_data,prescripted_countries,flags,decisions,missions}/**/*.txt"),
+		workspace.createFileSystemWatcher("**/{events,common,history,map,map_data,prescripted_countries,flags,decisions,missions}/**/*.txt"),
 		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gui"),
 		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gfx"),
 		workspace.createFileSystemWatcher("**/{interface}/**/*.sfx"),
@@ -116,7 +124,8 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 			cacheDir: path.join(cfg.cacheDir, 'vanilla'),
 			vanilla: workspace.getConfiguration('cwtools').get('cache.' + cfg.language),
 			ignoreFilePatterns: ignoreOptions.ignoreFilePatterns,
-			ignoredErrorCodes: ignoreOptions.ignoredErrorCodes },
+			ignoredErrorCodes: ignoreOptions.ignoredErrorCodes,
+			backgroundReindexIntervalMinutes: readBackgroundReindexMinutes() },
 			revealOutputChannelOn: RevealOutputChannelOn.Error,
 		// The server advertises its commands (cacheVanilla, clearAllCaches,
 		// reloadrulesconfig, genlocall, ...) in executeCommandProvider, and
@@ -137,7 +146,7 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 						return undefined;
 					}
 				}
-				const isStatusCommand = command === 'cacheVanilla' || command === 'clearAllCaches' || command === 'reloadrulesconfig';
+				const isStatusCommand = command === 'cacheVanilla' || command === 'clearAllCaches' || command === 'reloadrulesconfig' || command === 'reindexWorkspace';
 				if (!isStatusCommand) {
 					return next(command, args);
 				}
@@ -158,19 +167,20 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 
 	const client = new LanguageClient('cwtools', 'Paradox Language Server', serverOptions, clientOptions);
 
-	// Push the mapped ignore/suppression settings to the server whenever they
-	// change, so a live edit to `cwtools.errors.ignore` or the ignore globs takes
+	// Push the mapped ignore/suppression settings and the background-reindex
+	// interval to the server whenever they change, so a live edit to
+	// `cwtools.errors.ignore`, the ignore globs, or the reindex interval takes
 	// effect without a window reload. We drive this ourselves rather than via
 	// synchronize.configurationSection, which would send the raw (unmapped)
 	// `cwtools` section the server can't read.
 	context.subscriptions.push(workspace.onDidChangeConfiguration(e => {
 		const touched = e.affectsConfiguration('cwtools.errors.ignore')
 			|| e.affectsConfiguration('cwtools.errors.ignorefiles')
-			|| e.affectsConfiguration('cwtools.ignore_patterns');
+			|| e.affectsConfiguration('cwtools.ignore_patterns')
+			|| e.affectsConfiguration('cwtools.backgroundReindex.intervalMinutes');
 		if (!touched) { return; }
-		// Client not started yet; the initializationOptions already carry the
-		// current values, so there is nothing to push.
-		client.sendNotification(DidChangeConfigurationNotification.type, { settings: readIgnoreOptions() }).catch(() => {});
+		const settings = buildReindexSettingsPayload(readIgnoreOptions(), readBackgroundReindexMinutes());
+		client.sendNotification(DidChangeConfigurationNotification.type, { settings }).catch(() => {});
 	}));
 
 	return client;
