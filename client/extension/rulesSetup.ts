@@ -7,7 +7,6 @@ import { logInfo, logWarn, logError } from './logger';
 
 export interface RulesSetup {
 	rulesCache: string;
-	repoPath?: string;
 }
 
 export async function ensureRules(language: string, cacheDir: string): Promise<RulesSetup> {
@@ -36,14 +35,15 @@ export async function ensureRules(language: string, cacheDir: string): Promise<R
 		);
 	}
 	if (!manualRules.existed && repoPath) {
+		const gitDir = path.join(languageRulesCache, '.git');
+		const isInitialClone = !fsExistsSync(gitDir);
 		try {
-			const gitDir = path.join(languageRulesCache, '.git');
 			// Status-bar spinner: the clone/pull runs during activation and can
 			// take up to 60s on a slow network, previously with no UI at all.
 			await window.withProgress(
 				{ location: ProgressLocation.Window, title: `CWTools: updating ${language} rules` },
 				async () => {
-					if (!fsExistsSync(gitDir)) {
+					if (isInitialClone) {
 						logInfo(`Cloning rules from ${repoPath} into ${languageRulesCache}`);
 						await runGit(['clone', '--depth', '1', repoPath, languageRulesCache]);
 					} else {
@@ -55,8 +55,16 @@ export async function ensureRules(language: string, cacheDir: string): Promise<R
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logError(`Rule fetch failed for ${language}`, msg);
+			// A failed initial clone leaves the extension with no rules at all, so
+			// warn loudly. A failed pull (rules already present) is only a stale
+			// offline refresh and stays log-only.
+			if (isInitialClone) {
+				void window.showWarningMessage(
+					`CWTools: failed to download the ${language} rules (${msg}). Validation will be limited until they can be fetched; check your network and reload the window.`
+				);
+			}
 		}
 	}
 
-	return { rulesCache: effectiveRulesCache, repoPath };
+	return { rulesCache: effectiveRulesCache };
 }
