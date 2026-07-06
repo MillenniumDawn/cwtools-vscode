@@ -14,8 +14,7 @@ const manifest = JSON.parse(
 );
 
 // executeCommands the server advertises (config.rs execute_command_provider),
-// plus genlocall + reloadrulesconfig, which a parallel engine workstream (B8)
-// is wiring server-side; their palette entries are kept for that.
+// including genlocall and reloadrulesconfig, which the server now handles.
 const SERVER_COMMANDS = new Set([
 	"getFileTypes",
 	"exportProfilingLog",
