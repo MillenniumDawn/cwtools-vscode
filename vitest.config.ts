@@ -14,6 +14,7 @@ export default defineConfig({
 			include: [
 				"client/extension/engine.ts",
 				"client/extension/executable.ts",
+				"client/extension/focusTracking.ts",
 				"client/extension/games.ts",
 				"client/extension/logger.ts",
 				"client/extension/reindexSettings.ts",

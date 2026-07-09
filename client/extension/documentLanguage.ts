@@ -3,6 +3,7 @@ import type { ExtensionContext } from 'vscode';
 import { workspace, window, commands } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
 import { NotificationType, ExecuteCommandRequest } from 'vscode-languageclient/node';
+import { shouldNotifyFocus, pendingProcessDelayMs } from './focusTracking';
 import { logError } from './logger';
 
 interface DidFocusFile { uri: string }
@@ -24,7 +25,9 @@ export async function registerDocumentLanguage(
 	let latestType : string = '';
 	let getFileTypesInFlight = false;
 	let pendingEditor : vscode.TextEditor | undefined;
+	let lastFocusUri : string | undefined;
 	const getFileTypesTimeoutMs = 5000;
+	const getFileTypesBackoffMs = 2000;
 
 	// The static filenamePatterns in package.json only match game files under a
 	// folder named like the game ("hearts of iron iv"), so a mod workspace with
@@ -50,8 +53,9 @@ export async function registerDocumentLanguage(
 		if (!editor) return;
 		const editorPath = editor.document.uri.toString();
 		await upgradePlaintextDocument(editor.document);
-		if (editor.document.languageId === languageId) {
+		if (editor.document.languageId === languageId && shouldNotifyFocus(editorPath, lastFocusUri)) {
 			await client.sendNotification(didFocusFile, {uri: editorPath});
+			lastFocusUri = editorPath;
 		}
 		// Guard against rapid tab switches piling up requests to a busy server.
 		// Only one getFileTypes request runs at a time; a switch that arrives
@@ -63,16 +67,18 @@ export async function registerDocumentLanguage(
 			return;
 		}
 		getFileTypesInFlight = true;
+		let timedOut = false;
+		// The timeout guard cancels the request instead of just rejecting locally,
+		// so a dead getFileTypes leaves the (possibly saturated) server queue via
+		// $/cancelRequest rather than piling up behind it.
+		const cts = new vscode.CancellationTokenSource();
+		const timeoutTimer = setTimeout(() => cts.cancel(), getFileTypesTimeoutMs);
 		try {
-			const data = await Promise.race([
-				client.sendRequest(
-					ExecuteCommandRequest.type,
-					{ command: "getFileTypes", arguments: [editorPath] }
-				),
-				new Promise<never>((_, reject) =>
-					setTimeout(() => reject(new Error('getFileTypes request timed out')), getFileTypesTimeoutMs)
-				)
-			]);
+			const data = await client.sendRequest(
+				ExecuteCommandRequest.type,
+				{ command: "getFileTypes", arguments: [editorPath] },
+				cts.token
+			);
 			if (data && data[0]) {
 				latestType = data[0];
 				await commands.executeCommand('setContext', 'cwtoolsGraphFile', true);
@@ -80,9 +86,21 @@ export async function registerDocumentLanguage(
 				await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
 			}
 		} catch (err) {
+			timedOut = cts.token.isCancellationRequested;
 			logError('didChangeActiveTextEditor getFileTypes failed', err);
 			await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
 		} finally {
+			clearTimeout(timeoutTimer);
+			cts.dispose();
+			// After a timeout, cool down before draining pendingEditor so a
+			// stalled server isn't re-hit once per timeout window. The in-flight
+			// guard stays held through the wait, so switches during the cooldown
+			// coalesce into pendingEditor (freshest wins). A settled response
+			// drains immediately.
+			const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
+			if (delay > 0) {
+				await new Promise<void>(resolve => setTimeout(resolve, delay));
+			}
 			getFileTypesInFlight = false;
 		}
 		if (pendingEditor) {

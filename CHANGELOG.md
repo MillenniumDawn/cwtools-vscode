@@ -1,3 +1,9 @@
+### 1.19.0
+
+* Fixed a feedback loop where a busy language server could make the extension spam "getFileTypes request timed out" and stay stuck: the 5s guard now actually cancels the in-flight request (instead of just giving up locally and leaving it queued on the server), and the editor-tracking retry backs off for a couple of seconds after a timeout instead of firing again immediately. (cwtools-vscode#90)
+* The "did focus file" hint is no longer re-sent when the active editor is the file it was last sent for.
+* Removed a file watcher on the extension's own rule cache that only generated redundant lint traffic against the server.
+
 ### 1.18.0
 
 * A failed first-time download of the language rules now raises a warning notification, instead of silently leaving the extension with no rules and only a line in the output log. A failed offline refresh (rules already present) stays quiet.

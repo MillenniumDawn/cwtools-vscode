@@ -76,9 +76,7 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gfx"),
 		workspace.createFileSystemWatcher("**/{interface}/**/*.sfx"),
 		workspace.createFileSystemWatcher("**/{interface,gfx,fonts,music,sound}/**/*.asset"),
-		workspace.createFileSystemWatcher("**/{localisation,localisation_synced,localization}/**/*.yml"),
-		// Watch cached CWT rule files; force posix separators so the glob works on Windows.
-		workspace.createFileSystemWatcher(cfg.cacheDir.replace(/\\/g, '/') + '/**/*.cwt')
+		workspace.createFileSystemWatcher("**/{localisation,localisation_synced,localization}/**/*.yml")
 	]
 	context.subscriptions.push(...fileEvents);
 
