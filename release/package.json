@@ -172,6 +172,12 @@
             ],
             "description": "%configuration.cwtools.localisation.languages.description%",
             "uniqueItems": true
+          },
+          "cwtools.localisation.hoverShowAllLanguages": {
+            "scope": "window",
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.cwtools.localisation.hoverShowAllLanguages.description%"
           }
         }
       },
