@@ -71,7 +71,4 @@ export function registerCommands(context: ExtensionContext, client: LanguageClie
 		await workspace.fs.writeFile(uri, Buffer.from(log, 'utf8'));
 		window.showInformationMessage(`CWTools: profiling log written to ${uri.fsPath}`);
 	}));
-	context.subscriptions.push(vscode.commands.registerCommand("cwtools.reloadExtension", () =>
-		commands.executeCommand('workbench.action.reloadWindow')
-	));
 }
