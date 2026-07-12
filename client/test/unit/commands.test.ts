@@ -56,4 +56,20 @@ suite("manifest — command registration", () => {
 			`commands with no handler: ${orphans.join(", ")}`,
 		);
 	});
+
+	// Client-owned command IDs live in the cwtools. namespace so they can't
+	// collide with other extensions; only server-advertised IDs stay bare.
+	test("every client-registered contributed command is namespaced under cwtools.", () => {
+		const bare = contributed.filter(
+			(id) =>
+				clientCommands.has(id) &&
+				!SERVER_COMMANDS.has(id) &&
+				!id.startsWith("cwtools."),
+		);
+		assert.strictEqual(
+			bare.length,
+			0,
+			`client commands outside the cwtools. namespace: ${bare.join(", ")}`,
+		);
+	});
 });

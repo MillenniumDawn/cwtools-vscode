@@ -48,7 +48,7 @@ suite(`Debug Integration Test: `, function() {
 		const cwtoolsCommands = commands.filter(cmd =>
 			cmd.includes('cwtools') ||
 			cmd === 'genlocall' ||
-			cmd === 'showGraph'
+			cmd === 'cwtools.showGraph'
 		);
 
 		console.log('All available commands:', commands.slice(0, 20).join(', ') + '...');
@@ -210,7 +210,7 @@ describe('GraphPanel Tests', function () {
 
 		sandbox.stub(vscode.window, 'showOpenDialog').resolves([uri]);
 
-		await vscode.commands.executeCommand('graphFromJson');
+		await vscode.commands.executeCommand('cwtools.graphFromJson');
 
 		// Wait for the panel to be created and initialized
 		await wait(1000);
@@ -305,14 +305,14 @@ suite('GraphPanel — UI integration', function () {
 	test('saveGraphImage and saveGraphJson are registered once a GraphPanel exists', async function () {
 		await setupPanel();
 		const commands = await vscode.commands.getCommands();
-		assert.ok(commands.includes('saveGraphImage'), 'saveGraphImage should be registered');
-		assert.ok(commands.includes('saveGraphJson'), 'saveGraphJson should be registered');
+		assert.ok(commands.includes('cwtools.saveGraphImage'), 'cwtools.saveGraphImage should be registered');
+		assert.ok(commands.includes('cwtools.saveGraphJson'), 'cwtools.saveGraphJson should be registered');
 	});
 
 	test('saveGraphImage forwards an exportImage message to the webview', async function () {
 		await setupPanel();
 		const postMessage = sinon.spy(gp.GraphPanel.currentPanel!['_panel'].webview, 'postMessage');
-		await vscode.commands.executeCommand('saveGraphImage');
+		await vscode.commands.executeCommand('cwtools.saveGraphImage');
 		assert.ok(postMessage.called, 'webview.postMessage should be called');
 		assert.deepStrictEqual(postMessage.firstCall.args[0], { command: 'exportImage' });
 	});
@@ -320,7 +320,7 @@ suite('GraphPanel — UI integration', function () {
 	test('saveGraphJson forwards an exportJson message to the webview', async function () {
 		await setupPanel();
 		const postMessage = sinon.spy(gp.GraphPanel.currentPanel!['_panel'].webview, 'postMessage');
-		await vscode.commands.executeCommand('saveGraphJson');
+		await vscode.commands.executeCommand('cwtools.saveGraphJson');
 		assert.ok(postMessage.called, 'webview.postMessage should be called');
 		assert.deepStrictEqual(postMessage.firstCall.args[0], { command: 'exportJson' });
 	});

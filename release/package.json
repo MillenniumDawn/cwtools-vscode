@@ -53,22 +53,22 @@
       "editor/title": [
         {
           "when": "cwtoolsGraphFile == true \u0026\u0026 cwtoolsWebview == false",
-          "command": "showGraph",
+          "command": "cwtools.showGraph",
           "group": "navigation"
         },
         {
           "when": "cwtoolsWebview == true",
-          "command": "saveGraphImage",
+          "command": "cwtools.saveGraphImage",
           "group": "navigation"
         },
         {
           "when": "cwtoolsWebview == true",
-          "command": "setGraphDepth",
+          "command": "cwtools.setGraphDepth",
           "group": "navigation"
         },
         {
           "when": "cwtoolsWebview == true",
-          "command": "saveGraphJson",
+          "command": "cwtools.saveGraphJson",
           "group": "navigation"
         }
       ]
@@ -105,29 +105,29 @@
         "category": "cwtools"
       },
       {
-        "command": "showGraph",
+        "command": "cwtools.showGraph",
         "title": "%commands.showGraph.title%",
         "category": "cwtools"
       },
       {
-        "command": "graphFromJson",
+        "command": "cwtools.graphFromJson",
         "title": "%commands.graphFromJson.title%",
         "category": "cwtools"
       },
       {
-        "command": "saveGraphImage",
+        "command": "cwtools.saveGraphImage",
         "title": "%commands.saveGraphImage.title%",
         "category": "cwtools",
         "enablement": "cwtoolsWebview == true"
       },
       {
-        "command": "setGraphDepth",
+        "command": "cwtools.setGraphDepth",
         "title": "%commands.setGraphDepth.title%",
         "category": "cwtools",
         "enablement": "cwtoolsWebview == true"
       },
       {
-        "command": "saveGraphJson",
+        "command": "cwtools.saveGraphJson",
         "title": "%commands.saveGraphJson.title%",
         "category": "cwtools",
         "enablement": "cwtoolsWebview == true"
