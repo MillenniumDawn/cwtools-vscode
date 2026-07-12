@@ -3,7 +3,7 @@ import type { ExtensionContext } from 'vscode';
 import { workspace, window } from 'vscode';
 import type { LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
 import { LanguageClient, TransportKind, RevealOutputChannelOn, DidChangeConfigurationNotification } from 'vscode-languageclient/node';
-import { normalizeBackgroundReindexMinutes, buildReindexSettingsPayload } from './reindexSettings';
+import { normalizeBackgroundReindexMinutes, buildReindexSettingsPayload, mapIgnoreOptions } from './reindexSettings';
 import { logError } from './logger';
 
 export interface ClientConfig {
@@ -13,22 +13,15 @@ export interface ClientConfig {
 	rulesCache: string;
 }
 
-// The server reads remapped keys (ignoreFilePatterns/ignoredErrorCodes); the
-// `cwtools.*` settings use different names. Map them here so both the initial
-// initializationOptions and the live didChangeConfiguration payload agree.
-// ignore_patterns are already globs; errors.ignorefiles lists bare file names,
-// so turn each into a **/<name> glob to match anywhere.
+// Settings-to-server mapping lives in reindexSettings.ts (pure, unit-tested);
+// this just reads the raw config values.
 function readIgnoreOptions(): { ignoreFilePatterns: string[]; ignoredErrorCodes: string[] } {
 	const cfg = workspace.getConfiguration('cwtools');
-	const ignorePatterns = cfg.get<string[]>('ignore_patterns') ?? [];
-	const ignoreFiles = cfg.get<string[]>('errors.ignorefiles') ?? [];
-	return {
-		ignoreFilePatterns: [
-			...ignorePatterns,
-			...ignoreFiles.map(f => (f.includes('/') ? f : `**/${f}`)),
-		],
-		ignoredErrorCodes: cfg.get<string[]>('errors.ignore') ?? [],
-	};
+	return mapIgnoreOptions(
+		cfg.get<string[]>('ignore_patterns'),
+		cfg.get<string[]>('errors.ignorefiles'),
+		cfg.get<string[]>('errors.ignore'),
+	);
 }
 
 // Minutes between the server's periodic background re-index passes; the
