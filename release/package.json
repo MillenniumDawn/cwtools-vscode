@@ -30,9 +30,6 @@
   ],
   "main": "./bin/client/extension/extension.js",
   "activationEvents": [
-    "onLanguage:paradox",
-    "onLanguage:cwt",
-    "onLanguage:paradox-localisation",
     "workspaceContains:descriptor.mod",
     "workspaceContains:.metadata/metadata.json",
     "workspaceContains:{,binaries/}{eu4,hoi4,stellaris,CK2,v2game,imperator,ck3,victoria3,eu5}{,.exe}",
