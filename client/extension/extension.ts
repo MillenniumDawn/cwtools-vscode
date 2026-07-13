@@ -20,8 +20,6 @@ import { registerDocumentLanguage } from './documentLanguage';
 import { registerCommands } from './commands';
 import { logInfo, logError } from './logger';
 
-export { reloadExtension } from './serverNotifications';
-
 export let defaultClient: LanguageClient;
 export async function activate(context: ExtensionContext) {
 	void commands.executeCommand('setContext', 'cwtoolsEnabled', true);

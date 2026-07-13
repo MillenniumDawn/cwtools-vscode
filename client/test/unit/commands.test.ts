@@ -56,4 +56,24 @@ suite("manifest — command registration", () => {
 			`commands with no handler: ${orphans.join(", ")}`,
 		);
 	});
+
+	// Client-owned command IDs live in the cwtools. namespace so they can't
+	// collide with other extensions; only server-advertised IDs stay bare.
+	// Checked on the registration side, so a bare ID can't hide by skipping
+	// the manifest.
+	test("every client-registered command is namespaced under cwtools.", () => {
+		// View-id-prefixed tree-item command; the cwtools-files view id is the prefix.
+		const VIEW_SCOPED_COMMANDS = new Set(["cwtools-files.openFile"]);
+		const bare = [...clientCommands].filter(
+			(id) =>
+				!id.startsWith("cwtools.") &&
+				!SERVER_COMMANDS.has(id) &&
+				!VIEW_SCOPED_COMMANDS.has(id),
+		);
+		assert.strictEqual(
+			bare.length,
+			0,
+			`client commands outside the cwtools. namespace: ${bare.join(", ")}`,
+		);
+	});
 });

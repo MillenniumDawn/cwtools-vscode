@@ -38,11 +38,22 @@ jobs:
             bin: cwtools-server
     runs-on: ${{ matrix.os }}
     steps:
-    - name: Checkout cwtools (Rust source)
+    # The engine builds from the submodule gitlink, so one pinned pointer rules
+    # both local and CI builds.
+    - name: Checkout (with engine submodule)
       uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       with:
-        repository: MillenniumDawn/cwtools
         submodules: recursive
+    # A release must bundle a tagged engine, not whatever commit the submodule
+    # happens to point at. Submodule checkouts don't fetch tags, so pull them
+    # first.
+    - name: Require a tagged engine
+      shell: bash
+      run: |
+        git -C submodules/cwtools fetch --tags --force --depth=1 origin
+        tag=$(git -C submodules/cwtools describe --tags --exact-match)
+        echo "Bundled engine tag: $tag"
+        echo "Bundled engine tag: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
       with:
@@ -50,15 +61,15 @@ jobs:
     - name: Cache Rust build
       uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
       with:
-        workspaces: cwtools-rs
+        workspaces: submodules/cwtools/cwtools-rs
     - name: Build server
-      working-directory: cwtools-rs
+      working-directory: submodules/cwtools/cwtools-rs
       run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
     - name: Upload binary
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: server-${{ matrix.platform }}
-        path: cwtools-rs/target/${{ matrix.target }}/release/${{ matrix.bin }}
+        path: submodules/cwtools/cwtools-rs/target/${{ matrix.target }}/release/${{ matrix.bin }}
         if-no-files-found: error
 
   # Stage the binaries, package one vsix, and publish it.
@@ -80,7 +91,6 @@ jobs:
       with:
         # workflow_dispatch has no head_ref; fall back to the dispatched branch.
         ref: ${{ github.head_ref || github.ref_name }}
-        submodules: recursive
     - name: Download server binaries
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:

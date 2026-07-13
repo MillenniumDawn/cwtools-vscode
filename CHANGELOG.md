@@ -1,3 +1,11 @@
+### 1.20.0
+
+* Removed the dead server-notification handlers (debugBar, createVirtualFile, promptReload, forceReload, promptVanillaPath) and the reload plumbing behind them. The engine only ever sends loadingBar and updateFileList. The `cwtools.reloadExtension` command is gone too; it was never in the palette, but keybindings or macros referencing it will now error. (cwtools-vscode#84)
+* The graph commands are now namespaced: `showGraph`, `setGraphDepth`, `graphFromJson`, `saveGraphImage` and `saveGraphJson` became `cwtools.showGraph` and so on. Custom keybindings referencing the old bare IDs need updating. (cwtools-vscode#85)
+* The `cwtools.localisation.hoverShowAllLanguages` setting now shows up in the settings UI; it was read but never declared.
+* Release CI now builds the engine from the pinned submodule and fails unless it points at a tag, so a release can't silently bundle whatever engine main happens to be. The submodule is pinned to v1.22.0, the version 1.19.0 already shipped. (cwtools-vscode#83)
+* Housekeeping: dropped the redundant onLanguage activation events, the FAKE-era build target aliases and two needless submodule checkouts in CI, and moved the ignore-settings mapping into a unit-tested module. (cwtools-vscode#87, cwtools-vscode#88)
+
 ### 1.19.0
 
 * Fixed a feedback loop where a busy language server could make the extension spam "getFileTypes request timed out" and stay stuck: the 5s guard now actually cancels the in-flight request (instead of just giving up locally and leaving it queued on the server), and the editor-tracking retry backs off for a couple of seconds after a timeout instead of firing again immediately. (cwtools-vscode#90)

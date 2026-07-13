@@ -17,6 +17,7 @@
   // Trace here refers to very detailed logs
   "configuration.cwtools.trace.server.description": "Traces the communication between VSCode and the language server.",
   "configuration.cwtools.localisation.languages.description": "Languages to validate localisation against. Only the listed languages are checked, so an English-only mod isn't flagged for missing French/German/… translations the base game happens to ship. Default: English.",
+  "configuration.cwtools.localisation.hoverShowAllLanguages.description": "Show hover localisation in every configured language instead of just the first one.",
   "configuration.cwtools.errors.ignore.description": "Diagnostic codes to suppress everywhere, e.g. CW100 (list of error/warning IDs).",
   "configuration.cwtools.errors.ignorefiles.description": "File names to exclude from the workspace (not load into cwtools, so references into them won't resolve), e.g. README.txt, credits.txt.",
   "configuration.cwtools.rules_folder.description": "A folder containing custom rules to use",

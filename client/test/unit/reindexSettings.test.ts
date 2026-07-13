@@ -3,6 +3,7 @@ import * as assert from "assert";
 import {
 	normalizeBackgroundReindexMinutes,
 	buildReindexSettingsPayload,
+	mapIgnoreOptions,
 } from "../../extension/reindexSettings";
 
 suite("reindexSettings — normalizeBackgroundReindexMinutes", () => {
@@ -16,6 +17,54 @@ suite("reindexSettings — normalizeBackgroundReindexMinutes", () => {
 
 	test("passes a normal value through", () => {
 		assert.strictEqual(normalizeBackgroundReindexMinutes(45), 45);
+	});
+});
+
+suite("reindexSettings — mapIgnoreOptions", () => {
+	test("maps bare file names to **/ globs", () => {
+		const result = mapIgnoreOptions([], ["README.txt", "credits.txt"], []);
+		assert.deepStrictEqual(result.ignoreFilePatterns, [
+			"**/README.txt",
+			"**/credits.txt",
+		]);
+	});
+
+	test("rewrites a slashless glob to match anywhere (*.txt becomes **/*.txt)", () => {
+		const result = mapIgnoreOptions([], ["*.txt"], []);
+		assert.deepStrictEqual(result.ignoreFilePatterns, ["**/*.txt"]);
+	});
+
+	test("passes names that already contain a path through unchanged", () => {
+		const result = mapIgnoreOptions([], ["docs/README.txt"], []);
+		assert.deepStrictEqual(result.ignoreFilePatterns, ["docs/README.txt"]);
+	});
+
+	test("empty or missing settings produce empty lists", () => {
+		assert.deepStrictEqual(mapIgnoreOptions(undefined, undefined, undefined), {
+			ignoreFilePatterns: [],
+			ignoredErrorCodes: [],
+		});
+		assert.deepStrictEqual(mapIgnoreOptions([], [], []), {
+			ignoreFilePatterns: [],
+			ignoredErrorCodes: [],
+		});
+	});
+
+	test("merges ignore_patterns globs ahead of the mapped file names", () => {
+		const result = mapIgnoreOptions(
+			["**/99_README**.txt"],
+			["credits.txt"],
+			[],
+		);
+		assert.deepStrictEqual(result.ignoreFilePatterns, [
+			"**/99_README**.txt",
+			"**/credits.txt",
+		]);
+	});
+
+	test("passes ignored error codes through", () => {
+		const result = mapIgnoreOptions([], [], ["CW100", "CW222"]);
+		assert.deepStrictEqual(result.ignoredErrorCodes, ["CW100", "CW222"]);
 	});
 });
 

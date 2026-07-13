@@ -30,9 +30,6 @@
   ],
   "main": "./bin/client/extension/extension.js",
   "activationEvents": [
-    "onLanguage:paradox",
-    "onLanguage:cwt",
-    "onLanguage:paradox-localisation",
     "workspaceContains:descriptor.mod",
     "workspaceContains:.metadata/metadata.json",
     "workspaceContains:{,binaries/}{eu4,hoi4,stellaris,CK2,v2game,imperator,ck3,victoria3,eu5}{,.exe}",
@@ -53,22 +50,22 @@
       "editor/title": [
         {
           "when": "cwtoolsGraphFile == true \u0026\u0026 cwtoolsWebview == false",
-          "command": "showGraph",
+          "command": "cwtools.showGraph",
           "group": "navigation"
         },
         {
           "when": "cwtoolsWebview == true",
-          "command": "saveGraphImage",
+          "command": "cwtools.saveGraphImage",
           "group": "navigation"
         },
         {
           "when": "cwtoolsWebview == true",
-          "command": "setGraphDepth",
+          "command": "cwtools.setGraphDepth",
           "group": "navigation"
         },
         {
           "when": "cwtoolsWebview == true",
-          "command": "saveGraphJson",
+          "command": "cwtools.saveGraphJson",
           "group": "navigation"
         }
       ]
@@ -105,29 +102,29 @@
         "category": "cwtools"
       },
       {
-        "command": "showGraph",
+        "command": "cwtools.showGraph",
         "title": "%commands.showGraph.title%",
         "category": "cwtools"
       },
       {
-        "command": "graphFromJson",
+        "command": "cwtools.graphFromJson",
         "title": "%commands.graphFromJson.title%",
         "category": "cwtools"
       },
       {
-        "command": "saveGraphImage",
+        "command": "cwtools.saveGraphImage",
         "title": "%commands.saveGraphImage.title%",
         "category": "cwtools",
         "enablement": "cwtoolsWebview == true"
       },
       {
-        "command": "setGraphDepth",
+        "command": "cwtools.setGraphDepth",
         "title": "%commands.setGraphDepth.title%",
         "category": "cwtools",
         "enablement": "cwtoolsWebview == true"
       },
       {
-        "command": "saveGraphJson",
+        "command": "cwtools.saveGraphJson",
         "title": "%commands.saveGraphJson.title%",
         "category": "cwtools",
         "enablement": "cwtoolsWebview == true"
@@ -175,6 +172,12 @@
             ],
             "description": "%configuration.cwtools.localisation.languages.description%",
             "uniqueItems": true
+          },
+          "cwtools.localisation.hoverShowAllLanguages": {
+            "scope": "window",
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.cwtools.localisation.hoverShowAllLanguages.description%"
           }
         }
       },

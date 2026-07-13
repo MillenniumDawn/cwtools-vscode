@@ -17,10 +17,10 @@ export function registerCommands(context: ExtensionContext, client: LanguageClie
 		gp.GraphPanel.create(context.extensionPath);
 		gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity());
 	}
-	context.subscriptions.push(commands.registerCommand('showGraph', async () => {
+	context.subscriptions.push(commands.registerCommand('cwtools.showGraph', async () => {
 		await showGraph();
 	}));
-	context.subscriptions.push(commands.registerCommand('setGraphDepth', async () => {
+	context.subscriptions.push(commands.registerCommand('cwtools.setGraphDepth', async () => {
 		const res = await window.showInputBox(
 			{
 				placeHolder: "default: 3",
@@ -34,7 +34,7 @@ export function registerCommands(context: ExtensionContext, client: LanguageClie
 			await showGraph()
 		}
 	}));
-	context.subscriptions.push(commands.registerCommand('graphFromJson', async () => {
+	context.subscriptions.push(commands.registerCommand('cwtools.graphFromJson', async () => {
 		const uri = await window.showOpenDialog({filters: {'Json': ['json']}})
 		if(!uri){
 			return;
@@ -71,7 +71,4 @@ export function registerCommands(context: ExtensionContext, client: LanguageClie
 		await workspace.fs.writeFile(uri, Buffer.from(log, 'utf8'));
 		window.showInformationMessage(`CWTools: profiling log written to ${uri.fsPath}`);
 	}));
-	context.subscriptions.push(vscode.commands.registerCommand("cwtools.reloadExtension", () =>
-		commands.executeCommand('workbench.action.reloadWindow')
-	));
 }

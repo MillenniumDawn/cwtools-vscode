@@ -280,19 +280,7 @@ const commands: Record<string, () => void> = {
 	release: cmdRelease,
 };
 
-// Aliases for the old FAKE target names, so existing muscle memory and any
-// stale invocations keep working.
-const aliases: Record<string, string> = {
-	QuickBuild: 'quick',
-	QuickBuildDebug: 'quick',
-	DryRelease: 'package',
-	BuildPackage: 'package',
-	ReleasePrebuilt: 'release-prebuilt',
-	Release: 'release',
-};
-
-const requested = process.argv[2] ?? 'quick';
-const cmd = aliases[requested] ?? requested;
+const cmd = process.argv[2] ?? 'quick';
 const handler = commands[cmd];
 if (!handler) {
 	console.error(`unknown command '${cmd}'. Known: ${Object.keys(commands).join(', ')}`);

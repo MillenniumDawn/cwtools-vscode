@@ -48,7 +48,7 @@ This extension is still in preview, it may not work, it may stop working at any 
 
 * `C:\Users\name\Documents\Paradox Interactive\Stellaris\mod\your_mod`
 
-1. Follow the prompts to select your vanilla folder
+1. Set the `cwtools.cache.<game>` setting (e.g. `cwtools.cache.hoi4`) to the game's install folder
 2. Edit files and watch syntax errors show up when you make mistakes
 3. Wait up to a minute for the extension to scan your mod and find errors
 

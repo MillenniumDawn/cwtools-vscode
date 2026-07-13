@@ -142,10 +142,10 @@ export class GraphPanel {
         }, null, this._disposables)))
 
         // Set up commands
-        this._disposables.push(vscode.commands.registerCommand('saveGraphImage', () => {
+        this._disposables.push(vscode.commands.registerCommand('cwtools.saveGraphImage', () => {
             this._panel.webview.postMessage({ "command": "exportImage" })
         }))
-        this._disposables.push(vscode.commands.registerCommand('saveGraphJson', () => {
+        this._disposables.push(vscode.commands.registerCommand('cwtools.saveGraphJson', () => {
             this._panel.webview.postMessage({ "command": "exportJson" })
         }))
 
