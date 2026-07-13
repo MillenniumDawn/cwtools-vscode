@@ -29,6 +29,11 @@ suite("reindexSettings — mapIgnoreOptions", () => {
 		]);
 	});
 
+	test("rewrites a slashless glob to match anywhere (*.txt becomes **/*.txt)", () => {
+		const result = mapIgnoreOptions([], ["*.txt"], []);
+		assert.deepStrictEqual(result.ignoreFilePatterns, ["**/*.txt"]);
+	});
+
 	test("passes names that already contain a path through unchanged", () => {
 		const result = mapIgnoreOptions([], ["docs/README.txt"], []);
 		assert.deepStrictEqual(result.ignoreFilePatterns, ["docs/README.txt"]);
