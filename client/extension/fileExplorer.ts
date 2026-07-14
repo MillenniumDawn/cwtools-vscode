@@ -104,12 +104,7 @@ import * as vscode from 'vscode';
             return treeItem;
         }
         async getChildren(element?: TreeNode): Promise<TreeNode[]> {
-            if (element) {
-                return element.children;
-            }
-            else {
-                return this._tree.children;
-            }
+            return element ? element.children : this._tree.children;
         }
         refresh(files : FileListItem[]) {
             this.parseTree(files);

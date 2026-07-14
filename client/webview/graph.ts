@@ -317,22 +317,14 @@ function setupInteraction(cy: cytoscape.Core, layer: ReturnType<typeof cy.cyCanv
 
     cy.on('mouseover', 'node', function (e) {
         const sel = e.target;
-        cy.elements()
-            .difference(sel.outgoers().union(sel.incomers()))
-            .not(sel)
-            .addClass('semitransp');
-        sel.addClass('highlight')
-            .outgoers()
-            .union(sel.incomers())
-            .addClass('highlight');
+        const hood = sel.closedNeighborhood();
+        cy.elements().difference(hood).addClass('semitransp');
+        hood.addClass('highlight');
     });
     cy.on('mouseout', 'node', function (e) {
         const sel = e.target;
         cy.elements().removeClass('semitransp');
-        sel.removeClass('highlight')
-            .outgoers()
-            .union(sel.incomers())
-            .removeClass('highlight');
+        sel.closedNeighborhood().removeClass('highlight');
     });
 
     cy.on("render", function () {
