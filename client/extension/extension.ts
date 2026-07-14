@@ -58,14 +58,14 @@ export async function activate(context: ExtensionContext) {
 			}
 		}
 
-		const { rulesCache } = await resolveRulesCache(language, cacheDir);
+		const { rulesCache, fetchUpstream } = await resolveRulesCache(language, cacheDir);
 
 		const client = createLanguageClient(context, { language, serverExe, cacheDir, rulesCache });
 		defaultClient = client;
 		client.registerProposedFeatures();
 
 		const tracker = await registerDocumentLanguage(context, client, 'paradox');
-		registerServerNotifications(context, client);
+		const initialScanDone = registerServerNotifications(context, client);
 
 		if (workspace.name === undefined) {
 			await window.showWarningMessage("You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using \"File, Open Folder\"")
@@ -79,7 +79,9 @@ export async function activate(context: ExtensionContext) {
 			await client.start();
 			// Clone/pull the rules repo without blocking activation; the server
 			// reloads its rules once the fetch lands (see rulesSetup.ts).
-			fetchRulesInBackground(language, cacheDir, client);
+			if (fetchUpstream) {
+				fetchRulesInBackground(language, cacheDir, client, initialScanDone);
+			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logError('client.start() error', err);

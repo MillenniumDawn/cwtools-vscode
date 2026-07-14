@@ -9,6 +9,7 @@ import { logInfo, logWarn, logError } from './logger';
 
 export interface RulesSetup {
 	rulesCache: string;
+	fetchUpstream: boolean;
 }
 
 // Resolve the rules cache path (after creating the dir). No network access, so
@@ -38,13 +39,18 @@ export async function resolveRulesCache(language: string, cacheDir: string): Pro
 			`CWTools: the rules_folder "${rawManualRules}" could not be found (tried "${manualRules.path}"). Falling back to the bundled/upstream rules.`
 		);
 	}
-	return { rulesCache: effectiveRulesCache };
+	return { rulesCache: effectiveRulesCache, fetchUpstream: !manualRules.existed && !!repoPath };
 }
 
 // Clone/pull the rules repo in the background. The server starts without the
 // rules (it tolerates a missing/empty rules dir) and we signal it to reload
 // once the fetch lands, so activation is never stalled on the network.
-export function fetchRulesInBackground(language: string, cacheDir: string, client: LanguageClient): void {
+export function fetchRulesInBackground(
+	language: string,
+	cacheDir: string,
+	client: LanguageClient,
+	initialScanDone: Promise<void>
+): void {
 	const repoPath = LANGUAGE_REPOS[language];
 	if (!repoPath) {
 		return;
@@ -63,6 +69,7 @@ export function fetchRulesInBackground(language: string, cacheDir: string, clien
 					logInfo(`Fetching latest rules for ${language} ...`);
 					await runGit(['-C', languageRulesCache, 'pull', '--depth=1', '--ff-only']);
 				}
+				await initialScanDone;
 				// Rules are now on disk; tell the (already running) server to
 				// pick them up without a window reload.
 				await client.sendRequest(ExecuteCommandRequest.type, { command: 'reloadrulesconfig', arguments: [] })

@@ -431,7 +431,7 @@ export function go(nodesJ: Array<techNode>, settings: settings) {
     const seen = new Set<string>();
     const edgesfin: EdgeInput[] = [];
     for (const e of edges2) {
-        const key = e.source + '|' + e.target + '|' + e.label;
+        const key = JSON.stringify([e.source, e.target, e.label]);
         if (!seen.has(key)) { seen.add(key); edgesfin.push(e); }
     }
     tech(nodesJ, [...edgesfin], settings);
