@@ -65,10 +65,7 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 
 	const fileEvents = [
 		workspace.createFileSystemWatcher("**/{events,common,history,map,map_data,prescripted_countries,flags,decisions,missions}/**/*.txt"),
-		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gui"),
-		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gfx"),
-		workspace.createFileSystemWatcher("**/{interface}/**/*.sfx"),
-		workspace.createFileSystemWatcher("**/{interface,gfx,fonts,music,sound}/**/*.asset"),
+		workspace.createFileSystemWatcher("**/{interface,gfx,fonts,music,sound}/**/*.{gui,gfx,sfx,asset}"),
 		workspace.createFileSystemWatcher("**/{localisation,localisation_synced,localization}/**/*.yml")
 	]
 	context.subscriptions.push(...fileEvents);

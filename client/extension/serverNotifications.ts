@@ -12,7 +12,6 @@ export function registerServerNotifications(context: ExtensionContext, client: L
 	const loadingBarNotification = new NotificationType<LoadingBarParams>('loadingBar');
 	const updateFileList = new NotificationType<UpdateFileList>('updateFileList');
 	let status: Disposable | undefined;
-	let fileList : FileListItem[];
 	let fileExplorer : FileExplorer;
 
 	client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
@@ -28,12 +27,11 @@ export function registerServerNotifications(context: ExtensionContext, client: L
 		}
 	})
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
-		fileList = params.fileList;
 		if (fileExplorer) {
-			fileExplorer.refresh(fileList);
+			fileExplorer.refresh(params.fileList);
 		}
 		else {
-			fileExplorer = new FileExplorer(context, fileList);
+			fileExplorer = new FileExplorer(context, params.fileList);
 		}
 	})
 }

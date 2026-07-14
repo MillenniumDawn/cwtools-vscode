@@ -42,14 +42,20 @@ export interface GameDetection {
 export async function detectGameAndVanilla(): Promise<GameDetection> {
 	let languageId = (await detectLanguageId()) ?? "paradox";
 
-	const promises = GAMES.map(({ exeName, binariesPrefix }) =>
+	// Only the detected game's exe matters for the vanilla check. Once folder
+	// hints pin a specific game we don't need to scan the workspace for the
+	// other eight exes; the generic "paradox" case still checks all of them.
+	const gamesToCheck = languageId === 'paradox'
+		? GAMES
+		: GAMES.filter((g) => g.id === languageId);
+	const promises = gamesToCheck.map(({ exeName, binariesPrefix }) =>
 		findExeInFiles(exeName, binariesPrefix)
 	);
 	const results = await Promise.all(promises);
 
 	let isVanillaFolder = false;
 	for (let i = 0; i < results.length; i++) {
-		const { id } = GAMES[i];
+		const { id } = gamesToCheck[i];
 		if (results[i].length > 0 && (languageId === "paradox" || languageId === id)) {
 			isVanillaFolder = true;
 			languageId = id;
