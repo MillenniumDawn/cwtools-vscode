@@ -21,6 +21,10 @@ declare module 'cytoscape' {
 
 }
 
+registerCytoscapeCanvas(cyM.default());
+cyM.default.use(cytoscapeelk);
+cyM.default.use(popper);
+
 
 interface vscode {
     postMessage(message: unknown): void;
@@ -28,6 +32,10 @@ interface vscode {
 
 declare const acquireVsCodeApi : () => vscode;
 const vscode : vscode = acquireVsCodeApi();
+
+const htmlEl = document.documentElement;
+const vscodeFg = () => htmlEl.style.getPropertyValue("--vscode-editor-foreground");
+const vscodeBg = () => htmlEl.style.getPropertyValue("--vscode-editor-background");
 
 /** Escape HTML entities to prevent XSS from server-supplied data. */
 function escapeHtml(str: string): string {
@@ -73,8 +81,8 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
         style: {
             'background-color': function (ele) { if (ele.data("isPrimary")) { return '#666' } else { return '#AAA' } },
             'label': 'data(label)',
-            'color': function () { return document.getElementsByTagName("html")[0].style.getPropertyValue("--vscode-editor-foreground") },
-            'text-background-color': function () { return document.getElementsByTagName("html")[0].style.getPropertyValue("--vscode-editor-background") },
+            'color': function () { return vscodeFg() },
+            'text-background-color': function () { return vscodeBg() },
             'text-background-opacity': 0.8,
             'text-wrap': "wrap",
             'text-max-width':"200px"
@@ -97,8 +105,8 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
         selector: 'edge[label]',
         style: {
             'label': 'data(label)',
-            'color': function () { return document.getElementsByTagName("html")[0].style.getPropertyValue("--vscode-editor-foreground") },
-            'text-background-color': function () { return document.getElementsByTagName("html")[0].style.getPropertyValue("--vscode-editor-background") },
+            'color': function () { return vscodeFg() },
+            'text-background-color': function () { return vscodeBg() },
             'text-background-opacity': 0.8,
         }
     },
@@ -132,10 +140,7 @@ function initCytoscape(settings: settings): cytoscape.Core {
         _cy.destroy();
         document.getElementById('cy')!.replaceChildren();
     }
-    registerCytoscapeCanvas(cyM.default());
-    cyM.default.use(cytoscapeelk);
-    cyM.default.use(popper);
-    const cy = cyM.default({
+        const cy = cyM.default({
         container: document.getElementById('cy'),
         minZoom: 0.1,
         maxZoom: 5,
@@ -426,16 +431,18 @@ interface EdgeInput {
 }
 
 export function go(nodesJ: Array<techNode>, settings: settings) {
-    const nodes: Array<techNode> = nodesJ;
-    const edges = nodes.map((a) => a.references.map((b)  => b.isOutgoing ? { source: a.id, target: b.key, label: b.label ?? '' } : { source: b.key, target: a.id, label: b.label ?? '' }));
-    const edges2 = edges.flat();
+    const edges2 = nodesJ.flatMap((a) => a.references.map((b) =>
+        b.isOutgoing
+            ? { source: a.id, target: b.key, label: b.label ?? '' }
+            : { source: b.key, target: a.id, label: b.label ?? '' }
+    ));
     const seen = new Set<string>();
     const edgesfin: EdgeInput[] = [];
     for (const e of edges2) {
         const key = e.source + '|' + e.target + '|' + e.label;
         if (!seen.has(key)) { seen.add(key); edgesfin.push(e); }
     }
-    tech(nodes, [...edgesfin], settings);
+    tech(nodesJ, [...edgesfin], settings);
 }
 
 window.addEventListener('message', event => {
