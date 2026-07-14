@@ -1,3 +1,11 @@
+### 2.0.0
+
+* Consolidated the release manifest: `release/CHANGELOG.md` is no longer committed, since the build script regenerates it from the root `CHANGELOG.md`. The two had drifted out of sync.
+
+### 1.21.0
+
+* Upgraded to v1.23.0 of the cwtools rust engine.
+
 ### 1.20.0
 
 * Removed the dead server-notification handlers (debugBar, createVirtualFile, promptReload, forceReload, promptVanillaPath) and the reload plumbing behind them. The engine only ever sends loadingBar and updateFileList. The `cwtools.reloadExtension` command is gone too; it was never in the palette, but keybindings or macros referencing it will now error. (cwtools-vscode#84)
@@ -44,7 +52,7 @@
 * Fixed Crusader Kings III and Victoria 3 mod folders being detected as CK2/Vic2: the 2-numbered folder hint matched first, so a "III" folder substring-matched the "II" game. 3-suffixed games are now checked first.
 * The graph view reuses its webview when you change depth instead of tearing it down and re-parsing the 4.6MB bundle each time, so redraws are much faster. Game-exe detection, tooltips and node lookups were also trimmed along the way.
 * The rules folder download (git clone/pull, up to a minute on first run) now runs under a progress notification instead of appearing to hang silently.
-* Upgrades to 1.18.0 of the Rust cwtools engine. 
+* Upgrades to 1.18.0 of the Rust cwtools engine.
   * Supports stellaris
   * Auto completion improvements
   * Memory improvements + performance improvements
@@ -62,14 +70,17 @@
   * Go-to-definition no longer shows duplicate results. (cwtools-vscode#62)
   * Missing required-field warnings point at the block key. (cwtools-vscode#63)
 
-### 1.12.0 
+### 1.12.0
+
 * Updated to v1.15.0 of the cwtools engine
   * The cwtools engine upgrade focus on math expressions support for Hearts of Iron IV + improve auto completion and context awareness
 
 ### 1.11.2
-* Updated to v1.14.1 of the cwtools engine improving auto completion robustness and snappiness 
+
+* Updated to v1.14.1 of the cwtools engine improving auto completion robustness and snappiness
 
 ### 1.11.1
+
 * Improved minimalism of the classic theme.
 
 ### 1.11.0
