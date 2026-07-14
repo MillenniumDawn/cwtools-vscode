@@ -2,10 +2,7 @@ import { suite, test } from "vitest";
 import * as assert from "assert";
 import {
 	GAMES,
-	GAME_IDS,
 	LANGUAGE_REPOS,
-	GAME_DISPLAY,
-	GAME_FOLDER,
 	FOLDER_HINTS,
 	CONTENT_HINTS,
 } from "../../extension/games";
@@ -24,7 +21,7 @@ suite("games — table shape", () => {
 	});
 
 	test("ids are unique", () => {
-		assert.strictEqual(new Set(GAME_IDS).size, GAMES.length);
+		assert.strictEqual(new Set(GAMES.map(g => g.id)).size, GAMES.length);
 	});
 });
 
@@ -43,36 +40,6 @@ suite("games — derived maps match the pre-consolidation literals", () => {
 		});
 	});
 
-	test("GAME_DISPLAY", () => {
-		assert.deepStrictEqual(GAME_DISPLAY, {
-			stellaris: "Stellaris",
-			hoi4: "Hearts of Iron IV",
-			eu4: "Europa Universalis IV",
-			ck2: "Crusader Kings II",
-			imperator: "Imperator",
-			vic2: "Victoria II",
-			vic3: "Victoria 3",
-			ck3: "Crusader Kings III",
-			eu5: "Europa Universalis V",
-		});
-	});
-
-	test("GAME_FOLDER", () => {
-		assert.deepStrictEqual(GAME_FOLDER, {
-			"stellaris": { id: "stellaris" },
-			"hearts of iron iv": { id: "hoi4" },
-			"europa universalis iv": { id: "eu4" },
-			"crusader kings ii": { id: "ck2" },
-			"crusader kings iii": { id: "ck3", subdir: "game" },
-			"victoria ii": { id: "vic2" },
-			"victoria 2": { id: "vic2" },
-			"victoria 3": { id: "vic3", subdir: "game" },
-			"imperatorrome": { id: "imperator", subdir: "game" },
-			"imperator": { id: "imperator", subdir: "game" },
-			"europa universalis v": { id: "eu5", subdir: "game" },
-		});
-	});
-
 	test("CONTENT_HINTS covers the same markers", () => {
 		assert.deepStrictEqual(new Map(CONTENT_HINTS), new Map([
 			["common/ai_strategy", "hoi4"],
@@ -83,7 +50,7 @@ suite("games — derived maps match the pre-consolidation literals", () => {
 	});
 
 	test("FOLDER_HINTS has one hint per game", () => {
-		assert.deepStrictEqual(FOLDER_HINTS.map(([, id]) => id), GAME_IDS);
+		assert.deepStrictEqual(FOLDER_HINTS.map(([, id]) => id), GAMES.map(g => g.id));
 	});
 });
 
@@ -91,7 +58,7 @@ suite("games — hint ordering fix", () => {
 	const noopExists = () => false;
 
 	test("3-suffixed games are ordered before their 2-suffixed prefixes", () => {
-		const order = GAME_IDS;
+		const order = GAMES.map(g => g.id);
 		assert.ok(order.indexOf("ck3") < order.indexOf("ck2"));
 		assert.ok(order.indexOf("vic3") < order.indexOf("vic2"));
 	});

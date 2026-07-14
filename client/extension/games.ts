@@ -112,18 +112,8 @@ export const GAMES: GameDef[] = [
 	},
 ];
 
-export const GAME_IDS: string[] = GAMES.map(g => g.id);
-
 export const LANGUAGE_REPOS: Record<string, string> =
 	Object.fromEntries(GAMES.map(g => [g.id, g.repo]));
-
-export const GAME_DISPLAY: Record<string, string> =
-	Object.fromEntries(GAMES.map(g => [g.id, g.display]));
-
-export const GAME_FOLDER: Record<string, { id: string; subdir?: string }> =
-	Object.fromEntries(GAMES.flatMap(g => g.vanillaFolders.map(name =>
-		[name, g.vanillaSubdir ? { id: g.id, subdir: g.vanillaSubdir } : { id: g.id }]
-	)));
 
 export const FOLDER_HINTS: Array<[RegExp | string, string]> =
 	GAMES.map(g => [g.folderHint, g.id]);

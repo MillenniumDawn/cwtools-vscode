@@ -5,8 +5,6 @@ import { EventEmitter } from "events";
 import type { ExtensionContext } from "vscode";
 import {
 	LANGUAGE_REPOS,
-	GAME_DISPLAY,
-	GAME_FOLDER,
 	detectFromFolder,
 	resolveRulesFolder,
 	serverExe,
@@ -34,66 +32,7 @@ suite("engine — LANGUAGE_REPOS", () => {
 	});
 });
 
-suite("engine — GAME_DISPLAY", () => {
-	test("has a human-readable name for every supported language id", () => {
-		for (const id of Object.keys(LANGUAGE_REPOS)) {
-			assert.ok(GAME_DISPLAY[id], `missing display name for ${id}`);
-			assert.ok(GAME_DISPLAY[id].length > 0);
-		}
-	});
 
-	test("every display name is unique", () => {
-		const names = Object.values(GAME_DISPLAY);
-		assert.strictEqual(new Set(names).size, names.length);
-	});
-});
-
-suite("engine — GAME_FOLDER", () => {
-	test("maps vanilla Steam folder names to language ids", () => {
-		assert.deepStrictEqual(GAME_FOLDER["stellaris"], { id: "stellaris" });
-		assert.deepStrictEqual(GAME_FOLDER["hearts of iron iv"], { id: "hoi4" });
-		assert.deepStrictEqual(GAME_FOLDER["victoria ii"], { id: "vic2" });
-		assert.deepStrictEqual(GAME_FOLDER["victoria 2"], { id: "vic2" });
-	});
-
-	test("flags games whose vanilla install needs a /game subdir", () => {
-		assert.strictEqual(GAME_FOLDER["crusader kings iii"].subdir, "game");
-		assert.strictEqual(GAME_FOLDER["victoria 3"].subdir, "game");
-		assert.strictEqual(GAME_FOLDER["imperator"].subdir, "game");
-		assert.strictEqual(GAME_FOLDER["imperatorrome"].subdir, "game");
-		assert.strictEqual(GAME_FOLDER["europa universalis v"].subdir, "game");
-		assert.strictEqual(GAME_FOLDER["stellaris"].subdir, undefined);
-	});
-
-	test("handles alternate Imperator folder names", () => {
-		assert.strictEqual(GAME_FOLDER["imperator"].id, "imperator");
-		assert.strictEqual(GAME_FOLDER["imperatorrome"].id, "imperator");
-	});
-
-	test("every entry maps to a known language id", () => {
-		const known = new Set(Object.keys(LANGUAGE_REPOS));
-		for (const [, mapping] of Object.entries(GAME_FOLDER)) {
-			assert.ok(
-				known.has(mapping.id),
-				`${mapping.id} is not a known language id`,
-			);
-		}
-	});
-
-	test("no two folder names map to the same id with different subdirs", () => {
-		const byId: Record<string, Set<string | undefined>> = {};
-		for (const [, mapping] of Object.entries(GAME_FOLDER)) {
-			(byId[mapping.id] ??= new Set()).add(mapping.subdir);
-		}
-		for (const [id, subdirs] of Object.entries(byId)) {
-			assert.strictEqual(
-				subdirs.size,
-				1,
-				`${id} has inconsistent subdir values: ${[...subdirs]}`,
-			);
-		}
-	});
-});
 
 suite("engine — detectFromFolder", () => {
 	const noopExists = () => false;
