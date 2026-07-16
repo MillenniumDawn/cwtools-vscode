@@ -21,6 +21,10 @@ declare module 'cytoscape' {
 
 }
 
+registerCytoscapeCanvas(cyM.default());
+cyM.default.use(cytoscapeelk);
+cyM.default.use(popper);
+
 
 interface vscode {
     postMessage(message: unknown): void;
@@ -28,6 +32,10 @@ interface vscode {
 
 declare const acquireVsCodeApi : () => vscode;
 const vscode : vscode = acquireVsCodeApi();
+
+const htmlEl = document.documentElement;
+const vscodeFg = () => htmlEl.style.getPropertyValue("--vscode-editor-foreground");
+const vscodeBg = () => htmlEl.style.getPropertyValue("--vscode-editor-background");
 
 /** Escape HTML entities to prevent XSS from server-supplied data. */
 function escapeHtml(str: string): string {
@@ -73,8 +81,8 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
         style: {
             'background-color': function (ele) { if (ele.data("isPrimary")) { return '#666' } else { return '#AAA' } },
             'label': 'data(label)',
-            'color': function () { return document.getElementsByTagName("html")[0].style.getPropertyValue("--vscode-editor-foreground") },
-            'text-background-color': function () { return document.getElementsByTagName("html")[0].style.getPropertyValue("--vscode-editor-background") },
+            'color': vscodeFg,
+            'text-background-color': vscodeBg,
             'text-background-opacity': 0.8,
             'text-wrap': "wrap",
             'text-max-width':"200px"
@@ -97,8 +105,8 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
         selector: 'edge[label]',
         style: {
             'label': 'data(label)',
-            'color': function () { return document.getElementsByTagName("html")[0].style.getPropertyValue("--vscode-editor-foreground") },
-            'text-background-color': function () { return document.getElementsByTagName("html")[0].style.getPropertyValue("--vscode-editor-background") },
+            'color': vscodeFg,
+            'text-background-color': vscodeBg,
             'text-background-opacity': 0.8,
         }
     },
@@ -132,9 +140,6 @@ function initCytoscape(settings: settings): cytoscape.Core {
         _cy.destroy();
         document.getElementById('cy')!.replaceChildren();
     }
-    registerCytoscapeCanvas(cyM.default());
-    cyM.default.use(cytoscapeelk);
-    cyM.default.use(popper);
     const cy = cyM.default({
         container: document.getElementById('cy'),
         minZoom: 0.1,
@@ -148,8 +153,14 @@ function initCytoscape(settings: settings): cytoscape.Core {
 }
 
 function populateGraph(cy: cytoscape.Core, data: techNode[], edges: EdgeInput[]) {
-    data.forEach(function (element) {
-        cy.add({ group: 'nodes', data: {
+    const allIDs = new Set(data.map((el) => el.id));
+    const nonPrimary = new Set(
+        data.filter((el) => el.isPrimary === false).map((el) => el.id)
+    );
+
+    const elements: cytoscape.ElementDefinition[] = data.map((element) => ({
+        group: 'nodes',
+        data: {
             id: element.id,
             label: element.name || element.id,
             isPrimary: element.isPrimary,
@@ -158,19 +169,23 @@ function populateGraph(cy: cytoscape.Core, data: techNode[], edges: EdgeInput[])
             entityTypeDisplayName: element.entityTypeDisplayName ? element.entityTypeDisplayName : element.entityType,
             details: element.details,
             location: element.location
-        }});
-    });
-    const allIDs = new Set(data.map((el) => el.id));
-    edges.forEach(function (edge) {
-        if (allIDs.has(edge.source) && allIDs.has(edge.target)){
-            cy.add({ group: 'edges', data: { source: edge.source, target: edge.target, label: edge.label } }).data("isPrimary", true);
         }
-    });
-    data.forEach(function (element) {
-        if(element.isPrimary === false){
-            cy.edges().filter((n) => n.target().id() === element.id || n.source().id() === element.id).forEach((e) => {e.data("isPrimary", false);});
+    }));
+
+    for (const edge of edges) {
+        if (allIDs.has(edge.source) && allIDs.has(edge.target)) {
+            // An edge is primary only when both endpoints are primary; a single
+            // non-primary endpoint demotes it. Compute it once here instead of
+            // re-scanning every edge for each non-primary node (was O(nodes*edges)).
+            const isPrimary = !(nonPrimary.has(edge.source) || nonPrimary.has(edge.target));
+            elements.push({
+                group: 'edges',
+                data: { source: edge.source, target: edge.target, label: edge.label, isPrimary }
+            });
         }
-    });
+    }
+
+    cy.add(elements);
 }
 
 function setupTooltips(cy: cytoscape.Core) {
@@ -186,10 +201,14 @@ function setupTooltips(cy: cytoscape.Core) {
             <table class="cwtools-table">
             ${detailsText ? detailsText : "<tr><td class=\"cwtools-text-center\">-</td></tr>"}
             </table>`;
-        const ref = node.popperRef();
+        // Defer popperRef() (it allocates a DOM node) until the tooltip is first
+        // shown, so a graph with thousands of nodes does not create thousands of
+        // DOM elements up front.
+        let ref: ReturnType<typeof node.popperRef> | undefined;
+        const getRef = () => (ref ??= node.popperRef());
         let isSimple = true;
         const simpleOptions : Partial<Props> = {
-            getReferenceClientRect: ref.getBoundingClientRect,
+            getReferenceClientRect: () => getRef().getBoundingClientRect(),
             content: () => {
                 const content = document.createElement('div');
                 content.innerHTML = simpleTooltip;
@@ -201,7 +220,7 @@ function setupTooltips(cy: cytoscape.Core) {
         };
         let hoverTimeout : NodeJS.Timeout;
         const complexOptions = {
-            getReferenceClientRect: ref.getBoundingClientRect,
+            getReferenceClientRect: () => getRef().getBoundingClientRect(),
             content: () => {
                 const content = document.createElement('div');
                 content.innerHTML = detailsTable;
@@ -298,22 +317,14 @@ function setupInteraction(cy: cytoscape.Core, layer: ReturnType<typeof cy.cyCanv
 
     cy.on('mouseover', 'node', function (e) {
         const sel = e.target;
-        cy.elements()
-            .difference(sel.outgoers().union(sel.incomers()))
-            .not(sel)
-            .addClass('semitransp');
-        sel.addClass('highlight')
-            .outgoers()
-            .union(sel.incomers())
-            .addClass('highlight');
+        const hood = sel.closedNeighborhood();
+        cy.elements().difference(hood).addClass('semitransp');
+        hood.addClass('highlight');
     });
     cy.on('mouseout', 'node', function (e) {
         const sel = e.target;
         cy.elements().removeClass('semitransp');
-        sel.removeClass('highlight')
-            .outgoers()
-            .union(sel.incomers())
-            .removeClass('highlight');
+        sel.closedNeighborhood().removeClass('highlight');
     });
 
     cy.on("render", function () {
@@ -348,7 +359,7 @@ function tech(data: techNode[], edges: Array<EdgeInput>, settings: settings, jso
     setupInteraction(cy, layer, ctx);
 }
 
-export function goToNode(location : GraphLocation) {
+export function goToNode(location: GraphLocation) {
     const uri = location.filename
     const line = location.line
     const column = location.column
@@ -375,14 +386,12 @@ export async function exportImage(pixelRatio: number) {
 }
 
 async function blobToDataURL(blob: Blob): Promise<string> {
-    const buffer = await blob.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]!);
-    }
-    const base64 = btoa(binary);
-    return `data:${blob.type};base64,${base64}`;
+    return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+    });
 }
 
 export function exportJson() {
@@ -414,11 +423,18 @@ interface EdgeInput {
 }
 
 export function go(nodesJ: Array<techNode>, settings: settings) {
-    const nodes: Array<techNode> = nodesJ;
-    const edges = nodes.map((a) => a.references.map((b)  => b.isOutgoing ? { source: a.id, target: b.key, label: b.label ?? '' } : { source: b.key, target: a.id, label: b.label ?? '' }));
-    const edges2 = edges.flat();
-    const edgesfin = new Set(edges2)
-    tech(nodes, [...edgesfin], settings);
+    const edges2 = nodesJ.flatMap((a) => a.references.map((b) =>
+        b.isOutgoing
+            ? { source: a.id, target: b.key, label: b.label ?? '' }
+            : { source: b.key, target: a.id, label: b.label ?? '' }
+    ));
+    const seen = new Set<string>();
+    const edgesfin: EdgeInput[] = [];
+    for (const e of edges2) {
+        const key = JSON.stringify([e.source, e.target, e.label]);
+        if (!seen.has(key)) { seen.add(key); edgesfin.push(e); }
+    }
+    tech(nodesJ, edgesfin, settings);
 }
 
 window.addEventListener('message', event => {

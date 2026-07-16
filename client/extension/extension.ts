@@ -7,13 +7,13 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fsPromises from 'fs/promises';
 import * as vscode from 'vscode';
-import type { ExtensionContext, Disposable } from 'vscode';
+import type { ExtensionContext } from 'vscode';
 import { workspace, window, Uri, commands, env } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
 
 import { serverExe as resolveServerExe } from './engine';
 import { detectGameAndVanilla } from './detectGame';
-import { ensureRules } from './rulesSetup';
+import { resolveRulesCache, fetchRulesInBackground } from './rulesSetup';
 import { createLanguageClient } from './lspClient';
 import { registerServerNotifications } from './serverNotifications';
 import { registerDocumentLanguage } from './documentLanguage';
@@ -23,24 +23,6 @@ import { logInfo, logError } from './logger';
 export let defaultClient: LanguageClient;
 export async function activate(context: ExtensionContext) {
 	void commands.executeCommand('setContext', 'cwtoolsEnabled', true);
-
-	class CwtoolsProvider implements vscode.TextDocumentContentProvider
-	{
-		private disposables: Disposable[] = [];
-
-		constructor(){
-			this.disposables.push(
-				workspace.registerTextDocumentContentProvider("cwtools", this)
-			);
-		}
-		async provideTextDocumentContent() {
-			return '';
-		}
-
-		dispose(): void {
-			this.disposables.forEach(d => d.dispose());
-		}
-	}
 
 	// Writable, per-extension cache dir. globalStorage survives extension
 	// updates and is writable everywhere; the install dir (extensionPath) is
@@ -76,14 +58,14 @@ export async function activate(context: ExtensionContext) {
 			}
 		}
 
-		const { rulesCache } = await ensureRules(language, cacheDir);
+		const { rulesCache, fetchUpstream } = await resolveRulesCache(language, cacheDir);
 
 		const client = createLanguageClient(context, { language, serverExe, cacheDir, rulesCache });
 		defaultClient = client;
 		client.registerProposedFeatures();
 
 		const tracker = await registerDocumentLanguage(context, client, 'paradox');
-		registerServerNotifications(context, client);
+		const initialScanDone = registerServerNotifications(context, client);
 
 		if (workspace.name === undefined) {
 			await window.showWarningMessage("You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using \"File, Open Folder\"")
@@ -92,10 +74,14 @@ export async function activate(context: ExtensionContext) {
 		registerCommands(context, client, tracker);
 
 		// Subscriptions are pushed here so the client is disposed with the extension.
-		context.subscriptions.push(new CwtoolsProvider());
 		context.subscriptions.push(client);
 		try {
 			await client.start();
+			// Clone/pull the rules repo without blocking activation; the server
+			// reloads its rules once the fetch lands (see rulesSetup.ts).
+			if (fetchUpstream) {
+				fetchRulesInBackground(language, cacheDir, client, initialScanDone);
+			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			logError('client.start() error', err);

@@ -6,7 +6,7 @@ import { existsSync as fsExistsSync } from 'fs';
 import { logInfo, logError } from './logger';
 import { FOLDER_HINTS, CONTENT_HINTS } from './games';
 
-export { LANGUAGE_REPOS, GAME_DISPLAY, GAME_FOLDER } from './games';
+export { LANGUAGE_REPOS } from './games';
 
 export function detectFromFolder(root: string, fileExists: (p: string) => boolean): string | null {
 	const lower = root.toLowerCase();

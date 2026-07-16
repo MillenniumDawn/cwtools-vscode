@@ -1,3 +1,10 @@
+### 2.1.0
+
+* Activation no longer blocks on the first-run rules download. The extension used to wait for the rules download (git clone/pull, up to a minute on first run or a slow network) behind a progress notification before the language server would start. Now the server starts immediately against whatever rules are already on disk, the clone/pull runs in the background, and once it lands the server reloads the rules in place, no window reload needed. The editor is usable right away on first launch. (cwtools-vscode#93)
+* The graph view scales to graphs with thousands of nodes. Edge styling and node/edge insertion were merged into a single pass (the old edge-highlight step was quadratic in nodes times edges), and tooltip DOM elements are now created lazily on first hover instead of one per node up front. Duplicate edges are now actually deduped (the old check compared object references and never matched), the cytoscape plugins register once instead of on every redraw, and image export was rewritten to use FileReader. (cwtools-vscode#93)
+* Game detection no longer scans for the other eight games' executables once the workspace folder has already identified one, skipping the redundant globbing at activation with no behavior change.
+* Housekeeping: removed the unused `GAME_DISPLAY`, `GAME_FOLDER` and `GAME_IDS` exports and a dead virtual-document provider that only ever returned an empty string.
+
 ### 2.0.0
 
 * Consolidated the release manifest: `release/CHANGELOG.md` is no longer committed, since the build script regenerates it from the root `CHANGELOG.md`. The two had drifted out of sync.
