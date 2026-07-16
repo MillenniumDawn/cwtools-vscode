@@ -81,8 +81,8 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
         style: {
             'background-color': function (ele) { if (ele.data("isPrimary")) { return '#666' } else { return '#AAA' } },
             'label': 'data(label)',
-            'color': function () { return vscodeFg() },
-            'text-background-color': function () { return vscodeBg() },
+            'color': vscodeFg,
+            'text-background-color': vscodeBg,
             'text-background-opacity': 0.8,
             'text-wrap': "wrap",
             'text-max-width':"200px"
@@ -105,8 +105,8 @@ const style : StylesheetJsonBlock[] = [ // the stylesheet for the graph
         selector: 'edge[label]',
         style: {
             'label': 'data(label)',
-            'color': function () { return vscodeFg() },
-            'text-background-color': function () { return vscodeBg() },
+            'color': vscodeFg,
+            'text-background-color': vscodeBg,
             'text-background-opacity': 0.8,
         }
     },
@@ -140,7 +140,7 @@ function initCytoscape(settings: settings): cytoscape.Core {
         _cy.destroy();
         document.getElementById('cy')!.replaceChildren();
     }
-        const cy = cyM.default({
+    const cy = cyM.default({
         container: document.getElementById('cy'),
         minZoom: 0.1,
         maxZoom: 5,
@@ -434,7 +434,7 @@ export function go(nodesJ: Array<techNode>, settings: settings) {
         const key = JSON.stringify([e.source, e.target, e.label]);
         if (!seen.has(key)) { seen.add(key); edgesfin.push(e); }
     }
-    tech(nodesJ, [...edgesfin], settings);
+    tech(nodesJ, edgesfin, settings);
 }
 
 window.addEventListener('message', event => {
