@@ -1,5 +1,5 @@
-import type { ExtensionContext, Disposable } from 'vscode';
-import { window } from 'vscode';
+import type { ExtensionContext, StatusBarItem } from 'vscode';
+import { window, StatusBarAlignment } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
 import { NotificationType } from 'vscode-languageclient/node';
 import type { FileListItem } from './fileExplorer';
@@ -12,7 +12,7 @@ interface UpdateFileList { fileList: FileListItem[] }
 export function registerServerNotifications(context: ExtensionContext, client: LanguageClient): Promise<void> {
 	const loadingBarNotification = new NotificationType<LoadingBarParams>('loadingBar');
 	const updateFileList = new NotificationType<UpdateFileList>('updateFileList');
-	let status: Disposable | undefined;
+	let status: StatusBarItem | undefined;
 	let fileExplorer : FileExplorer;
 	let lastFileListSignature: string | undefined;
 	let initialScanStarted = false;
@@ -25,16 +25,17 @@ export function registerServerNotifications(context: ExtensionContext, client: L
 			if (initialScanPending) {
 				initialScanStarted = true;
 			}
-			if (status !== undefined) {
-				status.dispose();
+			// One persistent item updated in place: a scan emits many progress
+			// ticks, and dispose+recreate per tick makes the status bar churn.
+			if (status === undefined) {
+				status = window.createStatusBarItem(StatusBarAlignment.Left);
+				context.subscriptions.push(status);
 			}
-			status = window.setStatusBarMessage(param.value);
+			status.text = param.value;
+			status.show();
 		}
 		else {
-			if (status !== undefined) {
-				status.dispose();
-				status = undefined;
-			}
+			status?.hide();
 			if (initialScanPending && initialScanStarted) {
 				initialScanPending = false;
 				resolveInitialScan();
