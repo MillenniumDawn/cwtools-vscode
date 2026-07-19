@@ -116,7 +116,11 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 			ignoreFilePatterns: ignoreOptions.ignoreFilePatterns,
 			ignoredErrorCodes: ignoreOptions.ignoredErrorCodes,
 			backgroundReindexIntervalMinutes: readBackgroundReindexMinutes() },
-			revealOutputChannelOn: RevealOutputChannelOn.Error,
+			// Never force-reveal the output channel: an error-level server log
+			// during a validate storm would otherwise steal focus + repaint the
+			// panel repeatedly. Genuine startup/crash failures still surface via
+			// window.showErrorMessage in extension.ts.
+			revealOutputChannelOn: RevealOutputChannelOn.Never,
 		// The server advertises its commands (cacheVanilla, clearAllCaches,
 		// reloadrulesconfig, genlocall, ...) in executeCommandProvider, and
 		// vscode-languageclient registers each as a VS Code command. Registering
