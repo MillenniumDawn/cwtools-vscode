@@ -42,8 +42,6 @@ export function registerServerNotifications(context: ExtensionContext, client: L
 		}
 	})
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
-		// The server re-sends the full file list on every scan even when nothing
-		// changed; skip rebuilding the TreeView when the payload is identical.
 		const signature = fileListSignature(params.fileList);
 		if (!fileExplorer) {
 			fileExplorer = new FileExplorer(context, params.fileList);

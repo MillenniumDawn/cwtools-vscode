@@ -78,9 +78,6 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 	// so it skips those files and drops those codes when validating.
 	const ignoreOptions = readIgnoreOptions();
 
-	// Drops per-URI publishDiagnostics that are identical to the last set for
-	// that URI, so a scan re-publishing all ~7,400 files doesn't churn the
-	// DiagnosticCollection. Cleared when the client leaves Running (below).
 	const diagnosticsCache = new DiagnosticsSignatureCache();
 
 	const clientOptions: LanguageClientOptions = {
@@ -122,10 +119,7 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 			ignoreFilePatterns: ignoreOptions.ignoreFilePatterns,
 			ignoredErrorCodes: ignoreOptions.ignoredErrorCodes,
 			backgroundReindexIntervalMinutes: readBackgroundReindexMinutes() },
-			// Never force-reveal the output channel: an error-level server log
-			// during a validate storm would otherwise steal focus + repaint the
-			// panel repeatedly. Genuine startup/crash failures still surface via
-			// window.showErrorMessage in extension.ts.
+			// Never force-reveal: genuine failures still surface via window.showErrorMessage in extension.ts.
 			revealOutputChannelOn: RevealOutputChannelOn.Never,
 		// The server advertises its commands (cacheVanilla, clearAllCaches,
 		// reloadrulesconfig, genlocall, ...) in executeCommandProvider, and
@@ -172,9 +166,8 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 
 	const client = new LanguageClient('cwtools', 'Paradox Language Server', serverOptions, clientOptions);
 
-	// The client clears the DiagnosticCollection when it stops; drop the de-dupe
-	// cache on leaving Running so the server's re-publish after a restart isn't
-	// suppressed as "unchanged" and the squiggles come back.
+	// Client clears the DiagnosticCollection on stop; drop the cache too or the
+	// re-publish after restart looks unchanged and squiggles don't return.
 	context.subscriptions.push(client.onDidChangeState(e => {
 		if (e.oldState === State.Running) {
 			diagnosticsCache.clear();

@@ -87,9 +87,7 @@ export async function registerDocumentLanguage(
 			}
 		} catch (err) {
 			timedOut = cts.token.isCancellationRequested;
-			// A plain timeout against a busy server isn't an error; demote it so
-			// validate storms don't spam logError one line per timed-out tab
-			// switch. Real failures still go through logError.
+			// A timeout isn't an error; demote it so validate storms don't spam logError.
 			if (timedOut) {
 				logInfo(`didChangeActiveTextEditor getFileTypes timed out after ${getFileTypesTimeoutMs}ms`);
 			} else {
