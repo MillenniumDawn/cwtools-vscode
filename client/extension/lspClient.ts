@@ -2,8 +2,9 @@ import * as path from 'path';
 import type { ExtensionContext } from 'vscode';
 import { workspace, window } from 'vscode';
 import type { LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
-import { LanguageClient, TransportKind, RevealOutputChannelOn, DidChangeConfigurationNotification } from 'vscode-languageclient/node';
+import { LanguageClient, TransportKind, RevealOutputChannelOn, DidChangeConfigurationNotification, State } from 'vscode-languageclient/node';
 import { normalizeBackgroundReindexMinutes, buildReindexSettingsPayload, mapIgnoreOptions } from './reindexSettings';
+import { DiagnosticsSignatureCache } from './diagnosticsSignature';
 import { logError } from './logger';
 
 export interface ClientConfig {
@@ -77,6 +78,11 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 	// so it skips those files and drops those codes when validating.
 	const ignoreOptions = readIgnoreOptions();
 
+	// Drops per-URI publishDiagnostics that are identical to the last set for
+	// that URI, so a scan re-publishing all ~7,400 files doesn't churn the
+	// DiagnosticCollection. Cleared when the client leaves Running (below).
+	const diagnosticsCache = new DiagnosticsSignatureCache();
+
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
 			{ scheme: 'file', language: 'paradox' },
@@ -127,6 +133,11 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 		// them ourselves too makes client.start() throw "command already exists",
 		// so the UX (result toasts, opening the generated loc) lives here instead.
 		middleware: {
+			handleDiagnostics: (uri, diagnostics, next) => {
+				if (diagnosticsCache.shouldPublish(uri.toString(), diagnostics)) {
+					next(uri, diagnostics);
+				}
+			},
 			executeCommand: async (command, args, next) => {
 				// genlocall returns generated loc stubs to open, not a toast string.
 				if (command === 'genlocall') {
@@ -160,6 +171,15 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 	}
 
 	const client = new LanguageClient('cwtools', 'Paradox Language Server', serverOptions, clientOptions);
+
+	// The client clears the DiagnosticCollection when it stops; drop the de-dupe
+	// cache on leaving Running so the server's re-publish after a restart isn't
+	// suppressed as "unchanged" and the squiggles come back.
+	context.subscriptions.push(client.onDidChangeState(e => {
+		if (e.oldState === State.Running) {
+			diagnosticsCache.clear();
+		}
+	}));
 
 	// Push the mapped ignore/suppression settings and the background-reindex
 	// interval to the server whenever they change, so a live edit to
