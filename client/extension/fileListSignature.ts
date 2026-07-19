@@ -1,16 +1,6 @@
 // Type-only import — erased at runtime, so this file stays vscode-free.
 import type { FileListItem } from './fileExplorer';
-
-// 32-bit FNV-1a is plenty here: worst case is one skipped refresh on a
-// ~1-in-4-billion collision.
-function fnv1a(str: string): number {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < str.length; i++) {
-		h ^= str.charCodeAt(i);
-		h = Math.imul(h, 0x01000193);
-	}
-	return h >>> 0;
-}
+import { fnv1a } from './fnv1a';
 
 // Field/record separators and the length prefix stop two different lists
 // from serializing to the same signature.
