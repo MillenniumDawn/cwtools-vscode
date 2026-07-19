@@ -4,6 +4,7 @@ import type { LanguageClient } from 'vscode-languageclient/node';
 import { NotificationType } from 'vscode-languageclient/node';
 import type { FileListItem } from './fileExplorer';
 import { FileExplorer } from './fileExplorer';
+import { fileListSignature, shouldRefreshFileList } from './fileListSignature';
 
 interface LoadingBarParams { enable: boolean; value: string }
 interface UpdateFileList { fileList: FileListItem[] }
@@ -13,6 +14,7 @@ export function registerServerNotifications(context: ExtensionContext, client: L
 	const updateFileList = new NotificationType<UpdateFileList>('updateFileList');
 	let status: Disposable | undefined;
 	let fileExplorer : FileExplorer;
+	let lastFileListSignature: string | undefined;
 	let initialScanStarted = false;
 	let initialScanPending = true;
 	let resolveInitialScan: () => void;
@@ -40,11 +42,16 @@ export function registerServerNotifications(context: ExtensionContext, client: L
 		}
 	})
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
-		if (fileExplorer) {
-			fileExplorer.refresh(params.fileList);
-		}
-		else {
+		// The server re-sends the full file list on every scan even when nothing
+		// changed; skip rebuilding the TreeView when the payload is identical.
+		const signature = fileListSignature(params.fileList);
+		if (!fileExplorer) {
 			fileExplorer = new FileExplorer(context, params.fileList);
+			lastFileListSignature = signature;
+		}
+		else if (shouldRefreshFileList(lastFileListSignature, signature)) {
+			fileExplorer.refresh(params.fileList);
+			lastFileListSignature = signature;
 		}
 	})
 	return initialScanDone;
