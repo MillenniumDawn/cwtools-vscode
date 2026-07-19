@@ -1,9 +1,6 @@
 import { suite, test } from "vitest";
 import * as assert from "assert";
-import {
-	fileListSignature,
-	shouldRefreshFileList,
-} from "../../extension/fileListSignature";
+import { fileListSignature } from "../../extension/fileListSignature";
 
 interface FileListItem {
 	scope: string;
@@ -50,22 +47,5 @@ suite("fileListSignature — fileListSignature", () => {
 
 	test("an empty list has a stable signature", () => {
 		assert.strictEqual(fileListSignature([]), fileListSignature([]));
-	});
-});
-
-suite("fileListSignature — shouldRefreshFileList", () => {
-	test("refreshes on the first notification (no previous signature)", () => {
-		assert.strictEqual(shouldRefreshFileList(undefined, fileListSignature(base)), true);
-	});
-
-	test("skips when the signature is unchanged", () => {
-		const sig = fileListSignature(base);
-		assert.strictEqual(shouldRefreshFileList(sig, sig), false);
-	});
-
-	test("refreshes when the signature changed", () => {
-		const before = fileListSignature(base);
-		const after = fileListSignature(base.slice(0, 2));
-		assert.strictEqual(shouldRefreshFileList(before, after), true);
 	});
 });

@@ -4,7 +4,7 @@ import type { LanguageClient } from 'vscode-languageclient/node';
 import { NotificationType } from 'vscode-languageclient/node';
 import type { FileListItem } from './fileExplorer';
 import { FileExplorer } from './fileExplorer';
-import { fileListSignature, shouldRefreshFileList } from './fileListSignature';
+import { fileListSignature } from './fileListSignature';
 
 interface LoadingBarParams { enable: boolean; value: string }
 interface UpdateFileList { fileList: FileListItem[] }
@@ -48,7 +48,7 @@ export function registerServerNotifications(context: ExtensionContext, client: L
 			fileExplorer = new FileExplorer(context, params.fileList);
 			lastFileListSignature = signature;
 		}
-		else if (shouldRefreshFileList(lastFileListSignature, signature)) {
+		else if (lastFileListSignature !== signature) {
 			fileExplorer.refresh(params.fileList);
 			lastFileListSignature = signature;
 		}

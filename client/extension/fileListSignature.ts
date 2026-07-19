@@ -11,10 +11,3 @@ export function fileListSignature(fileList: readonly FileListItem[]): string {
 	}
 	return `${fileList.length}:${fnv1a(canonical).toString(16)}`;
 }
-
-export function shouldRefreshFileList(
-	previousSignature: string | undefined,
-	nextSignature: string,
-): boolean {
-	return previousSignature !== nextSignature;
-}
