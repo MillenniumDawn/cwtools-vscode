@@ -4,7 +4,7 @@ import { workspace, window, commands } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
 import { NotificationType, ExecuteCommandRequest } from 'vscode-languageclient/node';
 import { shouldNotifyFocus, pendingProcessDelayMs } from './focusTracking';
-import { logError } from './logger';
+import { logError, logInfo } from './logger';
 
 interface DidFocusFile { uri: string }
 
@@ -87,7 +87,12 @@ export async function registerDocumentLanguage(
 			}
 		} catch (err) {
 			timedOut = cts.token.isCancellationRequested;
-			logError('didChangeActiveTextEditor getFileTypes failed', err);
+			// A timeout isn't an error; demote it so validate storms don't spam logError.
+			if (timedOut) {
+				logInfo(`didChangeActiveTextEditor getFileTypes timed out after ${getFileTypesTimeoutMs}ms`);
+			} else {
+				logError('didChangeActiveTextEditor getFileTypes failed', err);
+			}
 			await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
 		} finally {
 			clearTimeout(timeoutTimer);

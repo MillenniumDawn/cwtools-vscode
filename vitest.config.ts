@@ -12,8 +12,10 @@ export default defineConfig({
 		coverage: {
 			provider: "v8",
 			include: [
+				"client/extension/diagnosticsSignature.ts",
 				"client/extension/engine.ts",
 				"client/extension/executable.ts",
+				"client/extension/fileListSignature.ts",
 				"client/extension/focusTracking.ts",
 				"client/extension/games.ts",
 				"client/extension/logger.ts",
