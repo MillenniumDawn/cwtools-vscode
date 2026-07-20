@@ -14,9 +14,6 @@ import * as vscode from 'vscode';
         logicalpath: string
     }
 
-    type fileToTreeNodeType = (files: FileListItem[]) => TreeNode[]
-
-    // Intermediate node type used during tree construction
     interface TreeNodeInternal {
         fileName?: string;
         isDirectory?: boolean;
@@ -24,19 +21,17 @@ import * as vscode from 'vscode';
         children: Record<string, TreeNodeInternal>;
     }
 
-    export const filesToTreeNodes: fileToTreeNodeType = (arr: FileListItem[]): TreeNode[] => {
+    export function filesToTreeNodes(arr: FileListItem[]): TreeNode[] {
         const tree: Record<string, TreeNodeInternal> = {};
 
         function addnode(obj: FileListItem): void {
-            const path = obj.scope + "/" + obj.logicalpath;
-            const splitpath = path.replace(/^\/+|\/+$/g, "").split('/').filter(s => s.length > 0);
+            const splitpath = (obj.scope + "/" + obj.logicalpath).split('/').filter(s => s.length > 0);
             let ptr = tree;
 
             for (let i = 0; i < splitpath.length; i++) {
                 const segment = splitpath[i];
                 const isLastSegment = i === splitpath.length - 1;
 
-                // Initialize node if it doesn't exist
                 if (!ptr[segment]) {
                     ptr[segment] = {
                         fileName: segment,
@@ -58,23 +53,17 @@ import * as vscode from 'vscode';
         }
 
         function convertToTreeNode(node: TreeNodeInternal): TreeNode {
-            // Convert children from Record to Array
-            const childrenArray = Object.values(node.children).map(convertToTreeNode);
-
             return {
                 isDirectory: node.isDirectory ?? true,
                 fileName: node.fileName ?? "",
                 uri: node.uri ?? "",
-                children: childrenArray
+                children: Object.values(node.children).map(convertToTreeNode)
             };
         }
 
-        // Process all input files
         arr.forEach(addnode);
-
-        // Convert the tree to the expected format
         return Object.values(tree).map(convertToTreeNode);
-      }
+    }
 
     export class FilesProvider implements vscode.TreeDataProvider<TreeNode> {
         private readonly _tree : TreeNode = {

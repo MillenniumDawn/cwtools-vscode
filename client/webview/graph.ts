@@ -42,15 +42,25 @@ function escapeHtml(str: string): string {
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function drawExtra(nodes : cytoscape.NodeCollection, ctx : CanvasRenderingContext2D, zoom : number){
+// Beyond these bounds the blur is invisible but still costs a full shadow
+// pass per draw call, so drop it.
+const SHADOW_NODE_LIMIT = 300;
+const SHADOW_MIN_ZOOM = 0.4;
+
+function drawExtra(nodes : cytoscape.NodeCollection, ctx : CanvasRenderingContext2D, zoom : number, withShadows = true){
     // Draw shadows under nodes
     ctx.shadowColor = "black";
-    ctx.shadowBlur = 25 * zoom;
-    ctx.fillStyle = "#666";
+    ctx.shadowBlur = withShadows ? 25 * zoom : 0;
+    ctx.font = "16px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
     nodes.forEach((node) => {
-        const text: string = node.data('entityType');
-        const eventChars = text.split('_').map(f => f[0].toUpperCase()).join('');
-        const eventChars2 = node.data('abbreviation') ? node.data('abbreviation') : eventChars;
+        let label: string = node.scratch('_drawLabel');
+        if (label === undefined) {
+            const text: string = node.data('entityType');
+            label = node.data('abbreviation') || text.split('_').map(f => f[0].toUpperCase()).join('');
+            node.scratch('_drawLabel', label);
+        }
         const pos = node.position();
 
         ctx.fillStyle = node.data('isPrimary') ? "#EEE" : '#444';
@@ -66,12 +76,7 @@ function drawExtra(nodes : cytoscape.NodeCollection, ctx : CanvasRenderingContex
             ctx.stroke();
         }
 
-        //Set text to black, center it and set font.
-        ctx.fillStyle = "black";
-        ctx.font = "16px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(eventChars2, pos.x, pos.y);
+        ctx.fillText(label, pos.x, pos.y);
     });
 }
 
@@ -315,23 +320,36 @@ function setupInteraction(cy: cytoscape.Core, layer: ReturnType<typeof cy.cyCanv
         goToNode(event.target.data('location'));
     });
 
+    // The graph is static after setup, so the neighborhood partition per node
+    // can be computed once instead of on every hover.
+    const hoods = new Map<string, { hood: CollectionReturnValue; rest: CollectionReturnValue }>();
+    const hoodOf = (sel: cytoscape.NodeSingular) => {
+        let entry = hoods.get(sel.id());
+        if (!entry) {
+            const hood = sel.closedNeighborhood();
+            entry = { hood, rest: cy.elements().difference(hood) };
+            hoods.set(sel.id(), entry);
+        }
+        return entry;
+    };
     cy.on('mouseover', 'node', function (e) {
-        const sel = e.target;
-        const hood = sel.closedNeighborhood();
-        cy.elements().difference(hood).addClass('semitransp');
+        const { hood, rest } = hoodOf(e.target);
+        rest.addClass('semitransp');
         hood.addClass('highlight');
     });
     cy.on('mouseout', 'node', function (e) {
-        const sel = e.target;
-        cy.elements().removeClass('semitransp');
-        sel.closedNeighborhood().removeClass('highlight');
+        const { hood, rest } = hoodOf(e.target);
+        rest.removeClass('semitransp');
+        hood.removeClass('highlight');
     });
 
     cy.on("render", function () {
         layer.resetTransform(ctx);
         layer.clear(ctx);
         layer.setTransform(ctx);
-        drawExtra(cy.nodes(), ctx, cy.zoom());
+        const nodes = cy.nodes();
+        const zoom = cy.zoom();
+        drawExtra(nodes, ctx, zoom, nodes.length <= SHADOW_NODE_LIMIT && zoom >= SHADOW_MIN_ZOOM);
     });
 }
 

@@ -16,6 +16,7 @@ export default defineConfig({
 				"client/extension/engine.ts",
 				"client/extension/executable.ts",
 				"client/extension/fileListSignature.ts",
+				"client/extension/fnv1a.ts",
 				"client/extension/focusTracking.ts",
 				"client/extension/games.ts",
 				"client/extension/logger.ts",

@@ -1,3 +1,10 @@
+### 2.2.0
+
+* The output panel no longer force-reveals itself when the server logs an error; the error still lands in the panel, but focus stays where you were. `getFileTypes` timeouts now log at info level instead of warn. File-list refreshes skip re-rendering when the incoming list is identical to what's already shown, and per-file diagnostics that are unchanged since the last publish are dropped client-side instead of re-applied (that cache is cleared on a server restart, so a fresh server's first batch always applies). (cwtools-vscode#95)
+* The loadingBar progress notification reuses one status bar item, updated in place, instead of disposing and recreating it on every progress tick; the item is now also disposed on deactivate. (cwtools-vscode#96)
+* The graph webview skips the node shadow pass above 300 nodes or below 0.4 zoom, where the blur was invisible but still cost a full render pass, and caches draw labels and hover-neighborhood lookups instead of recomputing them every frame or every hover. (cwtools-vscode#96)
+* Housekeeping: deduped the FNV-1a hash used by the diagnostics and file-list signatures into a shared module, removed a tautological `shouldRefreshFileList` wrapper in favor of the inline comparison, and added a committed `clientPerf` benchmark for the client's hot-path functions, run with `npm run bench:node`. (cwtools-vscode#96)
+
 ### 2.1.0
 
 * Activation no longer blocks on the first-run rules download. The extension used to wait for the rules download (git clone/pull, up to a minute on first run or a slow network) behind a progress notification before the language server would start. Now the server starts immediately against whatever rules are already on disk, the clone/pull runs in the background, and once it lands the server reloads the rules in place, no window reload needed. The editor is usable right away on first launch. (cwtools-vscode#93)
