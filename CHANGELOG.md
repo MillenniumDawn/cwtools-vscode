@@ -1,3 +1,6 @@
+### 2.3.0
+* Upgraded to the v3.0.0 of the cwtools rust engine
+
 ### 2.2.0
 
 * The output panel no longer force-reveals itself when the server logs an error; the error still lands in the panel, but focus stays where you were. `getFileTypes` timeouts now log at info level instead of warn. File-list refreshes skip re-rendering when the incoming list is identical to what's already shown, and per-file diagnostics that are unchanged since the last publish are dropped client-side instead of re-applied (that cache is cleared on a server restart, so a fresh server's first batch always applies). (cwtools-vscode#95)
