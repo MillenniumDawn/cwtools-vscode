@@ -31,9 +31,12 @@ jobs:
     - name: Download vsix from release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Via env, not inline: an inline ${{ }} is a shell injection sink.
+        TAG: ${{ inputs.tag }}
+        REPO: ${{ github.repository }}
       run: |
-        gh release download "${{ inputs.tag }}" \
-          --repo "${{ github.repository }}" \
+        gh release download "$TAG" \
+          --repo "$REPO" \
           --pattern "*.vsix" \
           --dir vsix-artifacts
         echo "Downloaded vsix:"

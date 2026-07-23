@@ -1,3 +1,11 @@
+### 2.4.0
+
+* Cleared the npm advisory backlog, 24 down to zero. The `overrides` block had pinned `brace-expansion`, `fast-uri` and `undici` to exact versions that later became the vulnerable ones, so `npm audit fix` could never move them. Every override is a caret range now, and `diff` is forced to 8.x since mocha and sinon ask for `^7`, which has no patched release.
+* Dependabot splits security fixes from routine version bumps into separate grouped PRs, so a security PR never queues behind a version bump. It also scans the composite action under `.github/actions/`, which was previously missed, and applies commit prefixes and a fixed weekly schedule.
+* Added CodeQL analysis for the TypeScript client and for the workflows themselves, on push, on PRs and weekly. Nothing was scanning either before.
+* PRs now run a dependency review that fails on a new high severity dependency, so a vulnerable package gets caught before merge instead of showing up as an alert afterwards.
+* Added a SECURITY.md pointing reports at private vulnerability reporting rather than a public issue.
+
 ### 2.3.0
 * Upgraded to the v3.0.0 of the cwtools rust engine
 
