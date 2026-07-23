@@ -41,7 +41,7 @@ jobs:
     # The engine builds from the submodule gitlink, so one pinned pointer rules
     # both local and CI builds.
     - name: Checkout (with engine submodule)
-      uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         submodules: recursive
     # A release must bundle a tagged engine, not whatever commit the submodule
@@ -87,7 +87,7 @@ jobs:
       VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
 
     steps:
-    - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         # workflow_dispatch has no head_ref; fall back to the dispatched branch.
         ref: ${{ github.head_ref || github.ref_name }}
