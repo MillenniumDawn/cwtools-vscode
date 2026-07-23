@@ -1,30 +1,67 @@
 version: 2
 updates:
-  # GitHub Actions are SHA-pinned; dependabot bumps the pin and the # version
-  # comment together.
+  # SHA-pinned; dependabot rewrites the pin and its version comment together.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      # `/` covers workflows but not composite actions.
+      - /.github/actions/setup-node-npm
     schedule:
       interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
     groups:
+      actions-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
       actions:
+        applies-to: version-updates
         patterns:
           - "*"
 
-  # Keeps the cwtools server submodule pin fresh.
   - package-ecosystem: gitsubmodule
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: chore
 
-  # Extension client (root) and the packaged manifest (release/).
+  # `/release` is the shipped manifest and resolves its own dependency set.
   - package-ecosystem: npm
     directories:
       - /
       - /release
     schedule:
       interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore
+      include: scope
     groups:
-      npm:
+      # Split out so a fix never queues behind a routine version bump.
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      npm-production:
+        applies-to: version-updates
+        dependency-type: production
+        patterns:
+          - "*"
+      npm-development:
+        applies-to: version-updates
+        dependency-type: development
         patterns:
           - "*"
