@@ -35,6 +35,8 @@ jobs:
         TAG: ${{ inputs.tag }}
         REPO: ${{ github.repository }}
       run: |
+        # An empty tag makes gh fetch the latest release, not fail.
+        [ -n "$TAG" ] || { echo "::error::tag input is empty"; exit 1; }
         gh release download "$TAG" \
           --repo "$REPO" \
           --pattern "*.vsix" \
