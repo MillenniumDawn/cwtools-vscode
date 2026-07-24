@@ -90,7 +90,11 @@ export class GraphPanel {
                     case 'goToFile':
                         {
                             const uri = vscode.Uri.file(message.uri);
-                            const range = new vscode.Range(message.line, message.column, message.line, message.column);
+                            // GraphLocation is 1-based, vscode.Range is 0-based.
+                            // Clamped so a defensive 0 can't go negative.
+                            const line = Math.max(0, message.line - 1);
+                            const column = Math.max(0, message.column - 1);
+                            const range = new vscode.Range(line, column, line, column);
                             const texteditor = await vscode.window.showTextDocument(uri);
                             texteditor.revealRange(range, vscode.TextEditorRevealType.AtTop);
                             return;

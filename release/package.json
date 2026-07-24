@@ -260,6 +260,18 @@
             ],
             "default": "context",
             "description": "%configuration.cwtools.hover.scopeDisplay.description%"
+          },
+          "cwtools.inlayHints.locTitles": {
+            "scope": "window",
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.cwtools.inlayHints.locTitles.description%"
+          },
+          "cwtools.inlayHints.scopes": {
+            "scope": "window",
+            "type": "boolean",
+            "default": false,
+            "description": "%configuration.cwtools.inlayHints.scopes.description%"
           }
         }
       },

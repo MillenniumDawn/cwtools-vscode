@@ -79,6 +79,16 @@ Source: `release/package.json` `contributes.configuration`.
   - Enum: `context`, `resolved`
   - Controls hover scope display.
 
+- `cwtools.inlayHints.locTitles` (boolean)
+  - Default: `true`
+  - Show the localised title inline after a value that names a known entity.
+    Read at server start, so a change needs a window reload.
+
+- `cwtools.inlayHints.scopes` (boolean)
+  - Default: `false`
+  - Show the scope a scope-changing key resolves to. The server scaffolds this
+    but produces no hints yet. Read at server start, so a change needs a reload.
+
 - `cwtools.cache.eu4` (string)
   - Path to vanilla EU4 install.
 

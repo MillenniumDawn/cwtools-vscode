@@ -2,6 +2,14 @@
  * Types for the graph data returned by getGraphData command
  */
 
+// Static, not `await import('vscode')`: esbuild bundles this file as CJS with
+// vscode external, and it leaves a native dynamic import alone. That goes
+// through Node's ESM resolver, which never sees the host's require('vscode')
+// shim, so the call threw ERR_MODULE_NOT_FOUND in the packaged extension. The
+// webview imports this module with `import type` only, so nothing browser-side
+// pulls vscode in.
+import { commands } from 'vscode';
+
 /**
  * Represents a location in a file
  */
@@ -72,7 +80,6 @@ export type GraphData = GraphNode[];
  * @returns Promise with the graph data
  */
 export async function getGraphData(entityType: string, depth: number): Promise<GraphData> {
-    const { commands } = await import('vscode');
     const result = await commands.executeCommand<unknown[]>("getGraphData", entityType, depth);
     return result as GraphData;
 }

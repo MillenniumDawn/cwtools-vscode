@@ -75,7 +75,11 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gfx"),
 		workspace.createFileSystemWatcher("**/{interface}/**/*.sfx"),
 		workspace.createFileSystemWatcher("**/{interface,gfx,fonts,music,sound}/**/*.asset"),
-		workspace.createFileSystemWatcher("**/{localisation,localisation_synced,localization}/**/*.yml")
+		workspace.createFileSystemWatcher("**/{localisation,localisation_synced,localization}/**/*.yml"),
+		// .cwt rule files: the server lints them and builds its ruleset from
+		// them, so an edit made outside the editor (git checkout, another tool)
+		// is otherwise invisible until the user runs reloadrulesconfig.
+		workspace.createFileSystemWatcher("**/*.cwt")
 	]
 	context.subscriptions.push(...fileEvents);
 
@@ -115,6 +119,11 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 			hoverShowAllLanguages: workspace.getConfiguration('cwtools').get('localisation.hoverShowAllLanguages') ?? false,
 				hoverDebug: workspace.getConfiguration('cwtools').get('hover.debug') ?? false,
 				hoverScopeDisplay: workspace.getConfiguration('cwtools').get('hover.scopeDisplay') ?? 'context',
+			// Inlay hints. The server reads both at initialize only — neither key is
+			// in its didChangeConfiguration handler — so a change needs a window
+			// reload, which the setting descriptions say.
+			inlayHintsLocTitles: workspace.getConfiguration('cwtools').get<boolean>('inlayHints.locTitles') ?? true,
+			inlayHintsScopes: workspace.getConfiguration('cwtools').get<boolean>('inlayHints.scopes') ?? false,
 			// Persistent cache dir + the user's vanilla install path. The Rust
 			// server caches the base-game index here keyed by game version, so
 			// it isn't re-parsed every startup. Passing the explicit install

@@ -441,7 +441,9 @@ interface EdgeInput {
 }
 
 export function go(nodesJ: Array<techNode>, settings: settings) {
-    const edges2 = nodesJ.flatMap((a) => a.references.map((b) =>
+    // Defaulted, not assumed: an older server that omits `references` would
+    // otherwise throw here and take the whole render down.
+    const edges2 = nodesJ.flatMap((a) => (a.references ?? []).map((b) =>
         b.isOutgoing
             ? { source: a.id, target: b.key, label: b.label ?? '' }
             : { source: b.key, target: a.id, label: b.label ?? '' }

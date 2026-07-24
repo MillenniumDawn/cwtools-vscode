@@ -53,6 +53,9 @@
   "configuration.cwtools.hover.scopeDisplay.context": "Show the ambient scope the hovered field is in.",
   // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
   "configuration.cwtools.hover.scopeDisplay.resolved": "Also show the scope the hovered link or FROM/ROOT/PREV keyword resolves to.",
+  // An inlay hint is the greyed-out text VS Code renders inline within a line of code
+  "configuration.cwtools.inlayHints.locTitles.description": "Show the localised title inline after a value that names a known entity, so an event or focus id reads as its in-game name without hovering. Reload the window after changing this.",
+  "configuration.cwtools.inlayHints.scopes.description": "Show the scope a scope-changing key resolves to, inline after the key. The bundled server does not produce these hints yet, so turning this on currently shows nothing. Reload the window after changing this.",
   "configuration.cwtools.profiling.description": "Launch the language server with profiling on. Emits per-phase timing and memory (RSS) to the CWTools output channel and keeps a buffer you can save with 'cwtools: Export profiling log'. Reload the window after changing this. Slightly slower; leave off for normal use.",
   "configuration.cwtools.backgroundReindex.intervalMinutes.description": "Minutes between background re-index passes that keep the index fresh during long sessions. Runs only while idle. 0 disables.",
   // The wait after your last keystroke before a background pass may start

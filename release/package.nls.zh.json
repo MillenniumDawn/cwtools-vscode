@@ -53,6 +53,9 @@
   "configuration.cwtools.hover.scopeDisplay.context": "显示悬停字段所在的环境作用域。",
   // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
   "configuration.cwtools.hover.scopeDisplay.resolved": "同时显示悬停的链接或 FROM/ROOT/PREV 关键字解析到的作用域。",
+  // An inlay hint is the greyed-out text VS Code renders inline within a line of code
+  "configuration.cwtools.inlayHints.locTitles.description": "在指向已知实体的值后内联显示其本地化标题，无需悬停即可看到事件或国策 id 对应的游戏内名称。更改后需重新加载窗口。",
+  "configuration.cwtools.inlayHints.scopes.description": "在改变作用域的键之后内联显示它解析到的作用域。捆绑的服务器尚未生成此类提示，因此当前开启后不会显示任何内容。更改后需重新加载窗口。",
   "configuration.cwtools.profiling.description": "启动语言服务器时开启性能分析。将各阶段的耗时和内存（RSS）输出到 CWTools 输出面板，并保留可通过“cwtools: 导出性能分析日志”保存的缓冲区。更改后需重新加载窗口。会略微变慢，日常使用请保持关闭。",
   "configuration.cwtools.backgroundReindex.intervalMinutes.description": "后台重新索引的间隔分钟数，用于在长时间使用中保持索引最新。仅在空闲时运行。0 表示禁用。",
   // The wait after your last keystroke before a background pass may start
