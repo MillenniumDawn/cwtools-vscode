@@ -1,11 +1,19 @@
 {
   "extension.displayName": "CWTools MD Edition",
   "extension.description": "Paradox Interactive scripting support. Millennium Dawn Mod Team fork of CWTools.",
+  // Why the extension can't run in a workspace you haven't trusted: it launches a bundled server binary and runs git
+  "capabilities.untrustedWorkspaces.description": "CWTools runs a bundled language server binary against the files in the workspace and uses git to fetch validation rules.",
+  // Why the extension can't run on a remote/virtual file system, e.g. GitHub Repositories
+  "capabilities.virtualWorkspaces.description": "CWTools needs the mod and the game install on a real file system to index them.",
   // The title of the panel under Explorer which contains the extension's list of files it knows about
   "views.cwtools-files.name": "CWTools loaded files",
   "commands.genlocall.title": "Generate missing loc for all files",
   "commands.reloadrulesconfig.title": "Reload config rules",
   "commands.cacheVanilla.title": "Regenerate game vanilla cache file",
+  "commands.clearAllCaches.title": "Clear all caches and reindex",
+  "commands.reindexWorkspace.title": "Re-index workspace",
+  // Save the language server's timing/memory log to a file, for a bug report
+  "commands.exportProfilingLog.title": "Export profiling log",
   "commands.showGraph.title": "Show graph",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "Recreate graph from json",
@@ -14,6 +22,11 @@
   "commands.setGraphDepth.title": "Set graph depth",
   "commands.saveGraphJson.title": "Save graph as json",
   "configuration.title": "CWTools configuration",
+  "configuration.title.localisation": "CWTools: Localisation",
+  "configuration.title.errors": "CWTools: Errors & diagnostics",
+  "configuration.title.cache": "CWTools: Game install paths",
+  "configuration.title.graph": "CWTools: Graph",
+  "configuration.title.advanced": "CWTools: Advanced",
   // Trace here refers to very detailed logs
   "configuration.cwtools.trace.server.description": "Traces the communication between VSCode and the language server.",
   "configuration.cwtools.localisation.languages.description": "Languages to validate localisation against. Only the listed languages are checked, so an English-only mod isn't flagged for missing French/German/… translations the base game happens to ship. Default: English.",
@@ -34,4 +47,14 @@
   "configuration.cwtools.cache.eu5.description": "Path to a vanilla EU5 install. Used to resolve base-game references so they aren't flagged as unknown. Usually auto-detected from Steam.",
   // zoom sensitivity in the graph
   "configuration.cwtools.graph.zoomSensitivity.description": "Control scroll wheel zoom sensitivity, <1 reduces sensitivity, >1 increases sensitivity",
+  // "field", "type" and "scope" are cwtools rule terms
+  "configuration.cwtools.hover.debug.description": "Show raw rule classification (field / type / scope) in hover tooltips. For extension developers; off by default.",
+  "configuration.cwtools.hover.scopeDisplay.description": "What scope a hover tooltip shows: the ambient scope the field is in (context), or additionally the scope it resolves to (resolved).",
+  "configuration.cwtools.hover.scopeDisplay.context": "Show the ambient scope the hovered field is in.",
+  // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
+  "configuration.cwtools.hover.scopeDisplay.resolved": "Also show the scope the hovered link or FROM/ROOT/PREV keyword resolves to.",
+  "configuration.cwtools.profiling.description": "Launch the language server with profiling on. Emits per-phase timing and memory (RSS) to the CWTools output channel and keeps a buffer you can save with 'cwtools: Export profiling log'. Reload the window after changing this. Slightly slower; leave off for normal use.",
+  "configuration.cwtools.backgroundReindex.intervalMinutes.description": "Minutes between background re-index passes that keep the index fresh during long sessions. Runs only while idle. 0 disables.",
+  // The wait after your last keystroke before a background pass may start
+  "configuration.cwtools.backgroundReindex.idleSeconds.description": "Seconds of inactivity before a background re-index pass may start, so a rescan doesn't compete with what you're typing. 0 lets a pass start immediately."
 }

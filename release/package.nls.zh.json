@@ -1,11 +1,19 @@
 {
   "extension.displayName": "CWTools MD Edition",
   "extension.description": "Paradox Interactive 脚本支持。Millennium Dawn Mod Team 维护的 CWTools 分支。",
+  // Why the extension can't run in a workspace you haven't trusted: it launches a bundled server binary and runs git
+  "capabilities.untrustedWorkspaces.description": "CWTools 会针对工作区中的文件运行捆绑的语言服务器二进制文件，并使用 git 获取验证规则。",
+  // Why the extension can't run on a remote/virtual file system, e.g. GitHub Repositories
+  "capabilities.virtualWorkspaces.description": "CWTools 需要在真实文件系统上访问 mod 和游戏安装目录才能建立索引。",
   // The title of the panel under Explorer which contains the extension's list of files it knows about
   "views.cwtools-files.name": "CWTools 已加载文件",
   "commands.genlocall.title": "为所有文件生成缺失的本地化",
   "commands.reloadrulesconfig.title": "重新加载配置规则",
   "commands.cacheVanilla.title": "重新生成游戏原版缓存文件",
+  "commands.clearAllCaches.title": "清除所有缓存并重新索引",
+  "commands.reindexWorkspace.title": "重新索引工作区",
+  // Save the language server's timing/memory log to a file, for a bug report
+  "commands.exportProfilingLog.title": "导出性能分析日志",
   "commands.showGraph.title": "显示图",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "从 JSON 重新创建图",
@@ -14,6 +22,11 @@
   "commands.setGraphDepth.title": "设置图深度",
   "commands.saveGraphJson.title": "将图保存为 JSON",
   "configuration.title": "CWTools 配置",
+  "configuration.title.localisation": "CWTools：本地化",
+  "configuration.title.errors": "CWTools：错误与诊断",
+  "configuration.title.cache": "CWTools：游戏安装路径",
+  "configuration.title.graph": "CWTools：图",
+  "configuration.title.advanced": "CWTools：高级",
   // Trace here refers to very detailed logs
   "configuration.cwtools.trace.server.description": "跟踪 VSCode 与语言服务器之间的通信。",
   "configuration.cwtools.localisation.languages.description": "用于验证本地化的语言列表。",
@@ -33,5 +46,15 @@
   "configuration.cwtools.cache.vic3.description": "原版 VIC3 安装位置",
   "configuration.cwtools.cache.eu5.description": "原版 EU5 安装位置",
   // zoom sensitivity in the graph
-  "configuration.cwtools.graph.zoomSensitivity.description": "控制滚轮缩放灵敏度，<1 降低灵敏度，>1 增加灵敏度"
+  "configuration.cwtools.graph.zoomSensitivity.description": "控制滚轮缩放灵敏度，<1 降低灵敏度，>1 增加灵敏度",
+  // "field", "type" and "scope" are cwtools rule terms
+  "configuration.cwtools.hover.debug.description": "在悬停提示中显示原始规则分类（field / type / scope）。供扩展开发者使用，默认关闭。",
+  "configuration.cwtools.hover.scopeDisplay.description": "悬停提示显示的作用域：字段所在的环境作用域（context），或额外显示其解析到的作用域（resolved）。",
+  "configuration.cwtools.hover.scopeDisplay.context": "显示悬停字段所在的环境作用域。",
+  // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
+  "configuration.cwtools.hover.scopeDisplay.resolved": "同时显示悬停的链接或 FROM/ROOT/PREV 关键字解析到的作用域。",
+  "configuration.cwtools.profiling.description": "启动语言服务器时开启性能分析。将各阶段的耗时和内存（RSS）输出到 CWTools 输出面板，并保留可通过“cwtools: 导出性能分析日志”保存的缓冲区。更改后需重新加载窗口。会略微变慢，日常使用请保持关闭。",
+  "configuration.cwtools.backgroundReindex.intervalMinutes.description": "后台重新索引的间隔分钟数，用于在长时间使用中保持索引最新。仅在空闲时运行。0 表示禁用。",
+  // The wait after your last keystroke before a background pass may start
+  "configuration.cwtools.backgroundReindex.idleSeconds.description": "后台重新索引开始前需要的空闲秒数，避免重新扫描与正在输入的操作抢占资源。0 表示可立即开始。"
 }

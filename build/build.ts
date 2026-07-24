@@ -4,9 +4,13 @@
 // Commands:
 //   quick            Local dev build: Rust server + client into release/, ready to launch.
 //   package          Clean, build the client, package a vsix into temp/ (no server build).
-//   release-prebuilt Set the version, package the staged binaries into a vsix, draft the
-//                    GitHub release, and publish to the Marketplace. Used by CI after the
-//                    per-platform Rust binaries are staged under release/bin/server.
+//   package-prebuilt Package the staged per-platform binaries into vsixes without publishing.
+//   publish-prebuilt Publish the vsixes already packaged into temp/. CI packages, smoke-tests,
+//                    then publishes, so a broken package never reaches the Marketplace.
+//   release-prebuilt Set the version, package the staged binaries into one vsix per platform
+//                    plus a universal fallback, draft the GitHub release, and publish to the
+//                    Marketplace. Used by CI after the per-platform Rust binaries are staged
+//                    under release/bin/server.
 //   release          Tag the current CHANGELOG version, push, then run release-prebuilt.
 //
 // The Rust server (cwtools-rs) builds from a sibling checkout by default; set
@@ -131,23 +135,85 @@ function assembleClient(): void {
 
 // --- Packaging -------------------------------------------------------------
 
-function packageVsix(): void {
+// VS Code's platform ids, keyed by the server-binary directory names the
+// release matrix stages. A platform-specific vsix carries one binary instead
+// of all of them, so a download is a third the size; the Marketplace serves
+// the matching one and falls back to the universal build for anything else.
+const VSIX_TARGETS: Record<string, string> = {
+	'win-x64': 'win32-x64',
+	'linux-x64': 'linux-x64',
+	'linux-arm64': 'linux-arm64',
+	'osx-x64': 'darwin-x64',
+	'osx-arm64': 'darwin-arm64',
+};
+
+const serverBinDir = path.join(releaseDir, 'bin/server/cwtools-server');
+
+function packageVsix(target?: string): string[] {
 	// The client is bundled with esbuild, so node_modules is excluded from the
 	// vsix (see release/.vscodeignore). --no-dependencies stops vsce from trying
 	// to resolve/include them.
-	run('npx', ['--yes', '@vscode/vsce', 'package', '--no-dependencies'], { cwd: releaseDir });
+	const args = ['--yes', '@vscode/vsce', 'package', '--no-dependencies'];
+	if (target) args.push('--target', target);
+	run('npx', args, { cwd: releaseDir });
 	fs.mkdirSync(tempDir, { recursive: true });
+	const packaged: string[] = [];
 	for (const f of fs.readdirSync(releaseDir)) {
 		if (f.endsWith('.vsix')) {
-			fs.renameSync(path.join(releaseDir, f), path.join(tempDir, f));
+			const dest = path.join(tempDir, f);
+			fs.renameSync(path.join(releaseDir, f), dest);
+			packaged.push(dest);
 		}
 	}
+	return packaged;
 }
 
-function findVsix(): string {
-	const files = fs.existsSync(tempDir) ? fs.readdirSync(tempDir).filter(f => f.endsWith('.vsix')) : [];
-	if (files.length === 0) throw new Error('no .vsix found in temp/');
-	return path.join(tempDir, files[0]);
+// Platform subdirectories currently staged under bin/server/cwtools-server.
+// A local `quick` build drops the binary straight in that folder instead, in
+// which case there is nothing to split and we package a single vsix.
+function stagedPlatforms(): string[] {
+	if (!fs.existsSync(serverBinDir)) return [];
+	return fs.readdirSync(serverBinDir, { withFileTypes: true })
+		.filter(e => e.isDirectory() && e.name in VSIX_TARGETS)
+		.map(e => e.name)
+		.sort();
+}
+
+// One vsix per staged platform, then a universal one carrying every binary as
+// the fallback for platforms with no dedicated build (win-arm64, older macOS).
+// Each pass leaves only the target platform's directory in place, so vsce can't
+// sweep the others in.
+function packageAllVsixes(): string[] {
+	const platforms = stagedPlatforms();
+	if (platforms.length === 0) {
+		console.log('no per-platform server binaries staged; packaging a single vsix');
+		return packageVsix();
+	}
+
+	const holding = path.join(tempDir, 'server-staging');
+	fs.rmSync(holding, { recursive: true, force: true });
+	fs.mkdirSync(path.dirname(holding), { recursive: true });
+	fs.renameSync(serverBinDir, holding);
+
+	const vsixes: string[] = [];
+	try {
+		for (const platform of platforms) {
+			fs.rmSync(serverBinDir, { recursive: true, force: true });
+			copyDir(path.join(holding, platform), path.join(serverBinDir, platform));
+			console.log(`packaging ${VSIX_TARGETS[platform]} (${platform})`);
+			vsixes.push(...packageVsix(VSIX_TARGETS[platform]));
+		}
+		// Restore every binary for the universal vsix. It also leaves release/
+		// complete for the Open VSX step, which re-packages from the directory.
+		fs.rmSync(serverBinDir, { recursive: true, force: true });
+		copyDir(holding, serverBinDir);
+		console.log('packaging the universal fallback vsix');
+		vsixes.push(...packageVsix());
+	} finally {
+		if (!fs.existsSync(serverBinDir)) copyDir(holding, serverBinDir);
+		fs.rmSync(holding, { recursive: true, force: true });
+	}
+	return vsixes;
 }
 
 // --- Release ---------------------------------------------------------------
@@ -197,10 +263,10 @@ function setReleaseVersion(version: string): void {
 	console.log(`set release/package.json version to ${version}`);
 }
 
-// Draft and publish the GitHub release with the vsix attached, via the gh CLI.
-// If a release with the same tag already exists (e.g. from a previous failed
-// run), delete it first so the workflow is idempotent.
-function publishGithubRelease(tag: string, version: string, preRelease: boolean, vsix: string): void {
+// Draft and publish the GitHub release with every vsix attached, via the gh
+// CLI. If a release with the same tag already exists (e.g. from a previous
+// failed run), delete it first so the workflow is idempotent.
+function publishGithubRelease(tag: string, version: string, preRelease: boolean, vsixes: string[]): void {
 	const notes = changelogNotes(version);
 	const notesArgs = notes
 		? (() => {
@@ -216,12 +282,12 @@ function publishGithubRelease(tag: string, version: string, preRelease: boolean,
 		run('gh', ['release', 'delete', tag, '--yes']);
 	}
 
-	const args = ['release', 'create', tag, vsix, '--title', tag, ...notesArgs];
+	const args = ['release', 'create', tag, ...vsixes, '--title', tag, ...notesArgs];
 	if (preRelease) args.push('--prerelease');
 	run('gh', args);
 }
 
-function publishToMarketplace(vsix: string): void {
+function publishToMarketplace(vsixes: string[]): void {
 	const token = process.env.VSCE_TOKEN;
 	if (!token || !token.trim()) {
 		const isTagRelease = /^(1|true)$/i.test(process.env.TAG_RELEASE ?? '');
@@ -234,7 +300,9 @@ function publishToMarketplace(vsix: string): void {
 		}
 		throw new Error('VSCE_TOKEN is not set; cannot publish to the Marketplace.');
 	}
-	run('npx', ['--yes', '@vscode/vsce', 'publish', '--pat', token, '--packagePath', vsix]);
+	// vsce takes every platform-specific vsix in one publish, so the Marketplace
+	// gets a consistent set rather than one platform at a time.
+	run('npx', ['--yes', '@vscode/vsce', 'publish', '--pat', token, '--packagePath', ...vsixes]);
 }
 
 // --- Commands --------------------------------------------------------------
@@ -252,18 +320,34 @@ function cmdPackage(): void {
 	packageVsix();
 }
 
-function cmdReleasePrebuilt(): void {
-	const { version, tag, preRelease } = resolveVersion();
-	setReleaseVersion(version);
+// The vsixes packaged into temp/ by a previous package-prebuilt run, so CI can
+// smoke-test them before anything is published.
+function findVsixes(): string[] {
+	const files = fs.existsSync(tempDir) ? fs.readdirSync(tempDir).filter(f => f.endsWith('.vsix')) : [];
+	if (files.length === 0) throw new Error('no .vsix found in temp/; run package-prebuilt first');
+	return files.map(f => path.join(tempDir, f));
+}
+
+function cmdPackagePrebuilt(): string[] {
+	setReleaseVersion(resolveVersion().version);
 	// Build the client bundles (extension.js, webview/graph.js) into release/bin
 	// so vsce finds the entrypoint. No cleanReleaseBin here: the per-platform
 	// server binaries are already staged under release/bin/server and assembling
 	// the client doesn't touch them.
 	assembleClient();
-	packageVsix();
-	const vsix = findVsix();
-	publishGithubRelease(tag, version, preRelease, vsix);
-	publishToMarketplace(vsix);
+	return packageAllVsixes();
+}
+
+function cmdPublishPrebuilt(): void {
+	const { version, tag, preRelease } = resolveVersion();
+	const vsixes = findVsixes();
+	publishGithubRelease(tag, version, preRelease, vsixes);
+	publishToMarketplace(vsixes);
+}
+
+function cmdReleasePrebuilt(): void {
+	cmdPackagePrebuilt();
+	cmdPublishPrebuilt();
 }
 
 function cmdRelease(): void {
@@ -273,9 +357,11 @@ function cmdRelease(): void {
 	cmdReleasePrebuilt();
 }
 
-const commands: Record<string, () => void> = {
+const commands: Record<string, () => unknown> = {
 	quick: cmdQuick,
 	package: cmdPackage,
+	'package-prebuilt': cmdPackagePrebuilt,
+	'publish-prebuilt': cmdPublishPrebuilt,
 	'release-prebuilt': cmdReleasePrebuilt,
 	release: cmdRelease,
 };

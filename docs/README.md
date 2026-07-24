@@ -25,10 +25,13 @@ Source: `release/package.json` `contributes.commands`.
   - Exports the language server profiling buffer to a chosen file.
 
 - `cwtools.showGraph` (`Show graph`)
-  - Opens the dependency graph panel for the current file type.
+  - Opens the dependency graph panel for the current file type. Needs the
+    server's `getGraphData` command, which the Rust engine has not ported, so
+    the command is hidden from the palette until a server provides it.
 
 - `cwtools.setGraphDepth` (`Set graph depth`)
   - Sets how many link hops from the current file to include in the graph.
+    Hidden alongside `cwtools.showGraph`, for the same reason.
 
 - `cwtools.graphFromJson` (`Recreate graph from json`)
   - Loads graph data from a JSON export and renders it.
@@ -120,9 +123,22 @@ Source: `release/package.json` `contributes.configuration`.
   - Default: `30`
   - Background re-index interval in minutes. `0` disables.
 
+- `cwtools.backgroundReindex.idleSeconds` (number)
+  - Default: `15`
+  - Seconds of inactivity before a background re-index pass may start. `0` lets
+    a pass start immediately.
+
 ## Graph view
 
 The graph panel shows file/entity references as nodes and references as edges. Primary nodes are shown as the core set for the current file context; references are followed to build neighboring nodes.
+
+Only `cwtools.graphFromJson` works with the bundled Rust server today. Building a
+graph live needs the server-side `getGraphData` command, which was never ported
+from the F# engine (`crates/lsp/src/main.rs` lists techGraph / event-graph as not
+ported), so `cwtools.showGraph` and `cwtools.setGraphDepth` stay hidden until a
+server advertises it. The client checks the server's `executeCommandProvider`
+at startup and sets the `cwtoolsGraphAvailable` context from it, so nothing has
+to change here when the engine catches up.
 
 Open the graph with `cwtools.showGraph`.
 

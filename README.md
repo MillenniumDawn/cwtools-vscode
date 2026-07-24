@@ -92,7 +92,15 @@ If you want to browse vanilla files, you can use the "CWTOOLS LOADED FILES" sect
 
 ### Background reindex
 
-The extension periodically re-scans the whole workspace in the background, so files changed outside the editor and definitions moved between files don't go stale until you reload the window. The rescan is idle-gated: it waits until you stop typing before running. To force one immediately, run **cwtools: Re-index workspace** from the command palette. The `cwtools.backgroundReindex.intervalMinutes` setting controls the interval (default 30; set it to 0 to disable the automatic pass).
+The extension periodically re-scans the whole workspace in the background, so files changed outside the editor and definitions moved between files don't go stale until you reload the window. The rescan is idle-gated: it waits until you stop typing before running. To force one immediately, run **cwtools: Re-index workspace** from the command palette. `cwtools.backgroundReindex.intervalMinutes` controls the interval (default 30; 0 disables the automatic pass) and `cwtools.backgroundReindex.idleSeconds` how long you have to be idle before a pass may start (default 15).
+
+### Graph view
+
+The graph view draws entity references as a node graph you can pan, zoom and click through to the source. It needs the server to supply the graph data, which the Rust server doesn't do yet (it was never ported from the old F# server), so **cwtools: Show graph** and **Set graph depth** stay hidden from the command palette for now. **cwtools: Recreate graph from json** still works, so a graph exported earlier can be reopened, and the export buttons (image, json) work on whatever is on screen. The commands come back on their own once a server advertises the capability.
+
+### Reporting a slow session
+
+If the editor feels slow, turn on `cwtools.profiling`, reload the window, reproduce the slowdown, then run **cwtools: Export profiling log** and attach the file to an issue. It records per-phase timing and memory for the language server. Leave it off the rest of the time.
 
 ## Theming
 

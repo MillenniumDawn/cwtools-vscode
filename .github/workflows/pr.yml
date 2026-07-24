@@ -47,21 +47,45 @@ jobs:
         fail-on-severity: high
         comment-summary-in-pr: on-failure
 
-  # Full build: compile client, package vsix, run coverage. Validates the
-  # complete packaging pipeline and produces the artifact.
+  # Full build: compile the engine and the client, run the host smoke suite
+  # against the real server, package the vsix, run coverage. This is the only
+  # place a submodule bump gets compiled before a release tag builds it for
+  # real, so it checks out the submodule and builds it.
   build:
     needs: check
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       contents: read
       pull-requests: write
 
     steps:
     - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      with:
+        submodules: recursive
     - uses: ./.github/actions/setup-node-npm
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      with:
+        workspaces: submodules/cwtools/cwtools-rs
+    # Builds the pinned engine and the client into release/, the same layout a
+    # developer gets from ./build.sh quick.
+    - name: Build engine and client
+      env:
+        CWTOOLS_RUST_WORKSPACE: submodules/cwtools/cwtools-rs
+      run: npm run build -- quick
+    # Boots the extension host against the freshly built server: activation,
+    # command registration and the graph/file-explorer UI. The full `host`
+    # label additionally covers hover and completion, which need rule data the
+    # sample workspace can't resolve (see .vscode-test.mjs).
+    - name: Host smoke tests
+      run: xvfb-run -a npm run test:smoke
+    # Packages what was just built, server included, so the PR artifact is an
+    # installable extension rather than a client-only shell.
     - name: Test build
-      run: npm run build -- package
+      run: npm run build -- package-prebuilt
     # Host V8 coverage (vscode-test + c8) is not run in CI: the instrumented
     # Electron process never exits under xvfb, so c8 waits for it until the job
     # timeout (previously the full 6h cap). The unit suites are already gated in

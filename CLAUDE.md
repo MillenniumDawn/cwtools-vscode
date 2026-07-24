@@ -22,7 +22,7 @@ This is a VS Code extension with a TypeScript client and a Rust language server.
 ### Build System
 - **Build orchestrator** (`build/build.ts`, run via `tsx`): builds and deploys the Rust server, compiles the client, packages and publishes the vsix. No .NET toolchain is involved.
 - **TypeScript compilation**: `tsc` type-checks and emits the per-file client output (which the tests run against); `esbuild` (`build/esbuild.ts`, run via `tsx`) bundles the two shipped artifacts: the extension host (`extension.js`) and the webview graph (`graph.js`).
-- **Release packaging**: Creates `.vsix` files with `vsce package --no-dependencies`. The client is bundled, so `node_modules` is excluded from the vsix (`release/.vscodeignore`). CI builds the Rust server per platform and `release-prebuilt` packages the staged binaries into one vsix.
+- **Release packaging**: Creates `.vsix` files with `vsce package --no-dependencies`. The client is bundled, so `node_modules` is excluded from the vsix (`release/.vscodeignore`). CI builds the Rust server per platform; `package-prebuilt` turns the staged binaries into one vsix per platform (`vsce --target`) plus a universal fallback carrying all of them.
 
 ## Development Commands
 
@@ -49,11 +49,15 @@ The Rust server builds from the `cwtools-rs` workspace, which the build expects 
 Run as `npm run build -- <command>` or `./build.sh <command>`:
 - `quick`: Build the server + client for local development
 - `package`: Package a vsix without publishing
+- `package-prebuilt`: Package server binaries already staged by CI, no publish
+- `publish-prebuilt`: Publish the vsixes `package-prebuilt` produced
 - `release`: Tag, then full build + publish
-- `release-prebuilt`: Package server binaries already staged by CI, then publish
+- `release-prebuilt`: `package-prebuilt` followed by `publish-prebuilt`
 
 ### Testing
-Two test layers. `npm test` runs the host-based extension tests (vscode-test, real Electron), which use the sample mod in `client/test/sample/`; `npm run test:host` runs the full host suite and `npm run test:coverage` adds V8 coverage. `npm run test:node` runs the fast node-only unit tests for the runtime-pure modules (vitest, no Electron) under `client/test/unit/`; `npm run test:node:coverage` reports their coverage to `coverage-node/`. The two coverage runs cover disjoint modules (engine.ts and executable.ts are vitest-owned), and `build/coverage-summary.ts` renders both into the PR comment.
+Two test layers. `npm test` runs the host-based extension tests (vscode-test, real Electron), which use the sample mod in `client/test/sample/`; `npm run test:smoke` adds the activation suite against the real server (the CI gate) and `npm run test:host` runs everything, including the hover/completion suites that need rule data the sample workspace can't resolve. `npm run test:coverage` adds V8 coverage. `npm run test:node` runs the fast node-only unit tests for the runtime-pure modules (vitest, no Electron) under `client/test/unit/`; `npm run test:node:coverage` reports their coverage to `coverage-node/`. The two coverage runs cover disjoint modules (engine.ts and executable.ts are vitest-owned), and `build/coverage-summary.ts` renders both into the PR comment.
+
+Host suites must not import extension modules directly: the host runs the esbuild bundle, so a direct import is a second copy of the module. Reach the extension's own modules through its activation API (`graphPanelModule()` in `client/test/support/utils.ts`).
 
 ## Key Files
 
@@ -61,7 +65,7 @@ Two test layers. `npm test` runs the host-based extension tests (vscode-test, re
 - `release/package.json`: VS Code extension manifest and configuration
 - `build/build.ts`: build/package/release orchestrator
 - `build/esbuild.ts`: esbuild bundler driver for the client (extension + webview)
-- `.vscode-test.mjs`: host test runner config (labeled: unit/host)
+- `.vscode-test.mjs`: host test runner config (labeled: unit/smoke/host)
 - Build scripts: `build.cmd` (Windows) / `build.sh` (Unix)
 
 ## Development Workflow

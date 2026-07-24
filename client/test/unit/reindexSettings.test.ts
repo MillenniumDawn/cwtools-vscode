@@ -2,6 +2,7 @@ import { suite, test } from "vitest";
 import * as assert from "assert";
 import {
 	normalizeBackgroundReindexMinutes,
+	normalizeBackgroundReindexIdleSeconds,
 	buildReindexSettingsPayload,
 	mapIgnoreOptions,
 } from "../../extension/reindexSettings";
@@ -17,6 +18,20 @@ suite("reindexSettings — normalizeBackgroundReindexMinutes", () => {
 
 	test("passes a normal value through", () => {
 		assert.strictEqual(normalizeBackgroundReindexMinutes(45), 45);
+	});
+});
+
+suite("reindexSettings — normalizeBackgroundReindexIdleSeconds", () => {
+	test("defaults to the server's 15s when the setting is unset", () => {
+		assert.strictEqual(normalizeBackgroundReindexIdleSeconds(undefined), 15);
+	});
+
+	test("passes a normal value through", () => {
+		assert.strictEqual(normalizeBackgroundReindexIdleSeconds(60), 60);
+	});
+
+	test("preserves an explicit 0 (no idle wait)", () => {
+		assert.strictEqual(normalizeBackgroundReindexIdleSeconds(0), 0);
 	});
 });
 
@@ -71,14 +86,16 @@ suite("reindexSettings — mapIgnoreOptions", () => {
 suite("reindexSettings — buildReindexSettingsPayload", () => {
 	test("carries the interval under the server's key and spreads the ignore options", () => {
 		const ignore = { ignoreFilePatterns: ["**/x.txt"], ignoredErrorCodes: ["CW100"] };
-		const payload = buildReindexSettingsPayload(ignore, 10);
+		const payload = buildReindexSettingsPayload(ignore, 10, 45);
 		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 10);
+		assert.strictEqual(payload.backgroundReindexIdleSeconds, 45);
 		assert.deepStrictEqual(payload.ignoreFilePatterns, ["**/x.txt"]);
 		assert.deepStrictEqual(payload.ignoredErrorCodes, ["CW100"]);
 	});
 
-	test("defaults the interval when unset in the payload too", () => {
-		const payload = buildReindexSettingsPayload({}, undefined);
+	test("defaults the interval and idle window when unset in the payload too", () => {
+		const payload = buildReindexSettingsPayload({}, undefined, undefined);
 		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 30);
+		assert.strictEqual(payload.backgroundReindexIdleSeconds, 15);
 	});
 });

@@ -27,14 +27,24 @@ export function normalizeBackgroundReindexMinutes(value: number | undefined): nu
 	return value ?? 30;
 }
 
+// Seconds of user inactivity before a background pass is allowed to start, so
+// a rescan never competes with a request the user is waiting on. Unset falls
+// back to the server's own default of 15.
+export function normalizeBackgroundReindexIdleSeconds(value: number | undefined): number {
+	return value ?? 15;
+}
+
 // The didChangeConfiguration payload pushed on a live settings edit: the mapped
-// ignore options plus the reindex interval under the server's key.
+// ignore options plus the reindex interval and idle window under the server's
+// keys.
 export function buildReindexSettingsPayload<T extends object>(
 	ignoreOptions: T,
 	minutes: number | undefined,
-): T & { backgroundReindexIntervalMinutes: number } {
+	idleSeconds: number | undefined,
+): T & { backgroundReindexIntervalMinutes: number; backgroundReindexIdleSeconds: number } {
 	return {
 		...ignoreOptions,
 		backgroundReindexIntervalMinutes: normalizeBackgroundReindexMinutes(minutes),
+		backgroundReindexIdleSeconds: normalizeBackgroundReindexIdleSeconds(idleSeconds),
 	};
 }

@@ -4,12 +4,29 @@ import { workspace, window, commands } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
 import { ExecuteCommandRequest } from 'vscode-languageclient/node';
 import { getGraphData } from '../common/graphTypes';
+import { graphDataAvailable } from './graphAvailability';
 import type { EditorTracker } from './documentLanguage';
+
+function serverProvidesGraphData(client: LanguageClient): boolean {
+	return graphDataAvailable(client.initializeResult?.capabilities.executeCommandProvider?.commands);
+}
+
+// Gates the palette entries and the editor-title button; call once the server
+// has started and its capabilities are known.
+export function publishGraphAvailability(client: LanguageClient): void {
+	void commands.executeCommand('setContext', 'cwtoolsGraphAvailable', serverProvidesGraphData(client));
+}
 
 export function registerCommands(context: ExtensionContext, client: LanguageClient, tracker: EditorTracker): void {
 	let currentGraphDepth = 3;
 	const wheelSensitivity = (): number => workspace.getConfiguration('cwtools.graph').get('zoomSensitivity') ?? 1;
 	const showGraph = async function() {
+		if (!serverProvidesGraphData(client)) {
+			window.showWarningMessage(
+				"CWTools: this language server doesn't provide graph data, so a graph can only be opened from a saved export. " +
+				"Run 'cwtools: Recreate graph from json'.");
+			return;
+		}
 		const [gp, graphData] = await Promise.all([
 			import('./graphPanel'),
 			getGraphData(tracker.getLatestType(), currentGraphDepth),
@@ -21,6 +38,12 @@ export function registerCommands(context: ExtensionContext, client: LanguageClie
 		await showGraph();
 	}));
 	context.subscriptions.push(commands.registerCommand('cwtools.setGraphDepth', async () => {
+		// Redrawing at a new depth re-queries the server, so a graph imported
+		// from JSON can't be re-cut without it either.
+		if (!serverProvidesGraphData(client)) {
+			window.showWarningMessage("CWTools: this language server doesn't provide graph data, so the graph depth can't be changed.");
+			return;
+		}
 		const res = await window.showInputBox(
 			{
 				placeHolder: "default: 3",

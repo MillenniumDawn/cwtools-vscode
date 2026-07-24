@@ -1,14 +1,13 @@
 import * as assert from 'assert';
 import path from 'path';
 import * as vscode from 'vscode';
-import { activate, retryAsync, wait, EXTENSION_ID, SAMPLE_ROOT } from '../support/utils';
+import { activate, graphPanelModule, retryAsync, wait, EXTENSION_ID, SAMPLE_ROOT } from '../support/utils';
 import { it, describe } from 'mocha';
-import * as gp from '../../extension/graphPanel';
+type GraphPanelModule = typeof import('../../extension/graphPanel');
 import type { GraphData } from '../../common/graphTypes';
 import sinon from 'sinon';
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { FileExplorer } from '../../extension/fileExplorer';
 const root = SAMPLE_ROOT;
 
 suite(`Debug Integration Test: `, function() {
@@ -151,12 +150,14 @@ describe('GraphPanel Tests', function () {
 	const testCyDataJson = JSON.stringify(testCyData);
 	// Setup variables
 	let extension: vscode.Extension<unknown>;
+	// The extension's own graphPanel module, not a second copy (see utils).
+	let gp: GraphPanelModule;
 
 	let tempFile: string;
 	// Setup before each test
 	const before = (async function() {
 		// Arrange: Activate the extension and get its path
-		await activate();
+		gp = await graphPanelModule();
 		const extensionMaybe = vscode.extensions.getExtension(EXTENSION_ID);
 		assert.ok(extensionMaybe, 'Extension should be found');
 		extension = extensionMaybe!;
@@ -273,10 +274,11 @@ suite('GraphPanel — UI integration', function () {
 
 	let sandbox: sinon.SinonSandbox;
 	let extension: vscode.Extension<unknown>;
+	let gp: GraphPanelModule;
 	let tempFile: string;
 
 	const setupPanel = async () => {
-		await activate();
+		gp = await graphPanelModule();
 		const ext = vscode.extensions.getExtension(EXTENSION_ID);
 		assert.ok(ext, 'Extension should be found');
 		extension = ext!;
@@ -287,7 +289,7 @@ suite('GraphPanel — UI integration', function () {
 	};
 
 	const teardownPanel = () => {
-		if (gp.GraphPanel.currentPanel) gp.GraphPanel.currentPanel.dispose();
+		if (gp?.GraphPanel.currentPanel) gp.GraphPanel.currentPanel.dispose();
 		if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
 	};
 
@@ -353,27 +355,24 @@ suite('GraphPanel — UI integration', function () {
 suite('FileExplorer — UI integration', function () {
 	this.timeout(2 * 60 * 1000);
 	let sandbox: sinon.SinonSandbox;
-	let fakeContext: vscode.ExtensionContext;
 
 	setup(() => { sandbox = sinon.createSandbox(); });
 	teardown(() => sandbox.restore());
 
-	test('instantiating FileExplorer registers the openFile command', async function () {
+	// The explorer is built once, when the server sends its first file list, so
+	// the command shows up shortly after activation. Constructing a second
+	// FileExplorer here to force it would re-register the command and throw.
+	test('the openFile command is registered once the server sends a file list', async function () {
 		await activate();
-		fakeContext = {
-			subscriptions: [] as { dispose(): unknown }[],
-		} as unknown as vscode.ExtensionContext;
-		new FileExplorer(fakeContext, [
-			{ scope: 'events', uri: 'file:///events/irm.txt', logicalpath: 'irm.txt' }
-		]);
-		const commands = await vscode.commands.getCommands();
-		assert.ok(commands.includes('cwtools-files.openFile'), 'openFile command should be registered once FileExplorer exists');
+		const registered = await retryAsync(
+			async () => (await vscode.commands.getCommands()).includes('cwtools-files.openFile'),
+			30, 500
+		);
+		assert.ok(registered, 'openFile command should be registered once FileExplorer exists');
 	});
 
 	test('openFile command shows the document', async function () {
 		await activate();
-		// Reuse the FileExplorer created by the previous test — registering
-		// the same command twice throws in VS Code.
 		const uri = vscode.Uri.file(path.join(root, 'events/irm.txt'));
 		const showStub = sandbox.stub(vscode.window, 'showTextDocument').resolves();
 

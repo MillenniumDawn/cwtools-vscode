@@ -57,6 +57,25 @@ suite("manifest — command registration", () => {
 		);
 	});
 
+	// The graph commands go through the server's getGraphData, which the Rust
+	// engine doesn't implement. While that's true they must stay out of the
+	// palette, or running one dead-ends in "command 'getGraphData' not found".
+	// Once the server advertises it, drop the gate and this check goes quiet.
+	test("graph commands are gated while the server has no getGraphData", () => {
+		if (SERVER_COMMANDS.has("getGraphData")) return;
+		const palette: Array<{ command: string; when?: string }> =
+			manifest.contributes.menus?.commandPalette ?? [];
+		for (const id of ["cwtools.showGraph", "cwtools.setGraphDepth"]) {
+			const entry = palette.find((e) => e.command === id);
+			assert.ok(entry, `${id} has no commandPalette entry, so it shows unconditionally`);
+			assert.match(
+				entry.when ?? "",
+				/cwtoolsGraphAvailable/,
+				`${id} is not gated on cwtoolsGraphAvailable`,
+			);
+		}
+	});
+
 	// Client-owned command IDs live in the cwtools. namespace so they can't
 	// collide with other extensions; only server-advertised IDs stay bare.
 	// Checked on the registration side, so a bare ID can't hide by skipping

@@ -17,11 +17,21 @@ import { resolveRulesCache, fetchRulesInBackground } from './rulesSetup';
 import { createLanguageClient } from './lspClient';
 import { registerServerNotifications } from './serverNotifications';
 import { registerDocumentLanguage } from './documentLanguage';
-import { registerCommands } from './commands';
+import { registerCommands, publishGraphAvailability } from './commands';
 import { logInfo, logError } from './logger';
 
 export let defaultClient: LanguageClient;
-export async function activate(context: ExtensionContext) {
+
+// What activate() hands back to other extensions and to the host tests. The
+// tests can't import graphPanel.ts directly: the extension host runs the
+// esbuild bundle, so a direct import would give them a second copy of the
+// module with its own GraphPanel.currentPanel, and the panel they inspect
+// would never be the one the extension opened.
+export interface CwtoolsApi {
+	graphPanel(): Promise<typeof import('./graphPanel')>;
+}
+
+export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 	void commands.executeCommand('setContext', 'cwtoolsEnabled', true);
 
 	// Writable, per-extension cache dir. globalStorage survives extension
@@ -77,6 +87,8 @@ export async function activate(context: ExtensionContext) {
 		context.subscriptions.push(client);
 		try {
 			await client.start();
+			// Capabilities are only known once the server has answered initialize.
+			publishGraphAvailability(client);
 			// Clone/pull the rules repo without blocking activation; the server
 			// reloads its rules once the fetch lands (see rulesSetup.ts).
 			if (fetchUpstream) {
@@ -117,4 +129,6 @@ export async function activate(context: ExtensionContext) {
 	const { languageId } = await detectGameAndVanilla();
 
 	await init(languageId);
+
+	return { graphPanel: () => import('./graphPanel') };
 }

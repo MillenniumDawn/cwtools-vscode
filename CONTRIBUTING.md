@@ -37,7 +37,7 @@ The Rust server builds from the `cwtools-rs` workspace. By default the build loo
 CWTOOLS_RUST_WORKSPACE=submodules/cwtools/cwtools-rs ./build.sh quick
 ```
 
-Other commands: `package` packages a vsix without publishing, `release` tags and does a full build and publish, `release-prebuilt` packages binaries already staged by CI.
+Other commands: `package` packages a vsix without publishing, `package-prebuilt` packages the binaries already staged by CI (one vsix per platform plus a universal fallback), `publish-prebuilt` publishes what `package-prebuilt` produced, `release-prebuilt` does both, and `release` tags and does a full build and publish.
 
 ## Syntax highlighting
 
@@ -49,10 +49,10 @@ override with `PARADOX_SYNTAX_SRC=...` if you keep it elsewhere. After
 syncing, eyeball the diff before committing: the grammars are mostly
 mechanical, but scope names sometimes change.
 
-Themes under `release/themes/` are owned in this repo. The long-term direction
-is one merged `paradox.tmLanguage.json` with game-specific keywords injected,
-replacing the per-game files. The per-game split is here for now because it
-mirrors the upstream layout and makes re-vendoring a clean copy/paste.
+Themes under `release/themes/` are owned in this repo. Highlighting runs off a
+single merged `paradox.tmLanguage.json` with each game's keywords folded in, so
+re-vendoring means merging the upstream per-game grammars into it rather than
+copying them across.
 
 ## Running and debugging
 
@@ -61,9 +61,26 @@ Open the repo in VS Code and launch **Quick update, Build and Launch Extension**
 ## Tests
 
 ```bash
-npm test               # extension tests through the VS Code host
-npm run test:host      # host-based suite
-npm run test:coverage  # unit suite with V8 coverage
+npm run test:node      # node-only unit tests for the pure modules (vitest, fast)
+npm test               # unit label: VS Code API, no language server
+npm run test:smoke     # unit plus activation against the real server
+npm run test:host      # everything, including hover and completion
+npm run test:coverage  # unit label with V8 coverage
+npm run test:node:coverage  # vitest coverage into coverage-node/
+npm run bench:node     # client hot-path benchmarks
 ```
 
-`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/` — open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The numbers count only the hand-written client source (`client/extension`, `client/common`); dependencies are filtered out so the figures mean something. CI renders the same summary as a markdown table in the job summary and as a sticky PR comment, and uploads the HTML report as the `coverage-html` artifact. It's all local/OSS, no external service. Coverage is informational, not a merge gate (see issue #7).
+Two layers. `test:node` runs under vitest with no Electron and owns the pure
+modules (`engine.ts`, `executable.ts`, `games.ts`, the signature/settings
+helpers, the manifest and nls guards). The rest run in a real extension host
+against the sample mod in `client/test/sample/`, picked by label from
+`.vscode-test.mjs`.
+
+CI gates on `test:node`, `test` and `test:smoke`. It does not gate on
+`test:host`: the hover and completion suites assert on rule-driven data, and the
+sample workspace has no game name in its path and no game-specific content dir,
+so it detects as the generic `paradox` language, which has no rules repo to
+clone. Those suites fail until the fixture is made identifiable as a game (or is
+pointed at a local `cwtools.rules_folder` and a vanilla install).
+
+`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/` — open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The numbers count only the hand-written client source (`client/extension`, `client/common`); dependencies are filtered out so the figures mean something. CI renders the node coverage summary as a markdown table in the job summary and as a sticky PR comment, and uploads the raw report as the `coverage-node` artifact. It's all local/OSS, no external service. Coverage is informational, not a merge gate (see issue #7).

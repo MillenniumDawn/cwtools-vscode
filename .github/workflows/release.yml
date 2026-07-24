@@ -28,6 +28,10 @@ jobs:
             platform: linux-x64
             target: x86_64-unknown-linux-gnu
             bin: cwtools-server
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            bin: cwtools-server
           - os: windows-latest
             platform: win-x64
             target: x86_64-pc-windows-msvc
@@ -35,6 +39,14 @@ jobs:
           - os: macos-latest
             platform: osx-arm64
             target: aarch64-apple-darwin
+            bin: cwtools-server
+          # Intel Macs. The client resolves osx-x64 there, so without this build
+          # every Intel Mac install ends at "no language server binary found".
+          # Cross-compiled from the arm64 runner; the Apple toolchain links both
+          # slices, so only the rust target needs adding.
+          - os: macos-latest
+            platform: osx-x64
+            target: x86_64-apple-darwin
             bin: cwtools-server
     runs-on: ${{ matrix.os }}
     steps:
@@ -108,6 +120,18 @@ jobs:
           echo "::error::VSCE_TOKEN secret is not set; cannot publish a tagged release to the Marketplace."
           exit 1
         fi
+    # One vsix per platform plus a universal fallback. No clean, no server
+    # rebuild: the binaries are already staged under release/bin/server.
+    - name: Package vsix
+      env:
+        TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
+      run: npm run build -- package-prebuilt
+    # Checks every packaged vsix: the per-platform ones carry exactly their own
+    # binary, the universal fallback carries all of them. The platform list is
+    # passed explicitly so a silently shrunken build matrix fails here. Runs
+    # before the publish, so a broken package can't reach the Marketplace.
+    - name: Smoke test vsix
+      run: .github/scripts/smoke-test-vsix.sh temp linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
     - name: Publish Release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -116,44 +140,7 @@ jobs:
         # The version comes from the pushed tag; the build doesn't commit or
         # re-tag.
         TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
-      # Packages and publishes the staged binaries. No clean, no server rebuild.
-      run: npm run build -- release-prebuilt
-    - name: Smoke test vsix
-      run: |
-        set -euo pipefail
-        vsix=$(ls temp/*.vsix 2>/dev/null | head -1)
-        if [ -z "$vsix" ]; then
-          echo "::error::No .vsix file found in temp/"
-          exit 1
-        fi
-        echo "Found vsix: $vsix"
-        # Extract and verify server binaries are present
-        workdir=$(mktemp -d)
-        unzip -q "$vsix" -d "$workdir"
-        # VSIX archives nest all extension content under extension/.
-        root="$workdir/extension"
-        echo "Checking for platform server binaries..."
-        for platform in linux-x64 win-x64 osx-arm64; do
-          bin="$root/bin/server/cwtools-server/$platform"
-          if [ ! -d "$bin" ]; then
-            echo "::error::Missing server binary directory: $platform"
-            exit 1
-          fi
-          count=$(find "$bin" -type f | wc -l)
-          if [ "$count" -eq 0 ]; then
-            echo "::error::No files in server binary directory: $platform"
-            exit 1
-          fi
-          echo "  $platform: $count file(s) OK"
-        done
-        # Verify extension manifest is valid JSON
-        if ! python3 -m json.tool "$root/package.json" > /dev/null 2>&1; then
-          echo "::error::extension package.json is not valid JSON"
-          exit 1
-        fi
-        echo "Extension manifest: OK"
-        rm -rf "$workdir"
-        echo "Smoke test passed"
+      run: npm run build -- publish-prebuilt
     - name: Publish to Open VSX Registry
       # Skip cleanly when no Open VSX PAT is configured (GitHub release only).
       if: ${{ env.OPEN_VSX_TOKEN != '' }}

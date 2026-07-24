@@ -14,9 +14,26 @@
     "type": "git",
     "url": "https://github.com/MillenniumDawn/cwtools-vscode"
   },
+  "homepage": "https://github.com/MillenniumDawn/cwtools-vscode#readme",
+  "bugs": {
+    "url": "https://github.com/MillenniumDawn/cwtools-vscode/issues"
+  },
   "engines": {
     "vscode": "^1.83.0"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "%capabilities.untrustedWorkspaces.description%"
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "%capabilities.virtualWorkspaces.description%"
+    }
+  },
+  "extensionKind": [
+    "workspace"
+  ],
   "categories": [
     "Programming Languages",
     "Linters"
@@ -49,7 +66,7 @@
     "menus": {
       "editor/title": [
         {
-          "when": "cwtoolsGraphFile == true \u0026\u0026 cwtoolsWebview == false",
+          "when": "cwtoolsGraphAvailable && cwtoolsGraphFile == true && cwtoolsWebview == false",
           "command": "cwtools.showGraph",
           "group": "navigation"
         },
@@ -67,6 +84,16 @@
           "when": "cwtoolsWebview == true",
           "command": "cwtools.saveGraphJson",
           "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "cwtools.showGraph",
+          "when": "cwtoolsGraphAvailable"
+        },
+        {
+          "command": "cwtools.setGraphDepth",
+          "when": "cwtoolsGraphAvailable"
         }
       ]
     },
@@ -88,17 +115,17 @@
       },
       {
         "command": "clearAllCaches",
-        "title": "Clear all caches and reindex",
+        "title": "%commands.clearAllCaches.title%",
         "category": "cwtools"
       },
       {
         "command": "reindexWorkspace",
-        "title": "Re-index workspace",
+        "title": "%commands.reindexWorkspace.title%",
         "category": "cwtools"
       },
       {
         "command": "cwtools.exportProfilingLog",
-        "title": "Export profiling log",
+        "title": "%commands.exportProfilingLog.title%",
         "category": "cwtools"
       },
       {
@@ -133,7 +160,7 @@
     "configuration": [
       {
         "type": "object",
-        "title": "CWTools",
+        "title": "%configuration.title%",
         "order": 1,
         "properties": {
           "cwtools.rules_folder": {
@@ -145,7 +172,7 @@
       },
       {
         "type": "object",
-        "title": "CWTools: Localisation",
+        "title": "%configuration.title.localisation%",
         "order": 2,
         "properties": {
           "cwtools.localisation.languages": {
@@ -183,7 +210,7 @@
       },
       {
         "type": "object",
-        "title": "CWTools: Errors & diagnostics",
+        "title": "%configuration.title.errors%",
         "order": 3,
         "properties": {
           "cwtools.errors.ignore": {
@@ -218,7 +245,7 @@
             "scope": "window",
             "type": "boolean",
             "default": false,
-            "description": "Show raw rule classification (field / type / scope) in hover tooltips. For extension developers; off by default."
+            "description": "%configuration.cwtools.hover.debug.description%"
           },
           "cwtools.hover.scopeDisplay": {
             "scope": "window",
@@ -228,17 +255,17 @@
               "resolved"
             ],
             "enumDescriptions": [
-              "Show the ambient scope the hovered field is in.",
-              "Also show the scope the hovered link or FROM/ROOT/PREV keyword resolves to."
+              "%configuration.cwtools.hover.scopeDisplay.context%",
+              "%configuration.cwtools.hover.scopeDisplay.resolved%"
             ],
             "default": "context",
-            "description": "What scope a hover tooltip shows: the ambient scope the field is in (context), or additionally the scope it resolves to (resolved)."
+            "description": "%configuration.cwtools.hover.scopeDisplay.description%"
           }
         }
       },
       {
         "type": "object",
-        "title": "CWTools: Game install paths",
+        "title": "%configuration.title.cache%",
         "order": 4,
         "properties": {
           "cwtools.cache.eu4": {
@@ -290,7 +317,7 @@
       },
       {
         "type": "object",
-        "title": "CWTools: Graph",
+        "title": "%configuration.title.graph%",
         "order": 5,
         "properties": {
           "cwtools.graph.zoomSensitivity": {
@@ -305,7 +332,7 @@
       },
       {
         "type": "object",
-        "title": "CWTools: Advanced",
+        "title": "%configuration.title.advanced%",
         "order": 6,
         "properties": {
           "cwtools.trace.server": {
@@ -323,14 +350,21 @@
             "scope": "window",
             "type": "boolean",
             "default": false,
-            "description": "Launch the language server with profiling on. Emits per-phase timing and memory (RSS) to the CWTools output channel and keeps a buffer you can save with 'cwtools: Export profiling log'. Reload the window after changing this. Slightly slower; leave off for normal use."
+            "description": "%configuration.cwtools.profiling.description%"
           },
           "cwtools.backgroundReindex.intervalMinutes": {
             "scope": "window",
             "type": "number",
             "minimum": 0,
             "default": 30,
-            "description": "Minutes between background re-index passes that keep the index fresh during long sessions. Runs only while idle. 0 disables."
+            "description": "%configuration.cwtools.backgroundReindex.intervalMinutes.description%"
+          },
+          "cwtools.backgroundReindex.idleSeconds": {
+            "scope": "window",
+            "type": "number",
+            "minimum": 0,
+            "default": 15,
+            "description": "%configuration.cwtools.backgroundReindex.idleSeconds.description%"
           }
         }
       }

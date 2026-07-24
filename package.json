@@ -8,6 +8,7 @@
     "test": "npm run compile && vscode-test --label unit",
     "test:watch": "tsc -w -p . & vscode-test --label unit -w",
     "test:host": "npm run compile && vscode-test --label host",
+    "test:smoke": "npm run compile && vscode-test --label smoke",
     "test:coverage": "npm run compile && vscode-test --label unit --coverage",
     "test:node": "vitest run",
     "test:node:watch": "vitest",

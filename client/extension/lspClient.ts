@@ -3,7 +3,7 @@ import type { ExtensionContext } from 'vscode';
 import { workspace, window } from 'vscode';
 import type { LanguageClientOptions, ServerOptions } from 'vscode-languageclient/node';
 import { LanguageClient, TransportKind, RevealOutputChannelOn, DidChangeConfigurationNotification, State } from 'vscode-languageclient/node';
-import { normalizeBackgroundReindexMinutes, buildReindexSettingsPayload, mapIgnoreOptions } from './reindexSettings';
+import { normalizeBackgroundReindexMinutes, normalizeBackgroundReindexIdleSeconds, buildReindexSettingsPayload, mapIgnoreOptions } from './reindexSettings';
 import { DiagnosticsSignatureCache } from './diagnosticsSignature';
 import { logError } from './logger';
 
@@ -30,6 +30,11 @@ function readIgnoreOptions(): { ignoreFilePatterns: string[]; ignoredErrorCodes:
 // name, just camelCased onto one word.
 function readBackgroundReindexMinutes(): number {
 	return normalizeBackgroundReindexMinutes(workspace.getConfiguration('cwtools').get<number>('backgroundReindex.intervalMinutes'));
+}
+
+// Idle window the server waits out before starting a background pass.
+function readBackgroundReindexIdleSeconds(): number {
+	return normalizeBackgroundReindexIdleSeconds(workspace.getConfiguration('cwtools').get<number>('backgroundReindex.idleSeconds'));
 }
 
 // genlocall returns one stub per language; open each as an untitled document so
@@ -118,7 +123,8 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 			vanilla: workspace.getConfiguration('cwtools').get('cache.' + cfg.language),
 			ignoreFilePatterns: ignoreOptions.ignoreFilePatterns,
 			ignoredErrorCodes: ignoreOptions.ignoredErrorCodes,
-			backgroundReindexIntervalMinutes: readBackgroundReindexMinutes() },
+			backgroundReindexIntervalMinutes: readBackgroundReindexMinutes(),
+			backgroundReindexIdleSeconds: readBackgroundReindexIdleSeconds() },
 			// Never force-reveal: genuine failures still surface via window.showErrorMessage in extension.ts.
 			revealOutputChannelOn: RevealOutputChannelOn.Never,
 		// The server advertises its commands (cacheVanilla, clearAllCaches,
@@ -184,9 +190,10 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 		const touched = e.affectsConfiguration('cwtools.errors.ignore')
 			|| e.affectsConfiguration('cwtools.errors.ignorefiles')
 			|| e.affectsConfiguration('cwtools.ignore_patterns')
-			|| e.affectsConfiguration('cwtools.backgroundReindex.intervalMinutes');
+			|| e.affectsConfiguration('cwtools.backgroundReindex.intervalMinutes')
+			|| e.affectsConfiguration('cwtools.backgroundReindex.idleSeconds');
 		if (!touched) { return; }
-		const settings = buildReindexSettingsPayload(readIgnoreOptions(), readBackgroundReindexMinutes());
+		const settings = buildReindexSettingsPayload(readIgnoreOptions(), readBackgroundReindexMinutes(), readBackgroundReindexIdleSeconds());
 		client.sendNotification(DidChangeConfigurationNotification.type, { settings })
 			.catch(err => logError('Failed to push updated settings to the server', err));
 	}));
