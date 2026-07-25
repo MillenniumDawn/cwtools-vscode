@@ -33,6 +33,10 @@ export interface CwtoolsApi {
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 	void commands.executeCommand('setContext', 'cwtoolsEnabled', true);
+	// The editor/title graph button is gated on `cwtoolsWebview == false`, which an
+	// unset key does not satisfy. Only GraphPanel ever wrote this key, so without a
+	// seed the button could not appear until a panel had opened and closed once.
+	void commands.executeCommand('setContext', 'cwtoolsWebview', false);
 
 	// Writable, per-extension cache dir. globalStorage survives extension
 	// updates and is writable everywhere; the install dir (extensionPath) is
@@ -89,6 +93,9 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			await client.start();
 			// Capabilities are only known once the server has answered initialize.
 			publishGraphAvailability(client);
+			// Classify the already-focused editor now that getFileTypes can be
+			// answered. Not awaited: activation shouldn't wait on a server round-trip.
+			void tracker.classifyActiveEditor();
 			// Clone/pull the rules repo without blocking activation; the server
 			// reloads its rules once the fetch lands (see rulesSetup.ts).
 			if (fetchUpstream) {

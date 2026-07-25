@@ -327,6 +327,56 @@ suite('GraphPanel — UI integration', function () {
 		assert.deepStrictEqual(postMessage.firstCall.args[0], { command: 'exportJson' });
 	});
 
+	// Whether a CSP source list actually permits a URI. cspSource is a list of
+	// source expressions, not one origin ("'self' https://*.vscode-cdn.net"), and
+	// the resource host is a subdomain of that wildcard, so comparing prefixes is
+	// not enough to answer the question.
+	const cspPermits = (sourceList: string, uri: string): boolean => {
+		const { protocol, host } = new URL(uri);
+		if (protocol !== 'https:') return false;
+		return sourceList.split(/\s+/).some(src => {
+			if (!src.startsWith('https://')) return false;
+			const pattern = src.slice('https://'.length);
+			return pattern.startsWith('*.') ? host.endsWith(pattern.slice(1)) : host === pattern;
+		});
+	};
+
+	// The CSP named the pre-1.55 `vscode-resource:` scheme while asWebviewUri
+	// returns an https://…vscode-cdn.net URI, so site.css was blocked and #cy lost
+	// the flex sizing that gives it height. Check the emitted href against the
+	// policy that is actually served rather than trusting the scheme name.
+	test('the webview CSP permits the stylesheet it links', async function () {
+		await setupPanel();
+		const webview = gp.GraphPanel.currentPanel!['_panel'].webview;
+		const html = webview.html;
+		const csp = /Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1];
+		assert.ok(csp, 'no Content-Security-Policy meta tag found');
+		assert.ok(!csp.includes('vscode-resource:'), 'CSP still names the pre-1.55 vscode-resource: scheme');
+
+		const styleSrc = /style-src ([^;"]+)/.exec(csp)?.[1];
+		assert.ok(styleSrc, 'CSP has no style-src directive');
+		const styleHref = /<link href="([^"]+)"/.exec(html)?.[1];
+		assert.ok(styleHref, 'no stylesheet <link> found');
+		assert.ok(
+			cspPermits(styleSrc, styleHref),
+			`style-src "${styleSrc}" does not permit "${styleHref}", so the stylesheet is blocked`
+		);
+	});
+
+	// The graph script is allowed by nonce, not by origin, so its own directive
+	// has to keep carrying one that matches the tag.
+	test('the webview CSP permits the graph script by nonce', async function () {
+		await setupPanel();
+		const html = gp.GraphPanel.currentPanel!['_panel'].webview.html;
+		const scriptNonce = /<script src="[^"]+" nonce="([^"]+)"/.exec(html)?.[1];
+		assert.ok(scriptNonce, 'no nonced <script> found');
+		const scriptSrc = /script-src ([^;"]+)/.exec(html)?.[1];
+		assert.ok(
+			scriptSrc?.includes(`'nonce-${scriptNonce}'`),
+			`script-src "${scriptSrc}" does not carry the script tag's nonce`
+		);
+	});
+
 	test('initialiseGraph transitions out of New once data is queued', async function () {
 		await setupPanel();
 		const data: GraphData = [

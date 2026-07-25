@@ -23,6 +23,7 @@ const SERVER_COMMANDS = new Set([
 	"reindexWorkspace",
 	"genlocall",
 	"reloadrulesconfig",
+	"getGraphData",
 ]);
 
 // Command IDs the client registers via registerCommand('...'), scanned from
@@ -57,12 +58,13 @@ suite("manifest — command registration", () => {
 		);
 	});
 
-	// The graph commands go through the server's getGraphData, which the Rust
-	// engine doesn't implement. While that's true they must stay out of the
-	// palette, or running one dead-ends in "command 'getGraphData' not found".
-	// Once the server advertises it, drop the gate and this check goes quiet.
-	test("graph commands are gated while the server has no getGraphData", () => {
-		if (SERVER_COMMANDS.has("getGraphData")) return;
+	// The graph commands go through the server's getGraphData. The gate reads the
+	// running server's advertised capabilities, not what the newest engine can do,
+	// so it still matters after the command lands: someone on an older server
+	// still needs them hidden rather than dead-ending in "command not found".
+	// Asserted unconditionally — an earlier version skipped the whole check once
+	// getGraphData was known, which made it pass without testing anything.
+	test("graph commands are gated on cwtoolsGraphAvailable", () => {
 		const palette: Array<{ command: string; when?: string }> =
 			manifest.contributes.menus?.commandPalette ?? [];
 		for (const id of ["cwtools.showGraph", "cwtools.setGraphDepth"]) {

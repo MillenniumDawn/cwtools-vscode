@@ -10,6 +10,11 @@ interface DidFocusFile { uri: string }
 
 export interface EditorTracker {
 	getLatestType(): string;
+	// Classify the editor that was already focused when the extension activated.
+	// onDidChangeActiveTextEditor never fires for it, so without this the file
+	// type stays unknown until the user switches tabs once. Call it after the
+	// client is running, since it makes a getFileTypes request.
+	classifyActiveEditor(): Promise<void>;
 }
 
 // Trailing debounce on tab switches: rapid cycling otherwise sends a
@@ -124,5 +129,8 @@ export async function registerDocumentLanguage(
 	await Promise.all(workspace.textDocuments.map(upgradePlaintextDocument));
 	context.subscriptions.push(workspace.onDidOpenTextDocument(upgradePlaintextDocument));
 
-	return { getLatestType: () => latestType };
+	return {
+		getLatestType: () => latestType,
+		classifyActiveEditor: () => didChangeActiveTextEditor(window.activeTextEditor),
+	};
 }
