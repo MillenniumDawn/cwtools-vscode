@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import type { CwtoolsApi } from '../../extension/extension';
+import type * as GraphPanelNamespace from '../../extension/graphPanel';
 
 // Re-exported so host suites can keep importing it from here. The function
 // itself lives in a vscode-free module so the parity harness can share it.
@@ -31,8 +32,9 @@ export async function activate() {
  * copy: the host runs the esbuild bundle, so the module-level
  * GraphPanel.currentPanel a test saw would not be the panel the extension
  * opened, and creating one would re-register the panel's commands and throw.
+ * The import below is type-only, so it is erased and loads nothing at runtime.
  */
-export async function graphPanelModule(): Promise<typeof import('../../extension/graphPanel')> {
+export async function graphPanelModule(): Promise<typeof GraphPanelNamespace> {
   const api = await activate() as CwtoolsApi | undefined;
   if (!api?.graphPanel) {
     throw new Error('extension activated without exporting its API; cannot reach GraphPanel');

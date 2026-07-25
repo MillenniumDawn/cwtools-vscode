@@ -19,6 +19,7 @@ import { registerServerNotifications } from './serverNotifications';
 import { registerDocumentLanguage } from './documentLanguage';
 import { registerCommands, publishGraphAvailability } from './commands';
 import { logInfo, logError } from './logger';
+import type * as GraphPanelModule from './graphPanel';
 
 export let defaultClient: LanguageClient;
 
@@ -28,7 +29,7 @@ export let defaultClient: LanguageClient;
 // module with its own GraphPanel.currentPanel, and the panel they inspect
 // would never be the one the extension opened.
 export interface CwtoolsApi {
-	graphPanel(): Promise<typeof import('./graphPanel')>;
+	graphPanel(): Promise<typeof GraphPanelModule>;
 }
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
