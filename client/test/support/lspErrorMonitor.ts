@@ -27,10 +27,10 @@ export function setupLSPErrorMonitoring(): void {
         defaultClient.outputChannel.appendLine = (message: string) => {
             const timestamp = Date.now();
 
-            // Check for error messages and log them with timestamps
-            if (message.toLowerCase().includes('error') ||
-                message.toLowerCase().includes('exception') ||
-                message.toLowerCase().includes('[Error')) {
+            // Only the client's own error frames. The channel is shared with the
+            // extension logger and server INFO, which say "error" in passing
+            // ("0 errors"), so a substring match fails tests on healthy runs.
+            if (message.startsWith('[Error')) {
                 errorLog.push({
                     timestamp,
                     message: message

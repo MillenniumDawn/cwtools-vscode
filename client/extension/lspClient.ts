@@ -5,7 +5,7 @@ import type { LanguageClientOptions, ServerOptions } from 'vscode-languageclient
 import { LanguageClient, TransportKind, RevealOutputChannelOn, DidChangeConfigurationNotification, State } from 'vscode-languageclient/node';
 import { normalizeBackgroundReindexMinutes, normalizeBackgroundReindexIdleSeconds, buildReindexSettingsPayload, mapIgnoreOptions } from './reindexSettings';
 import { DiagnosticsSignatureCache } from './diagnosticsSignature';
-import { logError } from './logger';
+import { logError, outputChannel } from './logger';
 
 export interface ClientConfig {
 	language: string;
@@ -136,6 +136,9 @@ export function createLanguageClient(context: ExtensionContext, cfg: ClientConfi
 			backgroundReindexIdleSeconds: readBackgroundReindexIdleSeconds() },
 			// Never force-reveal: genuine failures still surface via window.showErrorMessage in extension.ts.
 			revealOutputChannelOn: RevealOutputChannelOn.Never,
+			// Without this the client opens its own channel and the server's
+			// window/logMessage output never reaches the one users are sent to.
+			outputChannel,
 		// The server advertises its commands (cacheVanilla, clearAllCaches,
 		// reloadrulesconfig, genlocall, ...) in executeCommandProvider, and
 		// vscode-languageclient registers each as a VS Code command. Registering

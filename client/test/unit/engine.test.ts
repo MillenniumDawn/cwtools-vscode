@@ -409,6 +409,10 @@ suite("engine — serverExe", () => {
 		runServerExePlatform("darwin", "x64", "osx-x64"));
 	test("uses linux-x64 subdir on linux", () =>
 		runServerExePlatform("linux", "x64", "linux-x64"));
+	// The arm64 vsix carries only that binary, so looking under linux-x64 there
+	// finds nothing and the server never starts.
+	test("uses linux-arm64 subdir on linux arm64", () =>
+		runServerExePlatform("linux", "arm64", "linux-arm64"));
 	test("uses win-x64 subdir on windows", () =>
 		runServerExePlatform("win32", "x64", "win-x64"));
 });

@@ -10,6 +10,10 @@ import { window } from "vscode";
 
 const channel = window.createOutputChannel("CWTools");
 
+// Adopted by the language client, so its server output lands here rather than
+// in a second channel named after the client.
+export const outputChannel = channel;
+
 export function logInfo(message: string): void {
 	channel.appendLine(message);
 }

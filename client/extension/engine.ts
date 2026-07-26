@@ -25,7 +25,7 @@ function serverPlatformDir(): string {
 	switch (os.platform()) {
 		case 'win32': return 'win-x64';
 		case 'darwin': return os.arch() === 'arm64' ? 'osx-arm64' : 'osx-x64';
-		default: return 'linux-x64';
+		default: return os.arch() === 'arm64' ? 'linux-arm64' : 'linux-x64';
 	}
 }
 
