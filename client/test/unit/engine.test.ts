@@ -1,5 +1,13 @@
-import { suite, test } from "vitest";
+import { suite, test, vi } from "vitest";
 import * as assert from "assert";
+
+const logged: { level: string; message: string }[] = [];
+vi.mock("../../extension/logger", () => ({
+	logInfo: (m: string) => logged.push({ level: "info", message: m }),
+	logWarn: (m: string) => logged.push({ level: "warn", message: m }),
+	logError: (m: string) => logged.push({ level: "error", message: m }),
+	outputChannel: { appendLine: () => {} },
+}));
 import * as path from "path";
 import { EventEmitter } from "events";
 import type { ExtensionContext } from "vscode";
@@ -472,6 +480,42 @@ suite("engine — runGit", () => {
 				stderr: "warning: progress info\n",
 			});
 		await runGit(["fetch"], fakeSpawn as never);
+	});
+
+	// git writes fetch progress and "From <remote>" to stderr on success. Logging
+	// that at error level puts [ERROR] in the shared output channel on a healthy
+	// rules fetch, which is both misleading and enough to trip the host suite's
+	// error monitor.
+	test("does not log stderr at error level when git succeeds", async () => {
+		logged.length = 0;
+		const fakeSpawn = () =>
+			makeChild({
+				code: 0,
+				signal: null,
+				stderr: "From github.com:cwtools/cwtools-hoi4-config\n",
+			});
+		await runGit(["fetch"], fakeSpawn as never);
+		assert.ok(
+			!logged.some((l) => l.level === "error"),
+			`succeeded but logged an error: ${JSON.stringify(logged)}`,
+		);
+		assert.ok(
+			logged.some((l) => l.message.includes("From github.com")),
+			`stderr must still be recorded: ${JSON.stringify(logged)}`,
+		);
+	});
+
+	test("logs stderr at error level when git fails", async () => {
+		logged.length = 0;
+		const fakeSpawn = () =>
+			makeChild({ code: 128, signal: null, stderr: "fatal: not a repo\n" });
+		await assert.rejects(() => runGit(["pull"], fakeSpawn as never));
+		assert.ok(
+			logged.some(
+				(l) => l.level === "error" && l.message.includes("fatal: not a repo"),
+			),
+			`a real failure must log at error level: ${JSON.stringify(logged)}`,
+		);
 	});
 
 	test("rejects when git exits non-zero", async () => {

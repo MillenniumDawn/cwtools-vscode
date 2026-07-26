@@ -87,4 +87,7 @@ export function teardownLSPErrorMonitoring(): void {
     // Clear the error log
     errorLog = [];
     testStartTime = 0;
+    // Else a teardown right after an error frame captures an unrelated first
+    // line as its detail on the next setup.
+    captureDetailLine = false;
 }
