@@ -11,6 +11,8 @@ let errorLog: ErrorEntry[] = [];
 let testStartTime: number = 0;
 let originalAppendLine: ((value: string) => void) | undefined;
 let isMonitoringActive = false;
+// The client's error detail arrives as the appendLine right after its frame.
+let captureDetailLine = false;
 
 /**
  * Sets up LSP error monitoring by intercepting the output channel
@@ -27,15 +29,19 @@ export function setupLSPErrorMonitoring(): void {
         defaultClient.outputChannel.appendLine = (message: string) => {
             const timestamp = Date.now();
 
-            // Only the client's own error frames. The channel is shared with the
-            // extension logger and server INFO, which say "error" in passing
-            // ("0 errors"), so a substring match fails tests on healthy runs.
-            if (message.startsWith('[Error')) {
+            // The client writes "[Error - <time>] <msg>" then an unprefixed
+            // detail line (stack / Message: / Code:); the extension's own logger
+            // writes "[ERROR]". Matching a bare "error" substring instead would
+            // catch server INFO like "0 errors" and fail healthy runs.
+            const isErrorFrame =
+                message.startsWith('[Error') || message.startsWith('[ERROR]');
+            if (isErrorFrame || captureDetailLine) {
                 errorLog.push({
                     timestamp,
                     message: message
                 });
             }
+            captureDetailLine = isErrorFrame;
 
             // Call the original method
             return originalAppendLine!(message);
