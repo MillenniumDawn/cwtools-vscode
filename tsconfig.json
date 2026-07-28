@@ -6,6 +6,11 @@
 		"target": "es2020",
 		"module": "commonjs",
 		"moduleResolution": "node",
+		"baseUrl": ".",
+		"paths": {
+			"vscode-languageclient/node": ["node_modules/vscode-languageclient/lib/node/main"],
+			"vscode-languageserver-protocol": ["node_modules/vscode-languageserver-protocol/lib/common/api"]
+		},
 		"rootDir": "client",
 		"outDir": "release/bin/client",
 		"lib": [ "es2020", "dom" ],
