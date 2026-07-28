@@ -24,11 +24,12 @@ updates:
         patterns:
           - "*"
 
+  # Engine bumps auto-merge once CI passes (automerge-engine.yml), so daily
+  # keeps the pin close to engine main without manual work.
   - package-ecosystem: gitsubmodule
     directory: /
     schedule:
-      interval: weekly
-      day: monday
+      interval: daily
       time: "06:00"
       timezone: Etc/UTC
     open-pull-requests-limit: 3

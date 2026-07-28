@@ -48,7 +48,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		// Include `.` in the word pattern so a dotted event/decision id
 		// (`namespace.1`) selects whole on double-click and resolves via
 		// go-to-definition, instead of splitting at the dot. (#39)
-		const langConfigDisposable = vscode.languages.setLanguageConfiguration(language, { wordPattern : /"?([^\s]+)"?/ });
+		const langConfigDisposable = vscode.languages.setLanguageConfiguration('paradox', { wordPattern : /"?([^\s]+)"?/ });
 		context.subscriptions.push(langConfigDisposable);
 
 		// The Rust language server, bundled per-platform. Resolve the binary for
