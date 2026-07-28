@@ -8,7 +8,7 @@
  */
 import { window } from "vscode";
 
-const channel = window.createOutputChannel("CWTools");
+const channel = window.createOutputChannel("CWTools", { log: true });
 
 // Adopted by the language client, so its server output lands here rather than
 // in a second channel named after the client.
