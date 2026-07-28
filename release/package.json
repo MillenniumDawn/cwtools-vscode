@@ -502,7 +502,8 @@
         "editor.insertSpaces": false,
         "editor.acceptSuggestionOnEnter": "off",
         "editor.suggest.insertMode": "replace",
-        "editor.definitionLinkOpensInPeek": true
+        "editor.definitionLinkOpensInPeek": true,
+        "editor.maxTokenizationLineLength": 10000
       },
       "[yaml]": {
         "files.autoGuessEncoding": true,
