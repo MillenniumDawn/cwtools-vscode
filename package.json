@@ -16,7 +16,7 @@
     "bench:node": "vitest bench --run"
   },
   "dependencies": {
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "^10.1.0"
   },
   "devDependencies": {
     "@eslint/compat": "^2.1.0",
