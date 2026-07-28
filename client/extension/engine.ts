@@ -3,7 +3,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import type { ExtensionContext } from 'vscode';
 import { existsSync as fsExistsSync } from 'fs';
-import { logInfo, logError } from './logger';
+import { logInfo, logWarn, logError } from './logger';
 import { FOLDER_HINTS, CONTENT_HINTS } from './games';
 
 export { LANGUAGE_REPOS } from './games';
@@ -25,7 +25,7 @@ function serverPlatformDir(): string {
 	switch (os.platform()) {
 		case 'win32': return 'win-x64';
 		case 'darwin': return os.arch() === 'arm64' ? 'osx-arm64' : 'osx-x64';
-		default: return 'linux-x64';
+		default: return os.arch() === 'arm64' ? 'linux-arm64' : 'linux-x64';
 	}
 }
 
@@ -165,9 +165,12 @@ export function runGit(
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
+			const failed = code !== 0 || !!signal;
 			if (out) logInfo(`git stdout: ${out.trimEnd()}`);
-			if (err) logError(`git stderr: ${err.trimEnd()}`);
-			if (code === 0 && !signal) resolve();
+			// git reports fetch progress and "From <remote>" on stderr, so stderr
+			// alone is not a failure; the exit code is.
+			if (err) (failed ? logError : logWarn)(`git stderr: ${err.trimEnd()}`);
+			if (!failed) resolve();
 			else reject(new Error(`git exited with code ${code} (signal: ${signal || 'none'})`));
 		});
 	});

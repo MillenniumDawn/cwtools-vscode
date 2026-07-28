@@ -16,7 +16,28 @@ vi.mock("vscode", () => ({
 }));
 
 // Static import is safe because vi.mock is hoisted above all imports.
-import { logInfo, logWarn, logError } from "../../extension/logger";
+import {
+	logInfo,
+	logWarn,
+	logError,
+	outputChannel,
+} from "../../extension/logger";
+
+suite("logger — outputChannel", () => {
+	beforeEach(() => {
+		lines.length = 0;
+	});
+
+	// The language client is handed this same instance; a second channel would
+	// split server output away from where the rules-config popup points.
+	test("exports the channel the log helpers write to", () => {
+		logInfo("via helper");
+		outputChannel.appendLine("direct");
+		assert.strictEqual(lines.length, 2);
+		assert.strictEqual(lines[0], "via helper");
+		assert.strictEqual(lines[1], "direct");
+	});
+});
 
 suite("logger — logInfo", () => {
 	beforeEach(() => {
