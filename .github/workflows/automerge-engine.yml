@@ -9,11 +9,13 @@ on:
   workflow_run:
     workflows: [Test]
     types: [completed]
+    branches: ['dependabot/**']
 
 name: Auto-merge engine bump
 
-# Dependabot-triggered runs get a read-only token unless permissions are
-# granted explicitly.
+# workflow_run runs are write-capable even when the triggering actor is
+# Dependabot; this block guards against a read-only default-workflow-permissions
+# repo setting.
 permissions:
   contents: write
   pull-requests: write
@@ -35,6 +37,7 @@ jobs:
         HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
       run: |
         pr=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
+          --author "app/dependabot" \
           --json number,headRefOid --jq \
           ".[] | select(.headRefOid == \"$HEAD_SHA\") | .number")
         if [ -z "$pr" ]; then
@@ -46,4 +49,5 @@ jobs:
           echo "PR #$pr changes more than the engine gitlink; leaving it for review."
           exit 0
         fi
-        gh pr merge "$pr" --repo "$REPO" --squash
+        # --match-head-commit: refuse if the branch moved since this run's SHA.
+        gh pr merge "$pr" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"
