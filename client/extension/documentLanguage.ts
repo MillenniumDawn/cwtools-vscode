@@ -1,12 +1,10 @@
-import * as vscode from 'vscode';
-import type { ExtensionContext } from 'vscode';
-import { workspace, window, commands } from 'vscode';
-import type { LanguageClient } from 'vscode-languageclient/node';
-import { NotificationType, ExecuteCommandRequest } from 'vscode-languageclient/node';
-import { shouldNotifyFocus, pendingProcessDelayMs } from './focusTracking';
-import { logError, logInfo } from './logger';
-
-interface DidFocusFile { uri: string }
+import * as vscode from "vscode";
+import type { ExtensionContext } from "vscode";
+import { workspace, window, commands } from "vscode";
+import type { LanguageClient } from "vscode-languageclient/node";
+import { ExecuteCommandRequest } from "vscode-languageserver-protocol";
+import { shouldNotifyFocus, pendingProcessDelayMs } from "./focusTracking";
+import { logError, logInfo } from "./logger";
 
 export interface EditorTracker {
 	getLatestType(): string;
@@ -24,13 +22,13 @@ const ACTIVE_EDITOR_DEBOUNCE_MS = 200;
 export async function registerDocumentLanguage(
 	context: ExtensionContext,
 	client: LanguageClient,
-	languageId: string
+	languageId: string,
 ): Promise<EditorTracker> {
-	const didFocusFile = new NotificationType<DidFocusFile>('didFocusFile');
-	let latestType : string = '';
+	const didFocusFile = "didFocusFile";
+	let latestType: string = "";
 	let getFileTypesInFlight = false;
-	let pendingEditor : vscode.TextEditor | undefined;
-	let lastFocusUri : string | undefined;
+	let pendingEditor: vscode.TextEditor | undefined;
+	let lastFocusUri: string | undefined;
 	const getFileTypesTimeoutMs = 5000;
 	const getFileTypesBackoffMs = 2000;
 
@@ -41,25 +39,33 @@ export async function registerDocumentLanguage(
 	// Scoped to the usual game dirs (and known extensions) so unrelated .txt
 	// notes and scratch buffers aren't hijacked, in both the concrete-game and
 	// generic "paradox" cases.
-	const gameScriptDirs = /[\\/](events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
-	function looksLikeGameScript(doc : vscode.TextDocument): boolean {
-		if (doc.uri.scheme !== 'file') return false;
+	const gameScriptDirs =
+		/[\\/](events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
+	function looksLikeGameScript(doc: vscode.TextDocument): boolean {
+		if (doc.uri.scheme !== "file") return false;
 		const p = doc.uri.fsPath;
 		if (/\.(gui|gfx|asset|sfx)$/i.test(p)) return true;
 		return /\.txt$/i.test(p) && gameScriptDirs.test(p);
 	}
-	async function upgradePlaintextDocument(doc : vscode.TextDocument): Promise<void> {
+	async function upgradePlaintextDocument(
+		doc: vscode.TextDocument,
+	): Promise<void> {
 		if (doc.languageId !== "plaintext") return;
 		if (!looksLikeGameScript(doc)) return;
-		await vscode.languages.setTextDocumentLanguage(doc, languageId)
+		await vscode.languages.setTextDocumentLanguage(doc, languageId);
 	}
 
-	async function didChangeActiveTextEditor(editor : vscode.TextEditor | undefined): Promise<void> {
+	async function didChangeActiveTextEditor(
+		editor: vscode.TextEditor | undefined,
+	): Promise<void> {
 		if (!editor) return;
 		const editorPath = editor.document.uri.toString();
 		await upgradePlaintextDocument(editor.document);
-		if (editor.document.languageId === languageId && shouldNotifyFocus(editorPath, lastFocusUri)) {
-			await client.sendNotification(didFocusFile, {uri: editorPath});
+		if (
+			editor.document.languageId === languageId &&
+			shouldNotifyFocus(editorPath, lastFocusUri)
+		) {
+			await client.sendNotification(didFocusFile, { uri: editorPath });
 			lastFocusUri = editorPath;
 		}
 		// Guard against rapid tab switches piling up requests to a busy server.
@@ -82,23 +88,25 @@ export async function registerDocumentLanguage(
 			const data = await client.sendRequest(
 				ExecuteCommandRequest.type,
 				{ command: "getFileTypes", arguments: [editorPath] },
-				cts.token
+				cts.token,
 			);
 			if (data && data[0]) {
 				latestType = data[0];
-				await commands.executeCommand('setContext', 'cwtoolsGraphFile', true);
+				await commands.executeCommand("setContext", "cwtoolsGraphFile", true);
 			} else {
-				await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
+				await commands.executeCommand("setContext", "cwtoolsGraphFile", false);
 			}
 		} catch (err) {
 			timedOut = cts.token.isCancellationRequested;
 			// A timeout isn't an error; demote it so validate storms don't spam logError.
 			if (timedOut) {
-				logInfo(`didChangeActiveTextEditor getFileTypes timed out after ${getFileTypesTimeoutMs}ms`);
+				logInfo(
+					`didChangeActiveTextEditor getFileTypes timed out after ${getFileTypesTimeoutMs}ms`,
+				);
 			} else {
-				logError('didChangeActiveTextEditor getFileTypes failed', err);
+				logError("didChangeActiveTextEditor getFileTypes failed", err);
 			}
-			await commands.executeCommand('setContext', 'cwtoolsGraphFile', false);
+			await commands.executeCommand("setContext", "cwtoolsGraphFile", false);
 		} finally {
 			clearTimeout(timeoutTimer);
 			cts.dispose();
@@ -109,7 +117,7 @@ export async function registerDocumentLanguage(
 			// drains immediately.
 			const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
 			if (delay > 0) {
-				await new Promise<void>(resolve => setTimeout(resolve, delay));
+				await new Promise<void>((resolve) => setTimeout(resolve, delay));
 			}
 			getFileTypesInFlight = false;
 		}
@@ -121,16 +129,24 @@ export async function registerDocumentLanguage(
 	}
 
 	let debounceTimer: NodeJS.Timeout | undefined;
-	context.subscriptions.push(window.onDidChangeActiveTextEditor(editor => {
-		if (debounceTimer) clearTimeout(debounceTimer);
-		debounceTimer = setTimeout(() => void didChangeActiveTextEditor(editor), ACTIVE_EDITOR_DEBOUNCE_MS);
-	}));
+	context.subscriptions.push(
+		window.onDidChangeActiveTextEditor((editor) => {
+			if (debounceTimer) clearTimeout(debounceTimer);
+			debounceTimer = setTimeout(
+				() => void didChangeActiveTextEditor(editor),
+				ACTIVE_EDITOR_DEBOUNCE_MS,
+			);
+		}),
+	);
 
 	await Promise.all(workspace.textDocuments.map(upgradePlaintextDocument));
-	context.subscriptions.push(workspace.onDidOpenTextDocument(upgradePlaintextDocument));
+	context.subscriptions.push(
+		workspace.onDidOpenTextDocument(upgradePlaintextDocument),
+	);
 
 	return {
 		getLatestType: () => latestType,
-		classifyActiveEditor: () => didChangeActiveTextEditor(window.activeTextEditor),
+		classifyActiveEditor: () =>
+			didChangeActiveTextEditor(window.activeTextEditor),
 	};
 }
