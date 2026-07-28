@@ -49,6 +49,20 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # typescript-eslint peers typescript <6.1.0, so a major bump here breaks
+      # `npm ci` outright. Drop this once typescript-eslint supports it.
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+      # v3 replaced the `cy.use(popper)` registration the webview is written
+      # against with a factory. Needs a code change, not a version bump.
+      - dependency-name: cytoscape-popper
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "@types/cytoscape-popper"
+        update-types:
+          - version-update:semver-major
     groups:
       # Split out so a fix never queues behind a routine version bump.
       npm-security:
