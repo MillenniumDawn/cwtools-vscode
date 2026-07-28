@@ -1,0 +1,49 @@
+# Auto-merge Dependabot engine-submodule bumps after CI passes.
+#
+# main has no branch protection, so GitHub's native auto-merge would land a
+# PR before its checks finish. Instead this fires when the Test workflow
+# completes, and merges only if the run succeeded and the PR touches nothing
+# but the engine gitlink. Releases stay safe regardless: release.yml refuses
+# to bundle an untagged engine.
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+
+name: Auto-merge engine bump
+
+# Dependabot-triggered runs get a read-only token unless permissions are
+# granted explicitly.
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Merge if the PR only bumps the engine submodule
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      run: |
+        pr=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
+          --json number,headRefOid --jq \
+          ".[] | select(.headRefOid == \"$HEAD_SHA\") | .number")
+        if [ -z "$pr" ]; then
+          echo "No open PR for $HEAD_BRANCH at $HEAD_SHA; nothing to do."
+          exit 0
+        fi
+        files=$(gh pr view "$pr" --repo "$REPO" --json files --jq '.files[].path')
+        if [ "$files" != "submodules/cwtools" ]; then
+          echo "PR #$pr changes more than the engine gitlink; leaving it for review."
+          exit 0
+        fi
+        gh pr merge "$pr" --repo "$REPO" --squash
