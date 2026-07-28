@@ -92,6 +92,35 @@ suite("paradox grammar — keyword word lists (#112)", () => {
 		}
 	});
 
+	test("iterators sit in their scope buckets", () => {
+		const byName = new Map(wordListPatterns.map((p) => [p.name, wordsOf(p)]));
+		const conditionScopes =
+			byName.get("variable.language.condition_scopes.paradox") ?? [];
+		const commandScopes =
+			byName.get("variable.language.command_scopes.paradox") ?? [];
+		assert.deepStrictEqual(
+			conditionScopes.filter((w) => /^(every|random)_/.test(w)),
+			[],
+		);
+		assert.deepStrictEqual(
+			commandScopes.filter((w) => /^(any|count)_/.test(w)),
+			[],
+		);
+		for (const bucket of [
+			"variable.language.conditions.paradox",
+			"variable.language.effects.paradox",
+		]) {
+			assert.deepStrictEqual(
+				(byName.get(bucket) ?? []).filter(
+					(w) =>
+						/^(any|count|every|random)_/.test(w) && w !== "random_list",
+				),
+				[],
+				bucket,
+			);
+		}
+	});
+
 	test("yes/no stay RHS constants, not keys", () => {
 		for (const p of wordListPatterns) {
 			const words = wordsOf(p);
