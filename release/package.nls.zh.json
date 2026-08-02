@@ -14,6 +14,7 @@
   "commands.reindexWorkspace.title": "重新索引工作区",
   // Save the language server's timing/memory log to a file, for a bug report
   "commands.exportProfilingLog.title": "导出性能分析日志",
+  "commands.fixAllWorkspace.title": "修复工作区中所有可自动修复的问题",
   "commands.showGraph.title": "显示图",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "从 JSON 重新创建图",

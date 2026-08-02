@@ -129,6 +129,11 @@
         "category": "cwtools"
       },
       {
+        "command": "cwtools.fixAllWorkspace",
+        "title": "%commands.fixAllWorkspace.title%",
+        "category": "cwtools"
+      },
+      {
         "command": "cwtools.showGraph",
         "title": "%commands.showGraph.title%",
         "category": "cwtools"

@@ -14,6 +14,7 @@
   "commands.reindexWorkspace.title": "Re-index workspace",
   // Save the language server's timing/memory log to a file, for a bug report
   "commands.exportProfilingLog.title": "Export profiling log",
+  "commands.fixAllWorkspace.title": "Fix all auto-fixable problems in workspace",
   "commands.showGraph.title": "Show graph",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "Recreate graph from json",

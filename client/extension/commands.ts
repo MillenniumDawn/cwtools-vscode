@@ -130,4 +130,21 @@ export function registerCommands(
 			);
 		}),
 	);
+
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.fixAllWorkspace", async () => {
+			try {
+				const result = await client.sendRequest(ExecuteCommandRequest.type, {
+					command: "fixAllWorkspace",
+					arguments: [],
+				});
+				if (typeof result === "string" && result.length > 0) {
+					window.showInformationMessage(`CWTools: ${result}`);
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				window.showErrorMessage(`CWTools: fixAllWorkspace failed: ${msg}`);
+			}
+		}),
+	);
 }
