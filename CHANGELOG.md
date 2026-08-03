@@ -1,6 +1,7 @@
 ### Unreleased
 
 * `npm run test:watch` now starts both watchers on Windows. The script ran `tsc -w` and the test watcher joined with `&`, which npm executes sequentially through cmd.exe, so the never-exiting compiler watcher starved the test watcher; it worked on Linux only because `&` backgrounds there. The two now run under `concurrently`, and `-k` stops the test watcher when the compiler dies rather than rerunning stale output. (#132)
+* A failed language-server start no longer causes an unhandled rejection whenever the active tab changes. The failed focus notification is logged instead. (#130)
 
 ### 2.5.0
 

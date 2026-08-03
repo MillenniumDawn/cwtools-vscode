@@ -16,31 +16,34 @@
 // Coverage applies globally when `--coverage` is passed (test:coverage runs the
 // `unit` label).
 
-import { defineConfig } from '@vscode/test-cli';
+import { defineConfig } from "@vscode/test-cli";
 
-const sampleWorkspace = './release/bin/client/test/sample';
-const sampleFile = './client/test/sample/events/irm.txt';
+const sampleWorkspace = "./release/bin/client/test/sample";
+const sampleFile = "./client/test/sample/events/irm.txt";
 const unitFiles = [
-	'./release/bin/client/test/suite/graphTypes.test.js',
-	'./release/bin/client/test/suite/fileExplorer.test.js',
+	"./release/bin/client/test/suite/graphTypes.test.js",
+	"./release/bin/client/test/suite/fileExplorer.test.js",
 ];
-const smokeFiles = [...unitFiles, './release/bin/client/test/suite/extension.test.js'];
-const allFiles = './release/bin/client/test/suite/**/*.test.js';
+const smokeFiles = [
+	...unitFiles,
+	"./release/bin/client/test/suite/extension.test.js",
+];
+const allFiles = "./release/bin/client/test/suite/**/*.test.js";
 
 const base = {
-	vscode: 'stable',
-	extensionDevelopmentPath: 'release',
+	vscode: "stable",
+	extensionDevelopmentPath: "release",
 	workspaceFolder: sampleWorkspace,
 };
 
 export default defineConfig({
 	tests: [
-		{ ...base, label: 'unit', files: unitFiles, launchArgs: [sampleFile] },
-		{ ...base, label: 'smoke', files: smokeFiles, launchArgs: [sampleFile] },
-		{ ...base, label: 'host', files: allFiles, launchArgs: [sampleFile] },
+		{ ...base, label: "unit", files: unitFiles, launchArgs: [sampleFile] },
+		{ ...base, label: "smoke", files: smokeFiles, launchArgs: [sampleFile] },
+		{ ...base, label: "host", files: allFiles, launchArgs: [sampleFile] },
 	],
 	coverage: {
-		reporter: ['text-summary', 'html', 'lcov', 'json-summary'],
+		reporter: ["text-summary", "html", "lcov", "json-summary"],
 		// Intent: only the hand-written client source. vscode-test instruments
 		// every loaded file though, and doesn't reliably honor these globs: it
 		// leaks node_modules into the raw report (semver, vscode-jsonrpc, ...)
@@ -49,14 +52,14 @@ export default defineConfig({
 		// build/coverage-summary.ts is what actually drops node_modules and the
 		// vitest-owned files from the rendered report and recomputes the totals.
 		// The excludes below are kept as declared intent.
-		include: ['**/client/extension/**', '**/client/common/**'],
+		include: ["**/client/extension/**", "**/client/common/**"],
 		exclude: [
-			'**/client/extension/engine.ts',
-			'**/client/extension/executable.ts',
-			'**/client/extension/games.ts',
-			'**/client/test/**',
-			'**/client/webview/**',
-			'**/node_modules/**',
+			"**/client/extension/engine.ts",
+			"**/client/extension/executable.ts",
+			"**/client/extension/games.ts",
+			"**/client/test/**",
+			"**/client/webview/**",
+			"**/node_modules/**",
 		],
 	},
 });

@@ -2,8 +2,8 @@ import * as path from "path";
 import { existsSync as fsExistsSync } from "fs";
 import * as fsPromises from "fs/promises";
 import { workspace, window, ProgressLocation } from "vscode";
+import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
-import { ExecuteCommandRequest } from "vscode-languageserver-protocol";
 import { LANGUAGE_REPOS, resolveRulesFolder, runGit } from "./engine";
 import { logInfo, logWarn, logError } from "./logger";
 

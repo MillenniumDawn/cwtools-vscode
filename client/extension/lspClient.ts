@@ -10,8 +10,8 @@ import {
 	TransportKind,
 	RevealOutputChannelOn,
 	State,
+	DidChangeConfigurationNotification,
 } from "vscode-languageclient/node";
-import { DidChangeConfigurationNotification } from "vscode-languageserver-protocol";
 import {
 	normalizeBackgroundReindexMinutes,
 	normalizeBackgroundReindexIdleSeconds,
