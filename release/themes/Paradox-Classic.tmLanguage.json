@@ -56,7 +56,6 @@
 	"semanticTokenColors": {
 		"type": "#4EC9B0",
 		"type.declaration": {
-			"foreground": "#4EC9B0",
 			"bold": true
 		},
 		"enumMember": "#C586C0",

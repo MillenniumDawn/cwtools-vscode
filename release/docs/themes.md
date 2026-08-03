@@ -43,7 +43,10 @@ paint a curated subset; the rest fall back to their TextMate scope colors.
 
 The colored types get deliberate, distinct colors in each theme so the server's
 structural disambiguation is visible. Dark, light, and high-contrast variants
-carry their own values.
+carry their own values. `type.declaration` sets only `bold` and inherits its
+foreground from `type` (VS Code resolves each style property from the most
+specific matching rule and falls back for the rest), so changing the `type`
+color also recolors declarations.
 
 ## Adding a theme
 
