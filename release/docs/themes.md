@@ -2,16 +2,17 @@
 
 The bundled themes live under `release/themes/`. Each is a VS Code color theme
 manifest that paints the full scope set from the paradox grammar and the `.cwt`
-rules grammar, plus a semantic token layer contributed by the language server.
+rules grammar, plus a semantic token layer for game scripts contributed by the
+language server.
 
 ## Anatomy of a theme
 
 Every theme has two highlighting layers:
 
-* `tokenColors` — TextMate scope colors, painted from the grammar. This covers
+* `tokenColors`: TextMate scope colors, painted from the grammar. This covers
   the bulk of the language: keys, effects, triggers, modifiers, comments,
   numbers, strings, booleans, and so on.
-* `semanticTokenColors` — colors for the tokens the language server classifies
+* `semanticTokenColors`: colors for the tokens the language server classifies
   from parsed structure, where the grammar alone cannot tell them apart. This is
   the layer that resolves the ambiguity the issue in CHANGELOG 2.5.0 documents
   (for example a CK2 define key vs a scope keyword, or `capital` as a keyword vs
@@ -19,7 +20,7 @@ Every theme has two highlighting layers:
 
 A theme opts into semantic highlighting with `"semanticHighlighting": true`, and
 the extension defaults `editor.semanticHighlighting.enabled` to on for the
-`paradox` and `cwt` languages via `configurationDefaults` in `release/package.json`.
+`paradox` language via `configurationDefaults` in `release/package.json`.
 
 ## Semantic token types
 
@@ -27,15 +28,15 @@ The server advertises this legend (see `semantic.rs` in the engine). The themes
 paint a curated subset; the rest fall back to their TextMate scope colors.
 
 | type | meaning | colored in themes? |
-|---|---|---|
-| `comment` | comment | no — scope color |
-| `property` | a leaf/block key | no — scope color |
-| `operator` | `=`, `>=`, `!=`, … | no — scope color |
-| `number` | number literal | no — scope color |
-| `string` | unclassified scalar, LocRef, FileRef | no — scope color |
-| `keyword` | `yes` / `no` | no — scope color |
+| --- | --- | --- |
+| `comment` | comment | no, scope color |
+| `property` | a leaf/block key | no, scope color |
+| `operator` | `=`, `>=`, `!=`, … | no, scope color |
+| `number` | number literal | no, scope color |
+| `string` | unclassified scalar, LocRef, FileRef | no, scope color |
+| `keyword` | `yes` / `no` | no, scope color |
 | `type` | TypeRef value, or a type-declaring key | yes |
-| `type.declaration` | `type` with the declaration modifier (the key names a type instance) | yes |
+| `type.declaration` | a key that names a type instance | yes |
 | `enumMember` | EnumRef value | yes |
 | `variable` | script variable read | yes |
 | `namespace` | scope name | yes |
@@ -48,12 +49,12 @@ foreground from `type` (VS Code resolves each style property from the most
 specific matching rule and falls back for the rest), so changing the `type`
 color also recolors declarations.
 
-## Adding a theme
+## Bundled theme checklist
 
 1. Copy an existing manifest (for example `Paradox-Nord.tmLanguage.json`) to a
    new file under `release/themes/`.
-2. Update `name`, `type` (`dark`/`light`/`high-contrast`), and the `colors` and
-   `tokenColors` to your palette.
+2. Update `name`, `type` (`dark`/`light`), and the `colors` and `tokenColors` to
+   your palette.
 3. Add or adjust `semanticTokenColors`. The block is small and self-contained;
    copy the shape from an existing theme of the same family and change the hex
    values to match your palette. Leave `"semanticHighlighting": true` in place.
@@ -62,7 +63,7 @@ color also recolors declarations.
 5. Update this README's Theming section to list it.
 
 Semantic highlighting must be enabled for your theme's colors to appear. The
-extension already sets `editor.semanticHighlighting.enabled` for `paradox` and
-`cwt`, so a bundled theme only needs `"semanticHighlighting": true`. A user theme
+extension already sets `editor.semanticHighlighting.enabled` for `paradox`, so
+a bundled theme only needs `"semanticHighlighting": true`. A user theme
 that is not bundled can enable it the same way or via
 `editor.semanticTokenColorCustomizations` in their settings.
