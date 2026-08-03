@@ -1,3 +1,7 @@
+### Unreleased
+
+* `npm run test:watch` now starts both watchers on Windows. The script ran `tsc -w` and the test watcher joined with `&`, which npm executes sequentially through cmd.exe, so the never-exiting compiler watcher starved the test watcher; it worked on Linux only because `&` backgrounds there. The two now run under `concurrently`, and `-k` stops the test watcher when the compiler dies rather than rerunning stale output. (#132)
+
 ### 2.5.0
 
 * Upgraded to v2.4.0 of the cwtools rust engine. The `NOT`/`NOR`/`NAND` hint and the unnecessary-`AND`/`OR` hint now underline the operator itself instead of every line of the block it opens (#107), and squiggles in general no longer run one line past their content. The "Remove empty if" quick fix is withheld when an `else_if` or `else` follows the block, where applying it deleted valid script (and it was reachable from fix-all-on-save). `localisation_synced/` is walked for localisation, so HOI4 synced keys index and resolve instead of reading as missing. The rules-config error popup names the first error inline, and the per-file rule diagnostics are held until the handshake completes instead of being silently dropped (#98).
@@ -29,6 +33,7 @@
 * Added a SECURITY.md pointing reports at private vulnerability reporting rather than a public issue.
 
 ### 2.3.0
+
 * No engine change. The original entry here claimed an upgrade to "v3.0.0 of the cwtools rust engine"; there is no such version, and the submodule pin was untouched, so 2.3.0 shipped the same v1.22.0 engine as 2.0.0 through 2.2.0. Corrected in 2.4.0, which does move the pin.
 
 ### 2.2.0
@@ -441,7 +446,7 @@
 
 ### 0.9.9
 
-* Stellaris: Suppress [[FLAG]] errors
+* Stellaris: Suppress `[[FLAG]]` errors
 * Fix occasional extension corruption
 
 ### 0.9.8
