@@ -43,51 +43,51 @@ suite("engine — LANGUAGE_REPOS", () => {
 
 
 suite("engine — detectFromFolder", () => {
-	const noopExists = () => false;
-	const assertDetects = (folder: string, expected: string | null) =>
-		assert.strictEqual(detectFromFolder(folder, noopExists), expected);
+	const noopExists = async () => false;
+	const assertDetects = async (folder: string, expected: string | null) =>
+		assert.strictEqual(await detectFromFolder(folder, noopExists), expected);
 
-	test("returns null for an unrecognised folder", () => {
-		assertDetects("/home/user/mymod", null);
+	test("returns null for an unrecognised folder", async () => {
+		await assertDetects("/home/user/mymod", null);
 	});
 
-	test("returns null for an empty path", () => {
-		assertDetects("", null);
+	test("returns null for an empty path", async () => {
+		await assertDetects("", null);
 	});
 
-	test("matches by folder name substring for every supported game", () => {
-		assertDetects("/mods/Stellaris_v3", "stellaris");
-		assertDetects("/mods/HOI4_Mod", "hoi4");
-		assertDetects("/mods/Hearts of Iron", "hoi4");
-		assertDetects("/mods/Europa Universalis IV", "eu4");
-		assertDetects("/mods/CK2_whatever", "ck2");
-		assertDetects("/mods/CK3_whatever", "ck3");
-		assertDetects("/mods/CK3_Mod", "ck3");
-		assertDetects("/mods/Vic2", "vic2");
-		assertDetects("/mods/Victoria 2", "vic2");
-		assertDetects("/mods/Vic3", "vic3");
-		assertDetects("/mods/Imperator", "imperator");
-		assertDetects("/mods/Rome Total War", "imperator");
-		assertDetects("/mods/EU5", "eu5");
+	test("matches by folder name substring for every supported game", async () => {
+		await assertDetects("/mods/Stellaris_v3", "stellaris");
+		await assertDetects("/mods/HOI4_Mod", "hoi4");
+		await assertDetects("/mods/Hearts of Iron", "hoi4");
+		await assertDetects("/mods/Europa Universalis IV", "eu4");
+		await assertDetects("/mods/CK2_whatever", "ck2");
+		await assertDetects("/mods/CK3_whatever", "ck3");
+		await assertDetects("/mods/CK3_Mod", "ck3");
+		await assertDetects("/mods/Vic2", "vic2");
+		await assertDetects("/mods/Victoria 2", "vic2");
+		await assertDetects("/mods/Vic3", "vic3");
+		await assertDetects("/mods/Imperator", "imperator");
+		await assertDetects("/mods/Rome Total War", "imperator");
+		await assertDetects("/mods/EU5", "eu5");
 	});
 
-	test("matching is case-insensitive", () => {
-		assertDetects("/mods/stellaris_v3", "stellaris");
-		assertDetects("/mods/hoi4_mod", "hoi4");
-		assertDetects("/mods/ck3_mod", "ck3");
-		assertDetects("/mods/eu5_mod", "eu5");
+	test("matching is case-insensitive", async () => {
+		await assertDetects("/mods/stellaris_v3", "stellaris");
+		await assertDetects("/mods/hoi4_mod", "hoi4");
+		await assertDetects("/mods/ck3_mod", "ck3");
+		await assertDetects("/mods/eu5_mod", "eu5");
 	});
 
-	test("falls back to file content markers when the folder name is opaque", () => {
+	test("falls back to file content markers when the folder name is opaque", async () => {
 		const files: Record<string, boolean> = {
 			["/x/common/ai_strategy"]: true,
 		};
-		const exists = (p: string) => files[p] === true;
-		assert.strictEqual(detectFromFolder("/x", exists), "hoi4");
-		assert.strictEqual(detectFromFolder("/y", noopExists), null);
+		const exists = async (p: string) => files[p] === true;
+		assert.strictEqual(await detectFromFolder("/x", exists), "hoi4");
+		assert.strictEqual(await detectFromFolder("/y", noopExists), null);
 	});
 
-	test("content markers cover every game that lacks a unique folder-name hint", () => {
+	test("content markers cover every game that lacks a unique folder-name hint", async () => {
 		const contentMarkers: Record<string, string> = {
 			"common/ai_strategy": "hoi4",
 			"common/species_classes": "stellaris",
@@ -99,22 +99,22 @@ suite("engine — detectFromFolder", () => {
 			const files: Record<string, boolean> = {
 				[root + "/" + marker]: true,
 			};
-			const exists = (p: string) => files[p] === true;
+			const exists = async (p: string) => files[p] === true;
 			assert.strictEqual(
-				detectFromFolder(root, exists),
+				await detectFromFolder(root, exists),
 				expectedId,
 				`marker ${marker} should detect ${expectedId}`,
 			);
 		}
 	});
 
-	test("prefers folder-name hint over content hint", () => {
-		const exists = () => true;
-		assert.strictEqual(detectFromFolder("/mods/HOI4", exists), "hoi4");
+	test("prefers folder-name hint over content hint", async () => {
+		const exists = async () => true;
+		assert.strictEqual(await detectFromFolder("/mods/HOI4", exists), "hoi4");
 	});
 
-	test("first matching folder-name hint wins (order matters)", () => {
-		assert.strictEqual(detectFromFolder("/mods/CK2", noopExists), "ck2");
+	test("first matching folder-name hint wins (order matters)", async () => {
+		assert.strictEqual(await detectFromFolder("/mods/CK2", noopExists), "ck2");
 	});
 });
 

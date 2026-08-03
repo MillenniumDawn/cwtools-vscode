@@ -22,12 +22,16 @@ export function logWarn(message: string): void {
 	channel.appendLine(`[WARN] ${message}`);
 }
 
+// Best-effort human message for an unknown thrown value. The catch sites in
+// the extension all want `Error ? .message : String(value)`, and logError wants
+// the same but omitting the suffix entirely for undefined/null.
+export function errorMessage(err: unknown): string {
+	if (err instanceof Error) return err.message;
+	if (err === undefined || err === null) return "";
+	return String(err);
+}
+
 export function logError(message: string, err?: unknown): void {
-	const suffix =
-		err instanceof Error
-			? `: ${err.message}`
-			: err !== undefined && err !== null
-				? `: ${String(err)}`
-				: "";
-	channel.appendLine(`[ERROR] ${message}${suffix}`);
+	const suffix = errorMessage(err);
+	channel.appendLine(`[ERROR] ${message}${suffix ? `: ${suffix}` : ""}`);
 }

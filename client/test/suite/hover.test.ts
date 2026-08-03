@@ -5,7 +5,6 @@ import {
 	activate,
 	waitForLSP,
 	waitForLanguageServer,
-	currentEngine,
 	EXTENSION_ID,
 	SAMPLE_ROOT,
 } from '../support/utils';
@@ -64,11 +63,9 @@ suite('LSP Hover Tests', function () {
 				"THIS",
 			];
 			const result = await checkHoverContains(testDocument.uri, new vscode.Position(37, 45), required);
-			if (currentEngine() === 'rust') {
-				console.warn(`[rust] hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
-			}
-			expect(result.actual, `engine=${currentEngine()}`).to.not.be.empty;
-			expect(result.missing, `engine=${currentEngine()}\nactual: ${result.actual}`).to.deep.equal([]);
+			console.warn(`[rust] hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
+			expect(result.actual, `engine=rust`).to.not.be.empty;
+			expect(result.missing, `engine=rust\nactual: ${result.actual}`).to.deep.equal([]);
 		});
 
 		test('should provide hover information with scope change - trigger', async function () {
@@ -82,11 +79,9 @@ suite('LSP Hover Tests', function () {
 				"PREV",
 			];
 			const result = await checkHoverContains(testDocument.uri, new vscode.Position(15, 20), required);
-			if (currentEngine() === 'rust') {
-				console.warn(`[rust] hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
-			}
-			expect(result.actual, `engine=${currentEngine()}`).to.not.be.empty;
-			expect(result.missing, `engine=${currentEngine()}\nactual: ${result.actual}`).to.deep.equal([]);
+			console.warn(`[rust] hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
+			expect(result.actual, `engine=rust`).to.not.be.empty;
+			expect(result.missing, `engine=rust\nactual: ${result.actual}`).to.deep.equal([]);
 		});
 	});
 
@@ -97,11 +92,9 @@ suite('LSP Hover Tests', function () {
 			await vscode.window.showTextDocument(testDocument);
 			await waitForLSP(vscode.Uri.file(testEffectsFile));
 			const result = await checkHoverContains(testDocument.uri, new vscode.Position(36, 70), ["Faction Governance"]);
-			if (currentEngine() === 'rust') {
-				console.warn(`[rust] localization hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
-			}
-			expect(result.actual, `engine=${currentEngine()}`).to.not.be.empty;
-			expect(result.missing, `engine=${currentEngine()}\nactual: ${result.actual}`).to.deep.equal([]);
+			console.warn(`[rust] localization hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
+			expect(result.actual, `engine=rust`).to.not.be.empty;
+			expect(result.missing, `engine=rust\nactual: ${result.actual}`).to.deep.equal([]);
 		});
 	});
 

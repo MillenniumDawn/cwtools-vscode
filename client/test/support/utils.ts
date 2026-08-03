@@ -129,11 +129,3 @@ export async function waitForLanguageServer(uri: vscode.Uri, maxRetries = 30, de
   }
   return false;
 }
-
-/**
- * The active language server engine. Only the Rust server ships now; kept as a
- * function so the test diagnostics that label gaps still read naturally.
- */
-export function currentEngine(): 'rust' {
-  return 'rust';
-}

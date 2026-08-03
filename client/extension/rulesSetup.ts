@@ -5,7 +5,7 @@ import { workspace, window, ProgressLocation } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
 import { LANGUAGE_REPOS, resolveRulesFolder, runGit } from "./engine";
-import { logInfo, logWarn, logError } from "./logger";
+import { logInfo, logWarn, logError, errorMessage } from "./logger";
 
 export interface RulesSetup {
 	rulesCache: string;
@@ -104,7 +104,7 @@ export function fetchRulesInBackground(
 						logError("Failed to reload rules after background fetch", err),
 					);
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
+				const msg = errorMessage(err);
 				logError(`Rule fetch failed for ${language}`, msg);
 				// A failed initial clone leaves the extension with no rules at all, so
 				// warn loudly. A failed pull (rules already present) is only a stale

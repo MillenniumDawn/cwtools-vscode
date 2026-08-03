@@ -1,5 +1,6 @@
 ### Unreleased
 
+* Cleaned up the client. One `errorMessage` helper replaces the six copies of `err instanceof Error ? err.message : String(err)` (and the near-twin inside `logError`). The activation test asserts the `graphPanel` API is present instead of `assert.ok(true)`, the `currentEngine()` test helper that always returned `'rust'` is gone with its guards folded in, the file explorer's change emitter is disposed with the extension, `fnv1a` gains a unit test, the diagnostics-signature cache stops growing past 1000 entries, and game detection checks content hints with async fs instead of blocking activation on `existsSync`.
 * `npm run test:watch` now starts both watchers on Windows. The script ran `tsc -w` and the test watcher joined with `&`, which npm executes sequentially through cmd.exe, so the never-exiting compiler watcher starved the test watcher; it worked on Linux only because `&` backgrounds there. The two now run under `concurrently`, and `-k` stops the test watcher when the compiler dies rather than rerunning stale output. (#132)
 * A failed language-server start no longer causes an unhandled rejection whenever the active tab changes. The failed focus notification is logged instead. (#130)
 

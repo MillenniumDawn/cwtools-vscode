@@ -135,4 +135,17 @@ suite("diagnosticsSignature — DiagnosticsSignatureCache", () => {
 		cache.clear();
 		assert.strictEqual(cache.shouldPublish("file:///a.txt", [diag()]), true);
 	});
+
+	test("evicts the oldest entry once the cache is full", () => {
+		const cache = new DiagnosticsSignatureCache();
+		for (let i = 0; i < 1000; i++) {
+			cache.shouldPublish(`file:///f${i}.txt`, [diag()]);
+		}
+		// Inserting one more evicts the oldest (f0).
+		cache.shouldPublish("file:///f1000.txt", [diag()]);
+		// f0 was evicted, so a same-payload repeat now re-publishes.
+		assert.strictEqual(cache.shouldPublish("file:///f0.txt", [diag()]), true);
+		// A recent URI still dedupes.
+		assert.strictEqual(cache.shouldPublish("file:///f999.txt", [diag()]), false);
+	});
 });

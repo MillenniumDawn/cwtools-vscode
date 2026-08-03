@@ -40,6 +40,10 @@ export function diagnosticsSignature(diagnostics: readonly DiagnosticLike[]): st
 // re-publish and lose squiggles.
 export class DiagnosticsSignatureCache {
 	private readonly signatures = new Map<string, string>();
+	// Bound the map so a session touching many files (or re-scan churn) can't
+	// grow it unbounded until restart. Evicting the oldest entry only costs one
+	// re-publish for that file, which is harmless.
+	private readonly maxSize = 1000;
 
 	shouldPublish(uriKey: string, diagnostics: readonly DiagnosticLike[]): boolean {
 		const signature = diagnosticsSignature(diagnostics);
@@ -47,6 +51,13 @@ export class DiagnosticsSignatureCache {
 			return false;
 		}
 		this.signatures.set(uriKey, signature);
+		// Map preserves insertion order, so the first key is the oldest.
+		if (this.signatures.size > this.maxSize) {
+			const oldest = this.signatures.keys().next().value;
+			if (oldest !== undefined) {
+				this.signatures.delete(oldest);
+			}
+		}
 		return true;
 	}
 
