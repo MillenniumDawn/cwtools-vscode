@@ -98,6 +98,14 @@ const required = [...grammarScopes()]
 	.filter((s) => !NOT_REQUIRED.has(s))
 	.sort();
 const themes = registeredThemes();
+const SEMANTIC_TOKEN_SELECTORS = [
+	"type",
+	"type.declaration",
+	"enumMember",
+	"variable",
+	"namespace",
+	"function",
+];
 
 suite("themes — registration", () => {
 	test('every registered theme is labelled "Paradox - <name>"', () => {
@@ -126,6 +134,52 @@ suite("themes — registration", () => {
 				`no tokenColors in ${t.path}`,
 			);
 		}
+	});
+
+	test("every theme enables and paints semantic tokens", () => {
+		for (const t of themes) {
+			const theme = JSON.parse(
+				fs.readFileSync(path.join(releaseDir, t.path), "utf8"),
+			);
+			assert.strictEqual(
+				theme.semanticHighlighting,
+				true,
+				`semantic highlighting is disabled in ${t.path}`,
+			);
+			assert.ok(
+				theme.semanticTokenColors,
+				`no semanticTokenColors in ${t.path}`,
+			);
+			for (const selector of SEMANTIC_TOKEN_SELECTORS) {
+				assert.ok(
+					Object.prototype.hasOwnProperty.call(
+						theme.semanticTokenColors,
+						selector,
+					),
+					`${t.path} does not paint ${selector}`,
+				);
+			}
+			assert.deepStrictEqual(
+				theme.semanticTokenColors["type.declaration"],
+				{ bold: true },
+				`type declarations are not bold in ${t.path}`,
+			);
+		}
+	});
+
+	test("semantic highlighting defaults on only for game scripts", () => {
+		const manifest = JSON.parse(
+			fs.readFileSync(path.join(releaseDir, "package.json"), "utf8"),
+		);
+		const defaults = manifest.contributes.configurationDefaults;
+		assert.strictEqual(
+			defaults["[paradox]"]["editor.semanticHighlighting.enabled"],
+			true,
+		);
+		assert.strictEqual(
+			defaults["[cwt]"]?.["editor.semanticHighlighting.enabled"],
+			undefined,
+		);
 	});
 
 	test("every theme has a unique label", () => {
