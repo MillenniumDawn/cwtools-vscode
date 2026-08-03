@@ -3,6 +3,7 @@
 	"name": "Paradox - Kate",
 	"type": "dark",
 	"author": "cwtools-md-edition",
+	"semanticHighlighting": true,
 	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Dark scheme inspired by KDE Kate / Breeze Dark: blue keys, teal scopes, orange numbers.",
 	"colors": {
 		"editor.background": "#232629",
@@ -343,5 +344,16 @@
 				"foreground": "#EF5350"
 			}
 		}
-	]
+	],
+	"semanticTokenColors": {
+		"type": "#4EC9B0",
+		"type.declaration": {
+			"foreground": "#4EC9B0",
+			"bold": true
+		},
+		"enumMember": "#C586C0",
+		"variable": "#CE9178",
+		"namespace": "#569CD6",
+		"function": "#DCDCAA"
+	}
 }

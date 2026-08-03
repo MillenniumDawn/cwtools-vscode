@@ -508,7 +508,11 @@
         "editor.acceptSuggestionOnEnter": "off",
         "editor.suggest.insertMode": "replace",
         "editor.definitionLinkOpensInPeek": true,
-        "editor.maxTokenizationLineLength": 10000
+        "editor.maxTokenizationLineLength": 10000,
+        "editor.semanticHighlighting.enabled": true
+      },
+      "[cwt]": {
+        "editor.semanticHighlighting.enabled": true
       },
       "[yaml]": {
         "files.autoGuessEncoding": true,

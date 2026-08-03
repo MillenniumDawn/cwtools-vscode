@@ -3,6 +3,7 @@
 	"name": "Paradox - Syntax",
 	"type": "dark",
 	"author": "cwtools-md-edition",
+	"semanticHighlighting": true,
 	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Default dark scheme modeled on VS Code's Dark+, applied across paradox and cwt scopes.",
 	"colors": {
 		"editor.background": "#1E1E1E",
@@ -343,5 +344,16 @@
 				"foreground": "#F44747"
 			}
 		}
-	]
+	],
+	"semanticTokenColors": {
+		"type": "#4EC9B0",
+		"type.declaration": {
+			"foreground": "#4EC9B0",
+			"bold": true
+		},
+		"enumMember": "#C586C0",
+		"variable": "#CE9178",
+		"namespace": "#569CD6",
+		"function": "#DCDCAA"
+	}
 }

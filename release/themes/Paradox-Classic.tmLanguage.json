@@ -3,6 +3,7 @@
 	"name": "Paradox - Classic",
 	"type": "dark",
 	"author": "cwtools-md-edition",
+	"semanticHighlighting": true,
 	"minimal": true,
 	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Minimal overlay — defers colour to your active VS Code theme, adds only italic comments and bold booleans.",
 	"colors": {},
@@ -51,5 +52,16 @@
 				"foreground": "#F44747"
 			}
 		}
-	]
+	],
+	"semanticTokenColors": {
+		"type": "#4EC9B0",
+		"type.declaration": {
+			"foreground": "#4EC9B0",
+			"bold": true
+		},
+		"enumMember": "#C586C0",
+		"variable": "#CE9178",
+		"namespace": "#569CD6",
+		"function": "#DCDCAA"
+	}
 }

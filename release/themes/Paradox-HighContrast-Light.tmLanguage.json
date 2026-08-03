@@ -3,6 +3,7 @@
 	"name": "Paradox - High Contrast Light",
 	"type": "light",
 	"author": "cwtools-md-edition",
+	"semanticHighlighting": true,
 	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). High-contrast light scheme: dark saturated tokens on white for accessibility.",
 	"colors": {
 		"editor.background": "#FFFFFF",
@@ -343,5 +344,16 @@
 				"foreground": "#C00000"
 			}
 		}
-	]
+	],
+	"semanticTokenColors": {
+		"type": "#267F99",
+		"type.declaration": {
+			"foreground": "#267F99",
+			"bold": true
+		},
+		"enumMember": "#AF00DB",
+		"variable": "#795E26",
+		"namespace": "#0451A5",
+		"function": "#0F6E3B"
+	}
 }
