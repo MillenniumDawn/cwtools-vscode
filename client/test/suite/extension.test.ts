@@ -187,6 +187,7 @@ describe("GraphPanel Tests", function () {
 	// The extension's own graphPanel module, not a second copy (see utils).
 	let gp: GraphPanelModule;
 
+	let tempDir: string;
 	let tempFile: string;
 	// Setup before each test
 	const before = async function () {
@@ -196,7 +197,8 @@ describe("GraphPanel Tests", function () {
 		assert.ok(extensionMaybe, "Extension should be found");
 		extension = extensionMaybe!;
 
-		tempFile = path.join(os.tmpdir(), "test-graph.json");
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cwtools-graph-"));
+		tempFile = path.join(tempDir, "graph.json");
 		fs.writeFileSync(tempFile, testCyDataJson, "utf8");
 
 		// Clean up any existing panel
@@ -223,6 +225,9 @@ describe("GraphPanel Tests", function () {
 		// Remove temp file
 		if (fs.existsSync(tempFile)) {
 			fs.unlinkSync(tempFile);
+		}
+		if (fs.existsSync(tempDir)) {
+			fs.rmdirSync(tempDir);
 		}
 	};
 
@@ -328,6 +333,7 @@ suite("GraphPanel — UI integration", function () {
 	let sandbox: sinon.SinonSandbox;
 	let extension: vscode.Extension<unknown>;
 	let gp: GraphPanelModule;
+	let tempDir: string;
 	let tempFile: string;
 
 	const setupPanel = async () => {
@@ -335,7 +341,8 @@ suite("GraphPanel — UI integration", function () {
 		const ext = vscode.extensions.getExtension(EXTENSION_ID);
 		assert.ok(ext, "Extension should be found");
 		extension = ext!;
-		tempFile = path.join(os.tmpdir(), `cwtools-graph-${Date.now()}.json`);
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cwtools-graph-"));
+		tempFile = path.join(tempDir, "graph.json");
 		fs.writeFileSync(tempFile, sampleJson, "utf8");
 		if (gp.GraphPanel.currentPanel) gp.GraphPanel.currentPanel.dispose();
 		gp.GraphPanel.create(extension.extensionPath);
@@ -344,6 +351,7 @@ suite("GraphPanel — UI integration", function () {
 	const teardownPanel = () => {
 		if (gp?.GraphPanel.currentPanel) gp.GraphPanel.currentPanel.dispose();
 		if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+		if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
 	};
 
 	setup(() => {
