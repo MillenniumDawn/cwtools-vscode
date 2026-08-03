@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 import type { ExtensionContext } from "vscode";
 import { workspace, window, commands } from "vscode";
+import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
-import { ExecuteCommandRequest } from "vscode-languageserver-protocol";
 import { getGraphData } from "../common/graphTypes";
 import { graphDataAvailable } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";

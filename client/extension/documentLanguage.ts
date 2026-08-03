@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 import type { ExtensionContext } from "vscode";
 import { workspace, window, commands } from "vscode";
+import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
-import { ExecuteCommandRequest } from "vscode-languageserver-protocol";
 import { shouldNotifyFocus, pendingProcessDelayMs } from "./focusTracking";
 import { logError, logInfo } from "./logger";
 
@@ -58,73 +58,84 @@ export async function registerDocumentLanguage(
 	async function didChangeActiveTextEditor(
 		editor: vscode.TextEditor | undefined,
 	): Promise<void> {
-		if (!editor) return;
-		const editorPath = editor.document.uri.toString();
-		await upgradePlaintextDocument(editor.document);
-		if (
-			editor.document.languageId === languageId &&
-			shouldNotifyFocus(editorPath, lastFocusUri)
-		) {
-			await client.sendNotification(didFocusFile, { uri: editorPath });
-			lastFocusUri = editorPath;
-		}
-		// Guard against rapid tab switches piling up requests to a busy server.
-		// Only one getFileTypes request runs at a time; a switch that arrives
-		// mid-flight is remembered and processed once the in-flight one settles,
-		// so latestType and the cwtoolsGraphFile context can't stay stale on the
-		// editor the user actually landed on.
-		if (getFileTypesInFlight) {
-			pendingEditor = editor;
-			return;
-		}
-		getFileTypesInFlight = true;
-		let timedOut = false;
-		// The timeout guard cancels the request instead of just rejecting locally,
-		// so a dead getFileTypes leaves the (possibly saturated) server queue via
-		// $/cancelRequest rather than piling up behind it.
-		const cts = new vscode.CancellationTokenSource();
-		const timeoutTimer = setTimeout(() => cts.cancel(), getFileTypesTimeoutMs);
 		try {
-			const data = await client.sendRequest(
-				ExecuteCommandRequest.type,
-				{ command: "getFileTypes", arguments: [editorPath] },
-				cts.token,
+			if (!editor) return;
+			const editorPath = editor.document.uri.toString();
+			await upgradePlaintextDocument(editor.document);
+			if (
+				editor.document.languageId === languageId &&
+				shouldNotifyFocus(editorPath, lastFocusUri)
+			) {
+				await client.sendNotification(didFocusFile, { uri: editorPath });
+				lastFocusUri = editorPath;
+			}
+			// Guard against rapid tab switches piling up requests to a busy server.
+			// Only one getFileTypes request runs at a time; a switch that arrives
+			// mid-flight is remembered and processed once the in-flight one settles,
+			// so latestType and the cwtoolsGraphFile context can't stay stale on the
+			// editor the user actually landed on.
+			if (getFileTypesInFlight) {
+				pendingEditor = editor;
+				return;
+			}
+			getFileTypesInFlight = true;
+			let timedOut = false;
+			// The timeout guard cancels the request instead of just rejecting locally,
+			// so a dead getFileTypes leaves the (possibly saturated) server queue via
+			// $/cancelRequest rather than piling up behind it.
+			const cts = new vscode.CancellationTokenSource();
+			const timeoutTimer = setTimeout(
+				() => cts.cancel(),
+				getFileTypesTimeoutMs,
 			);
-			if (data && data[0]) {
-				latestType = data[0];
-				await commands.executeCommand("setContext", "cwtoolsGraphFile", true);
-			} else {
+			try {
+				const data = await client.sendRequest(
+					ExecuteCommandRequest.type,
+					{ command: "getFileTypes", arguments: [editorPath] },
+					cts.token,
+				);
+				if (data && data[0]) {
+					latestType = data[0];
+					await commands.executeCommand("setContext", "cwtoolsGraphFile", true);
+				} else {
+					await commands.executeCommand(
+						"setContext",
+						"cwtoolsGraphFile",
+						false,
+					);
+				}
+			} catch (err) {
+				timedOut = cts.token.isCancellationRequested;
+				// A timeout isn't an error; demote it so validate storms don't spam logError.
+				if (timedOut) {
+					logInfo(
+						`didChangeActiveTextEditor getFileTypes timed out after ${getFileTypesTimeoutMs}ms`,
+					);
+				} else {
+					logError("didChangeActiveTextEditor getFileTypes failed", err);
+				}
 				await commands.executeCommand("setContext", "cwtoolsGraphFile", false);
+			} finally {
+				clearTimeout(timeoutTimer);
+				cts.dispose();
+				// After a timeout, cool down before draining pendingEditor so a
+				// stalled server isn't re-hit once per timeout window. The in-flight
+				// guard stays held through the wait, so switches during the cooldown
+				// coalesce into pendingEditor (freshest wins). A settled response
+				// drains immediately.
+				const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
+				if (delay > 0) {
+					await new Promise<void>((resolve) => setTimeout(resolve, delay));
+				}
+				getFileTypesInFlight = false;
+			}
+			if (pendingEditor) {
+				const next = pendingEditor;
+				pendingEditor = undefined;
+				await didChangeActiveTextEditor(next);
 			}
 		} catch (err) {
-			timedOut = cts.token.isCancellationRequested;
-			// A timeout isn't an error; demote it so validate storms don't spam logError.
-			if (timedOut) {
-				logInfo(
-					`didChangeActiveTextEditor getFileTypes timed out after ${getFileTypesTimeoutMs}ms`,
-				);
-			} else {
-				logError("didChangeActiveTextEditor getFileTypes failed", err);
-			}
-			await commands.executeCommand("setContext", "cwtoolsGraphFile", false);
-		} finally {
-			clearTimeout(timeoutTimer);
-			cts.dispose();
-			// After a timeout, cool down before draining pendingEditor so a
-			// stalled server isn't re-hit once per timeout window. The in-flight
-			// guard stays held through the wait, so switches during the cooldown
-			// coalesce into pendingEditor (freshest wins). A settled response
-			// drains immediately.
-			const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
-			if (delay > 0) {
-				await new Promise<void>((resolve) => setTimeout(resolve, delay));
-			}
-			getFileTypesInFlight = false;
-		}
-		if (pendingEditor) {
-			const next = pendingEditor;
-			pendingEditor = undefined;
-			await didChangeActiveTextEditor(next);
+			logError("didChangeActiveTextEditor failed", err);
 		}
 	}
 
