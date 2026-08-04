@@ -71,8 +71,8 @@ suite("manifest — command registration", () => {
 	// Asserted unconditionally — an earlier version skipped the whole check once
 	// the command was known, which made it pass without testing anything.
 	test("capability-gated commands are gated in the palette", () => {
-	const palette: Array<{ command: string; when?: string }> =
-		manifest.contributes.menus?.commandPalette ?? [];
+		const palette: Array<{ command: string; when?: string }> =
+			manifest.contributes.menus?.commandPalette ?? [];
 		const gated: Record<string, string> = {
 			"cwtools.showGraph": "cwtoolsGraphAvailable",
 			"cwtools.setGraphDepth": "cwtoolsGraphAvailable",
@@ -80,7 +80,10 @@ suite("manifest — command registration", () => {
 		};
 		for (const [id, key] of Object.entries(gated)) {
 			const entry = palette.find((e) => e.command === id);
-			assert.ok(entry, `${id} has no commandPalette entry, so it shows unconditionally`);
+			assert.ok(
+				entry,
+				`${id} has no commandPalette entry, so it shows unconditionally`,
+			);
 			assert.match(
 				entry.when ?? "",
 				new RegExp(key),

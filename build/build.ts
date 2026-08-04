@@ -16,25 +16,32 @@
 // The Rust server (cwtools-rs) builds from a sibling checkout by default; set
 // CWTOOLS_RUST_WORKSPACE to build from elsewhere (e.g. the submodule).
 
-import { spawnSync } from 'node:child_process';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { releaseNotes, topChangelogVersion } from './changelog';
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { releaseNotes, topChangelogVersion } from "./changelog";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const releaseDir = path.join(repoRoot, 'release');
-const tempDir = path.join(repoRoot, 'temp');
+const repoRoot = path.resolve(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"..",
+);
+const releaseDir = path.join(repoRoot, "release");
+const tempDir = path.join(repoRoot, "temp");
 
-const isWindows = process.platform === 'win32';
+const isWindows = process.platform === "win32";
 
-function run(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): void {
-	const display = [cmd, ...args].join(' ');
+function run(
+	cmd: string,
+	args: string[],
+	opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): void {
+	const display = [cmd, ...args].join(" ");
 	console.log(`> ${display}`);
 	const r = spawnSync(cmd, args, {
 		cwd: opts.cwd ?? repoRoot,
 		env: opts.env ?? process.env,
-		stdio: 'inherit',
+		stdio: "inherit",
 		shell: isWindows, // npx/cargo resolve via .cmd shims on Windows
 	});
 	if (r.status !== 0) {
@@ -43,11 +50,15 @@ function run(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.Pro
 }
 
 /** Like run(), but returns the exit code instead of throwing on failure. */
-function runOrNull(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): number | null {
+function runOrNull(
+	cmd: string,
+	args: string[],
+	opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): number | null {
 	const r = spawnSync(cmd, args, {
 		cwd: opts.cwd ?? repoRoot,
 		env: opts.env ?? process.env,
-		stdio: 'ignore',
+		stdio: "ignore",
 		shell: isWindows,
 	});
 	return r.status;
@@ -58,25 +69,25 @@ function runOrNull(cmd: string, args: string[], opts: { cwd?: string; env?: Node
 function rustWorkspace(): string {
 	const fromEnv = process.env.CWTOOLS_RUST_WORKSPACE;
 	if (fromEnv && fromEnv.trim()) return path.resolve(repoRoot, fromEnv);
-	return path.resolve(repoRoot, '../cwtools/cwtools-rs');
+	return path.resolve(repoRoot, "../cwtools/cwtools-rs");
 }
 
 function buildAndDeployRustServer(): void {
 	const workspace = rustWorkspace();
-	run('cargo', ['build', '--release', '-p', 'cwtools_lsp'], { cwd: workspace });
+	run("cargo", ["build", "--release", "-p", "cwtools_lsp"], { cwd: workspace });
 
-	const binName = isWindows ? 'cwtools-server.exe' : 'cwtools-server';
-	const built = path.join(workspace, 'target/release', binName);
+	const binName = isWindows ? "cwtools-server.exe" : "cwtools-server";
+	const built = path.join(workspace, "target/release", binName);
 	if (!fs.existsSync(built)) {
 		throw new Error(
 			`Rust server binary not found at '${built}' after build. Check the crate name/target, ` +
-			`or point CWTOOLS_RUST_WORKSPACE at the right cwtools-rs checkout (currently '${workspace}').`,
+				`or point CWTOOLS_RUST_WORKSPACE at the right cwtools-rs checkout (currently '${workspace}').`,
 		);
 	}
 
 	// Deploy to the path the client loads first. Clean it so stale binaries
 	// don't linger next to the fresh one.
-	const outDir = path.join(releaseDir, 'bin/server/cwtools-server');
+	const outDir = path.join(releaseDir, "bin/server/cwtools-server");
 	fs.rmSync(outDir, { recursive: true, force: true });
 	fs.mkdirSync(outDir, { recursive: true });
 	const dest = path.join(outDir, binName);
@@ -87,14 +98,17 @@ function buildAndDeployRustServer(): void {
 // --- Client + docs ---------------------------------------------------------
 
 function buildClient(): void {
-	run('npm', ['run', 'compile']);
+	run("npm", ["run", "compile"]);
 }
 
 function copyDocs(): void {
-	for (const f of ['README.md', 'LICENSE.md']) {
+	for (const f of ["README.md", "LICENSE.md"]) {
 		fs.copyFileSync(path.join(repoRoot, f), path.join(releaseDir, f));
 	}
-	fs.copyFileSync(path.join(repoRoot, 'CHANGELOG.md'), path.join(releaseDir, 'CHANGELOG.md'));
+	fs.copyFileSync(
+		path.join(repoRoot, "CHANGELOG.md"),
+		path.join(releaseDir, "CHANGELOG.md"),
+	);
 }
 
 function copyDir(src: string, dest: string): void {
@@ -108,23 +122,24 @@ function copyDir(src: string, dest: string): void {
 }
 
 function copyWebviewCss(): void {
-	const dest = path.join(releaseDir, 'bin/client/webview');
+	const dest = path.join(releaseDir, "bin/client/webview");
 	fs.mkdirSync(dest, { recursive: true });
-	const webviewSrc = path.join(repoRoot, 'client/webview');
+	const webviewSrc = path.join(repoRoot, "client/webview");
 	for (const f of fs.readdirSync(webviewSrc)) {
-		if (f.endsWith('.css')) fs.copyFileSync(path.join(webviewSrc, f), path.join(dest, f));
+		if (f.endsWith(".css"))
+			fs.copyFileSync(path.join(webviewSrc, f), path.join(dest, f));
 	}
 }
 
 function copyTestSamples(): void {
 	copyDir(
-		path.join(repoRoot, 'client/test/sample'),
-		path.join(releaseDir, 'bin/client/test/sample'),
+		path.join(repoRoot, "client/test/sample"),
+		path.join(releaseDir, "bin/client/test/sample"),
 	);
 }
 
 function cleanReleaseBin(): void {
-	fs.rmSync(path.join(releaseDir, 'bin'), { recursive: true, force: true });
+	fs.rmSync(path.join(releaseDir, "bin"), { recursive: true, force: true });
 }
 
 function assembleClient(): void {
@@ -141,26 +156,26 @@ function assembleClient(): void {
 // of all of them, so a download is a third the size; the Marketplace serves
 // the matching one and falls back to the universal build for anything else.
 const VSIX_TARGETS: Record<string, string> = {
-	'win-x64': 'win32-x64',
-	'linux-x64': 'linux-x64',
-	'linux-arm64': 'linux-arm64',
-	'osx-x64': 'darwin-x64',
-	'osx-arm64': 'darwin-arm64',
+	"win-x64": "win32-x64",
+	"linux-x64": "linux-x64",
+	"linux-arm64": "linux-arm64",
+	"osx-x64": "darwin-x64",
+	"osx-arm64": "darwin-arm64",
 };
 
-const serverBinDir = path.join(releaseDir, 'bin/server/cwtools-server');
+const serverBinDir = path.join(releaseDir, "bin/server/cwtools-server");
 
 function packageVsix(target?: string): string[] {
 	// The client is bundled with esbuild, so node_modules is excluded from the
 	// vsix (see release/.vscodeignore). --no-dependencies stops vsce from trying
 	// to resolve/include them.
-	const args = ['--yes', '@vscode/vsce', 'package', '--no-dependencies'];
-	if (target) args.push('--target', target);
-	run('npx', args, { cwd: releaseDir });
+	const args = ["--yes", "@vscode/vsce", "package", "--no-dependencies"];
+	if (target) args.push("--target", target);
+	run("npx", args, { cwd: releaseDir });
 	fs.mkdirSync(tempDir, { recursive: true });
 	const packaged: string[] = [];
 	for (const f of fs.readdirSync(releaseDir)) {
-		if (f.endsWith('.vsix')) {
+		if (f.endsWith(".vsix")) {
 			const dest = path.join(tempDir, f);
 			fs.renameSync(path.join(releaseDir, f), dest);
 			packaged.push(dest);
@@ -174,9 +189,10 @@ function packageVsix(target?: string): string[] {
 // which case there is nothing to split and we package a single vsix.
 function stagedPlatforms(): string[] {
 	if (!fs.existsSync(serverBinDir)) return [];
-	return fs.readdirSync(serverBinDir, { withFileTypes: true })
-		.filter(e => e.isDirectory() && e.name in VSIX_TARGETS)
-		.map(e => e.name)
+	return fs
+		.readdirSync(serverBinDir, { withFileTypes: true })
+		.filter((e) => e.isDirectory() && e.name in VSIX_TARGETS)
+		.map((e) => e.name)
 		.sort();
 }
 
@@ -187,11 +203,13 @@ function stagedPlatforms(): string[] {
 function packageAllVsixes(): string[] {
 	const platforms = stagedPlatforms();
 	if (platforms.length === 0) {
-		console.log('no per-platform server binaries staged; packaging a single vsix');
+		console.log(
+			"no per-platform server binaries staged; packaging a single vsix",
+		);
 		return packageVsix();
 	}
 
-	const holding = path.join(tempDir, 'server-staging');
+	const holding = path.join(tempDir, "server-staging");
 	fs.rmSync(holding, { recursive: true, force: true });
 	fs.mkdirSync(path.dirname(holding), { recursive: true });
 	fs.renameSync(serverBinDir, holding);
@@ -208,7 +226,7 @@ function packageAllVsixes(): string[] {
 		// complete for the Open VSX step, which re-packages from the directory.
 		fs.rmSync(serverBinDir, { recursive: true, force: true });
 		copyDir(holding, serverBinDir);
-		console.log('packaging the universal fallback vsix');
+		console.log("packaging the universal fallback vsix");
 		vsixes.push(...packageVsix());
 	} finally {
 		if (!fs.existsSync(serverBinDir)) copyDir(holding, serverBinDir);
@@ -221,28 +239,34 @@ function packageAllVsixes(): string[] {
 
 // On a tag push CI sets TAG_RELEASE=true and the version comes from the tag.
 // Manual/local runs fall back to the top CHANGELOG.md entry.
-function resolveVersion(): { version: string; tag: string; preRelease: boolean } {
-	const isTagRelease = /^(1|true)$/i.test(process.env.TAG_RELEASE ?? '');
-	let tag = isTagRelease ? (process.env.GITHUB_REF_NAME ?? '').trim() : '';
+function resolveVersion(): {
+	version: string;
+	tag: string;
+	preRelease: boolean;
+} {
+	const isTagRelease = /^(1|true)$/i.test(process.env.TAG_RELEASE ?? "");
+	let tag = isTagRelease ? (process.env.GITHUB_REF_NAME ?? "").trim() : "";
 	if (!tag) tag = topChangelogVersion(readChangelog());
-	const version = tag.replace(/^v/, '');
-	return { version, tag, preRelease: version.includes('-') };
+	const version = tag.replace(/^v/, "");
+	return { version, tag, preRelease: version.includes("-") };
 }
 
 function readChangelog(): string {
-	return fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
+	return fs.readFileSync(path.join(repoRoot, "CHANGELOG.md"), "utf8");
 }
 
 function setReleaseVersion(version: string): void {
-	const manifestPath = path.join(releaseDir, 'package.json');
+	const manifestPath = path.join(releaseDir, "package.json");
 	let manifest: { version: string };
 	try {
-		manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { version: string };
+		manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+			version: string;
+		};
 	} catch (e) {
 		throw new Error(`could not parse ${manifestPath}`, { cause: e });
 	}
 	manifest.version = version;
-	fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+	fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 	console.log(`set release/package.json version to ${version}`);
 }
 
@@ -250,38 +274,64 @@ function setReleaseVersion(version: string): void {
 // CLI. If a release with the same tag already exists (e.g. from a previous
 // failed run), delete it first so the workflow is idempotent. Throws before
 // touching the release when the CHANGELOG has no section for this version.
-function publishGithubRelease(tag: string, version: string, preRelease: boolean, vsixes: string[]): void {
+function publishGithubRelease(
+	tag: string,
+	version: string,
+	preRelease: boolean,
+	vsixes: string[],
+): void {
 	const notes = releaseNotes(readChangelog(), version);
-	const notesFile = path.join(tempDir, 'release-notes.md');
+	const notesFile = path.join(tempDir, "release-notes.md");
 	fs.writeFileSync(notesFile, notes);
 
 	// If the release already exists (e.g. retried workflow), remove it first.
-	if (runOrNull('gh', ['release', 'view', tag]) === 0) {
+	if (runOrNull("gh", ["release", "view", tag]) === 0) {
 		console.log(`release ${tag} already exists; deleting before recreate`);
-		run('gh', ['release', 'delete', tag, '--yes']);
+		run("gh", ["release", "delete", tag, "--yes"]);
 	}
 
-	const args = ['release', 'create', tag, ...vsixes, '--title', tag, '--notes-file', notesFile];
-	if (preRelease) args.push('--prerelease');
-	run('gh', args);
+	const args = [
+		"release",
+		"create",
+		tag,
+		...vsixes,
+		"--title",
+		tag,
+		"--notes-file",
+		notesFile,
+	];
+	if (preRelease) args.push("--prerelease");
+	run("gh", args);
 }
 
 function publishToMarketplace(vsixes: string[]): void {
 	const token = process.env.VSCE_TOKEN;
 	if (!token || !token.trim()) {
-		const isTagRelease = /^(1|true)$/i.test(process.env.TAG_RELEASE ?? '');
+		const isTagRelease = /^(1|true)$/i.test(process.env.TAG_RELEASE ?? "");
 		// A real tagged release must not silently degrade to GitHub-only — that
 		// is exactly how Marketplace publishing went unnoticed. Only skip on
 		// non-tag CI runs (PR/dispatch dry runs).
 		if (process.env.CI && !isTagRelease) {
-			console.log('No VSCE_TOKEN set; skipping VS Code Marketplace publish (not a tag release).');
+			console.log(
+				"No VSCE_TOKEN set; skipping VS Code Marketplace publish (not a tag release).",
+			);
 			return;
 		}
-		throw new Error('VSCE_TOKEN is not set; cannot publish to the Marketplace.');
+		throw new Error(
+			"VSCE_TOKEN is not set; cannot publish to the Marketplace.",
+		);
 	}
 	// vsce takes every platform-specific vsix in one publish, so the Marketplace
 	// gets a consistent set rather than one platform at a time.
-	run('npx', ['--yes', '@vscode/vsce', 'publish', '--pat', token, '--packagePath', ...vsixes]);
+	run("npx", [
+		"--yes",
+		"@vscode/vsce",
+		"publish",
+		"--pat",
+		token,
+		"--packagePath",
+		...vsixes,
+	]);
 }
 
 // --- Commands --------------------------------------------------------------
@@ -302,9 +352,12 @@ function cmdPackage(): void {
 // The vsixes packaged into temp/ by a previous package-prebuilt run, so CI can
 // smoke-test them before anything is published.
 function findVsixes(): string[] {
-	const files = fs.existsSync(tempDir) ? fs.readdirSync(tempDir).filter(f => f.endsWith('.vsix')) : [];
-	if (files.length === 0) throw new Error('no .vsix found in temp/; run package-prebuilt first');
-	return files.map(f => path.join(tempDir, f));
+	const files = fs.existsSync(tempDir)
+		? fs.readdirSync(tempDir).filter((f) => f.endsWith(".vsix"))
+		: [];
+	if (files.length === 0)
+		throw new Error("no .vsix found in temp/; run package-prebuilt first");
+	return files.map((f) => path.join(tempDir, f));
 }
 
 function cmdPackagePrebuilt(): string[] {
@@ -335,24 +388,26 @@ function cmdRelease(): void {
 	// the build. Check it here so a missing CHANGELOG section can't leave a
 	// pushed tag behind.
 	releaseNotes(readChangelog(), version);
-	run('git', ['tag', tag]);
-	run('git', ['push', 'origin', tag]);
+	run("git", ["tag", tag]);
+	run("git", ["push", "origin", tag]);
 	cmdReleasePrebuilt();
 }
 
 const commands: Record<string, () => unknown> = {
 	quick: cmdQuick,
 	package: cmdPackage,
-	'package-prebuilt': cmdPackagePrebuilt,
-	'publish-prebuilt': cmdPublishPrebuilt,
-	'release-prebuilt': cmdReleasePrebuilt,
+	"package-prebuilt": cmdPackagePrebuilt,
+	"publish-prebuilt": cmdPublishPrebuilt,
+	"release-prebuilt": cmdReleasePrebuilt,
 	release: cmdRelease,
 };
 
-const cmd = process.argv[2] ?? 'quick';
+const cmd = process.argv[2] ?? "quick";
 const handler = commands[cmd];
 if (!handler) {
-	console.error(`unknown command '${cmd}'. Known: ${Object.keys(commands).join(', ')}`);
+	console.error(
+		`unknown command '${cmd}'. Known: ${Object.keys(commands).join(", ")}`,
+	);
 	process.exit(1);
 }
 handler();

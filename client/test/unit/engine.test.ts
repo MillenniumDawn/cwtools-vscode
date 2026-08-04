@@ -40,8 +40,6 @@ suite("engine — LANGUAGE_REPOS", () => {
 	});
 });
 
-
-
 suite("engine — detectFromFolder", () => {
 	const noopExists = () => false;
 	const assertDetects = async (folder: string, expected: string | null) =>

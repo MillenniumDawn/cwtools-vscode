@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
 
 /**
  * Result of a hover assertion. Either passed=true with the actual content,
@@ -21,21 +21,21 @@ export interface HoverCheckResult {
 export async function checkHoverContains(
 	uri: vscode.Uri,
 	position: vscode.Position,
-	required: string[]
+	required: string[],
 ): Promise<HoverCheckResult> {
 	const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
-		'vscode.executeHoverProvider',
+		"vscode.executeHoverProvider",
 		uri,
-		position
+		position,
 	);
 
 	const hover = hovers?.[0];
 	if (!hover || hover.contents.length === 0) {
-		return { passed: false, actual: '', missing: required };
+		return { passed: false, actual: "", missing: required };
 	}
 
 	const content = hover.contents[0];
-	const actual = typeof content === 'string' ? content : content.value;
-	const missing = required.filter(s => !actual.includes(s));
+	const actual = typeof content === "string" ? content : content.value;
+	const missing = required.filter((s) => !actual.includes(s));
 	return { passed: missing.length === 0, actual, missing };
 }
