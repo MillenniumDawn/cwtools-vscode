@@ -132,6 +132,8 @@ The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtoo
 
 Highlighting runs off a single merged `paradox` grammar, with each game's keywords folded into it, so there are no separate per-game grammar files to keep in sync.
 
+Themes also carry a semantic token layer from the language server, which paints the tokens a static grammar can't disambiguate. See [Adding a theme](release/docs/themes.md) for how to build a theme and what that layer covers.
+
 ## Credits
 
 The TextMate grammars under [`release/syntaxes/`](release/syntaxes/) are vendored from the [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) extension (Copyright (c) 2018 Thomas Boby, MIT). Original authors and contributors:

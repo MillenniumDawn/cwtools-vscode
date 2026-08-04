@@ -3,6 +3,7 @@
 	"name": "Paradox - Quiet Light",
 	"type": "light",
 	"author": "cwtools-md-edition",
+	"semanticHighlighting": true,
 	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Quiet Light scheme (originally CKII - Quiet Light by UristMcDorf) with its purple-accented workbench colors preserved.",
 	"colors": {
 		"activityBar.background": "#ededf5",
@@ -386,5 +387,15 @@
 				"foreground": "#AA3731"
 			}
 		}
-	]
+	],
+	"semanticTokenColors": {
+		"type": "#267F99",
+		"type.declaration": {
+			"bold": true
+		},
+		"enumMember": "#AF00DB",
+		"variable": "#795E26",
+		"namespace": "#0451A5",
+		"function": "#0F6E3B"
+	}
 }

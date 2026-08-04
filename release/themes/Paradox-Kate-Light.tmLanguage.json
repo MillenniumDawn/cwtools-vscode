@@ -3,6 +3,7 @@
 	"name": "Paradox - Kate Light",
 	"type": "light",
 	"author": "cwtools-md-edition",
+	"semanticHighlighting": true,
 	"comment": "Token scopes defined by cwtools/paradox-syntax (Thomas Boby, MIT, https://github.com/cwtools/paradox-syntax). Light scheme inspired by KDE Kate / Breeze Light.",
 	"colors": {
 		"editor.background": "#FFFFFF",
@@ -343,5 +344,15 @@
 				"foreground": "#BF0303"
 			}
 		}
-	]
+	],
+	"semanticTokenColors": {
+		"type": "#267F99",
+		"type.declaration": {
+			"bold": true
+		},
+		"enumMember": "#AF00DB",
+		"variable": "#795E26",
+		"namespace": "#0451A5",
+		"function": "#0F6E3B"
+	}
 }
