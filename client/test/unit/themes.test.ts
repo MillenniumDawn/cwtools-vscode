@@ -34,10 +34,19 @@ interface ThemeEntry {
 	path: string;
 }
 
+interface Theme {
+	name: string;
+	type?: "dark" | "light";
+	tokenColors?: Array<{ scope?: string | string[] }>;
+	semanticHighlighting?: boolean;
+	semanticTokenColors?: Record<string, { bold?: boolean }>;
+	minimal?: boolean;
+}
+
 function registeredThemes(): ThemeEntry[] {
 	const manifest = JSON.parse(
 		fs.readFileSync(path.join(releaseDir, "package.json"), "utf8"),
-	);
+	) as { contributes: { themes: ThemeEntry[] } };
 	return manifest.contributes.themes;
 }
 
@@ -119,7 +128,7 @@ suite("themes — registration", () => {
 		for (const t of themes) {
 			const file = path.join(releaseDir, t.path);
 			assert.ok(fs.existsSync(file), `missing theme file: ${t.path}`);
-			const theme = JSON.parse(fs.readFileSync(file, "utf8"));
+			const theme = JSON.parse(fs.readFileSync(file, "utf8")) as Theme;
 			assert.strictEqual(
 				theme.name,
 				t.label,
@@ -140,7 +149,7 @@ suite("themes — registration", () => {
 		for (const t of themes) {
 			const theme = JSON.parse(
 				fs.readFileSync(path.join(releaseDir, t.path), "utf8"),
-			);
+			) as Theme;
 			assert.strictEqual(
 				theme.semanticHighlighting,
 				true,
@@ -170,7 +179,11 @@ suite("themes — registration", () => {
 	test("semantic highlighting defaults on only for game scripts", () => {
 		const manifest = JSON.parse(
 			fs.readFileSync(path.join(releaseDir, "package.json"), "utf8"),
-		);
+		) as {
+			contributes: {
+				configurationDefaults: Record<string, Record<string, unknown>>;
+			};
+		};
 		const defaults = manifest.contributes.configurationDefaults;
 		assert.strictEqual(
 			defaults["[paradox]"]["editor.semanticHighlighting.enabled"],
@@ -203,7 +216,7 @@ suite("themes — registration", () => {
 	test("every theme has at least one dark and one light variant", () => {
 		const types = themes.map((t) => {
 			const file = path.join(releaseDir, t.path);
-			return JSON.parse(fs.readFileSync(file, "utf8")).type;
+			return (JSON.parse(fs.readFileSync(file, "utf8")) as Theme).type;
 		});
 		assert.ok(types.includes("dark"), "no dark theme registered");
 		assert.ok(types.includes("light"), "no light theme registered");
@@ -222,7 +235,7 @@ suite("themes — scope coverage", () => {
 		test(`${t.label} paints every grammar scope`, () => {
 			const theme = JSON.parse(
 				fs.readFileSync(path.join(releaseDir, t.path), "utf8"),
-			);
+			) as Theme;
 			// Minimal themes defer colour to VS Code — coverage check doesn't apply.
 			if (theme.minimal) return;
 			const rules = themeScopes(theme);
@@ -239,7 +252,7 @@ suite("themes — scope coverage", () => {
 		for (const t of themes) {
 			const theme = JSON.parse(
 				fs.readFileSync(path.join(releaseDir, t.path), "utf8"),
-			);
+			) as Theme;
 			const seen = new Set<string>();
 			const duplicates: string[] = [];
 			for (const rule of theme.tokenColors ?? []) {

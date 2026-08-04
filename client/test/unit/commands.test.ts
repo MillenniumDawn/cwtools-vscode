@@ -11,7 +11,12 @@ import * as path from "path";
 const repoRoot = path.resolve(__dirname, "../../..");
 const manifest = JSON.parse(
 	fs.readFileSync(path.join(repoRoot, "release", "package.json"), "utf8"),
-);
+) as {
+	contributes: {
+		commands?: Array<{ command: string }>;
+		menus?: { commandPalette?: Array<{ command: string; when?: string }> };
+	};
+};
 
 // executeCommands the server advertises (config.rs execute_command_provider),
 // including genlocall and reloadrulesconfig, which the server now handles.
@@ -75,7 +80,10 @@ suite("manifest — command registration", () => {
 		};
 		for (const [id, key] of Object.entries(gated)) {
 			const entry = palette.find((e) => e.command === id);
-			assert.ok(entry, `${id} has no commandPalette entry, so it shows unconditionally`);
+			assert.ok(
+				entry,
+				`${id} has no commandPalette entry, so it shows unconditionally`,
+			);
 			assert.match(
 				entry.when ?? "",
 				new RegExp(key),

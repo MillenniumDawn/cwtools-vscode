@@ -16,10 +16,20 @@ const grammar = JSON.parse(
 		path.join(repoRoot, "release", "syntaxes", "paradox.tmLanguage.json"),
 		"utf8",
 	),
-);
+) as {
+	repository: {
+		keywords: { patterns: Pattern[] };
+		strings: { end: string };
+		block: { patterns: Array<{ begin: string }> };
+	};
+};
 const manifest = JSON.parse(
 	fs.readFileSync(path.join(repoRoot, "release", "package.json"), "utf8"),
-);
+) as {
+	contributes: {
+		configurationDefaults: Record<string, Record<string, number>>;
+	};
+};
 
 interface Pattern {
 	name?: string;
@@ -112,8 +122,7 @@ suite("paradox grammar — keyword word lists (#112)", () => {
 		]) {
 			assert.deepStrictEqual(
 				(byName.get(bucket) ?? []).filter(
-					(w) =>
-						/^(any|count|every|random)_/.test(w) && w !== "random_list",
+					(w) => /^(any|count|every|random)_/.test(w) && w !== "random_list",
 				),
 				[],
 				bucket,

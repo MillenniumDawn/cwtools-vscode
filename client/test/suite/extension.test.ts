@@ -12,7 +12,6 @@ import {
 import { it, describe } from "mocha";
 import type * as GraphPanelNamespace from "../../extension/graphPanel";
 type GraphPanelModule = typeof GraphPanelNamespace;
-import type { CwtoolsApi } from "../../extension/extension";
 import type { GraphData } from "../../common/graphTypes";
 import sinon from "sinon";
 import * as fs from "node:fs";
@@ -26,7 +25,7 @@ suite(`Debug Integration Test: `, function () {
 
 	test("should activate and expose the graphPanel API", async function () {
 		this.timeout(1 * 60 * 1000);
-		const extension = (await activate()) as CwtoolsApi | undefined;
+		const extension = await activate();
 		// The exports may be absent when the language server can't start in the
 		// test environment, but when present the activation API must expose
 		// graphPanel() (the host tests reach the panel through it).
@@ -157,7 +156,7 @@ suite(`Debug Integration Test: `, function () {
 			assert.ok(extension?.isActive, "Extension should be active");
 
 			// The extension exports might be undefined due to server startup issues in test env
-			const exports = extension?.exports;
+			const exports: unknown = extension?.exports;
 			console.log("Extension exports type:", typeof exports, "value:", exports);
 
 			// Just verify the extension is active - that's the main indicator of success
@@ -314,8 +313,8 @@ describe("GraphPanel Tests", function () {
 		// Act: Initialize the graph with test data and wait for it to complete
 		gp.GraphPanel.currentPanel!.initialiseGraph(testRawData, 1.0);
 
-		const testStatus = async function () {
-			return (await gp.GraphPanel.currentPanel!.getState()) === gp.State.Done;
+		const testStatus = function () {
+			return gp.GraphPanel.currentPanel!.getState() === gp.State.Done;
 		};
 		const result = await retryAsync(testStatus, 3, 500);
 		assert.strictEqual(result, true, "GraphPanel should be in the Done state");
@@ -403,10 +402,7 @@ suite("GraphPanel — UI integration", function () {
 
 	test("starts in the New state before the webview posts ready", async function () {
 		await setupPanel();
-		assert.strictEqual(
-			await gp.GraphPanel.currentPanel!.getState(),
-			gp.State.New,
-		);
+		assert.strictEqual(gp.GraphPanel.currentPanel!.getState(), gp.State.New);
 	});
 
 	test("saveGraphImage and saveGraphJson are registered once a GraphPanel exists", async function () {
@@ -511,8 +507,7 @@ suite("GraphPanel — UI integration", function () {
 		];
 		gp.GraphPanel.currentPanel!.initialiseGraph(data, 1.0);
 		const finalState = await retryAsync(
-			async () =>
-				(await gp.GraphPanel.currentPanel!.getState()) === gp.State.Done,
+			() => gp.GraphPanel.currentPanel!.getState() === gp.State.Done,
 			3,
 			500,
 		);
@@ -528,7 +523,7 @@ suite("GraphPanel — UI integration", function () {
 		// panel in a non-New state (it wires an onLoad listener to post importJson
 		// once the webview signals ready).
 		gp.GraphPanel.currentPanel!.initialiseGraph(sampleJson, 1.0);
-		const state = await gp.GraphPanel.currentPanel!.getState();
+		const state = gp.GraphPanel.currentPanel!.getState();
 		assert.notStrictEqual(
 			state,
 			gp.State.New,

@@ -89,11 +89,11 @@ export async function registerDocumentLanguage(
 				getFileTypesTimeoutMs,
 			);
 			try {
-				const data = await client.sendRequest(
+				const data = (await client.sendRequest(
 					ExecuteCommandRequest.type,
 					{ command: "getFileTypes", arguments: [editorPath] },
 					cts.token,
-				);
+				)) as string[] | undefined;
 				if (data && data[0]) {
 					latestType = data[0];
 					await commands.executeCommand("setContext", "cwtoolsGraphFile", true);

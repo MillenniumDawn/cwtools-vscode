@@ -40,10 +40,8 @@ suite("engine — LANGUAGE_REPOS", () => {
 	});
 });
 
-
-
 suite("engine — detectFromFolder", () => {
-	const noopExists = async () => false;
+	const noopExists = () => false;
 	const assertDetects = async (folder: string, expected: string | null) =>
 		assert.strictEqual(await detectFromFolder(folder, noopExists), expected);
 
@@ -82,7 +80,7 @@ suite("engine — detectFromFolder", () => {
 		const files: Record<string, boolean> = {
 			["/x/common/ai_strategy"]: true,
 		};
-		const exists = async (p: string) => files[p] === true;
+		const exists = (p: string) => files[p] === true;
 		assert.strictEqual(await detectFromFolder("/x", exists), "hoi4");
 		assert.strictEqual(await detectFromFolder("/y", noopExists), null);
 	});
@@ -99,7 +97,7 @@ suite("engine — detectFromFolder", () => {
 			const files: Record<string, boolean> = {
 				[root + "/" + marker]: true,
 			};
-			const exists = async (p: string) => files[p] === true;
+			const exists = (p: string) => files[p] === true;
 			assert.strictEqual(
 				await detectFromFolder(root, exists),
 				expectedId,
@@ -109,7 +107,7 @@ suite("engine — detectFromFolder", () => {
 	});
 
 	test("prefers folder-name hint over content hint", async () => {
-		const exists = async () => true;
+		const exists = () => true;
 		assert.strictEqual(await detectFromFolder("/mods/HOI4", exists), "hoi4");
 	});
 
@@ -286,7 +284,7 @@ suite("engine — resolveRulesFolder", () => {
 			"best-effort path must be defined so the caller can warn",
 		);
 		assert.ok(
-			!r.path!.includes('"'),
+			!r.path.includes('"'),
 			"best-effort path should be trimmed of quotes",
 		);
 	});
