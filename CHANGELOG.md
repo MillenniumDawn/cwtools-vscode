@@ -1,5 +1,7 @@
 ### Unreleased
 
+* A tagged release now fails instead of silently shipping `--generate-notes` when `CHANGELOG.md` has no section matching the tag's version. `publishGithubRelease` throws on an empty `changelogNotes()` result, so a typo'd or missing CHANGELOG entry can no longer reach GitHub as generic auto-generated release notes. (#138)
+
 * Cleaned up the client. One `errorMessage` helper replaces the six copies of `err instanceof Error ? err.message : String(err)` (and the near-twin inside `logError`). The activation test asserts the `graphPanel` API is present instead of `assert.ok(true)`, the `currentEngine()` test helper that always returned `'rust'` is gone with its guards folded in, the file explorer's change emitter is disposed with the extension, `fnv1a` gains a unit test, the diagnostics-signature cache stops growing past 1000 entries, and game detection checks content hints with async fs instead of blocking activation on `existsSync`.
 * The bundled themes now paint the language server's semantic tokens, which resolve the TextMate ambiguity a static grammar can't (a CK2 define key vs a scope keyword, `capital` as a keyword vs a field). Each theme opts in via `semanticHighlighting` and carries a small `semanticTokenColors` block for the structurally-classified tokens (`type`, `enumMember`, `variable`, `namespace`, `function`); the rest fall back to their scope colors. `editor.semanticHighlighting.enabled` defaults on for `paradox` files. Added [a themes guide](release/docs/themes.md) covering the semantic token legend and how to add a theme.
 

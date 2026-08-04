@@ -268,13 +268,14 @@ function setReleaseVersion(version: string): void {
 // failed run), delete it first so the workflow is idempotent.
 function publishGithubRelease(tag: string, version: string, preRelease: boolean, vsixes: string[]): void {
 	const notes = changelogNotes(version);
-	const notesArgs = notes
-		? (() => {
-			const f = path.join(tempDir, 'release-notes.md');
-			fs.writeFileSync(f, notes);
-			return ['--notes-file', f];
-		})()
-		: ['--generate-notes'];
+	if (!notes) {
+		// A tag release must ship the curated CHANGELOG notes, not generic
+		// auto-generated ones. Fail rather than silently degrading.
+		throw new Error(`no CHANGELOG section for version ${version}; refusing to publish a release with auto-generated notes`);
+	}
+	const f = path.join(tempDir, 'release-notes.md');
+	fs.writeFileSync(f, notes);
+	const notesArgs = ['--notes-file', f];
 
 	// If the release already exists (e.g. retried workflow), remove it first.
 	if (runOrNull('gh', ['release', 'view', tag]) === 0) {
