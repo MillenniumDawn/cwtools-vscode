@@ -40,8 +40,10 @@ suite("engine — LANGUAGE_REPOS", () => {
 	});
 });
 
+
+
 suite("engine — detectFromFolder", () => {
-	const noopExists = () => false;
+const noopExists = () => false;
 	const assertDetects = async (folder: string, expected: string | null) =>
 		assert.strictEqual(await detectFromFolder(folder, noopExists), expected);
 
@@ -284,7 +286,7 @@ suite("engine — resolveRulesFolder", () => {
 			"best-effort path must be defined so the caller can warn",
 		);
 		assert.ok(
-			!r.path.includes('"'),
+			!r.path!.includes('"'),
 			"best-effort path should be trimmed of quotes",
 		);
 	});

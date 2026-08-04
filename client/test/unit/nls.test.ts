@@ -21,10 +21,7 @@ function loadJsonc(file: string): Record<string, string> {
 	return JSON.parse(stripped) as Record<string, string>;
 }
 
-const manifestRaw = fs.readFileSync(
-	path.join(releaseDir, "package.json"),
-	"utf8",
-);
+const manifestRaw = fs.readFileSync(path.join(releaseDir, "package.json"), "utf8");
 const english = loadJsonc(path.join(releaseDir, "package.nls.json"));
 const referenced = new Set(
 	[...manifestRaw.matchAll(/"%([^%"]+)%"/g)].map((m) => m[1]),
@@ -36,20 +33,12 @@ suite("nls", () => {
 	test("every %key% in the manifest resolves", () => {
 		assert.ok(referenced.size > 0, "manifest references no nls keys");
 		const missing = [...referenced].filter((k) => !(k in english));
-		assert.deepStrictEqual(
-			missing,
-			[],
-			`nls keys with no entry: ${missing.join(", ")}`,
-		);
+		assert.deepStrictEqual(missing, [], `nls keys with no entry: ${missing.join(", ")}`);
 	});
 
 	test("no dead entries left in package.nls.json", () => {
 		const dead = Object.keys(english).filter((k) => !referenced.has(k));
-		assert.deepStrictEqual(
-			dead,
-			[],
-			`nls entries nothing references: ${dead.join(", ")}`,
-		);
+		assert.deepStrictEqual(dead, [], `nls entries nothing references: ${dead.join(", ")}`);
 	});
 
 	// A stale key in a translation is dead weight; a missing one just falls back
@@ -58,11 +47,7 @@ suite("nls", () => {
 		test(`${file} has no keys the English file dropped`, () => {
 			const translated = loadJsonc(path.join(releaseDir, file));
 			const stale = Object.keys(translated).filter((k) => !(k in english));
-			assert.deepStrictEqual(
-				stale,
-				[],
-				`stale keys in ${file}: ${stale.join(", ")}`,
-			);
+			assert.deepStrictEqual(stale, [], `stale keys in ${file}: ${stale.join(", ")}`);
 		});
 	}
 });
