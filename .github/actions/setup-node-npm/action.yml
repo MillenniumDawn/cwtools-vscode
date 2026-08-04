@@ -4,7 +4,7 @@ description: setup-node with npm cache, then npm ci
 inputs:
   node-version:
     description: Node version
-    default: '20'
+    default: '26'
 
 runs:
   using: composite
