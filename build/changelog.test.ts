@@ -59,6 +59,25 @@ suite('releaseNotes', () => {
 		const changelog = '### 1.0.0\n\n### 2.0.0\n\n* Two.\n';
 		assert.throws(() => releaseNotes(changelog, '1.0.0'));
 	});
+
+	test('throws when the last heading in the file has no body before EOF', () => {
+		const changelog = '### 2.0.0\n\n* Two.\n\n### 1.0.0';
+		assert.throws(() => releaseNotes(changelog, '1.0.0'));
+	});
+
+	test('does not treat an indented heading-like line as a section boundary', () => {
+		const changelog =
+			'### 1.0.0\n\n* Example:\n  ### 2.5.0 not a real heading\n\n### 0.9.0\n\n* Old.\n';
+		assert.strictEqual(
+			releaseNotes(changelog, '1.0.0'),
+			'* Example:\n  ### 2.5.0 not a real heading',
+		);
+	});
+
+	test('finds a section whose heading has trailing decoration', () => {
+		const changelog = '### 2.5.0 - 2026-08-01\n\n* X.\n\n### 2.4.0\n\n* Y.\n';
+		assert.strictEqual(releaseNotes(changelog, '2.5.0'), '* X.');
+	});
 });
 
 suite('topChangelogVersion', () => {
@@ -78,6 +97,10 @@ suite('topChangelogVersion', () => {
 	test('ignores a heading that is not at the start of a line', () => {
 		const changelog = 'text ### 1.0.0\n\n### 2.0.0\n\n* Two.\n';
 		assert.strictEqual(topChangelogVersion(changelog), '2.0.0');
+	});
+
+	test('tolerates trailing text after the version on the heading line', () => {
+		assert.strictEqual(topChangelogVersion('### 2.5.0 - 2026-08-01\n\n* X.\n'), '2.5.0');
 	});
 
 	test('throws when there is no version heading', () => {
