@@ -8,8 +8,13 @@
 //   - node unit: vitest + v8       (coverage-node/coverage-summary.json)
 // They cover disjoint modules, so each gets its own headline and table.
 
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
-import { relative } from 'node:path';
+import {
+	readFileSync,
+	writeFileSync,
+	appendFileSync,
+	mkdirSync,
+} from "node:fs";
+import { relative } from "node:path";
 
 interface Metric {
 	pct?: number;
@@ -38,15 +43,19 @@ interface Source {
 
 const sources: Source[] = [
 	{
-		title: 'extension-host client',
-		path: 'coverage/coverage-summary.json',
-		htmlArtifact: 'coverage-html',
-		drop: ['client/extension/engine.ts', 'client/extension/executable.ts', 'client/extension/games.ts'],
+		title: "extension-host client",
+		path: "coverage/coverage-summary.json",
+		htmlArtifact: "coverage-html",
+		drop: [
+			"client/extension/engine.ts",
+			"client/extension/executable.ts",
+			"client/extension/games.ts",
+		],
 	},
 	{
-		title: 'node unit',
-		path: 'coverage-node/coverage-summary.json',
-		htmlArtifact: 'coverage-node',
+		title: "node unit",
+		path: "coverage-node/coverage-summary.json",
+		htmlArtifact: "coverage-node",
 	},
 ];
 
@@ -55,16 +64,21 @@ const sources: Source[] = [
 const GREEN = 80;
 const AMBER = 50;
 const light = (n: number | undefined) =>
-	typeof n !== 'number' ? '⚪' : n >= GREEN ? '🟢' : n >= AMBER ? '🟡' : '🔴';
+	typeof n !== "number" ? "⚪" : n >= GREEN ? "🟢" : n >= AMBER ? "🟡" : "🔴";
 
-const num = (m: Metric) => (m && typeof m.pct === 'number' ? m.pct.toFixed(1) : '-');
+const num = (m: Metric) =>
+	m && typeof m.pct === "number" ? m.pct.toFixed(1) : "-";
 const cell = (m: Metric) => `${light(m?.pct)} ${num(m)}`;
 const row = (name: string, m: FileCoverage) =>
 	`| ${name} | ${cell(m.lines)} | ${cell(m.statements)} | ${cell(m.branches)} | ${cell(m.functions)} |`;
 
 // Sum a metric across every source file, returning the worst-case 100% for an
 // empty set.
-function aggregate(files: string[], data: Summary, metric: keyof FileCoverage): Metric {
+function aggregate(
+	files: string[],
+	data: Summary,
+	metric: keyof FileCoverage,
+): Metric {
 	const covered = files.reduce((n, f) => n + (data[f][metric].covered ?? 0), 0);
 	const total = files.reduce((n, f) => n + (data[f][metric].total ?? 0), 0);
 	return { covered, total, pct: total ? (100 * covered) / total : 100 };
@@ -73,7 +87,7 @@ function aggregate(files: string[], data: Summary, metric: keyof FileCoverage): 
 function renderSection(source: Source): string[] {
 	let data: Summary;
 	try {
-		data = JSON.parse(readFileSync(source.path, 'utf8')) as Summary;
+		data = JSON.parse(readFileSync(source.path, "utf8")) as Summary;
 	} catch {
 		// Report absent (e.g. host coverage is not collected in CI). Omit the
 		// section rather than print a placeholder.
@@ -87,7 +101,9 @@ function renderSection(source: Source): string[] {
 	// dependencies dwarf the numbers we care about.
 	const drop = source.drop ?? [];
 	const isSource = (k: string) =>
-		k !== 'total' && !k.includes('node_modules') && !drop.some((d) => k.includes(d));
+		k !== "total" &&
+		!k.includes("node_modules") &&
+		!drop.some((d) => k.includes(d));
 
 	// Worst-covered files first, so the gaps are what you see.
 	const files = Object.keys(data)
@@ -95,34 +111,34 @@ function renderSection(source: Source): string[] {
 		.sort((a, b) => (data[a].lines.pct ?? 0) - (data[b].lines.pct ?? 0));
 
 	const t: FileCoverage = {
-		lines: aggregate(files, data, 'lines'),
-		statements: aggregate(files, data, 'statements'),
-		branches: aggregate(files, data, 'branches'),
-		functions: aggregate(files, data, 'functions'),
+		lines: aggregate(files, data, "lines"),
+		statements: aggregate(files, data, "statements"),
+		branches: aggregate(files, data, "branches"),
+		functions: aggregate(files, data, "functions"),
 	};
 	const headline = `${light(t.lines.pct)} **${num(t.lines)}% lines** · ${num(t.functions)}% functions · ${num(t.branches)}% branches`;
 
 	return [
 		`## Coverage (${source.title})`,
-		'',
+		"",
 		headline,
-		'',
-		'| File | % Lines | % Stmts | % Branch | % Funcs |',
-		'| --- | --- | --- | --- | --- |',
-		row('**All files**', t),
+		"",
+		"| File | % Lines | % Stmts | % Branch | % Funcs |",
+		"| --- | --- | --- | --- | --- |",
+		row("**All files**", t),
 		...files.map((f) => row(relative(process.cwd(), f), data[f])),
-		'',
+		"",
 		`<sub>🟢 ≥80% · 🟡 ≥50% · 🔴 <50%. Full HTML report is in the \`${source.htmlArtifact}\` artifact.</sub>`,
-		'',
+		"",
 	];
 }
 
-const md = sources.flatMap(renderSection).join('\n').trimEnd();
+const md = sources.flatMap(renderSection).join("\n").trimEnd();
 
-mkdirSync('coverage', { recursive: true });
-writeFileSync('coverage/summary.md', md + '\n');
+mkdirSync("coverage", { recursive: true });
+writeFileSync("coverage/summary.md", md + "\n");
 
 if (process.env.GITHUB_STEP_SUMMARY) {
-	appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + '\n');
+	appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + "\n");
 }
 console.log(md);

@@ -78,7 +78,10 @@ suite("topChangelogVersion", () => {
 	});
 
 	test("throws when there is no version heading", () => {
-		assert.throws(() => topChangelogVersion("# Title\n\nBody only.\n"), /could not find a version heading/);
+		assert.throws(
+			() => topChangelogVersion("# Title\n\nBody only.\n"),
+			/could not find a version heading/,
+		);
 	});
 });
 
