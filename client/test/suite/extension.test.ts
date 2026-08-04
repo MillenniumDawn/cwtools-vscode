@@ -402,7 +402,10 @@ suite("GraphPanel — UI integration", function () {
 
 	test("starts in the New state before the webview posts ready", async function () {
 		await setupPanel();
-		assert.strictEqual(gp.GraphPanel.currentPanel!.getState(), gp.State.New);
+		assert.strictEqual(
+			gp.GraphPanel.currentPanel!.getState(),
+			gp.State.New,
+		);
 	});
 
 	test("saveGraphImage and saveGraphJson are registered once a GraphPanel exists", async function () {
