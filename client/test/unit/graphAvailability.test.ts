@@ -1,6 +1,11 @@
 import { suite, test } from "vitest";
 import * as assert from "assert";
-import { GRAPH_DATA_COMMAND, graphDataAvailable } from "../../extension/graphAvailability";
+import {
+	GRAPH_DATA_COMMAND,
+	graphDataAvailable,
+	FIX_ALL_WORKSPACE_COMMAND,
+	fixAllWorkspaceAvailable,
+} from "../../extension/graphAvailability";
 
 suite("graphAvailability", () => {
 	test("available when the server advertises the command", () => {
@@ -19,5 +24,15 @@ suite("graphAvailability", () => {
 	// minimal server hands back undefined rather than an empty list.
 	test("unavailable when the capability is absent", () => {
 		assert.strictEqual(graphDataAvailable(undefined), false);
+	});
+
+	test("fixAllWorkspace available when advertised", () => {
+		assert.strictEqual(fixAllWorkspaceAvailable(["getFileTypes", FIX_ALL_WORKSPACE_COMMAND]), true);
+	});
+
+	test("fixAllWorkspace unavailable otherwise", () => {
+		assert.strictEqual(fixAllWorkspaceAvailable(["getFileTypes", "clearAllCaches"]), false);
+		assert.strictEqual(fixAllWorkspaceAvailable([]), false);
+		assert.strictEqual(fixAllWorkspaceAvailable(undefined), false);
 	});
 });

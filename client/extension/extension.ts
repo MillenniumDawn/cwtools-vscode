@@ -17,7 +17,7 @@ import { resolveRulesCache, fetchRulesInBackground } from './rulesSetup';
 import { createLanguageClient } from './lspClient';
 import { registerServerNotifications } from './serverNotifications';
 import { registerDocumentLanguage } from './documentLanguage';
-import { registerCommands, publishGraphAvailability } from './commands';
+import { registerCommands, publishCommandAvailability } from './commands';
 import { logInfo, logError, errorMessage } from './logger';
 import type * as GraphPanelModule from './graphPanel';
 
@@ -93,7 +93,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		try {
 			await client.start();
 			// Capabilities are only known once the server has answered initialize.
-			publishGraphAvailability(client);
+			publishCommandAvailability(client);
 			// Classify the already-focused editor now that getFileTypes can be
 			// answered. Not awaited: activation shouldn't wait on a server round-trip.
 			void tracker.classifyActiveEditor();

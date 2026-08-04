@@ -4,7 +4,7 @@ import { workspace, window, commands } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
 import { getGraphData } from "../common/graphTypes";
-import { graphDataAvailable } from "./graphAvailability";
+import { graphDataAvailable, fixAllWorkspaceAvailable } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";
 import { errorMessage } from "./logger";
 
@@ -14,13 +14,24 @@ function serverProvidesGraphData(client: LanguageClient): boolean {
 	);
 }
 
+function serverProvidesFixAll(client: LanguageClient): boolean {
+	return fixAllWorkspaceAvailable(
+		client.initializeResult?.capabilities.executeCommandProvider?.commands,
+	);
+}
+
 // Gates the palette entries and the editor-title button; call once the server
 // has started and its capabilities are known.
-export function publishGraphAvailability(client: LanguageClient): void {
+export function publishCommandAvailability(client: LanguageClient): void {
 	void commands.executeCommand(
 		"setContext",
 		"cwtoolsGraphAvailable",
 		serverProvidesGraphData(client),
+	);
+	void commands.executeCommand(
+		"setContext",
+		"cwtoolsFixAllAvailable",
+		serverProvidesFixAll(client),
 	);
 }
 
@@ -134,6 +145,13 @@ export function registerCommands(
 
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.fixAllWorkspace", async () => {
+			if (!serverProvidesFixAll(client)) {
+				window.showWarningMessage(
+					"CWTools: this language server doesn't support fixing the workspace. " +
+					"Update the language server to enable it.",
+				);
+				return;
+			}
 			try {
 				const result = await client.sendRequest(ExecuteCommandRequest.type, {
 					command: "fixAllWorkspace",
