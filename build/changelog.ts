@@ -2,39 +2,26 @@
 // and calling gh stay in build.ts; these functions only turn text into values
 // so the heading logic is unit-testable.
 
-// First "## [x.y.z]" (or "## x.y.z") heading in the changelog text.
+// "## [x.y.z]", "## x.y.z", "### v1.0.0-beta.2" -- capture group is the version.
+const headingRe = /^#+\s*\[?v?(\d+\.\d+\.\d+[^\]\s]*)\]?/m;
+
+// First version heading in the changelog text. Non-version headings such as
+// "### Unreleased" are skipped.
 export function topChangelogVersion(changelog: string): string {
-	const m = changelog.match(/^#+\s*\[?v?(\d+\.\d+\.\d+[^\]\s]*)\]?/m);
-	if (!m) throw new Error("could not find a version heading in CHANGELOG.md");
+	const m = changelog.match(headingRe);
+	if (!m) throw new Error('could not find a version heading in CHANGELOG.md');
 	return m[1];
 }
 
 // The CHANGELOG section body for `version`, used as the GitHub release notes.
-// Returns '' when no heading matches (the caller decides how to fail).
-export function changelogNotes(changelog: string, version: string): string {
-	const lines = changelog.split("\n");
-	const headingRe = /^#+\s*\[?v?(\d+\.\d+\.\d+[^\]\s]*)\]?/;
-	let start = -1;
-	for (let i = 0; i < lines.length; i++) {
-		const m = lines[i].match(headingRe);
-		if (m && m[1] === version) {
-			start = i + 1;
-			break;
-		}
-	}
-	if (start === -1) return "";
-	const body: string[] = [];
-	for (let i = start; i < lines.length; i++) {
-		if (headingRe.test(lines[i])) break;
-		body.push(lines[i]);
-	}
-	return body.join("\n").trim();
-}
-
-// The release notes for `version`, failing when the CHANGELOG has no matching
-// section so a tag can't silently ship auto-generated notes.
+// Throws when there is no such section, so a tag can't silently ship generic
+// auto-generated notes.
 export function releaseNotes(changelog: string, version: string): string {
-	const notes = changelogNotes(changelog, version);
+	const lines = changelog.split('\n');
+	const start = lines.findIndex((l) => l.match(headingRe)?.[1] === version);
+	const rest = start === -1 ? [] : lines.slice(start + 1);
+	const end = rest.findIndex((l) => headingRe.test(l));
+	const notes = (end === -1 ? rest : rest.slice(0, end)).join('\n').trim();
 	if (!notes) {
 		throw new Error(
 			`no CHANGELOG section for version ${version}; refusing to publish a release with auto-generated notes`,
