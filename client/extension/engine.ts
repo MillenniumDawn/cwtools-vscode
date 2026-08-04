@@ -8,7 +8,7 @@ import { FOLDER_HINTS, CONTENT_HINTS } from './games';
 
 export { LANGUAGE_REPOS } from './games';
 
-export function detectFromFolder(root: string, fileExists: (p: string) => boolean): string | null {
+export async function detectFromFolder(root: string, fileExists: (p: string) => Promise<boolean>): Promise<string | null> {
 	const lower = root.toLowerCase();
 	for (const [pattern, id] of FOLDER_HINTS) {
 		if (typeof pattern === 'string' ? lower.includes(pattern) : pattern.test(lower)) {
@@ -16,7 +16,7 @@ export function detectFromFolder(root: string, fileExists: (p: string) => boolea
 		}
 	}
 	for (const [sub, id] of CONTENT_HINTS) {
-		if (fileExists(path.join(root, sub))) return id;
+		if (await fileExists(path.join(root, sub))) return id;
 	}
 	return null;
 }

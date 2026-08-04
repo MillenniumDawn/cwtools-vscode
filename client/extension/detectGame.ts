@@ -2,7 +2,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { Uri } from 'vscode';
 import { workspace, RelativePattern } from 'vscode';
-import { existsSync as fsExistsSync } from 'fs';
+import { access } from 'fs/promises';
 import { detectFromFolder } from './engine';
 import { existAndIsExe } from './executable';
 import { GAMES } from './games';
@@ -29,7 +29,11 @@ async function findExeInFiles(gameExeName: string, binariesPrefix: boolean): Pro
 
 async function detectLanguageId(): Promise<string | null> {
 	if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
-		return detectFromFolder(workspace.workspaceFolders[0].uri.fsPath, fsExistsSync);
+		const root = workspace.workspaceFolders[0].uri.fsPath;
+		const exists = async (p: string): Promise<boolean> => {
+			try { await access(p); return true; } catch { return false; }
+		};
+		return detectFromFolder(root, exists);
 	}
 	return null;
 }

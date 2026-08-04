@@ -6,6 +6,7 @@ import type { LanguageClient } from "vscode-languageclient/node";
 import { getGraphData } from "../common/graphTypes";
 import { graphDataAvailable } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";
+import { errorMessage } from "./logger";
 
 function serverProvidesGraphData(client: LanguageClient): boolean {
 	return graphDataAvailable(
@@ -105,7 +106,7 @@ export function registerCommands(
 					arguments: [],
 				});
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
+				const msg = errorMessage(err);
 				window.showErrorMessage(
 					`CWTools: could not fetch profiling log: ${msg}`,
 				);
@@ -142,7 +143,7 @@ export function registerCommands(
 					window.showInformationMessage(`CWTools: ${result}`);
 				}
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
+				const msg = errorMessage(err);
 				window.showErrorMessage(`CWTools: fixAllWorkspace failed: ${msg}`);
 			}
 		}),

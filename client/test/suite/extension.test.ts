@@ -12,6 +12,7 @@ import {
 import { it, describe } from "mocha";
 import type * as GraphPanelNamespace from "../../extension/graphPanel";
 type GraphPanelModule = typeof GraphPanelNamespace;
+import type { CwtoolsApi } from "../../extension/extension";
 import type { GraphData } from "../../common/graphTypes";
 import sinon from "sinon";
 import * as fs from "node:fs";
@@ -23,14 +24,19 @@ suite(`Debug Integration Test: `, function () {
 		assert.ok(vscode.extensions.getExtension(EXTENSION_ID));
 	});
 
-	test("should activate", async function () {
+	test("should activate and expose the graphPanel API", async function () {
 		this.timeout(1 * 60 * 1000);
-		const extension = await activate();
-		// In test environment, extension may not return exports due to server issues
-		// but it should at least attempt activation
-		console.log("Extension exports:", typeof extension);
-		// Just verify that activation completed without throwing an uncaught error
-		assert.ok(true, "Extension activation completed");
+		const extension = (await activate()) as CwtoolsApi | undefined;
+		// The exports may be absent when the language server can't start in the
+		// test environment, but when present the activation API must expose
+		// graphPanel() (the host tests reach the panel through it).
+		if (extension) {
+			assert.strictEqual(
+				typeof extension.graphPanel,
+				"function",
+				"activation API should expose graphPanel()",
+			);
+		}
 	});
 
 	test("Extension activation status", async function () {

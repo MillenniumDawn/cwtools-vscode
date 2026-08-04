@@ -55,6 +55,9 @@ export function registerServerNotifications(
 		const signature = fileListSignature(params.fileList);
 		if (!fileExplorer) {
 			fileExplorer = new FileExplorer(context, params.fileList);
+			// The explorer owns the tree provider's EventEmitter; dispose it with
+			// the extension like every other emitter in the codebase.
+			context.subscriptions.push(fileExplorer);
 			lastFileListSignature = signature;
 		} else if (lastFileListSignature !== signature) {
 			fileExplorer.refresh(params.fileList);

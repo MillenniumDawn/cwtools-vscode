@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { activate, waitForLSP, currentEngine, EXTENSION_ID, openDocumentAndShow, SAMPLE_ROOT, extractCompletionLabel } from '../support/utils';
+import { activate, waitForLSP, EXTENSION_ID, openDocumentAndShow, SAMPLE_ROOT, extractCompletionLabel } from '../support/utils';
 import { setupLSPErrorMonitoring, checkForLSPErrors, teardownLSPErrorMonitoring } from '../support/lspErrorMonitor';
 import { expect } from 'chai';
 
@@ -50,10 +50,10 @@ suite('LSP Completion Tests', function () {
 		const labels = extractLabels(completions.items);
 		const expected = ["regionalist_dublicated", "sector_policy_leadership"];
 		const missing = expected.filter(e => !labels.includes(e));
-		if (currentEngine() === 'rust' && missing.length > 0) {
+		if (missing.length > 0) {
 			console.warn(`[rust] niche completion gap: missing ${JSON.stringify(missing)} in ${labels.length} items`);
 		}
-		expect(missing, `engine=${currentEngine()}\ngot ${labels.length} labels, missing: ${JSON.stringify(missing)}`).to.deep.equal([]);
+		expect(missing, `engine=rust\ngot ${labels.length} labels, missing: ${JSON.stringify(missing)}`).to.deep.equal([]);
 	});
 
 	test('should provide completions in trigger context', async function () {

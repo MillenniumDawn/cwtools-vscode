@@ -19,7 +19,7 @@ import {
 	mapIgnoreOptions,
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
-import { logError, outputChannel } from "./logger";
+import { logError, errorMessage, outputChannel } from "./logger";
 
 export interface ClientConfig {
 	language: string;
@@ -155,7 +155,7 @@ export function createLanguageClient(
 					await openGeneratedLoc(result);
 					return result;
 				} catch (err) {
-					const msg = err instanceof Error ? err.message : String(err);
+					const msg = errorMessage(err);
 					window.showErrorMessage(`CWTools: genlocall failed: ${msg}`);
 					return undefined;
 				}
@@ -175,7 +175,7 @@ export function createLanguageClient(
 				}
 				return result;
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
+				const msg = errorMessage(err);
 				window.showErrorMessage(`CWTools: ${command} failed: ${msg}`);
 				return undefined;
 			}

@@ -18,7 +18,7 @@ import { createLanguageClient } from './lspClient';
 import { registerServerNotifications } from './serverNotifications';
 import { registerDocumentLanguage } from './documentLanguage';
 import { registerCommands, publishGraphAvailability } from './commands';
-import { logInfo, logError } from './logger';
+import { logInfo, logError, errorMessage } from './logger';
 import type * as GraphPanelModule from './graphPanel';
 
 export let defaultClient: LanguageClient;
@@ -103,7 +103,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 				fetchRulesInBackground(language, cacheDir, client, initialScanDone);
 			}
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
+			const msg = errorMessage(err);
 			logError('client.start() error', err);
 			// EPERM/EACCES means the OS refused to execute the server binary,
 			// almost always antivirus (Defender) quarantining the unsigned exe

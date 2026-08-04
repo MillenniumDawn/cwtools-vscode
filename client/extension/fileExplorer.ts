@@ -65,7 +65,7 @@ import * as vscode from 'vscode';
         return Object.values(tree).map(convertToTreeNode);
     }
 
-    export class FilesProvider implements vscode.TreeDataProvider<TreeNode> {
+    export class FilesProvider implements vscode.TreeDataProvider<TreeNode>, vscode.Disposable {
         private readonly _tree : TreeNode = {
             fileName: "root",
             isDirectory: true,
@@ -100,9 +100,13 @@ import * as vscode from 'vscode';
             this._onDidChangeTreeData.fire(null);
         }
 
+        dispose(): void {
+            this._onDidChangeTreeData.dispose();
+        }
+
     }
 
-    export class FileExplorer {
+    export class FileExplorer implements vscode.Disposable {
 
 	private fileExplorer: vscode.TreeView<TreeNode>;
     private treeDataProvider: FilesProvider;
@@ -116,6 +120,10 @@ import * as vscode from 'vscode';
 
 	private openResource(resource: vscode.Uri): void {
 		vscode.window.showTextDocument(resource);
+    }
+
+    dispose(): void {
+        this.treeDataProvider.dispose();
     }
 
     refresh(files : FileListItem[]): void {
