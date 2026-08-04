@@ -35,7 +35,7 @@ export async function checkHoverContains(
 	}
 
 	const content = hover.contents[0];
-	const actual = content instanceof vscode.MarkdownString ? content.value : String(content);
+	const actual = typeof content === "string" ? content : content.value;
 	const missing = required.filter(s => !actual.includes(s));
 	return { passed: missing.length === 0, actual, missing };
 }

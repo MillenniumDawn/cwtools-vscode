@@ -19,7 +19,7 @@ suite('graphTypes — getGraphData', () => {
 		executeCommandStub.resolves([]);
 		await getGraphData('technology', 3);
 		assert.ok(executeCommandStub.calledOnce);
-		const [command, entityType, depth] = executeCommandStub.firstCall.args;
+		const [command, entityType, depth] = executeCommandStub.firstCall.args as [string, string, number];
 		assert.strictEqual(command, 'getGraphData');
 		assert.strictEqual(entityType, 'technology');
 		assert.strictEqual(depth, 3);
