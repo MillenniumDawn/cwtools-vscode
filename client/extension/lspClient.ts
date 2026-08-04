@@ -151,7 +151,7 @@ export function createLanguageClient(
 			// genlocall returns generated loc stubs to open, not a toast string.
 			if (command === "genlocall") {
 				try {
-					const result = await next(command, args);
+					const result: unknown = await next(command, args);
 					await openGeneratedLoc(result);
 					return result;
 				} catch (err) {
@@ -166,10 +166,11 @@ export function createLanguageClient(
 				command === "reloadrulesconfig" ||
 				command === "reindexWorkspace";
 			if (!isStatusCommand) {
-				return next(command, args);
+				const result: unknown = await next(command, args);
+				return result;
 			}
 			try {
-				const result = await next(command, args);
+				const result: unknown = await next(command, args);
 				if (typeof result === "string" && result.length > 0) {
 					window.showInformationMessage(`CWTools: ${result}`);
 				}
@@ -271,6 +272,10 @@ export function createLanguageClient(
 	// Client clears the DiagnosticCollection on stop; drop the cache too or the
 	// re-publish after restart looks unchanged and squiggles don't return.
 	context.subscriptions.push(
+		// onDidChangeState is a lib getter returning Event<StateChangeEvent>;
+		// type-aware lint resolves it as unsafe under skipLibCheck though tsc
+		// types it (client, the handler and the returned Disposable are typed).
+		// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument
 		client.onDidChangeState((e: { oldState: State; newState: State }) => {
 			if (e.oldState === State.Running) {
 				diagnosticsCache.clear();

@@ -18,7 +18,7 @@ function loadJsonc(file: string): Record<string, string> {
 	const stripped = raw
 		.replace(/^\s*\/\/.*$/gm, "")
 		.replace(/,(\s*[}\]])/g, "$1");
-	return JSON.parse(stripped);
+	return JSON.parse(stripped) as Record<string, string>;
 }
 
 const manifestRaw = fs.readFileSync(path.join(releaseDir, "package.json"), "utf8");

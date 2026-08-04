@@ -8,7 +8,7 @@ import { FOLDER_HINTS, CONTENT_HINTS } from './games';
 
 export { LANGUAGE_REPOS } from './games';
 
-export async function detectFromFolder(root: string, fileExists: (p: string) => Promise<boolean>): Promise<string | null> {
+export async function detectFromFolder(root: string, fileExists: (p: string) => boolean | Promise<boolean>): Promise<string | null> {
 	const lower = root.toLowerCase();
 	for (const [pattern, id] of FOLDER_HINTS) {
 		if (typeof pattern === 'string' ? lower.includes(pattern) : pattern.test(lower)) {
@@ -112,8 +112,8 @@ export function resolveRulesFolder(
 
 	// (d) env var expansion (%VAR% on win32, $VAR / ${VAR} elsewhere).
 	value = isWin
-		? value.replace(/%([^%]+)%/g, (m, name) => env[name] ?? m)
-		: value.replace(/\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, braced, bare) => env[braced ?? bare] ?? m);
+		? value.replace(/%([^%]+)%/g, (m, name: string) => env[name] ?? m)
+		: value.replace(/\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, braced: string, bare: string) => env[braced ?? bare] ?? m);
 	add(value);
 
 	// (e) separator normalization (win32 accepts backslashes natively).
@@ -152,8 +152,8 @@ export function runGit(
 			reject(new Error(`git ${args.join(' ')} timed out after ${timeoutMs}ms`));
 		}, timeoutMs);
 		timer.unref?.();
-		git.stdout?.on('data', d => { out += d.toString(); });
-		git.stderr?.on('data', d => { err += d.toString(); });
+		git.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+		git.stderr?.on('data', (d: Buffer) => { err += d.toString(); });
 		git.on('error', e => {
 			if (settled) return;
 			settled = true;

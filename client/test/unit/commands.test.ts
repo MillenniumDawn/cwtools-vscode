@@ -11,7 +11,12 @@ import * as path from "path";
 const repoRoot = path.resolve(__dirname, "../../..");
 const manifest = JSON.parse(
 	fs.readFileSync(path.join(repoRoot, "release", "package.json"), "utf8"),
-);
+) as {
+	contributes: {
+		commands?: Array<{ command: string }>;
+		menus?: { commandPalette?: Array<{ command: string; when?: string }> };
+	};
+};
 
 // executeCommands the server advertises (config.rs execute_command_provider),
 // including genlocall and reloadrulesconfig, which the server now handles.
@@ -66,8 +71,8 @@ suite("manifest — command registration", () => {
 	// Asserted unconditionally — an earlier version skipped the whole check once
 	// the command was known, which made it pass without testing anything.
 	test("capability-gated commands are gated in the palette", () => {
-		const palette: Array<{ command: string; when?: string }> =
-			manifest.contributes.menus?.commandPalette ?? [];
+	const palette: Array<{ command: string; when?: string }> =
+		manifest.contributes.menus?.commandPalette ?? [];
 		const gated: Record<string, string> = {
 			"cwtools.showGraph": "cwtoolsGraphAvailable",
 			"cwtools.setGraphDepth": "cwtoolsGraphAvailable",

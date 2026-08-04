@@ -92,7 +92,7 @@ import * as vscode from 'vscode';
             }
             return treeItem;
         }
-        async getChildren(element?: TreeNode): Promise<TreeNode[]> {
+        getChildren(element?: TreeNode): TreeNode[] {
             return element ? element.children : this._tree.children;
         }
         refresh(files : FileListItem[]) {
@@ -115,7 +115,7 @@ import * as vscode from 'vscode';
 		this.treeDataProvider = new FilesProvider(files);
 		this.fileExplorer = vscode.window.createTreeView('cwtools-files', { treeDataProvider: this.treeDataProvider });
 		context.subscriptions.push(this.fileExplorer);
-		context.subscriptions.push(vscode.commands.registerCommand('cwtools-files.openFile', (resource) => this.openResource(resource)));
+		context.subscriptions.push(vscode.commands.registerCommand('cwtools-files.openFile', (resource: vscode.Uri) => this.openResource(resource)));
 	}
 
 	private openResource(resource: vscode.Uri): void {

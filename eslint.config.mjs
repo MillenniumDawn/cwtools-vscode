@@ -9,6 +9,19 @@ const gitignorePath = fileURLToPath(new URL(".gitignore", import.meta.url));
 export default tseslint.config(
 	eslint.configs.recommended,
 	tseslint.configs.recommended,
+	// Type-aware rules need the project; scope them (and projectService) to
+	// TypeScript files only, so config/JS files aren't type-checked.
+	{
+		files: ["**/*.ts"],
+		extends: [tseslint.configs.recommendedTypeChecked],
+		languageOptions: {
+			parserOptions: {
+				projectService: {
+					allowDefaultProject: ["build/*.ts", "vitest.config.ts"],
+				},
+			},
+		},
+	},
 	includeIgnoreFile(gitignorePath, "Imported .gitignore patterns"),
 	// Extension host, build scripts, and configs run under Node.
 	{

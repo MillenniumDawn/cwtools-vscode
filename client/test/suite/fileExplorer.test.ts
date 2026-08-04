@@ -91,47 +91,47 @@ suite('FileExplorer — FilesProvider', () => {
 		{ scope: 'events', uri: 'file:///events/irm_faction.txt', logicalpath: 'irm_faction.txt' }
 	]);
 
-	test('exposes the parsed tree at the root', async () => {
+	test('exposes the parsed tree at the root', () => {
 		const provider = new FilesProvider(sampleFiles());
-		const children = await provider.getChildren();
+		const children = provider.getChildren();
 		assert.strictEqual(children.length, 1);
 		assert.strictEqual(children[0].fileName, 'events');
 		assert.strictEqual(children[0].isDirectory, true);
 		assert.strictEqual(children[0].children.length, 2);
 	});
 
-	test('builds a TreeItem that opens the file on click for leaf nodes', async () => {
+	test('builds a TreeItem that opens the file on click for leaf nodes', () => {
 		const provider = new FilesProvider(sampleFiles());
-		const root = (await provider.getChildren())[0];
+		const root = provider.getChildren()[0];
 		const leaf = root.children[0];
 		const item = provider.getTreeItem(leaf);
 		assert.strictEqual(item.label, leaf.fileName);
 		assert.strictEqual(item.collapsibleState, 0 /* None */);
 		assert.ok(item.command, 'leaf items must register a command');
-		assert.strictEqual(item.command!.command, 'cwtools-files.openFile');
+		assert.strictEqual(item.command.command, 'cwtools-files.openFile');
 		// The command stores a parsed vscode.Uri, not the raw string.
-		const arg = item.command!.arguments![0] as vscode.Uri;
+		const [arg] = item.command.arguments! as [vscode.Uri];
 		assert.ok(arg && typeof arg === 'object' && 'scheme' in arg, 'expected a Uri argument');
 		assert.strictEqual(arg.scheme, 'file');
 		assert.strictEqual(arg.path, leaf.uri.replace(/^file:\/\//, ''));
 		assert.strictEqual(item.contextValue, 'file');
 	});
 
-	test('builds a collapsible TreeItem for directories with no open command', async () => {
+	test('builds a collapsible TreeItem for directories with no open command', () => {
 		const provider = new FilesProvider([{ scope: 'common', uri: 'u', logicalpath: 'buildings/x.txt' }]);
-		const common = (await provider.getChildren())[0];
+		const common = provider.getChildren()[0];
 		const buildings = common.children[0];
 		const item = provider.getTreeItem(buildings);
 		assert.strictEqual(item.collapsibleState, 1 /* Collapsed */);
 		assert.strictEqual(item.command, undefined);
 	});
 
-	test('refresh replaces the tree and fires a change event', async () => {
+	test('refresh replaces the tree and fires a change event', () => {
 		const provider = new FilesProvider(sampleFiles());
 		const seen: (TreeNode | null)[] = [];
 		provider.onDidChangeTreeData(node => seen.push(node));
 		provider.refresh([{ scope: 'events', uri: 'u', logicalpath: 'irm.txt' }]);
-		const children = await provider.getChildren();
+		const children = provider.getChildren();
 		assert.strictEqual(children.length, 1);
 		assert.strictEqual(children[0].children.length, 1);
 		assert.strictEqual(seen.length, 1);

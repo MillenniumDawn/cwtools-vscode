@@ -93,7 +93,7 @@ export async function registerDocumentLanguage(
 					ExecuteCommandRequest.type,
 					{ command: "getFileTypes", arguments: [editorPath] },
 					cts.token,
-				);
+				) as string[] | undefined;
 				if (data && data[0]) {
 					latestType = data[0];
 					await commands.executeCommand("setContext", "cwtoolsGraphFile", true);

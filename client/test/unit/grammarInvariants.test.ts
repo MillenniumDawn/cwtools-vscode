@@ -11,20 +11,30 @@ import * as path from "path";
 // `}` close the enclosing block, shifting nesting for the rest of the file.
 
 const repoRoot = path.resolve(__dirname, "../../..");
+interface Pattern {
+	name?: string;
+	match?: string;
+}
+
 const grammar = JSON.parse(
 	fs.readFileSync(
 		path.join(repoRoot, "release", "syntaxes", "paradox.tmLanguage.json"),
 		"utf8",
 	),
-);
+) as {
+	repository: {
+		keywords: { patterns: Pattern[] };
+		strings: { end: string };
+		block: { patterns: Array<{ begin: string }> };
+	};
+};
 const manifest = JSON.parse(
 	fs.readFileSync(path.join(repoRoot, "release", "package.json"), "utf8"),
-);
-
-interface Pattern {
-	name?: string;
-	match?: string;
-}
+) as {
+	contributes: {
+		configurationDefaults: Record<string, Record<string, number>>;
+	};
+};
 const keywordPatterns: Pattern[] = grammar.repository.keywords.patterns;
 const wordList = /^\\b\((\w+(?:\|\w+)*)\)\\b$/;
 const wordListPatterns = keywordPatterns.filter(

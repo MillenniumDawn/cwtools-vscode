@@ -153,7 +153,7 @@ export function registerCommands(
 				return;
 			}
 			try {
-				const result = await client.sendRequest(ExecuteCommandRequest.type, {
+				const result: unknown = await client.sendRequest(ExecuteCommandRequest.type, {
 					command: "fixAllWorkspace",
 					arguments: [],
 				});

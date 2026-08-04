@@ -16,7 +16,7 @@ const grammarPath = path.join(
 	"syntaxes",
 	"paradox.tmLanguage.json",
 );
-const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf8"));
+const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf8")) as unknown;
 
 // Find the `match` regex of the grammar rule with the given scope name.
 function ruleMatch(name: string): string {

@@ -237,7 +237,7 @@ function setReleaseVersion(version: string): void {
 	const manifestPath = path.join(releaseDir, 'package.json');
 	let manifest: { version: string };
 	try {
-		manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+		manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { version: string };
 	} catch (e) {
 		throw new Error(`could not parse ${manifestPath}`, { cause: e });
 	}

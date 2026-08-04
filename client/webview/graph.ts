@@ -22,7 +22,7 @@ declare module 'cytoscape' {
 }
 
 registerCytoscapeCanvas(cyM.default());
-cyM.default.use(cytoscapeelk);
+cyM.default.use(cytoscapeelk as cytoscape.Ext);
 cyM.default.use(popper);
 
 
@@ -37,11 +37,6 @@ const htmlEl = document.documentElement;
 const vscodeFg = () => htmlEl.style.getPropertyValue("--vscode-editor-foreground");
 const vscodeBg = () => htmlEl.style.getPropertyValue("--vscode-editor-background");
 
-/** Escape HTML entities to prevent XSS from server-supplied data. */
-function escapeHtml(str: string): string {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
 // Beyond these bounds the blur is invisible but still costs a full shadow
 // pass per draw call, so drop it.
 const SHADOW_NODE_LIMIT = 300;
@@ -55,10 +50,10 @@ function drawExtra(nodes : cytoscape.NodeCollection, ctx : CanvasRenderingContex
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     nodes.forEach((node) => {
-        let label: string = node.scratch('_drawLabel');
+        let label: string = node.scratch('_drawLabel') as string;
         if (label === undefined) {
-            const text: string = node.data('entityType');
-            label = node.data('abbreviation') || text.split('_').map(f => f[0].toUpperCase()).join('');
+            const text: string = node.data('entityType') as string;
+            label = (node.data('abbreviation') as string) || text.split('_').map(f => f[0].toUpperCase()).join('');
             node.scratch('_drawLabel', label);
         }
         const pos = node.position();
@@ -195,17 +190,39 @@ function populateGraph(cy: cytoscape.Core, data: techNode[], edges: EdgeInput[])
 
 function setupTooltips(cy: cytoscape.Core) {
     cy.nodes().forEach(function(node) {
-        const simpleTooltip = `<strong>${escapeHtml(String(node.data("entityTypeDisplayName")))}</strong>: ${escapeHtml(String(node.data("id")))}`;
-        const createRow = function (details : { key : string, values : string[]}) {
-            const vals = details.values.join(", ");
-            return `<tr><td>${escapeHtml(details.key)}</td><td>${escapeHtml(vals)}</td></tr>`;
+        const buildTip = () => {
+            const tip = document.createElement('div');
+            const strong = document.createElement('strong');
+            strong.textContent = String(node.data("entityTypeDisplayName"));
+            tip.appendChild(strong);
+            tip.appendChild(document.createTextNode(`: ${String(node.data("id"))}`));
+            return tip;
         };
-        const detailsText = node.data("details") ? node.data("details").map(createRow).join("") : "";
-        const detailsTable =
-            `${simpleTooltip}
-            <table class="cwtools-table">
-            ${detailsText ? detailsText : "<tr><td class=\"cwtools-text-center\">-</td></tr>"}
-            </table>`;
+        const simpleTip = buildTip();
+        const detailTip = buildTip();
+        const table = document.createElement('table');
+        table.className = 'cwtools-table';
+        const detailsArr = node.data("details") as GraphNodeDetail[] | undefined;
+        if (detailsArr && detailsArr.length > 0) {
+            for (const d of detailsArr) {
+                const tr = document.createElement('tr');
+                const tdKey = document.createElement('td');
+                tdKey.textContent = d.key;
+                const tdVals = document.createElement('td');
+                tdVals.textContent = d.values.join(", ");
+                tr.appendChild(tdKey);
+                tr.appendChild(tdVals);
+                table.appendChild(tr);
+            }
+        } else {
+            const tr = document.createElement('tr');
+            const td = document.createElement('td');
+            td.className = 'cwtools-text-center';
+            td.textContent = '-';
+            tr.appendChild(td);
+            table.appendChild(tr);
+        }
+        detailTip.appendChild(table);
         // Defer popperRef() (it allocates a DOM node) until the tooltip is first
         // shown, so a graph with thousands of nodes does not create thousands of
         // DOM elements up front.
@@ -216,7 +233,7 @@ function setupTooltips(cy: cytoscape.Core) {
             getReferenceClientRect: () => getRef().getBoundingClientRect(),
             content: () => {
                 const content = document.createElement('div');
-                content.innerHTML = simpleTooltip;
+                content.appendChild(simpleTip.cloneNode(true));
                 return content;
             },
             sticky: true,
@@ -228,7 +245,7 @@ function setupTooltips(cy: cytoscape.Core) {
             getReferenceClientRect: () => getRef().getBoundingClientRect(),
             content: () => {
                 const content = document.createElement('div');
-                content.innerHTML = detailsTable;
+                content.appendChild(detailTip.cloneNode(true));
                 return content;
             },
             onHidden: (instance: Instance) =>
@@ -300,16 +317,16 @@ function runLayout(cy: cytoscape.Core) {
 }
 
 function setupInteraction(cy: cytoscape.Core, layer: ReturnType<typeof cy.cyCanvas>, ctx: CanvasRenderingContext2D) {
-    let tappedBefore : EventTarget | null;
+    let tappedBefore: cytoscape.NodeSingular | null;
     let tappedTimeout : NodeJS.Timeout;
 
     cy.on('tap', function (event : EventObject) {
-        const tappedNow = event.target;
+        const tappedNow = event.target as cytoscape.NodeSingular;
         if (tappedTimeout && tappedBefore) {
             clearTimeout(tappedTimeout);
         }
         if (tappedBefore === tappedNow) {
-            tappedNow.trigger('doubleTap', event);
+            tappedNow.trigger('doubleTap');
             tappedBefore = null;
         } else {
             tappedTimeout = setTimeout(function () { tappedBefore = null; }, 300);
@@ -317,7 +334,7 @@ function setupInteraction(cy: cytoscape.Core, layer: ReturnType<typeof cy.cyCanv
         }
     });
     cy.on('doubleTap', 'node', function (event) {
-        goToNode(event.target.data('location'));
+        goToNode((event.target as cytoscape.NodeSingular).data('location') as GraphLocation);
     });
 
     // The graph is static after setup, so the neighborhood partition per node
@@ -333,12 +350,12 @@ function setupInteraction(cy: cytoscape.Core, layer: ReturnType<typeof cy.cyCanv
         return entry;
     };
     cy.on('mouseover', 'node', function (e) {
-        const { hood, rest } = hoodOf(e.target);
+        const { hood, rest } = hoodOf(e.target as cytoscape.NodeSingular);
         rest.addClass('semitransp');
         hood.addClass('highlight');
     });
     cy.on('mouseout', 'node', function (e) {
-        const { hood, rest } = hoodOf(e.target);
+        const { hood, rest } = hoodOf(e.target as cytoscape.NodeSingular);
         rest.removeClass('semitransp');
         hood.removeClass('highlight');
     });
@@ -407,7 +424,8 @@ async function blobToDataURL(blob: Blob): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
+        reader.onerror = () =>
+            reject(reader.error ? new Error(reader.error.message) : new Error('failed to read blob'));
         reader.readAsDataURL(blob);
     });
 }
@@ -457,21 +475,33 @@ export function go(nodesJ: Array<techNode>, settings: settings) {
     tech(nodesJ, edgesfin, settings);
 }
 
+type InboundMessage =
+    | { command: 'go'; data: techNode[]; settings: settings }
+    | { command: 'exportImage' }
+    | { command: 'exportJson' }
+    | { command: 'importJson'; settings: settings; json: string }
+    | { command: 'checkCytoscapeRendered' };
+
 window.addEventListener('message', event => {
 
-    const message = event.data; // The JSON data our extension sent
+    const message = event.data as InboundMessage; // The JSON data our extension sent
     switch (message.command) {
         case 'go':
             go(message.data, message.settings)
             break;
         case 'exportImage':
-            exportImage(1);
+            void exportImage(1);
             break;
         case 'exportJson':
             exportJson();
             break;
         case 'importJson':
-            tech([],[],message.settings, JSON.parse(message.json))
+            try {
+                tech([],[],message.settings, JSON.parse(message.json) as Parameters<typeof tech>[3])
+            } catch {
+                // Malformed import: leave the graph empty rather than take the
+                // whole message handler down.
+            }
             break;
         case 'checkCytoscapeRendered':
             // Check if cytoscape is initialized and has rendered elements

@@ -13,16 +13,16 @@ export const EXTENSION_ID = 'milleniumdawnmodteam.cwtools-md-edition';
 /** Resolved path to the sample mod used by all test suites. */
 export const SAMPLE_ROOT = path.resolve(__dirname, '../sample');
 
-export async function activate() {
+export async function activate(): Promise<CwtoolsApi | undefined> {
   const ext = vscode.extensions.getExtension(EXTENSION_ID)!;
   try {
     await ext.activate();
-    return ext.exports;
+    return ext.exports as CwtoolsApi | undefined;
   } catch (error) {
     // Extension activation might fail due to missing language server in test environment
     // But we can still test other aspects of the extension
     console.warn('Extension activation had issues (expected in test environment):', error);
-    return ext.exports;
+    return ext.exports as CwtoolsApi | undefined;
   }
 }
 
@@ -35,7 +35,7 @@ export async function activate() {
  * The import below is type-only, so it is erased and loads nothing at runtime.
  */
 export async function graphPanelModule(): Promise<typeof GraphPanelNamespace> {
-  const api = await activate() as CwtoolsApi | undefined;
+  const api = await activate();
   if (!api?.graphPanel) {
     throw new Error('extension activated without exporting its API; cannot reach GraphPanel');
   }
@@ -49,7 +49,7 @@ export async function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export async function retryAsync(fn: () => Promise<boolean>, maxRetries = 3, delayMs = 500): Promise<boolean> {
+export async function retryAsync(fn: () => boolean | Promise<boolean>, maxRetries = 3, delayMs = 500): Promise<boolean> {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const result = await fn();

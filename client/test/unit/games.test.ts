@@ -55,7 +55,7 @@ suite("games — derived maps match the pre-consolidation literals", () => {
 });
 
 suite("games — hint ordering fix", () => {
-	const noopExists = async () => false;
+	const noopExists = () => false;
 
 	test("3-suffixed games are ordered before their 2-suffixed prefixes", () => {
 		const order = GAMES.map(g => g.id);

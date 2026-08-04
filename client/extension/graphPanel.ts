@@ -14,6 +14,13 @@ export enum State {
 type GraphMessage =
     | { command: 'importJson'; json: string; settings: { wheelSensitivity: number } }
     | { command: 'go'; data: GraphData; settings: { wheelSensitivity: number } };
+
+type WebviewMessage =
+    | { command: 'goToFile'; uri: string; line: number; column: number }
+    | { command: 'saveImage'; image: string }
+    | { command: 'saveJson'; json: string }
+    | { command: 'ready' }
+    | { command: 'cytoscapeRenderedResult'; rendered: boolean };
 export class GraphPanel {
 
     /**
@@ -26,7 +33,7 @@ export class GraphPanel {
     private pendingMessage: GraphMessage | null = null;
 
     // Methods for testing
-    public async getState(): Promise<State> {
+    public getState(): State {
         return this._state;
     }
     private pendingRequest : ((data: boolean) => void) | null = null
@@ -84,7 +91,7 @@ export class GraphPanel {
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
         // Handle messages from the webview
-        this._disposables.push((this._panel.webview.onDidReceiveMessage(async message => {
+        this._disposables.push((this._panel.webview.onDidReceiveMessage(async (message: WebviewMessage) => {
             try {
                 switch (message.command) {
                     case 'goToFile':
@@ -130,7 +137,7 @@ export class GraphPanel {
                             if(this.pendingRequest !== null){
                                 const resolve = this.pendingRequest;
                                 this.pendingRequest = null;
-                                resolve(message.rendered as boolean); // Use 'rendered' property from webview response
+                                resolve(message.rendered); // Use 'rendered' property from webview response
                             }
                             return;
                         }
@@ -224,7 +231,7 @@ export class GraphPanel {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
    <meta http-equiv="Content-Security-Policy" content="default-src 'nonce-${nonce}'; img-src ${cspSource} https: data:; script-src 'nonce-${nonce}' 'strict-dynamic'; base-uri 'self'; object-src 'none'; style-src ${cspSource} 'unsafe-inline'">
-           <link href="${styleUri}" rel="stylesheet" type="text/css" nonce="${nonce}" />
+           <link href="${styleUri.toString()}" rel="stylesheet" type="text/css" nonce="${nonce}" />
     </head>
 <body>
     <div class="vbox viewport body-content">
@@ -233,7 +240,7 @@ export class GraphPanel {
     <div class="cy-row" id="cy"></div>
 </div>
 
-         <script src="${scriptUri}" nonce="${nonce}"></script>
+         <script src="${scriptUri.toString()}" nonce="${nonce}"></script>
 </div>
 </body>
 </html>
