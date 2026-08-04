@@ -286,7 +286,7 @@ suite("engine — resolveRulesFolder", () => {
 			"best-effort path must be defined so the caller can warn",
 		);
 		assert.ok(
-			!r.path!.includes('"'),
+			!r.path.includes('"'),
 			"best-effort path should be trimmed of quotes",
 		);
 	});
