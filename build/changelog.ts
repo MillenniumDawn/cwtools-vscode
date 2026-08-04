@@ -27,3 +27,13 @@ export function changelogNotes(changelog: string, version: string): string {
 	}
 	return body.join('\n').trim();
 }
+
+// The release notes for `version`, failing when the CHANGELOG has no matching
+// section so a tag can't silently ship auto-generated notes.
+export function releaseNotes(changelog: string, version: string): string {
+	const notes = changelogNotes(changelog, version);
+	if (!notes) {
+		throw new Error(`no CHANGELOG section for version ${version}; refusing to publish a release with auto-generated notes`);
+	}
+	return notes;
+}

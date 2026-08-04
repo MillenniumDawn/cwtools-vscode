@@ -2,7 +2,7 @@
   "scripts": {
     "build": "tsx build/build.ts",
     "compile": "tsc -p ./tsconfig.extension.json && tsx build/esbuild.ts",
-    "typecheck": "tsc -p ./tsconfig.json --noEmit",
+    "typecheck": "tsc -p ./tsconfig.json --noEmit && tsc -p ./tsconfig.build.json --noEmit",
     "lint": "eslint .",
     "check": "npm run typecheck && npm run lint",
     "test": "npm run compile && vscode-test --label unit",

@@ -62,7 +62,13 @@ const cell = (m: Metric) => `${light(m?.pct)} ${num(m)}`;
 const row = (name: string, m: FileCoverage) =>
 	`| ${name} | ${cell(m.lines)} | ${cell(m.statements)} | ${cell(m.branches)} | ${cell(m.functions)} |`;
 
-const metrics = ['lines', 'statements', 'branches', 'functions'] as const;
+// Sum a metric across every source file, returning the worst-case 100% for an
+// empty set.
+function aggregate(files: string[], data: Summary, metric: keyof FileCoverage): Metric {
+	const covered = files.reduce((n, f) => n + (data[f][metric].covered ?? 0), 0);
+	const total = files.reduce((n, f) => n + (data[f][metric].total ?? 0), 0);
+	return { covered, total, pct: total ? (100 * covered) / total : 100 };
+}
 
 function renderSection(source: Source): string[] {
 	let data: Summary;
@@ -88,13 +94,12 @@ function renderSection(source: Source): string[] {
 		.filter(isSource)
 		.sort((a, b) => (data[a].lines.pct ?? 0) - (data[b].lines.pct ?? 0));
 
-	const t: FileCoverage = Object.fromEntries(
-		metrics.map((m) => {
-			const covered = files.reduce((n, f) => n + (data[f][m].covered ?? 0), 0);
-			const total = files.reduce((n, f) => n + (data[f][m].total ?? 0), 0);
-			return [m, { covered, total, pct: total ? (100 * covered) / total : 100 }];
-		}),
-	) as FileCoverage;
+	const t: FileCoverage = {
+		lines: aggregate(files, data, 'lines'),
+		statements: aggregate(files, data, 'statements'),
+		branches: aggregate(files, data, 'branches'),
+		functions: aggregate(files, data, 'functions'),
+	};
 	const headline = `${light(t.lines.pct)} **${num(t.lines)}% lines** · ${num(t.functions)}% functions · ${num(t.branches)}% branches`;
 
 	return [

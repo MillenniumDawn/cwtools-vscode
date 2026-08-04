@@ -20,7 +20,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { changelogNotes as sectionNotes, topChangelogVersion as latestVersion } from './changelog';
+import { releaseNotes as requireNotes, topChangelogVersion as latestVersion } from './changelog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const releaseDir = path.join(repoRoot, 'release');
@@ -235,13 +235,14 @@ function topChangelogVersion(): string {
 }
 
 // The CHANGELOG section body for `version`, used as the GitHub release notes.
-function changelogNotes(version: string): string {
-	return sectionNotes(fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8'), version);
-}
-
 function setReleaseVersion(version: string): void {
 	const manifestPath = path.join(releaseDir, 'package.json');
-	const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+	let manifest: { version: string };
+	try {
+		manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+	} catch (e) {
+		throw new Error(`could not parse ${manifestPath}: ${e instanceof Error ? e.message : String(e)}`, { cause: e });
+	}
 	manifest.version = version;
 	fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 	console.log(`set release/package.json version to ${version}`);
@@ -251,12 +252,7 @@ function setReleaseVersion(version: string): void {
 // CLI. If a release with the same tag already exists (e.g. from a previous
 // failed run), delete it first so the workflow is idempotent.
 function publishGithubRelease(tag: string, version: string, preRelease: boolean, vsixes: string[]): void {
-	const notes = changelogNotes(version);
-	if (!notes) {
-		// A tag release must ship the curated CHANGELOG notes, not generic
-		// auto-generated ones. Fail rather than silently degrading.
-		throw new Error(`no CHANGELOG section for version ${version}; refusing to publish a release with auto-generated notes`);
-	}
+	const notes = requireNotes(fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8'), version);
 	const f = path.join(tempDir, 'release-notes.md');
 	fs.writeFileSync(f, notes);
 	const notesArgs = ['--notes-file', f];

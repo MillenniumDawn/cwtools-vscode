@@ -1,6 +1,6 @@
 import { suite, test } from "vitest";
 import * as assert from "node:assert";
-import { changelogNotes, topChangelogVersion } from "./changelog";
+import { changelogNotes, releaseNotes, topChangelogVersion } from "./changelog";
 
 const threeReleases = `### Unreleased
 
@@ -79,5 +79,26 @@ suite("topChangelogVersion", () => {
 
 	test("throws when there is no version heading", () => {
 		assert.throws(() => topChangelogVersion("# Title\n\nBody only.\n"), /could not find a version heading/);
+	});
+});
+
+suite("releaseNotes", () => {
+	test("returns the section body for a present version", () => {
+		assert.strictEqual(
+			releaseNotes(threeReleases, "2.5.0"),
+			"* Added the widget.\n* Fixed the flange.",
+		);
+	});
+
+	test("throws instead of returning empty notes for a missing version", () => {
+		assert.throws(
+			() => releaseNotes(threeReleases, "9.9.9"),
+			/refusing to publish a release with auto-generated notes/,
+		);
+	});
+
+	test("throws for an empty section body too", () => {
+		const changelog = "### 1.0.0\n\n### 2.0.0\n\n* Two.\n";
+		assert.throws(() => releaseNotes(changelog, "1.0.0"));
 	});
 });
