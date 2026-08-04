@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { changelogNotes as sectionNotes, topChangelogVersion as latestVersion } from './changelog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const releaseDir = path.join(repoRoot, 'release');
@@ -230,29 +231,12 @@ function resolveVersion(): { version: string; tag: string; preRelease: boolean }
 
 // First "## [x.y.z]" (or "## x.y.z") heading in CHANGELOG.md.
 function topChangelogVersion(): string {
-	const changelog = fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
-	const m = changelog.match(/^#+\s*\[?v?(\d+\.\d+\.\d+[^\]\s]*)\]?/m);
-	if (!m) throw new Error('could not find a version heading in CHANGELOG.md');
-	return m[1];
+	return latestVersion(fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8'));
 }
 
 // The CHANGELOG section body for `version`, used as the GitHub release notes.
 function changelogNotes(version: string): string {
-	const changelog = fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
-	const lines = changelog.split('\n');
-	const headingRe = /^#+\s*\[?v?(\d+\.\d+\.\d+[^\]\s]*)\]?/;
-	let start = -1;
-	for (let i = 0; i < lines.length; i++) {
-		const m = lines[i].match(headingRe);
-		if (m && m[1] === version) { start = i + 1; break; }
-	}
-	if (start === -1) return '';
-	const body: string[] = [];
-	for (let i = start; i < lines.length; i++) {
-		if (headingRe.test(lines[i])) break;
-		body.push(lines[i]);
-	}
-	return body.join('\n').trim();
+	return sectionNotes(fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8'), version);
 }
 
 function setReleaseVersion(version: string): void {

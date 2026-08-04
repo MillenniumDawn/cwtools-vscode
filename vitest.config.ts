@@ -7,11 +7,12 @@ import { fileURLToPath } from "node:url";
 // executable.ts; the host run excludes them so the two reports stay disjoint.
 export default defineConfig({
 	test: {
-		include: ["client/test/unit/**/*.test.ts"],
+		include: ["client/test/unit/**/*.test.ts", "build/**/*.test.ts"],
 		environment: "node",
 		coverage: {
 			provider: "v8",
 			include: [
+				"build/changelog.ts",
 				"client/extension/diagnosticsSignature.ts",
 				"client/extension/engine.ts",
 				"client/extension/executable.ts",
