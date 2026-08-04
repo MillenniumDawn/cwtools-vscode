@@ -75,7 +75,10 @@ suite("manifest — command registration", () => {
 		};
 		for (const [id, key] of Object.entries(gated)) {
 			const entry = palette.find((e) => e.command === id);
-			assert.ok(entry, `${id} has no commandPalette entry, so it shows unconditionally`);
+			assert.ok(
+				entry,
+				`${id} has no commandPalette entry, so it shows unconditionally`,
+			);
 			assert.match(
 				entry.when ?? "",
 				new RegExp(key),

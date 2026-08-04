@@ -9,11 +9,17 @@ import {
 
 suite("graphAvailability", () => {
 	test("available when the server advertises the command", () => {
-		assert.strictEqual(graphDataAvailable(["getFileTypes", GRAPH_DATA_COMMAND]), true);
+		assert.strictEqual(
+			graphDataAvailable(["getFileTypes", GRAPH_DATA_COMMAND]),
+			true,
+		);
 	});
 
 	test("unavailable when the server advertises other commands", () => {
-		assert.strictEqual(graphDataAvailable(["getFileTypes", "clearAllCaches"]), false);
+		assert.strictEqual(
+			graphDataAvailable(["getFileTypes", "clearAllCaches"]),
+			false,
+		);
 	});
 
 	test("unavailable when the server advertises nothing", () => {
@@ -27,11 +33,17 @@ suite("graphAvailability", () => {
 	});
 
 	test("fixAllWorkspace available when advertised", () => {
-		assert.strictEqual(fixAllWorkspaceAvailable(["getFileTypes", FIX_ALL_WORKSPACE_COMMAND]), true);
+		assert.strictEqual(
+			fixAllWorkspaceAvailable(["getFileTypes", FIX_ALL_WORKSPACE_COMMAND]),
+			true,
+		);
 	});
 
 	test("fixAllWorkspace unavailable otherwise", () => {
-		assert.strictEqual(fixAllWorkspaceAvailable(["getFileTypes", "clearAllCaches"]), false);
+		assert.strictEqual(
+			fixAllWorkspaceAvailable(["getFileTypes", "clearAllCaches"]),
+			false,
+		);
 		assert.strictEqual(fixAllWorkspaceAvailable([]), false);
 		assert.strictEqual(fixAllWorkspaceAvailable(undefined), false);
 	});

@@ -94,6 +94,39 @@ suite(`Debug Integration Test: `, function () {
 		}
 	});
 
+	describe("fixAllWorkspace gating", function () {
+		this.timeout(1 * 60 * 1000);
+
+		it("shows an upgrade warning instead of a protocol error on the pinned server", async function () {
+			await activate();
+			const sandbox = sinon.createSandbox();
+			const warn = sandbox.stub(vscode.window, "showWarningMessage");
+			const err = sandbox.stub(vscode.window, "showErrorMessage");
+			try {
+				// The pinned engine doesn't advertise the fixAllWorkspace command, so
+				// the handler must bail out with the friendly hint rather than send a
+				// request that fails as a raw protocol error. A future engine that
+				// advertises it will legitimately change this behaviour and fail this
+				// test, which is the point.
+				await vscode.commands.executeCommand("cwtools.fixAllWorkspace");
+			} finally {
+				sandbox.restore();
+			}
+			const warnings = warn.getCalls().map((c) => String(c.args[0]));
+			assert.ok(
+				warnings.some((m) =>
+					m.includes("doesn't support fixing the workspace"),
+				),
+				`expected an upgrade warning, got: ${warnings.join(" | ")}`,
+			);
+			assert.strictEqual(
+				err.called,
+				false,
+				"no raw protocol error should be surfaced",
+			);
+		});
+	});
+
 	describe("Diagnostics and Language Features", function () {
 		this.timeout(2 * 60 * 1000);
 
