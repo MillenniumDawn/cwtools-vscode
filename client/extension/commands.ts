@@ -4,10 +4,7 @@ import { workspace, window, commands } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
 import { getGraphData } from "../common/graphTypes";
-import {
-	graphDataAvailable,
-	fixAllWorkspaceAvailable,
-} from "./graphAvailability";
+import { graphDataAvailable, fixAllWorkspaceAvailable } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";
 import { errorMessage } from "./logger";
 
@@ -151,7 +148,7 @@ export function registerCommands(
 			if (!serverProvidesFixAll(client)) {
 				window.showWarningMessage(
 					"CWTools: this language server doesn't support fixing the workspace. " +
-						"Update the language server to enable it.",
+					"Update the language server to enable it.",
 				);
 				return;
 			}
