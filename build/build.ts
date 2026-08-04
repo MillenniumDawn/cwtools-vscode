@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { releaseNotes, topChangelogVersion } from './changelog';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const releaseDir = path.join(repoRoot, 'release');
@@ -223,41 +224,23 @@ function packageAllVsixes(): string[] {
 function resolveVersion(): { version: string; tag: string; preRelease: boolean } {
 	const isTagRelease = /^(1|true)$/i.test(process.env.TAG_RELEASE ?? '');
 	let tag = isTagRelease ? (process.env.GITHUB_REF_NAME ?? '').trim() : '';
-	if (!tag) tag = topChangelogVersion();
+	if (!tag) tag = topChangelogVersion(readChangelog());
 	const version = tag.replace(/^v/, '');
 	return { version, tag, preRelease: version.includes('-') };
 }
 
-// First "## [x.y.z]" (or "## x.y.z") heading in CHANGELOG.md.
-function topChangelogVersion(): string {
-	const changelog = fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
-	const m = changelog.match(/^#+\s*\[?v?(\d+\.\d+\.\d+[^\]\s]*)\]?/m);
-	if (!m) throw new Error('could not find a version heading in CHANGELOG.md');
-	return m[1];
-}
-
-// The CHANGELOG section body for `version`, used as the GitHub release notes.
-function changelogNotes(version: string): string {
-	const changelog = fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
-	const lines = changelog.split('\n');
-	const headingRe = /^#+\s*\[?v?(\d+\.\d+\.\d+[^\]\s]*)\]?/;
-	let start = -1;
-	for (let i = 0; i < lines.length; i++) {
-		const m = lines[i].match(headingRe);
-		if (m && m[1] === version) { start = i + 1; break; }
-	}
-	if (start === -1) return '';
-	const body: string[] = [];
-	for (let i = start; i < lines.length; i++) {
-		if (headingRe.test(lines[i])) break;
-		body.push(lines[i]);
-	}
-	return body.join('\n').trim();
+function readChangelog(): string {
+	return fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
 }
 
 function setReleaseVersion(version: string): void {
 	const manifestPath = path.join(releaseDir, 'package.json');
-	const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+	let manifest: { version: string };
+	try {
+		manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+	} catch (e) {
+		throw new Error(`could not parse ${manifestPath}`, { cause: e });
+	}
 	manifest.version = version;
 	fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 	console.log(`set release/package.json version to ${version}`);
@@ -265,16 +248,12 @@ function setReleaseVersion(version: string): void {
 
 // Draft and publish the GitHub release with every vsix attached, via the gh
 // CLI. If a release with the same tag already exists (e.g. from a previous
-// failed run), delete it first so the workflow is idempotent.
+// failed run), delete it first so the workflow is idempotent. Throws before
+// touching the release when the CHANGELOG has no section for this version.
 function publishGithubRelease(tag: string, version: string, preRelease: boolean, vsixes: string[]): void {
-	const notes = changelogNotes(version);
-	const notesArgs = notes
-		? (() => {
-			const f = path.join(tempDir, 'release-notes.md');
-			fs.writeFileSync(f, notes);
-			return ['--notes-file', f];
-		})()
-		: ['--generate-notes'];
+	const notes = releaseNotes(readChangelog(), version);
+	const notesFile = path.join(tempDir, 'release-notes.md');
+	fs.writeFileSync(notesFile, notes);
 
 	// If the release already exists (e.g. retried workflow), remove it first.
 	if (runOrNull('gh', ['release', 'view', tag]) === 0) {
@@ -282,7 +261,7 @@ function publishGithubRelease(tag: string, version: string, preRelease: boolean,
 		run('gh', ['release', 'delete', tag, '--yes']);
 	}
 
-	const args = ['release', 'create', tag, ...vsixes, '--title', tag, ...notesArgs];
+	const args = ['release', 'create', tag, ...vsixes, '--title', tag, '--notes-file', notesFile];
 	if (preRelease) args.push('--prerelease');
 	run('gh', args);
 }
@@ -351,7 +330,11 @@ function cmdReleasePrebuilt(): void {
 }
 
 function cmdRelease(): void {
-	const { tag } = resolveVersion();
+	const { version, tag } = resolveVersion();
+	// The notes guard sits in publishGithubRelease, which is only reached after
+	// the build. Check it here so a missing CHANGELOG section can't leave a
+	// pushed tag behind.
+	releaseNotes(readChangelog(), version);
 	run('git', ['tag', tag]);
 	run('git', ['push', 'origin', tag]);
 	cmdReleasePrebuilt();
