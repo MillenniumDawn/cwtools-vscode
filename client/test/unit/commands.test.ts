@@ -58,22 +58,28 @@ suite("manifest — command registration", () => {
 		);
 	});
 
-	// The graph commands go through the server's getGraphData. The gate reads the
-	// running server's advertised capabilities, not what the newest engine can do,
-	// so it still matters after the command lands: someone on an older server
-	// still needs them hidden rather than dead-ending in "command not found".
+	// The graph commands go through the server's getGraphData, and the workspace
+	// auto-fix runs the server's fixAllWorkspace. Each gate reads the running
+	// server's advertised capabilities, not what the newest engine can do, so it
+	// still matters after the command lands: someone on an older server still
+	// needs them hidden rather than dead-ending in "command not found".
 	// Asserted unconditionally — an earlier version skipped the whole check once
-	// getGraphData was known, which made it pass without testing anything.
-	test("graph commands are gated on cwtoolsGraphAvailable", () => {
+	// the command was known, which made it pass without testing anything.
+	test("capability-gated commands are gated in the palette", () => {
 		const palette: Array<{ command: string; when?: string }> =
 			manifest.contributes.menus?.commandPalette ?? [];
-		for (const id of ["cwtools.showGraph", "cwtools.setGraphDepth"]) {
+		const gated: Record<string, string> = {
+			"cwtools.showGraph": "cwtoolsGraphAvailable",
+			"cwtools.setGraphDepth": "cwtoolsGraphAvailable",
+			"cwtools.fixAllWorkspace": "cwtoolsFixAllAvailable",
+		};
+		for (const [id, key] of Object.entries(gated)) {
 			const entry = palette.find((e) => e.command === id);
 			assert.ok(entry, `${id} has no commandPalette entry, so it shows unconditionally`);
 			assert.match(
 				entry.when ?? "",
-				/cwtoolsGraphAvailable/,
-				`${id} is not gated on cwtoolsGraphAvailable`,
+				new RegExp(key),
+				`${id} is not gated on ${key}`,
 			);
 		}
 	});

@@ -94,6 +94,10 @@
         {
           "command": "cwtools.setGraphDepth",
           "when": "cwtoolsGraphAvailable"
+        },
+        {
+          "command": "cwtools.fixAllWorkspace",
+          "when": "cwtoolsFixAllAvailable"
         }
       ]
     },
