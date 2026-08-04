@@ -21,7 +21,7 @@ suite("games — table shape", () => {
 	});
 
 	test("ids are unique", () => {
-		assert.strictEqual(new Set(GAMES.map(g => g.id)).size, GAMES.length);
+		assert.strictEqual(new Set(GAMES.map((g) => g.id)).size, GAMES.length);
 	});
 });
 
@@ -41,16 +41,22 @@ suite("games — derived maps match the pre-consolidation literals", () => {
 	});
 
 	test("CONTENT_HINTS covers the same markers", () => {
-		assert.deepStrictEqual(new Map(CONTENT_HINTS), new Map([
-			["common/ai_strategy", "hoi4"],
-			["common/species_classes", "stellaris"],
-			["common/great_projects", "eu4"],
-			["common/dynasties", "ck3"],
-		]));
+		assert.deepStrictEqual(
+			new Map(CONTENT_HINTS),
+			new Map([
+				["common/ai_strategy", "hoi4"],
+				["common/species_classes", "stellaris"],
+				["common/great_projects", "eu4"],
+				["common/dynasties", "ck3"],
+			]),
+		);
 	});
 
 	test("FOLDER_HINTS has one hint per game", () => {
-		assert.deepStrictEqual(FOLDER_HINTS.map(([, id]) => id), GAMES.map(g => g.id));
+		assert.deepStrictEqual(
+			FOLDER_HINTS.map(([, id]) => id),
+			GAMES.map((g) => g.id),
+		);
 	});
 });
 
@@ -58,21 +64,33 @@ suite("games — hint ordering fix", () => {
 	const noopExists = () => false;
 
 	test("3-suffixed games are ordered before their 2-suffixed prefixes", () => {
-		const order = GAMES.map(g => g.id);
+		const order = GAMES.map((g) => g.id);
 		assert.ok(order.indexOf("ck3") < order.indexOf("ck2"));
 		assert.ok(order.indexOf("vic3") < order.indexOf("vic2"));
 	});
 
 	test("a Crusader Kings III folder detects as ck3, not ck2", async () => {
-		assert.strictEqual(await detectFromFolder("/x/Crusader Kings III", noopExists), "ck3");
+		assert.strictEqual(
+			await detectFromFolder("/x/Crusader Kings III", noopExists),
+			"ck3",
+		);
 	});
 
 	test("a Victoria III folder detects as vic3, not vic2", async () => {
-		assert.strictEqual(await detectFromFolder("/x/Victoria III", noopExists), "vic3");
+		assert.strictEqual(
+			await detectFromFolder("/x/Victoria III", noopExists),
+			"vic3",
+		);
 	});
 
 	test("ck2 and vic2 folders still detect correctly", async () => {
-		assert.strictEqual(await detectFromFolder("/x/Crusader Kings II", noopExists), "ck2");
-		assert.strictEqual(await detectFromFolder("/x/Victoria II", noopExists), "vic2");
+		assert.strictEqual(
+			await detectFromFolder("/x/Crusader Kings II", noopExists),
+			"ck2",
+		);
+		assert.strictEqual(
+			await detectFromFolder("/x/Victoria II", noopExists),
+			"vic2",
+		);
 	});
 });

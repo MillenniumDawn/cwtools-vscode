@@ -122,8 +122,7 @@ suite("paradox grammar — keyword word lists (#112)", () => {
 		]) {
 			assert.deepStrictEqual(
 				(byName.get(bucket) ?? []).filter(
-					(w) =>
-						/^(any|count|every|random)_/.test(w) && w !== "random_list",
+					(w) => /^(any|count|every|random)_/.test(w) && w !== "random_list",
 				),
 				[],
 				bucket,
