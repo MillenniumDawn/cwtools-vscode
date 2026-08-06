@@ -126,7 +126,10 @@ export class FilesProvider
 		const stack = [...this._tree.children];
 		while (stack.length > 0) {
 			const node = stack.pop()!;
-			if (!node.isDirectory && vscode.Uri.parse(node.uri).toString() === target) {
+			if (
+				!node.isDirectory &&
+				vscode.Uri.parse(node.uri).toString() === target
+			) {
 				return node;
 			}
 			stack.push(...node.children);
@@ -161,11 +164,14 @@ export class FileExplorer implements vscode.Disposable {
 			),
 		);
 		context.subscriptions.push(
-			vscode.commands.registerCommand(
-				"cwtools-files.revealActiveFile",
-				() => this.revealActiveFile(),
+			vscode.commands.registerCommand("cwtools-files.revealActiveFile", () =>
+				this.revealActiveFile(),
 			),
 		);
+		// The view/title button is gated on this key so it can't be clicked before
+		// the command above is registered (the view itself appears at activation,
+		// before the server sends its first file list).
+		void vscode.commands.executeCommand("setContext", "cwtoolsFilesLoaded", true);
 	}
 
 	private revealActiveFile(): void {

@@ -66,7 +66,7 @@
     "menus": {
       "view/title": [
         {
-          "when": "view == cwtools-files",
+          "when": "view == cwtools-files && cwtoolsFilesLoaded",
           "command": "cwtools-files.revealActiveFile",
           "group": "navigation"
         }
