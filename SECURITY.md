@@ -16,4 +16,4 @@ This is a hobby project, so response times are best effort. If the report holds 
 
 This repo is the VS Code extension: the TypeScript client, the build, and packaging. The language server is Rust and lives in [MillenniumDawn/cwtools](https://github.com/MillenniumDawn/cwtools). Report server bugs there.
 
-The extension parses untrusted mod files and clones a rules repository over the network, so parser crashes, escaping the workspace directory, and anything that gets code executing from a mod file are all worth reporting.
+The extension parses untrusted mod files and fetches a pinned rules commit over the network, so parser crashes, escaping the workspace directory, and anything that gets code executing from a mod file are all worth reporting. The rules pins live in [`client/extension/games.ts`](client/extension/games.ts) and only move through a reviewed PR, so an upstream rules repo can't push content into an install on its own.

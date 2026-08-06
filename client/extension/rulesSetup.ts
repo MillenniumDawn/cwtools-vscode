@@ -4,7 +4,13 @@ import * as fsPromises from "fs/promises";
 import { workspace, window, ProgressLocation } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
-import { LANGUAGE_REPOS, resolveRulesFolder, runGit } from "./engine";
+import {
+	LANGUAGE_REPOS,
+	resolveRulesFolder,
+	runGit,
+	rulesFetchCommands,
+} from "./engine";
+import type { RulesRepo } from "./engine";
 import { logInfo, logWarn, logError, errorMessage } from "./logger";
 
 export interface RulesSetup {
@@ -18,13 +24,13 @@ export async function resolveRulesCache(
 	language: string,
 	cacheDir: string,
 ): Promise<RulesSetup> {
-	const repoPath = LANGUAGE_REPOS[language];
-	if (!repoPath) {
+	const rules = LANGUAGE_REPOS[language];
+	if (!rules) {
 		logWarn(
 			`No config repository for language "${language}"; rule cloning skipped.`,
 		);
 	}
-	logInfo(`${language} ${repoPath || "(no remote)"}`);
+	logInfo(`${language} ${rules ? `${rules.repo}@${rules.ref}` : "(no remote)"}`);
 
 	await fsPromises.mkdir(cacheDir, { recursive: true });
 	const languageRulesCache = path.join(cacheDir, language);
@@ -52,12 +58,12 @@ export async function resolveRulesCache(
 	}
 	return {
 		rulesCache: effectiveRulesCache,
-		fetchUpstream: !manualRules.existed && !!repoPath,
+		fetchUpstream: !manualRules.existed && !!rules,
 	};
 }
 
-// Clone/pull the rules repo in the background. The server starts without the
-// rules (it tolerates a missing/empty rules dir) and we signal it to reload
+// Fetch the pinned rules commit in the background. The server starts without
+// the rules (it tolerates a missing/empty rules dir) and we signal it to reload
 // once the fetch lands, so activation is never stalled on the network.
 export function fetchRulesInBackground(
 	language: string,
@@ -65,32 +71,55 @@ export function fetchRulesInBackground(
 	client: LanguageClient,
 	initialScanDone: Promise<void>,
 ): void {
-	const repoPath = LANGUAGE_REPOS[language];
-	if (!repoPath) {
+	const rules = LANGUAGE_REPOS[language];
+	if (!rules) {
 		return;
 	}
+	void syncPinnedRules(rules, language, cacheDir, client, initialScanDone).catch(
+		(err: unknown) => logError(`Rule fetch failed for ${language}`, err),
+	);
+}
+
+// The commit the cached rules sit on, or null when there's nothing usable
+// there, including a half-written clone that the next fetch rebuilds.
+async function currentRulesHead(dir: string): Promise<string | null> {
+	if (!fsExistsSync(path.join(dir, ".git"))) {
+		return null;
+	}
+	try {
+		return (await runGit(["-C", dir, "rev-parse", "HEAD"])).trim();
+	} catch {
+		return null;
+	}
+}
+
+async function syncPinnedRules(
+	rules: RulesRepo,
+	language: string,
+	cacheDir: string,
+	client: LanguageClient,
+	initialScanDone: Promise<void>,
+): Promise<void> {
 	const languageRulesCache = path.join(cacheDir, language);
-	const gitDir = path.join(languageRulesCache, ".git");
-	const isInitialClone = !fsExistsSync(gitDir);
-	void window.withProgress(
+	const head = await currentRulesHead(languageRulesCache);
+	const commands = rulesFetchCommands(languageRulesCache, rules, head);
+	if (commands.length === 0) {
+		logInfo(`${language} rules already at ${rules.ref}.`);
+		return;
+	}
+	const isInitialClone = head === null;
+	await window.withProgress(
 		{
 			location: ProgressLocation.Window,
 			title: `CWTools: updating ${language} rules`,
 		},
 		async () => {
 			try {
-				if (isInitialClone) {
-					logInfo(`Cloning rules from ${repoPath} into ${languageRulesCache}`);
-					await runGit(["clone", "--depth", "1", repoPath, languageRulesCache]);
-				} else {
-					logInfo(`Fetching latest rules for ${language} ...`);
-					await runGit([
-						"-C",
-						languageRulesCache,
-						"pull",
-						"--depth=1",
-						"--ff-only",
-					]);
+				logInfo(
+					`Fetching ${language} rules ${rules.ref} from ${rules.repo} into ${languageRulesCache}`,
+				);
+				for (const args of commands) {
+					await runGit(args);
 				}
 				await initialScanDone;
 				// Rules are now on disk; tell the (already running) server to
@@ -107,8 +136,8 @@ export function fetchRulesInBackground(
 				const msg = errorMessage(err);
 				logError(`Rule fetch failed for ${language}`, msg);
 				// A failed initial clone leaves the extension with no rules at all, so
-				// warn loudly. A failed pull (rules already present) is only a stale
-				// offline refresh and stays log-only.
+				// warn loudly. A failed bump (rules already present) just keeps the
+				// previous pin and stays log-only.
 				if (isInitialClone) {
 					void window.showWarningMessage(
 						`CWTools: failed to download the ${language} rules (${msg}). Validation will be limited until they can be fetched; check your network and reload the window.`,

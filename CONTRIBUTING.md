@@ -54,6 +54,26 @@ single merged `paradox.tmLanguage.json` with each game's keywords folded in, so
 re-vendoring means merging the upstream per-game grammars into it rather than
 copying them across.
 
+## Rules pins
+
+Each game in `client/extension/games.ts` names its rules repo and the exact
+commit the extension fetches (`repoRef`). Nothing tracks a branch: a fresh
+cache is a `git init` plus a shallow fetch of that one commit, and a cache
+already holding the pin is left alone. An upstream push therefore reaches users
+only once someone bumps a pin here and ships a release.
+
+Refresh the pins with:
+
+```bash
+npx tsx build/rulesPins.ts
+```
+
+It reads each repo's default branch head and rewrites the pin and its date.
+[`rules-pins.yml`](.github/workflows/rules-pins.yml) runs the same script weekly
+and opens a PR with a compare link for everything that moved. Read those diffs
+before merging: the commit you approve is what every install downloads. Nothing
+auto-merges here, unlike the engine submodule bump.
+
 ## Running and debugging
 
 Open the repo in VS Code and launch **Quick update, Build and Launch Extension** (or the Debug variant) from the Run panel. That builds and opens an Extension Development Host with the extension loaded. Point it at a mod folder under a game directory to see validation.
