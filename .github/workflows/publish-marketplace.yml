@@ -22,44 +22,49 @@ concurrency:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - uses: ./.github/actions/setup-node-npm
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        # v7.0.1
+      - uses: ./.github/actions/setup-node-npm
 
-    # Download the vsix asset from the specified GitHub release.
-    - name: Download vsix from release
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Via env, not inline: an inline ${{ }} is a shell injection sink.
-        TAG: ${{ inputs.tag }}
-        REPO: ${{ github.repository }}
-      run: |
-        # An empty tag makes gh fetch the latest release, not fail.
-        [ -n "$TAG" ] || { echo "::error::tag input is empty"; exit 1; }
-        gh release download "$TAG" \
-          --repo "$REPO" \
-          --pattern "*.vsix" \
-          --dir vsix-artifacts
-        echo "Downloaded vsix:"
-        ls -la vsix-artifacts/
+      # Download the vsix asset from the specified GitHub release.
+      - name: Download vsix from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Via env, not inline: an inline ${{ }} is a shell injection sink.
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          # An empty tag makes gh fetch the latest release, not fail.
+          [ -n "$TAG" ] || { echo "::error::tag input is empty"; exit 1; }
+          gh release download "$TAG" \
+            --repo "$REPO" \
+            --pattern "*.vsix" \
+            --dir vsix-artifacts
+          echo "Downloaded vsix:"
+          find vsix-artifacts -maxdepth 1 -type f -print
 
-    - name: Publish to VS Code Marketplace
-      if: ${{ inputs.dry-run == false }}
-      env:
-        VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
-      run: |
-        if [ -z "$VSCE_TOKEN" ]; then
-          echo "::error::VSCE_TOKEN secret is not set. Add it to the repository secrets."
-          exit 1
-        fi
-        vsix=$(ls vsix-artifacts/*.vsix | head -1)
-        npx @vscode/vsce publish --pat "$VSCE_TOKEN" --packagePath "$vsix"
+      - name: Publish to VS Code Marketplace
+        if: ${{ inputs.dry-run == false }}
+        env:
+          VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
+        run: |
+          if [ -z "$VSCE_TOKEN" ]; then
+            error="VSCE_TOKEN secret is not set."
+            echo "::error::$error Add it to the repository secrets."
+            exit 1
+          fi
+          vsix=$(find vsix-artifacts -maxdepth 1 -type f \
+            -name '*.vsix' -print | sort | head -n 1)
+          npx @vscode/vsce publish --pat "$VSCE_TOKEN" --packagePath "$vsix"
 
-    - name: Dry run (validate only)
-      if: ${{ inputs.dry-run == true }}
-      run: |
-        vsix=$(ls vsix-artifacts/*.vsix | head -1)
-        echo "Dry run — would publish: $vsix"
-        npx @vscode/vsce ls-publish --pat dummy --packagePath "$vsix" || true
-        echo "Dry run complete. No changes published."
+      - name: Dry run (validate only)
+        if: ${{ inputs.dry-run == true }}
+        run: |
+          vsix=$(find vsix-artifacts -maxdepth 1 -type f \
+            -name '*.vsix' -print | sort | head -n 1)
+          echo "Dry run — would publish: $vsix"
+          npx @vscode/vsce ls-publish --pat dummy --packagePath "$vsix" || true
+          echo "Dry run complete. No changes published."
