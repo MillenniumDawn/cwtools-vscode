@@ -31,6 +31,11 @@ const SERVER_COMMANDS = new Set([
 	"getGraphData",
 ]);
 
+// Built-in VS Code commands the manifest references in menus (declared so the
+// extension host doesn't warn, hidden from the palette). They need no client
+// handler and aren't server-advertised.
+const BUILTIN_COMMANDS = new Set(["revealFileInOS", "copyFilePath"]);
+
 // Command IDs the client registers via registerCommand('...'), scanned from
 // source so the test tracks the code rather than a hand-kept list.
 function registeredClientCommands(): Set<string> {
@@ -54,7 +59,10 @@ suite("manifest — command registration", () => {
 	test("every contributed command is registered client-side or server-advertised", () => {
 		assert.ok(contributed.length > 0, "no commands contributed");
 		const orphans = contributed.filter(
-			(id) => !clientCommands.has(id) && !SERVER_COMMANDS.has(id),
+			(id) =>
+				!clientCommands.has(id) &&
+				!SERVER_COMMANDS.has(id) &&
+				!BUILTIN_COMMANDS.has(id),
 		);
 		assert.strictEqual(
 			orphans.length,
@@ -98,7 +106,10 @@ suite("manifest — command registration", () => {
 	// the manifest.
 	test("every client-registered command is namespaced under cwtools.", () => {
 		// View-id-prefixed tree-item command; the cwtools-files view id is the prefix.
-		const VIEW_SCOPED_COMMANDS = new Set(["cwtools-files.openFile"]);
+		const VIEW_SCOPED_COMMANDS = new Set([
+			"cwtools-files.openFile",
+			"cwtools-files.revealActiveFile",
+		]);
 		const bare = [...clientCommands].filter(
 			(id) =>
 				!id.startsWith("cwtools.") &&

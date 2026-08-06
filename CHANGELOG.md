@@ -1,5 +1,7 @@
 ### Unreleased
 
+* The **CWTools loaded files** tree is now navigable. It has a collapse-all button, and a file's context menu offers **Reveal in File Explorer** and **Copy Path** (both built-in commands that read the item's `resourceUri`). A new **Reveal active file in loaded-files tree** button in the view title finds the active editor's file and selects it, expanding its ancestors via a new `getParent` on the tree provider. (#147)
+
 * Release and Marketplace publishing jobs now have bounded runtimes, so a hung
   job cannot hold the release queue indefinitely. (#136)
 

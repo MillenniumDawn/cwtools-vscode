@@ -22,6 +22,7 @@
   // Adjust the depth of the displayed graph, which is how many links it follows outside the current file to other files
   "commands.setGraphDepth.title": "设置图深度",
   "commands.saveGraphJson.title": "将图保存为 JSON",
+  "commands.revealActiveFile.title": "在已加载文件树中显示活动文件",
   "configuration.title": "CWTools 配置",
   "configuration.title.localisation": "CWTools：本地化",
   "configuration.title.errors": "CWTools：错误与诊断",
