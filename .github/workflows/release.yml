@@ -1,9 +1,10 @@
-on:
+---
+"on":
   # Push a v* tag to build, package, and publish the release. workflow_dispatch
   # is a manual fallback.
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 name: Release
@@ -49,103 +50,122 @@ jobs:
             target: x86_64-apple-darwin
             bin: cwtools-server
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      ROOT: submodules/cwtools/cwtools-rs/target
     steps:
-    # The engine builds from the submodule gitlink, so one pinned pointer rules
-    # both local and CI builds.
-    - name: Checkout (with engine submodule)
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        submodules: recursive
-    # A release must bundle a tagged engine, not whatever commit the submodule
-    # happens to point at. Submodule checkouts don't fetch tags, so pull them
-    # first.
-    - name: Require a tagged engine
-      shell: bash
-      run: |
-        git -C submodules/cwtools fetch --tags --force --depth=1 origin
-        tag=$(git -C submodules/cwtools describe --tags --exact-match)
-        echo "Bundled engine tag: $tag"
-        echo "Bundled engine tag: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
-      with:
-        targets: ${{ matrix.target }}
-    - name: Cache Rust build
-      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      with:
-        workspaces: submodules/cwtools/cwtools-rs
-    - name: Build server
-      working-directory: submodules/cwtools/cwtools-rs
-      run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
-    - name: Upload binary
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: server-${{ matrix.platform }}
-        path: submodules/cwtools/cwtools-rs/target/${{ matrix.target }}/release/${{ matrix.bin }}
-        if-no-files-found: error
+      # The engine builds from the submodule gitlink. One pinned pointer
+      # rules both local and CI builds.
+      - name: Checkout (with engine submodule)
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+      # A release must bundle a tagged engine, not whatever commit the submodule
+      # happens to point at. Submodule checkouts don't fetch tags, so pull them
+      # first.
+      - name: Require a tagged engine
+        shell: bash
+        run: |
+          git -C submodules/cwtools fetch --tags --force --depth=1 origin
+          tag=$(git -C submodules/cwtools describe --tags --exact-match)
+          echo "Bundled engine tag: $tag"
+          echo "Bundled engine tag: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+      - name: Setup Rust
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache Rust build
+        # v2.9.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+        with:
+          workspaces: submodules/cwtools/cwtools-rs
+      - name: Build server
+        working-directory: submodules/cwtools/cwtools-rs
+        run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
+      - name: Upload binary
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: server-${{ matrix.platform }}
+          path: >-
+            ${{ env.ROOT }}/${{ matrix.target }}/release/${{ matrix.bin }}
+          if-no-files-found: error
 
   # Stage the binaries, package one vsix, and publish it.
   publish:
     needs: build-server
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Creating the GitHub release needs write access; GITHUB_TOKEN is read-only
     # by default.
     permissions:
       contents: write
-    # Job-level so step `if:`/`run:` blocks can read them (secrets aren't visible
-    # in step conditions).
+    # Job-level so step `if:` and `run:` blocks can read them. Secrets aren't
+    # visible in step conditions.
     env:
       OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
       VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
 
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        # workflow_dispatch has no head_ref; fall back to the dispatched branch.
-        ref: ${{ github.head_ref || github.ref_name }}
-    - name: Download server binaries
-      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-      with:
-        pattern: server-*
-        path: artifacts
-    - name: Stage binaries into release/
-      run: .github/scripts/stage-release-binaries.sh artifacts release
-    - uses: ./.github/actions/setup-node-npm
-    - name: Require Marketplace token on tagged releases
-      # Fail fast (before creating the GitHub release) when a real tag release
-      # is missing the Marketplace PAT, instead of silently skipping the publish.
-      if: ${{ startsWith(github.ref, 'refs/tags/') }}
-      run: |
-        if [ -z "$VSCE_TOKEN" ]; then
-          echo "::error::VSCE_TOKEN secret is not set; cannot publish a tagged release to the Marketplace."
-          exit 1
-        fi
-    # One vsix per platform plus a universal fallback. No clean, no server
-    # rebuild: the binaries are already staged under release/bin/server.
-    - name: Package vsix
-      env:
-        TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
-      run: npm run build -- package-prebuilt
-    # Checks every packaged vsix: the per-platform ones carry exactly their own
-    # binary, the universal fallback carries all of them. The platform list is
-    # passed explicitly so a silently shrunken build matrix fails here. Runs
-    # before the publish, so a broken package can't reach the Marketplace.
-    - name: Smoke test vsix
-      run: .github/scripts/smoke-test-vsix.sh temp linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
-    - name: Publish Release
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # VSCE_TOKEN is inherited from the job-level env (build.ts reads it).
-        # The version comes from the pushed tag; the build doesn't commit or
-        # re-tag.
-        TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
-      run: npm run build -- publish-prebuilt
-    - name: Publish to Open VSX Registry
-      # Skip cleanly when no Open VSX PAT is configured (GitHub release only).
-      if: ${{ env.OPEN_VSX_TOKEN != '' }}
-      uses: HaaLeo/publish-vscode-extension@ca5561daa085dee804bf9f37fe0165785a9b14db # v2.0.0
-      id: publishToOpenVSX
-      with:
-        packagePath: "./release"
-        pat: ${{ env.OPEN_VSX_TOKEN }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        # v7.0.1
+        with:
+          # workflow_dispatch has no head_ref; fall back to the
+          # dispatched branch.
+          ref: ${{ github.head_ref || github.ref_name }}
+      - name: Download server binaries
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: server-*
+          path: artifacts
+      - name: Stage binaries into release/
+        run: .github/scripts/stage-release-binaries.sh artifacts release
+      - uses: ./.github/actions/setup-node-npm
+      - name: Require Marketplace token on tagged releases
+        # Fail fast (before creating the GitHub release) when a real tag release
+        # is missing the Marketplace PAT, instead of silently skipping the
+        # publish.
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          if [ -z "$VSCE_TOKEN" ]; then
+            message="VSCE_TOKEN secret is not set; cannot publish"
+            echo "::error::$message a tagged release to the Marketplace."
+            exit 1
+          fi
+      # One vsix per platform plus a universal fallback. No clean, no server
+      # rebuild: the binaries are already staged under release/bin/server.
+      - name: Package vsix
+        env:
+          TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: npm run build -- package-prebuilt
+      # Checks every packaged vsix. The per-platform ones carry exactly their
+      # own binary, while the universal fallback carries all of them. The
+      # platform list is passed explicitly so a silently shrunken build matrix
+      # fails here. Runs before the publish, so a broken package can't reach the
+      # Marketplace.
+      - name: Smoke test vsix
+        run: |
+          .github/scripts/smoke-test-vsix.sh temp \
+            linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # VSCE_TOKEN is inherited from the job-level env (build.ts reads it).
+          # The version comes from the pushed tag; the build doesn't commit or
+          # re-tag.
+          TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: npm run build -- publish-prebuilt
+      - name: Publish to Open VSX Registry
+        # Skip cleanly when no Open VSX PAT is configured (GitHub release only).
+        if: ${{ env.OPEN_VSX_TOKEN != '' }}
+        # v2.0.0
+        uses: >-
+          HaaLeo/publish-vscode-extension@ca5561daa085dee804bf9f37fe0165785a9b14db
+        id: publishToOpenVSX
+        with:
+          packagePath: "./release"
+          pat: ${{ env.OPEN_VSX_TOKEN }}
