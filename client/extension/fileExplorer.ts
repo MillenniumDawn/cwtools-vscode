@@ -7,6 +7,7 @@ export interface TreeNode {
 	children: TreeNode[];
 	fileName: string;
 	uri: string;
+	parent?: TreeNode;
 }
 export interface FileListItem {
 	scope: string;
@@ -54,17 +55,25 @@ export function filesToTreeNodes(arr: FileListItem[]): TreeNode[] {
 		}
 	}
 
-	function convertToTreeNode(node: TreeNodeInternal): TreeNode {
-		return {
+	function convertToTreeNode(
+		node: TreeNodeInternal,
+		parent?: TreeNode,
+	): TreeNode {
+		const result: TreeNode = {
 			isDirectory: node.isDirectory ?? true,
 			fileName: node.fileName ?? "",
 			uri: node.uri ?? "",
-			children: Object.values(node.children).map(convertToTreeNode),
+			children: [],
+			parent,
 		};
+		result.children = Object.values(node.children).map((c) =>
+			convertToTreeNode(c, result),
+		);
+		return result;
 	}
 
 	arr.forEach(addnode);
-	return Object.values(tree).map(convertToTreeNode);
+	return Object.values(tree).map((n) => convertToTreeNode(n));
 }
 
 export class FilesProvider
@@ -109,6 +118,21 @@ export class FilesProvider
 	getChildren(element?: TreeNode): TreeNode[] {
 		return element ? element.children : this._tree.children;
 	}
+	getParent(element: TreeNode): TreeNode | undefined {
+		return element.parent;
+	}
+	findNodeByUri(uri: vscode.Uri): TreeNode | undefined {
+		const target = uri.toString();
+		const stack = [...this._tree.children];
+		while (stack.length > 0) {
+			const node = stack.pop()!;
+			if (!node.isDirectory && vscode.Uri.parse(node.uri).toString() === target) {
+				return node;
+			}
+			stack.push(...node.children);
+		}
+		return undefined;
+	}
 	refresh(files: FileListItem[]) {
 		this.parseTree(files);
 		this._onDidChangeTreeData.fire(null);
@@ -127,6 +151,7 @@ export class FileExplorer implements vscode.Disposable {
 		this.treeDataProvider = new FilesProvider(files);
 		this.fileExplorer = vscode.window.createTreeView("cwtools-files", {
 			treeDataProvider: this.treeDataProvider,
+			showCollapseAll: true,
 		});
 		context.subscriptions.push(this.fileExplorer);
 		context.subscriptions.push(
@@ -135,6 +160,23 @@ export class FileExplorer implements vscode.Disposable {
 				(resource: vscode.Uri) => this.openResource(resource),
 			),
 		);
+		context.subscriptions.push(
+			vscode.commands.registerCommand(
+				"cwtools-files.revealActiveFile",
+				() => this.revealActiveFile(),
+			),
+		);
+	}
+
+	private revealActiveFile(): void {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			return;
+		}
+		const node = this.treeDataProvider.findNodeByUri(editor.document.uri);
+		if (node) {
+			this.fileExplorer.reveal(node, { select: true, focus: true });
+		}
 	}
 
 	private openResource(resource: vscode.Uri): void {

@@ -64,6 +64,25 @@
       ]
     },
     "menus": {
+      "view/title": [
+        {
+          "when": "view == cwtools-files",
+          "command": "cwtools-files.revealActiveFile",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "when": "view == cwtools-files && viewItem == file",
+          "command": "revealFileInOS",
+          "group": "inline"
+        },
+        {
+          "when": "view == cwtools-files && viewItem == file",
+          "command": "copyFilePath",
+          "group": "inline"
+        }
+      ],
       "editor/title": [
         {
           "when": "cwtoolsGraphAvailable && cwtoolsGraphFile == true && cwtoolsWebview == false",
@@ -87,6 +106,14 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "revealFileInOS",
+          "when": "false"
+        },
+        {
+          "command": "copyFilePath",
+          "when": "false"
+        },
         {
           "command": "cwtools.showGraph",
           "when": "cwtoolsGraphAvailable"
@@ -158,6 +185,19 @@
         "title": "%commands.setGraphDepth.title%",
         "category": "cwtools",
         "enablement": "cwtoolsWebview == true"
+      },
+      {
+        "command": "cwtools-files.revealActiveFile",
+        "title": "%commands.revealActiveFile.title%",
+        "category": "cwtools"
+      },
+      {
+        "command": "revealFileInOS",
+        "title": "Reveal in File Explorer"
+      },
+      {
+        "command": "copyFilePath",
+        "title": "Copy Path"
       },
       {
         "command": "cwtools.saveGraphJson",

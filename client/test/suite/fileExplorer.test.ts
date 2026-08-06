@@ -1,5 +1,5 @@
 import * as assert from "assert";
-import type * as vscode from "vscode";
+import * as vscode from "vscode";
 import type { FileListItem, TreeNode } from "../../extension/fileExplorer";
 import { filesToTreeNodes, FilesProvider } from "../../extension/fileExplorer";
 
@@ -171,5 +171,31 @@ suite("FileExplorer — FilesProvider", () => {
 		assert.strictEqual(children[0].children.length, 1);
 		assert.strictEqual(seen.length, 1);
 		assert.strictEqual(seen[0], null);
+	});
+
+	test("getParent returns the enclosing directory, undefined at the root", () => {
+		const provider = new FilesProvider(sampleFiles());
+		const root = provider.getChildren()[0];
+		assert.strictEqual(provider.getParent(root), undefined);
+		const leaf = root.children[0];
+		assert.strictEqual(provider.getParent(leaf), root);
+	});
+
+	test("findNodeByUri locates a leaf by its resource uri", () => {
+		const provider = new FilesProvider(sampleFiles());
+		const found = provider.findNodeByUri(
+			vscode.Uri.parse("file:///events/irm_faction.txt"),
+		);
+		assert.ok(found, "expected a matching leaf");
+		assert.strictEqual(found.fileName, "irm_faction.txt");
+		assert.strictEqual(found.isDirectory, false);
+	});
+
+	test("findNodeByUri returns undefined for an unknown uri", () => {
+		const provider = new FilesProvider(sampleFiles());
+		assert.strictEqual(
+			provider.findNodeByUri(vscode.Uri.parse("file:///events/missing.txt")),
+			undefined,
+		);
 	});
 });
