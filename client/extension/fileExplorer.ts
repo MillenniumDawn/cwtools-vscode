@@ -171,7 +171,11 @@ export class FileExplorer implements vscode.Disposable {
 		// The view/title button is gated on this key so it can't be clicked before
 		// the command above is registered (the view itself appears at activation,
 		// before the server sends its first file list).
-		void vscode.commands.executeCommand("setContext", "cwtoolsFilesLoaded", true);
+		void vscode.commands.executeCommand(
+			"setContext",
+			"cwtoolsFilesLoaded",
+			true,
+		);
 	}
 
 	private revealActiveFile(): void {
