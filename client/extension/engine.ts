@@ -5,8 +5,10 @@ import type { ExtensionContext } from "vscode";
 import { existsSync as fsExistsSync } from "fs";
 import { logInfo, logWarn, logError } from "./logger";
 import { FOLDER_HINTS, CONTENT_HINTS } from "./games";
+import type { RulesRepo } from "./games";
 
 export { LANGUAGE_REPOS } from "./games";
+export type { RulesRepo } from "./games";
 
 export async function detectFromFolder(
 	root: string,
@@ -156,7 +158,7 @@ export function runGit(
 	args: string[],
 	spawnFn: typeof spawn = spawn,
 	timeoutMs = 60000,
-): Promise<void> {
+): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const git = spawnFn("git", args, { stdio: ["ignore", "pipe", "pipe"] });
 		let out = "";
@@ -192,7 +194,7 @@ export function runGit(
 			// git reports fetch progress and "From <remote>" on stderr, so stderr
 			// alone is not a failure; the exit code is.
 			if (err) (failed ? logError : logWarn)(`git stderr: ${err.trimEnd()}`);
-			if (!failed) resolve();
+			if (!failed) resolve(out);
 			else
 				reject(
 					new Error(
@@ -201,4 +203,21 @@ export function runGit(
 				);
 		});
 	});
+}
+
+// Git commands that leave `dir` on the pinned rules commit, given the commit it
+// holds now (null when there's no clone yet). Empty when it already holds the
+// pin, which costs no network and no rules reload. A branch tip is never
+// checked out, so unpinned upstream content never reaches disk.
+export function rulesFetchCommands(
+	dir: string,
+	{ repo, ref }: RulesRepo,
+	currentHead: string | null,
+): string[][] {
+	if (currentHead === ref) return [];
+	const commands: string[][] = [];
+	if (currentHead === null) commands.push(["init", "--quiet", dir]);
+	commands.push(["-C", dir, "fetch", "--depth", "1", repo, ref]);
+	commands.push(["-C", dir, "checkout", "--detach", ref]);
+	return commands;
 }

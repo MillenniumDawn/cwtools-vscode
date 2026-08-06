@@ -14,6 +14,7 @@ suite("games — table shape", () => {
 			assert.ok(g.id, "id");
 			assert.ok(g.display, `${g.id} display`);
 			assert.match(g.repo, /^https:\/\/github\.com\//, `${g.id} repo`);
+			assert.match(g.repoRef, /^[0-9a-f]{40}$/, `${g.id} repoRef`);
 			assert.ok(g.exeName, `${g.id} exeName`);
 			assert.ok(g.vanillaFolders.length > 0, `${g.id} vanillaFolders`);
 			assert.ok(g.folderHint, `${g.id} folderHint`);
@@ -27,17 +28,28 @@ suite("games — table shape", () => {
 
 suite("games — derived maps match the pre-consolidation literals", () => {
 	test("LANGUAGE_REPOS", () => {
-		assert.deepStrictEqual(LANGUAGE_REPOS, {
-			stellaris: "https://github.com/cwtools/cwtools-stellaris-config",
-			eu4: "https://github.com/cwtools/cwtools-eu4-config",
-			hoi4: "https://github.com/cwtools/cwtools-hoi4-config",
-			ck2: "https://github.com/cwtools/cwtools-ck2-config",
-			imperator: "https://github.com/cwtools/cwtools-ir-config",
-			vic2: "https://github.com/cwtools/cwtools-vic2-config",
-			vic3: "https://github.com/cwtools/cwtools-vic3-config",
-			ck3: "https://github.com/cwtools/cwtools-ck3-config",
-			eu5: "https://github.com/kaiser-chris/cwtools-eu5-config",
-		});
+		assert.deepStrictEqual(
+			Object.fromEntries(
+				Object.entries(LANGUAGE_REPOS).map(([id, r]) => [id, r.repo]),
+			),
+			{
+				stellaris: "https://github.com/cwtools/cwtools-stellaris-config",
+				eu4: "https://github.com/cwtools/cwtools-eu4-config",
+				hoi4: "https://github.com/cwtools/cwtools-hoi4-config",
+				ck2: "https://github.com/cwtools/cwtools-ck2-config",
+				imperator: "https://github.com/cwtools/cwtools-ir-config",
+				vic2: "https://github.com/cwtools/cwtools-vic2-config",
+				vic3: "https://github.com/cwtools/cwtools-vic3-config",
+				ck3: "https://github.com/cwtools/cwtools-ck3-config",
+				eu5: "https://github.com/kaiser-chris/cwtools-eu5-config",
+			},
+		);
+	});
+
+	test("LANGUAGE_REPOS carries each game's pin", () => {
+		for (const g of GAMES) {
+			assert.strictEqual(LANGUAGE_REPOS[g.id].ref, g.repoRef, `${g.id} ref`);
+		}
 	});
 
 	test("CONTENT_HINTS covers the same markers", () => {

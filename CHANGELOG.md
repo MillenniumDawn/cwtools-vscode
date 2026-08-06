@@ -1,5 +1,7 @@
 ### Unreleased
 
+* The rules repos are now pinned. Each game in `client/extension/games.ts` carries the exact commit the extension fetches, and the fetch is a shallow `git fetch <repo> <commit>` plus a detached checkout instead of a clone or pull of whatever the default branch happened to hold. Pushing to one of the nine upstream rules repos no longer reaches every install on its next activation: pins move through a reviewed PR (`build/rulesPins.ts`, run weekly by `rules-pins.yml`) and ship with a release. A cache already sitting on the pin now skips the fetch and the rules reload entirely, so a routine activation makes no network call at all. (#133)
+
 * The **CWTools loaded files** tree is now navigable. It has a collapse-all button, and a file's context menu offers **Reveal in File Explorer** and **Copy Path** (both built-in commands that read the item's `resourceUri`). A new **Reveal active file in loaded-files tree** button in the view title finds the active editor's file and selects it, expanding its ancestors via a new `getParent` on the tree provider. (#147)
 
 * Release and Marketplace publishing jobs now have bounded runtimes, so a hung

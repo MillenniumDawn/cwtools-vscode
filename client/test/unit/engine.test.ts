@@ -17,6 +17,7 @@ import {
 	resolveRulesFolder,
 	serverExe,
 	runGit,
+	rulesFetchCommands,
 } from "../../extension/engine";
 
 suite("engine — LANGUAGE_REPOS", () => {
@@ -34,7 +35,8 @@ suite("engine — LANGUAGE_REPOS", () => {
 		];
 		for (const id of expected) {
 			assert.ok(LANGUAGE_REPOS[id], `missing repo URL for ${id}`);
-			assert.match(LANGUAGE_REPOS[id], /^https:\/\/github\.com\//);
+			assert.match(LANGUAGE_REPOS[id].repo, /^https:\/\/github\.com\//);
+			assert.match(LANGUAGE_REPOS[id].ref, /^[0-9a-f]{40}$/, `${id} ref`);
 		}
 		assert.strictEqual(Object.keys(LANGUAGE_REPOS).length, expected.length);
 	});
@@ -462,10 +464,10 @@ suite("engine — runGit", () => {
 		return child;
 	}
 
-	test("resolves when git exits with code 0", async () => {
+	test("resolves with stdout when git exits with code 0", async () => {
 		const fakeSpawn = () =>
 			makeChild({ code: 0, signal: null, stdout: "ok\n" });
-		await runGit(["status"], fakeSpawn as never);
+		assert.strictEqual(await runGit(["status"], fakeSpawn as never), "ok\n");
 	});
 
 	test("resolves when git exits with code 0 and stderr output", async () => {
@@ -569,5 +571,42 @@ suite("engine — runGit", () => {
 			makeChild({ code: 0, signal: null, stdout: "ok\n" });
 		// Use a generous timeout; the microtask resolves before it fires.
 		await runGit(["status"], fakeSpawn as never, 5000);
+	});
+});
+
+suite("engine — rulesFetchCommands", () => {
+	const pin = {
+		repo: "https://github.com/cwtools/cwtools-hoi4-config",
+		ref: "ab1fda2a599ab4318d6f24ecba380e579e37006a",
+	};
+
+	test("builds an empty repo, then fetches and checks out the pin", () => {
+		assert.deepStrictEqual(rulesFetchCommands("/cache/hoi4", pin, null), [
+			["init", "--quiet", "/cache/hoi4"],
+			["-C", "/cache/hoi4", "fetch", "--depth", "1", pin.repo, pin.ref],
+			["-C", "/cache/hoi4", "checkout", "--detach", pin.ref],
+		]);
+	});
+
+	test("moves an existing cache to a new pin without re-initing", () => {
+		assert.deepStrictEqual(
+			rulesFetchCommands("/cache/hoi4", pin, "f1460d139036e75a8dd065dbd27b27415172654f"),
+			[
+				["-C", "/cache/hoi4", "fetch", "--depth", "1", pin.repo, pin.ref],
+				["-C", "/cache/hoi4", "checkout", "--detach", pin.ref],
+			],
+		);
+	});
+
+	test("does nothing when the cache already holds the pin", () => {
+		assert.deepStrictEqual(rulesFetchCommands("/cache/hoi4", pin, pin.ref), []);
+	});
+
+	// The whole point of the pin: no command may name a branch or a remote HEAD.
+	test("never checks out a branch tip", () => {
+		const flat = rulesFetchCommands("/cache/hoi4", pin, null).flat().join(" ");
+		assert.ok(!/\bHEAD\b|\bmaster\b|\bmain\b/.test(flat), flat);
+		assert.ok(!flat.includes("clone"), flat);
+		assert.ok(!flat.includes("pull"), flat);
 	});
 });
