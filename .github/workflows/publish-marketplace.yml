@@ -2,10 +2,10 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish (e.g. v1.0.13-beta)'
+        description: "Release tag to publish (e.g. v1.0.13-beta)"
         required: true
       dry-run:
-        description: 'Dry run — validate without publishing'
+        description: "Dry run — validate without publishing"
         type: boolean
         default: false
 

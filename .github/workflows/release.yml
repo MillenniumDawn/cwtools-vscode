@@ -1,10 +1,10 @@
 ---
-'on':
+"on":
   # Push a v* tag to build, package, and publish the release. workflow_dispatch
   # is a manual fallback.
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 name: Release
