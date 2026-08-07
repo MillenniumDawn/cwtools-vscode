@@ -56,11 +56,17 @@ copying them across.
 
 ## Rules pins
 
-Each game in `client/extension/games.ts` names its rules repo and the exact
-commit the extension fetches (`repoRef`). Nothing tracks a branch: a fresh
-cache is a `git init` plus a shallow fetch of that one commit, and a cache
-already holding the pin is left alone. An upstream push therefore reaches users
-only once someone bumps a pin here and ships a release.
+Each game in `client/extension/games.ts` names its rules repo and a bundled
+fallback commit (`repoRef`). `rules-pins.json` is the reviewed runtime manifest:
+it carries the revision and the exact commit for every supported game. Nothing
+tracks a branch. A fresh cache is a `git init` plus a shallow fetch of that one
+commit, and a cache already holding the selected pin is left alone.
+
+On activation, the extension checks the reviewed manifest in the background
+and uses the newest valid result. The manifest can change only a known game's
+full commit SHA, never a repo URL or a branch. A failed or invalid refresh
+keeps the cached manifest (or the bundled fallback), so an upstream push cannot
+reach users on its own and an offline activation cannot move a cache backwards.
 
 Refresh the pins with:
 
@@ -68,10 +74,11 @@ Refresh the pins with:
 npx tsx build/rulesPins.ts
 ```
 
-It reads each repo's default branch head and rewrites the pin and its date.
-[`rules-pins.yml`](.github/workflows/rules-pins.yml) runs the same script weekly
-and opens a PR with a compare link for everything that moved. Read those diffs
-before merging: the commit you approve is what every install downloads. Nothing
+It reads each repo's default branch head, rewrites both pin sets, and increments
+the manifest revision. [`rules-pins.yml`](.github/workflows/rules-pins.yml)
+runs the same script weekly and opens a PR with a compare link for everything
+that moved. Read those diffs before merging: the commits in `rules-pins.json`
+are what installed extensions fetch on their next activation. Nothing
 auto-merges here, unlike the engine submodule bump.
 
 ## Running and debugging

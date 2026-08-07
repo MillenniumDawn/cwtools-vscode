@@ -100,7 +100,13 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			// Clone/pull the rules repo without blocking activation; the server
 			// reloads its rules once the fetch lands (see rulesSetup.ts).
 			if (fetchUpstream) {
-				fetchRulesInBackground(language, cacheDir, client, initialScanDone);
+				fetchRulesInBackground(
+					language,
+					cacheDir,
+					client,
+					initialScanDone,
+					context.globalState,
+				);
 			}
 		} catch (err) {
 			const msg = errorMessage(err);

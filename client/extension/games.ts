@@ -20,6 +20,8 @@ export interface GameDef {
 	contentHint?: string;
 }
 
+export const RULES_MANIFEST_REVISION = 1;
+
 // Order matters: folder hints are tried in order, so the 3-suffixed games sit
 // before their 2-suffixed prefixes ("crusader kings iii" contains
 // "crusader kings ii", "victoria iii" contains "victoria ii").
