@@ -80,7 +80,10 @@ suite("rules manifest", () => {
 			RULES_MANIFEST_MAX_BYTES,
 			" ",
 		);
-		assert.strictEqual(encoder.encode(atLimit).length, RULES_MANIFEST_MAX_BYTES);
+		assert.strictEqual(
+			encoder.encode(atLimit).length,
+			RULES_MANIFEST_MAX_BYTES,
+		);
 		const bytes = encoder.encode(atLimit);
 		const body = new ReadableStream<Uint8Array>({
 			start(controller) {

@@ -43,7 +43,9 @@ export async function resolveRulesCache(
 			`No config repository for language "${language}"; rule cloning skipped.`,
 		);
 	}
-	logInfo(`${language} ${rules ? `${rules.repo}@${rules.ref}` : "(no remote)"}`);
+	logInfo(
+		`${language} ${rules ? `${rules.repo}@${rules.ref}` : "(no remote)"}`,
+	);
 
 	await fsPromises.mkdir(cacheDir, { recursive: true });
 	const languageRulesCache = path.join(cacheDir, language);

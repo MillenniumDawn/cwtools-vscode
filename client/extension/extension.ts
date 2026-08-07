@@ -3,23 +3,23 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
-import * as path from 'path';
-import * as os from 'os';
-import * as fsPromises from 'fs/promises';
-import * as vscode from 'vscode';
-import type { ExtensionContext } from 'vscode';
-import { workspace, window, Uri, commands, env } from 'vscode';
-import type { LanguageClient } from 'vscode-languageclient/node';
+import * as path from "path";
+import * as os from "os";
+import * as fsPromises from "fs/promises";
+import * as vscode from "vscode";
+import type { ExtensionContext } from "vscode";
+import { workspace, window, Uri, commands, env } from "vscode";
+import type { LanguageClient } from "vscode-languageclient/node";
 
-import { serverExe as resolveServerExe } from './engine';
-import { detectGameAndVanilla } from './detectGame';
-import { resolveRulesCache, fetchRulesInBackground } from './rulesSetup';
-import { createLanguageClient } from './lspClient';
-import { registerServerNotifications } from './serverNotifications';
-import { registerDocumentLanguage } from './documentLanguage';
-import { registerCommands, publishCommandAvailability } from './commands';
-import { logInfo, logError, errorMessage } from './logger';
-import type * as GraphPanelModule from './graphPanel';
+import { serverExe as resolveServerExe } from "./engine";
+import { detectGameAndVanilla } from "./detectGame";
+import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
+import { createLanguageClient } from "./lspClient";
+import { registerServerNotifications } from "./serverNotifications";
+import { registerDocumentLanguage } from "./documentLanguage";
+import { registerCommands, publishCommandAvailability } from "./commands";
+import { logInfo, logError, errorMessage } from "./logger";
+import type * as GraphPanelModule from "./graphPanel";
 
 export let defaultClient: LanguageClient;
 
@@ -33,22 +33,25 @@ export interface CwtoolsApi {
 }
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
-	void commands.executeCommand('setContext', 'cwtoolsEnabled', true);
+	void commands.executeCommand("setContext", "cwtoolsEnabled", true);
 	// The editor/title graph button is gated on `cwtoolsWebview == false`, which an
 	// unset key does not satisfy. Only GraphPanel ever wrote this key, so without a
 	// seed the button could not appear until a panel had opened and closed once.
-	void commands.executeCommand('setContext', 'cwtoolsWebview', false);
+	void commands.executeCommand("setContext", "cwtoolsWebview", false);
 
 	// Writable, per-extension cache dir. globalStorage survives extension
 	// updates and is writable everywhere; the install dir (extensionPath) is
 	// wiped on every update and can be read-only.
-	const cacheDir = path.join(context.globalStorageUri.fsPath, '.cwtools')
+	const cacheDir = path.join(context.globalStorageUri.fsPath, ".cwtools");
 
-	const init = async function(language : string) {
+	const init = async function (language: string) {
 		// Include `.` in the word pattern so a dotted event/decision id
 		// (`namespace.1`) selects whole on double-click and resolves via
 		// go-to-definition, instead of splitting at the dot. (#39)
-		const langConfigDisposable = vscode.languages.setLanguageConfiguration('paradox', { wordPattern : /"?([^\s]+)"?/ });
+		const langConfigDisposable = vscode.languages.setLanguageConfiguration(
+			"paradox",
+			{ wordPattern: /"?([^\s]+)"?/ },
+		);
 		context.subscriptions.push(langConfigDisposable);
 
 		// The Rust language server, bundled per-platform. Resolve the binary for
@@ -57,33 +60,44 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		if (!serverExe) {
 			await window.showErrorMessage(
 				`CWTools: no language server binary found. ` +
-				`Re-install the extension or build the server.`);
+					`Re-install the extension or build the server.`,
+			);
 			return;
 		}
 		logInfo(`Using server: ${serverExe}`);
 
-		if (os.platform() !== 'win32') {
+		if (os.platform() !== "win32") {
 			try {
 				const stat = await fsPromises.stat(serverExe);
 				if ((stat.mode & 0o111) === 0) {
 					await fsPromises.chmod(serverExe, 0o755);
 				}
 			} catch (e) {
-				logError('stat/chmod error on server binary', e);
+				logError("stat/chmod error on server binary", e);
 			}
 		}
 
-		const { rulesCache, fetchUpstream } = await resolveRulesCache(language, cacheDir);
+		const { rulesCache, fetchUpstream } = await resolveRulesCache(
+			language,
+			cacheDir,
+		);
 
-		const client = createLanguageClient(context, { language, serverExe, cacheDir, rulesCache });
+		const client = createLanguageClient(context, {
+			language,
+			serverExe,
+			cacheDir,
+			rulesCache,
+		});
 		defaultClient = client;
 		client.registerProposedFeatures();
 
-		const tracker = await registerDocumentLanguage(context, client, 'paradox');
+		const tracker = await registerDocumentLanguage(context, client, "paradox");
 		const initialScanDone = registerServerNotifications(context, client);
 
 		if (workspace.name === undefined) {
-			await window.showWarningMessage("You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using \"File, Open Folder\"")
+			await window.showWarningMessage(
+				'You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using "File, Open Folder"',
+			);
 		}
 
 		registerCommands(context, client, tracker);
@@ -110,39 +124,50 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			}
 		} catch (err) {
 			const msg = errorMessage(err);
-			logError('client.start() error', err);
+			logError("client.start() error", err);
 			// EPERM/EACCES means the OS refused to execute the server binary,
 			// almost always antivirus (Defender) quarantining the unsigned exe
 			// or a corporate exec policy. A raw "spawn EPERM" tells a modder
 			// nothing, so surface the cause and a self-serve fix instead.
 			const code = (err as NodeJS.ErrnoException | undefined)?.code;
-			if (code === 'EPERM' || code === 'EACCES') {
-				const reveal = 'Reveal Server Binary';
-				const help = 'Antivirus Help';
-				void window.showErrorMessage(
-					`CWTools server was blocked from running (${code}). This is almost always ` +
-					`antivirus (e.g. Windows Defender) quarantining the unsigned server binary. ` +
-					`Restore it from quarantine and add an exclusion for the extension's server folder, ` +
-					`then reload the window.`,
-					reveal, help
-				).then(choice => {
-					if (choice === reveal && serverExe) {
-						void commands.executeCommand('revealFileInOS', Uri.file(serverExe));
-					} else if (choice === help) {
-						void env.openExternal(Uri.parse(
-							'https://support.microsoft.com/windows/add-an-exclusion-to-windows-security-811816c0-4dfd-af4a-47e4-c301afe13b26'));
-					}
-				});
+			if (code === "EPERM" || code === "EACCES") {
+				const reveal = "Reveal Server Binary";
+				const help = "Antivirus Help";
+				void window
+					.showErrorMessage(
+						`CWTools server was blocked from running (${code}). This is almost always ` +
+							`antivirus (e.g. Windows Defender) quarantining the unsigned server binary. ` +
+							`Restore it from quarantine and add an exclusion for the extension's server folder, ` +
+							`then reload the window.`,
+						reveal,
+						help,
+					)
+					.then((choice) => {
+						if (choice === reveal && serverExe) {
+							void commands.executeCommand(
+								"revealFileInOS",
+								Uri.file(serverExe),
+							);
+						} else if (choice === help) {
+							void env.openExternal(
+								Uri.parse(
+									"https://support.microsoft.com/windows/add-an-exclusion-to-windows-security-811816c0-4dfd-af4a-47e4-c301afe13b26",
+								),
+							);
+						}
+					});
 				return;
 			}
-			window.showErrorMessage(`CWTools language server failed to start: ${msg}`);
+			window.showErrorMessage(
+				`CWTools language server failed to start: ${msg}`,
+			);
 			return;
 		}
-	}
+	};
 
 	const { languageId } = await detectGameAndVanilla();
 
 	await init(languageId);
 
-	return { graphPanel: () => import('./graphPanel') };
+	return { graphPanel: () => import("./graphPanel") };
 }

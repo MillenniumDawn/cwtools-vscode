@@ -100,7 +100,10 @@ import {
 } from "../../extension/rulesManifest";
 import { fetchRulesInBackground } from "../../extension/rulesSetup";
 
-function manifest(ref: string, revision = RULES_MANIFEST_REVISION): RulesManifest {
+function manifest(
+	ref: string,
+	revision = RULES_MANIFEST_REVISION,
+): RulesManifest {
 	return {
 		schema: 1,
 		revision,
@@ -156,7 +159,9 @@ function stubManifestFetch(value: RulesManifest | string) {
 	const fetch = vi.fn().mockResolvedValue(
 		new Response(text, {
 			status: 200,
-			headers: { "content-length": String(new TextEncoder().encode(text).length) },
+			headers: {
+				"content-length": String(new TextEncoder().encode(text).length),
+			},
 		}),
 	);
 	vi.stubGlobal("fetch", fetch);
@@ -370,15 +375,16 @@ suite("rulesSetup — reviewed manifest sync", () => {
 			let signal: AbortSignal | null | undefined;
 			vi.stubGlobal(
 				"fetch",
-				vi.fn((_url: string, init?: RequestInit) =>
-					new Promise<Response>((_resolve, reject) => {
-						signal = init?.signal;
-						signal?.addEventListener(
-							"abort",
-							() => reject(new Error("aborted")),
-							{ once: true },
-						);
-					}),
+				vi.fn(
+					(_url: string, init?: RequestInit) =>
+						new Promise<Response>((_resolve, reject) => {
+							signal = init?.signal;
+							signal?.addEventListener(
+								"abort",
+								() => reject(new Error("aborted")),
+								{ once: true },
+							);
+						}),
 				),
 			);
 			const cached = manifest("c".repeat(40), RULES_MANIFEST_REVISION + 1);
