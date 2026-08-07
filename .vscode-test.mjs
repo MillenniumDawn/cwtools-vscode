@@ -47,8 +47,9 @@ export default defineConfig({
 		// Intent: only the hand-written client source. vscode-test instruments
 		// every loaded file though, and doesn't reliably honor these globs: it
 		// leaks node_modules into the raw report (semver, vscode-jsonrpc, ...)
-		// and still reports engine.ts / executable.ts even when excluded. Those
-		// two are owned by the node unit tests (vitest, see vitest.config.ts);
+		// and still reports engine.ts / executable.ts / games.ts / rulesManifest.ts
+		// / rulesSetup.ts even when excluded. Those are owned by the node unit
+		// tests (vitest, see vitest.config.ts);
 		// build/coverage-summary.ts is what actually drops node_modules and the
 		// vitest-owned files from the rendered report and recomputes the totals.
 		// The excludes below are kept as declared intent.
@@ -57,6 +58,8 @@ export default defineConfig({
 			"**/client/extension/engine.ts",
 			"**/client/extension/executable.ts",
 			"**/client/extension/games.ts",
+			"**/client/extension/rulesManifest.ts",
+			"**/client/extension/rulesSetup.ts",
 			"**/client/test/**",
 			"**/client/webview/**",
 			"**/node_modules/**",

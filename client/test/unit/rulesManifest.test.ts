@@ -74,16 +74,25 @@ suite("rules manifest", () => {
 		);
 	});
 
-	test("bounds manifest response bodies before buffering them", async () => {
+	test("accepts a manifest at the response-size limit and cancels larger bodies", async () => {
 		const encoder = new TextEncoder();
+		const atLimit = JSON.stringify(manifest()).padEnd(
+			RULES_MANIFEST_MAX_BYTES,
+			" ",
+		);
+		assert.strictEqual(encoder.encode(atLimit).length, RULES_MANIFEST_MAX_BYTES);
+		const bytes = encoder.encode(atLimit);
 		const body = new ReadableStream<Uint8Array>({
 			start(controller) {
-				controller.enqueue(encoder.encode('{"schema":'));
-				controller.enqueue(encoder.encode("1}"));
+				const split = Math.floor(bytes.length / 2);
+				controller.enqueue(bytes.slice(0, split));
+				controller.enqueue(bytes.slice(split));
 				controller.close();
 			},
 		});
-		assert.strictEqual(await readRulesManifestBody(body), '{"schema":1}');
+		const text = await readRulesManifestBody(body);
+		assert.strictEqual(text, atLimit);
+		assert.deepStrictEqual(parseRulesManifestText(text).pins, pins);
 
 		let cancelled = false;
 		const oversized = new ReadableStream<Uint8Array>({
