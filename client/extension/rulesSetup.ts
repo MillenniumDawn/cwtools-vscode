@@ -2,6 +2,7 @@ import * as path from "path";
 import { existsSync as fsExistsSync } from "fs";
 import * as fsPromises from "fs/promises";
 import { workspace, window, ProgressLocation } from "vscode";
+import type { Memento } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
 import {
@@ -11,6 +12,18 @@ import {
 	rulesFetchCommands,
 } from "./engine";
 import type { RulesRepo } from "./engine";
+import {
+	parseRulesManifest,
+	parseRulesManifestText,
+	readRulesManifestBody,
+	RULES_MANIFEST_CACHE_KEY,
+	RULES_MANIFEST_MAX_BYTES,
+	RULES_MANIFEST_TIMEOUT_MS,
+	RULES_MANIFEST_URL,
+	rulesRepoForManifest,
+	selectRulesManifest,
+	type RulesManifest,
+} from "./rulesManifest";
 import { logInfo, logWarn, logError, errorMessage } from "./logger";
 
 export interface RulesSetup {
@@ -30,7 +43,9 @@ export async function resolveRulesCache(
 			`No config repository for language "${language}"; rule cloning skipped.`,
 		);
 	}
-	logInfo(`${language} ${rules ? `${rules.repo}@${rules.ref}` : "(no remote)"}`);
+	logInfo(
+		`${language} ${rules ? `${rules.repo}@${rules.ref}` : "(no remote)"}`,
+	);
 
 	await fsPromises.mkdir(cacheDir, { recursive: true });
 	const languageRulesCache = path.join(cacheDir, language);
@@ -70,14 +85,100 @@ export function fetchRulesInBackground(
 	cacheDir: string,
 	client: LanguageClient,
 	initialScanDone: Promise<void>,
+	globalState: Memento,
 ): void {
-	const rules = LANGUAGE_REPOS[language];
+	if (!LANGUAGE_REPOS[language]) {
+		return;
+	}
+	void syncReviewedRules(
+		language,
+		cacheDir,
+		client,
+		initialScanDone,
+		globalState,
+	).catch((err: unknown) => logError(`Rule fetch failed for ${language}`, err));
+}
+
+async function syncReviewedRules(
+	language: string,
+	cacheDir: string,
+	client: LanguageClient,
+	initialScanDone: Promise<void>,
+	globalState: Memento,
+): Promise<void> {
+	const rules = await reviewedRulesRepo(language, globalState);
 	if (!rules) {
 		return;
 	}
-	void syncPinnedRules(rules, language, cacheDir, client, initialScanDone).catch(
-		(err: unknown) => logError(`Rule fetch failed for ${language}`, err),
+	await syncPinnedRules(rules, language, cacheDir, client, initialScanDone);
+}
+
+function cachedRulesManifest(globalState: Memento): RulesManifest | undefined {
+	const cached = globalState.get<unknown>(RULES_MANIFEST_CACHE_KEY);
+	if (cached === undefined) {
+		return undefined;
+	}
+	try {
+		return parseRulesManifest(cached);
+	} catch (err) {
+		logWarn(`Ignoring cached rules manifest: ${errorMessage(err)}`);
+		return undefined;
+	}
+}
+
+async function fetchRemoteRulesManifest(): Promise<RulesManifest> {
+	const controller = new AbortController();
+	const timeout = setTimeout(
+		() => controller.abort(),
+		RULES_MANIFEST_TIMEOUT_MS,
 	);
+	try {
+		const response = await fetch(RULES_MANIFEST_URL, {
+			signal: controller.signal,
+		});
+		if (!response.ok) {
+			throw new Error(`Rules manifest request failed with ${response.status}.`);
+		}
+		const contentLength = Number(response.headers.get("content-length"));
+		if (
+			Number.isFinite(contentLength) &&
+			contentLength > RULES_MANIFEST_MAX_BYTES
+		) {
+			throw new Error("Rules manifest response is too large.");
+		}
+		return parseRulesManifestText(await readRulesManifestBody(response.body));
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function reviewedRulesRepo(
+	language: string,
+	globalState: Memento,
+): Promise<RulesRepo | undefined> {
+	const cached = cachedRulesManifest(globalState);
+	let manifest = cached;
+	try {
+		const fetched = await fetchRemoteRulesManifest();
+		manifest = selectRulesManifest(cached, fetched);
+		if (cached && fetched.revision < cached.revision) {
+			logWarn(
+				`Ignoring stale rules manifest revision ${fetched.revision}; cached revision ${cached.revision} is newer.`,
+			);
+		}
+		if (manifest !== cached) {
+			try {
+				await globalState.update(RULES_MANIFEST_CACHE_KEY, manifest);
+			} catch (err) {
+				logWarn(`Could not cache rules manifest: ${errorMessage(err)}`);
+			}
+		}
+	} catch (err) {
+		logWarn(
+			`Rules manifest refresh failed; using ${cached ? "cached" : "bundled"} pins: ${errorMessage(err)}`,
+		);
+	}
+	return rulesRepoForManifest(language, manifest);
 }
 
 // The commit the cached rules sit on, or null when there's nothing usable
@@ -120,6 +221,12 @@ async function syncPinnedRules(
 				);
 				for (const args of commands) {
 					await runGit(args);
+				}
+				const fetchedHead = await currentRulesHead(languageRulesCache);
+				if (fetchedHead !== rules.ref) {
+					throw new Error(
+						`Rules cache landed on ${fetchedHead ?? "no commit"}, not ${rules.ref}.`,
+					);
 				}
 				await initialScanDone;
 				// Rules are now on disk; tell the (already running) server to

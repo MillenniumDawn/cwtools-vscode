@@ -3,8 +3,9 @@ import { fileURLToPath } from "node:url";
 
 // Node-only unit tests for the near-pure modules (no real vscode API needed).
 // The vscode-host suites live in client/test/suite and run under
-// @vscode/test-cli (see .vscode-test.mjs). Coverage here owns engine.ts and
-// executable.ts; the host run excludes them so the two reports stay disjoint.
+// @vscode/test-cli (see .vscode-test.mjs). Coverage here owns engine.ts,
+// executable.ts, games.ts, rulesManifest.ts, and rulesSetup.ts; the host run
+// excludes them so the two reports stay disjoint.
 export default defineConfig({
 	test: {
 		include: ["client/test/unit/**/*.test.ts", "build/**/*.test.ts"],
@@ -13,6 +14,7 @@ export default defineConfig({
 			provider: "v8",
 			include: [
 				"build/changelog.ts",
+				"build/rulesPins.ts",
 				"client/extension/diagnosticsSignature.ts",
 				"client/extension/engine.ts",
 				"client/extension/executable.ts",
@@ -22,6 +24,8 @@ export default defineConfig({
 				"client/extension/games.ts",
 				"client/extension/logger.ts",
 				"client/extension/reindexSettings.ts",
+				"client/extension/rulesManifest.ts",
+				"client/extension/rulesSetup.ts",
 			],
 			reporter: ["text-summary", "html", "lcov", "json-summary"],
 			reportsDirectory: "coverage-node",

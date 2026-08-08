@@ -1,0 +1,15 @@
+{
+	"schema": 1,
+	"revision": 1,
+	"pins": {
+		"stellaris": "99147efe8072b331005b50536762dcc0b8573224",
+		"hoi4": "ab1fda2a599ab4318d6f24ecba380e579e37006a",
+		"eu4": "a85622d368bbb7afca938ed70fdd5eda44aec769",
+		"ck3": "27db56f995af6b73baebae43e04d044f1a0a0bbe",
+		"ck2": "aedc351934035017aff7a4429afae93dad739dd5",
+		"vic3": "ba728e59a22e18dd590964e1c0201976852f46a8",
+		"vic2": "b8992c0f48a9878ffb45835fc677a6fa271899d2",
+		"imperator": "84c1d97fd36a5b8bdd0467100b2e987905808f53",
+		"eu5": "7f2764a9536951dc9915c0b05509d0499408381a"
+	}
+}
