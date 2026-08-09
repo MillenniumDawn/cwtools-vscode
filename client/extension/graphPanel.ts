@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { writeFile } from "fs/promises";
 import * as crypto from "crypto";
-import type { GraphData } from "../common/graphTypes";
+import type { GraphData, GraphPanelState } from "../common/graphTypes";
 import { logError } from "./logger";
 
 export enum State {
@@ -16,8 +16,14 @@ type GraphMessage =
 			command: "importJson";
 			json: string;
 			settings: { wheelSensitivity: number };
+			persist?: GraphPanelState;
 	  }
-	| { command: "go"; data: GraphData; settings: { wheelSensitivity: number } };
+	| {
+			command: "go";
+			data: GraphData;
+			settings: { wheelSensitivity: number };
+			persist?: GraphPanelState;
+	  };
 type WebviewMessage =
 	| { command: "goToFile"; uri: string; line: number; column: number }
 	| { command: "saveImage"; image: string }
@@ -29,7 +35,7 @@ export class GraphPanel {
 	 * Track the currently panel. Only allow a single panel to exist at a time.
 	 */
 	public static currentPanel: GraphPanel | undefined;
-	private static readonly viewType = "cwtools-graph";
+	public static readonly viewType = "cwtools-graph";
 	private readonly _panel: vscode.WebviewPanel;
 	private _state: State;
 	private pendingMessage: GraphMessage | null = null;
@@ -66,31 +72,44 @@ export class GraphPanel {
 			GraphPanel.currentPanel._panel.reveal(column);
 			return;
 		}
-		GraphPanel.currentPanel = new GraphPanel(
-			extensionPath,
-			column || vscode.ViewColumn.One,
-		);
-	}
-
-	private constructor(extensionPath: string, column: vscode.ViewColumn) {
-		this._webviewRootPath = path.join(extensionPath, "bin/client/webview");
-
-		this._state = State.New;
-
-		// Create and show a new webview panel
-		this._panel = vscode.window.createWebviewPanel(
+		const panel = vscode.window.createWebviewPanel(
 			GraphPanel.viewType,
 			"Graph",
-			column,
+			column || vscode.ViewColumn.One,
 			{
 				// Enable javascript in the webview
 				enableScripts: true,
 				retainContextWhenHidden: true,
 
 				// And restric the webview to only loading content from our extension's `media` directory.
-				localResourceRoots: [vscode.Uri.file(this._webviewRootPath)],
+				localResourceRoots: [vscode.Uri.file(this._webviewRootPathFor(extensionPath))],
 			},
 		);
+		GraphPanel.currentPanel = new GraphPanel(extensionPath, panel);
+	}
+
+	/**
+	 * Rebuild a GraphPanel around a webview panel revived by the window-reload
+	 * serializer. The revived panel's html is empty, so the constructor sets it
+	 * and re-wires every handler, same as a fresh panel.
+	 */
+	public static restore(
+		extensionPath: string,
+		panel: vscode.WebviewPanel,
+	): GraphPanel {
+		const revived = new GraphPanel(extensionPath, panel);
+		GraphPanel.currentPanel = revived;
+		return revived;
+	}
+
+	private static _webviewRootPathFor(extensionPath: string) {
+		return path.join(extensionPath, "bin/client/webview");
+	}
+
+	private constructor(extensionPath: string, panel: vscode.WebviewPanel) {
+		this._webviewRootPath = GraphPanel._webviewRootPathFor(extensionPath);
+		this._state = State.New;
+		this._panel = panel;
 
 		// Set the webview's initial html content
 		this._panel.webview.html = this._getHtmlForWebview();
@@ -195,14 +214,18 @@ export class GraphPanel {
 		vscode.commands.executeCommand("setContext", "cwtoolsWebview", true);
 	}
 
-	public initialiseGraph(data: string | GraphData, wheelSensitivity: number) {
+	public initialiseGraph(
+		data: string | GraphData,
+		wheelSensitivity: number,
+		persist?: GraphPanelState,
+	) {
 		const settings = {
 			wheelSensitivity: wheelSensitivity,
 		};
 		const msg: GraphMessage =
 			typeof data === "string"
-				? { command: "importJson", json: data, settings }
-				: { command: "go", data: data, settings };
+				? { command: "importJson", json: data, settings, persist }
+				: { command: "go", data: data, settings, persist };
 
 		if (this._state === State.Done) {
 			this._panel.webview.postMessage(msg);

@@ -13,6 +13,7 @@ import "tippy.js/dist/tippy.css";
 import mergeimages from "merge-images";
 import type {
 	GraphLocation,
+	GraphPanelState,
 	GraphReference,
 	GraphNodeDetail,
 } from "../common/graphTypes";
@@ -34,6 +35,7 @@ cyM.default.use(popper);
 
 interface vscode {
 	postMessage(message: unknown): void;
+	setState(state: unknown): void;
 }
 
 declare const acquireVsCodeApi: () => vscode;
@@ -570,17 +572,36 @@ export function go(nodesJ: Array<techNode>, settings: settings) {
 }
 
 type InboundMessage =
-	| { command: "go"; data: techNode[]; settings: settings }
+	| {
+			command: "go";
+			data: techNode[];
+			settings: settings;
+			persist?: GraphPanelState;
+	  }
 	| { command: "exportImage" }
 	| { command: "exportJson" }
-	| { command: "importJson"; settings: settings; json: string }
+	| {
+			command: "importJson";
+			settings: settings;
+			json: string;
+			persist?: GraphPanelState;
+	  }
 	| { command: "checkCytoscapeRendered" };
+
+// Persist where the graph's data came from, so the window-reload serializer
+// can re-request it. Only the request parameters are kept, not the data.
+function persistState(state: GraphPanelState | undefined) {
+	if (state) {
+		vscode.setState(state);
+	}
+}
 
 window.addEventListener("message", (event) => {
 	const message = event.data as InboundMessage; // The JSON data our extension sent
 	switch (message.command) {
 		case "go":
 			go(message.data, message.settings);
+			persistState(message.persist);
 			break;
 		case "exportImage":
 			void exportImage(1);
@@ -596,6 +617,7 @@ window.addEventListener("message", (event) => {
 					message.settings,
 					JSON.parse(message.json) as Parameters<typeof tech>[3],
 				);
+				persistState(message.persist);
 			} catch {
 				// Malformed import: leave the graph empty rather than take the
 				// whole message handler down.

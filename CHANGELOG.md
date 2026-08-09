@@ -1,5 +1,7 @@
 ### Unreleased
 
+* The graph panel now survives a window reload. The webview persists the request parameters (entity type, depth), and a `WebviewPanelSerializer` re-opens the panel and re-requests the graph from the server; a graph imported from JSON prompts for the file again, since that data isn't persisted. (#146)
+
 * The rules repos are now pinned. Each game in `client/extension/games.ts` carries the exact commit the extension fetches, and the fetch is a shallow `git fetch <repo> <commit>` plus a detached checkout instead of a clone or pull of whatever the default branch happened to hold. Pushing to one of the nine upstream rules repos no longer reaches every install on its next activation: pins move through a reviewed PR (`build/rulesPins.ts`, run weekly by `rules-pins.yml`) and publish in the reviewed `rules-pins.json` manifest. A cache already sitting on the selected pin skips the git fetch and rules reload. (#133)
 
 * Reviewed rules updates now reach installed extensions without a full extension release. On activation, CWTools refreshes `rules-pins.json` in the background, then fetches only the full SHA selected for the detected game. An invalid, stale, or offline refresh keeps the cached manifest or bundled fallback, and a manifest cannot change a repo URL or name a branch. (#167)

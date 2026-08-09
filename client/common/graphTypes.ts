@@ -74,6 +74,20 @@ export interface GraphNodeDetail {
 export type GraphData = GraphNode[];
 
 /**
+ * State the graph webview persists across window reloads via setState.
+ * Only the request parameters are kept: the graph data itself is re-requested
+ * from the server (or re-imported) when the panel is restored.
+ */
+export interface GraphPanelState {
+    /** Where the graph's data came from. */
+    source: "server" | "json";
+    /** Entity type the graph was requested for. */
+    entityType?: string;
+    /** Connection depth the graph was requested at. */
+    depth?: number;
+}
+
+/**
  * Wrapper function for getGraphData command
  * @param entityType The type of entity to get graph data for
  * @param depth The depth of connections to include
