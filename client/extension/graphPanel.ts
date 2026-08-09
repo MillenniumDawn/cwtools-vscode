@@ -82,7 +82,9 @@ export class GraphPanel {
 				retainContextWhenHidden: true,
 
 				// And restric the webview to only loading content from our extension's `media` directory.
-				localResourceRoots: [vscode.Uri.file(this._webviewRootPathFor(extensionPath))],
+				localResourceRoots: [
+					vscode.Uri.file(this._webviewRootPathFor(extensionPath)),
+				],
 			},
 		);
 		GraphPanel.currentPanel = new GraphPanel(extensionPath, panel);

@@ -141,11 +141,7 @@ suite("graph panel restore", () => {
 		executeCommand.mock.calls.filter((call) => call[0] === "getGraphData");
 
 	beforeAll(async () => {
-		registerCommands(
-			context,
-			client as unknown as LanguageClient,
-			tracker,
-		);
+		registerCommands(context, client as unknown as LanguageClient, tracker);
 		await vi.waitFor(() => {
 			if (serializers.length === 0) {
 				throw new Error("serializer not registered");
@@ -179,9 +175,7 @@ suite("graph panel restore", () => {
 			depth: 4,
 		});
 
-		assert.deepStrictEqual(graphRequests(), [
-			["getGraphData", "idea", 4],
-		]);
+		assert.deepStrictEqual(graphRequests(), [["getGraphData", "idea", 4]]);
 		assert.ok(GraphPanel.currentPanel, "restored panel becomes currentPanel");
 
 		panel.ready();
@@ -207,9 +201,7 @@ suite("graph panel restore", () => {
 			depth: 0,
 		});
 
-		assert.deepStrictEqual(graphRequests(), [
-			["getGraphData", "idea", 0],
-		]);
+		assert.deepStrictEqual(graphRequests(), [["getGraphData", "idea", 0]]);
 	});
 
 	test("defaults the depth to the current graph depth when the state omits it", async () => {
@@ -221,9 +213,7 @@ suite("graph panel restore", () => {
 			entityType: "idea",
 		});
 
-		assert.deepStrictEqual(graphRequests(), [
-			["getGraphData", "idea", 3],
-		]);
+		assert.deepStrictEqual(graphRequests(), [["getGraphData", "idea", 3]]);
 	});
 
 	test("warns instead of restoring when the server provides no graph data", async () => {
@@ -259,7 +249,9 @@ suite("graph panel restore", () => {
 		assert.deepStrictEqual(showOpenDialog.mock.calls, [
 			[{ filters: { Json: ["json"] } }],
 		]);
-		assert.deepStrictEqual(readFile.mock.calls, [[{ fsPath: "/tmp/graph.json" }]]);
+		assert.deepStrictEqual(readFile.mock.calls, [
+			[{ fsPath: "/tmp/graph.json" }],
+		]);
 
 		panel.ready();
 		assert.deepStrictEqual(panel.postMessage.mock.calls, [
@@ -295,9 +287,7 @@ suite("graph panel restore", () => {
 
 		await deserialize(panel.panel, undefined);
 
-		assert.deepStrictEqual(graphRequests(), [
-			["getGraphData", "idea", 3],
-		]);
+		assert.deepStrictEqual(graphRequests(), [["getGraphData", "idea", 3]]);
 		panel.ready();
 		assert.deepStrictEqual(panel.postMessage.mock.calls, [
 			[
@@ -317,9 +307,7 @@ suite("graph panel restore", () => {
 
 		await deserialize(panel.panel, { source: "server" });
 
-		assert.deepStrictEqual(graphRequests(), [
-			["getGraphData", "idea", 3],
-		]);
+		assert.deepStrictEqual(graphRequests(), [["getGraphData", "idea", 3]]);
 	});
 
 	test("shows an info message when there is nothing to restore", async () => {
@@ -348,9 +336,16 @@ suite("graph panel restore", () => {
 		const panel = fakePanel();
 
 		await assert.doesNotReject(() =>
-			deserialize(panel.panel, { source: "server", entityType: "idea", depth: 3 }),
+			deserialize(panel.panel, {
+				source: "server",
+				entityType: "idea",
+				depth: 3,
+			}),
 		);
-		assert.ok(GraphPanel.currentPanel, "panel still restored before the fetch failed");
+		assert.ok(
+			GraphPanel.currentPanel,
+			"panel still restored before the fetch failed",
+		);
 		assert.deepStrictEqual(logError.mock.calls, [
 			["graph panel restore failed", failure],
 		]);
