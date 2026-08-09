@@ -124,10 +124,7 @@ export function registerCommands(
 								context.extensionPath,
 								webviewPanel,
 							);
-							if (
-								persisted?.source === "server" &&
-								persisted.entityType
-							) {
+							if (persisted?.source === "server" && persisted.entityType) {
 								if (!serverProvidesGraphData(client)) {
 									window.showWarningMessage(
 										"CWTools: this language server doesn't provide graph data, so the graph can't be restored.",
@@ -135,10 +132,7 @@ export function registerCommands(
 									return;
 								}
 								const depth = persisted.depth ?? currentGraphDepth;
-								const data = await getGraphData(
-									persisted.entityType,
-									depth,
-								);
+								const data = await getGraphData(persisted.entityType, depth);
 								panel.initialiseGraph(data, wheelSensitivity(), {
 									source: "server",
 									entityType: persisted.entityType,
@@ -164,10 +158,7 @@ export function registerCommands(
 								// No persisted state (e.g. a reload before the first render):
 								// fall back to the last active entity type.
 								const entityType = tracker.getLatestType();
-								const data = await getGraphData(
-									entityType,
-									currentGraphDepth,
-								);
+								const data = await getGraphData(entityType, currentGraphDepth);
 								panel.initialiseGraph(data, wheelSensitivity(), {
 									source: "server",
 									entityType,

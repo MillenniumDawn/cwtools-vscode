@@ -7,44 +7,47 @@ import * as assert from "assert";
 // and friends are mocked so rendering runs against a minimal fake core.
 
 const { fakeCy, messageListener, postMessage, setState } = vi.hoisted(() => {
-		const messageListener: {
-			listener?: (event: { data: unknown }) => void;
-		} = {};
-		const fakeCollection = () => ({
-			boundingBox: () => ({ y2: 0 }),
-			layout: () => ({ run: () => {} }),
-			shift: () => {},
-			union: () => fakeCollection(),
-		});
-		const fakeCy = () => ({
-			add: vi.fn(),
-			collection: () => fakeCollection(),
-			cyCanvas: () => ({
-				clear: vi.fn(),
-				getCanvas: () => ({ getContext: () => ({}) }),
-				resetTransform: vi.fn(),
-				setTransform: vi.fn(),
-			}),
-			destroy: vi.fn(),
-			elements: () => ({ components: () => [] }),
-			fit: vi.fn(),
-			height: () => 600,
-			json: vi.fn(),
-			nodes: () => ({ forEach: () => {} }),
-			on: vi.fn(),
-			style: vi.fn(),
-			width: () => 800,
-		});
-		return {
-			fakeCy,
-			messageListener,
-			postMessage: vi.fn(),
-			setState: vi.fn(),
-		};
+	const messageListener: {
+		listener?: (event: { data: unknown }) => void;
+	} = {};
+	const fakeCollection = () => ({
+		boundingBox: () => ({ y2: 0 }),
+		layout: () => ({ run: () => {} }),
+		shift: () => {},
+		union: () => fakeCollection(),
 	});
+	const fakeCy = () => ({
+		add: vi.fn(),
+		collection: () => fakeCollection(),
+		cyCanvas: () => ({
+			clear: vi.fn(),
+			getCanvas: () => ({ getContext: () => ({}) }),
+			resetTransform: vi.fn(),
+			setTransform: vi.fn(),
+		}),
+		destroy: vi.fn(),
+		elements: () => ({ components: () => [] }),
+		fit: vi.fn(),
+		height: () => 600,
+		json: vi.fn(),
+		nodes: () => ({ forEach: () => {} }),
+		on: vi.fn(),
+		style: vi.fn(),
+		width: () => 800,
+	});
+	return {
+		fakeCy,
+		messageListener,
+		postMessage: vi.fn(),
+		setState: vi.fn(),
+	};
+});
 
 vi.mock("cytoscape", () => ({
-	default: Object.assign(vi.fn(() => fakeCy()), { use: vi.fn() }),
+	default: Object.assign(
+		vi.fn(() => fakeCy()),
+		{ use: vi.fn() },
+	),
 }));
 vi.mock("cytoscape-elk", () => ({ default: {} }));
 vi.mock("cytoscape-popper", () => ({ default: {} }));
