@@ -339,6 +339,39 @@ describe("GraphPanel Tests", function () {
 		);
 		after();
 	});
+
+	it("should restore a GraphPanel around a revived webview panel", async function () {
+		await before();
+
+		// The window-reload serializer hands back a live panel whose html the
+		// extension must re-set; restore() adopts it like a fresh panel.
+		const panel = vscode.window.createWebviewPanel(
+			"cwtools-graph",
+			"Graph",
+			vscode.ViewColumn.One,
+			{ enableScripts: true },
+		);
+		const revived = gp.GraphPanel.restore(extension.extensionPath, panel);
+		assert.strictEqual(
+			gp.GraphPanel.currentPanel,
+			revived,
+			"restored panel should become currentPanel",
+		);
+
+		revived.initialiseGraph(testRawData, 1.0, {
+			source: "server",
+			entityType: "test",
+			depth: 3,
+		});
+
+		const testStatus = function () {
+			return gp.GraphPanel.currentPanel!.getState() === gp.State.Done;
+		};
+		const result = await retryAsync(testStatus, 3, 500);
+		assert.strictEqual(result, true, "restored GraphPanel should reach Done");
+
+		after();
+	});
 });
 
 suite("GraphPanel — UI integration", function () {

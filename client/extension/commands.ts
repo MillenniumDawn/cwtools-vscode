@@ -3,13 +3,13 @@ import type { ExtensionContext } from "vscode";
 import { workspace, window, commands } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
-import { getGraphData } from "../common/graphTypes";
+import { getGraphData, type GraphPanelState } from "../common/graphTypes";
 import {
 	graphDataAvailable,
 	fixAllWorkspaceAvailable,
 } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";
-import { errorMessage } from "./logger";
+import { errorMessage, logError } from "./logger";
 
 function serverProvidesGraphData(client: LanguageClient): boolean {
 	return graphDataAvailable(
@@ -54,12 +54,17 @@ export function registerCommands(
 			);
 			return;
 		}
+		const entityType = tracker.getLatestType();
 		const [gp, graphData] = await Promise.all([
 			import("./graphPanel"),
-			getGraphData(tracker.getLatestType(), currentGraphDepth),
+			getGraphData(entityType, currentGraphDepth),
 		]);
 		gp.GraphPanel.create(context.extensionPath);
-		gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity());
+		gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity(), {
+			source: "server",
+			entityType,
+			depth: currentGraphDepth,
+		});
 	};
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showGraph", async () => {
@@ -100,9 +105,81 @@ export function registerCommands(
 			const data = new TextDecoder("utf-8").decode(bytes);
 			const gp = await import("./graphPanel");
 			gp.GraphPanel.create(context.extensionPath);
-			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity());
+			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity(), {
+				source: "json",
+			});
 		}),
 	);
+	// Revive the graph panel across window reloads. The webview persists the
+	// request parameters via setState; the data itself isn't persisted, so
+	// server graphs are re-requested and JSON imports are re-prompted.
+	void import("./graphPanel")
+		.then((gp) => {
+			context.subscriptions.push(
+				window.registerWebviewPanelSerializer(gp.GraphPanel.viewType, {
+					async deserializeWebviewPanel(webviewPanel, state) {
+						const persisted = state as GraphPanelState | undefined;
+						try {
+							const panel = gp.GraphPanel.restore(
+								context.extensionPath,
+								webviewPanel,
+							);
+							if (persisted?.source === "server" && persisted.entityType) {
+								if (!serverProvidesGraphData(client)) {
+									window.showWarningMessage(
+										"CWTools: this language server doesn't provide graph data, so the graph can't be restored.",
+									);
+									return;
+								}
+								const depth = persisted.depth ?? currentGraphDepth;
+								const data = await getGraphData(persisted.entityType, depth);
+								panel.initialiseGraph(data, wheelSensitivity(), {
+									source: "server",
+									entityType: persisted.entityType,
+									depth,
+								});
+							} else if (persisted?.source === "json") {
+								const uri = await window.showOpenDialog({
+									filters: { Json: ["json"] },
+								});
+								if (!uri) {
+									window.showInformationMessage(
+										"CWTools: graph data from a JSON export isn't persisted across reloads. " +
+											"Run 'CWTools: Recreate graph from json' to rebuild it.",
+									);
+									return;
+								}
+								const bytes = await vscode.workspace.fs.readFile(uri[0]);
+								const data = new TextDecoder("utf-8").decode(bytes);
+								panel.initialiseGraph(data, wheelSensitivity(), {
+									source: "json",
+								});
+							} else if (serverProvidesGraphData(client)) {
+								// No persisted state (e.g. a reload before the first render):
+								// fall back to the last active entity type.
+								const entityType = tracker.getLatestType();
+								const data = await getGraphData(entityType, currentGraphDepth);
+								panel.initialiseGraph(data, wheelSensitivity(), {
+									source: "server",
+									entityType,
+									depth: currentGraphDepth,
+								});
+							} else {
+								window.showInformationMessage(
+									"CWTools: graph data isn't persisted across reloads. " +
+										"Run 'CWTools: Show graph' to rebuild the graph.",
+								);
+							}
+						} catch (err) {
+							logError("graph panel restore failed", err);
+						}
+					},
+				}),
+			);
+		})
+		.catch((err: unknown) =>
+			logError("graph panel serializer registration failed", err),
+		);
 	// cacheVanilla / clearAllCaches / reindexWorkspace are NOT registered here:
 	// the language client registers them from the server's
 	// executeCommandProvider, and the executeCommand middleware surfaces
