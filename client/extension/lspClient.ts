@@ -1,6 +1,6 @@
 import * as path from "path";
 import type { ExtensionContext } from "vscode";
-import { workspace, window } from "vscode";
+import { CancellationError, workspace, window } from "vscode";
 import type {
 	LanguageClientOptions,
 	ServerOptions,
@@ -20,6 +20,7 @@ import {
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import { logError, errorMessage, outputChannel } from "./logger";
+import { runCancellableExecuteCommand } from "./commandProgress";
 
 export interface ClientConfig {
 	language: string;
@@ -61,6 +62,13 @@ function readBackgroundReindexIdleSeconds(): number {
 			.get<number>("backgroundReindex.idleSeconds"),
 	);
 }
+
+const commandProgressTitles: Readonly<Record<string, string>> = {
+	cacheVanilla: "CWTools: Regenerate game vanilla cache file",
+	clearAllCaches: "CWTools: Clear all caches and reindex",
+	reloadrulesconfig: "CWTools: Reload config rules",
+	reindexWorkspace: "CWTools: Re-index workspace",
+};
 
 // genlocall returns one stub per language; open each as an untitled document so
 // the user reviews and saves manually. Paradox loc files require a UTF-8 BOM, so
@@ -151,31 +159,43 @@ export function createLanguageClient(
 			// genlocall returns generated loc stubs to open, not a toast string.
 			if (command === "genlocall") {
 				try {
-					const result: unknown = await next(command, args);
+					const result = await runCancellableExecuteCommand(
+						client,
+						command,
+						args,
+						"CWTools: Generate missing loc for all files",
+					);
 					await openGeneratedLoc(result);
 					return result;
 				} catch (err) {
+					if (err instanceof CancellationError) {
+						return undefined;
+					}
 					const msg = errorMessage(err);
 					window.showErrorMessage(`CWTools: genlocall failed: ${msg}`);
 					return undefined;
 				}
 			}
-			const isStatusCommand =
-				command === "cacheVanilla" ||
-				command === "clearAllCaches" ||
-				command === "reloadrulesconfig" ||
-				command === "reindexWorkspace";
-			if (!isStatusCommand) {
+			const title = commandProgressTitles[command];
+			if (title === undefined) {
 				const result: unknown = await next(command, args);
 				return result;
 			}
 			try {
-				const result: unknown = await next(command, args);
+				const result = await runCancellableExecuteCommand(
+					client,
+					command,
+					args,
+					title,
+				);
 				if (typeof result === "string" && result.length > 0) {
 					window.showInformationMessage(`CWTools: ${result}`);
 				}
 				return result;
 			} catch (err) {
+				if (err instanceof CancellationError) {
+					return undefined;
+				}
 				const msg = errorMessage(err);
 				window.showErrorMessage(`CWTools: ${command} failed: ${msg}`);
 				return undefined;
