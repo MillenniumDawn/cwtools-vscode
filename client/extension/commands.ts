@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import type { ExtensionContext } from "vscode";
 import { workspace, window, commands } from "vscode";
-import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
 import { getGraphData, type GraphPanelState } from "../common/graphTypes";
 import {
@@ -10,6 +9,7 @@ import {
 } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";
 import { errorMessage, logError } from "./logger";
+import { runCancellableExecuteCommand } from "./commandProgress";
 
 function serverProvidesGraphData(client: LanguageClient): boolean {
 	return graphDataAvailable(
@@ -192,11 +192,16 @@ export function registerCommands(
 		commands.registerCommand("cwtools.exportProfilingLog", async () => {
 			let log: unknown;
 			try {
-				log = await client.sendRequest(ExecuteCommandRequest.type, {
-					command: "exportProfilingLog",
-					arguments: [],
-				});
+				log = await runCancellableExecuteCommand(
+					client,
+					"exportProfilingLog",
+					[],
+					"CWTools: Export profiling log",
+				);
 			} catch (err) {
+				if (err instanceof vscode.CancellationError) {
+					return;
+				}
 				const msg = errorMessage(err);
 				window.showErrorMessage(
 					`CWTools: could not fetch profiling log: ${msg}`,
@@ -233,17 +238,19 @@ export function registerCommands(
 				return;
 			}
 			try {
-				const result: unknown = await client.sendRequest(
-					ExecuteCommandRequest.type,
-					{
-						command: "fixAllWorkspace",
-						arguments: [],
-					},
+				const result = await runCancellableExecuteCommand(
+					client,
+					"fixAllWorkspace",
+					[],
+					"CWTools: Fix all auto-fixable problems in workspace",
 				);
 				if (typeof result === "string" && result.length > 0) {
 					window.showInformationMessage(`CWTools: ${result}`);
 				}
 			} catch (err) {
+				if (err instanceof vscode.CancellationError) {
+					return;
+				}
 				const msg = errorMessage(err);
 				window.showErrorMessage(`CWTools: fixAllWorkspace failed: ${msg}`);
 			}

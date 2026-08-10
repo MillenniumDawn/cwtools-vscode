@@ -15,6 +15,7 @@ export default defineConfig({
 			include: [
 				"build/changelog.ts",
 				"build/rulesPins.ts",
+				"client/extension/commandProgress.ts",
 				"client/extension/commands.ts",
 				"client/extension/diagnosticsSignature.ts",
 				"client/extension/engine.ts",
