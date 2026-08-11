@@ -1,5 +1,7 @@
 ### Unreleased
 
+* `ROOT` inside an event now resolves to the event's own scope instead of the file default. The engine seeded an event's `## push_scope` onto the current-scope stack but never updated ROOT, so `ROOT = { … }` blocks in HOI4's hybrid-scope `unit_leader_event`/`state_event` were falsely checked against country — `add_max_trait` and other unit-leader effects in `ROOT` fired a bogus CW105. The pinned engine now sets ROOT from the event's scope (lenient `any` for the hybrid types), matching the original F# behavior. (#152)
+
 * Long-running commands now show a cancellable notification and pass cancellation to the language server without an error toast. Server status cleanup is tracked in MillenniumDawn/cwtools#204. (#145)
 
 * The graph panel now survives a window reload. The webview persists the request parameters (entity type, depth), and a `WebviewPanelSerializer` re-opens the panel and re-requests the graph from the server; a graph imported from JSON prompts for the file again, since that data isn't persisted. (#146)
