@@ -215,6 +215,7 @@ function packageAllVsixes(): string[] {
 	fs.renameSync(serverBinDir, holding);
 
 	const vsixes: string[] = [];
+	let restored = false;
 	try {
 		for (const platform of platforms) {
 			fs.rmSync(serverBinDir, { recursive: true, force: true });
@@ -226,10 +227,18 @@ function packageAllVsixes(): string[] {
 		// complete for the Open VSX step, which re-packages from the directory.
 		fs.rmSync(serverBinDir, { recursive: true, force: true });
 		copyDir(holding, serverBinDir);
+		restored = true;
 		console.log("packaging the universal fallback vsix");
 		vsixes.push(...packageVsix());
 	} finally {
-		if (!fs.existsSync(serverBinDir)) copyDir(holding, serverBinDir);
+		// Key the restore on whether the loop finished, not on directory
+		// existence: a mid-loop vsce failure leaves the failing platform's
+		// binary in serverBinDir, which would skip the restore and let the
+		// holding dir (the only complete copy) get deleted below.
+		if (!restored) {
+			fs.rmSync(serverBinDir, { recursive: true, force: true });
+			copyDir(holding, serverBinDir);
+		}
 		fs.rmSync(holding, { recursive: true, force: true });
 	}
 	return vsixes;
