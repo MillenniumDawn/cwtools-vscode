@@ -541,12 +541,16 @@ suite("engine — runGit", () => {
 		const spawnError = Object.assign(new Error("spawn git ENOENT"), {
 			code: "ENOENT",
 		});
-		const fakeSpawn = () => makeChild({ code: null, signal: null, error: spawnError });
+		const fakeSpawn = () =>
+			makeChild({ code: null, signal: null, error: spawnError });
 		await assert.rejects(
 			() => runGit(["clone"], fakeSpawn as never),
 			(err) => {
-				assert.ok(err instanceof GitNotFoundError, "should be GitNotFoundError");
-				assert.match((err).message, /git was not found on your PATH/);
+				assert.ok(
+					err instanceof GitNotFoundError,
+					"should be GitNotFoundError",
+				);
+				assert.match(err.message, /git was not found on your PATH/);
 				return true;
 			},
 		);
@@ -554,7 +558,8 @@ suite("engine — runGit", () => {
 
 	test("rejects with the raw error when a non-ENOENT spawn error fires", async () => {
 		const spawnError = new Error("EACCES");
-		const fakeSpawn = () => makeChild({ code: null, signal: null, error: spawnError });
+		const fakeSpawn = () =>
+			makeChild({ code: null, signal: null, error: spawnError });
 		await assert.rejects(
 			() => runGit(["clone"], fakeSpawn as never),
 			(err) => {
