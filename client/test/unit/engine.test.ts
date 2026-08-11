@@ -448,7 +448,11 @@ suite("engine — runGit", () => {
 			if (opts.error) {
 				child.emit("error", opts.error);
 				if (opts.closeAfterError) {
-					child.emit("close", opts.closeAfterError.code, opts.closeAfterError.signal);
+					child.emit(
+						"close",
+						opts.closeAfterError.code,
+						opts.closeAfterError.signal,
+					);
 				}
 			} else {
 				child.emit("close", opts.code, opts.signal);
@@ -648,7 +652,11 @@ suite("engine — rulesFetchCommands", () => {
 
 	test("moves an existing cache to a new pin without re-initing", () => {
 		assert.deepStrictEqual(
-			rulesFetchCommands("/cache/hoi4", pin, "f1460d139036e75a8dd065dbd27b27415172654f"),
+			rulesFetchCommands(
+				"/cache/hoi4",
+				pin,
+				"f1460d139036e75a8dd065dbd27b27415172654f",
+			),
 			[
 				["-C", "/cache/hoi4", "fetch", "--depth", "1", pin.repo, pin.ref],
 				["-C", "/cache/hoi4", "checkout", "--detach", pin.ref],
