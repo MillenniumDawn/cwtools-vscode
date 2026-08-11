@@ -2,7 +2,11 @@ import * as vscode from "vscode";
 import type { ExtensionContext } from "vscode";
 import { workspace, window, commands } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
-import { getGraphData, type GraphPanelState } from "../common/graphTypes";
+import {
+	getGraphData,
+	type GraphData,
+	type GraphPanelState,
+} from "../common/graphTypes";
 import {
 	graphDataAvailable,
 	fixAllWorkspaceAvailable,
@@ -10,6 +14,12 @@ import {
 import type { EditorTracker } from "./documentLanguage";
 import { errorMessage, logError } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
+// Type-only: the graph panel stays lazily imported (it pulls in the webview
+// plumbing), and `import type` is erased, so naming its shape here doesn't
+// pull it into the activation path.
+import type * as graphPanelModule from "./graphPanel";
+
+type GraphPanelModule = typeof graphPanelModule;
 
 function serverProvidesGraphData(client: LanguageClient): boolean {
 	return graphDataAvailable(
@@ -55,10 +65,22 @@ export function registerCommands(
 			return;
 		}
 		const entityType = tracker.getLatestType();
-		const [gp, graphData] = await Promise.all([
-			import("./graphPanel"),
-			getGraphData(entityType, currentGraphDepth),
-		]);
+		let loaded: [GraphPanelModule, GraphData];
+		try {
+			loaded = await Promise.all([
+				import("./graphPanel"),
+				getGraphData(entityType, currentGraphDepth),
+			]);
+		} catch (err) {
+			// The graph build now runs under a cancellable notification, so
+			// Cancel lands here. Opening an empty panel would be worse than
+			// doing nothing.
+			if (err instanceof vscode.CancellationError) {
+				return;
+			}
+			throw err;
+		}
+		const [gp, graphData] = loaded;
 		gp.GraphPanel.create(context.extensionPath);
 		gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity(), {
 			source: "server",
@@ -243,6 +265,10 @@ export function registerCommands(
 					"fixAllWorkspace",
 					[],
 					"CWTools: Fix all auto-fixable problems in workspace",
+					// Lands as a single workspace edit from an already-computed
+					// snapshot: there is no half-applied state to stop in, so
+					// Cancel stays the `$/cancelRequest` fallback.
+					{ serverProgress: false },
 				);
 				if (typeof result === "string" && result.length > 0) {
 					window.showInformationMessage(`CWTools: ${result}`);

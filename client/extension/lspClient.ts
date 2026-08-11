@@ -156,6 +156,22 @@ export function createLanguageClient(
 			}
 		},
 		executeCommand: async (command, args, next) => {
+			// getGraphData returns the graph the webview renders, so its result
+			// isn't a toast and — unlike the commands below — a failure has to
+			// reach the caller instead of becoming an error message and an
+			// `undefined` the panel would try to draw. `serverProgress: false`
+			// keeps Cancel on the `$/cancelRequest` path: the server has no
+			// graceful cancel for this one, so a token would give the
+			// notification a Cancel button that stops nothing.
+			if (command === "getGraphData") {
+				return await runCancellableExecuteCommand(
+					client,
+					command,
+					args,
+					"CWTools: Build graph",
+					{ serverProgress: false },
+				);
+			}
 			// genlocall returns generated loc stubs to open, not a toast string.
 			if (command === "genlocall") {
 				try {
@@ -164,11 +180,16 @@ export function createLanguageClient(
 						command,
 						args,
 						"CWTools: Generate missing loc for all files",
+						// One synchronous sweep server-side with no cancel seam,
+						// so Cancel stays the `$/cancelRequest` fallback rather
+						// than a notification the server would ignore.
+						{ serverProgress: false },
 					);
 					await openGeneratedLoc(result);
 					return result;
 				} catch (err) {
 					if (err instanceof CancellationError) {
+						window.showInformationMessage("CWTools: genlocall cancelled.");
 						return undefined;
 					}
 					const msg = errorMessage(err);
@@ -188,12 +209,19 @@ export function createLanguageClient(
 					args,
 					title,
 				);
+				// Against a server that supports command progress this covers
+				// cancellation too: the command returns normally and says so
+				// ("Re-index cancelled.") instead of being dropped mid-flight.
 				if (typeof result === "string" && result.length > 0) {
 					window.showInformationMessage(`CWTools: ${result}`);
 				}
 				return result;
 			} catch (err) {
 				if (err instanceof CancellationError) {
+					// The `$/cancelRequest` fallback, where the handler was dropped
+					// and there is no server reply to report. Say so anyway — a
+					// notification that just vanishes reads as a silent failure.
+					window.showInformationMessage(`CWTools: ${command} cancelled.`);
 					return undefined;
 				}
 				const msg = errorMessage(err);
