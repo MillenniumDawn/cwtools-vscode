@@ -1,10 +1,18 @@
 # Auto-merge Dependabot engine-submodule bumps after CI passes.
 #
-# main has no branch protection, so GitHub's native auto-merge would land a
-# PR before its checks finish. Instead this fires when the Test workflow
-# completes, and merges only if the run succeeded and the PR touches nothing
-# but the engine gitlink. Releases stay safe regardless: release.yml refuses
-# to bundle an untagged engine.
+# main's ruleset requires a reviewed PR but no status checks, so GitHub's
+# native auto-merge would land a bump as soon as it is approved, whether or not
+# Test passed. Instead this fires when the Test workflow completes, and merges
+# only if the run succeeded, the PR touches nothing but the engine gitlink, and
+# the new gitlink is a descendant of the one on the base branch.
+#
+# That last gate is the one release.yml cannot cover. It refuses to bundle an
+# untagged engine, but a downgrade to an *older* tag passes that check and
+# would ship a regressed engine (#177 bumped the pin back to v2.4.0).
+#
+# The merge itself still has to satisfy the ruleset. github-actions[bot] is not
+# a bypass actor, so an unapproved bump stops at "the base branch policy
+# prohibits the merge" -- CI passing is necessary here, not sufficient.
 on:
   workflow_run:
     workflows: [Test]
@@ -29,12 +37,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-    - name: Merge if the PR only bumps the engine submodule
+    - name: Merge if the PR only moves the engine submodule forward
       env:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ github.repository }}
         HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        ENGINE_PATH: submodules/cwtools
       run: |
         pr=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
           --author "app/dependabot" \
@@ -44,10 +53,58 @@ jobs:
           echo "No open PR for $HEAD_BRANCH at $HEAD_SHA; nothing to do."
           exit 0
         fi
-        files=$(gh pr view "$pr" --repo "$REPO" --json files --jq '.files[].path')
-        if [ "$files" != "submodules/cwtools" ]; then
-          echo "PR #$pr changes more than the engine gitlink; leaving it for review."
+
+        pr_json=$(gh pr view "$pr" --repo "$REPO" --json baseRefName,files)
+        # Assert the count rather than leaning on a one-file PR rendering as a
+        # single line: a second changed path has to fail this, not concatenate
+        # into a string that happens not to match.
+        changed=$(jq '.files | length' <<<"$pr_json")
+        path=$(jq -r '.files[0].path // ""' <<<"$pr_json")
+        if [ "$changed" != 1 ] || [ "$path" != "$ENGINE_PATH" ]; then
+          echo "PR #$pr changes $changed path(s), not just the engine gitlink;" \
+            "leaving it for review."
           exit 0
         fi
+
+        # Both gitlinks, without checking anything out: the contents API reports
+        # a submodule path as type "submodule" with `sha` set to the commit it
+        # pins. The base branch is read at its tip, so the comparison is against
+        # what the merge would actually replace.
+        base=$(jq -r '.baseRefName' <<<"$pr_json")
+        base_json=$(gh api "repos/$REPO/contents/$ENGINE_PATH?ref=$base")
+        current=$(jq -r 'select(.type == "submodule") | .sha' <<<"$base_json")
+        new=$(gh api "repos/$REPO/contents/$ENGINE_PATH?ref=$HEAD_SHA" \
+          --jq 'select(.type == "submodule") | .sha')
+        if [ -z "$current" ] || [ -z "$new" ]; then
+          echo "::error::$ENGINE_PATH is not a submodule on $base or $HEAD_SHA."
+          exit 1
+        fi
+
+        # Which repo the gitlinks live in, taken from the base branch's
+        # .gitmodules rather than the PR's, so the bump can't redirect it.
+        engine=$(jq -r '.submodule_git_url' <<<"$base_json" |
+          sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')
+        if ! grep -qE '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' <<<"$engine"; then
+          echo "::error::Engine submodule URL '$engine' is not a GitHub" \
+            "owner/repo; cannot check which way the bump moves."
+          exit 1
+        fi
+
+        # Dependabot will bump to an older engine as readily as a newer one, and
+        # an older *tag* clears release.yml's tagged-engine gate. `compare`
+        # answers `git merge-base --is-ancestor` without cloning the engine: the
+        # status is "ahead" only when $current is an ancestor of $new.
+        status=$(gh api "repos/$engine/compare/$current...$new" --jq '.status')
+        if [ "$status" != "ahead" ]; then
+          echo "Engine $current -> $new is '$status', not a fast-forward;" \
+            "leaving PR #$pr for review."
+          # A downgrade is worth noticing, but it is a valid reason not to
+          # merge, so say so in the summary instead of failing the run.
+          echo "Did not auto-merge #$pr: engine \`$current\` -> \`$new\` is" \
+            "\`$status\`, not a fast-forward." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+        echo "Engine moves forward: $current -> $new."
+
         # --match-head-commit: refuse if the branch moved since this run's SHA.
         gh pr merge "$pr" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"
