@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
 	hasGitDirectory: false,
 	head: null as string | null,
 	checkoutHead: null as string | null,
+	gitMissing: false,
 	rulesFetches: [] as Array<{
 		cacheDir: string;
 		repo: string;
@@ -65,8 +66,15 @@ vi.mock("../../extension/logger", () => ({
 
 vi.mock("../../extension/engine", async () => {
 	const { LANGUAGE_REPOS } = await import("../../extension/games");
+	class GitNotFoundError extends Error {
+		constructor() {
+			super("git was not found on your PATH; install Git or add it to PATH");
+			this.name = "GitNotFoundError";
+		}
+	}
 	return {
 		LANGUAGE_REPOS,
+		GitNotFoundError,
 		rulesFetchCommands: (
 			cacheDir: string,
 			rules: { repo: string; ref: string },
@@ -76,6 +84,12 @@ vi.mock("../../extension/engine", async () => {
 			return head === rules.ref ? [] : [["checkout", rules.ref]];
 		},
 		runGit: (args: string[]): Promise<string> => {
+			// A missing git binary fails every invocation, including rev-parse;
+			// the real runGit has no rev-parse special case. Checking this first
+			// keeps the mock honest when a stale .git dir is present.
+			if (state.gitMissing) {
+				return Promise.reject(new GitNotFoundError());
+			}
 			if (args.includes("rev-parse")) {
 				return state.head === null
 					? Promise.reject(new Error("not a git repository"))
@@ -180,6 +194,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		state.hasGitDirectory = false;
 		state.head = null;
 		state.checkoutHead = null;
+		state.gitMissing = false;
 		state.rulesFetches.length = 0;
 		state.progress = undefined;
 		state.progressStarted = new Promise<void>((resolve) => {
@@ -427,5 +442,105 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		await waitForProgress();
 		assert.deepStrictEqual(requests, []);
 		assert.ok(vscode.showWarningMessage.mock.calls.length > 0);
+	});
+
+	test("warns about missing git (not the network) on an initial clone ENOENT", async () => {
+		state.gitMissing = true;
+		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+
+		fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+
+		await waitForProgress();
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 1);
+		const warning = vscode.showWarningMessage.mock.calls[0][0] as string;
+		assert.match(warning, /CWTools needs Git on your PATH/);
+		assert.doesNotMatch(warning, /check your network/);
+	});
+
+	test("still warns about missing git when a stale .git dir is present", async () => {
+		// A prior clone left .git behind, but git has since gone from PATH. The
+		// real currentRulesHead catches the failed rev-parse and returns null,
+		// forcing isInitialClone = true so the missing-git warning still fires.
+		state.hasGitDirectory = true;
+		state.head = "e".repeat(40);
+		state.gitMissing = true;
+		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+
+		fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+
+		await waitForProgress();
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 1);
+		const warning = vscode.showWarningMessage.mock.calls[0][0] as string;
+		assert.match(warning, /CWTools needs Git on your PATH/);
+		assert.doesNotMatch(warning, /check your network/);
+	});
+
+	test("shows the generic network wording when an initial clone fails for a non-git reason", async () => {
+		// Checkout "succeeds" but lands on the wrong commit, so syncPinnedRules
+		// throws inside the try. That is a non-ENOENT failure and must keep the
+		// generic fetch-failure wording, not the missing-git wording.
+		const ref = "f".repeat(40);
+		state.checkoutHead = "e".repeat(40);
+		stubManifestFetch(manifest(ref, RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+
+		fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+
+		await waitForProgress();
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 1);
+		const warning = vscode.showWarningMessage.mock.calls[0][0] as string;
+		assert.match(warning, /check your network/);
+		assert.match(warning, /Rules cache landed on/);
+		assert.doesNotMatch(warning, /needs Git on your PATH/);
+	});
+
+	test("a failed bump (rules already present) stays log-only with no warning", async () => {
+		// isInitialClone is false when currentRulesHead returns an existing pin,
+		// so a failed fetch must not warn — the previous pin is still on disk.
+		// This is the gate the missing-git and generic warnings branch on.
+		state.hasGitDirectory = true;
+		state.head = "e".repeat(40);
+		state.checkoutHead = "g".repeat(40);
+		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+
+		fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+
+		await waitForProgress();
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 0);
 	});
 });

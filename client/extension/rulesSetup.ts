@@ -10,6 +10,7 @@ import {
 	resolveRulesFolder,
 	runGit,
 	rulesFetchCommands,
+	GitNotFoundError,
 } from "./engine";
 import type { RulesRepo } from "./engine";
 import {
@@ -246,9 +247,13 @@ async function syncPinnedRules(
 				// warn loudly. A failed bump (rules already present) just keeps the
 				// previous pin and stays log-only.
 				if (isInitialClone) {
-					void window.showWarningMessage(
-						`CWTools: failed to download the ${language} rules (${msg}). Validation will be limited until they can be fetched; check your network and reload the window.`,
-					);
+					// Missing-git is a setup problem, not a network one; point the user at
+					// the actual fix instead of the generic fetch-failure wording.
+					const warning =
+						err instanceof GitNotFoundError
+							? `CWTools needs Git on your PATH to fetch the ${language} rules; install Git and reload the window.`
+							: `CWTools: failed to download the ${language} rules (${msg}). Validation will be limited until they can be fetched; check your network and reload the window.`;
+					void window.showWarningMessage(warning);
 				}
 			}
 		},

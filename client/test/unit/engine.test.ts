@@ -18,6 +18,7 @@ import {
 	serverExe,
 	runGit,
 	rulesFetchCommands,
+	GitNotFoundError,
 } from "../../extension/engine";
 
 suite("engine — LANGUAGE_REPOS", () => {
@@ -432,6 +433,8 @@ suite("engine — runGit", () => {
 		stdout?: string;
 		stderr?: string;
 		error?: Error;
+		// When set, emit `close` after `error` so the settled guard is exercised.
+		closeAfterError?: { code: number | null; signal: NodeJS.Signals | null };
 	}): EventEmitter & { stdout: EventEmitter; stderr: EventEmitter } {
 		const child = new EventEmitter() as EventEmitter & {
 			stdout: EventEmitter;
@@ -442,8 +445,18 @@ suite("engine — runGit", () => {
 		queueMicrotask(() => {
 			if (opts.stdout) child.stdout.emit("data", Buffer.from(opts.stdout));
 			if (opts.stderr) child.stderr.emit("data", Buffer.from(opts.stderr));
-			if (opts.error) child.emit("error", opts.error);
-			else child.emit("close", opts.code, opts.signal);
+			if (opts.error) {
+				child.emit("error", opts.error);
+				if (opts.closeAfterError) {
+					child.emit(
+						"close",
+						opts.closeAfterError.code,
+						opts.closeAfterError.signal,
+					);
+				}
+			} else {
+				child.emit("close", opts.code, opts.signal);
+			}
 		});
 		return child;
 	}
@@ -535,10 +548,59 @@ suite("engine — runGit", () => {
 		);
 	});
 
-	test("rejects when git fails to spawn", async () => {
+	test("rejects with GitNotFoundError when git fails to spawn (ENOENT)", async () => {
+		// Node sets .code on real spawn ENOENT errors.
+		const spawnError = Object.assign(new Error("spawn git ENOENT"), {
+			code: "ENOENT",
+		});
 		const fakeSpawn = () =>
-			makeChild({ code: null, signal: null, error: new Error("ENOENT") });
-		await assert.rejects(() => runGit(["clone"], fakeSpawn as never), /ENOENT/);
+			makeChild({ code: null, signal: null, error: spawnError });
+		await assert.rejects(
+			() => runGit(["clone"], fakeSpawn as never),
+			(err) => {
+				assert.ok(
+					err instanceof GitNotFoundError,
+					"should be GitNotFoundError",
+				);
+				assert.match(err.message, /git was not found on your PATH/);
+				return true;
+			},
+		);
+	});
+
+	test("rejects with the raw error when a non-ENOENT spawn error fires", async () => {
+		const spawnError = new Error("EACCES");
+		const fakeSpawn = () =>
+			makeChild({ code: null, signal: null, error: spawnError });
+		await assert.rejects(
+			() => runGit(["clone"], fakeSpawn as never),
+			(err) => {
+				assert.strictEqual(err, spawnError);
+				return true;
+			},
+		);
+	});
+
+	test("a close event after an ENOENT error does not override the rejection", async () => {
+		// Node can emit close after error for some spawn failures; the settled
+		// guard must keep the GitNotFoundError rejection, not double-settle.
+		const spawnError = Object.assign(new Error("spawn git ENOENT"), {
+			code: "ENOENT",
+		});
+		const fakeSpawn = () =>
+			makeChild({
+				code: null,
+				signal: null,
+				error: spawnError,
+				closeAfterError: { code: 0, signal: null },
+			});
+		await assert.rejects(
+			() => runGit(["fetch"], fakeSpawn as never),
+			(err) => {
+				assert.ok(err instanceof GitNotFoundError);
+				return true;
+			},
+		);
 	});
 
 	test("times out when git hangs", async () => {
@@ -590,7 +652,11 @@ suite("engine — rulesFetchCommands", () => {
 
 	test("moves an existing cache to a new pin without re-initing", () => {
 		assert.deepStrictEqual(
-			rulesFetchCommands("/cache/hoi4", pin, "f1460d139036e75a8dd065dbd27b27415172654f"),
+			rulesFetchCommands(
+				"/cache/hoi4",
+				pin,
+				"f1460d139036e75a8dd065dbd27b27415172654f",
+			),
 			[
 				["-C", "/cache/hoi4", "fetch", "--depth", "1", pin.repo, pin.ref],
 				["-C", "/cache/hoi4", "checkout", "--detach", pin.ref],
