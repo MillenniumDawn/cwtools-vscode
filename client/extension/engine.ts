@@ -10,6 +10,24 @@ import type { RulesRepo } from "./games";
 export { LANGUAGE_REPOS } from "./games";
 export type { RulesRepo } from "./games";
 
+// Raised when `git` is not on PATH (Node spawns it as "git", and a missing
+// executable surfaces as an ENOENT error event). Translated here so callers
+// can tell missing-git apart from a real fetch failure and message accordingly.
+export class GitNotFoundError extends Error {
+	constructor() {
+		super("git was not found on your PATH; install Git or add it to PATH");
+		this.name = "GitNotFoundError";
+	}
+}
+
+function isSpawnNotFound(e: unknown): boolean {
+	return (
+		typeof e === "object" &&
+		e !== null &&
+		(e as { code?: unknown }).code === "ENOENT"
+	);
+}
+
 export async function detectFromFolder(
 	root: string,
 	fileExists: (p: string) => boolean | Promise<boolean>,
@@ -183,7 +201,7 @@ export function runGit(
 			settled = true;
 			clearTimeout(timer);
 			logError(`git ${args.join(" ")} error`, e);
-			reject(e);
+			reject(isSpawnNotFound(e) ? new GitNotFoundError() : e);
 		});
 		git.on("close", (code, signal) => {
 			if (settled) return;

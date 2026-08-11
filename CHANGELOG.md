@@ -1,5 +1,7 @@
 ### Unreleased
 
+* A missing `git` on `PATH` no longer surfaces as a cryptic `spawn git ENOENT` inside the rules-download warning. `runGit` translates the spawn ENOENT into a `GitNotFoundError`, and the initial-clone warning now says CWTools needs Git on your PATH (and to install Git and reload) instead of pointing at the network. (#169)
+
 ### 3.0.1
 
 * 3.0.0 was tagged but never shipped. A release refuses to bundle an untagged engine, and the submodule pointed at a branch commit, so every platform job stopped at that gate and no vsix was built. The pin is now the tagged engine v2.5.0, which carries the same ROOT fix, merged as MillenniumDawn/cwtools#221.

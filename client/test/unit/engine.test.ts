@@ -18,6 +18,7 @@ import {
 	serverExe,
 	runGit,
 	rulesFetchCommands,
+	GitNotFoundError,
 } from "../../extension/engine";
 
 suite("engine — LANGUAGE_REPOS", () => {
@@ -535,10 +536,32 @@ suite("engine — runGit", () => {
 		);
 	});
 
-	test("rejects when git fails to spawn", async () => {
-		const fakeSpawn = () =>
-			makeChild({ code: null, signal: null, error: new Error("ENOENT") });
-		await assert.rejects(() => runGit(["clone"], fakeSpawn as never), /ENOENT/);
+	test("rejects with GitNotFoundError when git fails to spawn (ENOENT)", async () => {
+		// Node sets .code on real spawn ENOENT errors.
+		const spawnError = Object.assign(new Error("spawn git ENOENT"), {
+			code: "ENOENT",
+		});
+		const fakeSpawn = () => makeChild({ code: null, signal: null, error: spawnError });
+		await assert.rejects(
+			() => runGit(["clone"], fakeSpawn as never),
+			(err) => {
+				assert.ok(err instanceof GitNotFoundError, "should be GitNotFoundError");
+				assert.match((err).message, /git was not found on your PATH/);
+				return true;
+			},
+		);
+	});
+
+	test("rejects with the raw error when a non-ENOENT spawn error fires", async () => {
+		const spawnError = new Error("EACCES");
+		const fakeSpawn = () => makeChild({ code: null, signal: null, error: spawnError });
+		await assert.rejects(
+			() => runGit(["clone"], fakeSpawn as never),
+			(err) => {
+				assert.strictEqual(err, spawnError);
+				return true;
+			},
+		);
 	});
 
 	test("times out when git hangs", async () => {

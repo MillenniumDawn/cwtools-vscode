@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
 	hasGitDirectory: false,
 	head: null as string | null,
 	checkoutHead: null as string | null,
+	gitMissing: false,
 	rulesFetches: [] as Array<{
 		cacheDir: string;
 		repo: string;
@@ -65,8 +66,15 @@ vi.mock("../../extension/logger", () => ({
 
 vi.mock("../../extension/engine", async () => {
 	const { LANGUAGE_REPOS } = await import("../../extension/games");
+	class GitNotFoundError extends Error {
+		constructor() {
+			super("git was not found on your PATH; install Git or add it to PATH");
+			this.name = "GitNotFoundError";
+		}
+	}
 	return {
 		LANGUAGE_REPOS,
+		GitNotFoundError,
 		rulesFetchCommands: (
 			cacheDir: string,
 			rules: { repo: string; ref: string },
@@ -80,6 +88,9 @@ vi.mock("../../extension/engine", async () => {
 				return state.head === null
 					? Promise.reject(new Error("not a git repository"))
 					: Promise.resolve(`${state.head}\n`);
+			}
+			if (state.gitMissing) {
+				return Promise.reject(new GitNotFoundError());
 			}
 			if (args[0] === "checkout") {
 				state.hasGitDirectory = true;
@@ -180,6 +191,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		state.hasGitDirectory = false;
 		state.head = null;
 		state.checkoutHead = null;
+		state.gitMissing = false;
 		state.rulesFetches.length = 0;
 		state.progress = undefined;
 		state.progressStarted = new Promise<void>((resolve) => {
@@ -427,5 +439,27 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		await waitForProgress();
 		assert.deepStrictEqual(requests, []);
 		assert.ok(vscode.showWarningMessage.mock.calls.length > 0);
+	});
+
+	test("warns about missing git (not the network) on an initial clone ENOENT", async () => {
+		state.gitMissing = true;
+		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+
+		fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+
+		await waitForProgress();
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 1);
+		const warning = vscode.showWarningMessage.mock.calls[0][0] as string;
+		assert.match(warning, /CWTools needs Git on your PATH/);
+		assert.doesNotMatch(warning, /check your network/);
 	});
 });
