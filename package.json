@@ -39,14 +39,14 @@
     "cytoscape-popper": "^2.0.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.8.0",
-    "globals": "^17.8.0",
+    "globals": "^17.9.0",
     "merge-images": "2.0.0",
-    "mocha": "^11.7.1",
+    "mocha": "^11.8.0",
     "sinon": "22.1.0",
     "tippy.js": "^6.3.7",
-    "tsx": "^4.23.1",
+    "tsx": "^4.23.10",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.38.0",
+    "typescript-eslint": "^8.66.0",
     "vitest": "^4.1.8"
   },
   "overrides": {
