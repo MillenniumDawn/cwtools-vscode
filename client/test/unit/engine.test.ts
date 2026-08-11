@@ -433,6 +433,8 @@ suite("engine — runGit", () => {
 		stdout?: string;
 		stderr?: string;
 		error?: Error;
+		// When set, emit `close` after `error` so the settled guard is exercised.
+		closeAfterError?: { code: number | null; signal: NodeJS.Signals | null };
 	}): EventEmitter & { stdout: EventEmitter; stderr: EventEmitter } {
 		const child = new EventEmitter() as EventEmitter & {
 			stdout: EventEmitter;
@@ -443,8 +445,14 @@ suite("engine — runGit", () => {
 		queueMicrotask(() => {
 			if (opts.stdout) child.stdout.emit("data", Buffer.from(opts.stdout));
 			if (opts.stderr) child.stderr.emit("data", Buffer.from(opts.stderr));
-			if (opts.error) child.emit("error", opts.error);
-			else child.emit("close", opts.code, opts.signal);
+			if (opts.error) {
+				child.emit("error", opts.error);
+				if (opts.closeAfterError) {
+					child.emit("close", opts.closeAfterError.code, opts.closeAfterError.signal);
+				}
+			} else {
+				child.emit("close", opts.code, opts.signal);
+			}
 		});
 		return child;
 	}
@@ -564,6 +572,28 @@ suite("engine — runGit", () => {
 			() => runGit(["clone"], fakeSpawn as never),
 			(err) => {
 				assert.strictEqual(err, spawnError);
+				return true;
+			},
+		);
+	});
+
+	test("a close event after an ENOENT error does not override the rejection", async () => {
+		// Node can emit close after error for some spawn failures; the settled
+		// guard must keep the GitNotFoundError rejection, not double-settle.
+		const spawnError = Object.assign(new Error("spawn git ENOENT"), {
+			code: "ENOENT",
+		});
+		const fakeSpawn = () =>
+			makeChild({
+				code: null,
+				signal: null,
+				error: spawnError,
+				closeAfterError: { code: 0, signal: null },
+			});
+		await assert.rejects(
+			() => runGit(["fetch"], fakeSpawn as never),
+			(err) => {
+				assert.ok(err instanceof GitNotFoundError);
 				return true;
 			},
 		);

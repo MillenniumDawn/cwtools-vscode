@@ -519,4 +519,28 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		assert.match(warning, /Rules cache landed on/);
 		assert.doesNotMatch(warning, /needs Git on your PATH/);
 	});
+
+	test("a failed bump (rules already present) stays log-only with no warning", async () => {
+		// isInitialClone is false when currentRulesHead returns an existing pin,
+		// so a failed fetch must not warn — the previous pin is still on disk.
+		// This is the gate the missing-git and generic warnings branch on.
+		state.hasGitDirectory = true;
+		state.head = "e".repeat(40);
+		state.checkoutHead = "g".repeat(40);
+		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+
+		fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+
+		await waitForProgress();
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 0);
+	});
 });
