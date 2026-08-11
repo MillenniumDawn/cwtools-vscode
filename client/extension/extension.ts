@@ -30,6 +30,8 @@ export let defaultClient: LanguageClient;
 // would never be the one the extension opened.
 export interface CwtoolsApi {
 	graphPanel(): Promise<typeof GraphPanelModule>;
+	/** Commands the running server advertised, empty if it never started. */
+	serverCommands(): readonly string[];
 }
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
@@ -169,5 +171,10 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 
 	await init(languageId);
 
-	return { graphPanel: () => import("./graphPanel") };
+	return {
+		graphPanel: () => import("./graphPanel"),
+		serverCommands: () =>
+			defaultClient?.initializeResult?.capabilities.executeCommandProvider
+				?.commands ?? [],
+	};
 }

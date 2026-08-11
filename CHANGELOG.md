@@ -1,5 +1,13 @@
 ### Unreleased
 
+### 3.0.1
+
+* 3.0.0 was tagged but never shipped. A release refuses to bundle an untagged engine, and the submodule pointed at a branch commit, so every platform job stopped at that gate and no vsix was built. The pin is now the tagged engine v2.5.0, which carries the same ROOT fix, merged as MillenniumDawn/cwtools#221.
+
+* Installs are on extension 2.5.0, which bundled engine v2.4.0, so this release brings everything in between. **Fix all auto-fixable problems in workspace** has a server side now, so the command the client gates on capability actually runs, and CW100 gains a quick fix for a missing localisation key (MillenniumDawn/cwtools#128). Go-to-definition resolves an enum value. CW113's filepath check gets an opt-in case-sensitive mode, scope fallback no longer breaks on a mixed-case block key, and a subtype-qualified reference counts toward the unused check. On the hardening side, generated workspace edits stay inside the workspace, cache deletion is constrained to cwtools-owned entries, LSP file reads go through a URI access boundary, symlinks are rejected in every discovery walk, and a panic in a background task is logged and recovered instead of taking the server down.
+
+* The `fixAllWorkspace` smoke test asserted the bundled engine does not advertise the command, and predicted in its own comment that a future engine would flip it. v2.5.0 does, so the test now pins the other branch: the server advertises `fixAllWorkspace`, and running the command produces neither the upgrade warning nor a raw protocol error. Activation exposes `serverCommands()` so the host suite can read the advertised commands without loading a second copy of the extension's modules.
+
 ### 3.0.0
 
 * `ROOT` inside an event now resolves to the event's own scope instead of the file default. The engine seeded an event's `## push_scope` onto the current-scope stack but never updated ROOT, so `ROOT = { … }` blocks in HOI4's hybrid-scope `unit_leader_event`/`state_event` were falsely checked against country — `add_max_trait` and other unit-leader effects in `ROOT` fired a bogus CW105. The pinned engine now sets ROOT from the event's scope (lenient `any` for the hybrid types), matching the original F# behavior. (#152)
