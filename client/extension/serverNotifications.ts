@@ -5,10 +5,13 @@ import type { LanguageClient } from "vscode-languageclient/node";
 import type { FileListItem } from "./fileExplorer";
 import { FileExplorer } from "./fileExplorer";
 import { fileListSignature } from "./fileListSignature";
+import { commandProgressActive } from "./commandProgress";
 
 interface LoadingBarParams {
 	enable: boolean;
 	value: string;
+	/** 0-100, sent by servers new enough to know where they are. */
+	percentage?: number;
 }
 interface UpdateFileList {
 	fileList: FileListItem[];
@@ -35,13 +38,24 @@ export function registerServerNotifications(
 			if (initialScanPending) {
 				initialScanStarted = true;
 			}
+			// A command notification is showing the same phases with a cancel
+			// button attached; a status-bar copy alongside it is the third
+			// indicator for one operation (cwtools-vscode#145). The scan-started
+			// bookkeeping above still runs, so the activation gate is unaffected.
+			if (commandProgressActive()) {
+				status?.hide();
+				return;
+			}
 			// One persistent item updated in place: a scan emits many progress
 			// ticks, and dispose+recreate per tick makes the status bar churn.
 			if (status === undefined) {
 				status = window.createStatusBarItem(StatusBarAlignment.Left);
 				context.subscriptions.push(status);
 			}
-			status.text = param.value;
+			status.text =
+				typeof param.percentage === "number"
+					? `${param.value} ${param.percentage}%`
+					: param.value;
 			status.show();
 		} else {
 			status?.hide();
