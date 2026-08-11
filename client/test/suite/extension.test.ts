@@ -96,27 +96,34 @@ suite(`Debug Integration Test: `, function () {
 	describe("fixAllWorkspace gating", function () {
 		this.timeout(1 * 60 * 1000);
 
-		it("shows an upgrade warning instead of a protocol error on the pinned server", async function () {
-			await activate();
+		it("runs against the pinned server without a protocol error", async function () {
+			const api = await activate();
+			assert.ok(api, "activation API should be exposed");
+			const advertised = api.serverCommands();
+			// The gate reads the server's advertised commands; both branches are
+			// unit-tested in graphAvailability.test.ts. This pins which branch the
+			// bundled engine takes, so a pin that loses the command fails here
+			// rather than reaching users as a raw protocol error.
+			assert.ok(
+				advertised.includes("fixAllWorkspace"),
+				`pinned server should advertise fixAllWorkspace, got: ${advertised.join(", ")}`,
+			);
+
 			const sandbox = sinon.createSandbox();
 			const warn = sandbox.stub(vscode.window, "showWarningMessage");
 			const err = sandbox.stub(vscode.window, "showErrorMessage");
 			try {
-				// The pinned engine doesn't advertise the fixAllWorkspace command, so
-				// the handler must bail out with the friendly hint rather than send a
-				// request that fails as a raw protocol error. A future engine that
-				// advertises it will legitimately change this behaviour and fail this
-				// test, which is the point.
 				await vscode.commands.executeCommand("cwtools.fixAllWorkspace");
 			} finally {
 				sandbox.restore();
 			}
 			const warnings = warn.getCalls().map((c) => String(c.args[0]));
-			assert.ok(
+			assert.strictEqual(
 				warnings.some((m) =>
 					m.includes("doesn't support fixing the workspace"),
 				),
-				`expected an upgrade warning, got: ${warnings.join(" | ")}`,
+				false,
+				`unexpected upgrade warning: ${warnings.join(" | ")}`,
 			);
 			assert.strictEqual(
 				err.called,
