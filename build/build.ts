@@ -19,7 +19,7 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { releaseNotes, topChangelogVersion } from "./changelog";
 
 const repoRoot = path.resolve(
@@ -200,6 +200,51 @@ function stagedPlatforms(): string[] {
 // the fallback for platforms with no dedicated build (win-arm64, older macOS).
 // Each pass leaves only the target platform's directory in place, so vsce can't
 // sweep the others in.
+//
+// The holding/restore dance is split out so it can be unit-tested against a
+// real temp dir with an injected packageOne (no shelling out to vsce).
+// packageOne(platform) packages one per-platform vsix; packageOne(undefined)
+// packages the universal fallback after the full set is restored.
+export function runPlatformPackaging(
+	serverBinDir: string,
+	holding: string,
+	platforms: string[],
+	packageOne: (platform: string | undefined) => string[],
+): string[] {
+	fs.rmSync(holding, { recursive: true, force: true });
+	fs.mkdirSync(path.dirname(holding), { recursive: true });
+	fs.renameSync(serverBinDir, holding);
+
+	const vsixes: string[] = [];
+	let restored = false;
+	try {
+		for (const platform of platforms) {
+			fs.rmSync(serverBinDir, { recursive: true, force: true });
+			copyDir(path.join(holding, platform), path.join(serverBinDir, platform));
+			console.log(`packaging ${VSIX_TARGETS[platform]} (${platform})`);
+			vsixes.push(...packageOne(platform));
+		}
+		// Restore every binary for the universal vsix. It also leaves release/
+		// complete for the Open VSX step, which re-packages from the directory.
+		fs.rmSync(serverBinDir, { recursive: true, force: true });
+		copyDir(holding, serverBinDir);
+		restored = true;
+		console.log("packaging the universal fallback vsix");
+		vsixes.push(...packageOne(undefined));
+	} finally {
+		// Key the restore on whether the loop finished, not on directory
+		// existence: a mid-loop vsce failure leaves the failing platform's
+		// binary in serverBinDir, which would skip the restore and let the
+		// holding dir (the only complete copy) get deleted below.
+		if (!restored) {
+			fs.rmSync(serverBinDir, { recursive: true, force: true });
+			copyDir(holding, serverBinDir);
+		}
+		fs.rmSync(holding, { recursive: true, force: true });
+	}
+	return vsixes;
+}
+
 function packageAllVsixes(): string[] {
 	const platforms = stagedPlatforms();
 	if (platforms.length === 0) {
@@ -208,31 +253,10 @@ function packageAllVsixes(): string[] {
 		);
 		return packageVsix();
 	}
-
 	const holding = path.join(tempDir, "server-staging");
-	fs.rmSync(holding, { recursive: true, force: true });
-	fs.mkdirSync(path.dirname(holding), { recursive: true });
-	fs.renameSync(serverBinDir, holding);
-
-	const vsixes: string[] = [];
-	try {
-		for (const platform of platforms) {
-			fs.rmSync(serverBinDir, { recursive: true, force: true });
-			copyDir(path.join(holding, platform), path.join(serverBinDir, platform));
-			console.log(`packaging ${VSIX_TARGETS[platform]} (${platform})`);
-			vsixes.push(...packageVsix(VSIX_TARGETS[platform]));
-		}
-		// Restore every binary for the universal vsix. It also leaves release/
-		// complete for the Open VSX step, which re-packages from the directory.
-		fs.rmSync(serverBinDir, { recursive: true, force: true });
-		copyDir(holding, serverBinDir);
-		console.log("packaging the universal fallback vsix");
-		vsixes.push(...packageVsix());
-	} finally {
-		if (!fs.existsSync(serverBinDir)) copyDir(holding, serverBinDir);
-		fs.rmSync(holding, { recursive: true, force: true });
-	}
-	return vsixes;
+	return runPlatformPackaging(serverBinDir, holding, platforms, (platform) =>
+		platform === undefined ? packageVsix() : packageVsix(VSIX_TARGETS[platform]),
+	);
 }
 
 // --- Release ---------------------------------------------------------------
@@ -402,12 +426,16 @@ const commands: Record<string, () => unknown> = {
 	release: cmdRelease,
 };
 
-const cmd = process.argv[2] ?? "quick";
-const handler = commands[cmd];
-if (!handler) {
-	console.error(
-		`unknown command '${cmd}'. Known: ${Object.keys(commands).join(", ")}`,
-	);
-	process.exit(1);
+// Only dispatch when run directly (tsx build/build.ts <cmd>), not when the
+// module is imported by the vitest suite to test runPlatformPackaging.
+if (pathToFileURL(process.argv[1] ?? "").href === import.meta.url) {
+	const cmd = process.argv[2] ?? "quick";
+	const handler = commands[cmd];
+	if (!handler) {
+		console.error(
+			`unknown command '${cmd}'. Known: ${Object.keys(commands).join(", ")}`,
+		);
+		process.exit(1);
+	}
+	handler();
 }
-handler();
