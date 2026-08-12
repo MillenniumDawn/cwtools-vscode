@@ -37,7 +37,9 @@ The Rust server builds from the `cwtools-rs` workspace. By default the build loo
 CWTOOLS_RUST_WORKSPACE=submodules/cwtools/cwtools-rs ./build.sh quick
 ```
 
-Other commands: `package` packages a vsix without publishing, `package-prebuilt` packages the binaries already staged by CI (one vsix per platform plus a universal fallback), `publish-prebuilt` publishes what `package-prebuilt` produced, `release-prebuilt` does both, and `release` tags and does a full build and publish.
+Other commands: `package` packages a vsix without publishing, `package-prebuilt` packages the binaries already staged by CI (one vsix per platform plus a universal fallback), `publish-prebuilt` publishes what `package-prebuilt` produced, and `release-prebuilt` does both.
+
+`release` cuts a release: it checks the CHANGELOG has a section for the top version, refuses a dirty tree or an existing tag, then pushes `v<x.y.z>`. Everything after that is CI. The tag push triggers `.github/workflows/release.yml`, which builds the server on every platform, packages one vsix per platform plus the universal fallback, smoke-tests them, and publishes. Nothing is built or published from your machine.
 
 ## Syntax highlighting
 

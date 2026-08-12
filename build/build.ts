@@ -11,7 +11,9 @@
 //                    plus a universal fallback, draft the GitHub release, and publish to the
 //                    Marketplace. Used by CI after the per-platform Rust binaries are staged
 //                    under release/bin/server.
-//   release          Tag the current CHANGELOG version, push, then run release-prebuilt.
+//   release          Tag the current CHANGELOG version as v<x.y.z> and push it. The
+//                    tag-triggered Release workflow does the matrix build, smoke test,
+//                    and publish.
 //
 // The Rust server (cwtools-rs) builds from a sibling checkout by default; set
 // CWTOOLS_RUST_WORKSPACE to build from elsewhere (e.g. the submodule).
@@ -261,18 +263,32 @@ function packageAllVsixes(): string[] {
 
 // --- Release ---------------------------------------------------------------
 
-// On a tag push CI sets TAG_RELEASE=true and the version comes from the tag.
-// Manual/local runs fall back to the top CHANGELOG.md entry.
-function resolveVersion(): {
+interface ReleaseVersion {
 	version: string;
 	tag: string;
 	preRelease: boolean;
-} {
-	const isTagRelease = /^(1|true)$/i.test(process.env.TAG_RELEASE ?? "");
-	let tag = isTagRelease ? (process.env.GITHUB_REF_NAME ?? "").trim() : "";
-	if (!tag) tag = topChangelogVersion(readChangelog());
+}
+
+// On a tag push CI sets TAG_RELEASE=true and the version comes from the tag.
+// Manual/local runs fall back to the top CHANGELOG.md entry, which the heading
+// regex reports without the v. Re-add it: the Release workflow only triggers on
+// v*, and every published tag in the repo carries the prefix.
+//
+// Split from resolveVersion() so the derivation is unit-testable without
+// touching process.env or the real CHANGELOG.
+export function resolveVersionFrom(
+	env: NodeJS.ProcessEnv,
+	changelog: string,
+): ReleaseVersion {
+	const isTagRelease = /^(1|true)$/i.test(env.TAG_RELEASE ?? "");
+	let tag = isTagRelease ? (env.GITHUB_REF_NAME ?? "").trim() : "";
+	if (!tag) tag = `v${topChangelogVersion(changelog)}`;
 	const version = tag.replace(/^v/, "");
 	return { version, tag, preRelease: version.includes("-") };
+}
+
+function resolveVersion(): ReleaseVersion {
+	return resolveVersionFrom(process.env, readChangelog());
 }
 
 function readChangelog(): string {
@@ -406,15 +422,44 @@ function cmdReleasePrebuilt(): void {
 	cmdPublishPrebuilt();
 }
 
+// Tag and push, nothing else: the v* push triggers the Release workflow, which
+// builds the server on every platform, smoke-tests each vsix, and publishes.
+// Packaging locally instead would ship whatever single binary the dev machine
+// happens to have, untested.
 function cmdRelease(): void {
 	const { version, tag } = resolveVersion();
-	// The notes guard sits in publishGithubRelease, which is only reached after
-	// the build. Check it here so a missing CHANGELOG section can't leave a
-	// pushed tag behind.
+	// The notes guard sits in publishGithubRelease, which the workflow only
+	// reaches after the matrix build. Check it here so a missing CHANGELOG
+	// section can't leave a pushed tag behind.
 	releaseNotes(readChangelog(), version);
+	// Untracked files are fine, and so is a dirty submodule: the tag records the
+	// gitlink, not its working-tree contents.
+	const dirty = runOrNull("git", [
+		"diff",
+		"--quiet",
+		"HEAD",
+		"--ignore-submodules=dirty",
+	]);
+	if (dirty !== 0) {
+		throw new Error(
+			"working tree has uncommitted changes; commit them before tagging a release",
+		);
+	}
+	if (
+		runOrNull("git", ["rev-parse", "--verify", "--quiet", `refs/tags/${tag}`]) === 0
+	) {
+		throw new Error(`tag ${tag} already exists locally`);
+	}
+	if (
+		runOrNull("git", ["ls-remote", "--exit-code", "origin", `refs/tags/${tag}`]) === 0
+	) {
+		throw new Error(`tag ${tag} already exists on origin`);
+	}
 	run("git", ["tag", tag]);
 	run("git", ["push", "origin", tag]);
-	cmdReleasePrebuilt();
+	console.log(
+		`pushed ${tag}; the Release workflow now builds, smoke-tests, and publishes it.`,
+	);
 }
 
 const commands: Record<string, () => unknown> = {

@@ -51,7 +51,7 @@ Run as `npm run build -- <command>` or `./build.sh <command>`:
 - `package`: Package a vsix without publishing
 - `package-prebuilt`: Package server binaries already staged by CI, no publish
 - `publish-prebuilt`: Publish the vsixes `package-prebuilt` produced
-- `release`: Tag, then full build + publish
+- `release`: Push a `v*` tag; the tag-triggered workflow builds, smoke-tests, and publishes
 - `release-prebuilt`: `package-prebuilt` followed by `publish-prebuilt`
 
 ### Testing
