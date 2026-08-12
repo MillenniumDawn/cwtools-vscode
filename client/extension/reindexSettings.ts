@@ -38,11 +38,31 @@ export function normalizeBackgroundReindexIdleSeconds(
 	return value ?? 15;
 }
 
+export type HoverScopeDisplay = "context" | "resolved";
+
 export interface LiveServerSettings {
 	localisationLanguages: string[];
 	hoverShowAllLanguages: boolean;
 	hoverDebug: boolean;
-	hoverScopeDisplay: string;
+	hoverScopeDisplay: HoverScopeDisplay;
+}
+
+export const LIVE_SETTINGS_KEYS = [
+	"cwtools.errors.ignore",
+	"cwtools.errors.ignorefiles",
+	"cwtools.ignore_patterns",
+	"cwtools.backgroundReindex.intervalMinutes",
+	"cwtools.backgroundReindex.idleSeconds",
+	"cwtools.localisation.languages",
+	"cwtools.localisation.hoverShowAllLanguages",
+	"cwtools.hover.debug",
+	"cwtools.hover.scopeDisplay",
+] as const;
+
+export function isLiveSettingsChange(e: {
+	affectsConfiguration(section: string): boolean;
+}): boolean {
+	return LIVE_SETTINGS_KEYS.some((k) => e.affectsConfiguration(k));
 }
 
 // The didChangeConfiguration payload pushed on a live settings edit: mapped

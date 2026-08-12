@@ -2,8 +2,10 @@
 // `vscode-test --label <name>` (see the npm `test:*` scripts):
 //
 //   unit     fast suites that need the VS Code API but not the language server
-//   smoke    unit plus the activation suite, which starts the real server
-//   host     full suite incl. the language-feature tests (slower, see below)
+//   smoke    unit + activation (sample) + live-settings (sample-live, its own
+//            workspace because .vscode/settings.json pins rules_folder)
+//   live     only the live-settings suite (sample-live)
+//   host     full suite excl. live (slower, see below)
 //
 // The hover and completion suites assert on rule-driven data. The sample
 // workspace has no game name in its path and no game-specific content dir, so
@@ -19,29 +21,73 @@
 import { defineConfig } from "@vscode/test-cli";
 
 const sampleWorkspace = "./client/test/sample";
+const liveWorkspace = "./client/test/sample-live";
 const sampleFile = "./client/test/sample/events/irm.txt";
+const liveSampleFile = "./client/test/sample-live/events/irm.txt";
 const unitFiles = [
 	"./release/bin/client/test/suite/graphTypes.test.js",
 	"./release/bin/client/test/suite/fileExplorer.test.js",
 ];
+// Live-settings fixture is isolated: its .vscode/settings.json pins
+// cwtools.rules_folder to .cwtools-test-rules, which replaces the ruleset.
+// Running it in the shared sample workspace would pollute the host/unit
+// suites (they expect the generic paradox ruleset), so it lives in
+// sample-live with its own workspace.
 const smokeFiles = [
 	...unitFiles,
 	"./release/bin/client/test/suite/extension.test.js",
-	"./release/bin/client/test/suite/liveSettings.test.js",
 ];
-const allFiles = "./release/bin/client/test/suite/**/*.test.js";
+const liveFiles = ["./release/bin/client/test/suite/liveSettings.test.js"];
+const hostFiles = [
+	"./release/bin/client/test/suite/graphTypes.test.js",
+	"./release/bin/client/test/suite/fileExplorer.test.js",
+	"./release/bin/client/test/suite/extension.test.js",
+	"./release/bin/client/test/suite/hover.test.js",
+	"./release/bin/client/test/suite/completion.test.js",
+];
 
 const base = {
 	vscode: "stable",
 	extensionDevelopmentPath: "release",
-	workspaceFolder: sampleWorkspace,
 };
 
 export default defineConfig({
 	tests: [
-		{ ...base, label: "unit", files: unitFiles, launchArgs: [sampleFile] },
-		{ ...base, label: "smoke", files: smokeFiles, launchArgs: [sampleFile] },
-		{ ...base, label: "host", files: allFiles, launchArgs: [sampleFile] },
+		{
+			...base,
+			label: "unit",
+			files: unitFiles,
+			workspaceFolder: sampleWorkspace,
+			launchArgs: [sampleFile],
+		},
+		{
+			...base,
+			label: "smoke",
+			files: smokeFiles,
+			workspaceFolder: sampleWorkspace,
+			launchArgs: [sampleFile],
+		},
+		{
+			...base,
+			label: "smoke",
+			files: liveFiles,
+			workspaceFolder: liveWorkspace,
+			launchArgs: [liveSampleFile],
+		},
+		{
+			...base,
+			label: "live",
+			files: liveFiles,
+			workspaceFolder: liveWorkspace,
+			launchArgs: [liveSampleFile],
+		},
+		{
+			...base,
+			label: "host",
+			files: hostFiles,
+			workspaceFolder: sampleWorkspace,
+			launchArgs: [sampleFile],
+		},
 	],
 	coverage: {
 		reporter: ["text-summary", "html", "lcov", "json-summary"],

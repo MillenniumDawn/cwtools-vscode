@@ -17,6 +17,9 @@ import {
 	normalizeBackgroundReindexIdleSeconds,
 	buildSettingsPayload,
 	mapIgnoreOptions,
+	isLiveSettingsChange,
+	type HoverScopeDisplay,
+	type LiveServerSettings,
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import { logError, errorMessage, outputChannel } from "./logger";
@@ -63,8 +66,11 @@ function readBackgroundReindexIdleSeconds(): number {
 	);
 }
 
-function readLiveServerSettings() {
+function readLiveServerSettings(): LiveServerSettings {
 	const cfg = workspace.getConfiguration("cwtools");
+	const rawScope = cfg.get<string>("hover.scopeDisplay");
+	const hoverScopeDisplay: HoverScopeDisplay =
+		rawScope === "resolved" || rawScope === "context" ? rawScope : "context";
 	return {
 		localisationLanguages: cfg.get<string[]>("localisation.languages") ?? [
 			"English",
@@ -72,7 +78,7 @@ function readLiveServerSettings() {
 		hoverShowAllLanguages:
 			cfg.get<boolean>("localisation.hoverShowAllLanguages") ?? false,
 		hoverDebug: cfg.get<boolean>("hover.debug") ?? false,
-		hoverScopeDisplay: cfg.get<string>("hover.scopeDisplay") ?? "context",
+		hoverScopeDisplay,
 	};
 }
 
@@ -336,19 +342,11 @@ export function createLanguageClient(
 	// Push mapped configuration when a live setting changes. We drive this
 	// ourselves rather than via synchronize.configurationSection, which would
 	// send the raw (unmapped) `cwtools` section the server can't read.
+	// The allow-list lives in reindexSettings.LIVE_SETTINGS_KEYS so a new
+	// live key can't be added in one place and forgotten in the other.
 	context.subscriptions.push(
 		workspace.onDidChangeConfiguration((e) => {
-			const touched =
-				e.affectsConfiguration("cwtools.errors.ignore") ||
-				e.affectsConfiguration("cwtools.errors.ignorefiles") ||
-				e.affectsConfiguration("cwtools.ignore_patterns") ||
-				e.affectsConfiguration("cwtools.backgroundReindex.intervalMinutes") ||
-				e.affectsConfiguration("cwtools.backgroundReindex.idleSeconds") ||
-				e.affectsConfiguration("cwtools.localisation.languages") ||
-				e.affectsConfiguration("cwtools.localisation.hoverShowAllLanguages") ||
-				e.affectsConfiguration("cwtools.hover.debug") ||
-				e.affectsConfiguration("cwtools.hover.scopeDisplay");
-			if (!touched) {
+			if (!isLiveSettingsChange(e)) {
 				return;
 			}
 			const settings = buildSettingsPayload(

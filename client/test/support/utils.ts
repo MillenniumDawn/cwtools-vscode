@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as vscode from "vscode";
 import * as path from "path";
 import type { CwtoolsApi } from "../../extension/extension";
@@ -10,11 +11,36 @@ export { extractCompletionLabel } from "./labels";
 // The published extension id: publisher.name from release/package.json.
 export const EXTENSION_ID = "milleniumdawnmodteam.cwtools-md-edition";
 
-/** Resolved path to the source sample mod used by all test suites. */
-export const SAMPLE_ROOT = path.resolve(
-	__dirname,
-	"../../../../../client/test/sample",
-);
+/** Resolved path to the sample mod used by all test suites.
+ *
+ * The workspace in .vscode-test.mjs is the source tree
+ * (./client/test/sample), not the stale compiled copy under
+ * release/bin. Resolve from the workspace folder when available
+ * so the path works both from the esbuild bundle
+ * (release/bin/client/test/support) and from tsx/vitest source
+ * (client/test/support). Falls back to probing candidates so a
+ * bare import outside the host still finds the fixture.
+ */
+export const SAMPLE_ROOT = (() => {
+	const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	if (ws && fs.existsSync(path.join(ws, "events/irm.txt"))) {
+		return ws;
+	}
+	const candidates = [
+		path.resolve(__dirname, "../../../../../client/test/sample"),
+		path.resolve(__dirname, "../sample"),
+		path.resolve(__dirname, "../../sample"),
+		path.resolve(__dirname, "../../../client/test/sample"),
+	];
+	for (const c of candidates) {
+		try {
+			if (fs.existsSync(path.join(c, "events/irm.txt"))) return c;
+		} catch (_e) {
+			// probe next candidate
+		}
+	}
+	return candidates[0];
+})();
 
 export async function activate(): Promise<CwtoolsApi | undefined> {
 	const ext = vscode.extensions.getExtension(EXTENSION_ID)!;
@@ -135,6 +161,8 @@ export async function waitForLSP(
 /**
  * Wait for the language server to respond to hover requests at any position.
  * Cheaper than waitForLSP; use when a test only needs hover, not completions.
+ * `[]` (provider registered, no hover at 0,0) is considered ready —
+ * `undefined` means no hover provider yet, which is the pre-index signal.
  */
 export async function waitForLanguageServer(
 	uri: vscode.Uri,
