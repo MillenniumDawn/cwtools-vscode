@@ -3,7 +3,7 @@ import * as assert from "assert";
 import {
 	normalizeBackgroundReindexMinutes,
 	normalizeBackgroundReindexIdleSeconds,
-	buildReindexSettingsPayload,
+	buildSettingsPayload,
 	mapIgnoreOptions,
 } from "../../extension/reindexSettings";
 
@@ -83,18 +83,29 @@ suite("reindexSettings — mapIgnoreOptions", () => {
 	});
 });
 
-suite("reindexSettings — buildReindexSettingsPayload", () => {
-	test("carries the interval under the server's key and spreads the ignore options", () => {
+suite("reindexSettings — buildSettingsPayload", () => {
+	const liveSettings = {
+		localisationLanguages: ["English"],
+		hoverShowAllLanguages: false,
+		hoverDebug: false,
+		hoverScopeDisplay: "context",
+	};
+
+	test("carries the server keys and spreads the ignore options", () => {
 		const ignore = { ignoreFilePatterns: ["**/x.txt"], ignoredErrorCodes: ["CW100"] };
-		const payload = buildReindexSettingsPayload(ignore, 10, 45);
+		const payload = buildSettingsPayload(ignore, 10, 45, liveSettings);
 		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 10);
 		assert.strictEqual(payload.backgroundReindexIdleSeconds, 45);
 		assert.deepStrictEqual(payload.ignoreFilePatterns, ["**/x.txt"]);
 		assert.deepStrictEqual(payload.ignoredErrorCodes, ["CW100"]);
+		assert.deepStrictEqual(payload.localisationLanguages, ["English"]);
+		assert.strictEqual(payload.hoverShowAllLanguages, false);
+		assert.strictEqual(payload.hoverDebug, false);
+		assert.strictEqual(payload.hoverScopeDisplay, "context");
 	});
 
 	test("defaults the interval and idle window when unset in the payload too", () => {
-		const payload = buildReindexSettingsPayload({}, undefined, undefined);
+		const payload = buildSettingsPayload({}, undefined, undefined, liveSettings);
 		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 30);
 		assert.strictEqual(payload.backgroundReindexIdleSeconds, 15);
 	});

@@ -34,17 +34,28 @@ export function normalizeBackgroundReindexIdleSeconds(value: number | undefined)
 	return value ?? 15;
 }
 
-// The didChangeConfiguration payload pushed on a live settings edit: the mapped
-// ignore options plus the reindex interval and idle window under the server's
-// keys.
-export function buildReindexSettingsPayload<T extends object>(
+export interface LiveServerSettings {
+	localisationLanguages: string[];
+	hoverShowAllLanguages: boolean;
+	hoverDebug: boolean;
+	hoverScopeDisplay: string;
+}
+
+// The didChangeConfiguration payload pushed on a live settings edit: mapped
+// ignore/reindex settings plus the localisation and hover settings the server
+// accepts after startup.
+export function buildSettingsPayload<T extends object>(
 	ignoreOptions: T,
 	minutes: number | undefined,
 	idleSeconds: number | undefined,
-): T & { backgroundReindexIntervalMinutes: number; backgroundReindexIdleSeconds: number } {
+	liveSettings: LiveServerSettings,
+): T &
+	{ backgroundReindexIntervalMinutes: number; backgroundReindexIdleSeconds: number } &
+	LiveServerSettings {
 	return {
 		...ignoreOptions,
 		backgroundReindexIntervalMinutes: normalizeBackgroundReindexMinutes(minutes),
 		backgroundReindexIdleSeconds: normalizeBackgroundReindexIdleSeconds(idleSeconds),
+		...liveSettings,
 	};
 }
