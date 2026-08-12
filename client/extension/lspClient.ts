@@ -15,8 +15,11 @@ import {
 import {
 	normalizeBackgroundReindexMinutes,
 	normalizeBackgroundReindexIdleSeconds,
-	buildReindexSettingsPayload,
+	buildSettingsPayload,
 	mapIgnoreOptions,
+	isLiveSettingsChange,
+	type HoverScopeDisplay,
+	type LiveServerSettings,
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import { logError, errorMessage, outputChannel } from "./logger";
@@ -61,6 +64,22 @@ function readBackgroundReindexIdleSeconds(): number {
 			.getConfiguration("cwtools")
 			.get<number>("backgroundReindex.idleSeconds"),
 	);
+}
+
+function readLiveServerSettings(): LiveServerSettings {
+	const cfg = workspace.getConfiguration("cwtools");
+	const rawScope = cfg.get<string>("hover.scopeDisplay");
+	const hoverScopeDisplay: HoverScopeDisplay =
+		rawScope === "resolved" || rawScope === "context" ? rawScope : "context";
+	return {
+		localisationLanguages: cfg.get<string[]>("localisation.languages") ?? [
+			"English",
+		],
+		hoverShowAllLanguages:
+			cfg.get<boolean>("localisation.hoverShowAllLanguages") ?? false,
+		hoverDebug: cfg.get<boolean>("hover.debug") ?? false,
+		hoverScopeDisplay,
+	};
 }
 
 const commandProgressTitles: Readonly<Record<string, string>> = {
@@ -261,18 +280,7 @@ export function createLanguageClient(
 		initializationOptions: {
 			language: cfg.language === "eu5" ? "paradox" : cfg.language,
 			rulesCache: cfg.rulesCache,
-			localisationLanguages: workspace
-				.getConfiguration("cwtools")
-				.get("localisation.languages"),
-			hoverShowAllLanguages:
-				workspace
-					.getConfiguration("cwtools")
-					.get("localisation.hoverShowAllLanguages") ?? false,
-			hoverDebug:
-				workspace.getConfiguration("cwtools").get("hover.debug") ?? false,
-			hoverScopeDisplay:
-				workspace.getConfiguration("cwtools").get("hover.scopeDisplay") ??
-				"context",
+			...readLiveServerSettings(),
 			// Inlay hints. The server reads both at initialize only — neither key is
 			// in its didChangeConfiguration handler — so a change needs a window
 			// reload, which the setting descriptions say.
@@ -331,27 +339,21 @@ export function createLanguageClient(
 		}),
 	);
 
-	// Push the mapped ignore/suppression settings and the background-reindex
-	// interval to the server whenever they change, so a live edit to
-	// `cwtools.errors.ignore`, the ignore globs, or the reindex interval takes
-	// effect without a window reload. We drive this ourselves rather than via
-	// synchronize.configurationSection, which would send the raw (unmapped)
-	// `cwtools` section the server can't read.
+	// Push mapped configuration when a live setting changes. We drive this
+	// ourselves rather than via synchronize.configurationSection, which would
+	// send the raw (unmapped) `cwtools` section the server can't read.
+	// The allow-list lives in reindexSettings.LIVE_SETTINGS_KEYS so a new
+	// live key can't be added in one place and forgotten in the other.
 	context.subscriptions.push(
 		workspace.onDidChangeConfiguration((e) => {
-			const touched =
-				e.affectsConfiguration("cwtools.errors.ignore") ||
-				e.affectsConfiguration("cwtools.errors.ignorefiles") ||
-				e.affectsConfiguration("cwtools.ignore_patterns") ||
-				e.affectsConfiguration("cwtools.backgroundReindex.intervalMinutes") ||
-				e.affectsConfiguration("cwtools.backgroundReindex.idleSeconds");
-			if (!touched) {
+			if (!isLiveSettingsChange(e)) {
 				return;
 			}
-			const settings = buildReindexSettingsPayload(
+			const settings = buildSettingsPayload(
 				readIgnoreOptions(),
 				readBackgroundReindexMinutes(),
 				readBackgroundReindexIdleSeconds(),
+				readLiveServerSettings(),
 			);
 			client
 				.sendNotification(DidChangeConfigurationNotification.type, { settings })

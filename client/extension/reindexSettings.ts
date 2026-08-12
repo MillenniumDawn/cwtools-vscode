@@ -14,7 +14,7 @@ export function mapIgnoreOptions(
 	return {
 		ignoreFilePatterns: [
 			...(ignorePatterns ?? []),
-			...(ignoreFiles ?? []).map(f => (f.includes('/') ? f : `**/${f}`)),
+			...(ignoreFiles ?? []).map((f) => (f.includes("/") ? f : `**/${f}`)),
 		],
 		ignoredErrorCodes: [...(ignoredCodes ?? [])],
 	};
@@ -23,28 +23,66 @@ export function mapIgnoreOptions(
 // Minutes between the server's periodic background re-index passes. An unset
 // setting (undefined) falls back to 30; an explicit 0 disables the loop and is
 // preserved, as are the user's negative/fractional values (the server clamps).
-export function normalizeBackgroundReindexMinutes(value: number | undefined): number {
+export function normalizeBackgroundReindexMinutes(
+	value: number | undefined,
+): number {
 	return value ?? 30;
 }
 
 // Seconds of user inactivity before a background pass is allowed to start, so
 // a rescan never competes with a request the user is waiting on. Unset falls
 // back to the server's own default of 15.
-export function normalizeBackgroundReindexIdleSeconds(value: number | undefined): number {
+export function normalizeBackgroundReindexIdleSeconds(
+	value: number | undefined,
+): number {
 	return value ?? 15;
 }
 
-// The didChangeConfiguration payload pushed on a live settings edit: the mapped
-// ignore options plus the reindex interval and idle window under the server's
-// keys.
-export function buildReindexSettingsPayload<T extends object>(
+export type HoverScopeDisplay = "context" | "resolved";
+
+export interface LiveServerSettings {
+	localisationLanguages: string[];
+	hoverShowAllLanguages: boolean;
+	hoverDebug: boolean;
+	hoverScopeDisplay: HoverScopeDisplay;
+}
+
+export const LIVE_SETTINGS_KEYS = [
+	"cwtools.errors.ignore",
+	"cwtools.errors.ignorefiles",
+	"cwtools.ignore_patterns",
+	"cwtools.backgroundReindex.intervalMinutes",
+	"cwtools.backgroundReindex.idleSeconds",
+	"cwtools.localisation.languages",
+	"cwtools.localisation.hoverShowAllLanguages",
+	"cwtools.hover.debug",
+	"cwtools.hover.scopeDisplay",
+] as const;
+
+export function isLiveSettingsChange(e: {
+	affectsConfiguration(section: string): boolean;
+}): boolean {
+	return LIVE_SETTINGS_KEYS.some((k) => e.affectsConfiguration(k));
+}
+
+// The didChangeConfiguration payload pushed on a live settings edit: mapped
+// ignore/reindex settings plus the localisation and hover settings the server
+// accepts after startup.
+export function buildSettingsPayload<T extends object>(
 	ignoreOptions: T,
 	minutes: number | undefined,
 	idleSeconds: number | undefined,
-): T & { backgroundReindexIntervalMinutes: number; backgroundReindexIdleSeconds: number } {
+	liveSettings: LiveServerSettings,
+): T & {
+	backgroundReindexIntervalMinutes: number;
+	backgroundReindexIdleSeconds: number;
+} & LiveServerSettings {
 	return {
 		...ignoreOptions,
-		backgroundReindexIntervalMinutes: normalizeBackgroundReindexMinutes(minutes),
-		backgroundReindexIdleSeconds: normalizeBackgroundReindexIdleSeconds(idleSeconds),
+		backgroundReindexIntervalMinutes:
+			normalizeBackgroundReindexMinutes(minutes),
+		backgroundReindexIdleSeconds:
+			normalizeBackgroundReindexIdleSeconds(idleSeconds),
+		...liveSettings,
 	};
 }

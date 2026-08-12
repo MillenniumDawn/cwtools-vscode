@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "*.mesh": "plaintext",
+        "*.txt": "paradox"
+    },
+    "cwtools.rules_folder": ".cwtools-test-rules"
+}
