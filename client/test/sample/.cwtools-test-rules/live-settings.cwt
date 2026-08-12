@@ -1,0 +1,23 @@
+scopes = {
+	country = { }
+	state = { }
+}
+
+links = {
+	owner = {
+		input_scopes = country
+		output_scope = state
+	}
+}
+
+types = {
+	type[live_settings] = {
+		path = "game/common/live_settings"
+		## push_scope = country
+	}
+}
+
+live_settings = {
+	name = localisation
+	owner = scope[state]
+}

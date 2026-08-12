@@ -1,0 +1,4 @@
+cwtools_live_setting = {
+	name = cwtools_live_setting
+	owner = owner
+}
