@@ -14,7 +14,7 @@ export function mapIgnoreOptions(
 	return {
 		ignoreFilePatterns: [
 			...(ignorePatterns ?? []),
-			...(ignoreFiles ?? []).map(f => (f.includes('/') ? f : `**/${f}`)),
+			...(ignoreFiles ?? []).map((f) => (f.includes("/") ? f : `**/${f}`)),
 		],
 		ignoredErrorCodes: [...(ignoredCodes ?? [])],
 	};
@@ -23,14 +23,18 @@ export function mapIgnoreOptions(
 // Minutes between the server's periodic background re-index passes. An unset
 // setting (undefined) falls back to 30; an explicit 0 disables the loop and is
 // preserved, as are the user's negative/fractional values (the server clamps).
-export function normalizeBackgroundReindexMinutes(value: number | undefined): number {
+export function normalizeBackgroundReindexMinutes(
+	value: number | undefined,
+): number {
 	return value ?? 30;
 }
 
 // Seconds of user inactivity before a background pass is allowed to start, so
 // a rescan never competes with a request the user is waiting on. Unset falls
 // back to the server's own default of 15.
-export function normalizeBackgroundReindexIdleSeconds(value: number | undefined): number {
+export function normalizeBackgroundReindexIdleSeconds(
+	value: number | undefined,
+): number {
 	return value ?? 15;
 }
 
@@ -49,13 +53,16 @@ export function buildSettingsPayload<T extends object>(
 	minutes: number | undefined,
 	idleSeconds: number | undefined,
 	liveSettings: LiveServerSettings,
-): T &
-	{ backgroundReindexIntervalMinutes: number; backgroundReindexIdleSeconds: number } &
-	LiveServerSettings {
+): T & {
+	backgroundReindexIntervalMinutes: number;
+	backgroundReindexIdleSeconds: number;
+} & LiveServerSettings {
 	return {
 		...ignoreOptions,
-		backgroundReindexIntervalMinutes: normalizeBackgroundReindexMinutes(minutes),
-		backgroundReindexIdleSeconds: normalizeBackgroundReindexIdleSeconds(idleSeconds),
+		backgroundReindexIntervalMinutes:
+			normalizeBackgroundReindexMinutes(minutes),
+		backgroundReindexIdleSeconds:
+			normalizeBackgroundReindexIdleSeconds(idleSeconds),
 		...liveSettings,
 	};
 }

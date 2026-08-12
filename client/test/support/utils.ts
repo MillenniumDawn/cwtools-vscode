@@ -10,8 +10,11 @@ export { extractCompletionLabel } from "./labels";
 // The published extension id: publisher.name from release/package.json.
 export const EXTENSION_ID = "milleniumdawnmodteam.cwtools-md-edition";
 
-/** Resolved path to the sample mod used by all test suites. */
-export const SAMPLE_ROOT = path.resolve(__dirname, "../sample");
+/** Resolved path to the source sample mod used by all test suites. */
+export const SAMPLE_ROOT = path.resolve(
+	__dirname,
+	"../../../../../client/test/sample",
+);
 
 export async function activate(): Promise<CwtoolsApi | undefined> {
 	const ext = vscode.extensions.getExtension(EXTENSION_ID)!;

@@ -66,7 +66,9 @@ function readBackgroundReindexIdleSeconds(): number {
 function readLiveServerSettings() {
 	const cfg = workspace.getConfiguration("cwtools");
 	return {
-		localisationLanguages: cfg.get<string[]>("localisation.languages") ?? ["English"],
+		localisationLanguages: cfg.get<string[]>("localisation.languages") ?? [
+			"English",
+		],
 		hoverShowAllLanguages:
 			cfg.get<boolean>("localisation.hoverShowAllLanguages") ?? false,
 		hoverDebug: cfg.get<boolean>("hover.debug") ?? false,

@@ -18,7 +18,7 @@
 
 import { defineConfig } from "@vscode/test-cli";
 
-const sampleWorkspace = "./release/bin/client/test/sample";
+const sampleWorkspace = "./client/test/sample";
 const sampleFile = "./client/test/sample/events/irm.txt";
 const unitFiles = [
 	"./release/bin/client/test/suite/graphTypes.test.js",
@@ -27,6 +27,7 @@ const unitFiles = [
 const smokeFiles = [
 	...unitFiles,
 	"./release/bin/client/test/suite/extension.test.js",
+	"./release/bin/client/test/suite/liveSettings.test.js",
 ];
 const allFiles = "./release/bin/client/test/suite/**/*.test.js";
 

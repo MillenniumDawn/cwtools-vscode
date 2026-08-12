@@ -92,7 +92,10 @@ suite("reindexSettings — buildSettingsPayload", () => {
 	};
 
 	test("carries the server keys and spreads the ignore options", () => {
-		const ignore = { ignoreFilePatterns: ["**/x.txt"], ignoredErrorCodes: ["CW100"] };
+		const ignore = {
+			ignoreFilePatterns: ["**/x.txt"],
+			ignoredErrorCodes: ["CW100"],
+		};
 		const payload = buildSettingsPayload(ignore, 10, 45, liveSettings);
 		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 10);
 		assert.strictEqual(payload.backgroundReindexIdleSeconds, 45);
@@ -105,7 +108,12 @@ suite("reindexSettings — buildSettingsPayload", () => {
 	});
 
 	test("defaults the interval and idle window when unset in the payload too", () => {
-		const payload = buildSettingsPayload({}, undefined, undefined, liveSettings);
+		const payload = buildSettingsPayload(
+			{},
+			undefined,
+			undefined,
+			liveSettings,
+		);
 		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 30);
 		assert.strictEqual(payload.backgroundReindexIdleSeconds, 15);
 	});
