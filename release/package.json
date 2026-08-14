@@ -216,7 +216,7 @@
           "cwtools.rules_folder": {
             "scope": "window",
             "type": "string",
-            "description": "%configuration.cwtools.rules_folder.description%"
+            "markdownDescription": "%configuration.cwtools.rules_folder.description%"
           }
         }
       },
@@ -266,13 +266,19 @@
           "cwtools.errors.ignore": {
             "scope": "window",
             "type": "array",
-            "description": "%configuration.cwtools.errors.ignore.description%",
+            "items": {
+              "type": "string"
+            },
+            "markdownDescription": "%configuration.cwtools.errors.ignore.description%",
             "uniqueItems": true
           },
           "cwtools.errors.ignorefiles": {
             "scope": "window",
             "type": "array",
-            "description": "%configuration.cwtools.errors.ignorefiles.description%",
+            "items": {
+              "type": "string"
+            },
+            "markdownDescription": "%configuration.cwtools.errors.ignorefiles.description%",
             "uniqueItems": true,
             "default": [
               "README.txt",
@@ -285,7 +291,10 @@
           "cwtools.ignore_patterns": {
             "scope": "window",
             "type": "array",
-            "description": "%configuration.cwtools.ignore_patterns.description%",
+            "items": {
+              "type": "string"
+            },
+            "markdownDescription": "%configuration.cwtools.ignore_patterns.description%",
             "uniqueItems": true,
             "default": [
               "**/99_README**.txt"
@@ -315,13 +324,13 @@
             "scope": "window",
             "type": "boolean",
             "default": true,
-            "description": "%configuration.cwtools.inlayHints.locTitles.description%"
+            "markdownDescription": "%configuration.cwtools.inlayHints.locTitles.description%"
           },
           "cwtools.inlayHints.scopes": {
             "scope": "window",
             "type": "boolean",
             "default": false,
-            "description": "%configuration.cwtools.inlayHints.scopes.description%"
+            "markdownDescription": "%configuration.cwtools.inlayHints.scopes.description%"
           }
         }
       },
@@ -333,47 +342,47 @@
           "cwtools.cache.eu4": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.eu4.description%"
+            "markdownDescription": "%configuration.cwtools.cache.eu4.description%"
           },
           "cwtools.cache.hoi4": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.hoi4.description%"
+            "markdownDescription": "%configuration.cwtools.cache.hoi4.description%"
           },
           "cwtools.cache.stellaris": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.stellaris.description%"
+            "markdownDescription": "%configuration.cwtools.cache.stellaris.description%"
           },
           "cwtools.cache.ck2": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.ck2.description%"
+            "markdownDescription": "%configuration.cwtools.cache.ck2.description%"
           },
           "cwtools.cache.imperator": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.imperator.description%"
+            "markdownDescription": "%configuration.cwtools.cache.imperator.description%"
           },
           "cwtools.cache.vic2": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.vic2.description%"
+            "markdownDescription": "%configuration.cwtools.cache.vic2.description%"
           },
           "cwtools.cache.ck3": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.ck3.description%"
+            "markdownDescription": "%configuration.cwtools.cache.ck3.description%"
           },
           "cwtools.cache.vic3": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.vic3.description%"
+            "markdownDescription": "%configuration.cwtools.cache.vic3.description%"
           },
           "cwtools.cache.eu5": {
             "scope": "application",
             "type": "string",
-            "description": "%configuration.cwtools.cache.eu5.description%"
+            "markdownDescription": "%configuration.cwtools.cache.eu5.description%"
           }
         }
       },
@@ -383,7 +392,7 @@
         "order": 5,
         "properties": {
           "cwtools.graph.zoomSensitivity": {
-            "scope": "resource",
+            "scope": "window",
             "type": "number",
             "maximum": 2,
             "minimum": 0,
@@ -412,7 +421,7 @@
             "scope": "window",
             "type": "boolean",
             "default": false,
-            "description": "%configuration.cwtools.profiling.description%"
+            "markdownDescription": "%configuration.cwtools.profiling.description%"
           },
           "cwtools.backgroundReindex.intervalMinutes": {
             "scope": "window",
