@@ -1,4 +1,12 @@
-import { afterAll, beforeAll, beforeEach, suite, test, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	suite,
+	test,
+	vi,
+} from "vitest";
 import * as assert from "assert";
 
 // The webview module runs at import time: it grabs the DOM, calls
@@ -14,6 +22,11 @@ interface FakeElement {
 	cloneNode(deep?: boolean): FakeElement;
 }
 
+interface FakeElementDefinition {
+	group: "nodes" | "edges";
+	data: { source?: string; target?: string; label?: string };
+}
+
 interface FakeGraphNode {
 	data(key: string): unknown;
 	on(event: string, handler: () => void): void;
@@ -23,6 +36,7 @@ interface FakeGraphNode {
 
 interface FakeTippyProps {
 	content: () => FakeElement;
+	onHidden?: (instance: FakeTippyInstance) => void;
 }
 
 interface FakeTippyInstance {
@@ -34,6 +48,7 @@ interface FakeTippyInstance {
 }
 
 const {
+	added,
 	createdTags,
 	fakeCy,
 	graphNodes,
@@ -47,6 +62,7 @@ const {
 	const messageListener: {
 		listener?: (event: { data: unknown }) => void;
 	} = {};
+	const added: FakeElementDefinition[] = [];
 	const createdTags: string[] = [];
 	const tippyInstances: FakeTippyInstance[] = [];
 	const graphNodes: { nodes: FakeGraphNode[] } = { nodes: [] };
@@ -66,13 +82,19 @@ const {
 			handlers,
 		};
 	};
+	// tippy v6 evaluates the content prop eagerly, both when the instance is
+	// created and on every setProps (tippy.cjs.js evaluateProps, called from
+	// createTippy and setProps). The fake does the same, so these tests see the
+	// real call sequence rather than one invented by the test.
 	const tippy = vi.fn((_reference: unknown, props: FakeTippyProps) => {
+		props.content();
 		const instance: FakeTippyInstance = {
 			props,
 			show: vi.fn(),
 			hide: vi.fn(),
 			destroy: vi.fn(),
 			setProps: (next: FakeTippyProps) => {
+				next.content();
 				instance.props = next;
 			},
 		};
@@ -86,7 +108,9 @@ const {
 		union: () => fakeCollection(),
 	});
 	const fakeCy = () => ({
-		add: vi.fn(),
+		add: (elements: FakeElementDefinition[]) => {
+			added.push(...elements);
+		},
 		collection: () => fakeCollection(),
 		cyCanvas: () => ({
 			clear: vi.fn(),
@@ -109,6 +133,7 @@ const {
 		width: () => 800,
 	});
 	return {
+		added,
 		createdTags,
 		fakeCy,
 		graphNodes,
@@ -182,12 +207,22 @@ suite("graph webview", () => {
 		vi.unstubAllGlobals();
 	});
 
+	// Fake timers for every test, not just the ones that advance the clock: a
+	// hover schedules the tooltip's 1s expand timer, and a real one left running
+	// fires inside whichever test happens to be executing a second later and
+	// builds a detail table into that test's createdTags.
 	beforeEach(() => {
+		vi.useFakeTimers();
 		setState.mockClear();
 		tippy.mockClear();
+		added.length = 0;
 		createdTags.length = 0;
 		tippyInstances.length = 0;
 		graphNodes.nodes = [];
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	const render = (message: unknown) =>
@@ -254,29 +289,207 @@ suite("graph webview", () => {
 		assert.strictEqual(tippy.mock.calls.length, 0);
 	});
 
-	test("builds the header on hover and the detail table only on expand", () => {
+	test("builds the header on hover, without the detail table", () => {
 		const node = makeNode("a");
 		graphNodes.nodes = [node];
-		vi.useFakeTimers();
-		try {
-			render({
-				command: "go",
-				data: [graphNode],
-				settings: { wheelSensitivity: 1 },
-			});
-			node.handlers.get("mouseover")?.();
-			assert.strictEqual(tippyInstances.length, 1);
 
-			// tippy only calls content() when it renders, so drive that here.
-			tippyInstances[0].props.content();
-			assert.ok(createdTags.includes("strong"));
-			assert.ok(!createdTags.includes("table"));
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		node.handlers.get("mouseover")?.();
 
-			vi.advanceTimersByTime(1000);
-			tippyInstances[0].props.content();
-			assert.ok(createdTags.includes("table"));
-		} finally {
-			vi.useRealTimers();
-		}
+		assert.strictEqual(tippyInstances.length, 1);
+		assert.ok(createdTags.includes("strong"));
+		assert.ok(!createdTags.includes("table"));
+	});
+
+	test("builds the detail table only once the hover expands the tooltip", () => {
+		const node = makeNode("a");
+		graphNodes.nodes = [node];
+
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		node.handlers.get("mouseover")?.();
+		assert.ok(!createdTags.includes("table"));
+
+		// One tick short of the expand timeout the table must still be absent, or
+		// the assertion above would pass for the wrong reason.
+		vi.advanceTimersByTime(999);
+		assert.ok(!createdTags.includes("table"));
+
+		vi.advanceTimersByTime(1);
+		assert.deepStrictEqual(
+			createdTags.filter((tag) => tag === "table" || tag === "td"),
+			["table", "td", "td"],
+		);
+	});
+
+	test("a hover that ends before the timeout builds no detail table", () => {
+		const node = makeNode("a");
+		graphNodes.nodes = [node];
+
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		node.handlers.get("mouseover")?.();
+		node.handlers.get("mouseout")?.();
+		vi.advanceTimersByTime(5000);
+
+		assert.ok(!createdTags.includes("table"));
+	});
+
+	test("reuses the built tooltip rather than rebuilding it per render", () => {
+		const node = makeNode("a");
+		graphNodes.nodes = [node];
+
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		node.handlers.get("mouseover")?.();
+		vi.advanceTimersByTime(1000);
+		const instance = tippyInstances[0];
+		createdTags.length = 0;
+
+		// Collapsing back to the simple tooltip re-renders it, which is where a
+		// dropped memo would show up as a second header build.
+		instance.props.onHidden?.(instance);
+
+		assert.deepStrictEqual(createdTags, ["div"]);
+	});
+
+	const edgesOf = () =>
+		added
+			.filter((element) => element.group === "edges")
+			.map((element) => [
+				element.data.source,
+				element.data.target,
+				element.data.label,
+			]);
+
+	const nodeWith = (id: string, references: unknown[]) => ({
+		...graphNode,
+		id,
+		references,
+	});
+
+	test("collapses references that repeat the same source, target and label", () => {
+		render({
+			command: "go",
+			settings: { wheelSensitivity: 1 },
+			data: [
+				nodeWith("a", [
+					{ key: "b", isOutgoing: true, label: "needs" },
+					{ key: "b", isOutgoing: true, label: "needs" },
+				]),
+				nodeWith("b", []),
+			],
+		});
+
+		assert.deepStrictEqual(edgesOf(), [["a", "b", "needs"]]);
+	});
+
+	test("keeps two references between the same pair when the labels differ", () => {
+		render({
+			command: "go",
+			settings: { wheelSensitivity: 1 },
+			data: [
+				nodeWith("a", [
+					{ key: "b", isOutgoing: true, label: "needs" },
+					{ key: "b", isOutgoing: true, label: "unlocks" },
+				]),
+				nodeWith("b", []),
+			],
+		});
+
+		assert.deepStrictEqual(edgesOf(), [
+			["a", "b", "needs"],
+			["a", "b", "unlocks"],
+		]);
+	});
+
+	test("reverses the endpoints of an incoming reference", () => {
+		render({
+			command: "go",
+			settings: { wheelSensitivity: 1 },
+			data: [
+				nodeWith("a", [{ key: "b", isOutgoing: false, label: "needs" }]),
+				nodeWith("b", []),
+			],
+		});
+
+		assert.deepStrictEqual(edgesOf(), [["b", "a", "needs"]]);
+	});
+
+	test("treats an outgoing and an incoming reference as distinct edges", () => {
+		render({
+			command: "go",
+			settings: { wheelSensitivity: 1 },
+			data: [
+				nodeWith("a", [
+					{ key: "b", isOutgoing: true, label: "" },
+					{ key: "b", isOutgoing: false, label: "" },
+				]),
+				nodeWith("b", []),
+			],
+		});
+
+		assert.deepStrictEqual(edgesOf(), [
+			["a", "b", ""],
+			["b", "a", ""],
+		]);
+	});
+
+	test("keeps edges distinct when the ids and labels contain delimiters", () => {
+		// The dedup key joins three fields into one string. A printable separator
+		// would let ("a", "b", "c|d") and ("a", "b|c", "d") collapse into one edge.
+		render({
+			command: "go",
+			settings: { wheelSensitivity: 1 },
+			data: [
+				nodeWith("a", [
+					{ key: "b", isOutgoing: true, label: "c|d" },
+					{ key: "b|c", isOutgoing: true, label: "d" },
+				]),
+				nodeWith("b", []),
+				nodeWith("b|c", []),
+			],
+		});
+
+		assert.deepStrictEqual(edgesOf(), [
+			["a", "b", "c|d"],
+			["a", "b|c", "d"],
+		]);
+	});
+
+	test("renders a node whose references the server omitted", () => {
+		const node: Record<string, unknown> = { ...graphNode };
+		delete node.references;
+
+		render({
+			command: "go",
+			data: [node],
+			settings: { wheelSensitivity: 1 },
+		});
+
+		assert.deepStrictEqual(edgesOf(), []);
+	});
+
+	test("drops a reference to an id that is not in the graph", () => {
+		render({
+			command: "go",
+			settings: { wheelSensitivity: 1 },
+			data: [nodeWith("a", [{ key: "gone", isOutgoing: true, label: "" }])],
+		});
+
+		assert.deepStrictEqual(edgesOf(), []);
 	});
 });
