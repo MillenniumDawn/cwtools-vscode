@@ -29,6 +29,17 @@ jobs:
       run: npm run check
     - name: Node unit tests
       run: npm run test:node
+    # vscode-test pulls a full VS Code build into .vscode-test/ on every run
+    # (version pinned to "stable" in .vscode-test.mjs, so the exact build isn't
+    # known ahead of time). Restore-keys fall back to the newest prior cache;
+    # vscode-test tops up only if "stable" moved since then.
+    - name: Cache VS Code download
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .vscode-test
+        key: ${{ runner.os }}-vscode-test-${{ github.job }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-vscode-test-${{ github.job }}-
     - name: Unit tests
       run: xvfb-run -a npm test
 
@@ -76,6 +87,17 @@ jobs:
       env:
         CWTOOLS_RUST_WORKSPACE: submodules/cwtools/cwtools-rs
       run: npm run build -- quick
+    # vscode-test pulls a full VS Code build into .vscode-test/ on every run
+    # (version pinned to "stable" in .vscode-test.mjs, so the exact build isn't
+    # known ahead of time). Restore-keys fall back to the newest prior cache;
+    # vscode-test tops up only if "stable" moved since then.
+    - name: Cache VS Code download
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .vscode-test
+        key: ${{ runner.os }}-vscode-test-${{ github.job }}-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-vscode-test-${{ github.job }}-
     # Boots the extension host against the freshly built server: activation,
     # command registration and the graph/file-explorer UI. The full `host`
     # label additionally covers hover and completion, which need rule data the
