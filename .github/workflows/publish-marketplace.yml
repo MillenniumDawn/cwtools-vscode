@@ -56,15 +56,17 @@ jobs:
             echo "::error::$error Add it to the repository secrets."
             exit 1
           fi
-          vsix=$(find vsix-artifacts -maxdepth 1 -type f \
-            -name '*.vsix' -print | sort | head -n 1)
-          npx @vscode/vsce publish --pat "$VSCE_TOKEN" --packagePath "$vsix"
+          mapfile -t vsixes < <(find vsix-artifacts -maxdepth 1 -type f \
+            -name '*.vsix' -print | sort)
+          # Every platform vsix in one publish call, not one platform at a time.
+          npx @vscode/vsce publish --pat "$VSCE_TOKEN" --packagePath "${vsixes[@]}"
 
       - name: Dry run (validate only)
         if: ${{ inputs.dry-run == true }}
         run: |
-          vsix=$(find vsix-artifacts -maxdepth 1 -type f \
-            -name '*.vsix' -print | sort | head -n 1)
-          echo "Dry run — would publish: $vsix"
-          npx @vscode/vsce ls-publish --pat dummy --packagePath "$vsix" || true
+          mapfile -t vsixes < <(find vsix-artifacts -maxdepth 1 -type f \
+            -name '*.vsix' -print | sort)
+          echo "Dry run — would publish:"
+          printf '  %s\n' "${vsixes[@]}"
+          npx @vscode/vsce ls-publish --pat dummy --packagePath "${vsixes[@]}" || true
           echo "Dry run complete. No changes published."
