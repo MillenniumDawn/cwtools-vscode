@@ -18,6 +18,7 @@ import { createLanguageClient } from "./lspClient";
 import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
 import { registerCommands, publishCommandAvailability } from "./commands";
+import { setTrustedRoots } from "./trustedPaths";
 import { logInfo, logError, errorMessage } from "./logger";
 import type * as GraphPanelModule from "./graphPanel";
 
@@ -83,6 +84,14 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			language,
 			cacheDir,
 		);
+
+		// Where a location the server reports is allowed to point. Anything else
+		// needs the user to confirm before it opens (see trustedPaths.ts).
+		setTrustedRoots([
+			cacheDir,
+			rulesCache,
+			workspace.getConfiguration("cwtools").get<string>(`cache.${language}`),
+		]);
 
 		const client = createLanguageClient(context, {
 			language,
