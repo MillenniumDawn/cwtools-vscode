@@ -218,7 +218,9 @@ async function syncPinnedRules(
 		async () => {
 			try {
 				logInfo(
-					`Fetching ${language} rules ${rules.ref} from ${rules.repo} into ${languageRulesCache}`,
+					isInitialClone
+						? `Fetching ${language} rules ${rules.ref} from ${rules.repo} into ${languageRulesCache}`
+						: `Replacing ${language} rules ${head} with ${rules.ref} from ${rules.repo} into ${languageRulesCache}`,
 				);
 				for (const args of commands) {
 					await runGit(args);
@@ -227,6 +229,13 @@ async function syncPinnedRules(
 				if (fetchedHead !== rules.ref) {
 					throw new Error(
 						`Rules cache landed on ${fetchedHead ?? "no commit"}, not ${rules.ref}.`,
+					);
+				}
+				if (!isInitialClone) {
+					// A shallow cache can't tell newer from just different, so name the
+					// change rather than claim a direction.
+					void window.showInformationMessage(
+						`CWTools: ${language} rules changed from ${head} to ${rules.ref}. Validation may look different until you review the change.`,
 					);
 				}
 				await initialScanDone;

@@ -27,6 +27,7 @@ const logger = vi.hoisted(() => ({
 
 const vscode = vi.hoisted(() => ({
 	showWarningMessage: vi.fn(),
+	showInformationMessage: vi.fn(),
 }));
 
 vi.mock("fs", () => ({
@@ -38,6 +39,7 @@ vi.mock("vscode", () => ({
 	window: {
 		createOutputChannel: () => ({ appendLine: () => {} }),
 		showWarningMessage: vscode.showWarningMessage,
+		showInformationMessage: vscode.showInformationMessage,
 		withProgress: (
 			_options: unknown,
 			task: () => Promise<void>,
@@ -242,6 +244,45 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		assert.deepStrictEqual(requests, [
 			{ command: "reloadrulesconfig", arguments: [] },
 		]);
+		// A first-time download has nothing to replace, so it stays silent
+		// (distinct from the replace-existing-cache path below).
+		assert.strictEqual(vscode.showInformationMessage.mock.calls.length, 0);
+	});
+
+	test("names both commits and notifies when a bump replaces an existing cache", async () => {
+		const oldHead = "c".repeat(40);
+		const ref = "f".repeat(40);
+		state.hasGitDirectory = true;
+		state.head = oldHead;
+		stubManifestFetch(manifest(ref, RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+
+		fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+
+		await waitForProgress();
+		assert.deepStrictEqual(requests, [
+			{ command: "reloadrulesconfig", arguments: [] },
+		]);
+		assert.strictEqual(vscode.showInformationMessage.mock.calls.length, 1);
+		const info = vscode.showInformationMessage.mock.calls[0][0] as string;
+		assert.match(info, new RegExp(oldHead));
+		assert.match(info, new RegExp(ref));
+		assert.ok(
+			logger.logInfo.mock.calls.some(
+				(call) =>
+					typeof call[0] === "string" &&
+					call[0].includes("Replacing") &&
+					call[0].includes(oldHead) &&
+					call[0].includes(ref),
+			),
+		);
 	});
 
 	test("uses a newer manifest when caching it fails", async () => {
