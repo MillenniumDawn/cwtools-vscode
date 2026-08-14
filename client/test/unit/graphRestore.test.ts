@@ -68,6 +68,7 @@ vi.mock("vscode-languageclient/node", () => ({
 vi.mock("../../extension/logger", () => ({
 	logError,
 	logInfo: vi.fn(),
+	logWarn: vi.fn(),
 	errorMessage: (err: unknown) => (err instanceof Error ? err.message : ""),
 }));
 

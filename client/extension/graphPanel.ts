@@ -3,7 +3,8 @@ import * as path from "path";
 import { writeFile } from "fs/promises";
 import * as crypto from "crypto";
 import type { GraphData, GraphPanelState } from "../common/graphTypes";
-import { logError } from "./logger";
+import { logError, logWarn } from "./logger";
+import { confirmOpen } from "./trustedPaths";
 
 export enum State {
 	New,
@@ -127,7 +128,18 @@ export class GraphPanel {
 					try {
 						switch (message.command) {
 							case "goToFile": {
+								// A relative string would be silently rooted by Uri.file,
+								// so it never reaches the containment check below.
+								if (!path.isAbsolute(message.uri)) {
+									logWarn(
+										`Refusing to open ${message.uri}: not an absolute file path.`,
+									);
+									return;
+								}
 								const uri = vscode.Uri.file(message.uri);
+								if (!(await confirmOpen(uri))) {
+									return;
+								}
 								// GraphLocation is 1-based, vscode.Range is 0-based.
 								// Clamped so a defensive 0 can't go negative.
 								const line = Math.max(0, message.line - 1);
