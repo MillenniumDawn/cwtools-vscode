@@ -243,31 +243,39 @@ function setupTooltips(cy: cytoscape.Core) {
 			tip.appendChild(document.createTextNode(`: ${String(node.data("id"))}`));
 			return tip;
 		};
-		const simpleTip = buildTip();
-		const detailTip = buildTip();
-		const table = document.createElement("table");
-		table.className = "cwtools-table";
-		const detailsArr = node.data("details") as GraphNodeDetail[] | undefined;
-		if (detailsArr && detailsArr.length > 0) {
-			for (const d of detailsArr) {
+		const buildDetailTip = () => {
+			const tip = buildTip();
+			const table = document.createElement("table");
+			table.className = "cwtools-table";
+			const detailsArr = node.data("details") as GraphNodeDetail[] | undefined;
+			if (detailsArr && detailsArr.length > 0) {
+				for (const d of detailsArr) {
+					const tr = document.createElement("tr");
+					const tdKey = document.createElement("td");
+					tdKey.textContent = d.key;
+					const tdVals = document.createElement("td");
+					tdVals.textContent = d.values.join(", ");
+					tr.appendChild(tdKey);
+					tr.appendChild(tdVals);
+					table.appendChild(tr);
+				}
+			} else {
 				const tr = document.createElement("tr");
-				const tdKey = document.createElement("td");
-				tdKey.textContent = d.key;
-				const tdVals = document.createElement("td");
-				tdVals.textContent = d.values.join(", ");
-				tr.appendChild(tdKey);
-				tr.appendChild(tdVals);
+				const td = document.createElement("td");
+				td.className = "cwtools-text-center";
+				td.textContent = "-";
+				tr.appendChild(td);
 				table.appendChild(tr);
 			}
-		} else {
-			const tr = document.createElement("tr");
-			const td = document.createElement("td");
-			td.className = "cwtools-text-center";
-			td.textContent = "-";
-			tr.appendChild(td);
-			table.appendChild(tr);
-		}
-		detailTip.appendChild(table);
+			tip.appendChild(table);
+			return tip;
+		};
+		// Built on demand for the same reason as getRef below, and the detail
+		// table only for a hover held long enough to expand the tooltip.
+		let simpleTip: HTMLElement | undefined;
+		const getSimpleTip = () => (simpleTip ??= buildTip());
+		let detailTip: HTMLElement | undefined;
+		const getDetailTip = () => (detailTip ??= buildDetailTip());
 		// Defer popperRef() (it allocates a DOM node) until the tooltip is first
 		// shown, so a graph with thousands of nodes does not create thousands of
 		// DOM elements up front.
@@ -278,7 +286,7 @@ function setupTooltips(cy: cytoscape.Core) {
 			getReferenceClientRect: () => getRef().getBoundingClientRect(),
 			content: () => {
 				const content = document.createElement("div");
-				content.appendChild(simpleTip.cloneNode(true));
+				content.appendChild(getSimpleTip().cloneNode(true));
 				return content;
 			},
 			sticky: true,
@@ -290,7 +298,7 @@ function setupTooltips(cy: cytoscape.Core) {
 			getReferenceClientRect: () => getRef().getBoundingClientRect(),
 			content: () => {
 				const content = document.createElement("div");
-				content.appendChild(detailTip.cloneNode(true));
+				content.appendChild(getDetailTip().cloneNode(true));
 				return content;
 			},
 			onHidden: (instance: Instance) => {
@@ -303,11 +311,10 @@ function setupTooltips(cy: cytoscape.Core) {
 			interactive: true,
 			trigger: "manual",
 		};
-		const dummyDomEle = document.createElement("div");
 		let tip: Instance | undefined;
 		const getTip = () => {
 			if (!tip) {
-				tip = tippy(dummyDomEle, simpleOptions);
+				tip = tippy(document.createElement("div"), simpleOptions);
 				_tips.push(tip);
 			}
 			return tip;
@@ -550,22 +557,22 @@ interface EdgeInput {
 }
 
 export function go(nodesJ: Array<techNode>, settings: settings) {
-	// Defaulted, not assumed: an older server that omits `references` would
-	// otherwise throw here and take the whole render down.
-	const edges2 = nodesJ.flatMap((a) =>
-		(a.references ?? []).map((b) =>
-			b.isOutgoing
-				? { source: a.id, target: b.key, label: b.label ?? "" }
-				: { source: b.key, target: a.id, label: b.label ?? "" },
-		),
-	);
 	const seen = new Set<string>();
 	const edgesfin: EdgeInput[] = [];
-	for (const e of edges2) {
-		const key = JSON.stringify([e.source, e.target, e.label]);
-		if (!seen.has(key)) {
-			seen.add(key);
-			edgesfin.push(e);
+	for (const a of nodesJ) {
+		// Defaulted, not assumed: an older server that omits `references` would
+		// otherwise throw here and take the whole render down.
+		for (const b of a.references ?? []) {
+			const source = b.isOutgoing ? a.id : b.key;
+			const target = b.isOutgoing ? b.key : a.id;
+			const label = b.label ?? "";
+			// NUL cannot occur in a script id or a localised label, so a plain
+			// delimiter is unambiguous here without paying for JSON.stringify.
+			const key = `${source}\0${target}\0${label}`;
+			if (!seen.has(key)) {
+				seen.add(key);
+				edgesfin.push({ source, target, label });
+			}
 		}
 	}
 	tech(nodesJ, edgesfin, settings);
