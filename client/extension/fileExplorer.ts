@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { confirmOpen } from "./trustedPaths";
 
 //#region Utilities
 
@@ -160,7 +161,7 @@ export class FileExplorer implements vscode.Disposable {
 		context.subscriptions.push(
 			vscode.commands.registerCommand(
 				"cwtools-files.openFile",
-				(resource: vscode.Uri) => this.openResource(resource),
+				(resource: vscode.Uri) => void this.openResource(resource),
 			),
 		);
 		context.subscriptions.push(
@@ -189,8 +190,10 @@ export class FileExplorer implements vscode.Disposable {
 		}
 	}
 
-	private openResource(resource: vscode.Uri): void {
-		vscode.window.showTextDocument(resource);
+	private async openResource(resource: vscode.Uri): Promise<void> {
+		if (await confirmOpen(resource)) {
+			await vscode.window.showTextDocument(resource);
+		}
 	}
 
 	dispose(): void {
