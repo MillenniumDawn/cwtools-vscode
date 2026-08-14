@@ -235,7 +235,7 @@ async function syncPinnedRules(
 					// A shallow cache can't tell newer from just different, so name the
 					// change rather than claim a direction.
 					void window.showInformationMessage(
-						`CWTools: ${language} rules changed from ${head} to ${rules.ref}. Validation may look different until you review the change.`,
+						`CWTools: ${language} rules changed from ${head} to ${rules.ref}. Validation may differ under the new pin.`,
 					);
 				}
 				await initialScanDone;
