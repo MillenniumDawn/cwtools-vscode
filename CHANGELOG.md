@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.1.0
+
 * The engine pin moves back to `3309db2`. Dependabot PR #197 bumped it from `3309db2` to `29b9a1c`, which is an *ancestor*, so it reverted both `dcea7893` (apply LSP settings without restart) and `3309db2` (incremental semantic tokens) while two entries in this file said they had shipped. The `automerge-engine.yml` guard added in #179 refuses exactly this move, so #197 did not come through auto-merge; the fast-forward check is worth extending to whatever path did merge it. This went unnoticed because the one suite that covers live settings was never running in CI, which the entry below fixes.
 
 * The engine pin moves the rest of the way to the tagged v2.6.0, which `release.yml` requires exactly (`git describe --tags --exact-match`). Past `3309db2`, that release adds LSP validation of `inline_script` bodies at their call site instead of only from the CLI (MillenniumDawn/cwtools#259), populates the file index so CW113 (missing `filepath`) actually fires in the editor (MillenniumDawn/cwtools#311), widens rule-aware scope inlay hints and the `cwtools-ignore` workspace action (MillenniumDawn/cwtools#275, MillenniumDawn/cwtools#282), and hardens `FilepathField` probes to stay inside the search roots alongside a Windows drive-letter parsing fix (MillenniumDawn/cwtools#233, MillenniumDawn/cwtools#307).
