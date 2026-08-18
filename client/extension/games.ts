@@ -40,8 +40,15 @@ export const GAMES: GameDef[] = [
 	{
 		id: "hoi4",
 		display: "Hearts of Iron IV",
-		repo: "https://github.com/cwtools/cwtools-hoi4-config",
-		repoRef: "ab1fda2a599ab4318d6f24ecba380e579e37006a", // 2026-08-05
+		// Overridable so the rules-sync host suite can point hoi4 at a local,
+		// checked-in bare repo instead of the real network (see
+		// client/test/suite/rulesSync.test.ts). Unset in every real install.
+		repo:
+			process.env.CWTOOLS_TEST_HOI4_REPO ||
+			"https://github.com/cwtools/cwtools-hoi4-config",
+		repoRef:
+			process.env.CWTOOLS_TEST_HOI4_REF ||
+			"ab1fda2a599ab4318d6f24ecba380e579e37006a", // 2026-08-05
 		exeName: "hoi4",
 		binariesPrefix: false,
 		folderHint: /(hoi4|hearts)/,
