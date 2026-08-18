@@ -593,7 +593,7 @@ type InboundMessage =
 			json: string;
 			persist?: GraphPanelState;
 	  }
-	| { command: "checkCytoscapeRendered" };
+	| { command: "checkCytoscapeRendered"; id: number };
 
 // Persist where the graph's data came from, so the window-reload serializer
 // can re-request it. Only the request parameters are kept, not the data.
@@ -639,6 +639,7 @@ window.addEventListener("message", (event) => {
 				vscode.postMessage({
 					command: "cytoscapeRenderedResult",
 					rendered: rendered,
+					id: message.id,
 				});
 				break;
 			}

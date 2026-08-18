@@ -60,11 +60,19 @@ suite("graph render check", () => {
 			onDidChangeViewState: () => ({ dispose: () => {} }),
 			dispose: vi.fn(),
 		};
+		// The real webview echoes the id of the check it is answering, so a reply
+		// here has to name one too.
+		const idOf = (call: number) =>
+			(postMessage.mock.calls[call][0] as { id: number }).id;
 		return {
 			panel: panel as unknown as WebviewPanel,
 			postMessage,
-			reply: (rendered: boolean) =>
-				messageListener?.({ command: "cytoscapeRenderedResult", rendered }),
+			reply: (rendered: boolean, call = postMessage.mock.calls.length - 1) =>
+				messageListener?.({
+					command: "cytoscapeRenderedResult",
+					rendered,
+					id: idOf(call),
+				}),
 		};
 	}
 
@@ -110,5 +118,24 @@ suite("graph render check", () => {
 		fake.reply(true);
 		assert.strictEqual(await second, true);
 		assert.strictEqual(fake.postMessage.mock.calls.length, 2);
+	});
+
+	test("ignores a reply the webview owed a check that already timed out", async () => {
+		const fake = fakePanel();
+		const graph = GraphPanel.restore("/ext", fake.panel);
+
+		const first = graph.checkCytoscapeRendered();
+		await vi.advanceTimersByTimeAsync(1_000);
+		assert.strictEqual(await first, false);
+
+		const second = graph.checkCytoscapeRendered();
+		fake.reply(true, 0);
+		await vi.advanceTimersByTimeAsync(1_000);
+
+		assert.strictEqual(
+			await second,
+			false,
+			"the late reply belongs to the first check, not this one",
+		);
 	});
 });
