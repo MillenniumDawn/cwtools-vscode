@@ -14,13 +14,16 @@
 // Labels are therefore unique here, and `test:smoke` passes both `--label
 // smoke` and `--label live` to cover the two workspaces.
 //
-// The hover and completion suites assert on rule-driven data. The sample
-// workspace has no game name in its path and no game-specific content dir, so
-// it detects as the generic `paradox` language, which has no rules repo to
-// clone; those suites then see only word-completion fallback and empty hovers
-// and fail. CI gates on `smoke` (which still boots the server binary and checks
-// activation) and `host` stays the local full run until the fixture is made
-// identifiable as a game.
+// The hover and completion suites assert on rule-driven data, which needs the
+// workspace to detect as a real game rather than the generic `paradox`
+// language (no rules repo to clone). The sample workspace has no game name in
+// its path, but client/test/sample/common/species_classes (added for #185,
+// unrelated to detection) is Stellaris's content marker (see
+// client/extension/games.ts), so it already detects as `stellaris` and fetches
+// real rules in the background on activation. `host` needs the built server
+// binary, so it is gated in pr.yml's `build` job rather than `check`; two of
+// its assertions stay `test.skip` against genuine engine gaps
+// (MillenniumDawn/cwtools#317, #318).
 //
 // rules-sync exercises the opposite gap: sample-hoi4's folder name and
 // common/ai_strategy dir make it detect as hoi4, so activation's real

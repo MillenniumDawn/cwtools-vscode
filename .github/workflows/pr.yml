@@ -112,12 +112,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-vscode-test-
     # Boots the extension host against the freshly built server: activation,
-    # command registration and the graph/file-explorer UI. The full `host`
-    # label additionally covers hover and completion, which need rule data the
-    # sample workspace can't resolve (see .vscode-test.mjs).
+    # command registration and the graph/file-explorer UI, plus the
+    # live-settings suite in its own workspace (see .vscode-test.mjs).
     - name: Host smoke tests
       timeout-minutes: 10
       run: xvfb-run -a npm run test:smoke
+    # The `host` label adds hover and completion, which need rule data: the
+    # sample workspace detects as `stellaris` (see .vscode-test.mjs) and the
+    # extension fetches its pinned rules over git in the background on
+    # activation.
+    - name: Host tests (hover/completion)
+      timeout-minutes: 10
+      run: xvfb-run -a npm run test:host
     # Packages what was just built, server included, so the PR artifact is an
     # installable extension rather than a client-only shell.
     - name: Test build
