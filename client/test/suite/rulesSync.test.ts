@@ -1,8 +1,16 @@
 import * as assert from "assert";
 import * as path from "path";
 import * as fsPromises from "fs/promises";
-import { runGit } from "../../extension/engine";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { activate, waitUntil } from "../support/utils";
+
+// Host suites must not import extension modules (the host runs the esbuild
+// bundle, so that would be a second copy), so the git assertions below use
+// their own spawn instead of engine.ts's runGit.
+const execFileAsync = promisify(execFile);
+const git = async (args: string[]): Promise<string> =>
+	(await execFileAsync("git", args)).stdout;
 
 // Fixed commits in the checked-in bare repo at
 // client/test/fixtures/hoi4-rules.git (see .vscode-test.mjs, which points
@@ -37,13 +45,11 @@ suite("Rules sync — hoi4 fixture", function () {
 			`rules cache should be populated with the pinned fixture content at ${markerPath}`,
 		);
 
-		const head = (
-			await runGit(["-C", hoi4Cache, "rev-parse", "HEAD"])
-		).trim();
+		const head = (await git(["-C", hoi4Cache, "rev-parse", "HEAD"])).trim();
 		assert.strictEqual(head, NEW_PIN, "cache should land on the pinned commit");
 
 		await assert.rejects(
-			runGit(["-C", hoi4Cache, "cat-file", "-e", OLD_PIN]),
+			git(["-C", hoi4Cache, "cat-file", "-e", OLD_PIN]),
 			"the shallow --depth 1 fetch should not have pulled in the previous commit",
 		);
 	});
