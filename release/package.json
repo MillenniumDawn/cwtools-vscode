@@ -50,8 +50,8 @@
     "workspaceContains:descriptor.mod",
     "workspaceContains:.metadata/metadata.json",
     "workspaceContains:{,binaries/}{eu4,hoi4,stellaris,CK2,v2game,imperator,ck3,victoria3,eu5}{,.exe}",
-    "workspaceContains:{events,common,decisions,missions,map,map_data,prescripted_countries,interface,gfx}/**/*.{txt,gui,gfx,asset}",
-    "workspaceContains:{localisation,localisation_synced,localization}/**/*.yml",
+    "workspaceContains:**/*.{txt,gui,gfx,sfx,asset,map}",
+    "workspaceContains:**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
     "onWebviewPanel:cwtools-graph"
   ],
   "contributes": {
