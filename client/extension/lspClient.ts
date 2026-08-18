@@ -1,6 +1,6 @@
 import * as path from "path";
 import type { ExtensionContext } from "vscode";
-import { CancellationError, workspace, window } from "vscode";
+import { CancellationError, Uri, workspace, window } from "vscode";
 import type {
 	LanguageClientOptions,
 	ServerOptions,
@@ -22,6 +22,7 @@ import {
 	type LiveServerSettings,
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
+import { isExcludedWatchedPath } from "./watchedFiles";
 import { logError, errorMessage, outputChannel } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
 
@@ -142,18 +143,16 @@ export function createLanguageClient(
 		},
 	};
 
+	// One watcher per file class the server actually reads, keyed on extension
+	// rather than a directory list. Its workspace scan walks the whole tree and
+	// filters by SCRIPT_EXTENSIONS (txt, gui, gfx, sfx, asset, map), so a
+	// per-directory glob here is always narrower than what it indexes: .txt
+	// under gfx/, portraits/ or dlc/ went unwatched. Loc keeps its directory
+	// scope, which the server's own loc check requires.
 	const fileEvents = [
+		workspace.createFileSystemWatcher("**/*.{txt,gui,gfx,sfx,asset,map}"),
 		workspace.createFileSystemWatcher(
-			"**/{events,common,history,map,map_data,prescripted_countries,flags,decisions,missions}/**/*.txt",
-		),
-		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gui"),
-		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gfx"),
-		workspace.createFileSystemWatcher("**/{interface}/**/*.sfx"),
-		workspace.createFileSystemWatcher(
-			"**/{interface,gfx,fonts,music,sound}/**/*.asset",
-		),
-		workspace.createFileSystemWatcher(
-			"**/{localisation,localisation_synced,localization}/**/*.yml",
+			"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
 		),
 		// .cwt rule files: the server lints them and builds its ruleset from
 		// them, so an edit made outside the editor (git checkout, another tool)
@@ -169,6 +168,17 @@ export function createLanguageClient(
 	const diagnosticsCache = new DiagnosticsSignatureCache();
 
 	const middleware: LanguageClientOptions["middleware"] = {
+		workspace: {
+			// Extension-keyed globs also catch files the server's own discovery
+			// walk skips, and its watched-file path doesn't re-apply that skip
+			// list, so hold those events here.
+			didChangeWatchedFile: async (event, next) => {
+				if (isExcludedWatchedPath(Uri.parse(event.uri).fsPath)) {
+					return;
+				}
+				await next(event);
+			},
+		},
 		handleDiagnostics: (uri, diagnostics, next) => {
 			if (diagnosticsCache.shouldPublish(uri.toString(), diagnostics)) {
 				next(uri, diagnostics);
@@ -267,7 +277,8 @@ export function createLanguageClient(
 			{
 				scheme: "file",
 				language: "yaml",
-				pattern: "**/{localisation,localisation_synced,localization}/**/*.yml",
+				pattern:
+					"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
 			},
 		],
 		synchronize: {

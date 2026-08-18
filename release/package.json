@@ -479,7 +479,8 @@
           "pdxloc"
         ],
         "filenamePatterns": [
-          "**/{localisation,localisation_synced,localization}/**/*.yml"
+          "**/{localisation,localisation_synced,localization}/**/*.yml",
+          "**/{localisation,localisation_synced,localization}/**/*.yaml"
         ],
         "configuration": "./paradox-localisation-language-configuration.json"
       }
