@@ -4,8 +4,7 @@ import * as vscode from "vscode";
 import {
 	activate,
 	graphPanelModule,
-	retryAsync,
-	wait,
+	waitUntil,
 	EXTENSION_ID,
 	SAMPLE_ROOT,
 } from "../support/utils";
@@ -297,13 +296,8 @@ describe("GraphPanel Tests", function () {
 
 		await vscode.commands.executeCommand("cwtools.graphFromJson");
 
-		// Wait for the panel to be created and initialized
-		await wait(1000);
-
-		const rendered = await retryAsync(
-			() => gp.GraphPanel.currentPanel!.checkCytoscapeRendered(),
-			6,
-			500,
+		const rendered = await waitUntil(() =>
+			gp.GraphPanel.currentPanel!.checkCytoscapeRendered(),
 		);
 
 		assert.ok(rendered, "Cytoscape should have rendered elements");
@@ -323,7 +317,7 @@ describe("GraphPanel Tests", function () {
 		const testStatus = function () {
 			return gp.GraphPanel.currentPanel!.getState() === gp.State.Done;
 		};
-		const result = await retryAsync(testStatus, 3, 500);
+		const result = await waitUntil(testStatus);
 		assert.strictEqual(result, true, "GraphPanel should be in the Done state");
 
 		after();
@@ -374,7 +368,7 @@ describe("GraphPanel Tests", function () {
 		const testStatus = function () {
 			return gp.GraphPanel.currentPanel!.getState() === gp.State.Done;
 		};
-		const result = await retryAsync(testStatus, 3, 500);
+		const result = await waitUntil(testStatus);
 		assert.strictEqual(result, true, "restored GraphPanel should reach Done");
 
 		after();
@@ -546,10 +540,8 @@ suite("GraphPanel — UI integration", function () {
 			{ id: "b", name: "B", references: [], isPrimary: false, entityType: "x" },
 		];
 		gp.GraphPanel.currentPanel!.initialiseGraph(data, 1.0);
-		const finalState = await retryAsync(
+		const finalState = await waitUntil(
 			() => gp.GraphPanel.currentPanel!.getState() === gp.State.Done,
-			3,
-			500,
 		);
 		assert.ok(
 			finalState,
@@ -586,13 +578,8 @@ suite("FileExplorer — UI integration", function () {
 	// FileExplorer here to force it would re-register the command and throw.
 	test("the openFile command is registered once the server sends a file list", async function () {
 		await activate();
-		const registered = await retryAsync(
-			async () =>
-				(await vscode.commands.getCommands()).includes(
-					"cwtools-files.openFile",
-				),
-			30,
-			500,
+		const registered = await waitUntil(async () =>
+			(await vscode.commands.getCommands()).includes("cwtools-files.openFile"),
 		);
 		assert.ok(
 			registered,

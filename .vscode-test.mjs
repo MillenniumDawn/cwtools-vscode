@@ -2,10 +2,15 @@
 // `vscode-test --label <name>` (see the npm `test:*` scripts):
 //
 //   unit     fast suites that need the VS Code API but not the language server
-//   smoke    unit + activation (sample) + live-settings (sample-live, its own
-//            workspace because .vscode/settings.json pins rules_folder)
-//   live     only the live-settings suite (sample-live)
+//   smoke    unit + activation, in the sample workspace
+//   live     the live-settings suite, in sample-live (its own workspace
+//            because .vscode/settings.json pins rules_folder)
 //   host     full suite excl. live (slower, see below)
+//
+// A label selects exactly one config: @vscode/test-cli resolves `--label x`
+// with config.tests.find(), so a second entry sharing a label is never run.
+// Labels are therefore unique here, and `test:smoke` passes both `--label
+// smoke` and `--label live` to cover the two workspaces.
 //
 // The hover and completion suites assert on rule-driven data. The sample
 // workspace has no game name in its path and no game-specific content dir, so
@@ -66,13 +71,6 @@ export default defineConfig({
 			files: smokeFiles,
 			workspaceFolder: sampleWorkspace,
 			launchArgs: [sampleFile],
-		},
-		{
-			...base,
-			label: "smoke",
-			files: liveFiles,
-			workspaceFolder: liveWorkspace,
-			launchArgs: [liveSampleFile],
 		},
 		{
 			...base,

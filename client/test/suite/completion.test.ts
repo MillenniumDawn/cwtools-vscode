@@ -8,21 +8,19 @@ import { expect } from 'chai';
 const testEventFile = path.join(SAMPLE_ROOT, 'events', 'irm.txt');
 const testNicheFile = path.join(SAMPLE_ROOT, 'common', 'pop_faction_types', 'irm_regionalist.txt');
 
-async function getCompletions(uri: vscode.Uri, position: vscode.Position): Promise<vscode.CompletionList> {
+async function getCompletionLabels(uri: vscode.Uri, position: vscode.Position): Promise<string[]> {
 	const completions = await vscode.commands.executeCommand<vscode.CompletionList>(
 		'vscode.executeCompletionItemProvider',
 		uri,
 		position
 	);
 	assert.ok(completions?.items?.length, 'No completions received');
+	// Kind 0 is Text, the word list VS Code falls back to with no server behind
+	// it. Any of those means the assertions below would be reading the fallback.
 	const textTypeCount = completions.items.filter(item => (item.kind || 0) === 0).length;
 	assert.ok(textTypeCount === 0,
 		`Too many Text type completions (${textTypeCount}/${completions.items.length}) - LSP may not be working`);
-	return completions;
-}
-
-function extractLabels(items: vscode.CompletionItem[]): string[] {
-	return items.map(item => extractCompletionLabel(item));
+	return completions.items.map(item => extractCompletionLabel(item));
 }
 
 suite('LSP Completion Tests', function () {
@@ -44,53 +42,31 @@ suite('LSP Completion Tests', function () {
 
 	suiteTeardown(() => teardownLSPErrorMonitoring());
 
-	test('should provide completions in niche context', async function () {
+	// The two context tests are a pair: each asserts the names it must offer and
+	// the names from the opposite context it must not. Losing scope awareness
+	// makes one list bleed into the other, which a "returned some items" check
+	// would not notice.
+	test('offers triggers and withholds effects inside a trigger block', async function () {
+		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
+		const labels = await getCompletionLabels(document.uri, new vscode.Position(12, 0));
+		expect(labels).to.include.members(['is_ai', 'is_country_type']);
+		expect(labels).to.not.have.members(['country_event', 'set_country_flag']);
+	});
+
+	test('offers effects and withholds triggers inside an immediate block', async function () {
+		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
+		const labels = await getCompletionLabels(document.uri, new vscode.Position(36, 2));
+		expect(labels).to.include.members(['country_event', 'every_country', 'set_country_flag']);
+		expect(labels).to.not.have.members(['is_ai', 'is_country_type']);
+	});
+
+	// Red against MillenniumDawn/cwtools#318: the pop_faction_flag value set is
+	// built per file, so a flag set in common/button_effects is not offered in
+	// common/pop_faction_types. Only regionalist_dublicated (set in this same
+	// file) comes back.
+	test('offers a pop faction flag set in another file', async function () {
 		const document = await openDocumentAndShow(vscode.Uri.file(testNicheFile));
-		const completions = await getCompletions(document.uri, new vscode.Position(26, 41));
-		const labels = extractLabels(completions.items);
-		const expected = ["regionalist_dublicated", "sector_policy_leadership"];
-		const missing = expected.filter(e => !labels.includes(e));
-		if (missing.length > 0) {
-			console.warn(`[rust] niche completion gap: missing ${JSON.stringify(missing)} in ${labels.length} items`);
-		}
-		expect(missing, `engine=rust\ngot ${labels.length} labels, missing: ${JSON.stringify(missing)}`).to.deep.equal([]);
-	});
-
-	test('should provide completions in trigger context', async function () {
-		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
-		const completions = await getCompletions(document.uri, new vscode.Position(12, 0));
-		const labels = extractLabels(completions.items);
-		const hasRelevantTriggers = labels.some(label =>
-			label.includes('is_ai') || label.includes('limit') || label.includes('country_type')
-		);
-		assert.ok(hasRelevantTriggers);
-		assert.ok(completions.items.length > 0, 'Should have completion items');
-	});
-
-	test('should provide completions in effect context', async function () {
-		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
-		const completions = await getCompletions(document.uri, new vscode.Position(17, 8));
-		const labels = extractLabels(completions.items);
-		assert.ok(labels.length > 0);
-		assert.ok(completions.items.length > 0, 'Should have completion items in effect context');
-	});
-
-	test('should respond to completion requests quickly', async function () {
-		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
-		const start = Date.now();
-		const completions = await getCompletions(document.uri, new vscode.Position(12, 0));
-		const duration = Date.now() - start;
-		assert.ok(duration < 5000, `Completion should be fast, took ${duration}ms`);
-		assert.ok(completions.items.length > 0, 'Should have completion items');
-	});
-
-	test('should provide LSP-based completions not just text fallback', async function () {
-		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
-		const completions = await getCompletions(document.uri, new vscode.Position(12, 0));
-		const hasLSPFeatures = completions.items.some(item =>
-			item.detail || item.documentation || item.sortText ||
-			(item.commitCharacters && item.commitCharacters.length > 0)
-		);
-		assert.ok(hasLSPFeatures, 'Completions should have LSP-specific features like detail, documentation, or sortText');
+		const labels = await getCompletionLabels(document.uri, new vscode.Position(26, 41));
+		expect(labels).to.include.members(['regionalist_dublicated', 'sector_policy_leadership']);
 	});
 });
