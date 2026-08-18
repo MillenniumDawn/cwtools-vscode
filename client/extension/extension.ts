@@ -61,7 +61,10 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		// this platform or bail with a clear message.
 		const serverExe = resolveServerExe(context);
 		if (!serverExe) {
-			await window.showErrorMessage(
+			// Not awaited: an error notification stays up until it is dismissed, so
+			// awaiting it parks activation forever wherever nobody can click it,
+			// which is exactly the headless extension host the tests run in.
+			void window.showErrorMessage(
 				`CWTools: no language server binary found. ` +
 					`Re-install the extension or build the server.`,
 			);
@@ -106,7 +109,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		const initialScanDone = registerServerNotifications(context, client);
 
 		if (workspace.name === undefined) {
-			await window.showWarningMessage(
+			void window.showWarningMessage(
 				'You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using "File, Open Folder"',
 			);
 		}

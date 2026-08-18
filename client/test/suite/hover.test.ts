@@ -46,55 +46,55 @@ suite('LSP Hover Tests', function () {
 			const uri = vscode.Uri.file(testEventFile);
 			testDocument = await vscode.workspace.openTextDocument(uri);
 			await vscode.window.showTextDocument(testDocument);
-			await waitForLanguageServer(uri, 10, 100);
+			await waitForLanguageServer(uri);
 		});
 
 		teardown(async function () {
 			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
 		});
 
-		test('should provide hover information with scope change - effect', async function () {
+		// `is_country_type` inside `every_country = { limit = { … } }`: the hover
+		// names the trigger, carries its rule description, and reports the scope
+		// the trigger is evaluated in.
+		test('names a trigger, its description and the scope it runs in', async function () {
 			await waitForLSP(vscode.Uri.file(testEventFile));
 			const required = [
-				"Checks if the country is a specific type",
-				"Any",
-				"Country",
-				"ROOT",
-				"THIS",
+				'`is_country_type`',
+				'Checks if the country is a specific type',
+				'**Scope**: country',
 			];
 			const result = await checkHoverContains(testDocument.uri, new vscode.Position(37, 45), required);
-			console.warn(`[rust] hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
-			expect(result.actual, `engine=rust`).to.not.be.empty;
-			expect(result.missing, `engine=rust\nactual: ${result.actual}`).to.deep.equal([]);
+			expect(result.missing, `actual hover:\n${result.actual}`).to.deep.equal([]);
 		});
 
-		test('should provide hover information with scope change - trigger', async function () {
+		// `is_homeworld` sits inside `solar_system = { … }` in a country_event, so
+		// the current scope has moved to the system while ROOT and PREV stay on
+		// the country. Losing the Root/Prev lines is the regression this catches.
+		test('reports the scope change plus the surviving root and prev scopes', async function () {
 			await waitForLSP(vscode.Uri.file(testEventFile));
 			const required = [
 				"Checks if the planet is its owner's homeworld",
-				"System",
-				"Country",
-				"ROOT",
-				"THIS",
-				"PREV",
+				'**Scope**: galacticobject',
+				'**Root**: country',
+				'**Prev**: country',
 			];
 			const result = await checkHoverContains(testDocument.uri, new vscode.Position(15, 20), required);
-			console.warn(`[rust] hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
-			expect(result.actual, `engine=rust`).to.not.be.empty;
-			expect(result.missing, `engine=rust\nactual: ${result.actual}`).to.deep.equal([]);
+			expect(result.missing, `actual hover:\n${result.actual}`).to.deep.equal([]);
 		});
 	});
 
 	suite('Localization Hover', function () {
-		test('should provide localization information in hover', async function () {
+		// Red against MillenniumDawn/cwtools#317: hovering a value[…] string
+		// reports the enclosing trigger instead of previewing the localisation the
+		// key resolves to, so "Faction Governance" from irm_l_english.yml never
+		// appears.
+		test('previews the localisation a pop faction flag resolves to', async function () {
 			const uri = vscode.Uri.file(testEffectsFile);
 			testDocument = await vscode.workspace.openTextDocument(uri);
 			await vscode.window.showTextDocument(testDocument);
-			await waitForLSP(vscode.Uri.file(testEffectsFile));
-			const result = await checkHoverContains(testDocument.uri, new vscode.Position(36, 70), ["Faction Governance"]);
-			console.warn(`[rust] localization hover gap: missing ${JSON.stringify(result.missing)} in:\n${result.actual}`);
-			expect(result.actual, `engine=rust`).to.not.be.empty;
-			expect(result.missing, `engine=rust\nactual: ${result.actual}`).to.deep.equal([]);
+			await waitForLSP(uri);
+			const result = await checkHoverContains(testDocument.uri, new vscode.Position(36, 70), ['Faction Governance']);
+			expect(result.missing, `actual hover:\n${result.actual}`).to.deep.equal([]);
 		});
 	});
 
@@ -114,21 +114,22 @@ suite('LSP Hover Tests', function () {
 	});
 
 	suite('Performance Tests', function () {
-		test('should respond to hover requests within reasonable time', async function () {
+		// Answers from the warm index in ~10 ms. The budget is deliberately far
+		// above that: it catches a hover that starts blocking on a re-index
+		// (seconds) without failing on a loaded runner's scheduling noise.
+		test('answers a hover from the warm index instead of re-indexing', async function () {
 			const uri = vscode.Uri.file(testEventFile);
 			const document = await vscode.workspace.openTextDocument(uri);
 			await vscode.window.showTextDocument(document);
-			await waitForLanguageServer(document.uri, 10, 100);
+			await waitForLanguageServer(document.uri);
 			const start = Date.now();
-			const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			await vscode.commands.executeCommand<vscode.Hover[]>(
 				'vscode.executeHoverProvider',
 				document.uri,
 				new vscode.Position(8, 7)
 			);
 			const duration = Date.now() - start;
-			console.log(`Hover request took ${duration}ms`);
-			assert.ok(duration < 100, `Hover request should complete within 100 ms, took ${duration}ms`);
-			if (hovers) console.log('Performance test - hovers found:', hovers.length);
+			assert.ok(duration < 500, `Hover request should complete within 500 ms, took ${duration}ms`);
 			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
 		});
 	});

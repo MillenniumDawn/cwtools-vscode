@@ -1,7 +1,12 @@
 import * as assert from "assert";
 import * as path from "path";
 import * as vscode from "vscode";
-import { activate, SAMPLE_ROOT, waitForLanguageServer } from "../support/utils";
+import {
+	activate,
+	SAMPLE_ROOT,
+	waitForLanguageServer,
+	waitUntil,
+} from "../support/utils";
 
 const settingsFile = path.join(
 	SAMPLE_ROOT,
@@ -32,17 +37,17 @@ async function waitForHover(
 	message: string,
 ): Promise<string> {
 	let lastText = "";
-	// 6 s budget (60 × 100 ms): didChangeConfiguration triggers a full loc
-	// re-index that can exceed 3 s on CI runners with a cold cache.
-	for (let attempt = 0; attempt < 60; attempt++) {
-		const text = await hoverText(uri, position);
-		lastText = text;
-		if (predicate(text)) {
-			return text;
-		}
-		await new Promise((resolve) => setTimeout(resolve, 100));
+	// didChangeConfiguration triggers a full loc re-index that can exceed 3 s on
+	// a CI runner with a cold cache, so the budget stays generous even though
+	// the poll is fine-grained.
+	const matched = await waitUntil(async () => {
+		lastText = await hoverText(uri, position);
+		return predicate(lastText);
+	}, 15_000);
+	if (!matched) {
+		throw new Error(`${message}: ${JSON.stringify(lastText)}`);
 	}
-	throw new Error(`${message}: ${JSON.stringify(lastText)}`);
+	return lastText;
 }
 
 suite("Live settings", function () {
@@ -78,7 +83,7 @@ suite("Live settings", function () {
 		await activate();
 		document = await vscode.workspace.openTextDocument(settingsFile);
 		await vscode.window.showTextDocument(document);
-		const ready = await waitForLanguageServer(document.uri, 60, 100);
+		const ready = await waitForLanguageServer(document.uri);
 		assert.ok(ready, "language server should be ready");
 		// Start from a known baseline so the first polling assertion is not flaky.
 		await resetLiveSettings();

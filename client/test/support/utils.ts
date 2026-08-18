@@ -83,27 +83,33 @@ export async function wait(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function retryAsync(
-	fn: () => boolean | Promise<boolean>,
-	maxRetries = 3,
-	delayMs = 500,
+/**
+ * Poll `probe` until it returns true, or the deadline passes.
+ *
+ * Poll granularity and time budget are separate on purpose. A retry count
+ * multiplied by a coarse delay ties them together, so every wait pays the
+ * full delay even when the condition is already met a few ms later, and
+ * raising the budget for a loaded CI runner makes the fast path slower too.
+ */
+export async function waitUntil(
+	probe: () => boolean | Promise<boolean>,
+	timeoutMs = 10_000,
+	intervalMs = 25,
 ): Promise<boolean> {
-	for (let attempt = 1; attempt <= maxRetries; attempt++) {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
 		try {
-			const result = await fn();
-			if (result === true) {
+			if (await probe()) {
 				return true;
 			}
-		} catch (err) {
-			if (attempt === maxRetries) {
-				throw err;
-			}
+		} catch (_e) {
+			// Transient while the host settles; report the timeout, not the throw.
 		}
-		if (attempt < maxRetries) {
-			await wait(delayMs);
+		if (Date.now() >= deadline) {
+			return false;
 		}
+		await wait(intervalMs);
 	}
-	return false;
 }
 
 export async function openDocumentAndShow(
@@ -121,41 +127,22 @@ export async function openDocumentAndShow(
  */
 export async function waitForLSP(
 	uri: vscode.Uri,
-	maxRetries = 60,
-	delayMs = 500,
+	timeoutMs = 30_000,
 ): Promise<void> {
-	for (let attempt = 1; attempt <= maxRetries; attempt++) {
-		try {
-			const completions =
-				await vscode.commands.executeCommand<vscode.CompletionList>(
-					"vscode.executeCompletionItemProvider",
-					uri,
-					new vscode.Position(12, 0),
-				);
-			if (completions?.items?.length) {
-				const hasLspCompletions = completions.items.some(
-					(item) => (item.kind || 0) !== 0,
-				);
-				if (hasLspCompletions) {
-					console.log(
-						`LSP ready after ${attempt} attempts (${attempt * delayMs}ms) — found ${completions.items.length} completions`,
-					);
-					return;
-				}
-			}
-		} catch (error) {
-			console.log(
-				`LSP check attempt ${attempt} failed:`,
-				error instanceof Error ? error.message : String(error),
+	const ready = await waitUntil(async () => {
+		const completions =
+			await vscode.commands.executeCommand<vscode.CompletionList>(
+				"vscode.executeCompletionItemProvider",
+				uri,
+				new vscode.Position(12, 0),
 			);
-		}
-		if (attempt < maxRetries) {
-			await wait(delayMs);
-		}
+		// kind 0 is Text, the word-completion fallback VS Code supplies with no
+		// server behind it; anything else means the server answered.
+		return !!completions?.items?.some((item) => (item.kind || 0) !== 0);
+	}, timeoutMs);
+	if (!ready) {
+		throw new Error(`LSP not ready within ${timeoutMs}ms`);
 	}
-	throw new Error(
-		`LSP not ready after ${maxRetries} attempts (${maxRetries * delayMs}ms total)`,
-	);
 }
 
 /**
@@ -166,31 +153,14 @@ export async function waitForLSP(
  */
 export async function waitForLanguageServer(
 	uri: vscode.Uri,
-	maxRetries = 30,
-	delayMs = 500,
+	timeoutMs = 15_000,
 ): Promise<boolean> {
-	for (let attempt = 1; attempt <= maxRetries; attempt++) {
-		try {
-			const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
-				"vscode.executeHoverProvider",
-				uri,
-				new vscode.Position(0, 0),
-			);
-			if (hovers !== undefined) {
-				console.log(
-					`Language server ready after ${attempt} attempts (${attempt * delayMs}ms)`,
-				);
-				return true;
-			}
-		} catch (error) {
-			console.log(
-				`LSP check attempt ${attempt} failed:`,
-				error instanceof Error ? error.message : error,
-			);
-		}
-		if (attempt < maxRetries) {
-			await wait(delayMs);
-		}
-	}
-	return false;
+	return waitUntil(async () => {
+		const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+			"vscode.executeHoverProvider",
+			uri,
+			new vscode.Position(0, 0),
+		);
+		return hovers !== undefined;
+	}, timeoutMs);
 }
