@@ -1,0 +1,27 @@
+# IRM
+# Imperial Routine - General Events
+
+namespace = irm
+
+# Scope = N/A
+# Country events
+country_event = {
+	id = irm.1
+	hide_window = yes
+
+	trigger = {
+		is_ai = no
+		is_country_type = default
+        solar_system = {
+            is_homeworld = yes
+       }
+	}
+
+	immediate = {
+		# Regular events
+		country_event = { id = irm_sector.101 } 					# listener: leader's edict traits
+		country_event = { id = irm_sector.102 } 					# listener: update timer for edict's length
+		country_event = { id = irm_sector.104 }
+						# listener: update timer for policy cd
+	}
+}

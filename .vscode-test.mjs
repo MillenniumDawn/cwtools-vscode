@@ -1,11 +1,13 @@
 // Single source for the host-based extension tests. Pick a config with
 // `vscode-test --label <name>` (see the npm `test:*` scripts):
 //
-//   unit     fast suites that need the VS Code API but not the language server
-//   smoke    unit + activation, in the sample workspace
-//   live     the live-settings suite, in sample-live (its own workspace
-//            because .vscode/settings.json pins rules_folder)
-//   host     full suite excl. live (slower, see below)
+//   unit        fast suites that need the VS Code API but not the language server
+//   smoke       unit + activation, in the sample workspace
+//   live        the live-settings suite, in sample-live (its own workspace
+//               because .vscode/settings.json pins rules_folder)
+//   rules-sync  activation-triggered rules sync against a local hoi4 fixture
+//               (see below; not part of test:smoke)
+//   host        full suite excl. live (slower, see below)
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
@@ -20,15 +22,34 @@
 // activation) and `host` stays the local full run until the fixture is made
 // identifiable as a game.
 //
+// rules-sync exercises the opposite gap: sample-hoi4's folder name and
+// common/ai_strategy dir make it detect as hoi4, so activation's real
+// resolveRulesCache/fetchRulesInBackground actually run (see rulesSetup.ts).
+// games.ts and rulesManifest.ts read CWTOOLS_TEST_HOI4_REPO/_REF and
+// CWTOOLS_TEST_RULES_MANIFEST_URL (below) to point that sync at the
+// checked-in bare repo under client/test/fixtures/hoi4-rules.git instead of
+// the real network. It still needs a real cwtools-server binary staged at
+// release/bin/server: activation's init() returns before it ever reaches the
+// rules sync when the binary is missing, same as `smoke`/`live`. Left out of
+// test:smoke for now rather than folded in unasked; wiring it into CI's smoke
+// step (pr.yml) is a separate call.
+//
 // Coverage applies globally when `--coverage` is passed (test:coverage runs the
 // `unit` label).
 
+import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";
 
 const sampleWorkspace = "./client/test/sample";
 const liveWorkspace = "./client/test/sample-live";
+const rulesSyncWorkspace = "./client/test/sample-hoi4";
 const sampleFile = "./client/test/sample/events/irm.txt";
 const liveSampleFile = "./client/test/sample-live/events/irm.txt";
+const rulesSyncSampleFile = "./client/test/sample-hoi4/events/irm.txt";
+const hoi4RulesFixture = path.resolve(
+	import.meta.dirname,
+	"client/test/fixtures/hoi4-rules.git",
+);
 const unitFiles = [
 	"./release/bin/client/test/suite/graphTypes.test.js",
 	"./release/bin/client/test/suite/fileExplorer.test.js",
@@ -43,6 +64,7 @@ const smokeFiles = [
 	"./release/bin/client/test/suite/extension.test.js",
 ];
 const liveFiles = ["./release/bin/client/test/suite/liveSettings.test.js"];
+const rulesSyncFiles = ["./release/bin/client/test/suite/rulesSync.test.js"];
 const hostFiles = [
 	"./release/bin/client/test/suite/graphTypes.test.js",
 	"./release/bin/client/test/suite/fileExplorer.test.js",
@@ -78,6 +100,18 @@ export default defineConfig({
 			files: liveFiles,
 			workspaceFolder: liveWorkspace,
 			launchArgs: [liveSampleFile],
+		},
+		{
+			...base,
+			label: "rules-sync",
+			files: rulesSyncFiles,
+			workspaceFolder: rulesSyncWorkspace,
+			launchArgs: [rulesSyncSampleFile],
+			env: {
+				CWTOOLS_TEST_HOI4_REPO: hoi4RulesFixture,
+				CWTOOLS_TEST_HOI4_REF: "3f03757a6f15565f763434e5752021c3ba8c0c3e",
+				CWTOOLS_TEST_RULES_MANIFEST_URL: "http://127.0.0.1:1/rules-pins.json",
+			},
 		},
 		{
 			...base,
