@@ -4,18 +4,16 @@
 // The server reads remapped keys (ignoreFilePatterns/ignoredErrorCodes); the
 // `cwtools.*` settings use different names. Map them here so both the initial
 // initializationOptions and the live didChangeConfiguration payload agree.
-// ignore_patterns are already globs; errors.ignorefiles lists bare file names,
-// so turn each into a **/<name> glob to match anywhere.
+// ignore_patterns are already globs; errors.ignorefiles lists bare file names
+// or globs, which the server now matches at any depth on its own (a pattern
+// with no path separator matches the name regardless of where it sits).
 export function mapIgnoreOptions(
 	ignorePatterns: readonly string[] | undefined,
 	ignoreFiles: readonly string[] | undefined,
 	ignoredCodes: readonly string[] | undefined,
 ): { ignoreFilePatterns: string[]; ignoredErrorCodes: string[] } {
 	return {
-		ignoreFilePatterns: [
-			...(ignorePatterns ?? []),
-			...(ignoreFiles ?? []).map((f) => (f.includes("/") ? f : `**/${f}`)),
-		],
+		ignoreFilePatterns: [...(ignorePatterns ?? []), ...(ignoreFiles ?? [])],
 		ignoredErrorCodes: [...(ignoredCodes ?? [])],
 	};
 }

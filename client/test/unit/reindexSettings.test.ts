@@ -39,17 +39,17 @@ suite("reindexSettings — normalizeBackgroundReindexIdleSeconds", () => {
 });
 
 suite("reindexSettings — mapIgnoreOptions", () => {
-	test("maps bare file names to **/ globs", () => {
+	test("passes bare file names through unprefixed", () => {
 		const result = mapIgnoreOptions([], ["README.txt", "credits.txt"], []);
 		assert.deepStrictEqual(result.ignoreFilePatterns, [
-			"**/README.txt",
-			"**/credits.txt",
+			"README.txt",
+			"credits.txt",
 		]);
 	});
 
-	test("rewrites a slashless glob to match anywhere (*.txt becomes **/*.txt)", () => {
+	test("passes a slashless glob through unchanged (*.txt stays *.txt)", () => {
 		const result = mapIgnoreOptions([], ["*.txt"], []);
-		assert.deepStrictEqual(result.ignoreFilePatterns, ["**/*.txt"]);
+		assert.deepStrictEqual(result.ignoreFilePatterns, ["*.txt"]);
 	});
 
 	test("passes names that already contain a path through unchanged", () => {
@@ -68,7 +68,7 @@ suite("reindexSettings — mapIgnoreOptions", () => {
 		});
 	});
 
-	test("merges ignore_patterns globs ahead of the mapped file names", () => {
+	test("merges ignore_patterns globs ahead of the passed-through file names", () => {
 		const result = mapIgnoreOptions(
 			["**/99_README**.txt"],
 			["credits.txt"],
@@ -76,7 +76,7 @@ suite("reindexSettings — mapIgnoreOptions", () => {
 		);
 		assert.deepStrictEqual(result.ignoreFilePatterns, [
 			"**/99_README**.txt",
-			"**/credits.txt",
+			"credits.txt",
 		]);
 	});
 
