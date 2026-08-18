@@ -142,18 +142,16 @@ export function createLanguageClient(
 		},
 	};
 
+	// One watcher per file class the server actually reads, keyed on extension
+	// rather than a directory list. Its workspace scan walks the whole tree and
+	// filters by SCRIPT_EXTENSIONS (txt, gui, gfx, sfx, asset, map), so a
+	// per-directory glob here is always narrower than what it indexes: .txt
+	// under gfx/, portraits/ or dlc/ went unwatched. Loc keeps its directory
+	// scope, which the server's own loc check requires.
 	const fileEvents = [
+		workspace.createFileSystemWatcher("**/*.{txt,gui,gfx,sfx,asset,map}"),
 		workspace.createFileSystemWatcher(
-			"**/{events,common,history,map,map_data,prescripted_countries,flags,decisions,missions}/**/*.txt",
-		),
-		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gui"),
-		workspace.createFileSystemWatcher("**/{interface,gfx}/**/*.gfx"),
-		workspace.createFileSystemWatcher("**/{interface}/**/*.sfx"),
-		workspace.createFileSystemWatcher(
-			"**/{interface,gfx,fonts,music,sound}/**/*.asset",
-		),
-		workspace.createFileSystemWatcher(
-			"**/{localisation,localisation_synced,localization}/**/*.yml",
+			"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
 		),
 		// .cwt rule files: the server lints them and builds its ruleset from
 		// them, so an edit made outside the editor (git checkout, another tool)
