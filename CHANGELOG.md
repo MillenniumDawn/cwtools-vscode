@@ -1,5 +1,7 @@
 ### Unreleased
 
+* The `workspaceContains` activation events still hard-coded the narrow directory list #203 removed from the file watchers, so a mod laid out outside `events/common/decisions/...` and without a `descriptor.mod` never activated the extension. They're now keyed on extension like the watchers: any `txt`, `gui`, `gfx`, `sfx`, `asset`, or `map` file anywhere in the workspace, and `yml`, `yaml`, or `csv` under a localisation directory. (#204)
+
 ### 3.1.1
 
 * The engine pin moves to v2.6.1, which fixes a Windows-only false positive that made 3.1.0 close to unusable there. Every server-side index is keyed on the raw URI string, and nothing canonicalised those keys, so a file reaching the server under two spellings was indexed twice. On Windows that is every open file: VS Code percent-encodes the drive colon (`file:///d%3A/mod/x.txt`) while the workspace scan builds its keys with `Url::from_file_path` (`file:///d:/mod/x.txt`), so the scan's "skip documents the editor already has open" string compare never matched and each open document was indexed a second time from disk. It stayed invisible until 2.6.0 changed CW261 to ask the type index how many times the *project* defines an id, at which point every `## unique` definition in every opened file reported as defined twice — and because the span is the whole definition block, a focus-tree file squiggled end to end. Incoming document URIs and the workspace folder URIs are now folded onto one spelling at the same boundary. (MillenniumDawn/cwtools#319)
