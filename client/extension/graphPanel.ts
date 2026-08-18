@@ -57,7 +57,12 @@ export class GraphPanel {
 			this.pendingRequest = resolve;
 		});
 		this._panel.webview.postMessage({ command: "checkCytoscapeRendered" });
-		return promise;
+		// A webview that hasn't attached its listener yet drops the message and
+		// never replies; answer not-rendered instead so a poller can ask again.
+		const noReply = new Promise<boolean>((resolve) => {
+			setTimeout(() => resolve(false), 1_000);
+		});
+		return Promise.race([promise, noReply]);
 	}
 
 	private _disposed = false;
