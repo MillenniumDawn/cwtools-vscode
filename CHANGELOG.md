@@ -26,6 +26,7 @@
 * `package-prebuilt` no longer loses the staged server binaries if one platform's `vsce` run fails partway through. `packageAllVsixes` keyed its `finally` restore on whether `release/bin/server` still existed, but a mid-loop failure leaves the failing platform's binary there, so the restore was skipped and the holding directory (the only complete copy) was deleted. The restore is now gated on a success flag, and the partial directory is wiped before the full set is copied back. (#129)
 
 * A missing `git` on `PATH` no longer surfaces as a cryptic `spawn git ENOENT` inside the rules-download warning. `runGit` translates the spawn ENOENT into a `GitNotFoundError`, and the initial-clone warning now says CWTools needs Git on your PATH (and to install Git and reload) instead of pointing at the network. (#169)
+* `publish-marketplace.yml`'s dry run called `vsce ls-publish`, which isn't a real vsce subcommand, and hid the failure behind `|| true`, so every dry run reported success without validating anything. It now runs `vsce generate-manifest --packagePath` against each downloaded vsix, which actually opens the package and fails the step if one is missing or corrupt. (#193)
 
 ### 3.0.1
 
