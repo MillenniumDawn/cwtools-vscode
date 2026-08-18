@@ -1,6 +1,6 @@
 import * as path from "path";
 import type { ExtensionContext } from "vscode";
-import { CancellationError, workspace, window } from "vscode";
+import { CancellationError, Uri, workspace, window } from "vscode";
 import type {
 	LanguageClientOptions,
 	ServerOptions,
@@ -22,6 +22,7 @@ import {
 	type LiveServerSettings,
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
+import { isExcludedWatchedPath } from "./watchedFiles";
 import { logError, errorMessage, outputChannel } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
 
@@ -167,6 +168,17 @@ export function createLanguageClient(
 	const diagnosticsCache = new DiagnosticsSignatureCache();
 
 	const middleware: LanguageClientOptions["middleware"] = {
+		workspace: {
+			// Extension-keyed globs also catch files the server's own discovery
+			// walk skips, and its watched-file path doesn't re-apply that skip
+			// list, so hold those events here.
+			didChangeWatchedFile: async (event, next) => {
+				if (isExcludedWatchedPath(Uri.parse(event.uri).fsPath)) {
+					return;
+				}
+				await next(event);
+			},
+		},
 		handleDiagnostics: (uri, diagnostics, next) => {
 			if (diagnosticsCache.shouldPublish(uri.toString(), diagnostics)) {
 				next(uri, diagnostics);
@@ -265,7 +277,8 @@ export function createLanguageClient(
 			{
 				scheme: "file",
 				language: "yaml",
-				pattern: "**/{localisation,localisation_synced,localization}/**/*.yml",
+				pattern:
+					"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
 			},
 		],
 		synchronize: {

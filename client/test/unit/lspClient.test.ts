@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import { minimatch } from "minimatch";
 import { beforeEach, suite, test, vi } from "vitest";
 import type { ExtensionContext } from "vscode";
 import type { LanguageClientOptions } from "vscode-languageclient/node";
@@ -27,6 +28,11 @@ const {
 vi.mock("vscode", () => ({
 	CancellationError: class extends Error {},
 	ProgressLocation: { Notification: 15 },
+	Uri: {
+		parse: (value: string) => ({
+			fsPath: decodeURIComponent(value.replace(/^file:\/\//, "")),
+		}),
+	},
 	window: {
 		createOutputChannel: () => ({ appendLine: () => {} }),
 		showErrorMessage: vi.fn(),
@@ -65,12 +71,26 @@ import { createLanguageClient } from "../../extension/lspClient";
 
 // The server's workspace scan walks the whole tree and filters by
 // cwtools_file_manager's SCRIPT_EXTENSIONS (txt, gui, gfx, sfx, asset, map),
-// and reads yml/yaml/csv under a localisation dir. A watcher narrower than
-// that leaves edits made outside the editor unindexed (#117).
-const EXPECTED_GLOBS = [
-	"**/*.{txt,gui,gfx,sfx,asset,map}",
-	"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
-	"**/*.cwt",
+// and reads yml/yaml/csv under a localisation dir. Anything it indexes has to
+// be watched, or an edit made outside the editor never reaches it (#117).
+const WATCHED: [path: string, watched: boolean][] = [
+	["portraits/leaders/x.txt", true],
+	["dlc/dlc01/common/ideas/x.txt", true],
+	["map_data/terrain.map", true],
+	["interface/x.sfx", true],
+	["gfx/models/x.asset", true],
+	["localisation/english/a_l_english.yml", true],
+	["localisation/replace/b.csv", true],
+	["deep/nested/localization/c.yaml", true],
+	["Config/events.cwt", true],
+	// Loc extensions only count under a localisation dir, matching the
+	// server's own loc predicate.
+	["docs/notes.yml", false],
+	["data/export.csv", false],
+	// Resources the server notes but never reads.
+	["gfx/flags/x.dds", false],
+	["gfx/models/x.mesh", false],
+	["music/track.ogg", false],
 ];
 
 function create(): { context: ExtensionContext } {
@@ -84,6 +104,10 @@ function create(): { context: ExtensionContext } {
 	return { context };
 }
 
+function watchedFileEvent(uri: string): { uri: string; type: 1 | 2 | 3 } {
+	return { uri, type: 2 };
+}
+
 suite("lspClient — watched files", () => {
 	beforeEach(() => {
 		createdWatchers.length = 0;
@@ -91,19 +115,27 @@ suite("lspClient — watched files", () => {
 		lastClientOptions.value = undefined;
 	});
 
-	test("watches every file class the server indexes", () => {
+	test("the globs match every file class the server indexes", () => {
 		create();
-		assert.deepStrictEqual(
-			createdWatchers.map((w) => w.glob),
-			EXPECTED_GLOBS,
-		);
+		const globs = createdWatchers.map((w) => w.glob);
+		for (const [path, watched] of WATCHED) {
+			assert.strictEqual(
+				globs.some((glob) => minimatch(path, glob)),
+				watched,
+				path,
+			);
+		}
 	});
 
 	test("hands the watchers to the client and disposes them with the extension", () => {
 		const { context } = create();
+		const fileEvents = lastClientOptions.value?.synchronize?.fileEvents;
+		assert.ok(Array.isArray(fileEvents), "fileEvents is not a watcher list");
+		const byGlob = (a: { glob: string }, b: { glob: string }): number =>
+			a.glob.localeCompare(b.glob);
 		assert.deepStrictEqual(
-			lastClientOptions.value?.synchronize?.fileEvents,
-			createdWatchers,
+			(fileEvents as unknown as { glob: string }[]).slice().sort(byGlob),
+			createdWatchers.slice().sort(byGlob),
 		);
 		for (const watcher of createdWatchers) {
 			assert.ok(
@@ -111,5 +143,29 @@ suite("lspClient — watched files", () => {
 				`watcher ${watcher.glob} not registered for disposal`,
 			);
 		}
+	});
+
+	test("holds back events for files the server's own walk skips", async () => {
+		create();
+		const forwarded: string[] = [];
+		const next = (event: { uri: string }): Promise<void> => {
+			forwarded.push(event.uri);
+			return Promise.resolve();
+		};
+		const middleware = lastClientOptions.value?.middleware?.workspace
+			?.didChangeWatchedFile;
+		assert.ok(middleware, "no didChangeWatchedFile middleware");
+		for (const uri of [
+			"file:///mod/Changelog.txt",
+			"file:///mod/dist/bundle.js.map",
+			"file:///mod/common/ideas/x.txt",
+			"file:///mod/My%20Mod/events/y.txt",
+		]) {
+			await middleware(watchedFileEvent(uri), next);
+		}
+		assert.deepStrictEqual(forwarded, [
+			"file:///mod/common/ideas/x.txt",
+			"file:///mod/My%20Mod/events/y.txt",
+		]);
 	});
 });
