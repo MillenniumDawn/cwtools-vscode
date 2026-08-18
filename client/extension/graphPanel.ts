@@ -30,7 +30,7 @@ type WebviewMessage =
 	| { command: "saveImage"; image: string }
 	| { command: "saveJson"; json: string }
 	| { command: "ready" }
-	| { command: "cytoscapeRenderedResult"; rendered: boolean };
+	| { command: "cytoscapeRenderedResult"; rendered: boolean; id: number };
 export class GraphPanel {
 	/**
 	 * Track the currently panel. Only allow a single panel to exist at a time.
@@ -45,24 +45,39 @@ export class GraphPanel {
 	public getState(): State {
 		return this._state;
 	}
-	private pendingRequest: ((data: boolean) => void) | null = null;
+	// Carries the id so a reply the webview owed an earlier check cannot answer
+	// the one now in flight; the poll loop asks every 25 ms, so overlap is the
+	// normal case rather than the odd one.
+	private pendingRequest: {
+		id: number;
+		answer: (rendered: boolean) => void;
+	} | null = null;
+	private lastCheckId = 0;
 
 	// Method to check if cytoscape has rendered elements
 	public async checkCytoscapeRendered() {
 		// Settle any in-flight check before replacing it, so it isn't orphaned.
-		if (this.pendingRequest !== null) {
-			this.pendingRequest(false);
-		}
-		const promise = new Promise<boolean>((resolve) => {
-			this.pendingRequest = resolve;
+		this.pendingRequest?.answer(false);
+		const id = ++this.lastCheckId;
+		let answer!: (rendered: boolean) => void;
+		const reply = new Promise<boolean>((resolve) => {
+			answer = resolve;
 		});
-		this._panel.webview.postMessage({ command: "checkCytoscapeRendered" });
+		this.pendingRequest = { id, answer };
+		this._panel.webview.postMessage({ command: "checkCytoscapeRendered", id });
 		// A webview that hasn't attached its listener yet drops the message and
 		// never replies; answer not-rendered instead so a poller can ask again.
-		const noReply = new Promise<boolean>((resolve) => {
-			setTimeout(() => resolve(false), 1_000);
-		});
-		return Promise.race([promise, noReply]);
+		const noReply = setTimeout(() => {
+			if (this.pendingRequest?.id === id) {
+				this.pendingRequest = null;
+			}
+			answer(false);
+		}, 1_000);
+		try {
+			return await reply;
+		} finally {
+			clearTimeout(noReply);
+		}
 	}
 
 	private _disposed = false;
@@ -186,10 +201,10 @@ export class GraphPanel {
 								}
 								return;
 							case "cytoscapeRenderedResult": {
-								if (this.pendingRequest !== null) {
-									const resolve = this.pendingRequest;
+								const pending = this.pendingRequest;
+								if (pending?.id === message.id) {
 									this.pendingRequest = null;
-									resolve(message.rendered); // Use 'rendered' property from webview response
+									pending.answer(message.rendered);
 								}
 								return;
 							}
