@@ -1,5 +1,6 @@
 ### Unreleased
 
+* The `workspaceContains` activation events still hard-coded the narrow directory list #203 removed from the file watchers, so a mod laid out outside `events/common/decisions/...` and without a `descriptor.mod` never activated the extension. They're now keyed on extension like the watchers: any `txt`, `gui`, `gfx`, `sfx`, `asset`, or `map` file anywhere in the workspace, and `yml`, `yaml`, or `csv` under a localisation directory. (#204)
 * `mapIgnoreOptions` no longer rewrites `cwtools.errors.ignorefiles` entries into `**/<name>` globs before sending them to the server. That rewrite existed because the server only matched a slashless pattern against a path's last segment; the v2.6.1 engine pin now matches such a pattern at any depth on its own (MillenniumDawn/cwtools#244), so the client-side prefixing was redundant and is dropped. User-facing behaviour is unchanged with that engine. (#196)
 
 ### 3.1.1
