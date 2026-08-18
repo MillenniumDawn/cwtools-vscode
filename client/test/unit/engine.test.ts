@@ -9,6 +9,7 @@ vi.mock("../../extension/logger", () => ({
 	outputChannel: { appendLine: () => {} },
 }));
 import * as path from "path";
+import { existsSync } from "fs";
 import { EventEmitter } from "events";
 import type { ExtensionContext } from "vscode";
 import {
@@ -116,6 +117,17 @@ suite("engine — detectFromFolder", () => {
 
 	test("first matching folder-name hint wins (order matters)", async () => {
 		assert.strictEqual(await detectFromFolder("/mods/CK2", noopExists), "ck2");
+	});
+
+	// The host label's workspace has no game name in its path, so it must carry
+	// the Stellaris `common/species_classes` content marker for the hover and
+	// completion suites to see real rule data instead of the paradox fallback.
+	test("the sample host fixture detects as stellaris via its content marker", async () => {
+		const sampleRoot = path.resolve(__dirname, "../sample");
+		assert.strictEqual(
+			await detectFromFolder(sampleRoot, (p) => existsSync(p)),
+			"stellaris",
+		);
 	});
 });
 
