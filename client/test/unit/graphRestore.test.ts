@@ -44,7 +44,8 @@ const {
 	};
 });
 
-vi.mock("vscode", () => ({
+vi.mock("vscode", async (importOriginal) => ({
+	...(await importOriginal<object>()),
 	commands: { executeCommand, registerCommand },
 	Uri: { file: (p: string) => ({ fsPath: p, toString: () => `file://${p}` }) },
 	ViewColumn: { One: 1 },

@@ -1,7 +1,7 @@
 import * as os from "os";
 import * as path from "path";
 import type { Uri } from "vscode";
-import { window, workspace } from "vscode";
+import { l10n, window, workspace } from "vscode";
 import { logWarn } from "./logger";
 
 // Roots activation resolved: the extension's cache dir, the rules folder in
@@ -56,9 +56,12 @@ export async function confirmOpen(uri: Uri): Promise<boolean> {
 	if (isTrustedPath(uri.fsPath, trustedRoots())) {
 		return true;
 	}
-	const open = "Open";
+	const open = l10n.t("Open");
 	const choice = await window.showWarningMessage(
-		`CWTools: ${uri.fsPath} is outside the workspace, the game install and the rules cache. Open it anyway?`,
+		l10n.t(
+			"CWTools: {0} is outside the workspace, the game install and the rules cache. Open it anyway?",
+			uri.fsPath,
+		),
 		{ modal: true },
 		open,
 	);

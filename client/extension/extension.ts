@@ -8,7 +8,7 @@ import * as os from "os";
 import * as fsPromises from "fs/promises";
 import * as vscode from "vscode";
 import type { ExtensionContext } from "vscode";
-import { workspace, window, Uri, commands, env } from "vscode";
+import { workspace, window, Uri, commands, env, l10n } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 
 import { serverExe as resolveServerExe } from "./engine";
@@ -72,8 +72,9 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			// awaiting it parks activation forever wherever nobody can click it,
 			// which is exactly the headless extension host the tests run in.
 			void window.showErrorMessage(
-				`CWTools: no language server binary found. ` +
-					`Re-install the extension or build the server.`,
+				l10n.t(
+					"CWTools: no language server binary found. Re-install the extension or build the server.",
+				),
 			);
 			return;
 		}
@@ -117,7 +118,9 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 
 		if (workspace.name === undefined) {
 			void window.showWarningMessage(
-				'You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using "File, Open Folder"',
+				l10n.t(
+					'You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using "File, Open Folder"',
+				),
 			);
 		}
 
@@ -152,14 +155,14 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			// nothing, so surface the cause and a self-serve fix instead.
 			const code = (err as NodeJS.ErrnoException | undefined)?.code;
 			if (code === "EPERM" || code === "EACCES") {
-				const reveal = "Reveal Server Binary";
-				const help = "Antivirus Help";
+				const reveal = l10n.t("Reveal Server Binary");
+				const help = l10n.t("Antivirus Help");
 				void window
 					.showErrorMessage(
-						`CWTools server was blocked from running (${code}). This is almost always ` +
-							`antivirus (e.g. Windows Defender) quarantining the unsigned server binary. ` +
-							`Restore it from quarantine and add an exclusion for the extension's server folder, ` +
-							`then reload the window.`,
+						l10n.t(
+							"CWTools server was blocked from running ({0}). This is almost always antivirus (e.g. Windows Defender) quarantining the unsigned server binary. Restore it from quarantine and add an exclusion for the extension's server folder, then reload the window.",
+							code,
+						),
 						reveal,
 						help,
 					)
@@ -180,7 +183,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 				return;
 			}
 			window.showErrorMessage(
-				`CWTools language server failed to start: ${msg}`,
+				l10n.t("CWTools language server failed to start: {0}", msg),
 			);
 			return;
 		}

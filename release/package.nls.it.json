@@ -1,0 +1,65 @@
+{
+  "extension.displayName": "CWTools MD Edition",
+  "extension.description": "Supporto per gli script di Paradox Interactive. Fork di CWTools del Millennium Dawn Mod Team.",
+  // Why the extension can't run in a workspace you haven't trusted: it launches a bundled server binary and runs git
+  "capabilities.untrustedWorkspaces.description": "CWTools esegue un binario del server di linguaggio incluso sui file dell'area di lavoro e usa git per scaricare le regole di validazione.",
+  // Why the extension can't run on a remote/virtual file system, e.g. GitHub Repositories
+  "capabilities.virtualWorkspaces.description": "CWTools ha bisogno della mod e dell'installazione del gioco su un file system reale per indicizzarle.",
+  // The title of the panel under Explorer which contains the extension's list of files it knows about
+  "views.cwtools-files.name": "File caricati da CWTools",
+  "commands.genlocall.title": "Genera la localizzazione mancante per tutti i file",
+  "commands.reloadrulesconfig.title": "Ricarica la configurazione delle regole",
+  "commands.cacheVanilla.title": "Rigenera il file di cache del gioco vanilla",
+  "commands.clearAllCaches.title": "Svuota tutte le cache e reindicizza",
+  "commands.reindexWorkspace.title": "Reindicizza l'area di lavoro",
+  // Save the language server's timing/memory log to a file, for a bug report
+  "commands.exportProfilingLog.title": "Esporta il log di profilazione",
+  "commands.fixAllWorkspace.title": "Correggi tutti i problemi correggibili automaticamente nell'area di lavoro",
+  "commands.showGraph.title": "Mostra il grafo",
+  // Show a graph previously exported JSON
+  "commands.graphFromJson.title": "Ricrea il grafo da un JSON",
+  "commands.saveGraphImage.title": "Salva il grafo come immagine",
+  // Adjust the depth of the displayed graph, which is how many links it follows outside the current file to other files
+  "commands.setGraphDepth.title": "Imposta la profondità del grafo",
+  "commands.saveGraphJson.title": "Salva il grafo come JSON",
+  "commands.revealActiveFile.title": "Mostra il file attivo nell'albero dei file caricati",
+  "configuration.title": "Configurazione di CWTools",
+  "configuration.title.localisation": "CWTools: localizzazione",
+  "configuration.title.errors": "CWTools: errori e diagnostica",
+  "configuration.title.cache": "CWTools: percorsi di installazione dei giochi",
+  "configuration.title.graph": "CWTools: grafo",
+  "configuration.title.advanced": "CWTools: avanzate",
+  // Trace here refers to very detailed logs
+  "configuration.cwtools.trace.server.description": "Traccia la comunicazione fra VSCode e il server di linguaggio.",
+  "configuration.cwtools.localisation.languages.description": "Lingue su cui validare la localizzazione. Vengono controllate solo le lingue elencate, così una mod solo in inglese non viene segnalata per le traduzioni francese/tedesca/… che il gioco base porta con sé. Predefinito: English.",
+  "configuration.cwtools.localisation.hoverShowAllLanguages.description": "Mostra la localizzazione al passaggio del mouse in tutte le lingue configurate e non solo nella prima.",
+  "configuration.cwtools.errors.ignore.description": "Codici diagnostici da silenziare ovunque, ad es. `CW100` (elenco di ID di errore/avviso).",
+  "configuration.cwtools.errors.ignorefiles.description": "Nomi di file da escludere dall'area di lavoro (non caricati in cwtools, quindi i riferimenti a essi non si risolvono), ad es. `README.txt`, `credits.txt`.",
+  "configuration.cwtools.rules_folder.description": "Una cartella con regole personalizzate da usare. **Ricarica la finestra** dopo averla cambiata.",
+  // Glob pattern is a technical term
+  "configuration.cwtools.ignore_patterns.description": "Percorsi di file da ignorare (non caricati in cwtools), elenco di pattern glob, ad es. `**/99_README**.txt`",
+  "configuration.cwtools.cache.eu4.description": "Percorso di un'installazione vanilla di EU4. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.cache.hoi4.description": "Percorso di un'installazione vanilla di HOI4. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.cache.stellaris.description": "Percorso di un'installazione vanilla di Stellaris. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.cache.ck2.description": "Percorso di un'installazione vanilla di CK2. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.cache.imperator.description": "Percorso di un'installazione vanilla di Imperator: Rome. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.cache.vic2.description": "Percorso di un'installazione vanilla di Victoria 2. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.cache.ck3.description": "Percorso di un'installazione vanilla di CK3. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.cache.vic3.description": "Percorso di un'installazione vanilla di Victoria 3. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.cache.eu5.description": "Percorso di un'installazione vanilla di EU5. Serve a risolvere i riferimenti al gioco base perché non vengano segnalati come sconosciuti. Di solito viene rilevato da Steam. **Ricarica la finestra** dopo averlo cambiato.",
+  // zoom sensitivity in the graph
+  "configuration.cwtools.graph.zoomSensitivity.description": "Regola la sensibilità dello zoom con la rotella, <1 la riduce, >1 la aumenta",
+  // "field", "type" and "scope" are cwtools rule terms
+  "configuration.cwtools.hover.debug.description": "Mostra la classificazione grezza delle regole (field / type / scope) nei suggerimenti al passaggio del mouse. Per gli sviluppatori di estensioni; disattivato per impostazione predefinita.",
+  "configuration.cwtools.hover.scopeDisplay.description": "Quale scope mostra il suggerimento al passaggio del mouse: lo scope ambiente in cui si trova il campo (context), oppure in più lo scope a cui si risolve (resolved).",
+  "configuration.cwtools.hover.scopeDisplay.context": "Mostra lo scope ambiente in cui si trova il campo sotto il puntatore.",
+  // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
+  "configuration.cwtools.hover.scopeDisplay.resolved": "Mostra anche lo scope a cui si risolve il link o la parola chiave FROM/ROOT/PREV sotto il puntatore.",
+  // An inlay hint is the greyed-out text VS Code renders inline within a line of code
+  "configuration.cwtools.inlayHints.locTitles.description": "Mostra il titolo localizzato in linea dopo un valore che nomina un'entità nota, così un id di evento o di focus si legge come il suo nome nel gioco senza passarci sopra. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.inlayHints.scopes.description": "Mostra in linea, dopo la chiave, lo scope a cui si risolve una chiave che cambia scope. Il server incluso non produce ancora questi suggerimenti, quindi attivarlo al momento non mostra nulla. **Ricarica la finestra** dopo averlo cambiato.",
+  "configuration.cwtools.profiling.description": "Avvia il server di linguaggio con la profilazione attiva. Emette tempi e memoria (RSS) per fase nel canale di output di CWTools e tiene un buffer che puoi salvare con `cwtools: Esporta il log di profilazione`. **Ricarica la finestra** dopo averlo cambiato. È un po' più lento; lascialo spento nell'uso normale.",
+  "configuration.cwtools.backgroundReindex.intervalMinutes.description": "Minuti fra le passate di reindicizzazione in background che tengono aggiornato l'indice nelle sessioni lunghe. Girano solo a riposo. 0 disattiva.",
+  // The wait after your last keystroke before a background pass may start
+  "configuration.cwtools.backgroundReindex.idleSeconds.description": "Secondi di inattività prima che una passata di reindicizzazione in background possa partire, così una nuova scansione non compete con quello che stai scrivendo. Con 0 può partire subito."
+}

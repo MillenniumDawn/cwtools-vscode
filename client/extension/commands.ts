@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { ExtensionContext } from "vscode";
-import { workspace, window, commands } from "vscode";
+import { workspace, window, commands, l10n } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 import {
 	getGraphData,
@@ -59,8 +59,9 @@ export function registerCommands(
 	const showGraph = async function () {
 		if (!serverProvidesGraphData(client)) {
 			window.showWarningMessage(
-				"CWTools: this language server doesn't provide graph data, so a graph can only be opened from a saved export. " +
-					"Run 'cwtools: Recreate graph from json'.",
+				l10n.t(
+					"CWTools: this language server doesn't provide graph data, so a graph can only be opened from a saved export. Run 'cwtools: Recreate graph from json'.",
+				),
 			);
 			return;
 		}
@@ -99,17 +100,22 @@ export function registerCommands(
 			// from JSON can't be re-cut without it either.
 			if (!serverProvidesGraphData(client)) {
 				window.showWarningMessage(
-					"CWTools: this language server doesn't provide graph data, so the graph depth can't be changed.",
+					l10n.t(
+						"CWTools: this language server doesn't provide graph data, so the graph depth can't be changed.",
+					),
 				);
 				return;
 			}
 			const res = await window.showInputBox({
-				placeHolder: "default: 3",
-				prompt:
+				placeHolder: l10n.t("default: 3"),
+				prompt: l10n.t(
 					"Set graph depth (how many connections to go back from this file)",
+				),
 				value: currentGraphDepth.toString(),
 				validateInput: (v: string) =>
-					Number.isInteger(Number(v)) ? undefined : "Please enter a number",
+					Number.isInteger(Number(v))
+						? undefined
+						: l10n.t("Please enter a number"),
 			});
 			if (Number.isInteger(Number(res))) {
 				currentGraphDepth = Number(res);
@@ -149,7 +155,9 @@ export function registerCommands(
 							if (persisted?.source === "server" && persisted.entityType) {
 								if (!serverProvidesGraphData(client)) {
 									window.showWarningMessage(
-										"CWTools: this language server doesn't provide graph data, so the graph can't be restored.",
+										l10n.t(
+											"CWTools: this language server doesn't provide graph data, so the graph can't be restored.",
+										),
 									);
 									return;
 								}
@@ -166,8 +174,9 @@ export function registerCommands(
 								});
 								if (!uri) {
 									window.showInformationMessage(
-										"CWTools: graph data from a JSON export isn't persisted across reloads. " +
-											"Run 'CWTools: Recreate graph from json' to rebuild it.",
+										l10n.t(
+											"CWTools: graph data from a JSON export isn't persisted across reloads. Run 'CWTools: Recreate graph from json' to rebuild it.",
+										),
 									);
 									return;
 								}
@@ -188,8 +197,9 @@ export function registerCommands(
 								});
 							} else {
 								window.showInformationMessage(
-									"CWTools: graph data isn't persisted across reloads. " +
-										"Run 'CWTools: Show graph' to rebuild the graph.",
+									l10n.t(
+										"CWTools: graph data isn't persisted across reloads. Run 'CWTools: Show graph' to rebuild the graph.",
+									),
 								);
 							}
 						} catch (err) {
@@ -218,7 +228,7 @@ export function registerCommands(
 					client,
 					"exportProfilingLog",
 					[],
-					"CWTools: Export profiling log",
+					l10n.t("CWTools: Export profiling log"),
 				);
 			} catch (err) {
 				if (err instanceof vscode.CancellationError) {
@@ -226,26 +236,28 @@ export function registerCommands(
 				}
 				const msg = errorMessage(err);
 				window.showErrorMessage(
-					`CWTools: could not fetch profiling log: ${msg}`,
+					l10n.t("CWTools: could not fetch profiling log: {0}", msg),
 				);
 				return;
 			}
 			if (typeof log !== "string" || log.length === 0) {
 				window.showWarningMessage(
-					"CWTools: profiling log is empty. Turn on 'cwtools.profiling', reload the window, reproduce the slowdown, then export.",
+					l10n.t(
+						"CWTools: profiling log is empty. Turn on 'cwtools.profiling', reload the window, reproduce the slowdown, then export.",
+					),
 				);
 				return;
 			}
 			const uri = await window.showSaveDialog({
 				filters: { Log: ["log", "txt"] },
-				saveLabel: "Export CWTools profiling log",
+				saveLabel: l10n.t("Export CWTools profiling log"),
 			});
 			if (!uri) {
 				return;
 			}
 			await workspace.fs.writeFile(uri, Buffer.from(log, "utf8"));
 			window.showInformationMessage(
-				`CWTools: profiling log written to ${uri.fsPath}`,
+				l10n.t("CWTools: profiling log written to {0}", uri.fsPath),
 			);
 		}),
 	);
@@ -254,8 +266,9 @@ export function registerCommands(
 		commands.registerCommand("cwtools.fixAllWorkspace", async () => {
 			if (!serverProvidesFixAll(client)) {
 				window.showWarningMessage(
-					"CWTools: this language server doesn't support fixing the workspace. " +
-						"Update the language server to enable it.",
+					l10n.t(
+						"CWTools: this language server doesn't support fixing the workspace. Update the language server to enable it.",
+					),
 				);
 				return;
 			}
@@ -264,7 +277,7 @@ export function registerCommands(
 					client,
 					"fixAllWorkspace",
 					[],
-					"CWTools: Fix all auto-fixable problems in workspace",
+					l10n.t("CWTools: Fix all auto-fixable problems in workspace"),
 					// Lands as a single workspace edit from an already-computed
 					// snapshot: there is no half-applied state to stop in, so
 					// Cancel stays the `$/cancelRequest` fallback.
@@ -278,7 +291,9 @@ export function registerCommands(
 					return;
 				}
 				const msg = errorMessage(err);
-				window.showErrorMessage(`CWTools: fixAllWorkspace failed: ${msg}`);
+				window.showErrorMessage(
+					l10n.t("CWTools: fixAllWorkspace failed: {0}", msg),
+				);
 			}
 		}),
 	);

@@ -1,6 +1,6 @@
 import * as path from "path";
 import type { ExtensionContext } from "vscode";
-import { CancellationError, Uri, workspace, window } from "vscode";
+import { CancellationError, Uri, l10n, workspace, window } from "vscode";
 import type {
 	LanguageClientOptions,
 	ServerOptions,
@@ -83,12 +83,17 @@ function readLiveServerSettings(): LiveServerSettings {
 	};
 }
 
-const commandProgressTitles: Readonly<Record<string, string>> = {
-	cacheVanilla: "CWTools: Regenerate game vanilla cache file",
-	clearAllCaches: "CWTools: Clear all caches and reindex",
-	reloadrulesconfig: "CWTools: Reload config rules",
-	reindexWorkspace: "CWTools: Re-index workspace",
-};
+// Built per call rather than once at module scope: l10n.t is resolved eagerly,
+// and the notification title has to be in the language the window is running in.
+function commandProgressTitle(command: string): string | undefined {
+	const titles: Readonly<Record<string, string>> = {
+		cacheVanilla: l10n.t("CWTools: Regenerate game vanilla cache file"),
+		clearAllCaches: l10n.t("CWTools: Clear all caches and reindex"),
+		reloadrulesconfig: l10n.t("CWTools: Reload config rules"),
+		reindexWorkspace: l10n.t("CWTools: Re-index workspace"),
+	};
+	return titles[command];
+}
 
 // genlocall returns one stub per language; open each as an untitled document so
 // the user reviews and saves manually. Paradox loc files require a UTF-8 BOM, so
@@ -102,7 +107,9 @@ async function openGeneratedLoc(result: unknown): Promise<void> {
 		(f) => typeof f.content === "string" && f.content.length > 0,
 	);
 	if (stubs.length === 0) {
-		window.showInformationMessage("CWTools: no missing localisation found.");
+		window.showInformationMessage(
+			l10n.t("CWTools: no missing localisation found."),
+		);
 		return;
 	}
 	for (const stub of stubs) {
@@ -197,7 +204,7 @@ export function createLanguageClient(
 					client,
 					command,
 					args,
-					"CWTools: Build graph",
+					l10n.t("CWTools: Build graph"),
 					{ serverProgress: false },
 				);
 			}
@@ -208,7 +215,7 @@ export function createLanguageClient(
 						client,
 						command,
 						args,
-						"CWTools: Generate missing loc for all files",
+						l10n.t("CWTools: Generate missing loc for all files"),
 						// One synchronous sweep server-side with no cancel seam,
 						// so Cancel stays the `$/cancelRequest` fallback rather
 						// than a notification the server would ignore.
@@ -218,15 +225,19 @@ export function createLanguageClient(
 					return result;
 				} catch (err) {
 					if (err instanceof CancellationError) {
-						window.showInformationMessage("CWTools: genlocall cancelled.");
+						window.showInformationMessage(
+							l10n.t("CWTools: genlocall cancelled."),
+						);
 						return undefined;
 					}
 					const msg = errorMessage(err);
-					window.showErrorMessage(`CWTools: genlocall failed: ${msg}`);
+					window.showErrorMessage(
+						l10n.t("CWTools: genlocall failed: {0}", msg),
+					);
 					return undefined;
 				}
 			}
-			const title = commandProgressTitles[command];
+			const title = commandProgressTitle(command);
 			if (title === undefined) {
 				const result: unknown = await next(command, args);
 				return result;
@@ -250,11 +261,15 @@ export function createLanguageClient(
 					// The `$/cancelRequest` fallback, where the handler was dropped
 					// and there is no server reply to report. Say so anyway — a
 					// notification that just vanishes reads as a silent failure.
-					window.showInformationMessage(`CWTools: ${command} cancelled.`);
+					window.showInformationMessage(
+						l10n.t("CWTools: {0} cancelled.", command),
+					);
 					return undefined;
 				}
 				const msg = errorMessage(err);
-				window.showErrorMessage(`CWTools: ${command} failed: ${msg}`);
+				window.showErrorMessage(
+					l10n.t("CWTools: {0} failed: {1}", command, msg),
+				);
 				return undefined;
 			}
 		},
