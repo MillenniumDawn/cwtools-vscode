@@ -168,7 +168,8 @@
       {
         "command": "cwtools.showGraph",
         "title": "%commands.showGraph.title%",
-        "category": "cwtools"
+        "category": "cwtools",
+        "icon": "$(type-hierarchy)"
       },
       {
         "command": "cwtools.graphFromJson",
@@ -179,13 +180,15 @@
         "command": "cwtools.saveGraphImage",
         "title": "%commands.saveGraphImage.title%",
         "category": "cwtools",
-        "enablement": "cwtoolsWebview == true"
+        "enablement": "cwtoolsWebview == true",
+        "icon": "$(device-camera)"
       },
       {
         "command": "cwtools.setGraphDepth",
         "title": "%commands.setGraphDepth.title%",
         "category": "cwtools",
-        "enablement": "cwtoolsWebview == true"
+        "enablement": "cwtoolsWebview == true",
+        "icon": "$(filter)"
       },
       {
         "command": "cwtools-files.revealActiveFile",
@@ -204,7 +207,8 @@
         "command": "cwtools.saveGraphJson",
         "title": "%commands.saveGraphJson.title%",
         "category": "cwtools",
-        "enablement": "cwtoolsWebview == true"
+        "enablement": "cwtoolsWebview == true",
+        "icon": "$(json)"
       }
     ],
     "configuration": [
