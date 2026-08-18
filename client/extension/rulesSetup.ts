@@ -1,7 +1,7 @@
 import * as path from "path";
 import { existsSync as fsExistsSync } from "fs";
 import * as fsPromises from "fs/promises";
-import { workspace, window, ProgressLocation } from "vscode";
+import { workspace, window, ProgressLocation, l10n } from "vscode";
 import type { Memento } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
@@ -69,7 +69,11 @@ export async function resolveRulesCache(
 			`rules_folder "${rawManualRules}" does not exist (tried "${manualRules.path}"); falling back to bundled/upstream rules.`,
 		);
 		void window.showWarningMessage(
-			`CWTools: the rules_folder "${rawManualRules}" could not be found (tried "${manualRules.path}"). Falling back to the bundled/upstream rules.`,
+			l10n.t(
+				'CWTools: the rules_folder "{0}" could not be found (tried "{1}"). Falling back to the bundled/upstream rules.',
+				rawManualRules,
+				manualRules.path!,
+			),
 		);
 	}
 	return {
@@ -213,7 +217,7 @@ async function syncPinnedRules(
 	await window.withProgress(
 		{
 			location: ProgressLocation.Window,
-			title: `CWTools: updating ${language} rules`,
+			title: l10n.t("CWTools: updating {0} rules", language),
 		},
 		async () => {
 			try {
@@ -235,7 +239,12 @@ async function syncPinnedRules(
 					// A shallow cache can't tell newer from just different, so name the
 					// change rather than claim a direction.
 					void window.showInformationMessage(
-						`CWTools: ${language} rules changed from ${head} to ${rules.ref}. Validation may differ under the new pin.`,
+						l10n.t(
+							"CWTools: {0} rules changed from {1} to {2}. Validation may differ under the new pin.",
+							language,
+							head,
+							rules.ref,
+						),
 					);
 				}
 				await initialScanDone;
@@ -260,8 +269,15 @@ async function syncPinnedRules(
 					// the actual fix instead of the generic fetch-failure wording.
 					const warning =
 						err instanceof GitNotFoundError
-							? `CWTools needs Git on your PATH to fetch the ${language} rules; install Git and reload the window.`
-							: `CWTools: failed to download the ${language} rules (${msg}). Validation will be limited until they can be fetched; check your network and reload the window.`;
+							? l10n.t(
+									"CWTools needs Git on your PATH to fetch the {0} rules; install Git and reload the window.",
+									language,
+								)
+							: l10n.t(
+									"CWTools: failed to download the {0} rules ({1}). Validation will be limited until they can be fetched; check your network and reload the window.",
+									language,
+									msg,
+								);
 					void window.showWarningMessage(warning);
 				}
 			}

@@ -7,7 +7,8 @@ const { showWarningMessage, state } = vi.hoisted(() => ({
 	state: { folders: [] as { uri: { fsPath: string } }[] },
 }));
 
-vi.mock("vscode", () => ({
+vi.mock("vscode", async (importOriginal) => ({
+	...(await importOriginal<object>()),
 	window: { showWarningMessage },
 	workspace: {
 		get workspaceFolders() {

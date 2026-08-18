@@ -1,0 +1,65 @@
+{
+  "extension.displayName": "CWTools MD Edition",
+  "extension.description": "Paradox Interactive 指令碼支援。Millennium Dawn Mod Team 維護的 CWTools 分支。",
+  // Why the extension can't run in a workspace you haven't trusted: it launches a bundled server binary and runs git
+  "capabilities.untrustedWorkspaces.description": "CWTools 會針對工作區中的檔案執行隨附的語言伺服器二進位檔，並使用 git 取得驗證規則。",
+  // Why the extension can't run on a remote/virtual file system, e.g. GitHub Repositories
+  "capabilities.virtualWorkspaces.description": "CWTools 需要在真實檔案系統上存取 mod 與遊戲安裝目錄才能建立索引。",
+  // The title of the panel under Explorer which contains the extension's list of files it knows about
+  "views.cwtools-files.name": "CWTools 已載入檔案",
+  "commands.genlocall.title": "為所有檔案產生缺少的本地化",
+  "commands.reloadrulesconfig.title": "重新載入設定規則",
+  "commands.cacheVanilla.title": "重新產生遊戲原版快取檔",
+  "commands.clearAllCaches.title": "清除所有快取並重新索引",
+  "commands.reindexWorkspace.title": "重新索引工作區",
+  // Save the language server's timing/memory log to a file, for a bug report
+  "commands.exportProfilingLog.title": "匯出效能分析記錄",
+  "commands.fixAllWorkspace.title": "修正工作區中所有可自動修正的問題",
+  "commands.showGraph.title": "顯示圖表",
+  // Show a graph previously exported JSON
+  "commands.graphFromJson.title": "從 JSON 重新建立圖表",
+  "commands.saveGraphImage.title": "將圖表儲存為圖片",
+  // Adjust the depth of the displayed graph, which is how many links it follows outside the current file to other files
+  "commands.setGraphDepth.title": "設定圖表深度",
+  "commands.saveGraphJson.title": "將圖表儲存為 JSON",
+  "commands.revealActiveFile.title": "在已載入檔案樹中顯示使用中的檔案",
+  "configuration.title": "CWTools 設定",
+  "configuration.title.localisation": "CWTools：本地化",
+  "configuration.title.errors": "CWTools：錯誤與診斷",
+  "configuration.title.cache": "CWTools：遊戲安裝路徑",
+  "configuration.title.graph": "CWTools：圖表",
+  "configuration.title.advanced": "CWTools：進階",
+  // Trace here refers to very detailed logs
+  "configuration.cwtools.trace.server.description": "追蹤 VSCode 與語言伺服器之間的通訊。",
+  "configuration.cwtools.localisation.languages.description": "用於驗證本地化的語言。只會檢查列出的語言，因此純英文 mod 不會因為缺少基礎遊戲附帶的法文/德文/… 翻譯而被標示。預設：English。",
+  "configuration.cwtools.localisation.hoverShowAllLanguages.description": "停留提示顯示所有已設定語言的本地化文字，而不只是第一種語言。",
+  "configuration.cwtools.errors.ignore.description": "在任何位置都要抑制的診斷代碼，例如 `CW100`（錯誤/警告 ID 清單）。",
+  "configuration.cwtools.errors.ignorefiles.description": "要從工作區排除的檔名（不載入 cwtools，因此指向它們的參考無法解析），例如 `README.txt`、`credits.txt`。",
+  "configuration.cwtools.rules_folder.description": "包含要使用的自訂規則的資料夾。變更後請**重新載入視窗**。",
+  // Glob pattern is a technical term
+  "configuration.cwtools.ignore_patterns.description": "要忽略的檔案路徑（不載入 cwtools），glob 模式清單，例如 `**/99_README**.txt`",
+  "configuration.cwtools.cache.eu4.description": "原版 EU4 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.cache.hoi4.description": "原版 HOI4 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.cache.stellaris.description": "原版 Stellaris 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.cache.ck2.description": "原版 CK2 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.cache.imperator.description": "原版 Imperator: Rome 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.cache.vic2.description": "原版 Victoria 2 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.cache.ck3.description": "原版 CK3 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.cache.vic3.description": "原版 Victoria 3 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.cache.eu5.description": "原版 EU5 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  // zoom sensitivity in the graph
+  "configuration.cwtools.graph.zoomSensitivity.description": "控制滾輪縮放靈敏度，<1 降低靈敏度，>1 提高靈敏度",
+  // "field", "type" and "scope" are cwtools rule terms
+  "configuration.cwtools.hover.debug.description": "在停留提示中顯示原始規則分類（field / type / scope）。供擴充功能開發者使用，預設關閉。",
+  "configuration.cwtools.hover.scopeDisplay.description": "停留提示顯示的作用域：欄位所在的環境作用域（context），或額外顯示其解析到的作用域（resolved）。",
+  "configuration.cwtools.hover.scopeDisplay.context": "顯示停留欄位所在的環境作用域。",
+  // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
+  "configuration.cwtools.hover.scopeDisplay.resolved": "同時顯示停留的連結或 FROM/ROOT/PREV 關鍵字解析到的作用域。",
+  // An inlay hint is the greyed-out text VS Code renders inline within a line of code
+  "configuration.cwtools.inlayHints.locTitles.description": "在指向已知實體的值後方內嵌顯示其本地化標題，不必停留就能看到事件或國策 id 對應的遊戲內名稱。變更後請**重新載入視窗**。",
+  "configuration.cwtools.inlayHints.scopes.description": "在會改變作用域的索引鍵後方內嵌顯示它解析到的作用域。隨附的伺服器尚未產生這類提示，因此目前開啟後不會顯示任何內容。變更後請**重新載入視窗**。",
+  "configuration.cwtools.profiling.description": "啟動語言伺服器時開啟效能分析。將各階段的耗時與記憶體（RSS）輸出到 CWTools 輸出面板，並保留可用 `cwtools: 匯出效能分析記錄` 儲存的緩衝區。變更後請**重新載入視窗**。會稍微變慢，日常使用請保持關閉。",
+  "configuration.cwtools.backgroundReindex.intervalMinutes.description": "背景重新索引的間隔分鐘數，用於在長時間工作階段中保持索引最新。只在閒置時執行。0 表示停用。",
+  // The wait after your last keystroke before a background pass may start
+  "configuration.cwtools.backgroundReindex.idleSeconds.description": "背景重新索引開始前需要的閒置秒數，避免重新掃描與正在輸入的操作競爭資源。0 表示可立即開始。"
+}

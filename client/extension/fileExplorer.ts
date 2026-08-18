@@ -108,7 +108,7 @@ export class FilesProvider
 		if (!element.isDirectory) {
 			treeItem.command = {
 				command: "cwtools-files.openFile",
-				title: "Open File",
+				title: vscode.l10n.t("Open File"),
 				arguments: [vscode.Uri.parse(element.uri)],
 			};
 			treeItem.contextValue = "file";

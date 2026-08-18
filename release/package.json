@@ -46,6 +46,7 @@
     "hearts of iron"
   ],
   "main": "./bin/client/extension/extension.js",
+  "l10n": "./l10n",
   "activationEvents": [
     "workspaceContains:descriptor.mod",
     "workspaceContains:.metadata/metadata.json",

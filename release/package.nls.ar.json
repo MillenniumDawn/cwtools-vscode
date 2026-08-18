@@ -1,0 +1,65 @@
+{
+  "extension.displayName": "CWTools MD Edition",
+  "extension.description": "دعم برمجة ألعاب Paradox Interactive. نسخة معدّلة من CWTools من فريق Millennium Dawn Mod Team.",
+  // Why the extension can't run in a workspace you haven't trusted: it launches a bundled server binary and runs git
+  "capabilities.untrustedWorkspaces.description": "يشغّل CWTools ملفًا تنفيذيًا مرفقًا لخادم اللغة على ملفات مساحة العمل، ويستخدم git لجلب قواعد التحقق.",
+  // Why the extension can't run on a remote/virtual file system, e.g. GitHub Repositories
+  "capabilities.virtualWorkspaces.description": "يحتاج CWTools إلى وجود التعديل (mod) وتثبيت اللعبة على نظام ملفات حقيقي حتى يفهرسهما.",
+  // The title of the panel under Explorer which contains the extension's list of files it knows about
+  "views.cwtools-files.name": "الملفات المحمّلة في CWTools",
+  "commands.genlocall.title": "إنشاء نصوص الترجمة الناقصة لكل الملفات",
+  "commands.reloadrulesconfig.title": "إعادة تحميل إعدادات القواعد",
+  "commands.cacheVanilla.title": "إعادة إنشاء ملف ذاكرة التخزين المؤقت للعبة الأصلية",
+  "commands.clearAllCaches.title": "مسح كل ذواكر التخزين المؤقت وإعادة الفهرسة",
+  "commands.reindexWorkspace.title": "إعادة فهرسة مساحة العمل",
+  // Save the language server's timing/memory log to a file, for a bug report
+  "commands.exportProfilingLog.title": "تصدير سجل قياس الأداء",
+  "commands.fixAllWorkspace.title": "إصلاح كل المشكلات القابلة للإصلاح تلقائيًا في مساحة العمل",
+  "commands.showGraph.title": "عرض المخطط",
+  // Show a graph previously exported JSON
+  "commands.graphFromJson.title": "إعادة إنشاء المخطط من ملف JSON",
+  "commands.saveGraphImage.title": "حفظ المخطط كصورة",
+  // Adjust the depth of the displayed graph, which is how many links it follows outside the current file to other files
+  "commands.setGraphDepth.title": "تحديد عمق المخطط",
+  "commands.saveGraphJson.title": "حفظ المخطط بصيغة JSON",
+  "commands.revealActiveFile.title": "إظهار الملف النشط في شجرة الملفات المحمّلة",
+  "configuration.title": "إعدادات CWTools",
+  "configuration.title.localisation": "CWTools: الترجمة",
+  "configuration.title.errors": "CWTools: الأخطاء والتشخيصات",
+  "configuration.title.cache": "CWTools: مسارات تثبيت الألعاب",
+  "configuration.title.graph": "CWTools: المخطط",
+  "configuration.title.advanced": "CWTools: خيارات متقدمة",
+  // Trace here refers to very detailed logs
+  "configuration.cwtools.trace.server.description": "تتبّع الاتصال بين VSCode وخادم اللغة.",
+  "configuration.cwtools.localisation.languages.description": "اللغات التي يجري التحقق من الترجمة مقابلها. تُفحص اللغات المذكورة فقط، حتى لا يُنبَّه تعديل بالإنجليزية وحدها إلى نقص الترجمات الفرنسية/الألمانية/… التي تأتي مع اللعبة الأساسية. الافتراضي: English.",
+  "configuration.cwtools.localisation.hoverShowAllLanguages.description": "إظهار الترجمة عند التحويم بكل اللغات المضبوطة بدلًا من اللغة الأولى فقط.",
+  "configuration.cwtools.errors.ignore.description": "رموز التشخيص التي تُكتَم في كل مكان، مثل `CW100` (قائمة معرّفات الأخطاء والتحذيرات).",
+  "configuration.cwtools.errors.ignorefiles.description": "أسماء الملفات التي تُستثنى من مساحة العمل (لا تُحمَّل في cwtools، فلا تُحَل الإشارات إليها)، مثل `README.txt` و`credits.txt`.",
+  "configuration.cwtools.rules_folder.description": "مجلد يحتوي على قواعد مخصصة للاستخدام. **أعد تحميل النافذة** بعد التغيير.",
+  // Glob pattern is a technical term
+  "configuration.cwtools.ignore_patterns.description": "مسارات الملفات التي تُتجاهل (لا تُحمَّل في cwtools)، قائمة بأنماط glob، مثل `**/99_README**.txt`",
+  "configuration.cwtools.cache.eu4.description": "مسار تثبيت أصلي للعبة EU4. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.cache.hoi4.description": "مسار تثبيت أصلي للعبة HOI4. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.cache.stellaris.description": "مسار تثبيت أصلي للعبة Stellaris. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.cache.ck2.description": "مسار تثبيت أصلي للعبة CK2. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.cache.imperator.description": "مسار تثبيت أصلي للعبة Imperator: Rome. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.cache.vic2.description": "مسار تثبيت أصلي للعبة Victoria 2. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.cache.ck3.description": "مسار تثبيت أصلي للعبة CK3. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.cache.vic3.description": "مسار تثبيت أصلي للعبة Victoria 3. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.cache.eu5.description": "مسار تثبيت أصلي للعبة EU5. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",
+  // zoom sensitivity in the graph
+  "configuration.cwtools.graph.zoomSensitivity.description": "التحكم في حساسية التكبير بعجلة الفأرة، أقل من 1 يقللها وأكثر من 1 يزيدها",
+  // "field", "type" and "scope" are cwtools rule terms
+  "configuration.cwtools.hover.debug.description": "إظهار تصنيف القاعدة الخام (field / type / scope) في تلميحات التحويم. لمطوّري الامتدادات؛ معطّل افتراضيًا.",
+  "configuration.cwtools.hover.scopeDisplay.description": "أي scope يعرضه تلميح التحويم: الـ scope المحيط الذي يقع فيه الحقل (context)، أو إضافةً إلى ذلك الـ scope الذي يُحَل إليه (resolved).",
+  "configuration.cwtools.hover.scopeDisplay.context": "إظهار الـ scope المحيط الذي يقع فيه الحقل تحت المؤشر.",
+  // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
+  "configuration.cwtools.hover.scopeDisplay.resolved": "إظهار الـ scope الذي يُحَل إليه الرابط أو الكلمة المفتاحية FROM/ROOT/PREV تحت المؤشر أيضًا.",
+  // An inlay hint is the greyed-out text VS Code renders inline within a line of code
+  "configuration.cwtools.inlayHints.locTitles.description": "إظهار العنوان المترجم مباشرةً بعد قيمة تشير إلى كيان معروف، حتى يُقرأ معرّف حدث أو تركيز باسمه داخل اللعبة دون تحويم. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.inlayHints.scopes.description": "إظهار الـ scope الذي يُحَل إليه مفتاح يغيّر الـ scope، مباشرةً بعد المفتاح. الخادم المرفق لا ينتج هذه التلميحات بعد، لذا تفعيل الخيار لا يُظهر شيئًا حاليًا. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.profiling.description": "تشغيل خادم اللغة مع تفعيل قياس الأداء. يُخرج زمن كل مرحلة واستهلاك الذاكرة (RSS) إلى قناة إخراج CWTools، ويحتفظ بمخزن يمكنك حفظه عبر `cwtools: تصدير سجل قياس الأداء`. **أعد تحميل النافذة** بعد التغيير. أبطأ قليلًا؛ اتركه معطّلًا في الاستخدام العادي.",
+  "configuration.cwtools.backgroundReindex.intervalMinutes.description": "عدد الدقائق بين جولات إعادة الفهرسة في الخلفية التي تُبقي الفهرس محدّثًا في الجلسات الطويلة. تعمل أثناء الخمول فقط. القيمة 0 تعطّلها.",
+  // The wait after your last keystroke before a background pass may start
+  "configuration.cwtools.backgroundReindex.idleSeconds.description": "عدد ثواني الخمول قبل أن تبدأ جولة إعادة فهرسة في الخلفية، حتى لا يزاحم المسح ما تكتبه. القيمة 0 تسمح بالبدء فورًا."
+}
