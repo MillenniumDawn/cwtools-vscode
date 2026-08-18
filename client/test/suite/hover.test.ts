@@ -21,8 +21,11 @@ suite('LSP Hover Tests', function () {
 	let testDocument: vscode.TextDocument;
 
 	setup(async function () {
-		setupLSPErrorMonitoring();
+		// After activation, not before: the monitor hooks defaultClient's output
+		// channel, and defaultClient is only set once activation has built the
+		// client, so hooking first leaves the first test of a run unmonitored.
 		await activate();
+		setupLSPErrorMonitoring();
 		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, 'Extension should be active');
 
@@ -84,10 +87,11 @@ suite('LSP Hover Tests', function () {
 	});
 
 	suite('Localization Hover', function () {
-		// Red against MillenniumDawn/cwtools#317: hovering a value[…] string
-		// reports the enclosing trigger instead of previewing the localisation the
-		// key resolves to, so "Faction Governance" from irm_l_english.yml never
-		// appears.
+		// MillenniumDawn/cwtools#317 (hovering a value[…] string reported the
+		// enclosing trigger instead of previewing the localisation the key
+		// resolves to) is fixed upstream in 786a11bb, which the pinned d38febcd
+		// predates. Passes against a server built from the fix; still skipped
+		// because CI builds the pin. Un-skip when the pin moves past it.
 		test.skip('previews the localisation a pop faction flag resolves to', async function () {
 			const uri = vscode.Uri.file(testEffectsFile);
 			testDocument = await vscode.workspace.openTextDocument(uri);
