@@ -17,6 +17,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 const root = SAMPLE_ROOT;
 
+// Disposing a panel whose webview is still loading kills the ready handshake
+// mid-flight, which is the window #216's silent host aborts point at. Wait for
+// the webview to post ready (the state leaves New) before closing the panel;
+// one that never gets there is closed anyway once the budget runs out.
+const settleWebview = (gp: GraphPanelModule) =>
+	waitUntil(
+		() => gp.GraphPanel.currentPanel?.getState() !== gp.State.New,
+		2_000,
+	);
+
 suite(`Debug Integration Test: `, function () {
 	test("Extension should be present", () => {
 		assert.ok(vscode.extensions.getExtension(EXTENSION_ID));
@@ -233,9 +243,10 @@ describe("GraphPanel Tests", function () {
 
 	let tempDir: string;
 	let tempFile: string;
-	// Setup before each test
-	const before = async function () {
-		// Arrange: Activate the extension and get its path
+	let sandbox: sinon.SinonSandbox;
+
+	setup(async () => {
+		sandbox = sinon.createSandbox();
 		gp = await graphPanelModule();
 		const extensionMaybe = vscode.extensions.getExtension(EXTENSION_ID);
 		assert.ok(extensionMaybe, "Extension should be found");
@@ -245,49 +256,34 @@ describe("GraphPanel Tests", function () {
 		tempFile = path.join(tempDir, "graph.json");
 		fs.writeFileSync(tempFile, testCyDataJson, "utf8");
 
-		// Clean up any existing panel
 		if (gp.GraphPanel.currentPanel) {
 			gp.GraphPanel.currentPanel.dispose();
 		}
-	};
-	let sandbox: sinon.SinonSandbox;
-
-	setup(() => {
-		sandbox = sinon.createSandbox();
 	});
 
-	teardown(() => {
+	teardown(async () => {
 		sandbox.restore();
-	});
-
-	// Teardown after each test
-	const after = function () {
-		// Clean up
 		if (gp.GraphPanel.currentPanel) {
-			gp.GraphPanel.currentPanel.dispose();
+			await settleWebview(gp);
+			gp.GraphPanel.currentPanel?.dispose();
 		}
-		// Remove temp file
 		if (fs.existsSync(tempFile)) {
 			fs.unlinkSync(tempFile);
 		}
 		if (fs.existsSync(tempDir)) {
 			fs.rmdirSync(tempDir);
 		}
-	};
+	});
 
-	it("should create a GraphPanel instance", async function () {
-		await before();
+	it("should create a GraphPanel instance", function () {
 		// Act: Create a GraphPanel
 		gp.GraphPanel.create(extension.extensionPath);
 
 		// Assert: Panel should be created
 		assert.ok(gp.GraphPanel.currentPanel, "GraphPanel should be created");
-		after();
 	});
 	it("should load and render cytoscape from JSON file", async function () {
 		this.timeout(30000);
-		await before();
-
 		// Execute the graphFromJson command
 		// We'll need to simulate the file dialog selection
 		const uri = vscode.Uri.file(tempFile);
@@ -301,13 +297,10 @@ describe("GraphPanel Tests", function () {
 		);
 
 		assert.ok(rendered, "Cytoscape should have rendered elements");
-		after();
 	});
 
 	it("should initialize GraphPanel with data", async function () {
-		await before();
 		this.timeout(10000); // Increase timeout for this test
-
 		// Arrange: Create a GraphPanel
 		gp.GraphPanel.create(extension.extensionPath);
 
@@ -319,13 +312,9 @@ describe("GraphPanel Tests", function () {
 		};
 		const result = await waitUntil(testStatus);
 		assert.strictEqual(result, true, "GraphPanel should be in the Done state");
-
-		after();
 	});
 
-	it("should dispose GraphPanel properly", async function () {
-		await before();
-
+	it("should dispose GraphPanel properly", function () {
 		// Arrange: Create a GraphPanel
 		gp.GraphPanel.create(extension.extensionPath);
 
@@ -338,12 +327,9 @@ describe("GraphPanel Tests", function () {
 			undefined,
 			"GraphPanel should be undefined after disposal",
 		);
-		after();
 	});
 
 	it("should restore a GraphPanel around a revived webview panel", async function () {
-		await before();
-
 		// The window-reload serializer hands back a live panel whose html the
 		// extension must re-set; restore() adopts it like a fresh panel.
 		const panel = vscode.window.createWebviewPanel(
@@ -370,8 +356,6 @@ describe("GraphPanel Tests", function () {
 		};
 		const result = await waitUntil(testStatus);
 		assert.strictEqual(result, true, "restored GraphPanel should reach Done");
-
-		after();
 	});
 });
 
@@ -420,8 +404,11 @@ suite("GraphPanel — UI integration", function () {
 		gp.GraphPanel.create(extension.extensionPath);
 	};
 
-	const teardownPanel = () => {
-		if (gp?.GraphPanel.currentPanel) gp.GraphPanel.currentPanel.dispose();
+	const teardownPanel = async () => {
+		if (gp?.GraphPanel.currentPanel) {
+			await settleWebview(gp);
+			gp.GraphPanel.currentPanel?.dispose();
+		}
 		if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
 		if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
 	};
@@ -429,9 +416,9 @@ suite("GraphPanel — UI integration", function () {
 	setup(() => {
 		sandbox = sinon.createSandbox();
 	});
-	teardown(() => {
+	teardown(async () => {
 		sandbox.restore();
-		teardownPanel();
+		await teardownPanel();
 	});
 
 	test("starts in the New state before the webview posts ready", async function () {

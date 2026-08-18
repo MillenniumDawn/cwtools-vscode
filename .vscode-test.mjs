@@ -69,12 +69,24 @@ const smokeFiles = [
 const liveFiles = ["./release/bin/client/test/suite/liveSettings.test.js"];
 const rulesSyncFiles = ["./release/bin/client/test/suite/rulesSync.test.js"];
 const hostFiles = [
+	// Root hooks only, no tests: names the in-flight test if the host exits
+	// before mocha reports (#216). Kept first so the hooks are registered
+	// before any suite runs.
+	"./release/bin/client/test/support/abortDiagnostics.js",
 	"./release/bin/client/test/suite/graphTypes.test.js",
 	"./release/bin/client/test/suite/fileExplorer.test.js",
 	"./release/bin/client/test/suite/extension.test.js",
 	"./release/bin/client/test/suite/hover.test.js",
 	"./release/bin/client/test/suite/completion.test.js",
 ];
+
+// The graph tests drive a real webview, and #210's CI logs show the GPU
+// process already failing under xvfb (`Failed to send
+// GpuControl.CreateCommandBuffer`), so the render path is on software
+// rendering there whether we ask for it or not. Asking for it explicitly puts
+// a developer machine with a working GPU on the same path, which rules out a
+// GPU-process crash as the source of #216's silent aborts.
+const softwareRendering = "--disable-gpu";
 
 const base = {
 	vscode: "stable",
@@ -88,28 +100,28 @@ export default defineConfig({
 			label: "unit",
 			files: unitFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile],
+			launchArgs: [sampleFile, softwareRendering],
 		},
 		{
 			...base,
 			label: "smoke",
 			files: smokeFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile],
+			launchArgs: [sampleFile, softwareRendering],
 		},
 		{
 			...base,
 			label: "live",
 			files: liveFiles,
 			workspaceFolder: liveWorkspace,
-			launchArgs: [liveSampleFile],
+			launchArgs: [liveSampleFile, softwareRendering],
 		},
 		{
 			...base,
 			label: "rules-sync",
 			files: rulesSyncFiles,
 			workspaceFolder: rulesSyncWorkspace,
-			launchArgs: [rulesSyncSampleFile],
+			launchArgs: [rulesSyncSampleFile, softwareRendering],
 			env: {
 				CWTOOLS_TEST_HOI4_REPO: hoi4RulesFixture,
 				CWTOOLS_TEST_HOI4_REF: "3f03757a6f15565f763434e5752021c3ba8c0c3e",
@@ -121,7 +133,7 @@ export default defineConfig({
 			label: "host",
 			files: hostFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile],
+			launchArgs: [sampleFile, softwareRendering, "--log=debug"],
 		},
 	],
 	coverage: {
