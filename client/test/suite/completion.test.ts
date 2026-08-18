@@ -27,8 +27,10 @@ suite('LSP Completion Tests', function () {
 	this.timeout(60000);
 
 	setup(async function () {
-		setupLSPErrorMonitoring();
+		// See hover.test.ts: the monitor needs defaultClient, which activation
+		// sets, so hooking before it leaves the first test of a run unmonitored.
 		await activate();
+		setupLSPErrorMonitoring();
 		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, 'Extension should be active');
 		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));

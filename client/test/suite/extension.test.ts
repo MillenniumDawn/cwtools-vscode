@@ -17,15 +17,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 const root = SAMPLE_ROOT;
 
-// Disposing a panel whose webview is still loading kills the ready handshake
-// mid-flight, which is the window #216's silent host aborts point at. Wait for
-// the webview to post ready (the state leaves New) before closing the panel;
-// one that never gets there is closed anyway once the budget runs out.
-const settleWebview = (gp: GraphPanelModule) =>
-	waitUntil(
+// Closing a panel whose webview is still loading kills the ready handshake
+// mid-flight, which is the window #216's silent host aborts point at.
+const closePanel = async (gp: GraphPanelModule | undefined) => {
+	if (!gp?.GraphPanel.currentPanel) return;
+	await waitUntil(
 		() => gp.GraphPanel.currentPanel?.getState() !== gp.State.New,
 		2_000,
 	);
+	gp.GraphPanel.currentPanel?.dispose();
+};
 
 suite(`Debug Integration Test: `, function () {
 	test("Extension should be present", () => {
@@ -263,10 +264,7 @@ describe("GraphPanel Tests", function () {
 
 	teardown(async () => {
 		sandbox.restore();
-		if (gp.GraphPanel.currentPanel) {
-			await settleWebview(gp);
-			gp.GraphPanel.currentPanel?.dispose();
-		}
+		await closePanel(gp);
 		if (fs.existsSync(tempFile)) {
 			fs.unlinkSync(tempFile);
 		}
@@ -404,21 +402,14 @@ suite("GraphPanel — UI integration", function () {
 		gp.GraphPanel.create(extension.extensionPath);
 	};
 
-	const teardownPanel = async () => {
-		if (gp?.GraphPanel.currentPanel) {
-			await settleWebview(gp);
-			gp.GraphPanel.currentPanel?.dispose();
-		}
-		if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
-		if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
-	};
-
 	setup(() => {
 		sandbox = sinon.createSandbox();
 	});
 	teardown(async () => {
 		sandbox.restore();
-		await teardownPanel();
+		await closePanel(gp);
+		if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
+		if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
 	});
 
 	test("starts in the New state before the webview posts ready", async function () {

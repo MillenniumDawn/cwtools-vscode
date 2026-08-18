@@ -21,8 +21,11 @@ suite('LSP Hover Tests', function () {
 	let testDocument: vscode.TextDocument;
 
 	setup(async function () {
-		setupLSPErrorMonitoring();
+		// After activation, not before: the monitor hooks defaultClient's output
+		// channel, and defaultClient is only set once activation has built the
+		// client, so hooking first leaves the first test of a run unmonitored.
 		await activate();
+		setupLSPErrorMonitoring();
 		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, 'Extension should be active');
 

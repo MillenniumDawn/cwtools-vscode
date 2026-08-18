@@ -1,20 +1,13 @@
-/**
- * Says where a run stopped when the extension host goes away before mocha
- * reports (#216: no summary, host `exited with code: 0`, runner `Exit code: 1`).
- * Mocha's output ends at the last completed test and says nothing about whether
- * the shutdown came from inside the host, so the position has to be recorded as
- * the run goes.
- *
- * Loaded as a spec file so mocha's tdd globals are bound: a top-level setup /
- * teardown pair here is a root hook and runs around every test in the label.
- * The gap between two files is exactly where #216 has been seen, so the last
- * completed test is tracked as well as the in-flight one.
- */
+// Says where a run stopped when the extension host goes away before mocha
+// reports (#216). Loaded as a spec file, not via mocha's `require`, so the tdd
+// globals are bound and the hooks below register as root hooks. #216 has been
+// seen in the gap between two spec files, so the last completed test is
+// tracked as well as the in-flight one.
 export {};
 
 let inFlight: string | undefined;
 let lastCompleted: string | undefined;
-let reported = false;
+let mochaFinished = false;
 
 setup(function () {
 	inFlight = this.currentTest?.fullTitle();
@@ -26,11 +19,11 @@ teardown(function () {
 });
 
 suiteTeardown(function () {
-	reported = true;
+	mochaFinished = true;
 });
 
 process.on("exit", (code) => {
-	if (reported) {
+	if (mochaFinished) {
 		return;
 	}
 	const where = inFlight

@@ -53,7 +53,13 @@ const hoi4RulesFixture = path.resolve(
 	import.meta.dirname,
 	"client/test/fixtures/hoi4-rules.git",
 );
+// Root hooks only, no tests: names the in-flight test if the host exits before
+// mocha reports (#216). First in every label, since the abort has now been seen
+// on `live` as well as `host`.
+const abortDiagnostics =
+	"./release/bin/client/test/support/abortDiagnostics.js";
 const unitFiles = [
+	abortDiagnostics,
 	"./release/bin/client/test/suite/graphTypes.test.js",
 	"./release/bin/client/test/suite/fileExplorer.test.js",
 ];
@@ -66,13 +72,16 @@ const smokeFiles = [
 	...unitFiles,
 	"./release/bin/client/test/suite/extension.test.js",
 ];
-const liveFiles = ["./release/bin/client/test/suite/liveSettings.test.js"];
-const rulesSyncFiles = ["./release/bin/client/test/suite/rulesSync.test.js"];
+const liveFiles = [
+	abortDiagnostics,
+	"./release/bin/client/test/suite/liveSettings.test.js",
+];
+const rulesSyncFiles = [
+	abortDiagnostics,
+	"./release/bin/client/test/suite/rulesSync.test.js",
+];
 const hostFiles = [
-	// Root hooks only, no tests: names the in-flight test if the host exits
-	// before mocha reports (#216). Kept first so the hooks are registered
-	// before any suite runs.
-	"./release/bin/client/test/support/abortDiagnostics.js",
+	abortDiagnostics,
 	"./release/bin/client/test/suite/graphTypes.test.js",
 	"./release/bin/client/test/suite/fileExplorer.test.js",
 	"./release/bin/client/test/suite/extension.test.js",
@@ -80,12 +89,9 @@ const hostFiles = [
 	"./release/bin/client/test/suite/completion.test.js",
 ];
 
-// The graph tests drive a real webview, and #210's CI logs show the GPU
-// process already failing under xvfb (`Failed to send
-// GpuControl.CreateCommandBuffer`), so the render path is on software
-// rendering there whether we ask for it or not. Asking for it explicitly puts
-// a developer machine with a working GPU on the same path, which rules out a
-// GPU-process crash as the source of #216's silent aborts.
+// CI already renders the graph webview in software (#210's logs show the GPU
+// process failing under xvfb), so ask for it explicitly and put a developer
+// machine on the same path, which takes a GPU-process crash off #216's list.
 const softwareRendering = "--disable-gpu";
 
 const base = {
