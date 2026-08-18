@@ -5,7 +5,12 @@ import {
 	type RulesRepo,
 } from "./games";
 
+// Overridable so the rules-sync host suite can force this to fail fast and
+// stay off the network, instead of racing a real manifest fetch against its
+// own local fixture (see client/test/suite/rulesSync.test.ts). Unset in
+// every real install.
 export const RULES_MANIFEST_URL =
+	process.env.CWTOOLS_TEST_RULES_MANIFEST_URL ||
 	"https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/main/rules-pins.json";
 export const RULES_MANIFEST_CACHE_KEY = "rulesManifest";
 export const RULES_MANIFEST_MAX_BYTES = 64 * 1024;
