@@ -1,0 +1,3 @@
+# Placeholder ai_strategy file. Its only job is to give this workspace hoi4's
+# contentHint dir, on top of the "hoi4" folder name, so it detects as hoi4 the
+# same way a real mod folder would (see client/extension/games.ts).

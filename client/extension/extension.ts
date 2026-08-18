@@ -23,6 +23,10 @@ import { logInfo, logError, errorMessage } from "./logger";
 import type * as GraphPanelModule from "./graphPanel";
 
 export let defaultClient: LanguageClient;
+// The dir resolveRulesCache/fetchRulesInBackground clone into, keyed by
+// language below it. Exposed via CwtoolsApi so the rules-sync host suite
+// can find what activation chose without guessing globalStorage's path.
+let rulesCacheRoot: string | undefined;
 
 // What activate() hands back to other extensions and to the host tests. The
 // tests can't import graphPanel.ts directly: the extension host runs the
@@ -33,6 +37,8 @@ export interface CwtoolsApi {
 	graphPanel(): Promise<typeof GraphPanelModule>;
 	/** Commands the running server advertised, empty if it never started. */
 	serverCommands(): readonly string[];
+	/** The rules cache root dir, once activation has resolved it. */
+	rulesCacheRoot(): string | undefined;
 }
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
@@ -46,6 +52,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 	// updates and is writable everywhere; the install dir (extensionPath) is
 	// wiped on every update and can be read-only.
 	const cacheDir = path.join(context.globalStorageUri.fsPath, ".cwtools");
+	rulesCacheRoot = cacheDir;
 
 	const init = async function (language: string) {
 		// Include `.` in the word pattern so a dotted event/decision id
@@ -188,5 +195,6 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverCommands: () =>
 			defaultClient?.initializeResult?.capabilities.executeCommandProvider
 				?.commands ?? [],
+		rulesCacheRoot: () => rulesCacheRoot,
 	};
 }
