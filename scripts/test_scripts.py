@@ -170,7 +170,14 @@ class StageReleaseTests(unittest.TestCase):
                 stage_release_binaries.main([str(artifacts), str(release)]),
                 0,
             )
-            staged = release / "bin" / "server" / "cwtools-server" / "linux-x64" / "cwtools-server"
+            staged = (
+                release
+                / "bin"
+                / "server"
+                / "cwtools-server"
+                / "linux-x64"
+                / "cwtools-server"
+            )
             self.assertTrue(staged.is_file())
 
 
@@ -183,8 +190,12 @@ class SyncSyntaxTests(unittest.TestCase):
             src.mkdir(parents=True)
             dst.mkdir()
             (src / "paradox.tmLanguage.json").write_text("{}\n", encoding="utf-8")
-            (src / "cwt.tmLanguage.json").write_text('{"owned":false}\n', encoding="utf-8")
-            (dst / "cwt.tmLanguage.json").write_text('{"owned":true}\n', encoding="utf-8")
+            (src / "cwt.tmLanguage.json").write_text(
+                '{"owned":false}\n', encoding="utf-8"
+            )
+            (dst / "cwt.tmLanguage.json").write_text(
+                '{"owned":true}\n', encoding="utf-8"
+            )
             with patch.dict(
                 os.environ,
                 {

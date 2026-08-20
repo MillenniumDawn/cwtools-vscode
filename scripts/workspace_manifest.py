@@ -15,9 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 SHARED_DEPS = ("tempfile", "assert_cmd", "predicates")
 DEP_LINE = re.compile(r"^(tempfile|assert_cmd|predicates)\s*=")
-DEP_WORKSPACE = re.compile(
-    r"^(tempfile|assert_cmd|predicates) = \{ workspace = true"
-)
+DEP_WORKSPACE = re.compile(r"^(tempfile|assert_cmd|predicates) = \{ workspace = true")
 
 
 def die(message: str) -> NoReturn:
@@ -70,7 +68,9 @@ def main() -> int:
         if not has_lints_workspace(text):
             note(f"{crate}: missing [lints] workspace = true")
         if DEP_LINE.search(text) and not DEP_WORKSPACE.search(text):
-            note(f"{crate}: tempfile/assert_cmd/predicates must use {{ workspace = true }}")
+            note(
+                f"{crate}: tempfile/assert_cmd/predicates must use {{ workspace = true }}"
+            )
 
     meta = subprocess.run(
         [

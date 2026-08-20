@@ -15,7 +15,9 @@ OWNED_GRAMMAR = "cwt.tmLanguage.json"
 def main() -> int:
     src = Path(os.environ.get("PARADOX_SYNTAX_SRC") or "../paradox-syntax")
     syntaxes = src / "syntaxes"
-    dst = Path(os.environ.get("PARADOX_SYNTAX_DST") or (REPO_ROOT / "release" / "syntaxes"))
+    dst = Path(
+        os.environ.get("PARADOX_SYNTAX_DST") or (REPO_ROOT / "release" / "syntaxes")
+    )
     if not syntaxes.is_dir():
         print(f"error: '{syntaxes}' not found.", file=sys.stderr)
         print(

@@ -43,7 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     if os.name != "nt":
         for path in base.glob("*/*"):
             if path.is_file():
-                path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                path.chmod(
+                    path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+                )
 
     print("Staged platforms:")
     for path in sorted(base.rglob("*")):

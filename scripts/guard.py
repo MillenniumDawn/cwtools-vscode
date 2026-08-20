@@ -40,7 +40,7 @@ class Config:
 
 
 def csv_escape(s: str) -> str:
-    if any(c in s for c in ",\"\n"):
+    if any(c in s for c in ',"\n'):
         return '"' + s.replace('"', '""') + '"'
     return s
 
@@ -176,12 +176,18 @@ def build_config(
         or (projects / "Kaiserreich-4-Development")
     )
     rules = Path(
-        args.rules or env.get("CWTOOLS_RULES") or (projects / "cwtools-hoi4-config" / "Config")
+        args.rules
+        or env.get("CWTOOLS_RULES")
+        or (projects / "cwtools-hoi4-config" / "Config")
     )
-    vanilla_raw = args.vanilla if args.vanilla is not None else env.get("CWTOOLS_VANILLA")
+    vanilla_raw = (
+        args.vanilla if args.vanilla is not None else env.get("CWTOOLS_VANILLA")
+    )
     vanilla = Path(vanilla_raw) if vanilla_raw else None
     baseline = Path(
-        args.baseline or env.get("CWTOOLS_BASELINE") or (script_dir / "corpus-baseline.csv")
+        args.baseline
+        or env.get("CWTOOLS_BASELINE")
+        or (script_dir / "corpus-baseline.csv")
     )
     bin_path = Path(
         args.bin
@@ -194,7 +200,11 @@ def build_config(
         if args.corpus is None:
             corpus = projects / "Millennium-Dawn"
         if args.baseline is None:
-            baseline = Path(env["CWTOOLS_BASELINE"]) if env.get("CWTOOLS_BASELINE") else script_dir / "md-baseline.csv"
+            baseline = (
+                Path(env["CWTOOLS_BASELINE"])
+                if env.get("CWTOOLS_BASELINE")
+                else script_dir / "md-baseline.csv"
+            )
     elif args.preset == "vanilla":
         fixture = script_dir / "vanilla-fixture"
         if args.game is None:
@@ -206,7 +216,11 @@ def build_config(
         if args.vanilla is None:
             vanilla = fixture / "vanilla"
         if args.baseline is None:
-            baseline = Path(env["CWTOOLS_BASELINE"]) if env.get("CWTOOLS_BASELINE") else script_dir / "vanilla-baseline.csv"
+            baseline = (
+                Path(env["CWTOOLS_BASELINE"])
+                if env.get("CWTOOLS_BASELINE")
+                else script_dir / "vanilla-baseline.csv"
+            )
 
     return Config(
         preset=args.preset,
@@ -331,7 +345,9 @@ def run_guard(config: Config) -> int:
             cmd.extend(["--vanilla", str(vanilla), "--no-vanilla-cache"])
 
         with log_path.open("w", encoding="utf-8", errors="surrogateescape") as log:
-            status = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT).returncode
+            status = subprocess.run(
+                cmd, stdout=log, stderr=subprocess.STDOUT
+            ).returncode
         if status > 1:
             keep = True
             text = log_path.read_text(encoding="utf-8", errors="replace")
@@ -350,7 +366,9 @@ def run_guard(config: Config) -> int:
 
         if config.bless:
             if config.baseline.is_file():
-                before = max(len(report_body(config.baseline.read_text(encoding="utf-8"))) - 1, 0)
+                before = max(
+                    len(report_body(config.baseline.read_text(encoding="utf-8"))) - 1, 0
+                )
             else:
                 before = 0
             after = max(len(current_body) - 1, 0)
@@ -362,7 +380,9 @@ def run_guard(config: Config) -> int:
         if not config.baseline.is_file():
             die(f"no baseline at {config.baseline} (create one with --bless)")
 
-        baseline_text = config.baseline.read_text(encoding="utf-8", errors="surrogateescape")
+        baseline_text = config.baseline.read_text(
+            encoding="utf-8", errors="surrogateescape"
+        )
         baseline_body = report_body(baseline_text)
         (work / "baseline.body").write_text(
             "\n".join(baseline_body) + "\n", encoding="utf-8", newline="\n"
@@ -388,10 +408,20 @@ def run_guard(config: Config) -> int:
             )
         )
         drift_path = work / "drift.diff"
-        drift_path.write_text("\n".join(diff_lines) + "\n", encoding="utf-8", newline="\n")
+        drift_path.write_text(
+            "\n".join(diff_lines) + "\n", encoding="utf-8", newline="\n"
+        )
 
-        removed = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
-        added = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
+        removed = sum(
+            1
+            for line in diff_lines
+            if line.startswith("-") and not line.startswith("---")
+        )
+        added = sum(
+            1
+            for line in diff_lines
+            if line.startswith("+") and not line.startswith("+++")
+        )
         base_n = max(len(baseline_body) - 1, 0)
         curr_n = max(len(current_body) - 1, 0)
 
@@ -407,9 +437,13 @@ def run_guard(config: Config) -> int:
         new: dict[str, int] = {}
         for line in diff_lines:
             if line.startswith("-") and not line.startswith("---"):
-                gone[code_from_diff_line(line)] = gone.get(code_from_diff_line(line), 0) + 1
+                gone[code_from_diff_line(line)] = (
+                    gone.get(code_from_diff_line(line), 0) + 1
+                )
             elif line.startswith("+") and not line.startswith("+++"):
-                new[code_from_diff_line(line)] = new.get(code_from_diff_line(line), 0) + 1
+                new[code_from_diff_line(line)] = (
+                    new.get(code_from_diff_line(line), 0) + 1
+                )
         for code in sorted(set(gone) | set(new)):
             print(f"    {code:<10} -{gone.get(code, 0)} +{new.get(code, 0)}")
 

@@ -49,7 +49,9 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
             raise SystemExit(1) from None
         entry = root / "bin" / "client" / "extension" / "extension.js"
         if not entry.is_file():
-            gh_error(f"{vsix.name}: missing extension entrypoint bin/client/extension/extension.js")
+            gh_error(
+                f"{vsix.name}: missing extension entrypoint bin/client/extension/extension.js"
+            )
             raise SystemExit(1)
 
         present = platform_files(root)
