@@ -2,8 +2,9 @@ name: Diagnostics guard
 
 # The test suite proves the code still compiles and behaves. The guards prove
 # the *diagnostics* did not move, which is the claim a "changes nothing"
-# refactor cannot otherwise back up. All three tiers run scripts/corpus-guard.sh
-# against a committed baseline; they differ only in what their inputs cost.
+# refactor cannot otherwise back up. All three tiers run
+# python3 scripts/guard.py against a committed baseline; they differ only in
+# what their inputs cost.
 #
 #   vanilla  scripts/vanilla-fixture, 88K and committed. No external input, so
 #            it runs on every PR including forks.
@@ -97,7 +98,7 @@ jobs:
           # left under the OS cache dir. Nothing caches this path, which makes
           # every run start cold and the report a function of the inputs alone.
           XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
-        run: ./scripts/vanilla-guard.sh --no-build
+        run: python3 scripts/guard.py vanilla --no-build
 
   # Reads the pinned revisions out of the committed baselines and resolves them
   # to full SHAs, because git cannot fetch an abbreviated one. Split out so the
@@ -272,10 +273,10 @@ jobs:
           path: _guard-inputs/cwtools-hoi4-config
           persist-credentials: false
       # Both inputs as flags rather than CWTOOLS_CORPUS/CWTOOLS_RULES:
-      # md-guard.sh passes a --corpus of its own and an env var would lose to
-      # it. XDG_CACHE_HOME pins the parse cache to this run and TMPDIR puts the
-      # scratch dir where the upload step can find it, both for the reasons the
-      # other two tiers spell out.
+      # the md preset ignores CWTOOLS_CORPUS, and an env var would lose to a
+      # flag anyway. XDG_CACHE_HOME pins the parse cache to this run and
+      # TMPDIR puts the scratch dir where the upload step can find it, both
+      # for the reasons the other two tiers spell out.
       - name: Run Millennium Dawn guard
         env:
           INPUTS: ${{ github.workspace }}/_guard-inputs
@@ -283,7 +284,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}/guard-work
         run: |
           mkdir -p "$TMPDIR"
-          ./scripts/md-guard.sh --no-build \
+          python3 scripts/guard.py md --no-build \
             --corpus "$INPUTS/Millennium-Dawn" \
             --rules "$INPUTS/cwtools-hoi4-config/Config"
       - name: Upload drift diff
@@ -364,7 +365,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}/guard-work
         run: |
           mkdir -p "$TMPDIR"
-          ./scripts/corpus-guard.sh --no-build
+          python3 scripts/guard.py corpus --no-build
       # Just the diff. The rest of the guard's scratch dir is the full report
       # and the validator log, and this repository is public while the corpus
       # it read is not. `warn` rather than `ignore` so that a break in the

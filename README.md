@@ -106,7 +106,7 @@ If the editor feels slow, turn on `cwtools.profiling`, reload the window, reprod
 
 The extension ships its own [TextMate grammar](https://github.com/cwtools/paradox-syntax/tree/master/syntaxes) for the supported games, so syntax highlighting works out of the box. No second extension to install.
 
-The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) (see [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh) to refresh them); the `.cwt` rules grammar is owned here. Themes live under [`release/themes/`](release/themes/). Every theme paints the full scope set from both grammars (game scripts and `.cwt` rule files) plus a generic baseline, so coloring is consistent whatever file you're in. Pick one with the Color Theme picker:
+The grammars are vendored from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) (see [`scripts/sync_paradox_syntax.py`](scripts/sync_paradox_syntax.py) to refresh them); the `.cwt` rules grammar is owned here. Themes live under [`release/themes/`](release/themes/). Every theme paints the full scope set from both grammars (game scripts and `.cwt` rule files) plus a generic baseline, so coloring is consistent whatever file you're in. Pick one with the Color Theme picker:
 
 * [**Paradox - Classic**](release/themes/Paradox-Classic.tmLanguage.json). Dark
   scheme modeled on VS Code's default Dark+ token colours, applied to the

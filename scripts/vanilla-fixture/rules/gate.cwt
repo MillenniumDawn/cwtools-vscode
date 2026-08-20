@@ -1,4 +1,4 @@
-### Ruleset for the vanilla-backed guard tier (scripts/vanilla-guard.sh).
+### Ruleset for the vanilla-backed guard tier (python3 scripts/guard.py vanilla).
 ###
 ### Small on purpose: one type per check family that needs a base-game index,
 ### and nothing else that could report. The types the mod references are

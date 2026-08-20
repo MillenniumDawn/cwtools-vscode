@@ -82,7 +82,10 @@ jobs:
       # so the script can see both cwtools-rs/ and scripts/.
       - name: workspace manifest inheritance
         working-directory: ${{ github.workspace }}
-        run: ./scripts/workspace-manifest-check.sh
+        run: python3 scripts/workspace_manifest.py
+      - name: scripts unit tests
+        working-directory: ${{ github.workspace }}
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
 
   # Releases ship Linux, Windows, and macOS binaries, so a platform-only
   # break must fail here before it ships. The tag-triggered release workflow
@@ -300,7 +303,7 @@ jobs:
       - name: Run coverage (85% line floor)
         env:
           COVERAGE_THRESHOLD: 85
-        run: bash ../scripts/coverage.sh
+        run: python3 ../scripts/coverage.py
         continue-on-error: true
       # Named for the engine so it can't collide with the client's
       # coverage-node artifact in pr.yml.
