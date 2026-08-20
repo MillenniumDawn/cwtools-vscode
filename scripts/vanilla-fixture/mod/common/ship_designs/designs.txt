@@ -1,0 +1,25 @@
+# CW227 and CW229. Both templates are defined only by the fixture's base game,
+# so the design below names one of each that nothing defines, and one that does.
+ship_design = {
+	name = "GUARD_MISSING"
+	section = {
+		template = NO_SUCH_SECTION
+		slot = mid
+	}
+	component = {
+		template = NO_SUCH_COMPONENT
+		slot = mid
+	}
+}
+
+ship_design = {
+	name = "GUARD_RESOLVED"
+	section = {
+		template = BASE_SECTION
+		slot = mid
+	}
+	component = {
+		template = BASE_COMPONENT
+		slot = mid
+	}
+}

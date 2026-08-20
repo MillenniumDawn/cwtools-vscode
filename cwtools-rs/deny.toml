@@ -1,0 +1,38 @@
+# cargo-deny configuration for cwtools-rs.
+# Catches security advisories, license issues, and duplicate crate versions.
+# Run locally with `cargo deny check` (install via `cargo install cargo-deny --locked`).
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "warn"
+ignore = []
+
+[licenses]
+# Allowlist reflects the licenses actually present in the dependency graph
+# (verified via `cargo deny list`).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "Unicode-3.0",
+    "Unlicense",
+    # LGPL-2.1-or-later appears via r-efi. Acceptable for a closed-source
+    # binary that merely links dynamically; switch to a forbid if the
+    # project ever ships static-only builds.
+    "LGPL-2.1-or-later",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+# Wildcard bans go here. Empty by default.
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

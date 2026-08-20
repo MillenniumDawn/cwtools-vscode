@@ -1,0 +1,2 @@
+﻿l_english:
+ parenthesised_expression:0 "Keep [(Character?.GetName:'CAP_SCIENTIST')]"

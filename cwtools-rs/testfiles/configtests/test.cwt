@@ -1,0 +1,270 @@
+alias[effect:create_starbase] = {
+    ## cardinality = 1..1
+    owner = scalar
+
+    ## cardinality = 1..1
+    size = scalar
+
+    ## cardinality = 0..100
+    module = scalar
+
+    ## cardinality = 0..100
+    building = scalar
+
+    ## cardinality = 0..1
+    effect = effect
+}
+
+alias[effect:set_name] = scalar
+alias[effect:solar_system] = {
+    ## cardinality = 0..inf
+    alias_name[effect] = alias_match_left[effect]
+}
+
+alias[effect:if] = {
+	limit = { alias_name[trigger] = alias_match_left[trigger] }
+	alias_name[effect] = alias_match_left[effect]
+}
+
+## push_scope = megastrcture
+alias[effect:every_planet_army] = {
+	##cardinality = 0..1
+	limit = { alias_name[trigger] = alias_match_left[trigger] }
+	alias_name[effect] = alias_match_left[effect]
+}
+
+alias[effect:capital_scope] = {
+    alias_name[effect] = alias_match_left[effect]
+}
+alias[effect:owner] = {
+    alias_name[effect] = alias_match_left[effect]
+}
+
+alias[trigger:text] = scalar
+
+## push_scope = fleet
+alias[trigger:any_owned_fleet] = {
+	alias_name[trigger] = alias_match_left[trigger]
+	##cardinality = 0..1
+	count = int
+}
+
+## push_scope = country
+alias[trigger:any_country] = {
+	alias_name[trigger] = alias_match_left[trigger]
+	##cardinality = 0..1
+	count = int
+}
+
+alias[trigger:valid_planet_killer_target] = scope[fleet]
+
+alias[trigger:scope_field] = {
+    ## cardinality = 0..inf
+    alias_name[trigger] = alias_match_left[trigger]
+}
+
+alias[effect:scope_field] = {
+    ## cardinality = 0..inf
+    alias_name[effect] = alias_match_left[effect]
+}
+
+ship_size = {
+    ## cardinality = 0..1
+    formation_priority = int
+    ## cardinality = 0..1
+    max_speed = float[0.0..1.0]
+    ## cardinality = 0..1
+    acceleration = float
+    ## cardinality = 0..1
+    rotation_speed = float
+    ## cardinality = 0..1
+    collision_radius = float
+    ## cardinality = 0..1
+    max_hitpoints = int
+    ## cardinality = 0..1
+    ### Base cost of building this ship_size
+    cost = int
+    ## cardinality = 0..1
+    components_add_to_cost = bool
+    ## cardinality = 0..1
+    is_designable = bool
+    ## cardinality = 0..1
+    is_civilian = bool
+    ## cardinality = 0..1
+    build_block_radius = int
+    ## cardinality = 0..1
+    can_disable = bool
+    modifier = {
+        ## cardinality = 0..inf
+        alias_name[modifier] = alias_match_left[modifier]
+    }
+    ## cardinality = 0..1
+    size_multiplier = int
+    ## cardinality = 0..1
+    fleet_slot_size = int
+    section_slots = {
+
+    }
+    ## cardinality = 0..1
+    combat_size_multiplier = int
+    ## cardinality = 0..1
+    num_target_locators = int
+    ## cardinality = 0..1
+    is_space_station = bool
+    ## cardinality = 0..1
+    icon_frame = int
+    ## cardinality = 0..1
+    base_buildtime = int
+    ## cardinality = 0..1
+    can_have_federation_design = bool
+    ## cardinality = 0..1
+    enable_default_design = bool
+    ## cardinality = 0..1
+    default_behavior = <ship_behavior>
+    ## cardinality = 0..1
+    prerequisites = {
+        ## cardinality = 0..100
+        <technology>
+    }
+    upkeep_override = {
+
+    }
+    has_mineral_upkeep = bool
+    class = enum[shipsize_class]
+    construction_type = scalar
+    ## cardinality = 0..100
+    required_component_set = scalar
+    subtype[starbase]  = {
+        flip_control_on_disable = bool
+    }
+    subtype[ship] = {
+        combat_disengage_chance = float
+    }
+
+ }
+
+event = {
+    is_triggered_only = bool
+    id = scalar
+    hide_window = bool
+    trigger = {
+        ## cardinality = 0..inf
+        alias_name[trigger] = alias_match_left[trigger]
+    }
+    immediate = {
+        alias_name[effect] = alias_match_left[effect]
+    }
+}
+
+test = {
+    test_empty_quotes = ""
+}
+
+types = {
+    type[ship_size] = {
+        path = "game/common/ship_sizes"
+        subtype[starbase] = {
+            class = shipclass_starbase
+        }
+        subtype[platform] = {
+            class = shipclass_military_station
+        }
+        subtype[ship] = {
+
+        }
+    }
+    type[ship_behavior] = {
+        name_field = "name"
+        path = "game/common/ship_behaviors"
+    }
+    type[technology] = {
+        path = "game/common/technology"
+    }
+    type[event] = {
+        path = "game/events"
+    }
+	type[color_define] = {
+		path = "game/flags"
+		skip_root_key = colors
+	}
+	## type_key_filter = randomizable_combo
+	type[randomizable_combo] = {
+		path = "game/flags"
+    }
+    type[test] = {
+        path = "game/common/war_goals"
+    }
+    type[scripted_effect] = {
+        path = "game/common/scripted_effects"
+    }
+}
+
+enums = {
+    enum[shipsize_class] = {
+        shipclass_military
+        shipclass_military_station
+        shipclass_transport
+        shipclass_starbase
+    }
+}
+
+#These are not required as covered by scope_field
+alias[trigger:NOT] = {
+	## cardinality = 1..1
+	alias_name[trigger] = alias_match_left[trigger]
+}
+
+alias[trigger:NOR] = { alias_name[trigger] = alias_match_left[trigger] }
+alias[trigger:NAND] = { alias_name[trigger] = alias_match_left[trigger] }
+alias[trigger:AND] = { alias_name[trigger] = alias_match_left[trigger] }
+alias[trigger:OR] = { alias_name[trigger] = alias_match_left[trigger] }
+alias[trigger:hidden_trigger] = { alias_name[trigger] = alias_match_left[trigger] }
+
+#These are not required as covered by scope_field
+alias[effect:NOT] = {
+	## cardinality = 1..1
+	alias_name[effect] = alias_match_left[effect]
+}
+
+alias[effect:NOR] = { alias_name[effect] = alias_match_left[effect] }
+alias[effect:NAND] = { alias_name[effect] = alias_match_left[effect] }
+alias[effect:AND] = { alias_name[effect] = alias_match_left[effect] }
+alias[effect:OR] = { alias_name[effect] = alias_match_left[effect] }
+alias[effect:hidden_effect] = { alias_name[effect] = alias_match_left[effect] }
+
+types = {
+    type[unique] = {
+        path = "game/common"
+        path_file = "unique.txt"
+        unique = yes
+    }
+}
+
+scripted_effect = {
+    alias_name[effect] = alias_match_left[effect]
+    ## cardinality = 0..inf
+    test = {
+        ## cardinality = 0..inf
+        <scripted_effect> = {
+        ## cardinality = 1..inf
+        enum[scripted_effect_params] = scalar
+        ## cardinality = 1..inf
+        enum[scripted_effect_params] = scope_field
+       }
+    }
+}
+
+## scope = ship
+alias[effect:set_ship_flag] = bool
+
+## scope = country
+alias[effect:set_country_flag] = bool
+
+###The scripted effect will draw the value of the right clause via $left_clause$.
+#Todo: Make sure this works
+alias[effect:<scripted_effect>] = {
+	## cardinality = 1..inf
+	enum[scripted_effect_params] = scalar
+	## cardinality = 1..inf
+	enum[scripted_effect_params] = scope_field
+}

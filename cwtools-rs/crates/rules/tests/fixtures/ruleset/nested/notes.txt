@@ -1,0 +1,2 @@
+Not a .cwt file. The loader must walk past this without parsing it.
+types = { type[should_never_load] = { path = "game/common" } }

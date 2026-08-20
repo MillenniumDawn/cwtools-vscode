@@ -1,0 +1,10 @@
+# cwtools guard baseline. Regenerate with scripts/vanilla-guard.sh --bless
+# corpus: mod @ f3051983 (dirty)
+# rules:  vanilla-fixture/rules @ f3051983 (dirty)
+# vanilla: vanilla @ f3051983 (dirty)
+file,line,severity,code,message
+common/gate_refs/refs.txt,5,Error,CW500,Field 'thing' references 'no_such_thing' which is not a known instance of type 'gate_thing'
+common/gate_refs/refs.txt,6,Warning,CW222,The event id no.such.event is not defined
+common/gate_refs/refs.txt,7,Error,CW113,"File gfx/models/no_such_model.mesh not found, this is case sensitive"
+common/ship_designs/designs.txt,5,Error,CW227,Section template NO_SUCH_SECTION can not be found
+common/ship_designs/designs.txt,9,Error,CW229,Component template NO_SUCH_COMPONENT can not be found

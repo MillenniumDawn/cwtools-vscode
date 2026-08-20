@@ -1,0 +1,99 @@
+[workspace]
+members = [
+  "crates/profiling",
+  "crates/i18n",
+  "crates/error_codes",
+  "crates/string_table",
+  "crates/parser",
+  "crates/file_manager",
+  "crates/cache",
+  "crates/rules",
+  "crates/index",
+  "crates/validation",
+  "crates/game",
+  "crates/localization",
+  "crates/info",
+  "crates/driver",
+  "crates/lsp",
+  "crates/cli",
+]
+# fuzz/ is its own workspace root. Excluding it here keeps `cargo build` and
+# `cargo test` from ever pulling in libfuzzer-sys, which needs nightly and a
+# sanitizer runtime. Running the targets: see CONTRIBUTING.md.
+exclude = ["fuzz"]
+resolver = "3"
+
+[workspace.package]
+version = "2.6.0"
+edition = "2024"
+# Minimum supported Rust version, inherited by every member crate so cargo
+# enforces it per crate. 1.88 is the floor for let-chains (`if let ... && let
+# ...`), which the parser, the scope registry and ~20 other modules rely on;
+# 1.86 and 1.87 reject them as E0658. Dependencies want 1.86 independently.
+# CI's "Rust MSRV build" job in test.yml builds at exactly this version so it
+# cannot drift upward unnoticed.
+rust-version = "1.88.0"
+license = "MIT"
+repository = "https://github.com/MillenniumDawn/cwtools"
+
+[workspace.dependencies]
+cwtools_profiling = { path = "crates/profiling" }
+cwtools_i18n = { path = "crates/i18n" }
+cwtools_error_codes = { path = "crates/error_codes" }
+cwtools_string_table = { path = "crates/string_table" }
+cwtools_parser = { path = "crates/parser" }
+cwtools_file_manager = { path = "crates/file_manager" }
+cwtools_cache = { path = "crates/cache" }
+cwtools_rules = { path = "crates/rules" }
+cwtools_index = { path = "crates/index" }
+cwtools_validation = { path = "crates/validation" }
+cwtools_game = { path = "crates/game" }
+cwtools_localization = { path = "crates/localization" }
+cwtools_info = { path = "crates/info" }
+cwtools_driver = { path = "crates/driver" }
+cwtools_lsp = { path = "crates/lsp" }
+cwtools_cli = { path = "crates/cli" }
+clap = { version = "4.5", features = ["derive"] }
+clap_complete = "4.5"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+libc = "0.2"
+rkyv = "0.8"
+zstd = "0.13"
+tower-lsp = "0.20"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+parking_lot = "0.12"
+rayon = "1.10"
+rustc-hash = "2.1"
+smallvec = { version = "1", features = ["union"] }
+criterion = "0.8"
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+# Match CI's `cargo clippy ... -- -D warnings` so plain local clippy and
+# rust-analyzer deny the same set without needing the flag. No pedantic/
+# nursery: those are opt-in noise on top of the posture the tree already keeps.
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+
+# Strip symbols and run thin LTO on release builds.
+#
+# Thin LTO + codegen-units=1 is the sweet spot: thin LTO parallelizes well
+# across codegen units and links much faster than fat LTO, especially on
+# Windows where MSVC link.exe is the bottleneck, while codegen-units=1
+# maximizes cross-module optimization for thin LTO. The binary is ~5-10%
+# larger than fat LTO, but still stripped so antivirus false positives are
+# not a concern.
+#
+# No panic=abort: tower-lsp/tokio rely on unwinding per request.
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

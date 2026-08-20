@@ -1,0 +1,12 @@
+types = {
+    type[test_type] = {
+        path = "game/common"
+    }
+}
+enums = {
+    enum[test_enum] = {
+        a
+        b
+        c
+    }
+}

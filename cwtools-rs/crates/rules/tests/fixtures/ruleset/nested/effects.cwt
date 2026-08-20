@@ -1,0 +1,23 @@
+types = {
+	type[guard_decision] = {
+		path = "game/common/decisions"
+	}
+}
+
+single_alias[guard_limit] = {
+	## cardinality = 0..inf
+	alias_name[trigger] = alias_match_left[trigger]
+}
+
+alias[effect:guard_set_flag] = scalar
+
+alias[effect:guard_if] = {
+	limit = single_alias_right[guard_limit]
+	## cardinality = 0..inf
+	alias_name[effect] = alias_match_left[effect]
+}
+
+guard_decision = {
+	## cardinality = 0..1
+	visible = single_alias_right[guard_limit]
+}

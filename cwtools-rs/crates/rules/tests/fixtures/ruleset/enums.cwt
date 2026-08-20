@@ -1,0 +1,6 @@
+enums = {
+	enum[guard_gender] = {
+		male
+		female
+	}
+}

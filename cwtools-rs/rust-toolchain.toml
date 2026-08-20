@@ -1,0 +1,13 @@
+# The toolchain you develop on, which is not the same thing as the toolchain
+# the crates support. `rust-version` in Cargo.toml declares the floor (1.88.0,
+# for let-chains); this file stays on `stable` so day-to-day work, clippy and
+# the release builds get current lints and codegen. CI's "Rust MSRV build" job
+# is what holds the floor.
+#
+# Note for anyone adding a job that targets a specific version: a toolchain
+# file in the directory outranks `rustup default`, so pass `+<version>`
+# explicitly or this file wins and you get stable instead.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

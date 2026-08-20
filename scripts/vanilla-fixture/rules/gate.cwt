@@ -1,0 +1,36 @@
+### Ruleset for the vanilla-backed guard tier (scripts/vanilla-guard.sh).
+###
+### Small on purpose: one type per check family that needs a base-game index,
+### and nothing else that could report. The types the mod references are
+### defined only under ../vanilla, so every reference below resolves to a
+### base-game instance or to nothing at all.
+
+types = {
+	type[gate_thing] = {
+		path = "game/common/gate_things"
+	}
+	type[event] = {
+		path = "game/events"
+		name_field = "id"
+	}
+	type[section_template] = {
+		path = "game/common/section_templates"
+		name_field = "key"
+	}
+	type[component_template] = {
+		path = "game/common/component_templates"
+		name_field = "key"
+	}
+	type[gate_ref] = {
+		path = "game/common/gate_refs"
+	}
+}
+
+gate_ref = {
+	## cardinality = 0..1
+	thing = <gate_thing>
+	## cardinality = 0..1
+	happening = <event>
+	## cardinality = 0..1
+	art = filepath
+}
