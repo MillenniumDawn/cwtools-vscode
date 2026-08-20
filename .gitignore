@@ -1,5 +1,6 @@
 bin/
 out/
+target/
 node_modules/
 .idea/
 *.vsix
@@ -11,6 +12,7 @@ Scratch.*
 .vscode-test/
 coverage/
 coverage-node/
+corpus/
 *.user
 .vs/
 .opencode/
