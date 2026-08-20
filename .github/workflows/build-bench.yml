@@ -1,0 +1,99 @@
+name: Build bench
+
+# Measures clean release-build time and binary size for the Rust engine across
+# platforms, so the Windows-vs-Linux gap is a number rather than an impression.
+# Manual only: it cargo-cleans before every build, so it is far too slow to sit
+# on the PR path, and it gates nothing. Results land in the job summary and
+# compare across runs.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-bench:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: cwtools-rs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+
+      # Registry cache only. The target dir is deliberately not cached: a warm
+      # target dir is the thing this workflow is measuring the absence of.
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ matrix.os }}-cargo-registry-${{ hashFiles('cwtools-rs/Cargo.lock') }}
+
+      - name: cargo clean
+        run: cargo clean
+
+      - name: cargo build --release
+        id: build
+        run: |
+          $timer = [System.Diagnostics.Stopwatch]::StartNew()
+          cargo build --workspace --release
+          $timer.Stop()
+          "duration_ms=$($timer.ElapsedMilliseconds)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "duration_s=$([math]::Round($timer.Elapsed.TotalSeconds, 1))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        shell: pwsh
+
+      - name: Binary sizes
+        id: sizes
+        run: |
+          $cli = Get-Item "target/release/cwtools.exe" -ErrorAction SilentlyContinue
+          $srv = Get-Item "target/release/cwtools-server.exe" -ErrorAction SilentlyContinue
+          if (-not $cli) { $cli = Get-Item "target/release/cwtools" -ErrorAction SilentlyContinue }
+          if (-not $srv) { $srv = Get-Item "target/release/cwtools-server" -ErrorAction SilentlyContinue }
+          $cliSize = if ($cli) { $cli.Length } else { 0 }
+          $srvSize = if ($srv) { $srv.Length } else { 0 }
+          "cli_bytes=$cliSize" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "srv_bytes=$srvSize" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        shell: pwsh
+
+      - name: Print summary
+        run: |
+          $os = "${{ matrix.os }}"
+          $dur = "${{ steps.build.outputs.duration_s }}s"
+          $cli = [math]::Round(${{ steps.sizes.outputs.cli_bytes }} / 1MB, 1)
+          $srv = [math]::Round(${{ steps.sizes.outputs.srv_bytes }} / 1MB, 1)
+          Write-Host "## $os build results" -ForegroundColor Cyan
+          Write-Host "- Clean release build: **$dur**"
+          Write-Host "- cwtools: **${cli}MB**"
+          Write-Host "- cwtools-server: **${srv}MB**"
+        shell: pwsh
+
+      - name: Summary job annotation
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const os = '${{ matrix.os }}';
+            const dur = '${{ steps.build.outputs.duration_s }}s';
+            const cli = '${{ steps.sizes.outputs.cli_bytes }}';
+            const srv = '${{ steps.sizes.outputs.srv_bytes }}';
+            core.summary.addHeading(`${os} build results`, 3);
+            core.summary.addRaw(`- Clean release build: **${dur}**\n`);
+            core.summary.addRaw(`- cwtools: **${(cli/1e6).toFixed(1)}MB**\n`);
+            core.summary.addRaw(`- cwtools-server: **${(srv/1e6).toFixed(1)}MB**\n`);
+            core.summary.write();

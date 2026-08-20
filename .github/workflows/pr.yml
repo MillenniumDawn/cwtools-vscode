@@ -51,7 +51,9 @@ jobs:
       timeout-minutes: 5
       run: xvfb-run -a npm test
 
-  # Catches a vulnerable dependency before merge, not as an alert after.
+  # Catches a vulnerable dependency before merge, not as an alert after. Reads
+  # every manifest in the diff, so this one job covers package-lock.json and
+  # the engine's Cargo.lock; the engine suite deliberately has no second copy.
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -67,9 +69,9 @@ jobs:
         comment-summary-in-pr: on-failure
 
   # Full build: compile the engine and the client, run the host smoke suite
-  # against the real server, package the vsix, run coverage. This is the only
-  # place a submodule bump gets compiled before a release tag builds it for
-  # real, so it checks out the submodule and builds it.
+  # against the real server, package the vsix, run coverage. The engine lives
+  # in-repo at cwtools-rs/, so this is the same tree Engine CI lints and tests,
+  # built here the way the extension actually consumes it.
   build:
     needs: check
     runs-on: ubuntu-latest
@@ -80,20 +82,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        submodules: recursive
     - uses: ./.github/actions/setup-node-npm
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
     - name: Cache Rust build
       uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       with:
-        workspaces: submodules/cwtools/cwtools-rs
-    # Builds the pinned engine and the client into release/, the same layout a
+        workspaces: cwtools-rs
+    # Builds the in-repo engine and the client into release/, the same layout a
     # developer gets from ./build.sh quick.
     - name: Build engine and client
-      env:
-        CWTOOLS_RUST_WORKSPACE: submodules/cwtools/cwtools-rs
       run: npm run build -- quick
     # vscode-test resolves "stable" (.vscode-test.mjs) through this same update
     # API, so keying the cache on the resolved version writes a new entry only

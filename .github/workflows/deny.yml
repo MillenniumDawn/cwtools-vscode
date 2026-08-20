@@ -1,0 +1,33 @@
+name: cargo-deny
+
+# Advisory + license gate for the Rust engine's lockfile. Dependency review in
+# pr.yml catches what a PR adds; this catches what a published advisory turns
+# an already-merged crate into.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly run to catch newly-published advisories against the lockfile.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  # event_name keeps a push to main from cancelling the weekly sweep.
+  group: deny-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Run cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: cwtools-rs/Cargo.toml

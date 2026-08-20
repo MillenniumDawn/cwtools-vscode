@@ -1,7 +1,7 @@
 # Weekly PR bumping the reviewed runtime manifest and bundled fallback pins.
 # Every install fetches only the exact commits this PR approves
 # (client/extension/rulesSetup.ts), so an upstream push cannot land unreviewed.
-# Unlike the engine bump, nothing here auto-merges.
+# Nothing here auto-merges; the diffs are the point.
 on:
   schedule:
     - cron: "0 6 * * 1"
