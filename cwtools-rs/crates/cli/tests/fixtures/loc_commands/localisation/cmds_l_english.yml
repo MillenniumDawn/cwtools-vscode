@@ -1,0 +1,5 @@
+l_english:
+ plain_key:0 "Nothing to resolve here"
+ terminal_key:0 "Ruled by [GetName]"
+ unknown_command:0 "Ruled by [totally_unknown()]"
+ wrong_scope:0 "Held by [owner.controller.GetName]"

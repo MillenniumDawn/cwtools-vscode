@@ -1,0 +1,38 @@
+[package]
+name = "cwtools_driver"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cwtools_cache = { workspace = true }
+cwtools_parser = { workspace = true }
+cwtools_file_manager = { workspace = true }
+cwtools_string_table = { workspace = true }
+cwtools_rules = { workspace = true }
+cwtools_validation = { workspace = true }
+cwtools_index = { workspace = true }
+cwtools_game = { workspace = true }
+cwtools_localization = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+tempfile = { workspace = true }
+
+[[bench]]
+name = "rules_hot"
+harness = false
+
+[[bench]]
+name = "validate_hot"
+harness = false
+
+[[bench]]
+name = "snapshot_clone"
+harness = false

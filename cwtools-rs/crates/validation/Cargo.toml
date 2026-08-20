@@ -1,0 +1,31 @@
+[package]
+name = "cwtools_validation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cwtools_error_codes = { workspace = true }
+cwtools_i18n = { workspace = true }
+cwtools_parser = { workspace = true }
+cwtools_rules = { workspace = true }
+cwtools_string_table = { workspace = true }
+cwtools_game = { workspace = true }
+cwtools_index = { workspace = true }
+cwtools_localization = { workspace = true }
+tracing = { workspace = true }
+rustc-hash = { workspace = true }
+smallvec = { workspace = true }
+
+[dev-dependencies]
+cwtools_file_manager = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "cw246"
+harness = false

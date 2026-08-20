@@ -6,6 +6,8 @@ node_modules/
 Scratch.*
 .vsce
 .cwtools/
+# except the engine fixture, which ships a .cwtools/ config as test input
+!cwtools-rs/testfiles/performancetest2/.cwtools/
 .vscode-test/
 coverage/
 coverage-node/

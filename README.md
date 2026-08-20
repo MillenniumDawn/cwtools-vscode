@@ -4,7 +4,7 @@
 
 ## Origin
 
-This is a fork of [cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vscode). The original extension wrapped an F# language server from [cwtools/cwtools](https://github.com/cwtools/cwtools); this fork has moved to a Rust-based server binary (cwtools-rs) and ships that.
+This is a fork of [cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vscode). The original extension wrapped an F# language server from [cwtools/cwtools](https://github.com/cwtools/cwtools); this fork has moved to a Rust-based server binary and ships that. The server lives here too, as the [`cwtools-rs/`](cwtools-rs/) workspace.
 
 ## Disclaimer
 
@@ -163,9 +163,11 @@ The bundled themes draw on the following:
 
 `cwtools-md-edition` itself is a fork of
 [cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vscode) maintained
-by the [Millennium Dawn mod team](https://github.com/MillenniumDawn), and
-drives a Rust language server from
-[MillenniumDawn/cwtools](https://github.com/MillenniumDawn/cwtools).
+by the [Millennium Dawn mod team](https://github.com/MillenniumDawn). The Rust
+language server it drives began as
+[MillenniumDawn/cwtools](https://github.com/MillenniumDawn/cwtools), itself a
+fork of [cwtools/cwtools](https://github.com/cwtools/cwtools), and now lives in
+this repo under [`cwtools-rs/`](cwtools-rs/).
 
 ## Links
 

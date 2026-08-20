@@ -1,0 +1,40 @@
+[package]
+name = "cwtools_lsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cwtools-server"
+path = "src/main.rs"
+
+[dependencies]
+cwtools_parser = { workspace = true }
+cwtools_string_table = { workspace = true }
+cwtools_file_manager = { workspace = true }
+cwtools_rules = { workspace = true }
+cwtools_validation = { workspace = true }
+cwtools_error_codes = { workspace = true }
+cwtools_i18n = { workspace = true }
+cwtools_info = { workspace = true }
+cwtools_driver = { workspace = true }
+cwtools_game = { workspace = true }
+cwtools_localization = { workspace = true }
+cwtools_cache = { workspace = true }
+cwtools_profiling = { workspace = true }
+tower-lsp = { workspace = true }
+tokio = { workspace = true, features = ["time", "fs", "io-util", "sync"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+rayon = { workspace = true }
+rustc-hash = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+tempfile = { workspace = true }

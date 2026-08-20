@@ -1,0 +1,380 @@
+name: Diagnostics guard
+
+# The test suite proves the code still compiles and behaves. The guards prove
+# the *diagnostics* did not move, which is the claim a "changes nothing"
+# refactor cannot otherwise back up. All three tiers run scripts/corpus-guard.sh
+# against a committed baseline; they differ only in what their inputs cost.
+#
+#   vanilla  scripts/vanilla-fixture, 88K and committed. No external input, so
+#            it runs on every PR including forks.
+#   md       Millennium-Dawn at the revision pinned in scripts/md-baseline.csv.
+#            Public, so the repository's own token checks it out and this tier
+#            runs on every PR too. Not a second opinion on the Kaiserreich
+#            tier: four codes only MD reports, four only Kaiserreich does, and
+#            the shared ones in nothing like the same proportions.
+#   corpus   Kaiserreich-4-Development at the revision pinned in the baseline
+#            header. That repo is private and ~5 GB packed, so a fork PR gets
+#            no token and cannot run it. Same-repo PRs and pushes to main do,
+#            once CORPUS_TOKEN is configured.
+#
+# Exit 1 from the guard is drift, exit 2 is a setup problem it could not run
+# through. Both fail the job; neither is skipped.
+#
+# No path filtering. The client ships the engine, so a client-only change is
+# still a candidate to release these diagnostics under.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: guard-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  # The baseline header records the input repos by basename only, so the owner
+  # has to live here. The ruleset pin is on the Kaiserreich fork, not on
+  # cwtools/cwtools-hoi4-config upstream.
+  CORPUS_REPO: Kaiserreich/Kaiserreich-4-Development
+  MD_REPO: MillenniumDawn/Millennium-Dawn
+  RULES_REPO: Kaiserreich/cwtools-hoi4-config
+
+jobs:
+  # Cheap tier. Covers CW113/CW222/CW227/CW229/CW500, families that can only
+  # answer against a mod plus a base game and so never fire in the corpus tier,
+  # which runs without one.
+  vanilla:
+    name: Vanilla tier
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+      - name: Cache cargo registry
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: >-
+            ${{ runner.os }}-cargo-registry-${{
+            hashFiles('cwtools-rs/Cargo.lock') }}
+      # Own prefix: the guards need a release build, and sharing the debug
+      # jobs' `cargo-target-` key would have the two profiles overwrite each
+      # other's cache and cold-build in turn. The restore-key is a prefix
+      # match, so neither side reaches the other's entries. No `save-always`:
+      # it is a deprecated no-op at this pin, so a run that fails after the
+      # build saves nothing and the next one rebuilds. The release profile is
+      # thin-LTO at one codegen unit, hence the hour. This tier is the only one
+      # that writes these entries, because it is the only one that checks out
+      # nothing but this repository.
+      - name: Cache cargo release target
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: cwtools-rs/target
+          key: >-
+            ${{ runner.os }}-guard-release-target-${{
+            hashFiles('cwtools-rs/Cargo.lock', 'cwtools-rs/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-guard-release-target-
+      # Built here rather than by the guard's own `cargo build`, so a compile
+      # failure reads as a compile failure instead of the guard's exit 2.
+      - name: cargo build --release -p cwtools_cli
+        working-directory: cwtools-rs
+        run: cargo build --release -p cwtools_cli
+      - name: Run vanilla guard
+        env:
+          # `validate` always enables the .cwb parse cache and has no flag to
+          # turn it off, so it would otherwise read whatever an earlier run
+          # left under the OS cache dir. Nothing caches this path, which makes
+          # every run start cold and the report a function of the inputs alone.
+          XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
+        run: ./scripts/vanilla-guard.sh --no-build
+
+  # Reads the pinned revisions out of the committed baselines and resolves them
+  # to full SHAs, because git cannot fetch an abbreviated one. Split out so the
+  # corpus job knows before it spins up whether it has an input to check out:
+  # the `secrets` context is not available in a job-level `if`. Millennium Dawn
+  # is resolved first and unconditionally, so a missing corpus token cannot
+  # take the public tier down with it.
+  pins:
+    name: Guard pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      corpus_run: ${{ steps.pins.outputs.corpus_run }}
+      corpus_sha: ${{ steps.pins.outputs.corpus_sha }}
+      rules_sha: ${{ steps.pins.outputs.rules_sha }}
+      md_sha: ${{ steps.pins.outputs.md_sha }}
+      md_rules_sha: ${{ steps.pins.outputs.md_rules_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read and resolve baseline pins
+        id: pins
+        env:
+          CORPUS_TOKEN: ${{ secrets.CORPUS_TOKEN }}
+          # Both rulesets and the Millennium Dawn corpus are public, so the
+          # repository's own token reads them. Only the Kaiserreich corpus
+          # lookup below swaps in the secret.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Anchored on end-of-line so a `(dirty)` suffix does not match. A
+          # baseline blessed against a modified checkout pins nothing CI can
+          # reproduce, and failing here says so instead of reporting the drift
+          # as a code change later.
+          pin() {
+            sed -n "s|^# $2:[[:space:]]*[^@]*@ \([0-9a-f]\{7,40\}\)$|\1|p" \
+              "$1" | head -n 1
+          }
+          bad_pin() {
+            echo "::error::no clean revision pin in $1 (a '(dirty)' pin is" \
+              "not reproducible; re-bless from a clean checkout)"
+            grep '^#' -- "$1" >&2
+            exit 1
+          }
+          # An empty ref is not an error to actions/checkout, it is the default
+          # branch. Letting one through would validate whatever the corpus tip
+          # happens to be and report the difference as drift.
+          check_sha() {
+            if ! [[ $2 =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::could not resolve the $1 pin to a full SHA" \
+                "(got '$2')"
+              exit 1
+            fi
+          }
+
+          # Millennium Dawn carries its own rules pin, which need not be the
+          # one the Kaiserreich baseline was taken against: the two tiers are
+          # re-blessed independently.
+          md_baseline=scripts/md-baseline.csv
+          md_pin=$(pin "$md_baseline" corpus)
+          md_rules_pin=$(pin "$md_baseline" rules)
+          [ -n "$md_pin" ] && [ -n "$md_rules_pin" ] || bad_pin "$md_baseline"
+          echo "md baseline pins: corpus $md_pin, rules $md_rules_pin"
+          md_sha=$(gh api "repos/$MD_REPO/commits/$md_pin" --jq '.sha')
+          md_rules_sha=$(gh api "repos/$RULES_REPO/commits/$md_rules_pin" \
+            --jq '.sha')
+          check_sha "Millennium Dawn corpus" "$md_sha"
+          check_sha "Millennium Dawn ruleset" "$md_rules_sha"
+          echo "resolved: md $md_sha, rules $md_rules_sha"
+          {
+            echo "md_sha=$md_sha"
+            echo "md_rules_sha=$md_rules_sha"
+          } >> "$GITHUB_OUTPUT"
+
+          baseline=scripts/corpus-baseline.csv
+          corpus_pin=$(pin "$baseline" corpus)
+          rules_pin=$(pin "$baseline" rules)
+          [ -n "$corpus_pin" ] && [ -n "$rules_pin" ] || bad_pin "$baseline"
+          echo "corpus baseline pins: corpus $corpus_pin, rules $rules_pin"
+
+          # No token means no private corpus. On a pull request that is a fact
+          # about the trigger rather than a fault: a fork PR gets no secrets,
+          # and neither does a Dependabot PR, which gets Dependabot's own set.
+          # Those skip, and the push to main after merge is what catches them.
+          # Anywhere else a missing token is a misconfiguration, and skipping
+          # quietly would leave the expensive tier switched off with every
+          # check still green.
+          if [ -z "${CORPUS_TOKEN:-}" ]; then
+            if [ "${{ github.event_name }}" != "pull_request" ]; then
+              echo "::error::CORPUS_TOKEN is not configured, so the corpus" \
+                "tier cannot check out $CORPUS_REPO. It needs a read-only" \
+                "token with contents access to that repository."
+              exit 1
+            fi
+            echo "::notice::corpus tier skipped: this pull request cannot" \
+              "read repository secrets, so it has no token for the private" \
+              "$CORPUS_REPO. Expected on a fork PR and on a Dependabot PR." \
+              "The vanilla and Millennium Dawn tiers still ran, and the push" \
+              "to main after merge runs the corpus tier."
+            echo "corpus_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          corpus_sha=$(GH_TOKEN=$CORPUS_TOKEN gh api \
+            "repos/$CORPUS_REPO/commits/$corpus_pin" --jq '.sha')
+          rules_sha=$(gh api "repos/$RULES_REPO/commits/$rules_pin" --jq '.sha')
+          check_sha "Kaiserreich corpus" "$corpus_sha"
+          check_sha "Kaiserreich ruleset" "$rules_sha"
+          echo "resolved: corpus $corpus_sha, rules $rules_sha"
+          {
+            echo "corpus_run=true"
+            echo "corpus_sha=$corpus_sha"
+            echo "rules_sha=$rules_sha"
+          } >> "$GITHUB_OUTPUT"
+
+  # Second corpus tier, and the one that runs everywhere. Millennium Dawn is
+  # public, so no secret gates it and a fork's pull request gets a real mod
+  # checked rather than the fixture alone.
+  millennium-dawn:
+    name: Millennium Dawn tier
+    needs: pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+      # Restore-only, here and in the corpus tier. Both check out repositories
+      # this one does not own, and a job that does that must not be able to
+      # write the cache every other job restores from. The vanilla tier checks
+      # out nothing but this repository, so it is the one that populates these
+      # entries; a run that finds them cold rebuilds, which is what all three
+      # do on the first run after a lockfile change anyway.
+      - name: Restore cargo registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: >-
+            ${{ runner.os }}-cargo-registry-${{
+            hashFiles('cwtools-rs/Cargo.lock') }}
+      - name: Restore cargo release target
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: cwtools-rs/target
+          key: >-
+            ${{ runner.os }}-guard-release-target-${{
+            hashFiles('cwtools-rs/Cargo.lock', 'cwtools-rs/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-guard-release-target-
+      - name: cargo build --release -p cwtools_cli
+        working-directory: cwtools-rs
+        run: cargo build --release -p cwtools_cli
+      # After the build, so a compile error costs no checkout. Most of that
+      # working tree is art the guard never opens, and there is no trimming it
+      # down: the run indexes whatever is on disk, so a narrower checkout here
+      # than on a developer's machine would report the difference as drift.
+      - name: Check out Millennium Dawn at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.MD_REPO }}
+          ref: ${{ needs.pins.outputs.md_sha }}
+          path: _guard-inputs/Millennium-Dawn
+          persist-credentials: false
+          show-progress: false
+      - name: Check out ruleset at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.RULES_REPO }}
+          ref: ${{ needs.pins.outputs.md_rules_sha }}
+          path: _guard-inputs/cwtools-hoi4-config
+          persist-credentials: false
+      # Both inputs as flags rather than CWTOOLS_CORPUS/CWTOOLS_RULES:
+      # md-guard.sh passes a --corpus of its own and an env var would lose to
+      # it. XDG_CACHE_HOME pins the parse cache to this run and TMPDIR puts the
+      # scratch dir where the upload step can find it, both for the reasons the
+      # other two tiers spell out.
+      - name: Run Millennium Dawn guard
+        env:
+          INPUTS: ${{ github.workspace }}/_guard-inputs
+          XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
+          TMPDIR: ${{ runner.temp }}/guard-work
+        run: |
+          mkdir -p "$TMPDIR"
+          ./scripts/md-guard.sh --no-build \
+            --corpus "$INPUTS/Millennium-Dawn" \
+            --rules "$INPUTS/cwtools-hoi4-config/Config"
+      - name: Upload drift diff
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: md-guard-drift
+          path: ${{ runner.temp }}/guard-work/**/drift.diff
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Expensive tier, and the one the committed corpus baseline is about. A
+  # depth-1 checkout of the pinned commit is ~1.2 GB of working tree against
+  # ~5 GB of history, which is why nothing here clones a branch.
+  corpus:
+    name: Corpus tier
+    needs: pins
+    if: needs.pins.outputs.corpus_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+      # Restore-only, for the reason the Millennium Dawn tier spells out.
+      - name: Restore cargo registry
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: >-
+            ${{ runner.os }}-cargo-registry-${{
+            hashFiles('cwtools-rs/Cargo.lock') }}
+      - name: Restore cargo release target
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: cwtools-rs/target
+          key: >-
+            ${{ runner.os }}-guard-release-target-${{
+            hashFiles('cwtools-rs/Cargo.lock', 'cwtools-rs/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-guard-release-target-
+      - name: cargo build --release -p cwtools_cli
+        working-directory: cwtools-rs
+        run: cargo build --release -p cwtools_cli
+      # After the build, so a compile error costs no corpus clone. Neither
+      # checkout touches the workspace root, only its own `path`. The
+      # directories are named after their repositories because the guard
+      # writes a baseline header from the basenames, so a `--bless` run from
+      # here would otherwise record the inputs as "corpus" and "rules/Config".
+      - name: Check out corpus at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.CORPUS_REPO }}
+          ref: ${{ needs.pins.outputs.corpus_sha }}
+          token: ${{ secrets.CORPUS_TOKEN }}
+          path: _guard-inputs/Kaiserreich-4-Development
+          persist-credentials: false
+          show-progress: false
+      - name: Check out ruleset at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.RULES_REPO }}
+          ref: ${{ needs.pins.outputs.rules_sha }}
+          path: _guard-inputs/cwtools-hoi4-config
+          persist-credentials: false
+      - name: Run corpus guard
+        env:
+          CWTOOLS_CORPUS: >-
+            ${{ github.workspace }}/_guard-inputs/Kaiserreich-4-Development
+          CWTOOLS_RULES: >-
+            ${{ github.workspace }}/_guard-inputs/cwtools-hoi4-config/Config
+          XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
+          # The guard keeps its scratch dir on failure and prints the path.
+          # Pointing it somewhere predictable is what lets the next step
+          # collect the full diff, which the log only shows 40 lines of.
+          TMPDIR: ${{ runner.temp }}/guard-work
+        run: |
+          mkdir -p "$TMPDIR"
+          ./scripts/corpus-guard.sh --no-build
+      # Just the diff. The rest of the guard's scratch dir is the full report
+      # and the validator log, and this repository is public while the corpus
+      # it read is not. `warn` rather than `ignore` so that a break in the
+      # TMPDIR wiring above shows up as something, instead of a red run whose
+      # only record is the 40 diff lines the log already truncated to.
+      - name: Upload drift diff
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: corpus-guard-drift
+          path: ${{ runner.temp }}/guard-work/**/drift.diff
+          if-no-files-found: warn
+          retention-days: 14

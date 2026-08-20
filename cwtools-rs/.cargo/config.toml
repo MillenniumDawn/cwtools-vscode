@@ -1,0 +1,15 @@
+# Cargo configuration for cwtools-rs.
+#
+# Platform-specific overrides live under [target.<triple>] sections.
+# Shared settings (e.g. target-dir) go at the top level.
+
+# Windows: no linker override. The default MSVC link.exe is used.
+# rust-lld would be faster for LTO linking, but it's shipped as a
+# self-contained binary on stable Windows MSVC (not an installable
+# rustup component), so wiring it up reliably across runners needs
+# more work than this branch is doing. Re-enable here once that's
+# sorted out; the CI workflows in .github/workflows/ assume this
+# file does not require an extra install step on Windows.
+#
+# macOS: use the system linker (default). No override needed.
+# Linux: use the system linker (default). No override needed.

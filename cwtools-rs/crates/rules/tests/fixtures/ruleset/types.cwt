@@ -1,0 +1,12 @@
+types = {
+	type[guard_idea] = {
+		path = "game/common/ideas"
+		name_field = "id"
+	}
+}
+
+guard_idea = {
+	id = localisation
+	## cardinality = 0..1
+	cost = int
+}

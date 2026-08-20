@@ -1,0 +1,16 @@
+# CW500, CW222 and CW113. Every reference here is missing from both the mod and
+# the fixture's base game, and the base game is what makes them answerable: drop
+# --vanilla and all three go quiet.
+missing_refs = {
+	thing = no_such_thing
+	happening = no.such.event
+	art = "gfx/models/no_such_model.mesh"
+}
+
+# The same three fields, resolving. A regression that stops the checks reporting
+# and one that makes them report everything both move the baseline.
+resolved_refs = {
+	thing = base_thing
+	happening = base.1
+	art = "gfx/models/base_model.mesh"
+}

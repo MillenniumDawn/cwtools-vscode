@@ -24,17 +24,34 @@ updates:
         patterns:
           - "*"
 
-  # Engine bumps auto-merge once CI passes (automerge-engine.yml), so daily
-  # keeps the pin close to engine main without manual work.
-  - package-ecosystem: gitsubmodule
-    directory: /
+  # The Rust engine. MSRV is declared in cwtools-rs/Cargo.toml and the "Rust
+  # MSRV build" job in engine-ci.yml fails any update whose own rust-version
+  # climbs past it, so a floor bump is a red check rather than something a
+  # reviewer has to spot. cargo-deny (deny.yml) is the advisory gate.
+  - package-ecosystem: cargo
+    directory: /cwtools-rs
     schedule:
-      interval: daily
+      interval: weekly
+      day: monday
       time: "06:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 10
     commit-message:
       prefix: chore
+      include: scope
+    groups:
+      # Split out so a fix never queues behind a routine version bump.
+      cargo-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      # Majors stay individual. Grouped across 15 crates one is a rewrite,
+      # not a review.
+      cargo:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
 
   # `/release` is the shipped manifest and resolves its own dependency set.
   - package-ecosystem: npm

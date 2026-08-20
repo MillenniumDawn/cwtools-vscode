@@ -1,0 +1,38 @@
+# Fuzz targets. Deliberately its own workspace root (the bare [workspace]
+# table at the bottom) and excluded from ../Cargo.toml, so a plain
+# `cargo build` / `cargo test` in cwtools-rs never sees it. libfuzzer-sys
+# needs nightly and a sanitizer runtime; neither belongs in the normal build.
+[package]
+name = "cwtools-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+# Not inherited from the workspace: an excluded package can't use
+# `.workspace = true`. Keep in step with ../Cargo.toml by hand.
+rust-version = "1.88.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cwtools_parser = { path = "../crates/parser" }
+cwtools_string_table = { path = "../crates/string_table" }
+cwtools_localization = { path = "../crates/localization" }
+
+# `test`/`doc`/`bench` off: these are libFuzzer entry points, not test targets.
+[[bin]]
+name = "parse_string"
+path = "fuzz_targets/parse_string.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_loc_text"
+path = "fuzz_targets/parse_loc_text.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

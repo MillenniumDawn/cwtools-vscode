@@ -1,0 +1,10 @@
+types = {
+	test_type = {
+		path = game(common)
+		subtypes = {
+		}
+	}
+}
+enums = {
+	test_enum = { a b c }
+}

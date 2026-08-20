@@ -52,25 +52,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
-      ROOT: submodules/cwtools/cwtools-rs/target
+      ROOT: cwtools-rs/target
     steps:
-      # The engine builds from the submodule gitlink. One pinned pointer
-      # rules both local and CI builds.
-      - name: Checkout (with engine submodule)
+      # The engine lives in-repo at cwtools-rs/, so the tag names both halves
+      # at once: the commit being released is the engine being bundled.
+      - name: Checkout
         # v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          submodules: recursive
-      # A release must bundle a tagged engine, not whatever commit the submodule
-      # happens to point at. Submodule checkouts don't fetch tags, so pull them
-      # first.
-      - name: Require a tagged engine
-        shell: bash
-        run: |
-          git -C submodules/cwtools fetch --tags --force --depth=1 origin
-          tag=$(git -C submodules/cwtools describe --tags --exact-match)
-          echo "Bundled engine tag: $tag"
-          echo "Bundled engine tag: \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
       - name: Setup Rust
         # stable branch, 2026-03-27
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
@@ -80,9 +68,9 @@ jobs:
         # v2.9.1
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
-          workspaces: submodules/cwtools/cwtools-rs
+          workspaces: cwtools-rs
       - name: Build server
-        working-directory: submodules/cwtools/cwtools-rs
+        working-directory: cwtools-rs
         run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
       - name: Upload binary
         # v7.0.1

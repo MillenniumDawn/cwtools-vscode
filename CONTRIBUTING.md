@@ -2,22 +2,19 @@
 
 ## Layout
 
-This repo is the VS Code extension. The language server it drives is the `cwtools-rs` workspace in the [cwtools](https://github.com/MillenniumDawn/cwtools) repo, which ships as a standalone per-platform binary.
+This repo holds both halves of CWTools: the VS Code extension and the language server it drives. The server is the `cwtools-rs` Rust workspace, which ships as a standalone per-platform binary.
 
-The TypeScript client lives in `client/`: `extension/` (the host), `webview/` (the Cytoscape graph), and `test/` (tests plus the sample mod). The build is driven by `build/build.ts` (run via `tsx`). The Rust server source is pulled in as a submodule at `submodules/cwtools`.
+The TypeScript client lives in `client/`: `extension/` (the host), `webview/` (the Cytoscape graph), and `test/` (tests plus the sample mod). The build is driven by `build/build.ts` (run via `tsx`). The Rust engine lives in `cwtools-rs/`, with its own [CONTRIBUTING.md](cwtools-rs/CONTRIBUTING.md) and [BUILD.md](cwtools-rs/BUILD.md); the diagnostics regression guards that gate engine changes are in `scripts/`.
 
 ## Prerequisites
 
 - Node 20
 - Rust (stable) with cargo, for the server
-- git, for the submodules
 
 ## Getting the source
 
 ```bash
-git clone --recursive https://github.com/MillenniumDawn/cwtools-vscode
-# or, in an existing checkout:
-git submodule update --init --recursive
+git clone https://github.com/MillenniumDawn/cwtools-vscode
 ```
 
 ## Building
@@ -31,10 +28,10 @@ npm install        # client dependencies
 
 The client is bundled with esbuild (`build/esbuild.ts`): `tsc` type-checks and emits the per-file output the tests run against, then esbuild produces the two shipped bundles (`extension.js`, `webview/graph.js`). `npm run compile` does both; `npm run check` runs the typecheck and lint.
 
-The Rust server builds from the `cwtools-rs` workspace. By default the build looks for it as a sibling checkout (`../cwtools/cwtools-rs`), which matches CI. To build from the submodule or another checkout, point it there:
+The Rust server builds from the in-repo `cwtools-rs` workspace. To build from another checkout, point it there:
 
 ```bash
-CWTOOLS_RUST_WORKSPACE=submodules/cwtools/cwtools-rs ./build.sh quick
+CWTOOLS_RUST_WORKSPACE=../some-other-cwtools/cwtools-rs ./build.sh quick
 ```
 
 Other commands: `package` packages a vsix without publishing, `package-prebuilt` packages the binaries already staged by CI (one vsix per platform plus a universal fallback), `publish-prebuilt` publishes what `package-prebuilt` produced, and `release-prebuilt` does both.
@@ -81,7 +78,7 @@ the manifest revision. [`rules-pins.yml`](.github/workflows/rules-pins.yml)
 runs the same script weekly and opens a PR with a compare link for everything
 that moved. Read those diffs before merging: the commits in `rules-pins.json`
 are what installed extensions fetch on their next activation. Nothing
-auto-merges here, unlike the engine submodule bump.
+auto-merges here.
 
 ## Running and debugging
 
@@ -105,11 +102,26 @@ helpers, the manifest and nls guards). The rest run in a real extension host
 against the sample mod in `client/test/sample/`, picked by label from
 `.vscode-test.mjs`.
 
-CI gates on `test:node`, `test` and `test:smoke`. It does not gate on
-`test:host`: the hover and completion suites assert on rule-driven data, and the
-sample workspace has no game name in its path and no game-specific content dir,
-so it detects as the generic `paradox` language, which has no rules repo to
-clone. Those suites fail until the fixture is made identifiable as a game (or is
-pointed at a local `cwtools.rules_folder` and a vanilla install).
+The Rust side has its own suite and its own gates:
+
+```bash
+cd cwtools-rs
+cargo fmt --all
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace
+```
+
+Anything that touches the parser, the rule engine, a validator or the ruleset
+types also runs the corpus guards from the repo root
+(`./scripts/corpus-guard.sh` and `./scripts/md-guard.sh`). They validate two
+pinned real mods and diff the report against a committed baseline, so a change
+meant to leave diagnostics alone has to prove it. See
+[cwtools-rs/CONTRIBUTING.md](cwtools-rs/CONTRIBUTING.md) for the flags, the
+pinned input revisions and when re-blessing a baseline is appropriate.
+
+CI gates on `test:node`, `test`, `test:smoke` and `test:host`. The sample
+workspace detects as `stellaris` (its `common/species_classes` content marker),
+so the hover and completion suites fetch real rules on activation and run in CI
+like everything else.
 
 `test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/` — open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The numbers count only the hand-written client source (`client/extension`, `client/common`); dependencies are filtered out so the figures mean something. CI renders the node coverage summary as a markdown table in the job summary and as a sticky PR comment, and uploads the raw report as the `coverage-node` artifact. It's all local/OSS, no external service. Coverage is informational, not a merge gate (see issue #7).

@@ -1,0 +1,3 @@
+ship_section_template = {
+	key = BASE_SECTION
+}

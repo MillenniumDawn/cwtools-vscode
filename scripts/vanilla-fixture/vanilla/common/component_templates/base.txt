@@ -1,0 +1,3 @@
+utility_component_template = {
+	key = BASE_COMPONENT
+}
