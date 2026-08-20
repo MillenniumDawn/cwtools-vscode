@@ -25,6 +25,10 @@ export default tseslint.config(
 		},
 	},
 	includeIgnoreFile(gitignorePath, "Imported .gitignore patterns"),
+	// The Rust engine has no JS to lint, and its target/ is ignored by its own
+	// .gitignore, which the root one above doesn't cover. Without this eslint
+	// walks the whole build output.
+	{ ignores: ["cwtools-rs/**"] },
 	// Extension host, build scripts, and configs run under Node.
 	{
 		languageOptions: { globals: globals.node },

@@ -15,8 +15,8 @@
 //                    tag-triggered Release workflow does the matrix build, smoke test,
 //                    and publish.
 //
-// The Rust server (cwtools-rs) builds from a sibling checkout by default; set
-// CWTOOLS_RUST_WORKSPACE to build from elsewhere (e.g. the submodule).
+// The Rust server (cwtools-rs) builds from the in-repo workspace by default; set
+// CWTOOLS_RUST_WORKSPACE to build from another checkout.
 
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -71,7 +71,7 @@ function runOrNull(
 function rustWorkspace(): string {
 	const fromEnv = process.env.CWTOOLS_RUST_WORKSPACE;
 	if (fromEnv && fromEnv.trim()) return path.resolve(repoRoot, fromEnv);
-	return path.resolve(repoRoot, "../cwtools/cwtools-rs");
+	return path.resolve(repoRoot, "cwtools-rs");
 }
 
 function buildAndDeployRustServer(): void {
@@ -432,14 +432,8 @@ function cmdRelease(): void {
 	// reaches after the matrix build. Check it here so a missing CHANGELOG
 	// section can't leave a pushed tag behind.
 	releaseNotes(readChangelog(), version);
-	// Untracked files are fine, and so is a dirty submodule: the tag records the
-	// gitlink, not its working-tree contents.
-	const dirty = runOrNull("git", [
-		"diff",
-		"--quiet",
-		"HEAD",
-		"--ignore-submodules=dirty",
-	]);
+	// Untracked files are fine; tracked edits are not.
+	const dirty = runOrNull("git", ["diff", "--quiet", "HEAD"]);
 	if (dirty !== 0) {
 		throw new Error(
 			"working tree has uncommitted changes; commit them before tagging a release",

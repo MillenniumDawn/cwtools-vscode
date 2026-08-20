@@ -143,13 +143,13 @@ Source: `release/package.json` `contributes.configuration`.
 The graph panel shows file/entity references as nodes and references as edges. Primary nodes are shown as the core set for the current file context; references are followed to build neighboring nodes.
 
 Building a graph live needs the server-side `getGraphData` command. The engine
-has implemented it, but the bundled server is only as new as the pinned
-`submodules/cwtools` commit, so `cwtools.showGraph` and `cwtools.setGraphDepth`
-stay hidden until the server the user is actually running advertises it.
+has implemented it, but an installed extension is only as new as the server it
+shipped with, so `cwtools.showGraph` and `cwtools.setGraphDepth` stay hidden
+until the server the user is actually running advertises it.
 `cwtools.graphFromJson` reads a saved export and never touches the server, so it
 always works. The client checks the server's `executeCommandProvider` at startup
 and sets the `cwtoolsGraphAvailable` context from it, so the commands appear on
-their own once the pinned engine carries the command.
+their own once the bundled engine carries the command.
 
 Open the graph with `cwtools.showGraph`.
 
