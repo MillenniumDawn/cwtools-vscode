@@ -1,0 +1,100 @@
+---
+# Pre-commit hooks for this repository's toolchains.
+#
+# Setup (once per clone):
+#   pipx install pre-commit          # or: pip install --user pre-commit
+#   pre-commit install --hook-type pre-commit --hook-type pre-push
+#   # Rust (engine/) and the node tools come from the repo's own toolchains;
+#   # the Python linters need to be on PATH:
+#   pipx install ruff black          # pip install --user mypy pytest
+#   npm install                      # provides eslint via node_modules/.bin
+#
+# The fixers (cargo fmt, ruff --fix, black, eslint --fix) rewrite the files
+# you stage and the commit picks up the result; the gates (cargo clippy,
+# mypy) still fail the commit on anything they can't fix. The test suites
+# (cargo test, pytest) gate every push, mirroring CI. Bypass with
+# `git commit --no-verify`.
+
+minimum_pre_commit_version: "3.2.0"
+
+repos:
+  - repo: local
+    hooks:
+      # --- Rust (engine/) -------------------------------------------------
+      # Formats the whole workspace in place, so the committed code is always
+      # rustfmt-clean (the -D warnings gate lives in cargo-clippy below).
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: >-
+          bash -c 'cd engine && exec cargo fmt --all'
+        language: system
+        files: ^engine/.*\.rs$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: cargo-clippy
+        name: cargo clippy -D warnings
+        entry: >-
+          bash -c 'cd engine && exec cargo clippy --workspace
+          --all-targets --all-features -- -D warnings'
+        language: system
+        files: ^engine/.*\.(rs|toml)$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: cargo-test
+        name: cargo test --workspace
+        entry: >-
+          bash -c 'cd engine && exec cargo test --workspace
+          --all-features --no-fail-fast'
+        language: system
+        files: ^engine/.*\.(rs|toml)$
+        pass_filenames: false
+        stages: [pre-push]
+
+      # --- TypeScript (extension/, build/) --------------------------------
+      # Applies eslint's autofixes to the files you changed (typescript-eslint's
+      # projectService resolves each one against its tsconfig), so it stays fast
+      # while running the same rules as `npm run lint` (eslint .).
+      - id: eslint
+        name: eslint --fix
+        entry: npx --no-install eslint --fix
+        language: system
+        files: \.(ts|mjs|js)$
+        stages: [pre-commit]
+
+      # --- Python (scripts/) ----------------------------------------------
+      # Applies ruff's autofixes (e.g. explicit check=False on subprocess.run);
+      # anything it can't fix (shebang-without-exec-bit, type errors) is caught
+      # by the other hooks or left for you to fix.
+      - id: ruff
+        name: ruff check --fix
+        entry: ruff check --fix
+        language: system
+        files: ^scripts/.*\.py$
+        stages: [pre-commit]
+
+      # Reformats the changed files in place (black, not --check), so the
+      # committed version is already formatted.
+      - id: black
+        name: black
+        entry: black
+        language: system
+        files: ^scripts/.*\.py$
+        stages: [pre-commit]
+
+      - id: mypy
+        name: mypy
+        entry: mypy scripts
+        language: system
+        files: ^scripts/.*\.py$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: pytest
+        name: pytest (scripts)
+        entry: pytest scripts
+        language: system
+        files: ^scripts/.*\.py$
+        pass_filenames: false
+        stages: [pre-push]

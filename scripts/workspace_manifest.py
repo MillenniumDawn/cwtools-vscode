@@ -84,6 +84,7 @@ def main() -> int:
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     if meta.returncode != 0:
         die("cargo metadata failed")

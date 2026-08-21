@@ -4,9 +4,37 @@ The active codebase is the Rust workspace in `engine/`.
 
 ## Local checks
 
-No hook manager is checked in. Run the same format, lint, and test commands as
-`.github/workflows/engine-ci.yml` before pushing an engine change. CI also runs
-`cargo machete` and `cargo deny`.
+`.pre-commit-config.yaml` at the repo root installs format, lint, and test
+hooks for every toolchain. The fixers rewrite the files you stage and the
+commit picks up the result; the gates still fail the commit on anything they
+can't fix. Commands mirror CI so local failures match it.
+
+- Rust (`engine/`): `cargo fmt` formats the workspace in place (so committed
+  code is always rustfmt-clean) and `cargo clippy -D warnings` gates every
+  commit; `cargo test --workspace` gates every push (see
+  `.github/workflows/engine-ci.yml`).
+- TypeScript (`extension/`, `build/`): `eslint --fix` applies autofixes on
+  commit (the same rules as `npm run lint`, `eslint .`).
+- Python (`scripts/`): `ruff check --fix` and `black` reformat/fix on commit;
+  `mypy` gates every commit; `pytest` gates every push.
+
+One-time setup:
+
+```sh
+pipx install pre-commit          # or: pip install --user pre-commit
+pre-commit install --hook-type pre-commit --hook-type pre-push
+# The Python linters must be on PATH (the Rust and TypeScript ones come from
+# the repo's own toolchains):
+pipx install ruff black          # pip install --user mypy pytest
+npm install                      # provides eslint via node_modules/.bin
+```
+
+The hooks fire only on the files they cover, so a docs-only change runs nothing.
+Because the fixers edit your staged files, a commit that triggers one will need
+to be run again so the fixed version is the one committed. You can still run the
+same commands by hand (`cargo fmt --all` from `engine/`, `npx --no-install
+eslint`, `ruff check --fix scripts`, ...) when you want a faster loop. Bypass
+the hooks in a pinch with `git commit --no-verify` (use sparingly).
 
 ## Running checks by hand
 

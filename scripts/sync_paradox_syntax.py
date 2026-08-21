@@ -35,16 +35,12 @@ def main() -> int:
         shutil.copy2(src_file, dst / src_file.name)
         copied.append(src_file.name)
 
-    print(
-        f"Updated {len(copied)} grammar file(s) in extension/package/syntaxes/:"
-    )
+    print(f"Updated {len(copied)} grammar file(s) in extension/package/syntaxes/:")
     for name in copied:
         print(f"  {name}")
     print()
     print("Reminder: do not add 'tboby.paradox-syntax' to extensionPack again.")
-    print(
-        "this repo ships its own grammars. Themes live in extension/package/themes/"
-    )
+    print("this repo ships its own grammars. Themes live in extension/package/themes/")
     print("and are owned here, not mirrored.")
     return 0
 

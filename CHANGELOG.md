@@ -1,5 +1,7 @@
 ### Unreleased
 
+* `.pre-commit-config.yaml` is back at the repo root and now both gates and fixes. The fixers (`cargo fmt`, `ruff check --fix`, `black`, `eslint --fix`) rewrite staged files so the commit is always clean; the gates (`cargo clippy -D warnings`, `mypy`) still fail on anything they can't fix, and `cargo test` / `pytest` gate every push. Every hook matches only the files it owns, so a docs-only change runs nothing. The repo was brought to clean: the `subprocess.run` calls in `scripts/` got explicit `check=False` (PLW1510), the seven `scripts/*.py` that carry a shebang are now executable (EXE001, git mode 100755), and `scripts/guard.py` was re-formatted by black. (#382)
+
 * Repo helper scripts live under `scripts/` as Python, so the same commands run on Linux and Windows. `python3 scripts/guard.py corpus|md|vanilla` replaces the three `*-guard.sh` wrappers; coverage, workspace-manifest, syntax-sync, vsix-smoke and binary-staging moved there too.
 
 * The Millennium Dawn guard baseline drops 614 CW266 rows on scripted-GUI `[!callback]` localisation (`!foo_click`, `!foo_click_enabled`). The engine already resolved those against scripted-GUI effects/triggers (MillenniumDawn/cwtools#350); the baseline had not been re-blessed. Five other CW266 rows remain.
