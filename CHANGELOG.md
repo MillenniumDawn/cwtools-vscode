@@ -1,5 +1,7 @@
 ### Unreleased
 
+* `.pre-commit-config.yaml` is back at the repo root, fulfilling the pre-commit setup `docs/engine/CONTRIBUTING.md` describes. `cargo fmt --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` gate every commit; `cargo test --workspace --all-features` gates every push. The hooks `cd engine` and match `engine/**`, so they fire only on Rust changes, and their commands mirror `.github/workflows/engine-ci.yml`. (#382)
+
 * Repo helper scripts live under `scripts/` as Python, so the same commands run on Linux and Windows. `python3 scripts/guard.py corpus|md|vanilla` replaces the three `*-guard.sh` wrappers; coverage, workspace-manifest, syntax-sync, vsix-smoke and binary-staging moved there too.
 
 * The Millennium Dawn guard baseline drops 614 CW266 rows on scripted-GUI `[!callback]` localisation (`!foo_click`, `!foo_click_enabled`). The engine already resolved those against scripted-GUI effects/triggers (MillenniumDawn/cwtools#350); the baseline had not been re-blessed. Five other CW266 rows remain.

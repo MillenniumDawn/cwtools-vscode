@@ -4,9 +4,18 @@ The active codebase is the Rust workspace in `engine/`.
 
 ## Local checks
 
-No hook manager is checked in. Run the same format, lint, and test commands as
-`.github/workflows/engine-ci.yml` before pushing an engine change. CI also runs
-`cargo machete` and `cargo deny`.
+`.pre-commit-config.yaml` at the repo root installs format, lint, and test gates
+that mirror `.github/workflows/engine-ci.yml` (and run `cargo machete` and
+`cargo deny`, as CI does). One-time setup:
+
+```sh
+pipx install pre-commit          # or: pip install --user pre-commit
+pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+fmt and clippy gate every commit; the full test suite gates every push. You can
+still run the same commands by hand from `engine/` when you want a faster loop.
+Bypass the hooks in a pinch with `git commit --no-verify` (use sparingly).
 
 ## Running checks by hand
 

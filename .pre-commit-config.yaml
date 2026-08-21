@@ -1,0 +1,44 @@
+---
+# Pre-commit hooks for the cwtools Rust workspace (engine/).
+#
+# Setup (once per clone):
+#   pipx install pre-commit          # or: pip install --user pre-commit
+#   pre-commit install --hook-type pre-commit --hook-type pre-push
+#
+# fmt + clippy gate every commit; the full test suite gates every push.
+# Commands mirror .github/workflows/engine-ci.yml so local failures match CI.
+# Bypass in a pinch with `git commit --no-verify` (use sparingly).
+
+minimum_pre_commit_version: "3.2.0"
+
+repos:
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: >-
+          bash -c 'cd engine && exec cargo fmt --all -- --check'
+        language: system
+        files: ^engine/.*\.rs$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: cargo-clippy
+        name: cargo clippy -D warnings
+        entry: >-
+          bash -c 'cd engine && exec cargo clippy --workspace
+          --all-targets --all-features -- -D warnings'
+        language: system
+        files: ^engine/.*\.(rs|toml)$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: cargo-test
+        name: cargo test --workspace
+        entry: >-
+          bash -c 'cd engine && exec cargo test --workspace
+          --all-features --no-fail-fast'
+        language: system
+        files: ^engine/.*\.(rs|toml)$
+        pass_filenames: false
+        stages: [pre-push]
