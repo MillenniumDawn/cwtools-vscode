@@ -43,6 +43,7 @@ def main() -> int:
             threshold,
         ],
         cwd=workspace,
+        check=False,
     )
     if first.returncode != 0:
         return first.returncode
@@ -57,6 +58,7 @@ def main() -> int:
             ignore,
         ],
         cwd=workspace,
+        check=False,
     )
     return second.returncode
 

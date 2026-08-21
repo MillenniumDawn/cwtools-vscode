@@ -95,6 +95,7 @@ def describe(directory: Path) -> str:
         ["git", "-C", str(directory), "rev-parse", "--short", "HEAD"],
         capture_output=True,
         text=True,
+        check=False,
     )
     if sha.returncode != 0:
         return "not a git checkout"
@@ -103,6 +104,7 @@ def describe(directory: Path) -> str:
         ["git", "-C", str(directory), "status", "--porcelain"],
         capture_output=True,
         text=True,
+        check=False,
     )
     if dirty.returncode == 0 and dirty.stdout.strip():
         return f"{sha_s} (dirty)"
@@ -282,6 +284,7 @@ def run_guard(config: Config) -> int:
         built = subprocess.run(
             ["cargo", "build", "--release", "-p", "cwtools_cli"],
             cwd=config.repo_root / "engine",
+            check=False,
         )
         if built.returncode != 0:
             die("release build failed; nothing to validate with")
@@ -346,7 +349,7 @@ def run_guard(config: Config) -> int:
 
         with log_path.open("w", encoding="utf-8", errors="surrogateescape") as log:
             status = subprocess.run(
-                cmd, stdout=log, stderr=subprocess.STDOUT
+                cmd, stdout=log, stderr=subprocess.STDOUT, check=False
             ).returncode
         if status > 1:
             keep = True

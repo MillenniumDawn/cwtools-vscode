@@ -4,16 +4,19 @@ The active codebase is the Rust workspace in `engine/`.
 
 ## Local checks
 
-`.pre-commit-config.yaml` at the repo root installs format, lint, and test gates
-for every toolchain, mirroring the commands CI runs so local failures match:
+`.pre-commit-config.yaml` at the repo root installs format, lint, and test
+hooks for every toolchain. The fixers rewrite the files you stage and the
+commit picks up the result; the gates still fail the commit on anything they
+can't fix. Commands mirror CI so local failures match it.
 
-- Rust (`engine/`): `cargo fmt --check` and `cargo clippy -D warnings` gate
-  every commit; `cargo test --workspace` gates every push (see
+- Rust (`engine/`): `cargo fmt` formats the workspace in place (so committed
+  code is always rustfmt-clean) and `cargo clippy -D warnings` gates every
+  commit; `cargo test --workspace` gates every push (see
   `.github/workflows/engine-ci.yml`).
-- TypeScript (`extension/`, `build/`): `eslint` (the same rules as `npm run
-  lint`, `eslint .`) gates every commit.
-- Python (`scripts/`): `ruff check` and `black` gate every commit; `mypy` gates
-  every commit; `pytest` gates every push.
+- TypeScript (`extension/`, `build/`): `eslint --fix` applies autofixes on
+  commit (the same rules as `npm run lint`, `eslint .`).
+- Python (`scripts/`): `ruff check --fix` and `black` reformat/fix on commit;
+  `mypy` gates every commit; `pytest` gates every push.
 
 One-time setup:
 
@@ -27,9 +30,11 @@ npm install                      # provides eslint via node_modules/.bin
 ```
 
 The hooks fire only on the files they cover, so a docs-only change runs nothing.
-You can still run the same commands by hand (`cargo` from `engine/`, `npx
---no-install eslint`, `ruff check scripts`, ...) when you want a faster loop.
-Bypass the hooks in a pinch with `git commit --no-verify` (use sparingly).
+Because the fixers edit your staged files, a commit that triggers one will need
+to be run again so the fixed version is the one committed. You can still run the
+same commands by hand (`cargo fmt --all` from `engine/`, `npx --no-install
+eslint`, `ruff check --fix scripts`, ...) when you want a faster loop. Bypass
+the hooks in a pinch with `git commit --no-verify` (use sparingly).
 
 ## Running checks by hand
 
