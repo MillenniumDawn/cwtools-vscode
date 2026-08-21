@@ -10750,6 +10750,72 @@ fn test_initialize_advertises_the_new_capabilities() {
 }
 
 #[test]
+fn test_missing_workspace_root_is_reported_as_error_log_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("no_such_workspace");
+    let missing_path = missing.to_string_lossy().to_string();
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(&missing),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response(&mut reader).expect("no init response");
+    let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(
+        resp.get("error").is_none(),
+        "initialize must not error for a missing root: {resp}"
+    );
+
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+
+    let mut found = false;
+    for _ in 0..2000 {
+        let raw = read_frame(&mut reader).unwrap_or_default();
+        if raw.is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if v["method"] == "window/logMessage"
+            && v["params"]["type"].as_i64() == Some(1)
+            && v["params"]["message"].as_str().is_some_and(|m| {
+                m.starts_with("error: discovery failed for")
+                    && m.contains(&missing_path)
+                    && m.contains("directory does not exist")
+            })
+        {
+            found = true;
+            break;
+        }
+    }
+    child.kill().ok();
+    assert!(
+        found,
+        "expected window/logMessage ERROR for missing workspace root"
+    );
+}
+
+#[test]
 fn test_semantic_tokens_refresh_waits_for_advertised_client_support() {
     let (ws, _) = boundary_workspace();
     let mut child = cwtools_server_cmd()
