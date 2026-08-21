@@ -1,10 +1,12 @@
-### Unreleased
+### 3.2.0
+
+This is the first release with the engine in-repo under `engine/`. The extension and engine now share one version number; there is no separate submodule pin to report.
+
+#### Extension
 
 * `.pre-commit-config.yaml` is back at the repo root and now both gates and fixes. The fixers (`cargo fmt`, `ruff check --fix`, `black`, `eslint --fix`) rewrite staged files so the commit is always clean; the gates (`cargo clippy -D warnings`, `mypy`) still fail on anything they can't fix, and `cargo test` / `pytest` gate every push. Every hook matches only the files it owns, so a docs-only change runs nothing. The repo was brought to clean: the `subprocess.run` calls in `scripts/` got explicit `check=False` (PLW1510), the seven `scripts/*.py` that carry a shebang are now executable (EXE001, git mode 100755), and `scripts/guard.py` was re-formatted by black. (#382)
 
 * Repo helper scripts live under `scripts/` as Python, so the same commands run on Linux and Windows. `python3 scripts/guard.py corpus|md|vanilla` replaces the three `*-guard.sh` wrappers; coverage, workspace-manifest, syntax-sync, vsix-smoke and binary-staging moved there too.
-
-* The Millennium Dawn guard baseline drops 614 CW266 rows on scripted-GUI `[!callback]` localisation (`!foo_click`, `!foo_click_enabled`). The engine already resolved those against scripted-GUI effects/triggers (MillenniumDawn/cwtools#350); the baseline had not been re-blessed. Five other CW266 rows remain.
 
 * The merged repository is organized by product. `extension/` owns the TypeScript host, webview, tests and checked-in VSIX inputs; `engine/` owns the Rust workspace; and product documentation is under `docs/`. Builds assemble a disposable extension under `dist/extension/` and put packaged VSIX files under `artifacts/vsix/`, so packaging no longer writes generated files or release versions into the checked-in manifest. `./build.sh quick` still builds both halves, and `CWTOOLS_RUST_WORKSPACE` can still point it at another engine checkout. The old [MillenniumDawn/cwtools](https://github.com/MillenniumDawn/cwtools) repository remains the engine history archive.
 
@@ -32,6 +34,10 @@
 * Added a `rules-sync` host suite that exercises the real activation-triggered rules sync, which the existing suites never touch: the shared sample workspace detects as the generic `paradox` language on purpose, which has no rules repo, so `resolveRulesCache`/`fetchRulesInBackground` returned before running any sync logic. A new `client/test/sample-hoi4` fixture detects as hoi4 instead, and `games.ts` and `rulesManifest.ts` now read `CWTOOLS_TEST_HOI4_REPO`/`CWTOOLS_TEST_HOI4_REF`/`CWTOOLS_TEST_RULES_MANIFEST_URL` (unset in every real install) to point that sync at a checked-in bare repo under `client/test/fixtures/hoi4-rules.git` instead of the network, so it clones a real, known commit with zero network access and asserts the pin lands correctly and the shallow fetch left the previous commit unreachable. It still needs a real `cwtools-server` binary, since `activate()` returns before the rules sync runs when the binary is missing, so it is wired up as its own `rules-sync` label and `npm run test:rules-sync`, not folded into `test:smoke`. (#171)
 * The `workspaceContains` activation events still hard-coded the narrow directory list #203 removed from the file watchers, so a mod laid out outside `events/common/decisions/...` and without a `descriptor.mod` never activated the extension. They're now keyed on extension like the watchers: any `txt`, `gui`, `gfx`, `sfx`, `asset`, or `map` file anywhere in the workspace, and `yml`, `yaml`, or `csv` under a localisation directory. (#204)
 * `mapIgnoreOptions` no longer rewrites `cwtools.errors.ignorefiles` entries into `**/<name>` globs before sending them to the server. That rewrite existed because the server only matched a slashless pattern against a path's last segment; the v2.6.1 engine pin now matches such a pattern at any depth on its own (MillenniumDawn/cwtools#244), so the client-side prefixing was redundant and is dropped. User-facing behaviour is unchanged with that engine. (#196)
+
+#### Engine
+
+* The Millennium Dawn guard baseline drops 614 CW266 rows on scripted-GUI `[!callback]` localisation (`!foo_click`, `!foo_click_enabled`). The engine already resolved those against scripted-GUI effects/triggers (MillenniumDawn/cwtools#350); the baseline had not been re-blessed. Five other CW266 rows remain.
 
 * LSP: opt-in workspace-wide diagnostics control. A new `workspaceWideDiagnostics` setting (default `true`) decides whether the scan publishes diagnostics for closed files; set it to `false` to keep the Problems panel scoped to open documents only. A new `validateWorkspace` execute command runs a full scan and returns a JSON summary (`totalFiles`, `filesWithErrors`, `totalErrors`, `totalWarnings`, `totalInfos`, `totalHints`) regardless of the setting, so "is my mod clean?" has a direct answer. The scan also caps closed-file `publishDiagnostics` traffic at 2,000 files per pass and yields every 50 publishes so a 10k-file mod cannot flood the client. (MillenniumDawn/cwtools#106)
 
