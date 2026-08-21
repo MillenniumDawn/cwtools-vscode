@@ -1894,7 +1894,13 @@ mod tests {
             }
         });
 
-        assert!(backend.validate_entire_workspace(false).await);
+        let scan = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.validate_entire_workspace(false),
+        )
+        .await
+        .expect("missing-root workspace validation timed out");
+        assert!(scan);
         let msg = tokio::time::timeout(std::time::Duration::from_secs(2), found_rx)
             .await
             .expect("missing-root log message timed out")
