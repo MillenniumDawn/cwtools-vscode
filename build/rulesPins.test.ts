@@ -11,7 +11,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("node:fs", () => ({
 	readFileSync: (file: string): string => {
-		if (file.endsWith("/client/extension/games.ts")) return state.games;
+		if (file.endsWith("/extension/src/host/games.ts")) return state.games;
 		if (file.endsWith("/rules-pins.json")) return state.manifest;
 		throw new Error(`unexpected read: ${file}`);
 	},
@@ -34,7 +34,7 @@ import {
 	GAMES,
 	LANGUAGE_REPOS,
 	RULES_MANIFEST_REVISION,
-} from "../client/extension/games";
+} from "../extension/src/host/games";
 
 const pins = Object.fromEntries(GAMES.map((game) => [game.id, game.repoRef]));
 
@@ -96,7 +96,7 @@ suite("rulesPins", () => {
 
 		await runRulesPins();
 
-		const games = writeFor("/client/extension/games.ts");
+		const games = writeFor("/extension/src/host/games.ts");
 		assert.ok(
 			games.includes(
 				`RULES_MANIFEST_REVISION = ${RULES_MANIFEST_REVISION + 1}`,

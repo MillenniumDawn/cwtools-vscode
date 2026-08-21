@@ -28,7 +28,7 @@ export default tseslint.config(
 	// The Rust engine has no JS to lint, and its target/ is ignored by its own
 	// .gitignore, which the root one above doesn't cover. Without this eslint
 	// walks the whole build output.
-	{ ignores: ["cwtools-rs/**"] },
+	{ ignores: ["engine/**"] },
 	// Extension host, build scripts, and configs run under Node.
 	{
 		languageOptions: { globals: globals.node },
@@ -51,12 +51,12 @@ export default tseslint.config(
 	},
 	// The webview runs in a browser context.
 	{
-		files: ["client/webview/**/*.ts"],
+		files: ["extension/src/webview/**/*.ts"],
 		languageOptions: { globals: globals.browser },
 	},
 	// chai assertions like `expect(x).to.be.true` read as unused expressions.
 	{
-		files: ["client/test/**/*.ts"],
+		files: ["extension/test/**/*.ts"],
 		rules: { "@typescript-eslint/no-unused-expressions": "off" },
 	},
 );

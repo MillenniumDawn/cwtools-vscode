@@ -5,8 +5,8 @@
     },
     "extends": "./tsconfig.json",
     "exclude": [
-        "client/extension/**/*.ts",
-        "client/test/**/*.ts",
-        "client/common/**/*.ts"
+        "extension/src/host/**/*.ts",
+        "extension/test/**/*.ts",
+        "extension/src/common/**/*.ts"
     ]
 }

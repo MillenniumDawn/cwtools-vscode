@@ -1,3 +1,2 @@
 [tools]
-node = "20"
-"npm:typescript" = "5.8.3"
+node = "26"

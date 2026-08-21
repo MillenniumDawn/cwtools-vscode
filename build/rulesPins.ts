@@ -6,15 +6,11 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import { GAMES, RULES_MANIFEST_REVISION } from "../client/extension/games";
-import { parseRulesManifest } from "../client/extension/rulesManifest";
+import { GAMES, RULES_MANIFEST_REVISION } from "../extension/src/host/games";
+import { parseRulesManifest } from "../extension/src/host/rulesManifest";
+import { extensionHostRoot, repoRoot } from "./paths";
 
-const repoRoot = path.resolve(
-	path.dirname(fileURLToPath(import.meta.url)),
-	"..",
-);
-const gamesFile = path.join(repoRoot, "client", "extension", "games.ts");
+const gamesFile = path.join(extensionHostRoot, "games.ts");
 const manifestFile = path.join(repoRoot, "rules-pins.json");
 
 const today = new Date().toISOString().slice(0, 10);

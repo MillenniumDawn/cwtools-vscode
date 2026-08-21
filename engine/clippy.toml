@@ -1,0 +1,4 @@
+# Clippy configuration for the CWTools engine.
+# Kept minimal — only the thresholds that meaningfully reduce false positives
+# on a real codebase without forcing rewrites.
+avoid-breaking-exported-api = false

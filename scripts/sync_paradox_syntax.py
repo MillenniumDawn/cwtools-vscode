@@ -16,7 +16,8 @@ def main() -> int:
     src = Path(os.environ.get("PARADOX_SYNTAX_SRC") or "../paradox-syntax")
     syntaxes = src / "syntaxes"
     dst = Path(
-        os.environ.get("PARADOX_SYNTAX_DST") or (REPO_ROOT / "release" / "syntaxes")
+        os.environ.get("PARADOX_SYNTAX_DST")
+        or (REPO_ROOT / "extension" / "package" / "syntaxes")
     )
     if not syntaxes.is_dir():
         print(f"error: '{syntaxes}' not found.", file=sys.stderr)
@@ -34,13 +35,17 @@ def main() -> int:
         shutil.copy2(src_file, dst / src_file.name)
         copied.append(src_file.name)
 
-    print(f"Updated {len(copied)} grammar file(s) in release/syntaxes/:")
+    print(
+        f"Updated {len(copied)} grammar file(s) in extension/package/syntaxes/:"
+    )
     for name in copied:
         print(f"  {name}")
     print()
     print("Reminder: do not add 'tboby.paradox-syntax' to extensionPack again.")
-    print("this repo ships its own grammars. Themes live in release/themes/ and")
-    print("are owned here, not mirrored.")
+    print(
+        "this repo ships its own grammars. Themes live in extension/package/themes/"
+    )
+    print("and are owned here, not mirrored.")
     return 0
 
 

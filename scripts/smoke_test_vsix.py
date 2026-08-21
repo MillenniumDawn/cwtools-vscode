@@ -28,10 +28,65 @@ def platform_files(root: Path) -> dict[str, int]:
     present: dict[str, int] = {}
     if not base.is_dir():
         return present
+    flat = sum(1 for path in base.iterdir() if path.is_file())
+    if flat:
+        present["flat"] = flat
     for directory in sorted(p for p in base.iterdir() if p.is_dir()):
         count = sum(1 for path in directory.rglob("*") if path.is_file())
         present[directory.name] = count
     return present
+
+
+def require_file(root: Path, relative: object, vsix: Path) -> None:
+    if not isinstance(relative, str) or not relative:
+        gh_error(f"{vsix.name}: manifest contains an invalid package path")
+        raise SystemExit(1)
+    path = root / relative.removeprefix("./")
+    if not path.is_file():
+        gh_error(f"{vsix.name}: missing packaged file {relative}")
+        raise SystemExit(1)
+
+
+def check_package(root: Path, vsix: Path) -> None:
+    package_json = root / "package.json"
+    try:
+        package = json.loads(package_json.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        gh_error(f"{vsix.name}: extension package.json is not valid JSON")
+        raise SystemExit(1) from None
+    if not isinstance(package, dict):
+        gh_error(f"{vsix.name}: extension package.json is not an object")
+        raise SystemExit(1)
+
+    require_file(root, package.get("main"), vsix)
+    require_file(root, package.get("icon"), vsix)
+    # vsce normalizes the root README and changelog names in the archive.
+    for relative in [
+        "bin/client/webview/graph.js",
+        "bin/client/webview/site.css",
+        "readme.md",
+        "changelog.md",
+        "LICENSE.md",
+    ]:
+        require_file(root, relative, vsix)
+
+    l10n = package.get("l10n")
+    l10n_dir = root / l10n.removeprefix("./") if isinstance(l10n, str) else None
+    if l10n_dir is None or not any(l10n_dir.glob("bundle.l10n.*.json")):
+        gh_error(f"{vsix.name}: missing l10n bundles")
+        raise SystemExit(1)
+
+    contributes = package.get("contributes")
+    if not isinstance(contributes, dict):
+        gh_error(f"{vsix.name}: manifest has no contributes object")
+        raise SystemExit(1)
+    for language in contributes.get("languages", []):
+        if isinstance(language, dict) and "configuration" in language:
+            require_file(root, language["configuration"], vsix)
+    for key in ["grammars", "themes", "snippets"]:
+        for entry in contributes.get(key, []):
+            if isinstance(entry, dict):
+                require_file(root, entry.get("path"), vsix)
 
 
 def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
@@ -41,18 +96,7 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
         with zipfile.ZipFile(vsix) as zf:
             zf.extractall(workdir)
         root = workdir / "extension"
-        package_json = root / "package.json"
-        try:
-            json.loads(package_json.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            gh_error(f"{vsix.name}: extension package.json is not valid JSON")
-            raise SystemExit(1) from None
-        entry = root / "bin" / "client" / "extension" / "extension.js"
-        if not entry.is_file():
-            gh_error(
-                f"{vsix.name}: missing extension entrypoint bin/client/extension/extension.js"
-            )
-            raise SystemExit(1)
+        check_package(root, vsix)
 
         present = platform_files(root)
         if not present:

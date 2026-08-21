@@ -1,6 +1,7 @@
 # Weekly PR bumping the reviewed runtime manifest and bundled fallback pins.
 # Every install fetches only the exact commits this PR approves
-# (client/extension/rulesSetup.ts), so an upstream push cannot land unreviewed.
+# The pins are consumed by extension/src/host/rulesSetup.ts, so an upstream
+# push cannot land unreviewed.
 # Nothing here auto-merges; the diffs are the point.
 on:
   schedule:
@@ -26,8 +27,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          pins=(client/extension/games.ts rules-pins.json)
-          summary=$(npx tsx build/rulesPins.ts)
+          pins=(extension/src/host/games.ts rules-pins.json)
+          summary=$(npx --no-install tsx build/rulesPins.ts)
           echo "$summary"
           if git diff --quiet -- "${pins[@]}"; then
             exit 0
@@ -43,9 +44,9 @@ jobs:
           git switch -c "$branch"
           git commit -m 'chore: bump the pinned rules commits' -- "${pins[@]}"
           git push origin "$branch"
-          body=$(printf '%s\n\n%s\n\n' \
-            'Weekly refresh of the reviewed rules manifest by build/rulesPins.ts.' \
-            "$summary")
+          description='Weekly refresh of the reviewed rules manifest'
+          description+=' by build/rulesPins.ts.'
+          body=$(printf '%s\n\n%s\n\n' "$description" "$summary")
           body+=$(printf '%s %s\n' \
             'Installed extensions fetch these exact commits.' \
             'Read the upstream diffs before merging.')

@@ -24,12 +24,12 @@ updates:
         patterns:
           - "*"
 
-  # The Rust engine. MSRV is declared in cwtools-rs/Cargo.toml and the "Rust
+  # The Rust engine. MSRV is declared in engine/Cargo.toml and the "Rust
   # MSRV build" job in engine-ci.yml fails any update whose own rust-version
   # climbs past it, so a floor bump is a red check rather than something a
   # reviewer has to spot. cargo-deny (deny.yml) is the advisory gate.
   - package-ecosystem: cargo
-    directory: /cwtools-rs
+    directory: /engine
     schedule:
       interval: weekly
       day: monday
@@ -53,11 +53,8 @@ updates:
           - minor
           - patch
 
-  # `/release` is the shipped manifest and resolves its own dependency set.
   - package-ecosystem: npm
-    directories:
-      - /
-      - /release
+    directory: /
     schedule:
       interval: weekly
       day: monday

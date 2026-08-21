@@ -1,35 +1,29 @@
-// Build orchestrator for the extension. Replaces the old FAKE/dotnet script.
-// Run via `tsx build/build.ts <command>` (see package.json scripts and build.sh).
+// Build and package the extension from checked-in inputs under extension/package.
+// Generated extension files go under dist/extension and packaged vsixes under
+// artifacts/vsix. Run via `tsx build/build.ts <command>`.
 //
-// Commands:
-//   quick            Local dev build: Rust server + client into release/, ready to launch.
-//   package          Clean, build the client, package a vsix into temp/ (no server build).
-//   package-prebuilt Package the staged per-platform binaries into vsixes without publishing.
-//   publish-prebuilt Publish the vsixes already packaged into temp/. CI packages, smoke-tests,
-//                    then publishes, so a broken package never reaches the Marketplace.
-//   release-prebuilt Set the version, package the staged binaries into one vsix per platform
-//                    plus a universal fallback, draft the GitHub release, and publish to the
-//                    Marketplace. Used by CI after the per-platform Rust binaries are staged
-//                    under release/bin/server.
-//   release          Tag the current CHANGELOG version as v<x.y.z> and push it. The
-//                    tag-triggered Release workflow does the matrix build, smoke test,
-//                    and publish.
-//
-// The Rust server (cwtools-rs) builds from the in-repo workspace by default; set
+// The Rust server builds from the in-repo engine workspace by default; set
 // CWTOOLS_RUST_WORKSPACE to build from another checkout.
 
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { releaseNotes, topChangelogVersion } from "./changelog";
+import {
+	artifactsRoot,
+	engineRoot,
+	extensionDistRoot,
+	extensionDocsRoot,
+	extensionPackageRoot,
+	extensionTestRoot,
+	extensionWebviewRoot,
+	repoRoot,
+	vsixRoot,
+} from "./paths";
 
-const repoRoot = path.resolve(
-	path.dirname(fileURLToPath(import.meta.url)),
-	"..",
-);
-const releaseDir = path.join(repoRoot, "release");
-const tempDir = path.join(repoRoot, "temp");
+const extensionDir = extensionDistRoot;
+const vsixDir = vsixRoot;
 
 const isWindows = process.platform === "win32";
 
@@ -71,7 +65,7 @@ function runOrNull(
 function rustWorkspace(): string {
 	const fromEnv = process.env.CWTOOLS_RUST_WORKSPACE;
 	if (fromEnv && fromEnv.trim()) return path.resolve(repoRoot, fromEnv);
-	return path.resolve(repoRoot, "cwtools-rs");
+	return engineRoot;
 }
 
 function buildAndDeployRustServer(): void {
@@ -83,13 +77,13 @@ function buildAndDeployRustServer(): void {
 	if (!fs.existsSync(built)) {
 		throw new Error(
 			`Rust server binary not found at '${built}' after build. Check the crate name/target, ` +
-				`or point CWTOOLS_RUST_WORKSPACE at the right cwtools-rs checkout (currently '${workspace}').`,
+				`or point CWTOOLS_RUST_WORKSPACE at the right engine checkout (currently '${workspace}').`,
 		);
 	}
 
 	// Deploy to the path the client loads first. Clean it so stale binaries
 	// don't linger next to the fresh one.
-	const outDir = path.join(releaseDir, "bin/server/cwtools-server");
+	const outDir = path.join(extensionDir, "bin/server/cwtools-server");
 	fs.rmSync(outDir, { recursive: true, force: true });
 	fs.mkdirSync(outDir, { recursive: true });
 	const dest = path.join(outDir, binName);
@@ -100,17 +94,21 @@ function buildAndDeployRustServer(): void {
 // --- Client + docs ---------------------------------------------------------
 
 function buildClient(): void {
-	run("npm", ["run", "compile"]);
+	run("npm", ["run", "compile:code"]);
+}
+
+function copyPackageInputs(): void {
+	copyDir(extensionPackageRoot, extensionDir);
 }
 
 function copyDocs(): void {
-	for (const f of ["README.md", "LICENSE.md"]) {
-		fs.copyFileSync(path.join(repoRoot, f), path.join(releaseDir, f));
-	}
 	fs.copyFileSync(
-		path.join(repoRoot, "CHANGELOG.md"),
-		path.join(releaseDir, "CHANGELOG.md"),
+		path.join(extensionDocsRoot, "README.md"),
+		path.join(extensionDir, "README.md"),
 	);
+	for (const f of ["LICENSE.md", "CHANGELOG.md"]) {
+		fs.copyFileSync(path.join(repoRoot, f), path.join(extensionDir, f));
+	}
 }
 
 function copyDir(src: string, dest: string): void {
@@ -124,27 +122,27 @@ function copyDir(src: string, dest: string): void {
 }
 
 function copyWebviewCss(): void {
-	const dest = path.join(releaseDir, "bin/client/webview");
+	const dest = path.join(extensionDir, "bin/client/webview");
 	fs.mkdirSync(dest, { recursive: true });
-	const webviewSrc = path.join(repoRoot, "client/webview");
-	for (const f of fs.readdirSync(webviewSrc)) {
+	for (const f of fs.readdirSync(extensionWebviewRoot)) {
 		if (f.endsWith(".css"))
-			fs.copyFileSync(path.join(webviewSrc, f), path.join(dest, f));
+			fs.copyFileSync(path.join(extensionWebviewRoot, f), path.join(dest, f));
 	}
 }
 
 function copyTestSamples(): void {
 	copyDir(
-		path.join(repoRoot, "client/test/sample"),
-		path.join(releaseDir, "bin/client/test/sample"),
+		path.join(extensionTestRoot, "workspaces", "stellaris"),
+		path.join(extensionDir, "bin/client/test/workspaces/stellaris"),
 	);
 }
 
-function cleanReleaseBin(): void {
-	fs.rmSync(path.join(releaseDir, "bin"), { recursive: true, force: true });
+function cleanExtensionDist(): void {
+	fs.rmSync(extensionDir, { recursive: true, force: true });
 }
 
 function assembleClient(): void {
+	copyPackageInputs();
 	buildClient();
 	copyDocs();
 	copyWebviewCss();
@@ -165,21 +163,21 @@ const VSIX_TARGETS: Record<string, string> = {
 	"osx-arm64": "darwin-arm64",
 };
 
-const serverBinDir = path.join(releaseDir, "bin/server/cwtools-server");
+const serverBinDir = path.join(extensionDir, "bin/server/cwtools-server");
 
 function packageVsix(target?: string): string[] {
 	// The client is bundled with esbuild, so node_modules is excluded from the
-	// vsix (see release/.vscodeignore). --no-dependencies stops vsce from trying
-	// to resolve/include them.
-	const args = ["--yes", "@vscode/vsce", "package", "--no-dependencies"];
+	// vsix (see extension/package/.vscodeignore). --no-dependencies stops vsce
+	// from trying to resolve/include them.
+	const args = ["--no-install", "vsce", "package", "--no-dependencies"];
 	if (target) args.push("--target", target);
-	run("npx", args, { cwd: releaseDir });
-	fs.mkdirSync(tempDir, { recursive: true });
+	run("npx", args, { cwd: extensionDir });
+	fs.mkdirSync(vsixDir, { recursive: true });
 	const packaged: string[] = [];
-	for (const f of fs.readdirSync(releaseDir)) {
+	for (const f of fs.readdirSync(extensionDir)) {
 		if (f.endsWith(".vsix")) {
-			const dest = path.join(tempDir, f);
-			fs.renameSync(path.join(releaseDir, f), dest);
+			const dest = path.join(vsixDir, f);
+			fs.renameSync(path.join(extensionDir, f), dest);
 			packaged.push(dest);
 		}
 	}
@@ -226,8 +224,8 @@ export function runPlatformPackaging(
 			console.log(`packaging ${VSIX_TARGETS[platform]} (${platform})`);
 			vsixes.push(...packageOne(platform));
 		}
-		// Restore every binary for the universal vsix. It also leaves release/
-		// complete for the Open VSX step, which re-packages from the directory.
+		// Restore every binary for the universal vsix. It also leaves the staged
+		// extension complete for the Open VSX step.
 		fs.rmSync(serverBinDir, { recursive: true, force: true });
 		copyDir(holding, serverBinDir);
 		restored = true;
@@ -255,7 +253,7 @@ function packageAllVsixes(): string[] {
 		);
 		return packageVsix();
 	}
-	const holding = path.join(tempDir, "server-staging");
+	const holding = path.join(artifactsRoot, "package", "server-staging");
 	return runPlatformPackaging(serverBinDir, holding, platforms, (platform) =>
 		platform === undefined ? packageVsix() : packageVsix(VSIX_TARGETS[platform]),
 	);
@@ -296,18 +294,26 @@ function readChangelog(): string {
 }
 
 function setReleaseVersion(version: string): void {
-	const manifestPath = path.join(releaseDir, "package.json");
+	const manifestPath = path.join(extensionDir, "package.json");
 	let manifest: { version: string };
 	try {
 		manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
 			version: string;
 		};
-	} catch (e) {
-		throw new Error(`could not parse ${manifestPath}`, { cause: e });
+	} catch (error: unknown) {
+		const message =
+			error instanceof Error
+				? error.message
+				: typeof error === "string"
+					? error
+					: "unknown error";
+		throw new Error(`could not parse ${manifestPath}: ${message}`, {
+			cause: error,
+		});
 	}
 	manifest.version = version;
 	fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-	console.log(`set release/package.json version to ${version}`);
+	console.log(`set dist/extension/package.json version to ${version}`);
 }
 
 // Draft and publish the GitHub release with every vsix attached, via the gh
@@ -321,7 +327,7 @@ function publishGithubRelease(
 	vsixes: string[],
 ): void {
 	const notes = releaseNotes(readChangelog(), version);
-	const notesFile = path.join(tempDir, "release-notes.md");
+	const notesFile = path.join(vsixDir, "release-notes.md");
 	fs.writeFileSync(notesFile, notes);
 
 	// If the release already exists (e.g. retried workflow), remove it first.
@@ -364,8 +370,8 @@ function publishToMarketplace(vsixes: string[]): void {
 	// vsce takes every platform-specific vsix in one publish, so the Marketplace
 	// gets a consistent set rather than one platform at a time.
 	run("npx", [
-		"--yes",
-		"@vscode/vsce",
+		"--no-install",
+		"vsce",
 		"publish",
 		"--pat",
 		token,
@@ -376,37 +382,42 @@ function publishToMarketplace(vsixes: string[]): void {
 
 // --- Commands --------------------------------------------------------------
 
-function cmdQuick(): void {
-	cleanReleaseBin();
-	buildAndDeployRustServer();
+function cmdCompile(): void {
 	assembleClient();
+}
+
+function cmdQuick(): void {
+	cleanExtensionDist();
+	assembleClient();
+	buildAndDeployRustServer();
 }
 
 function cmdPackage(): void {
-	cleanReleaseBin();
-	setReleaseVersion(resolveVersion().version);
+	cleanExtensionDist();
 	assembleClient();
+	buildAndDeployRustServer();
+	setReleaseVersion(resolveVersion().version);
 	packageVsix();
 }
 
-// The vsixes packaged into temp/ by a previous package-prebuilt run, so CI can
-// smoke-test them before anything is published.
+// The vsixes packaged into artifacts/vsix by a previous package-prebuilt run,
+// so CI can smoke-test them before anything is published.
 function findVsixes(): string[] {
-	const files = fs.existsSync(tempDir)
-		? fs.readdirSync(tempDir).filter((f) => f.endsWith(".vsix"))
+	const files = fs.existsSync(vsixDir)
+		? fs.readdirSync(vsixDir).filter((f) => f.endsWith(".vsix"))
 		: [];
-	if (files.length === 0)
-		throw new Error("no .vsix found in temp/; run package-prebuilt first");
-	return files.map((f) => path.join(tempDir, f));
+	if (files.length === 0) {
+		throw new Error(
+			"no .vsix found in artifacts/vsix; run package-prebuilt first",
+		);
+	}
+	return files.map((f) => path.join(vsixDir, f));
 }
 
 function cmdPackagePrebuilt(): string[] {
+	// CI assembles the extension before staging the per-platform server binaries.
+	// Do not clean or rebuild here, or those staged binaries are lost.
 	setReleaseVersion(resolveVersion().version);
-	// Build the client bundles (extension.js, webview/graph.js) into release/bin
-	// so vsce finds the entrypoint. No cleanReleaseBin here: the per-platform
-	// server binaries are already staged under release/bin/server and assembling
-	// the client doesn't touch them.
-	assembleClient();
 	return packageAllVsixes();
 }
 
@@ -457,6 +468,7 @@ function cmdRelease(): void {
 }
 
 const commands: Record<string, () => unknown> = {
+	compile: cmdCompile,
 	quick: cmdQuick,
 	package: cmdPackage,
 	"package-prebuilt": cmdPackagePrebuilt,

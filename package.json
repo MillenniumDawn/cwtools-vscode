@@ -1,12 +1,15 @@
 {
+  "name": "cwtools-vscode",
+  "private": true,
   "scripts": {
     "build": "tsx build/build.ts",
-    "compile": "tsc -p ./tsconfig.extension.json && tsx build/esbuild.ts",
+    "compile": "tsx build/build.ts compile",
+    "compile:code": "tsc -p ./tsconfig.extension.json && tsx build/esbuild.ts",
     "typecheck": "tsc -p ./tsconfig.json --noEmit && tsc -p ./tsconfig.build.json --noEmit",
     "lint": "eslint .",
     "check": "npm run typecheck && npm run lint",
     "test": "npm run compile && vscode-test --label unit",
-    "test:watch": "concurrently -k \"tsc -w -p .\" \"vscode-test --label unit -w\"",
+    "test:watch": "npm run compile && concurrently -k \"tsc -w -p ./tsconfig.extension.json\" \"tsx build/esbuild.ts --watch\" \"vscode-test --label unit -w\"",
     "test:host": "npm run compile && vscode-test --label host",
     "test:smoke": "npm run compile && vscode-test --label smoke --label live",
     "test:rules-sync": "npm run compile && vscode-test --label rules-sync",

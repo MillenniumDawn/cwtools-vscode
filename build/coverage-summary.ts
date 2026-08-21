@@ -47,11 +47,11 @@ const sources: Source[] = [
 		path: "coverage/coverage-summary.json",
 		htmlArtifact: "coverage-html",
 		drop: [
-			"client/extension/engine.ts",
-			"client/extension/executable.ts",
-			"client/extension/games.ts",
-			"client/extension/rulesManifest.ts",
-			"client/extension/rulesSetup.ts",
+			"extension/src/host/engine.ts",
+			"extension/src/host/executable.ts",
+			"extension/src/host/games.ts",
+			"extension/src/host/rulesManifest.ts",
+			"extension/src/host/rulesSetup.ts",
 		],
 	},
 	{

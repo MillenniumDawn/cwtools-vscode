@@ -14,8 +14,8 @@ This is a hobby project, so response times are best effort. If the report holds 
 
 ## Scope
 
-This repo is both halves of CWTools: the TypeScript client, the build and packaging, and the Rust language server in [`cwtools-rs/`](cwtools-rs/) with the rule files it reads. Report anything in either one here.
+This repo is both halves of CWTools: the TypeScript extension under [`extension/`](extension/), the build and packaging, and the Rust language engine under [`engine/`](engine/). Report anything in either one here.
 
-The extension parses untrusted mod files and fetches a pinned rules commit over the network, so parser crashes, escaping the workspace directory, and anything that gets code executing from a mod file are all worth reporting. The bundled fallback pins live in [`client/extension/games.ts`](client/extension/games.ts); the reviewed runtime pin set is [`rules-pins.json`](rules-pins.json). The manifest can only replace a known game's full commit SHA, and both pin sets move through a reviewed PR, so an upstream rules repo can't push content into an install on its own.
+The extension parses untrusted mod files and fetches a pinned rules commit over the network, so parser crashes, escaping the workspace directory, and anything that gets code executing from a mod file are all worth reporting. The bundled fallback pins live in [`extension/src/host/games.ts`](extension/src/host/games.ts); the reviewed runtime pin set is [`rules-pins.json`](rules-pins.json). The manifest can only replace a known game's full commit SHA, and both pin sets move through a reviewed PR, so an upstream rules repo can't push content into an install on its own.
 
 The server takes the same untrusted mod files from whatever editor drives it, so panics and hangs on malformed input, reading outside the workspace, and anything that gets code executing from a parsed file are worth reporting too.

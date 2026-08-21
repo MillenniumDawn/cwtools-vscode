@@ -1,4 +1,0 @@
-# Clippy configuration for cwtools-rs.
-# Kept minimal — only the thresholds that meaningfully reduce false positives
-# on a real codebase without forcing rewrites.
-avoid-breaking-exported-api = false

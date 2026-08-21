@@ -23,33 +23,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - uses: ./.github/actions/setup-node-npm
-    - name: Typecheck and lint
-      run: npm run check
-    - name: Node unit tests
-      run: npm run test:node
-    # vscode-test resolves "stable" (.vscode-test.mjs) through this same update
-    # API, so keying the cache on the resolved version writes a new entry only
-    # when stable moves. Restore-keys seed the newest prior cache if the
-    # resolve hiccups, costing a top-up instead of a full download.
-    - name: Resolve VS Code stable version
-      id: vscode-version
-      run: |
-        version=$(curl -fsSL https://update.code.visualstudio.com/api/releases/stable | jq -r '.[0]' || true)
-        echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
-    - name: Cache VS Code download
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: .vscode-test
-        key: ${{ runner.os }}-vscode-test-${{ steps.vscode-version.outputs.version }}
-        restore-keys: |
-          ${{ runner.os }}-vscode-test-
-    # Step-scoped so a hung extension host fails here in minutes instead of
-    # burning the job's whole 20m budget with no mocha output to show for it.
-    - name: Unit tests
-      timeout-minutes: 5
-      run: xvfb-run -a npm test
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-node-npm
+      - name: Typecheck and lint
+        run: npm run check
+      - name: Node unit tests
+        run: npm run test:node
+      # vscode-test resolves "stable" (.vscode-test.mjs) through this same
+      # update API, so keying the cache on the resolved version writes a new
+      # entry only when stable moves. Restore-keys seed the newest prior cache
+      # if the resolve hiccups, costing a top-up instead of a full download.
+      - name: Resolve VS Code stable version
+        id: vscode-version
+        run: |
+          url=https://update.code.visualstudio.com/api/releases/stable
+          version="$(curl -fsSL "$url" | jq -r '.[0]' || true)"
+          echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Cache VS Code download
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .vscode-test
+          key: >-
+            ${{ runner.os }}-vscode-test-${{
+            steps.vscode-version.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-vscode-test-
+      # Step-scoped so a hung extension host fails here in minutes instead of
+      # burning the job's whole 20m budget with no mocha output to show for it.
+      - name: Unit tests
+        timeout-minutes: 5
+        run: xvfb-run -a npm test
 
   # Catches a vulnerable dependency before merge, not as an alert after. Reads
   # every manifest in the diff, so this one job covers package-lock.json and
@@ -62,15 +65,17 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
-      with:
-        fail-on-severity: high
-        comment-summary-in-pr: on-failure
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v5.0.0
+      - uses: >-
+          actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
 
   # Full build: compile the engine and the client, run the host smoke suite
   # against the real server, package the vsix, run coverage. The engine lives
-  # in-repo at cwtools-rs/, so this is the same tree Engine CI lints and tests,
+  # in-repo at engine/, so this is the same tree Engine CI lints and tests,
   # built here the way the extension actually consumes it.
   build:
     needs: check
@@ -81,81 +86,86 @@ jobs:
       pull-requests: write
 
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - uses: ./.github/actions/setup-node-npm
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
-    - name: Cache Rust build
-      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      with:
-        workspaces: cwtools-rs
-    # Builds the in-repo engine and the client into release/, the same layout a
-    # developer gets from ./build.sh quick.
-    - name: Build engine and client
-      run: npm run build -- quick
-    # vscode-test resolves "stable" (.vscode-test.mjs) through this same update
-    # API, so keying the cache on the resolved version writes a new entry only
-    # when stable moves. Restore-keys seed the newest prior cache if the
-    # resolve hiccups, costing a top-up instead of a full download.
-    - name: Resolve VS Code stable version
-      id: vscode-version
-      run: |
-        version=$(curl -fsSL https://update.code.visualstudio.com/api/releases/stable | jq -r '.[0]' || true)
-        echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
-    - name: Cache VS Code download
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: .vscode-test
-        key: ${{ runner.os }}-vscode-test-${{ steps.vscode-version.outputs.version }}
-        restore-keys: |
-          ${{ runner.os }}-vscode-test-
-    # Boots the extension host against the freshly built server: activation,
-    # command registration and the graph/file-explorer UI, plus the
-    # live-settings suite in its own workspace (see .vscode-test.mjs).
-    - name: Host smoke tests
-      timeout-minutes: 10
-      run: xvfb-run -a npm run test:smoke
-    # The `host` label adds hover and completion, which need rule data: the
-    # sample workspace detects as `stellaris` (see .vscode-test.mjs) and the
-    # extension fetches its pinned rules over git in the background on
-    # activation.
-    - name: Host tests (hover/completion)
-      timeout-minutes: 10
-      run: xvfb-run -a npm run test:host
-    # Packages what was just built, server included, so the PR artifact is an
-    # installable extension rather than a client-only shell.
-    - name: Test build
-      run: npm run build -- package-prebuilt
-    # Host V8 coverage (vscode-test + c8) is not run in CI: the instrumented
-    # Electron process never exits under xvfb, so c8 waits for it until the job
-    # timeout (previously the full 6h cap). The unit suites are already gated in
-    # the `check` job, so host coverage stays a local tool (`npm run
-    # test:coverage`, which completes normally outside CI). Node coverage below
-    # is the report published to the PR.
-    - name: Node unit tests (with coverage)
-      if: always()
-      run: npm run test:node:coverage
-    - name: Coverage summary
-      if: always()
-      run: npx tsx build/coverage-summary.ts
-    # Readable coverage table straight on the PR, kept in place across pushes.
-    # Open source, uses the built-in GITHUB_TOKEN, so it needs no extra secrets.
-    - name: Coverage PR comment
-      if: always() && github.event_name == 'pull_request'
-      uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
-      with:
-        header: coverage
-        path: coverage/summary.md
-    - name: 'Upload node coverage'
-      if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: coverage-node
-        path: coverage-node
-        retention-days: 5
-    - name: 'Upload Artifact'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: cwtools-vscode-pipeline.vsix
-        path: temp/*.vsix
-        retention-days: 5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-node-npm
+      - name: Setup Rust
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+      - name: Cache Rust build
+        # v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: engine
+      # Builds the engine and the generated extension under dist/, the same
+      # layout a developer gets from ./build.sh quick.
+      - name: Build engine and client
+        run: npm run build -- quick
+      # vscode-test resolves "stable" (.vscode-test.mjs) through this same
+      # update API, so keying the cache on the resolved version writes a new
+      # entry only when stable moves. Restore-keys seed the newest prior cache
+      # if the resolve hiccups, costing a top-up instead of a full download.
+      - name: Resolve VS Code stable version
+        id: vscode-version
+        run: |
+          url=https://update.code.visualstudio.com/api/releases/stable
+          version="$(curl -fsSL "$url" | jq -r '.[0]' || true)"
+          echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Cache VS Code download
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .vscode-test
+          key: >-
+            ${{ runner.os }}-vscode-test-${{
+            steps.vscode-version.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-vscode-test-
+      # Boots the extension host against the freshly built server: activation,
+      # command registration and the graph/file-explorer UI, plus the
+      # live-settings suite in its own workspace (see .vscode-test.mjs).
+      - name: Host smoke tests
+        timeout-minutes: 10
+        run: xvfb-run -a npm run test:smoke
+      # The `host` label adds hover and completion, which need rule data: the
+      # sample workspace detects as `stellaris` (see .vscode-test.mjs) and the
+      # extension fetches its pinned rules over git in the background.
+      - name: Host tests (hover/completion)
+        timeout-minutes: 10
+        run: xvfb-run -a npm run test:host
+      # Packages what was just built, server included, so the PR artifact is an
+      # installable extension rather than a client-only shell.
+      - name: Test build
+        run: npm run build -- package-prebuilt
+      # Host V8 coverage is not run in CI: the instrumented Electron process
+      # never exits under xvfb, so c8 waits for it until the job timeout. The
+      # unit suites are already gated in the check job, so host coverage stays
+      # a local tool. Node coverage below is the report published to the PR.
+      - name: Node unit tests (with coverage)
+        if: always()
+        run: npm run test:node:coverage
+      - name: Coverage summary
+        if: always()
+        run: npx --no-install tsx build/coverage-summary.ts
+      # Readable coverage table straight on the PR, kept in place across pushes.
+      - name: Coverage PR comment
+        if: always() && github.event_name == 'pull_request'
+        # v3.0.5
+        uses: >-
+          marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88
+        with:
+          header: coverage
+          path: coverage/summary.md
+      - name: Upload node coverage
+        if: always()
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-node
+          path: coverage-node
+          retention-days: 5
+      - name: Upload VSIX
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cwtools-vscode-pipeline.vsix
+          path: artifacts/vsix/*.vsix
+          retention-days: 5

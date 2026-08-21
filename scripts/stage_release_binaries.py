@@ -13,14 +13,14 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) != 2:
         print(
-            f"Usage: {Path(sys.argv[0]).name} <artifacts-dir> <release-dir>",
+            f"Usage: {Path(sys.argv[0]).name} <artifacts-dir> <extension-dir>",
             file=sys.stderr,
         )
         return 1
 
     artifacts_dir = Path(argv[0])
-    release_dir = Path(argv[1])
-    base = release_dir / "bin" / "server" / "cwtools-server"
+    extension_dir = Path(argv[1])
+    base = extension_dir / "bin" / "server" / "cwtools-server"
 
     found = False
     for directory in sorted(artifacts_dir.glob("server-*")):

@@ -52,9 +52,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
-      ROOT: cwtools-rs/target
+      ROOT: engine/target
     steps:
-      # The engine lives in-repo at cwtools-rs/, so the tag names both halves
+      # The engine lives in-repo at engine/, so the tag names both halves
       # at once: the commit being released is the engine being bundled.
       - name: Checkout
         # v7.0.1
@@ -68,9 +68,9 @@ jobs:
         # v2.9.1
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
-          workspaces: cwtools-rs
+          workspaces: engine
       - name: Build server
-        working-directory: cwtools-rs
+        working-directory: engine
         run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
       - name: Upload binary
         # v7.0.1
@@ -108,10 +108,14 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: server-*
-          path: artifacts
-      - name: Stage binaries into release/
-        run: python3 scripts/stage_release_binaries.py artifacts release
+          path: artifacts/server
       - uses: ./.github/actions/setup-node-npm
+      - name: Assemble extension
+        run: npm run compile
+      - name: Stage binaries into dist/extension
+        run: >-
+          python3 scripts/stage_release_binaries.py
+          artifacts/server dist/extension
       - name: Require Marketplace token on tagged releases
         # Fail fast (before creating the GitHub release) when a real tag release
         # is missing the Marketplace PAT, instead of silently skipping the
@@ -123,8 +127,8 @@ jobs:
             echo "::error::$message a tagged release to the Marketplace."
             exit 1
           fi
-      # One vsix per platform plus a universal fallback. No clean, no server
-      # rebuild: the binaries are already staged under release/bin/server.
+      # One vsix per platform plus a universal fallback. No clean or rebuild:
+      # the binaries are already staged under dist/extension/bin/server.
       - name: Package vsix
         env:
           TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
@@ -136,7 +140,7 @@ jobs:
       # Marketplace.
       - name: Smoke test vsix
         run: |
-          python3 scripts/smoke_test_vsix.py temp \
+          python3 scripts/smoke_test_vsix.py artifacts/vsix \
             linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
       - name: Publish Release
         env:
@@ -155,5 +159,5 @@ jobs:
           HaaLeo/publish-vscode-extension@ca5561daa085dee804bf9f37fe0165785a9b14db
         id: publishToOpenVSX
         with:
-          packagePath: "./release"
+          packagePath: "./dist/extension"
           pat: ${{ env.OPEN_VSX_TOKEN }}

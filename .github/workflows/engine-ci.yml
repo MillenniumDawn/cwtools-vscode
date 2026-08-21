@@ -35,11 +35,12 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: cwtools-rs
+        working-directory: engine
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + rustfmt + clippy)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           components: rustfmt, clippy
       # Registry cache (rarely changes, separate from target so a lockfile
@@ -54,16 +55,16 @@ jobs:
             ~/.cargo/bin
           key: >-
             ${{ runner.os }}-cargo-registry-${{
-            hashFiles('cwtools-rs/Cargo.lock') }}
+            hashFiles('engine/Cargo.lock') }}
       # Target cache: save even on failure so a cancelled build doesn't
       # force a full rebuild on the next run.
       - name: Cache cargo target
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: cwtools-rs/target
+          path: engine/target
           key: >-
             ${{ runner.os }}-cargo-target-${{
-            hashFiles('cwtools-rs/Cargo.lock', 'cwtools-rs/**/Cargo.toml') }}
+            hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-target-
           save-always: true
@@ -79,7 +80,7 @@ jobs:
           cargo machete
       # Keeps the engine's inheritance posture (repository, [lints], shared
       # test deps) from drifting when a new crate is added. Runs from repo root
-      # so the script can see both cwtools-rs/ and scripts/.
+      # so the script can see both engine/ and scripts/.
       - name: workspace manifest inheritance
         working-directory: ${{ github.workspace }}
         run: python3 scripts/workspace_manifest.py
@@ -100,11 +101,12 @@ jobs:
     timeout-minutes: 60
     defaults:
       run:
-        working-directory: cwtools-rs
+        working-directory: engine
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
       - name: Cache cargo registry
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -113,14 +115,14 @@ jobs:
             ~/.cargo/git
           key: >-
             ${{ runner.os }}-cargo-registry-${{
-            hashFiles('cwtools-rs/Cargo.lock') }}
+            hashFiles('engine/Cargo.lock') }}
       - name: Cache cargo target
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: cwtools-rs/target
+          path: engine/target
           key: >-
             ${{ runner.os }}-cargo-target-${{
-            hashFiles('cwtools-rs/Cargo.lock', 'cwtools-rs/**/Cargo.toml') }}
+            hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-target-
           save-always: true
@@ -134,14 +136,14 @@ jobs:
   # A declared MSRV nobody builds at is a comment. Stable is 1.95; the floor is
   # 1.88 (let-chains), so seven releases' worth of newer APIs compile fine on a
   # developer machine and break the MSRV silently. This job is what makes
-  # `rust-version` in cwtools-rs/Cargo.toml mean something.
+  # `rust-version` in engine/Cargo.toml mean something.
   msrv-rs:
     name: Rust MSRV build
     runs-on: ubuntu-latest
     timeout-minutes: 45
     defaults:
       run:
-        working-directory: cwtools-rs
+        working-directory: engine
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Read the version out of Cargo.toml rather than repeating it here, so
@@ -152,13 +154,14 @@ jobs:
         run: |
           msrv=$(grep -m1 -oP '^rust-version\s*=\s*"\K[^"]+' Cargo.toml)
           if [ -z "$msrv" ]; then
-            echo "::error::no rust-version found in cwtools-rs/Cargo.toml"
+            echo "::error::no rust-version found in engine/Cargo.toml"
             exit 1
           fi
           echo "Declared MSRV: $msrv"
           echo "version=$msrv" >> "$GITHUB_OUTPUT"
       - name: Install Rust toolchain (MSRV)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
       - name: Cache cargo registry
@@ -169,7 +172,7 @@ jobs:
             ~/.cargo/git
           key: >-
             ${{ runner.os }}-cargo-registry-${{
-            hashFiles('cwtools-rs/Cargo.lock') }}
+            hashFiles('engine/Cargo.lock') }}
       # Keyed on the MSRV: a different rustc invalidates every fingerprint, so
       # sharing the stable job's target cache would just force two full rebuilds
       # per run. The prefix is `msrv-target` rather than `cargo-target-msrv`
@@ -178,11 +181,11 @@ jobs:
       - name: Cache cargo target
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: cwtools-rs/target
+          path: engine/target
           key: >-
             ${{ runner.os }}-msrv-target-${{
             steps.msrv.outputs.version }}-${{
-            hashFiles('cwtools-rs/Cargo.lock', 'cwtools-rs/**/Cargo.toml') }}
+            hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-msrv-target-${{ steps.msrv.outputs.version }}-
           save-always: true
@@ -208,7 +211,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: cwtools-rs
+        working-directory: engine
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # cargo-fuzz needs nightly. Pinned to a date for the same reason every
@@ -216,7 +219,8 @@ jobs:
       # regression lands as a red build on an unrelated PR. Bump it deliberately
       # when there's a reason to.
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           toolchain: nightly-2026-07-24
       - name: Cache cargo registry
@@ -227,14 +231,14 @@ jobs:
             ~/.cargo/git
           key: >-
             ${{ runner.os }}-cargo-registry-${{
-            hashFiles('cwtools-rs/Cargo.lock') }}
+            hashFiles('engine/Cargo.lock') }}
       - name: Cache fuzz target
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: cwtools-rs/fuzz/target
+          path: engine/fuzz/target
           key: >-
             ${{ runner.os }}-cargo-fuzz-target-${{
-            hashFiles('cwtools-rs/fuzz/Cargo.toml', 'cwtools-rs/Cargo.lock') }}
+            hashFiles('engine/fuzz/Cargo.toml', 'engine/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-fuzz-target-
           save-always: true
@@ -268,11 +272,12 @@ jobs:
     timeout-minutes: 60
     defaults:
       run:
-        working-directory: cwtools-rs
+        working-directory: engine
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust toolchain (stable + llvm tools)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           components: llvm-tools
       # Registry cache (including ~/.cargo/bin) helps cargo-llvm-cov install
@@ -286,15 +291,15 @@ jobs:
             ~/.cargo/bin
           key: >-
             ${{ runner.os }}-cargo-registry-${{
-            hashFiles('cwtools-rs/Cargo.lock') }}
+            hashFiles('engine/Cargo.lock') }}
       # Cache target output so repeated runs avoid rebuilds.
       - name: Cache cargo target
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: cwtools-rs/target
+          path: engine/target
           key: >-
             ${{ runner.os }}-cargo-coverage-target-${{
-            hashFiles('cwtools-rs/Cargo.lock', 'cwtools-rs/**/Cargo.toml') }}
+            hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-coverage-target-
           save-always: true
@@ -308,9 +313,10 @@ jobs:
       # Named for the engine so it can't collide with the client's
       # coverage-node artifact in pr.yml.
       - name: Upload lcov report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: rust-coverage-lcov
-          path: cwtools-rs/target/coverage/lcov.info
+          path: engine/target/coverage/lcov.info
           if-no-files-found: error

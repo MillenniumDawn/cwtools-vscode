@@ -1,0 +1,15 @@
+.cwtools/
+**/*.map
+node_modules/**
+
+# Tests are never shipped.
+bin/client/test/**
+
+# The client is bundled with esbuild. We ship only the two bundles
+# (extension.js, webview/graph.js) plus the webview CSS; the per-file tsc output
+# they inline is build input, not part of the vsix.
+bin/client/src/**
+bin/client/extension/**
+!bin/client/extension/extension.js
+bin/client/webview/*.js
+!bin/client/webview/graph.js

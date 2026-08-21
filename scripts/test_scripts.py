@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -111,10 +112,35 @@ class GuardConfigTests(unittest.TestCase):
         self.assertEqual(cfg.game, "hoi4")
 
 
-def _write_vsix(path: Path, platforms: list[str], package: str = "{}") -> None:
+def _write_vsix(
+    path: Path, platforms: list[str], *, include_entrypoint: bool = True
+) -> None:
+    package = {
+        "main": "./bin/client/extension/extension.js",
+        "icon": "media/icon.png",
+        "l10n": "./l10n",
+        "contributes": {
+            "languages": [],
+            "grammars": [],
+            "themes": [],
+            "snippets": [],
+        },
+    }
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("extension/package.json", package)
-        zf.writestr("extension/bin/client/extension/extension.js", "console.log(1)\n")
+        zf.writestr("extension/package.json", json.dumps(package))
+        for relative in [
+            "bin/client/extension/extension.js",
+            "bin/client/webview/graph.js",
+            "bin/client/webview/site.css",
+            "media/icon.png",
+            "l10n/bundle.l10n.test.json",
+            "readme.md",
+            "changelog.md",
+            "LICENSE.md",
+        ]:
+            if relative.endswith("extension.js") and not include_entrypoint:
+                continue
+            zf.writestr(f"extension/{relative}", "x\n")
         for platform in platforms:
             zf.writestr(
                 f"extension/bin/server/cwtools-server/{platform}/cwtools-server",
@@ -138,12 +164,7 @@ class SmokeTestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             vsix = directory / "ext-1.0.0.vsix"
-            with zipfile.ZipFile(vsix, "w") as zf:
-                zf.writestr("extension/package.json", "{}")
-                zf.writestr(
-                    "extension/bin/server/cwtools-server/linux-x64/cwtools-server",
-                    "x",
-                )
+            _write_vsix(vsix, ["linux-x64"], include_entrypoint=False)
             with self.assertRaises(SystemExit) as ctx:
                 smoke_test_vsix.main([str(directory)])
             self.assertEqual(ctx.exception.code, 1)
@@ -165,13 +186,13 @@ class StageReleaseTests(unittest.TestCase):
             binary = artifacts / "server-linux-x64" / "cwtools-server"
             binary.parent.mkdir(parents=True)
             binary.write_text("x\n", encoding="utf-8")
-            release = root / "release"
+            extension = root / "extension"
             self.assertEqual(
-                stage_release_binaries.main([str(artifacts), str(release)]),
+                stage_release_binaries.main([str(artifacts), str(extension)]),
                 0,
             )
             staged = (
-                release
+                extension
                 / "bin"
                 / "server"
                 / "cwtools-server"
