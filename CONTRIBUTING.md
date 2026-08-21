@@ -10,6 +10,7 @@ The TypeScript client lives in `client/`: `extension/` (the host), `webview/` (t
 
 - Node 20
 - Rust (stable) with cargo, for the server
+- Python 3, for the helpers under `scripts/`
 
 ## Getting the source
 
@@ -42,7 +43,7 @@ Other commands: `package` packages a vsix without publishing, `package-prebuilt`
 
 The TextMate grammars under `release/syntaxes/` are vendored from
 [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) and
-re-synced with [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh).
+re-synced with [`scripts/sync_paradox_syntax.py`](scripts/sync_paradox_syntax.py).
 The script expects an upstream checkout as a sibling (`../paradox-syntax`);
 override with `PARADOX_SYNTAX_SRC=...` if you keep it elsewhere. After
 syncing, eyeball the diff before committing: the grammars are mostly
@@ -113,7 +114,7 @@ cargo test --workspace
 
 Anything that touches the parser, the rule engine, a validator or the ruleset
 types also runs the corpus guards from the repo root
-(`./scripts/corpus-guard.sh` and `./scripts/md-guard.sh`). They validate two
+(`python3 scripts/guard.py corpus` and `python3 scripts/guard.py md`). They validate two
 pinned real mods and diff the report against a committed baseline, so a change
 meant to leave diagnostics alone has to prove it. See
 [cwtools-rs/CONTRIBUTING.md](cwtools-rs/CONTRIBUTING.md) for the flags, the

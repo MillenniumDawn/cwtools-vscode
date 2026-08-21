@@ -42,7 +42,7 @@ Coverage is optional while we build history, with an 85% line target. It needs
 it isn't there:
 
 ```sh
-COVERAGE_THRESHOLD=85 bash ../scripts/coverage.sh
+COVERAGE_THRESHOLD=85 python3 ../scripts/coverage.py
 ```
 
 The command writes `target/coverage/lcov.info`, which is the source for CI and
@@ -60,7 +60,7 @@ baseline (`scripts/corpus-baseline.csv`, 4718 diagnostics as of writing). Run it
 from the repo root, one level up from here:
 
 ```sh
-./scripts/corpus-guard.sh
+python3 scripts/guard.py corpus
 ```
 
 Exit 0 means the report matched. Exit 1 prints what moved: row counts, a
@@ -96,7 +96,7 @@ covers them. `cwtools validate` now says so on stderr, and in the `github` and
 The second tier fills that in:
 
 ```sh
-./scripts/vanilla-guard.sh
+python3 scripts/guard.py vanilla
 ```
 
 Same script underneath, same flags, same exit codes, against a synthetic base
@@ -105,7 +105,7 @@ of its own (`scripts/vanilla-baseline.csv`, 5 diagnostics). No game install, so
 it runs anywhere. The fixture is deliberately small: one reference per family
 that resolves and one that doesn't, so a change that stops a check reporting and
 a change that makes it report everything both move the baseline. Re-bless it the
-same way, `./scripts/vanilla-guard.sh --bless`, and say why in the commit
+same way, `python3 scripts/guard.py vanilla --bless`, and say why in the commit
 message.
 
 Adding a family to the fixture is the way to keep it honest as more checks go
@@ -121,7 +121,7 @@ baseline of its own (`scripts/md-baseline.csv`, 11563 diagnostics as of
 writing):
 
 ```sh
-./scripts/md-guard.sh
+python3 scripts/guard.py md
 ```
 
 Same script underneath, same flags, same exit codes, same ruleset. It expects
@@ -147,8 +147,8 @@ When a change is *meant* to move diagnostics, re-bless the baselines it moved
 in the same commit and say in the message which codes moved and why:
 
 ```sh
-./scripts/corpus-guard.sh --bless
-./scripts/md-guard.sh --bless
+python3 scripts/guard.py corpus --bless
+python3 scripts/guard.py md --bless
 git add scripts/corpus-baseline.csv scripts/md-baseline.csv
 ```
 

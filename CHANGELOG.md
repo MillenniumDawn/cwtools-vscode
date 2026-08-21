@@ -1,5 +1,9 @@
 ### Unreleased
 
+* Repo helper scripts live under `scripts/` as Python, so the same commands run on Linux and Windows. `python3 scripts/guard.py corpus|md|vanilla` replaces the three `*-guard.sh` wrappers; coverage, workspace-manifest, syntax-sync, vsix-smoke and binary-staging moved there too.
+
+* The Millennium Dawn guard baseline drops 614 CW266 rows on scripted-GUI `[!callback]` localisation (`!foo_click`, `!foo_click_enabled`). The engine already resolved those against scripted-GUI effects/triggers (MillenniumDawn/cwtools#350); the baseline had not been re-blessed. Five other CW266 rows remain.
+
 * The Rust engine lives in this repo. `cwtools-rs/` and the diagnostics guards under `scripts/` were their own repo, [MillenniumDawn/cwtools](https://github.com/MillenniumDawn/cwtools), pulled in here as the `submodules/cwtools` git submodule; both are checked in now and the submodule and its `.gitmodules` entry are gone. `./build.sh quick` builds the server straight from `cwtools-rs/` with no submodule init in front of it, `CWTOOLS_RUST_WORKSPACE` still points the build at a different checkout, and a client change and the engine change it needs are one PR against one changelog rather than a bump waiting on an engine release. The engine's own tag-and-archive release process does not survive the move; the merged release process is being reworked separately. Engine history stays in the archived repo, so the entries below are the engine's unreleased work only.
 
 * The hoi4 rules fixture repo carries only what a bare repo needs to serve a fetch. #211 checked it in the way `git init --bare` leaves it, so the 13 `hooks/*.sample` files, `description` and `info/exclude` came along: roughly 900 lines of stock text that nothing in the suite reads and that git never runs for a local-path clone. `HEAD`, `config`, `objects/` and `refs/` are what the `rules-sync` label actually fetches from, and that is all that is left. (#214)

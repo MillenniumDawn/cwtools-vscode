@@ -110,7 +110,7 @@ jobs:
           pattern: server-*
           path: artifacts
       - name: Stage binaries into release/
-        run: .github/scripts/stage-release-binaries.sh artifacts release
+        run: python3 scripts/stage_release_binaries.py artifacts release
       - uses: ./.github/actions/setup-node-npm
       - name: Require Marketplace token on tagged releases
         # Fail fast (before creating the GitHub release) when a real tag release
@@ -136,7 +136,7 @@ jobs:
       # Marketplace.
       - name: Smoke test vsix
         run: |
-          .github/scripts/smoke-test-vsix.sh temp \
+          python3 scripts/smoke_test_vsix.py temp \
             linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
       - name: Publish Release
         env:

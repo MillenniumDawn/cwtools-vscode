@@ -18,16 +18,18 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 - Run the CLI from source with `cargo run -p cwtools_cli -- validate --game hoi4 --directory <mod> --rules <rules>/Config`.
 
 ### Frontend (TypeScript)
+
 - **Client Extension** (`client/extension/`): VS Code extension host and commands
 - **Webview** (`client/webview/`): Graph visualization using Cytoscape.js
 - **Test Suite** (`client/test/`): Host-based extension tests using the sample mod
 
 ### Guards and corpora
 
-- `scripts/corpus-guard.sh` and `scripts/corpus-baseline.csv` are the diagnostics regression gate, and `scripts/md-guard.sh` with `scripts/md-baseline.csv` is the same gate over a second real mod. `scripts/vanilla-guard.sh` and `scripts/vanilla-baseline.csv` are the tier over a committed synthetic base game, for the checks that need one (CW113, CW222, CW227, CW229, CW250, CW500).
+- `python3 scripts/guard.py corpus` and `scripts/corpus-baseline.csv` are the diagnostics regression gate, and `python3 scripts/guard.py md` with `scripts/md-baseline.csv` is the same gate over a second real mod. `python3 scripts/guard.py vanilla` and `scripts/vanilla-baseline.csv` are the tier over a committed synthetic base game, for the checks that need one (CW113, CW222, CW227, CW229, CW250, CW500).
 - Three sibling checkouts matter, expected next to this repo (override the location with `CWTOOLS_PROJECTS`): `cwtools-hoi4-config` holds the `.cwt` rules, which are not bundled, so a behavior change is as likely to belong there as here; `Kaiserreich-4-Development` and `Millennium-Dawn` are the pinned corpora the guards validate. Neither corpus substitutes for the other; each reports codes the other never does.
 
 ### Build System
+
 - **Build orchestrator** (`build/build.ts`, run via `tsx`): builds and deploys the Rust server, compiles the client, packages and publishes the vsix. No .NET toolchain is involved.
 - **TypeScript compilation**: `tsc` type-checks and emits the per-file client output (which the tests run against); `esbuild` (`build/esbuild.ts`, run via `tsx`) bundles the two shipped artifacts: the extension host (`extension.js`) and the webview graph (`graph.js`).
 - **Release packaging**: Creates `.vsix` files with `vsce package --no-dependencies`. The client is bundled, so `node_modules` is excluded from the vsix (`release/.vscodeignore`). CI builds the Rust server per platform; `package-prebuilt` turns the staged binaries into one vsix per platform (`vsce --target`) plus a universal fallback carrying all of them.
@@ -35,6 +37,7 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 ## Development Commands
 
 ### Building
+
 ```bash
 # Windows
 ./build.cmd quick
@@ -44,6 +47,7 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 ```
 
 ### TypeScript Client
+
 ```bash
 npm install
 npm run compile    # tsc + esbuild (bundle extension + webview)
@@ -54,7 +58,9 @@ npm test           # Run VS Code extension tests
 The Rust server builds from the in-repo `cwtools-rs` workspace. Set `CWTOOLS_RUST_WORKSPACE` to build from another checkout.
 
 ### Available Build Commands
+
 Run as `npm run build -- <command>` or `./build.sh <command>`:
+
 - `quick`: Build the server + client for local development
 - `package`: Package a vsix without publishing
 - `package-prebuilt`: Package server binaries already staged by CI, no publish
@@ -63,6 +69,7 @@ Run as `npm run build -- <command>` or `./build.sh <command>`:
 - `release-prebuilt`: `package-prebuilt` followed by `publish-prebuilt`
 
 ### Testing
+
 Two test layers. `npm run test:node` runs the fast node-only unit tests for the runtime-pure modules (vitest, no Electron) under `client/test/unit/`. The rest run in a real extension host (vscode-test) against the sample mod in `client/test/sample/`, picked by label from `.vscode-test.mjs`: `npm test` runs the `unit` label (VS Code API, no language server), `npm run test:smoke` adds the activation suite against the real server, and `npm run test:host` runs everything, including the hover/completion suites that need rule data (the sample workspace detects as `stellaris` via its `common/species_classes` content marker, so the extension fetches real rules on activation). CI gates on `test:node`, `test`, `test:smoke`, and `test:host`.
 
 Single test: `npx vitest run client/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `npx vscode-test --label unit --grep 'name'` (or `--run <compiled file>`). Watch modes: `npm run test:watch` and `npm run test:node:watch`. `npm run bench:node` runs the client hot-path benchmarks.
@@ -86,15 +93,15 @@ While iterating, scope tests down: `cargo test -p cwtools_validation`, or `cargo
 Then, from the repo root, the corpus guards. Run both for anything that touches the parser, the rule engine, a validator, or the ruleset types:
 
 ```plaintext
-./scripts/corpus-guard.sh
-./scripts/md-guard.sh
+python3 scripts/guard.py corpus
+python3 scripts/guard.py md
 ```
 
 The test suite proves the code compiles and behaves. The guards prove the *diagnostics* did not move, which is the thing a "this changes nothing" refactor is easy to believe and hard to demonstrate. Details, including the flags and the input revisions, are in [cwtools-rs/CONTRIBUTING.md](cwtools-rs/CONTRIBUTING.md).
 
 Three things to know about them:
 
-- Each committed baseline is pinned to specific corpus and rules revisions, recorded in its `#` header and printed on every run. When either checkout has moved on you get a diff that has nothing to do with your change. Capture your own before-baseline against the current inputs (`CWTOOLS_BASELINE=/tmp/before.csv ./scripts/corpus-guard.sh --bless` on a clean tree) and compare against that instead.
+- Each committed baseline is pinned to specific corpus and rules revisions, recorded in its `#` header and printed on every run. When either checkout has moved on you get a diff that has nothing to do with your change. Capture your own before-baseline against the current inputs (`CWTOOLS_BASELINE=/tmp/before.csv python3 scripts/guard.py corpus --bless` on a clean tree) and compare against that instead.
 - Re-blessing a committed baseline is for changes that are *meant* to move diagnostics, and the commit message has to say which codes moved and why. A re-bless with no explanation reads as a regression someone papered over.
 - The two corpora are not a second opinion on each other. Kaiserreich is the only one reporting CW122, CW248, CW251 and CW280, Millennium Dawn the only one reporting CW105, CW255, CW262 and CW268, and the codes they share come out in nothing like the same proportions. A change that moves one baseline and not the other is usually telling you something.
 
@@ -107,7 +114,7 @@ Three things to know about them:
 - `.vscode-test.mjs`: host test runner config (labeled: unit/smoke/host)
 - `vitest.config.ts`: node-only unit test config
 - `cwtools-rs/Cargo.toml`: the Rust workspace manifest; all crates inherit its version
-- `scripts/corpus-guard.sh`: the diagnostics regression gate
+- `scripts/guard.py`: the diagnostics regression gate
 - Build scripts: `build.cmd` (Windows) / `build.sh` (Unix)
 
 ## Development Workflow

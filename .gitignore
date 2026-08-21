@@ -16,6 +16,8 @@ corpus/
 *.user
 .vs/
 .opencode/
+__pycache__/
+*.py[cod]
 temp/
 artifacts/
 .cwtools-parity/

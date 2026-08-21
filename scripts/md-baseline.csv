@@ -1,4 +1,4 @@
-# cwtools guard baseline. Regenerate with scripts/md-guard.sh --bless
+# cwtools guard baseline. Regenerate with python3 scripts/guard.py md --bless
 # corpus: Millennium-Dawn @ 44940966fe
 # rules:  cwtools-hoi4-config/Config @ 46d5886
 file,line,severity,code,message
@@ -5892,34 +5892,7 @@ history/countries/ZAM - Zambia.txt,188,Information,CW272,This is a deprecated co
 history/countries/ZAN - Zanzibar.txt,108,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 history/countries/ZIM - Zimbabwe.txt,180,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
 history/countries/ZOM - Zombies.txt,29,Information,CW272,This is a deprecated command. Use add_country_leader_role instead when possible.
-interface/!MD_research_slots.gui,48,Error,CW266,Localisation key gdp_slot_gain_industry_size_desc uses command !gdp_slot_gain_industry_size_click which does not exist in data type scope.
-interface/!MD_research_slots.gui,48,Error,CW266,Localisation key gdp_slot_gain_industry_size_desc uses command !gdp_slot_gain_industry_size_click_enabled which does not exist in data type scope.
-interface/!MD_research_slots.gui,64,Error,CW266,Localisation key gdp_slot_gain_developmental_size_desc uses command !gdp_slot_gain_developmental_size_click which does not exist in data type scope.
-interface/!MD_research_slots.gui,64,Error,CW266,Localisation key gdp_slot_gain_developmental_size_desc uses command !gdp_slot_gain_developmental_size_click_enabled which does not exist in data type scope.
 interface/BI_dynamic_topbar.gui,106,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/BI_dynamic_topbar.gui,143,Error,CW266,Localisation key TOPBAR_LIST_MENU_TOOLTIP uses command !topbar_menu_icon_click which does not exist in data type scope.
-interface/BI_dynamic_topbar.gui,51,Error,CW266,Localisation key TOPBAR_ENTRY_TOOLTIP uses command !topbar_icon_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,289,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_TITLE_DELAYED uses command !EH_mech_production_start_factory_1_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,289,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_TITLE_DELAYED uses command !EH_mech_production_start_factory_1_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,310,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_2_TITLE_DELAYED uses command !EH_mech_production_start_factory_2_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,310,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_2_TITLE_DELAYED uses command !EH_mech_production_start_factory_2_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,331,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_3_TITLE_DELAYED uses command !EH_mech_production_start_factory_3_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,331,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_3_TITLE_DELAYED uses command !EH_mech_production_start_factory_3_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,352,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_4_TITLE_DELAYED uses command !EH_mech_production_start_factory_4_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,352,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_4_TITLE_DELAYED uses command !EH_mech_production_start_factory_4_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,373,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_5_TITLE_DELAYED uses command !EH_mech_production_start_factory_5_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,373,Error,CW266,Localisation key EH_MECH_PRODUCTION_START_5_TITLE_DELAYED uses command !EH_mech_production_start_factory_5_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,39,Error,CW266,Localisation key EH_LAUNCH_MISSION_DELAYED uses command !EH_launch_mission_button_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,391,Error,CW266,Localisation key EH_SELECT_MECH_1_DELAYED uses command !EH_select_mech_1_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,402,Error,CW266,Localisation key EH_SELECT_MECH_2_DELAYED uses command !EH_select_mech_2_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,413,Error,CW266,Localisation key EH_SELECT_MECH_3_DELAYED uses command !EH_select_mech_3_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,443,Error,CW266,Localisation key EH_SHOW_TESLA_PAGE_DELAYED uses command !EH_show_tesla_page_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,487,Error,CW266,Localisation key EH_TESLA_NEUTRALIZER_PRODUCTION_TEXT_DELAYED uses command !EH_randallite_ui_tesla_neutralizer_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,487,Error,CW266,Localisation key EH_TESLA_NEUTRALIZER_PRODUCTION_TEXT_DELAYED uses command !EH_randallite_ui_tesla_neutralizer_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,494,Error,CW266,Localisation key EH_TESLA_EMP_PRODUCTION_TEXT_DELAYED uses command !EH_randallite_ui_tesla_emp_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,494,Error,CW266,Localisation key EH_TESLA_EMP_PRODUCTION_TEXT_DELAYED uses command !EH_randallite_ui_tesla_emp_click_enabled which does not exist in data type scope.
-interface/EH_scripted_gui.gui,501,Error,CW266,Localisation key EH_TESLA_AIRFRAME_PRODUCTION_TEXT_DELAYED uses command !EH_randallite_ui_tesla_airframe_click which does not exist in data type scope.
-interface/EH_scripted_gui.gui,501,Error,CW266,Localisation key EH_TESLA_AIRFRAME_PRODUCTION_TEXT_DELAYED uses command !EH_randallite_ui_tesla_airframe_click_enabled which does not exist in data type scope.
 interface/ENG_British_guis.gui,11,Warning,CW100,Localisation key OPEN_devolution_BUTTON is not defined for any language
 interface/ENG_British_guis.gui,12,Warning,CW100,Localisation key OPEN_devolution_BUTTON_TT is not defined for any language
 interface/ENG_British_guis.gui,183,Warning,CW100,Localisation key ENG_scottish_dependency is not defined for any language
@@ -5931,399 +5904,18 @@ interface/MD_PER_decision.gui,430,Warning,CW100,Localisation key PER_IRGC_attack
 interface/MD_PER_decision.gui,437,Warning,CW100,Localisation key PER_IRGC_attack_text4_loc is not defined for any language
 interface/MD_PER_decision.gui,444,Warning,CW100,Localisation key PER_IRGC_attack_text5_loc is not defined for any language
 interface/MD_auto_agency_queue.gui,138,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/MD_auto_agency_queue.gui,364,Error,CW266,Localisation key MD_auto_agency_upgrades_add_to_queue_tt_delayed uses command !agency_upgrade_icon_button_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,1516,Error,CW266,Localisation key expand_money_supply_button_tooltip uses command !expand_money_supply_button_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,1516,Error,CW266,Localisation key expand_money_supply_button_tooltip uses command !expand_money_supply_button_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,1547,Error,CW266,Localisation key austerity_button_tooltip uses command !austerity_button_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,1547,Error,CW266,Localisation key austerity_button_tooltip uses command !austerity_button_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,1578,Error,CW266,Localisation key print_money_button_tooltip uses command !print_money_button_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,1578,Error,CW266,Localisation key print_money_button_tooltip uses command !print_money_button_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2480,Error,CW266,Localisation key arms_industry_stipends_delayed_tt uses command !arms_industry_stipends_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2480,Error,CW266,Localisation key arms_industry_stipends_delayed_tt uses command !arms_industry_stipends_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2494,Error,CW266,Localisation key industrial_projects_delayed_tt uses command !industrial_projects_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2494,Error,CW266,Localisation key industrial_projects_delayed_tt uses command !industrial_projects_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2508,Error,CW266,Localisation key retool_shipyards_delayed_tt uses command !retool_shipyards_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2508,Error,CW266,Localisation key retool_shipyards_delayed_tt uses command !retool_shipyards_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2522,Error,CW266,Localisation key infrastructure_investiture_delayed_tt uses command !infrastructure_investiture_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2522,Error,CW266,Localisation key infrastructure_investiture_delayed_tt uses command !infrastructure_investiture_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2536,Error,CW266,Localisation key service_constructions_delayed_tt uses command !service_constructions_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2536,Error,CW266,Localisation key service_constructions_delayed_tt uses command !service_constructions_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2550,Error,CW266,Localisation key agro_industrial_expansion_delayed_tt uses command !agro_industrial_expansion_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2550,Error,CW266,Localisation key agro_industrial_expansion_delayed_tt uses command !agro_industrial_expansion_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2564,Error,CW266,Localisation key advanced_manufacturing_delayed_tt uses command !advanced_manufacturing_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2564,Error,CW266,Localisation key advanced_manufacturing_delayed_tt uses command !advanced_manufacturing_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2578,Error,CW266,Localisation key energy_grid_modernization_delayed_tt uses command !energy_grid_modernization_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2578,Error,CW266,Localisation key energy_grid_modernization_delayed_tt uses command !energy_grid_modernization_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2592,Error,CW266,Localisation key strategic_defense_infrastructure_delayed_tt uses command !strategic_defense_infrastructure_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2592,Error,CW266,Localisation key strategic_defense_infrastructure_delayed_tt uses command !strategic_defense_infrastructure_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2606,Error,CW266,Localisation key strategic_rd_sites_delayed_tt uses command !strategic_rd_sites_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2606,Error,CW266,Localisation key strategic_rd_sites_delayed_tt uses command !strategic_rd_sites_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2952,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2952,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2960,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,2960,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3026,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3026,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3034,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3034,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3100,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3100,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3108,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3108,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3174,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3174,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3182,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3182,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3248,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3248,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3256,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3256,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3322,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3322,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3330,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3330,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3396,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3396,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3404,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3404,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3470,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3470,Error,CW266,Localisation key CHANGE_EMPLOYMENT_INCREASE_TT uses command !increase_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3478,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click which does not exist in data type scope.
-interface/MD_countryeconomyview.gui,3478,Error,CW266,Localisation key CHANGE_EMPLOYMENT_DECREASE_TT uses command !decrease_employment_civilian_factories_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,1059,Error,CW266,Localisation key PRODUCTION_START_13_TT uses command !start_button_13_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,1250,Error,CW266,Localisation key PRODUCTION_START_14_TT uses command !start_button_14_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,139,Error,CW266,Localisation key CYBER_GUI_LEDGER_TT_DELAYED uses command !cyber_gui_ledger_button_click_enabled which does not exist in data type scope.
 interface/MD_countrymissilesview.gui,1391,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/MD_countrymissilesview.gui,1725,Error,CW266,Localisation key OLV_LAUNCH_BUTTON_TT uses command !OLV_launch_button_click_enabled which does not exist in data type scope.
 interface/MD_countrymissilesview.gui,175,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/MD_countrymissilesview.gui,1829,Error,CW266,Localisation key ASAT_BUTTON_TT uses command !ASAT_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,1919,Error,CW266,Localisation key ACTIVATE_KILLSAT_BUTTON_TT uses command !activate_killsat_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,1975,Error,CW266,Localisation key SPACE_AUTO_TOGGLE_TT uses command !space_auto_toggle_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,2095,Error,CW266,Localisation key SPACE_AUTO_SAVE_BUTTON_TT uses command !space_auto_save_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,2105,Error,CW266,Localisation key SPACE_AUTO_UPGRADE_BUTTON_TT uses command !space_auto_upgrade_button_click_enabled which does not exist in data type scope.
 interface/MD_countrymissilesview.gui,2386,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/MD_countrymissilesview.gui,2400,Error,CW266,Localisation key OLV_WIN_BUTTON_TT uses command !OLV_type_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,2446,Error,CW266,Localisation key SAT_WIN_BUTTON_TT uses command !sat_payload_type_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,2503,Error,CW266,Localisation key SPP_WIN_BUTTON_TT uses command !spp_payload_type_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,2548,Error,CW266,Localisation key ASAT_WIN_BUTTON_TT uses command !ASAT_type_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,2594,Error,CW266,Localisation key KILLSAT_WIN_BUTTON_TT uses command !KILLSAT_type_button_click_enabled which does not exist in data type scope.
 interface/MD_countrymissilesview.gui,3576,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/MD_countrymissilesview.gui,4153,Error,CW266,Localisation key SPY_MISSION_START_BUTTON_TT uses command !spy_mission_start_button_click_enabled which does not exist in data type scope.
 interface/MD_countrymissilesview.gui,4340,Warning,CW100,Localisation key CLOSE is not defined for any language
 interface/MD_countrymissilesview.gui,4537,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/MD_countrymissilesview.gui,4799,Error,CW266,Localisation key CT_NAT_SPEND_TT uses command !ct_funding_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4799,Error,CW266,Localisation key CT_NAT_SPEND_TT uses command !ct_funding_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4799,Error,CW266,Localisation key CT_NAT_SPEND_TT uses command !ct_funding_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4811,Error,CW266,Localisation key CT_NAT_ANALYST_TT uses command !analyst_focus_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4811,Error,CW266,Localisation key CT_NAT_ANALYST_TT uses command !analyst_focus_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4811,Error,CW266,Localisation key CT_NAT_ANALYST_TT uses command !analyst_focus_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4823,Error,CW266,Localisation key CT_NAT_DOM_SUV_TT uses command !domestic_survellience_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4823,Error,CW266,Localisation key CT_NAT_DOM_SUV_TT uses command !domestic_survellience_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4823,Error,CW266,Localisation key CT_NAT_DOM_SUV_TT uses command !domestic_survellience_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4835,Error,CW266,Localisation key CT_NAT_MASS_TT uses command !mass_gathering_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4835,Error,CW266,Localisation key CT_NAT_MASS_TT uses command !mass_gathering_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4847,Error,CW266,Localisation key CT_NAT_ARST_TT uses command !arrest_sympathizers_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4847,Error,CW266,Localisation key CT_NAT_ARST_TT uses command !arrest_sympathizers_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4859,Error,CW266,Localisation key CT_NAT_INFL_TT uses command !infil_agent_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4859,Error,CW266,Localisation key CT_NAT_INFL_TT uses command !infil_agent_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,486,Error,CW266,Localisation key PRODUCTION_START_10_TT uses command !start_button_10_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4871,Error,CW266,Localisation key CT_NAT_SEIZE_TT uses command !seize_assets_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4871,Error,CW266,Localisation key CT_NAT_SEIZE_TT uses command !seize_assets_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4883,Error,CW266,Localisation key CT_NAT_EXP_TT uses command !exploit_intelligence_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,4883,Error,CW266,Localisation key CT_NAT_EXP_TT uses command !exploit_intelligence_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5014,Error,CW266,Localisation key CT_INT_ADV_TT uses command !send_advisors_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5014,Error,CW266,Localisation key CT_INT_ADV_TT uses command !send_advisors_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5014,Error,CW266,Localisation key CT_INT_ADV_TT uses command !send_advisors_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5014,Error,CW266,Localisation key CT_INT_ADV_TT uses command !send_advisors_button_right_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5026,Error,CW266,Localisation key CT_NAT_DRONE_TT uses command !conduct_drone_operations_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5026,Error,CW266,Localisation key CT_NAT_DRONE_TT uses command !conduct_drone_operations_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5038,Error,CW266,Localisation key CT_INT_JTRN_TT uses command !conduct_joint_training_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5038,Error,CW266,Localisation key CT_INT_JTRN_TT uses command !conduct_joint_training_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5085,Error,CW266,Localisation key light_inf_tt uses command !remove_light_inf_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5096,Error,CW266,Localisation key mot_inf_tt uses command !remove_mot_inf_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5108,Error,CW266,Localisation key mech_inf_tt uses command !remove_mech_inf_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5119,Error,CW266,Localisation key hvy_inf_tt uses command !remove_hvy_inf_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5130,Error,CW266,Localisation key spec_inf_tt uses command !remove_spec_inf_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5141,Error,CW266,Localisation key tank_tt uses command !remove_tank_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5152,Error,CW266,Localisation key sof_inf_tt uses command !remove_sf_inf_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5431,Error,CW266,Localisation key CYBER_GUI_INVEST_OFF_TT uses command !cyber_invest_offense_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5431,Error,CW266,Localisation key CYBER_GUI_INVEST_OFF_TT uses command !cyber_invest_offense_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5431,Error,CW266,Localisation key CYBER_GUI_INVEST_OFF_TT uses command !cyber_invest_offense_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5431,Error,CW266,Localisation key CYBER_GUI_INVEST_OFF_TT uses command !cyber_invest_offense_button_right_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5442,Error,CW266,Localisation key CYBER_GUI_INVEST_DEF_TT uses command !cyber_invest_defense_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5442,Error,CW266,Localisation key CYBER_GUI_INVEST_DEF_TT uses command !cyber_invest_defense_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5442,Error,CW266,Localisation key CYBER_GUI_INVEST_DEF_TT uses command !cyber_invest_defense_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5442,Error,CW266,Localisation key CYBER_GUI_INVEST_DEF_TT uses command !cyber_invest_defense_button_right_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5492,Error,CW266,Localisation key CYBER_GPS_BTN_TT uses command !cyber_gps_jamming_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5492,Error,CW266,Localisation key CYBER_GPS_BTN_TT uses command !cyber_gps_jamming_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5504,Error,CW266,Localisation key CYBER_ECON_BTN_TT uses command !cyber_economic_disruption_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5504,Error,CW266,Localisation key CYBER_ECON_BTN_TT uses command !cyber_economic_disruption_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5516,Error,CW266,Localisation key CYBER_PROP_BTN_TT uses command !cyber_propaganda_ops_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5516,Error,CW266,Localisation key CYBER_PROP_BTN_TT uses command !cyber_propaganda_ops_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5528,Error,CW266,Localisation key CYBER_SIGINT_BTN_TT uses command !cyber_sigint_surveillance_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5528,Error,CW266,Localisation key CYBER_SIGINT_BTN_TT uses command !cyber_sigint_surveillance_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5540,Error,CW266,Localisation key CYBER_RADAR_BTN_TT uses command !cyber_radar_spoofing_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5540,Error,CW266,Localisation key CYBER_RADAR_BTN_TT uses command !cyber_radar_spoofing_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5553,Error,CW266,Localisation key CYBER_ELECT_BTN_TT uses command !cyber_election_interference_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5553,Error,CW266,Localisation key CYBER_ELECT_BTN_TT uses command !cyber_election_interference_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5565,Error,CW266,Localisation key CYBER_ESPION_BTN_TT uses command !cyber_industrial_espionage_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5565,Error,CW266,Localisation key CYBER_ESPION_BTN_TT uses command !cyber_industrial_espionage_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5577,Error,CW266,Localisation key CYBER_COMMS_BTN_TT uses command !cyber_comms_intercept_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5577,Error,CW266,Localisation key CYBER_COMMS_BTN_TT uses command !cyber_comms_intercept_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5590,Error,CW266,Localisation key CYBER_INFRA_BTN_TT uses command !cyber_infrastructure_attack_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5590,Error,CW266,Localisation key CYBER_INFRA_BTN_TT uses command !cyber_infrastructure_attack_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5602,Error,CW266,Localisation key CYBER_FIN_BTN_TT uses command !cyber_financial_system_attack_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5602,Error,CW266,Localisation key CYBER_FIN_BTN_TT uses command !cyber_financial_system_attack_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5614,Error,CW266,Localisation key CYBER_LOG_BTN_TT uses command !cyber_logistics_disruption_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5614,Error,CW266,Localisation key CYBER_LOG_BTN_TT uses command !cyber_logistics_disruption_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5626,Error,CW266,Localisation key CYBER_SLEEP_BTN_TT uses command !cyber_sleeper_network_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5626,Error,CW266,Localisation key CYBER_SLEEP_BTN_TT uses command !cyber_sleeper_network_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5639,Error,CW266,Localisation key CYBER_CRIT_BTN_TT uses command !cyber_critical_strike_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5639,Error,CW266,Localisation key CYBER_CRIT_BTN_TT uses command !cyber_critical_strike_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5651,Error,CW266,Localisation key CYBER_DECEPT_BTN_TT uses command !cyber_deception_campaign_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5651,Error,CW266,Localisation key CYBER_DECEPT_BTN_TT uses command !cyber_deception_campaign_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5663,Error,CW266,Localisation key CYBER_ZERO_BTN_TT uses command !cyber_zero_day_strike_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5663,Error,CW266,Localisation key CYBER_ZERO_BTN_TT uses command !cyber_zero_day_strike_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5676,Error,CW266,Localisation key CYBER_HARDEN_BTN_TT uses command !cyber_network_hardening_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5676,Error,CW266,Localisation key CYBER_HARDEN_BTN_TT uses command !cyber_network_hardening_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5688,Error,CW266,Localisation key CYBER_CNTRINT_BTN_TT uses command !cyber_counter_intrusion_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5688,Error,CW266,Localisation key CYBER_CNTRINT_BTN_TT uses command !cyber_counter_intrusion_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5700,Error,CW266,Localisation key CYBER_ATTRIB_BTN_TT uses command !cyber_attribution_hunt_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5700,Error,CW266,Localisation key CYBER_ATTRIB_BTN_TT uses command !cyber_attribution_hunt_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5857,Error,CW266,Localisation key pressure_countries_delayed_tt uses command !pressure_countries_recog_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5857,Error,CW266,Localisation key pressure_countries_delayed_tt uses command !pressure_countries_recog_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5869,Error,CW266,Localisation key grant_recog_delayed_tt uses command !grant_recog_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5869,Error,CW266,Localisation key grant_recog_delayed_tt uses command !grant_recog_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5881,Error,CW266,Localisation key rescind_recog_delayed_tt uses command !rescind_recog_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5881,Error,CW266,Localisation key rescind_recog_delayed_tt uses command !rescind_recog_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5892,Error,CW266,Localisation key un_improve_relations_tt uses command !un_improve_relations_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5892,Error,CW266,Localisation key un_improve_relations_tt uses command !un_improve_relations_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5904,Error,CW266,Localisation key un_campaign_for_recog_tt uses command !un_campaign_for_recog_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5904,Error,CW266,Localisation key un_campaign_for_recog_tt uses command !un_campaign_for_recog_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5916,Error,CW266,Localisation key un_ask_for_independence_tt uses command !un_ask_for_independence_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5916,Error,CW266,Localisation key un_ask_for_independence_tt uses command !un_ask_for_independence_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5928,Error,CW266,Localisation key un_ascend_tt uses command !un_ascension_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,5928,Error,CW266,Localisation key un_ascend_tt uses command !un_ascension_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6042,Error,CW266,Localisation key un_sc_at_war_tt_delayed uses command !nations_at_war_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6042,Error,CW266,Localisation key un_sc_at_war_tt_delayed uses command !nations_at_war_button_visible which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6055,Error,CW266,Localisation key un_sc_sanctions_tt_delayed uses command !sanction_nations_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6055,Error,CW266,Localisation key un_sc_sanctions_tt_delayed uses command !sanction_nations_button_visible which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6068,Error,CW266,Localisation key un_sc_volunteers_tt_delayed uses command !manage_volunteers_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6068,Error,CW266,Localisation key un_sc_volunteers_tt_delayed uses command !manage_volunteers_button_visible which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6081,Error,CW266,Localisation key un_sc_embargo_tt_delayed uses command !arms_embargo_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6081,Error,CW266,Localisation key un_sc_embargo_tt_delayed uses command !arms_embargo_button_visible which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6560,Error,CW266,Localisation key increase_base_un_budget_tt uses command !increase_base_budget_vote_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6560,Error,CW266,Localisation key increase_base_un_budget_tt uses command !increase_base_budget_vote_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6572,Error,CW266,Localisation key decrease_base_un_budget_tt uses command !decrease_base_budget_vote_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6572,Error,CW266,Localisation key decrease_base_un_budget_tt uses command !decrease_base_budget_vote_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6584,Error,CW266,Localisation key cancel_all_contributions_tt uses command !cancel_all_contributions_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6584,Error,CW266,Localisation key cancel_all_contributions_tt uses command !cancel_all_contributions_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6697,Error,CW266,Localisation key is_un_aid_esco_status_tt uses command !is_un_aid_request_join_esco_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6697,Error,CW266,Localisation key is_un_aid_esco_status_tt uses command !is_un_aid_request_join_esco_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6709,Error,CW266,Localisation key is_un_aid_ido_status_tt uses command !is_un_aid_request_join_ido_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6709,Error,CW266,Localisation key is_un_aid_ido_status_tt uses command !is_un_aid_request_join_ido_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6721,Error,CW266,Localisation key is_un_aid_cdf_status_tt uses command !is_un_aid_request_join_cdf_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6721,Error,CW266,Localisation key is_un_aid_cdf_status_tt uses command !is_un_aid_request_join_cdf_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6733,Error,CW266,Localisation key is_un_aid_request_subsidies_esco_tt uses command !is_un_aid_request_subsidies_esco_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6733,Error,CW266,Localisation key is_un_aid_request_subsidies_esco_tt uses command !is_un_aid_request_subsidies_esco_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6745,Error,CW266,Localisation key is_un_aid_request_subsidies_ido_tt uses command !is_un_aid_request_subsidies_ido_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6745,Error,CW266,Localisation key is_un_aid_request_subsidies_ido_tt uses command !is_un_aid_request_subsidies_ido_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6757,Error,CW266,Localisation key is_un_aid_request_subsidies_cdf_tt uses command !is_un_aid_request_subsidies_cdf_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6757,Error,CW266,Localisation key is_un_aid_request_subsidies_cdf_tt uses command !is_un_aid_request_subsidies_cdf_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,677,Error,CW266,Localisation key PRODUCTION_START_11_TT uses command !start_button_11_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6792,Error,CW266,Localisation key increase_program_contribution_esco_tt uses command !is_un_increase_esco_contribution_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6833,Error,CW266,Localisation key increase_program_contribution_ido_tt uses command !is_un_increase_ido_contribution_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6874,Error,CW266,Localisation key increase_program_contribution_cdf_tt uses command !is_un_increase_cdf_contribution_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6940,Error,CW266,Localisation key PMC_company_button_tt uses command !name_of_pmc_companies_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6940,Error,CW266,Localisation key PMC_company_button_tt uses command !name_of_pmc_companies_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6980,Error,CW266,Localisation key pmc_unit_button_tt uses command !name_of_pmc_units_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,6980,Error,CW266,Localisation key pmc_unit_button_tt uses command !name_of_pmc_units_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7103,Error,CW266,Localisation key un_sc_nation_yes_adjust_tt uses command !is_un_sc_vote_yes_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7103,Error,CW266,Localisation key un_sc_nation_yes_adjust_tt uses command !is_un_sc_vote_yes_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7103,Error,CW266,Localisation key un_sc_nation_yes_adjust_tt uses command !is_un_sc_vote_yes_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7118,Error,CW266,Localisation key un_sc_nation_no_adjust_tt uses command !is_un_sc_vote_no_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7118,Error,CW266,Localisation key un_sc_nation_no_adjust_tt uses command !is_un_sc_vote_no_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7118,Error,CW266,Localisation key un_sc_nation_no_adjust_tt uses command !is_un_sc_vote_no_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7133,Error,CW266,Localisation key un_sc_nation_abstain_adjust_tt uses command !is_un_sc_vote_abstain_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7133,Error,CW266,Localisation key un_sc_nation_abstain_adjust_tt uses command !is_un_sc_vote_abstain_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7133,Error,CW266,Localisation key un_sc_nation_abstain_adjust_tt uses command !is_un_sc_vote_abstain_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7172,Error,CW266,Localisation key un_sc_propose_action_delayed_tt uses command !is_un_sc_propose_action_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7172,Error,CW266,Localisation key un_sc_propose_action_delayed_tt uses command !is_un_sc_propose_action_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7209,Error,CW266,Localisation key nation_pending_vote_info_tt uses command !is_un_sc_manipulate_vote_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7209,Error,CW266,Localisation key nation_pending_vote_info_tt uses command !is_un_sc_manipulate_vote_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7294,Error,CW266,Localisation key un_ga_nation_yes_adjust_tt uses command !is_un_ga_vote_yes_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7294,Error,CW266,Localisation key un_ga_nation_yes_adjust_tt uses command !is_un_ga_vote_yes_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7294,Error,CW266,Localisation key un_ga_nation_yes_adjust_tt uses command !is_un_ga_vote_yes_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7309,Error,CW266,Localisation key un_ga_nation_no_adjust_tt uses command !is_un_ga_vote_no_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7309,Error,CW266,Localisation key un_ga_nation_no_adjust_tt uses command !is_un_ga_vote_no_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7309,Error,CW266,Localisation key un_ga_nation_no_adjust_tt uses command !is_un_ga_vote_no_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7324,Error,CW266,Localisation key un_ga_nation_abstain_adjust_tt uses command !is_un_ga_vote_abstain_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7324,Error,CW266,Localisation key un_ga_nation_abstain_adjust_tt uses command !is_un_ga_vote_abstain_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7324,Error,CW266,Localisation key un_ga_nation_abstain_adjust_tt uses command !is_un_ga_vote_abstain_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7348,Error,CW266,Localisation key propose_poverty_reduction_tooltip uses command !un_ga_propose_poverty_reduction_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7348,Error,CW266,Localisation key propose_poverty_reduction_tooltip uses command !un_ga_propose_poverty_reduction_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7361,Error,CW266,Localisation key propose_food_security_tooltip uses command !un_ga_propose_food_security_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7361,Error,CW266,Localisation key propose_food_security_tooltip uses command !un_ga_propose_food_security_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7374,Error,CW266,Localisation key propose_global_health_tooltip uses command !un_ga_propose_global_health_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7374,Error,CW266,Localisation key propose_global_health_tooltip uses command !un_ga_propose_global_health_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7387,Error,CW266,Localisation key propose_education_tooltip uses command !un_ga_propose_education_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7387,Error,CW266,Localisation key propose_education_tooltip uses command !un_ga_propose_education_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7400,Error,CW266,Localisation key propose_clean_energy_tooltip uses command !un_ga_propose_clean_energy_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7400,Error,CW266,Localisation key propose_clean_energy_tooltip uses command !un_ga_propose_clean_energy_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7413,Error,CW266,Localisation key propose_economic_growth_tooltip uses command !un_ga_propose_economic_growth_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7413,Error,CW266,Localisation key propose_economic_growth_tooltip uses command !un_ga_propose_economic_growth_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7426,Error,CW266,Localisation key propose_infrastructure_tooltip uses command !un_ga_propose_infrastructure_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7426,Error,CW266,Localisation key propose_infrastructure_tooltip uses command !un_ga_propose_infrastructure_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7439,Error,CW266,Localisation key propose_reduced_inequality_tooltip uses command !un_ga_propose_reduced_inequality_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7439,Error,CW266,Localisation key propose_reduced_inequality_tooltip uses command !un_ga_propose_reduced_inequality_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7452,Error,CW266,Localisation key propose_climate_action_tooltip uses command !un_ga_propose_climate_action_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7452,Error,CW266,Localisation key propose_climate_action_tooltip uses command !un_ga_propose_climate_action_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7465,Error,CW266,Localisation key propose_peace_institutions_tooltip uses command !un_ga_propose_peace_institutions_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7465,Error,CW266,Localisation key propose_peace_institutions_tooltip uses command !un_ga_propose_peace_institutions_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7478,Error,CW266,Localisation key propose_trade_partnerships_tooltip uses command !un_ga_propose_trade_partnerships_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7478,Error,CW266,Localisation key propose_trade_partnerships_tooltip uses command !un_ga_propose_trade_partnerships_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7491,Error,CW266,Localisation key propose_digital_development_tooltip uses command !un_ga_propose_digital_development_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7491,Error,CW266,Localisation key propose_digital_development_tooltip uses command !un_ga_propose_digital_development_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7571,Error,CW266,Localisation key ga_nation_pending_vote_info_tt uses command !is_un_ga_manipulate_vote_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7571,Error,CW266,Localisation key ga_nation_pending_vote_info_tt uses command !is_un_ga_manipulate_vote_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7914,Error,CW266,Localisation key name_of_state_button_tooltip_delayed_tt uses command !name_of_state_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7954,Error,CW266,Localisation key campaign_for_recog_tt_delayed uses command !name_of_sc_state_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,7954,Error,CW266,Localisation key campaign_for_recog_tt_delayed uses command !name_of_sc_state_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8095,Error,CW266,Localisation key CYBER_CUR_TARGET_TT uses command !cyber_current_targets_list_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8095,Error,CW266,Localisation key CYBER_CUR_TARGET_TT uses command !cyber_current_targets_list_button_right_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8095,Error,CW266,Localisation key CYBER_CUR_TARGET_TT uses command !cyber_current_targets_list_button_right_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8160,Error,CW266,Localisation key ANTARCTICA_JOIN_TREATY_TEXT_DELAYED uses command !antarctica_treaty_join_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8160,Error,CW266,Localisation key ANTARCTICA_JOIN_TREATY_TEXT_DELAYED uses command !antarctica_treaty_join_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8172,Error,CW266,Localisation key ANTARCTICA_LEAVE_TREATY_TEXT_DELAYED uses command !antarctica_treaty_leave_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8172,Error,CW266,Localisation key ANTARCTICA_LEAVE_TREATY_TEXT_DELAYED uses command !antarctica_treaty_leave_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8184,Error,CW266,Localisation key ANTARCTICA_JOIN_ATCP_TEXT_DELAYED uses command !antarctica_treaty_join_atcp_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8184,Error,CW266,Localisation key ANTARCTICA_JOIN_ATCP_TEXT_DELAYED uses command !antarctica_treaty_join_atcp_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8210,Error,CW266,Localisation key ANTARCTICA_JOIN_CCAS_TEXT_DELAYED uses command !antarctica_treaty_join_ccas_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8210,Error,CW266,Localisation key ANTARCTICA_JOIN_CCAS_TEXT_DELAYED uses command !antarctica_treaty_join_ccas_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8222,Error,CW266,Localisation key ANTARCTICA_LEAVE_CCAS_TEXT_DELAYED uses command !antarctica_treaty_leave_ccas_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8222,Error,CW266,Localisation key ANTARCTICA_LEAVE_CCAS_TEXT_DELAYED uses command !antarctica_treaty_leave_ccas_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8254,Error,CW266,Localisation key ANTARCTICA_JOIN_CCAMLR_TEXT_DELAYED uses command !antarctica_treaty_join_ccamlr_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8254,Error,CW266,Localisation key ANTARCTICA_JOIN_CCAMLR_TEXT_DELAYED uses command !antarctica_treaty_join_ccamlr_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8266,Error,CW266,Localisation key ANTARCTICA_LEAVE_CCAMLR_TEXT_DELAYED uses command !antarctica_treaty_leave_ccamlr_button_click which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8266,Error,CW266,Localisation key ANTARCTICA_LEAVE_CCAMLR_TEXT_DELAYED uses command !antarctica_treaty_leave_ccamlr_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8306,Error,CW266,Localisation key ANTARCTICA_OPEN_MAP_TEXT_DELAYED uses command !antarctica_map_open_button_click_enabled which does not exist in data type scope.
 interface/MD_countrymissilesview.gui,8413,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/MD_countrymissilesview.gui,8598,Error,CW266,Localisation key ANTARCTICA_STATION_SEND_SUPPLIES_TEXT_DELAYED uses command !antarctica_station_send_supplies_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8606,Error,CW266,Localisation key ANTARCTICA_STATION_SEND_OBSERVERS_TEXT_DELAYED uses command !antarctica_station_send_observers_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8616,Error,CW266,Localisation key ANTARCTICA_STATION_DISMANTLE_TEXT_DELAYED uses command !antarctica_station_dismantle_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,8644,Error,CW266,Localisation key ANTARCTICA_STATION_SHOW_BP_TEXT_DELAYED uses command !antarctica_station_show_blueprint_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,868,Error,CW266,Localisation key PRODUCTION_START_12_TT uses command !start_button_12_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9365,Error,CW266,Localisation key ANTARCTICA_STATION_INSTALL_MODULE_TEXT_DELAYED uses command !antarctica_station_install_module_button_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9373,Error,CW266,Localisation key ANTARCTICA_STATION_SLOT_1_TT_DELAYED uses command !antarctic_station_module_slot_1_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9381,Error,CW266,Localisation key ANTARCTICA_STATION_SLOT_2_TT_DELAYED uses command !antarctic_station_module_slot_2_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9389,Error,CW266,Localisation key ANTARCTICA_STATION_SLOT_4_TT_DELAYED uses command !antarctic_station_module_slot_4_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9405,Error,CW266,Localisation key ANTARCTICA_STATION_SLOT_6_TT_DELAYED uses command !antarctic_station_module_slot_6_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9429,Error,CW266,Localisation key ANTARCTICA_STATION_SLOT_9_TT_DELAYED uses command !antarctic_station_module_slot_9_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9437,Error,CW266,Localisation key ANTARCTICA_STATION_SLOT_10_TT_DELAYED uses command !antarctic_station_module_slot_10_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9461,Error,CW266,Localisation key ANTARCTICA_STATION_SLOT_13_TT_DELAYED uses command !antarctic_station_module_slot_13_click_enabled which does not exist in data type scope.
-interface/MD_countrymissilesview.gui,9594,Error,CW266,Localisation key ANTARCTICA_STATION_TOGGLE_ILLEGAL_ACTIVITIES_TEXT_DELAYED uses command !antarctica_station_toggle_illegal_activities_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1121,Error,CW266,Localisation key ALLOW_ALL_PARTIES_TT_DELAYED uses command !allow_all_parties_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1121,Error,CW266,Localisation key ALLOW_ALL_PARTIES_TT_DELAYED uses command !allow_all_parties_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1128,Error,CW266,Localisation key BAN_ALL_PARTIES_TT_DELAYED uses command !ban_all_parties_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1128,Error,CW266,Localisation key BAN_ALL_PARTIES_TT_DELAYED uses command !ban_all_parties_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1681,Error,CW266,Localisation key boost_party_TT uses command !boost_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1681,Error,CW266,Localisation key boost_party_TT uses command !boost_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1687,Error,CW266,Localisation key attack_party_TT uses command !attack_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1687,Error,CW266,Localisation key attack_party_TT uses command !attack_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1693,Error,CW266,Localisation key ban_party_TT uses command !ban_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1693,Error,CW266,Localisation key ban_party_TT uses command !ban_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1699,Error,CW266,Localisation key allow_party_TT uses command !allow_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1699,Error,CW266,Localisation key allow_party_TT uses command !allow_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1818,Error,CW266,Localisation key allow_party_TT uses command !allow_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1818,Error,CW266,Localisation key allow_party_TT uses command !allow_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1860,Error,CW266,Localisation key allow_party_TT uses command !allow_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,1860,Error,CW266,Localisation key allow_party_TT uses command !allow_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,315,Error,CW266,Localisation key increase_election_threshold_TT uses command !increase_election_threshold_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,315,Error,CW266,Localisation key increase_election_threshold_TT uses command !increase_election_threshold_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,324,Error,CW266,Localisation key decrease_election_threshold_TT uses command !decrease_election_threshold_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,324,Error,CW266,Localisation key decrease_election_threshold_TT uses command !decrease_election_threshold_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,555,Error,CW266,Localisation key HOLD_REELECTIONS_TT uses command !hold_reelections_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,555,Error,CW266,Localisation key HOLD_REELECTIONS_TT uses command !hold_reelections_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,589,Error,CW266,Localisation key RETIRE_LEADER_TT uses command !retire_leader_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,589,Error,CW266,Localisation key RETIRE_LEADER_TT uses command !retire_leader_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,624,Error,CW266,Localisation key PERMANENTLY_SUSPEND_ELECTIONS_TT uses command !permanently_suspend_elections_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,624,Error,CW266,Localisation key PERMANENTLY_SUSPEND_ELECTIONS_TT uses command !permanently_suspend_elections_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,717,Error,CW266,Localisation key prowestern_propaganda_button_tt uses command !prowestern_propaganda_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,717,Error,CW266,Localisation key prowestern_propaganda_button_tt uses command !prowestern_propaganda_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,752,Error,CW266,Localisation key emerging_propaganda_button_tt uses command !emerging_propaganda_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,752,Error,CW266,Localisation key emerging_propaganda_button_tt uses command !emerging_propaganda_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,787,Error,CW266,Localisation key nonaligned_propaganda_button_tt uses command !nonaligned_propaganda_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,787,Error,CW266,Localisation key nonaligned_propaganda_button_tt uses command !nonaligned_propaganda_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,822,Error,CW266,Localisation key nationalist_propaganda_button_tt uses command !nationalist_propaganda_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,822,Error,CW266,Localisation key nationalist_propaganda_button_tt uses command !nationalist_propaganda_button_click_enabled which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,857,Error,CW266,Localisation key fascism_propaganda_button_tt uses command !fascism_propaganda_button_click which does not exist in data type scope.
-interface/MD_countrypoliticsview.gui,857,Error,CW266,Localisation key fascism_propaganda_button_tt uses command !fascism_propaganda_button_click_enabled which does not exist in data type scope.
 interface/MD_energy_scripted.gui,325,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/MD_energy_scripted.gui,360,Error,CW266,Localisation key heavy_power_restrictions_button_delayed_tt uses command !heavy_power_restrictions_button_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,369,Error,CW266,Localisation key some_power_restrictions_button_delayed_tt uses command !some_power_restrictions_button_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,378,Error,CW266,Localisation key no_power_restrictions_button_delayed_tt uses command !no_power_rules_button_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,387,Error,CW266,Localisation key some_additional_consumption_button_delayed_tt uses command !some_additional_consumption_button_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,396,Error,CW266,Localisation key heavy_additional_consumption_button_delayed_tt uses command !heavy_additional_consumption_button_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,405,Error,CW266,Localisation key enable_nuclear_reactor_fuel_production_delayed_tt uses command !enable_nuclear_reactor_fuel_production_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,405,Error,CW266,Localisation key enable_nuclear_reactor_fuel_production_delayed_tt uses command !enable_nuclear_reactor_fuel_production_click_enabled which does not exist in data type scope.
-interface/MD_energy_scripted.gui,451,Error,CW266,Localisation key build_battery_park_button_delayed_tt uses command !build_battery_park_button_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,451,Error,CW266,Localisation key build_battery_park_button_delayed_tt uses command !build_battery_park_button_click_enabled which does not exist in data type scope.
-interface/MD_energy_scripted.gui,451,Error,CW266,Localisation key build_battery_park_button_delayed_tt uses command !build_battery_park_button_shift_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,451,Error,CW266,Localisation key build_battery_park_button_delayed_tt uses command !build_battery_park_button_shift_click_enabled which does not exist in data type scope.
-interface/MD_energy_scripted.gui,460,Error,CW266,Localisation key buy_fuel_for_money_button_delayed_tt uses command !buy_fuel_for_money_button_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,460,Error,CW266,Localisation key buy_fuel_for_money_button_delayed_tt uses command !buy_fuel_for_money_button_click_enabled which does not exist in data type scope.
-interface/MD_energy_scripted.gui,480,Error,CW266,Localisation key toggle_fossil_fuel_power_plant_generation_delayed_tt uses command !toggle_fossil_fuel_power_plant_generation_click which does not exist in data type scope.
-interface/MD_energy_scripted.gui,489,Error,CW266,Localisation key toggle_nuclear_power_plant_generation_delayed_tt uses command !toggle_nuclear_power_plant_generation_click which does not exist in data type scope.
-interface/MD_influence.gui,377,Error,CW266,Localisation key influence_action_button_delayed_TT uses command !opt_influence_action_button_click which does not exist in data type scope.
-interface/MD_influence.gui,377,Error,CW266,Localisation key influence_action_button_delayed_TT uses command !opt_influence_action_button_click_enabled which does not exist in data type scope.
-interface/MD_influence.gui,377,Error,CW266,Localisation key influence_action_button_delayed_TT uses command !opt_influence_action_button_right_click which does not exist in data type scope.
-interface/MD_influence.gui,377,Error,CW266,Localisation key influence_action_button_delayed_TT uses command !opt_influence_action_button_right_click_enabled which does not exist in data type scope.
-interface/MD_influence.gui,384,Error,CW266,Localisation key aid_button_delayed_TT uses command !opt_aid_button_click_enabled which does not exist in data type scope.
-interface/MD_influence.gui,391,Error,CW266,Localisation key aid_military_button_delayed_TT uses command !opt_aid_military_button_click_enabled which does not exist in data type scope.
-interface/MD_influence.gui,405,Error,CW266,Localisation key target_other_button_delayed_TT uses command !opt_target_other_button_click_enabled which does not exist in data type scope.
-interface/MD_influence.gui,413,Error,CW266,Localisation key manipulate_politics_button_delayed_TT uses command !opt_manipulate_politics_button_click which does not exist in data type scope.
-interface/MD_influence.gui,413,Error,CW266,Localisation key manipulate_politics_button_delayed_TT uses command !opt_manipulate_politics_button_click_enabled which does not exist in data type scope.
-interface/MD_influence.gui,420,Error,CW266,Localisation key coup_button_delayed_TT uses command !opt_coup_button_click_enabled which does not exist in data type scope.
-interface/MD_influence.gui,427,Error,CW266,Localisation key economic_exploitation_button_delayed_TT uses command !opt_economic_exploitation_button_click which does not exist in data type scope.
-interface/MD_influence.gui,427,Error,CW266,Localisation key economic_exploitation_button_delayed_TT uses command !opt_economic_exploitation_button_click_enabled which does not exist in data type scope.
-interface/MD_influence.gui,434,Error,CW266,Localisation key make_puppet_button_delayed_TT uses command !opt_make_puppet_button_click which does not exist in data type scope.
-interface/MD_influence.gui,434,Error,CW266,Localisation key make_puppet_button_delayed_TT uses command !opt_make_puppet_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,131,Error,CW266,Localisation key investments_construction_CIC_delayed uses command !select_civ_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,152,Error,CW266,Localisation key investments_construction_MIC_delayed uses command !select_mil_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,173,Error,CW266,Localisation key investments_construction_NIC_delayed uses command !select_dockyard_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,194,Error,CW266,Localisation key investments_construction_agriculture_district_delayed uses command !select_agriculture_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,215,Error,CW266,Localisation key investments_construction_offices_delayed uses command !select_office_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,236,Error,CW266,Localisation key investments_construction_INF_delayed uses command !select_infrastructure_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,257,Error,CW266,Localisation key investments_construction_internet_station_delayed uses command !select_internet_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,278,Error,CW266,Localisation key investments_construction_POWER_PLANT_delayed uses command !select_fossil_fuel_power_plant_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,299,Error,CW266,Localisation key investments_construction_REF_delayed uses command !select_renewable_power_plant_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,320,Error,CW266,Localisation key investments_construction_NUCLEAR_REACTOR_delayed uses command !select_nuclear_power_plant_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,341,Error,CW266,Localisation key investments_construction_fuel_silo_delayed uses command !select_strategic_resource_reserve_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,362,Error,CW266,Localisation key investments_construction_AIR_delayed uses command !select_airbase_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,383,Error,CW266,Localisation key investments_construction_AA_delayed uses command !select_antyair_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,404,Error,CW266,Localisation key investments_construction_RAD_delayed uses command !select_radar_button_click_enabled which does not exist in data type scope.
-interface/MD_investments.gui,560,Error,CW266,Localisation key investments_build_button_tt_delayed uses command !invest_button_click which does not exist in data type scope.
-interface/MD_investments.gui,560,Error,CW266,Localisation key investments_build_button_tt_delayed uses command !invest_button_click_enabled which does not exist in data type scope.
 interface/MD_market_window.gui,45,Warning,CW100,Localisation key CLOSE is not defined for any language
 interface/MD_nukes.gui,10,Warning,CW100,Localisation key LAUNCH_NUKE_TOOLTIP is not defined for any language
 interface/MD_nukes.gui,11,Warning,CW100,Localisation key LAUNCH_NUKE_TOOLTIP_DELAYED is not defined for any language
-interface/MD_singapore_gui.gui,105,Error,CW266,Localisation key SIN_fund_western_clique_delayed_tt uses command !fund_western_clique_click which does not exist in data type scope.
-interface/MD_singapore_gui.gui,105,Error,CW266,Localisation key SIN_fund_western_clique_delayed_tt uses command !fund_western_clique_click_enabled which does not exist in data type scope.
-interface/MD_singapore_gui.gui,112,Error,CW266,Localisation key SIN_fund_eastern_clique_delayed_tt uses command !fund_eastern_clique_click which does not exist in data type scope.
-interface/MD_singapore_gui.gui,112,Error,CW266,Localisation key SIN_fund_eastern_clique_delayed_tt uses command !fund_eastern_clique_click_enabled which does not exist in data type scope.
-interface/MD_singapore_gui.gui,119,Error,CW266,Localisation key SIN_fund_neutral_clique_delayed_tt uses command !fund_neutral_clique_click which does not exist in data type scope.
-interface/MD_singapore_gui.gui,119,Error,CW266,Localisation key SIN_fund_neutral_clique_delayed_tt uses command !fund_neutral_clique_click_enabled which does not exist in data type scope.
-interface/MD_singapore_gui.gui,82,Error,CW266,Localisation key SIN_western_pressure_delayed_tt uses command !western_pressure_click which does not exist in data type scope.
-interface/MD_singapore_gui.gui,82,Error,CW266,Localisation key SIN_western_pressure_delayed_tt uses command !western_pressure_click_enabled which does not exist in data type scope.
-interface/MD_singapore_gui.gui,89,Error,CW266,Localisation key SIN_eastern_pressure_delayed_tt uses command !eastern_pressure_click which does not exist in data type scope.
-interface/MD_singapore_gui.gui,89,Error,CW266,Localisation key SIN_eastern_pressure_delayed_tt uses command !eastern_pressure_click_enabled which does not exist in data type scope.
 interface/MD_singapore_gui.gui,96,Warning,CW100,Localisation key SIN_neutarlity_pressure_delayed_tt is not defined for any language
-interface/agriculture_decisions.gui,150,Error,CW266,Localisation key ALLOCATE_FIELDS_BASIC uses command !basic_crop_allocation_button_click_enabled which does not exist in data type scope.
-interface/agriculture_decisions.gui,151,Error,CW266,Localisation key ALLOCATE_FIELDS_BASIC_DELAYED uses command !basic_crop_allocation_button_right_click_enabled which does not exist in data type scope.
-interface/agriculture_decisions.gui,177,Error,CW266,Localisation key ALLOCATE_FIELDS_CASH uses command !cash_crop_allocation_button_click_enabled which does not exist in data type scope.
-interface/agriculture_decisions.gui,178,Error,CW266,Localisation key ALLOCATE_FIELDS_CASH_DELAYED uses command !cash_crop_allocation_button_right_click_enabled which does not exist in data type scope.
-interface/agriculture_decisions.gui,72,Error,CW266,Localisation key AGRI_banked_change_TT uses command !AGRI_banked_change_click_enabled which does not exist in data type scope.
-interface/agriculture_decisions.gui,84,Error,CW266,Localisation key AGRI_banked_change_TT uses command !AGRI_banked_change_click_enabled which does not exist in data type scope.
 interface/airgroupview.gui,108,Warning,CW100,Localisation key DESELECT_UNIT is not defined for any language
 interface/airgroupview.gui,57,Warning,CW100,Localisation key 99 is not defined for any language
 interface/airselectionview.gui,144,Warning,CW100,Localisation key CLOSE is not defined for any language
@@ -6537,70 +6129,8 @@ interface/countrytradeview.gui,337,Warning,CW100,Localisation key CLOSE is not d
 interface/countrytradeview.gui,433,Warning,CW100,Localisation key SET_NEEDED_AMOUNT is not defined for any language
 interface/countrytradeview.gui,566,Warning,CW100,Localisation key SEND is not defined for any language
 interface/countrytradeview.gui,579,Warning,CW100,Localisation key CANCEL is not defined for any language
-interface/cze_scripted_gui.gui,103,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_SLO_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_SLO_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,110,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_SWI_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_SWI_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,117,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_SWE_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_SWE_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,124,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_norway_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_norway_button_click_enabled which does not exist in data type scope.
 interface/cze_scripted_gui.gui,1266,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/cze_scripted_gui.gui,131,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_belgium_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_belgium_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,138,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_netherlands_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_netherlands_button_click_enabled which does not exist in data type scope.
 interface/cze_scripted_gui.gui,179,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/cze_scripted_gui.gui,1797,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_north_flank_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_north_flank_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1797,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_north_flank_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_north_flank_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1817,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_north_flank_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_north_flank_politics_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1817,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_north_flank_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_north_flank_politics_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1837,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_north_flank_politics_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_north_flank_politics_button_two_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1837,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_north_flank_politics_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_north_flank_politics_button_two_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1857,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_north_flank_politics_button_three_delayed_text uses command !CZE_petr_pavel_scripted_gui_north_flank_politics_button_three_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1857,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_north_flank_politics_button_three_delayed_text uses command !CZE_petr_pavel_scripted_gui_north_flank_politics_button_three_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1893,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_east_south_flank_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_east_south_flank_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1893,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_east_south_flank_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_east_south_flank_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1913,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1913,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1933,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_two_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1933,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_two_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1953,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_three_delayed_text uses command !CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_three_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1953,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_three_delayed_text uses command !CZE_petr_pavel_scripted_gui_east_south_flank_politics_button_three_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1989,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_eastern_flank_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_eastern_flank_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,1989,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_eastern_flank_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_eastern_flank_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2009,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_eastern_flank_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_eastern_flank_button_two_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2009,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_eastern_flank_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_eastern_flank_button_two_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2029,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_eastern_flank_political_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_eastern_flank_political_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2029,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_eastern_flank_political_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_eastern_flank_political_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2065,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_usa_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_usa_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2065,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_usa_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_usa_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2085,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_usa_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_usa_button_two_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2085,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_usa_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_usa_button_two_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2105,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_usa_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_usa_politics_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2105,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_usa_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_usa_politics_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2141,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_russia_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_russia_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2141,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_russia_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_russia_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2161,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_russia_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_russia_politics_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2161,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_russia_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_russia_politics_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2197,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_qatar_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_qatar_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2197,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_qatar_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_qatar_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2217,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_qatar_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_qatar_politics_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2217,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_qatar_politics_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_qatar_politics_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2253,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_iraq_delayed_text uses command !CZE_petr_pavel_scripted_gui_iraq_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2253,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_iraq_delayed_text uses command !CZE_petr_pavel_scripted_gui_iraq_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2273,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_iraq_politics_delayed_text uses command !CZE_petr_pavel_scripted_gui_iraq_politics_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2273,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_iraq_politics_delayed_text uses command !CZE_petr_pavel_scripted_gui_iraq_politics_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2309,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_afghanistan_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_afghanistan_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2309,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_afghanistan_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_afghanistan_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2329,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_afghanistan_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_afghanistan_button_two_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2329,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_afghanistan_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_afghanistan_button_two_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2349,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_afghanistan_political_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_afghanistan_political_button_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2349,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_afghanistan_political_button_delayed_text uses command !CZE_petr_pavel_scripted_gui_afghanistan_political_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2369,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_afghanistan_political_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_afghanistan_political_button_two_click which does not exist in data type scope.
-interface/cze_scripted_gui.gui,2369,Error,CW266,Localisation key CZE_petr_pavel_scripted_gui_afghanistan_political_button_two_delayed_text uses command !CZE_petr_pavel_scripted_gui_afghanistan_political_button_two_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,47,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_GER_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_GER_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,54,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_ENG_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_ENG_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,61,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_FRA_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_FRA_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,68,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_ITA_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_ITA_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,75,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_SPR_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_SPR_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,82,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_POL_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_POL_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,89,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_SOV_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_SOV_button_click_enabled which does not exist in data type scope.
-interface/cze_scripted_gui.gui,96,Error,CW266,Localisation key CZE_skoda_superb_cars_sell_AUS_button_delayed_TT uses command !CZE_skoda_superb_cars_sell_AUS_button_click_enabled which does not exist in data type scope.
 interface/divisiondesignerview.gui,1009,Warning,CW100,Localisation key DIVISION_PRODUCTION_COST_DESC is not defined for any language
 interface/divisiondesignerview.gui,1296,Warning,CW100,Localisation key EQUIPMENT_CATEGORIES_RESET is not defined for any language
 interface/divisiondesignerview.gui,1311,Warning,CW100,Localisation key USE_DEFAULT_MODEL_IN_DIVISION_DESIGNER_TOOLTIP is not defined for any language
@@ -6648,120 +6178,9 @@ interface/equipmentdesignerview.gui,957,Warning,CW100,Localisation key CLOSE is 
 interface/equipmentdesignerview.gui,973,Warning,CW100,Localisation key EQUIPMENT_DESIGNER_PRODUCTION_RESOURCE_DESC is not defined for any language
 interface/equipmentupgradedesignerwindow.gui,113,Warning,CW100,Localisation key CLOSE is not defined for any language
 interface/equipmentupgradedesignerwindow.gui,45,Warning,CW100,Localisation key CURRENT_EXPERIENCE is not defined for any language
-interface/eu.gui,1003,Error,CW266,Localisation key eme_rea_tt uses command !PG_party_6_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1012,Error,CW266,Localisation key eme_aut_tt uses command !PG_party_7_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1021,Error,CW266,Localisation key eme_msh_tt uses command !PG_party_8_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1030,Error,CW266,Localisation key eme_hsh_tt uses command !PG_party_9_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1039,Error,CW266,Localisation key sal_est_tt uses command !PG_party_10_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1048,Error,CW266,Localisation key sal_jih_tt uses command !PG_party_11_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1057,Error,CW266,Localisation key neu_isl_tt uses command !PG_party_12_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1066,Error,CW266,Localisation key neu_aut_tt uses command !PG_party_13_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1075,Error,CW266,Localisation key neu_con_tt uses command !PG_party_14_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1084,Error,CW266,Localisation key neu_oli_tt uses command !PG_party_15_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1093,Error,CW266,Localisation key neu_lib_tt uses command !PG_party_16_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1102,Error,CW266,Localisation key neu_gre_tt uses command !PG_party_17_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1111,Error,CW266,Localisation key neu_soc_tt uses command !PG_party_18_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1120,Error,CW266,Localisation key neu_com_tt uses command !PG_party_19_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1129,Error,CW266,Localisation key nat_pop_tt uses command !PG_party_20_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1138,Error,CW266,Localisation key nat_facism_tt uses command !PG_party_21_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,1147,Error,CW266,Localisation key nat_autocracy_tt uses command !PG_party_22_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,115,Error,CW266,Localisation key EU_article_50_available_click uses command !EU_Article_50_click_enabled which does not exist in data type scope.
-interface/eu.gui,1156,Error,CW266,Localisation key monarchist_tt uses command !PG_party_23_influence_click_enabled which does not exist in data type scope.
 interface/eu.gui,124,Warning,CW100,Localisation key DIPLOMACY_CLOSE is not defined for any language
-interface/eu.gui,1240,Error,CW266,Localisation key pass_vote_button_desc uses command !pass_vote_button_click which does not exist in data type scope.
-interface/eu.gui,1240,Error,CW266,Localisation key pass_vote_button_desc uses command !pass_vote_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,1249,Error,CW266,Localisation key remove_vote_button_desc uses command !remove_vote_button_click which does not exist in data type scope.
-interface/eu.gui,1249,Error,CW266,Localisation key remove_vote_button_desc uses command !remove_vote_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,147,Error,CW266,Localisation key EU_president_council_tt uses command !eu_president_council_back_click which does not exist in data type scope.
-interface/eu.gui,156,Error,CW266,Localisation key EU_president_council_tt uses command !eu_president_council_back_click which does not exist in data type scope.
-interface/eu.gui,1567,Error,CW266,Localisation key EU_budget_global_expense_tooltip uses command !EU_global_expenses_click which does not exist in data type scope.
-interface/eu.gui,1567,Error,CW266,Localisation key EU_budget_global_expense_tooltip uses command !EU_global_expenses_click_enabled which does not exist in data type scope.
-interface/eu.gui,1567,Error,CW266,Localisation key EU_budget_global_expense_tooltip uses command !EU_global_expenses_right_click which does not exist in data type scope.
-interface/eu.gui,1567,Error,CW266,Localisation key EU_budget_global_expense_tooltip uses command !EU_global_expenses_right_click_enabled which does not exist in data type scope.
-interface/eu.gui,157,Error,CW266,Localisation key eu_president_council_tip uses command !eu_president_council_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,1577,Error,CW266,Localisation key EU_budget_admin_expense_tooltip uses command !EU_administration_expenses_click which does not exist in data type scope.
-interface/eu.gui,1577,Error,CW266,Localisation key EU_budget_admin_expense_tooltip uses command !EU_administration_expenses_click_enabled which does not exist in data type scope.
-interface/eu.gui,1577,Error,CW266,Localisation key EU_budget_admin_expense_tooltip uses command !EU_administration_expenses_right_click which does not exist in data type scope.
-interface/eu.gui,1577,Error,CW266,Localisation key EU_budget_admin_expense_tooltip uses command !EU_administration_expenses_right_click_enabled which does not exist in data type scope.
-interface/eu.gui,1587,Error,CW266,Localisation key EU_budget_subsidies_tooltip uses command !EU_growth_natural_subsidies_click which does not exist in data type scope.
-interface/eu.gui,1587,Error,CW266,Localisation key EU_budget_subsidies_tooltip uses command !EU_growth_natural_subsidies_click_enabled which does not exist in data type scope.
-interface/eu.gui,1587,Error,CW266,Localisation key EU_budget_subsidies_tooltip uses command !EU_growth_natural_subsidies_right_click which does not exist in data type scope.
-interface/eu.gui,1587,Error,CW266,Localisation key EU_budget_subsidies_tooltip uses command !EU_growth_natural_subsidies_right_click_enabled which does not exist in data type scope.
-interface/eu.gui,1627,Error,CW266,Localisation key eu_adjust_omt_program_tip uses command !EU_adjust_omt_program_click_enabled which does not exist in data type scope.
-interface/eu.gui,1637,Error,CW266,Localisation key EU_run_omt_program_tip uses command !EU_run_omt_program_click_enabled which does not exist in data type scope.
-interface/eu.gui,167,Error,CW266,Localisation key EU_president_council_tt uses command !eu_president_council_back_click which does not exist in data type scope.
-interface/eu.gui,168,Error,CW266,Localisation key eu_president_council_tip uses command !eu_president_council_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,179,Error,CW266,Localisation key eu_president_commission_tt uses command !eu_president_commission_back_click which does not exist in data type scope.
-interface/eu.gui,188,Error,CW266,Localisation key eu_president_commission_tt uses command !eu_president_commission_back_click which does not exist in data type scope.
-interface/eu.gui,189,Error,CW266,Localisation key eu_president_commission_tip uses command !eu_president_commission_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,199,Error,CW266,Localisation key eu_president_commission_tt uses command !eu_president_commission_back_click which does not exist in data type scope.
-interface/eu.gui,200,Error,CW266,Localisation key eu_president_commission_tip uses command !eu_president_commission_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,211,Error,CW266,Localisation key EU_central_bank_president_tt uses command !eu_central_bank_president_back_click which does not exist in data type scope.
-interface/eu.gui,2188,Error,CW266,Localisation key influence_country_vote_tt uses command !eu_council_voting_members_list_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,220,Error,CW266,Localisation key EU_central_bank_president_tt uses command !eu_central_bank_president_back_click which does not exist in data type scope.
-interface/eu.gui,2203,Error,CW266,Localisation key council_vote_button_tt uses command !eu_council_available_reforms_button_click which does not exist in data type scope.
-interface/eu.gui,2203,Error,CW266,Localisation key council_vote_button_tt uses command !eu_council_available_reforms_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,221,Error,CW266,Localisation key eu_central_bank_president_tip uses command !eu_central_bank_president_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,231,Error,CW266,Localisation key EU_central_bank_president_tt uses command !eu_central_bank_president_back_click which does not exist in data type scope.
-interface/eu.gui,232,Error,CW266,Localisation key eu_central_bank_president_tip uses command !eu_central_bank_president_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,2321,Error,CW266,Localisation key vote_requirements_tt uses command !eu_parliament_available_reforms_button_click which does not exist in data type scope.
-interface/eu.gui,2321,Error,CW266,Localisation key vote_requirements_tt uses command !eu_parliament_available_reforms_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,244,Error,CW266,Localisation key EU_high_representative_tt uses command !foreign_affairs_security_back_click which does not exist in data type scope.
-interface/eu.gui,253,Error,CW266,Localisation key EU_high_representative_tt uses command !foreign_affairs_security_back_click which does not exist in data type scope.
-interface/eu.gui,254,Error,CW266,Localisation key eu_foreign_affairs_security_tip uses command !foreign_affairs_security_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,264,Error,CW266,Localisation key EU_high_representative_tt uses command !foreign_affairs_security_back_click which does not exist in data type scope.
-interface/eu.gui,265,Error,CW266,Localisation key eu_foreign_affairs_security_tip uses command !foreign_affairs_security_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,276,Error,CW266,Localisation key EU_president_european_parliament_tt uses command !eu_parliament_president_back_click which does not exist in data type scope.
-interface/eu.gui,285,Error,CW266,Localisation key EU_president_european_parliament_tt uses command !eu_parliament_president_back_click which does not exist in data type scope.
-interface/eu.gui,286,Error,CW266,Localisation key eu_parliament_president_tip uses command !eu_parliament_president_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,296,Error,CW266,Localisation key EU_president_european_parliament_tt uses command !eu_parliament_president_back_click which does not exist in data type scope.
-interface/eu.gui,297,Error,CW266,Localisation key eu_parliament_president_tip uses command !eu_parliament_president_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,308,Error,CW266,Localisation key EU_ministry_of_economy_and_finance_tt uses command !eu_minister_economy_finance_back_click which does not exist in data type scope.
-interface/eu.gui,317,Error,CW266,Localisation key EU_ministry_of_economy_and_finance_tt uses command !eu_minister_economy_finance_back_click which does not exist in data type scope.
-interface/eu.gui,318,Error,CW266,Localisation key eu_minister_economy_finance_tip uses command !eu_minister_economy_finance_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,328,Error,CW266,Localisation key EU_ministry_of_economy_and_finance_tt uses command !eu_minister_economy_finance_back_click which does not exist in data type scope.
-interface/eu.gui,329,Error,CW266,Localisation key eu_minister_economy_finance_tip uses command !eu_minister_economy_finance_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,341,Error,CW266,Localisation key EU_frontex_director_tt uses command !eu_frontex_director_back_click which does not exist in data type scope.
-interface/eu.gui,350,Error,CW266,Localisation key EU_frontex_director_tt uses command !eu_frontex_director_back_click which does not exist in data type scope.
-interface/eu.gui,351,Error,CW266,Localisation key eu_frontex_director_tip uses command !eu_frontex_director_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,361,Error,CW266,Localisation key EU_frontex_director_tt uses command !eu_frontex_director_back_click which does not exist in data type scope.
-interface/eu.gui,362,Error,CW266,Localisation key eu_frontex_director_tip uses command !eu_frontex_director_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,373,Error,CW266,Localisation key EU_sec_general_euro_army_tt uses command !eu_sec_general_euro_army_back_click which does not exist in data type scope.
-interface/eu.gui,382,Error,CW266,Localisation key EU_sec_general_euro_army_tt uses command !eu_sec_general_euro_army_back_click which does not exist in data type scope.
-interface/eu.gui,383,Error,CW266,Localisation key eu_sec_general_euro_army_tip uses command !eu_sec_general_euro_army_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,393,Error,CW266,Localisation key EU_sec_general_euro_army_tt uses command !eu_sec_general_euro_army_back_click which does not exist in data type scope.
-interface/eu.gui,394,Error,CW266,Localisation key eu_sec_general_euro_army_tip uses command !eu_sec_general_euro_army_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,405,Error,CW266,Localisation key EU_sec_general_euro_navy_tt uses command !eu_sec_general_euro_navy_back_click which does not exist in data type scope.
-interface/eu.gui,414,Error,CW266,Localisation key EU_sec_general_euro_navy_tt uses command !eu_sec_general_euro_navy_back_click which does not exist in data type scope.
-interface/eu.gui,415,Error,CW266,Localisation key eu_sec_general_euro_navy_tip uses command !eu_sec_general_euro_navy_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,425,Error,CW266,Localisation key EU_sec_general_euro_navy_tt uses command !eu_sec_general_euro_navy_back_click which does not exist in data type scope.
-interface/eu.gui,426,Error,CW266,Localisation key eu_sec_general_euro_navy_tip uses command !eu_sec_general_euro_navy_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,438,Error,CW266,Localisation key EU_ambassador_to_un_tt uses command !eu_ambassador_to_un_back_click which does not exist in data type scope.
-interface/eu.gui,447,Error,CW266,Localisation key EU_ambassador_to_un_tt uses command !eu_ambassador_to_un_back_click which does not exist in data type scope.
-interface/eu.gui,448,Error,CW266,Localisation key eu_ambassador_to_un_tip uses command !eu_ambassador_to_un_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,458,Error,CW266,Localisation key EU_ambassador_to_un_tt uses command !eu_ambassador_to_un_back_click which does not exist in data type scope.
-interface/eu.gui,459,Error,CW266,Localisation key eu_ambassador_to_un_tip uses command !eu_ambassador_to_un_back_click_enabled which does not exist in data type scope.
-interface/eu.gui,470,Error,CW266,Localisation key EU_president_of_the_eurofederation_tt uses command !eu_pres_federation_back_click which does not exist in data type scope.
 interface/eu.gui,471,Warning,CW100,Localisation key eu_pres_federation_back_tip is not defined for any language
-interface/eu.gui,480,Error,CW266,Localisation key EU_president_of_the_eurofederation_tt uses command !eu_pres_federation_back_click which does not exist in data type scope.
-interface/eu.gui,481,Error,CW266,Localisation key eu_pres_federation_tip uses command !eu_pres_federation_back_click_enabled which does not exist in data type scope.
 interface/eu.gui,492,Warning,CW100,Localisation key EU_retire_from_offices_desc is not defined for any language
-interface/eu.gui,610,Error,CW266,Localisation key root_euroscepticism_campaign_desc uses command !euroscepticism_country_button_click which does not exist in data type scope.
-interface/eu.gui,610,Error,CW266,Localisation key root_euroscepticism_campaign_desc uses command !euroscepticism_country_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,620,Error,CW266,Localisation key root_pro_european_campaign_desc uses command !proeuro_country_button_click which does not exist in data type scope.
-interface/eu.gui,620,Error,CW266,Localisation key root_pro_european_campaign_desc uses command !proeuro_country_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,630,Error,CW266,Localisation key euroscepticism_campaign_desc uses command !euroscepticism_euwide_button_click which does not exist in data type scope.
-interface/eu.gui,630,Error,CW266,Localisation key euroscepticism_campaign_desc uses command !euroscepticism_euwide_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,640,Error,CW266,Localisation key pro_european_campaign_desc uses command !proeuro_euwide_button_click which does not exist in data type scope.
-interface/eu.gui,640,Error,CW266,Localisation key pro_european_campaign_desc uses command !proeuro_euwide_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,662,Error,CW266,Localisation key approve_ipa_tt uses command !approve_IPA_button_click which does not exist in data type scope.
-interface/eu.gui,662,Error,CW266,Localisation key approve_ipa_tt uses command !approve_IPA_button_click_enabled which does not exist in data type scope.
-interface/eu.gui,949,Error,CW266,Localisation key wes_aut_tt uses command !PG_party_0_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,958,Error,CW266,Localisation key wes_con_tt uses command !PG_party_1_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,967,Error,CW266,Localisation key wes_lib_tt uses command !PG_party_2_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,976,Error,CW266,Localisation key wes_soc_tt uses command !PG_party_3_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,985,Error,CW266,Localisation key eme_com_tt uses command !PG_party_4_influence_click_enabled which does not exist in data type scope.
-interface/eu.gui,994,Error,CW266,Localisation key eme_ana_tt uses command !PG_party_5_influence_click_enabled which does not exist in data type scope.
 interface/factions/countryfactionview.gui,1484,Warning,CW100,Localisation key UNIT_LEADER_NAME_SORT is not defined for any language
 interface/factions/countryfactionview.gui,1547,Warning,CW100,Localisation key CLOSE is not defined for any language
 interface/factions/countryfactionview.gui,1857,Warning,CW100,Localisation key CLOSE is not defined for any language
@@ -6815,42 +6234,12 @@ interface/frontendmainview.gui,301,Warning,CW100,Localisation key MENU_ACHIEVEME
 interface/frontendmainview.gui,651,Warning,CW100,Localisation key MENU_ACHIEVEMENTS is not defined for any language
 interface/frontendmainview.gui,689,Warning,CW100,Localisation key MENU_PRIVACY_POLICY is not defined for any language
 interface/gdp_graph.gui,40,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/hezbollah.gui,255,Error,CW266,Localisation key RECRUIT_MILITIA_TT uses command !recruit_militia_icon_click_enabled which does not exist in data type scope.
-interface/hezbollah.gui,262,Error,CW266,Localisation key SELL_WEAPONS_TT uses command !sell_weapons_icon_click_enabled which does not exist in data type scope.
-interface/hezbollah.gui,269,Error,CW266,Localisation key INFLUENCING_TT uses command !influencing_icon_click_enabled which does not exist in data type scope.
-interface/hezbollah.gui,276,Error,CW266,Localisation key ATTACKING_ZIONISTS_TT uses command !attack_israel_icon_click_enabled which does not exist in data type scope.
 interface/ingamemenu.gui,144,Warning,CW100,Localisation key MENU_PRIVACY_POLICY is not defined for any language
 interface/ingamemenu.gui,166,Warning,CW100,Localisation key MENU_X is not defined for any language
 interface/ingamemenu.gui,184,Warning,CW100,Localisation key MENU_INSTAGRAM is not defined for any language
 interface/ingamemenu.gui,194,Warning,CW100,Localisation key MENU_YOUTUBE is not defined for any language
 interface/ingamemenu.gui,264,Warning,CW100,Localisation key MENU_PRIVACY_POLICY is not defined for any language
 interface/ingamemenu.gui,270,Warning,CW100,Localisation key MENU_ACHIEVEMENTS is not defined for any language
-interface/investments_window.gui,102,Error,CW266,Localisation key expand_local_energy_infrastructure_delayed_tt uses command !expand_local_energy_infrastructure_click which does not exist in data type scope.
-interface/investments_window.gui,102,Error,CW266,Localisation key expand_local_energy_infrastructure_delayed_tt uses command !expand_local_energy_infrastructure_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,111,Error,CW266,Localisation key build_forward_logistics_base_delayed_tt uses command !build_forward_logistics_base_click which does not exist in data type scope.
-interface/investments_window.gui,111,Error,CW266,Localisation key build_forward_logistics_base_delayed_tt uses command !build_forward_logistics_base_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,120,Error,CW266,Localisation key improve_rebuilding_efforts_delayed_tt uses command !improve_rebuilding_efforts_click which does not exist in data type scope.
-interface/investments_window.gui,120,Error,CW266,Localisation key improve_rebuilding_efforts_delayed_tt uses command !improve_rebuilding_efforts_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,129,Error,CW266,Localisation key hire_extra_primary_sector_workers_delayed_tt uses command !hire_extra_primary_sector_workers_click which does not exist in data type scope.
-interface/investments_window.gui,129,Error,CW266,Localisation key hire_extra_primary_sector_workers_delayed_tt uses command !hire_extra_primary_sector_workers_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,138,Error,CW266,Localisation key expand_local_coastal_infrastructure_delayed_tt uses command !expand_local_coastal_infrastructure_click which does not exist in data type scope.
-interface/investments_window.gui,138,Error,CW266,Localisation key expand_local_coastal_infrastructure_delayed_tt uses command !expand_local_coastal_infrastructure_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,147,Error,CW266,Localisation key expand_local_fortification_efforts_delayed_tt uses command !expand_local_fortification_efforts_click which does not exist in data type scope.
-interface/investments_window.gui,147,Error,CW266,Localisation key expand_local_fortification_efforts_delayed_tt uses command !expand_local_fortification_efforts_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,157,Error,CW266,Localisation key improve_local_conservation_efforts_delayed_tt uses command !improve_local_conservation_efforts_click which does not exist in data type scope.
-interface/investments_window.gui,157,Error,CW266,Localisation key improve_local_conservation_efforts_delayed_tt uses command !improve_local_conservation_efforts_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,48,Error,CW266,Localisation key encourage_investments_in_state_delayed_tt uses command !encourage_investments_in_state_click which does not exist in data type scope.
-interface/investments_window.gui,48,Error,CW266,Localisation key encourage_investments_in_state_delayed_tt uses command !encourage_investments_in_state_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,57,Error,CW266,Localisation key encourage_productivity_in_state_delayed_tt uses command !encourage_productivity_in_state_click which does not exist in data type scope.
-interface/investments_window.gui,57,Error,CW266,Localisation key encourage_productivity_in_state_delayed_tt uses command !encourage_productivity_in_state_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,66,Error,CW266,Localisation key expand_local_building_capacity_delayed_tt uses command !expand_local_building_capacity_click which does not exist in data type scope.
-interface/investments_window.gui,66,Error,CW266,Localisation key expand_local_building_capacity_delayed_tt uses command !expand_local_building_capacity_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,75,Error,CW266,Localisation key expand_local_renewable_capacity_delayed_tt uses command !expand_local_renewable_capacity_click which does not exist in data type scope.
-interface/investments_window.gui,75,Error,CW266,Localisation key expand_local_renewable_capacity_delayed_tt uses command !expand_local_renewable_capacity_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,84,Error,CW266,Localisation key expand_local_infrastructure_delayed_tt uses command !expand_local_infrastructure_click which does not exist in data type scope.
-interface/investments_window.gui,84,Error,CW266,Localisation key expand_local_infrastructure_delayed_tt uses command !expand_local_infrastructure_click_enabled which does not exist in data type scope.
-interface/investments_window.gui,93,Error,CW266,Localisation key expand_local_military_infrastructure_delayed_tt uses command !expand_local_military_infrastructure_click which does not exist in data type scope.
-interface/investments_window.gui,93,Error,CW266,Localisation key expand_local_military_infrastructure_delayed_tt uses command !expand_local_military_infrastructure_click_enabled which does not exist in data type scope.
 interface/ledger.gui,40,Warning,CW100,Localisation key CLOSE is not defined for any language
 interface/mapmodes_interface.gui,1019,Warning,CW100,Localisation key TOGGLE_PLAYER_COUNTERS_ONLY is not defined for any language
 interface/mapmodes_interface.gui,1041,Warning,CW100,Localisation key TOGGLE_UNIT_COUNTER_MODE is not defined for any language
@@ -6867,7 +6256,6 @@ interface/military_industrial_organization/industrial_organization_list.gui,351,
 interface/military_industrial_organization/industrial_organization_list.gui,57,Warning,CW100,Localisation key mio_sorting_name is not defined for any language
 interface/military_industrial_organization/industrial_organization_list.gui,67,Warning,CW100,Localisation key mio_sorting_task_cost is not defined for any language
 interface/military_industrial_organization/industrial_organization_list.gui,77,Warning,CW100,Localisation key mio_sorting_task_capacity is not defined for any language
-interface/military_industrial_organization/zz_mio_unlock_catalog.gui,184,Error,CW266,Localisation key MIO_CAT_UNLOCK_BTN_REQUIREMENTS_TT uses command !mio_cat_unlock_btn_click_enabled which does not exist in data type scope.
 interface/military_industrial_organization/zz_mio_unlock_catalog.gui,66,Warning,CW100,Localisation key CLOSE is not defined for any language
 interface/military_raids/country_raids_view.gui,481,Warning,CW100,Localisation key tooltip_additional_equipment_header is not defined for any language
 interface/military_raids/country_raids_view.gui,666,Warning,CW100,Localisation key RAID_OUTCOME_DISMISS is not defined for any language
@@ -6941,8 +6329,6 @@ interface/plane_designer_view.gui,822,Warning,CW100,Localisation key EQUIPMENT_D
 interface/plane_designer_view.gui,838,Warning,CW100,Localisation key EQUIPMENT_DESIGNER_DYNAMIC_VERSION_CHECKBOX_BUTTON_DESC is not defined for any language
 interface/plane_designer_view.gui,985,Warning,CW100,Localisation key EQUIPMENT_COMPARISON is not defined for any language
 interface/plane_designer_view.gui,996,Warning,CW100,Localisation key CLOSE is not defined for any language
-interface/pol_scripted_gui.gui,706,Error,CW266,Localisation key POL_sre_increase_effort_text_delayed uses command !POL_sre_increase_effort_button_click which does not exist in data type scope.
-interface/pol_scripted_gui.gui,721,Error,CW266,Localisation key POL_sre_decrease_effort_text_delayed uses command !POL_sre_decrease_effort_button_click which does not exist in data type scope.
 interface/popupwindow.gui,2519,Warning,CW100,Localisation key CLOSE is not defined for any language
 interface/popupwindow.gui,423,Warning,CW100,Localisation key DIPLOMACY_LEND_LEASE_ONCE_TOOLTIP is not defined for any language
 interface/powerbalanceview.gui,78,Warning,CW100,Localisation key CLOSE is not defined for any language
