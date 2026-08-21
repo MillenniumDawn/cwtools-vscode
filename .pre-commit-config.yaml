@@ -1,19 +1,25 @@
 ---
-# Pre-commit hooks for the cwtools Rust workspace (engine/).
+# Pre-commit hooks for this repository's toolchains.
 #
 # Setup (once per clone):
 #   pipx install pre-commit          # or: pip install --user pre-commit
 #   pre-commit install --hook-type pre-commit --hook-type pre-push
+#   # Rust (engine/) and the node tools come from the repo's own toolchains;
+#   # the Python linters need to be on PATH:
+#   pipx install ruff black          # pip install --user mypy pytest
+#   npm install                      # provides eslint via node_modules/.bin
 #
-# fmt + clippy gate every commit; the full test suite gates every push.
-# Commands mirror .github/workflows/engine-ci.yml so local failures match CI.
-# Bypass in a pinch with `git commit --no-verify` (use sparingly).
+# The Rust hooks gate every commit (fmt, clippy) and the test suite gates
+# every push, mirroring .github/workflows/engine-ci.yml. The TypeScript and
+# Python hooks run the same commands CI does (eslint ., the scripts' unit
+# suite) so local failures match CI. Bypass with `git commit --no-verify`.
 
 minimum_pre_commit_version: "3.2.0"
 
 repos:
   - repo: local
     hooks:
+      # --- Rust (engine/) -------------------------------------------------
       - id: cargo-fmt
         name: cargo fmt --check
         entry: >-
@@ -40,5 +46,49 @@ repos:
           --all-features --no-fail-fast'
         language: system
         files: ^engine/.*\.(rs|toml)$
+        pass_filenames: false
+        stages: [pre-push]
+
+      # --- TypeScript (extension/, build/) --------------------------------
+      # Lints only the files you changed (typescript-eslint's projectService
+      # resolves each one against its tsconfig), so it stays fast while still
+      # running the same rules as `npm run lint` (eslint .).
+      - id: eslint
+        name: eslint
+        entry: npx --no-install eslint
+        language: system
+        files: \.(ts|mjs|js)$
+        stages: [pre-commit]
+
+      # --- Python (scripts/) ----------------------------------------------
+      - id: ruff
+        name: ruff check
+        entry: ruff check
+        language: system
+        files: ^scripts/.*\.py$
+        stages: [pre-commit]
+
+      # Reformats the changed files in place (black, not --check), so the
+      # committed version is already formatted.
+      - id: black
+        name: black
+        entry: black
+        language: system
+        files: ^scripts/.*\.py$
+        stages: [pre-commit]
+
+      - id: mypy
+        name: mypy
+        entry: mypy scripts
+        language: system
+        files: ^scripts/.*\.py$
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: pytest
+        name: pytest (scripts)
+        entry: pytest scripts
+        language: system
+        files: ^scripts/.*\.py$
         pass_filenames: false
         stages: [pre-push]

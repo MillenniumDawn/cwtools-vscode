@@ -1,6 +1,6 @@
 ### Unreleased
 
-* `.pre-commit-config.yaml` is back at the repo root, fulfilling the pre-commit setup `docs/engine/CONTRIBUTING.md` describes. `cargo fmt --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` gate every commit; `cargo test --workspace --all-features` gates every push. The hooks `cd engine` and match `engine/**`, so they fire only on Rust changes, and their commands mirror `.github/workflows/engine-ci.yml`. (#382)
+* `.pre-commit-config.yaml` is back at the repo root, fulfilling the pre-commit setup `docs/engine/CONTRIBUTING.md` describes, and now covers every toolchain. Rust (`engine/`): `cargo fmt --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings` gate every commit; `cargo test --workspace --all-features` gates every push. TypeScript (`extension/`, `build/`): `eslint` (the same rules as `eslint .`) gates every commit. Python (`scripts/`): `ruff check` and `black` gate every commit, `mypy` gates every commit, and `pytest` gates every push. Every hook matches only the files it owns, so a docs-only change runs nothing, and each command mirrors what CI runs. (#382)
 
 * Repo helper scripts live under `scripts/` as Python, so the same commands run on Linux and Windows. `python3 scripts/guard.py corpus|md|vanilla` replaces the three `*-guard.sh` wrappers; coverage, workspace-manifest, syntax-sync, vsix-smoke and binary-staging moved there too.
 

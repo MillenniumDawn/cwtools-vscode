@@ -5,16 +5,30 @@ The active codebase is the Rust workspace in `engine/`.
 ## Local checks
 
 `.pre-commit-config.yaml` at the repo root installs format, lint, and test gates
-that mirror `.github/workflows/engine-ci.yml` (and run `cargo machete` and
-`cargo deny`, as CI does). One-time setup:
+for every toolchain, mirroring the commands CI runs so local failures match:
+
+- Rust (`engine/`): `cargo fmt --check` and `cargo clippy -D warnings` gate
+  every commit; `cargo test --workspace` gates every push (see
+  `.github/workflows/engine-ci.yml`).
+- TypeScript (`extension/`, `build/`): `eslint` (the same rules as `npm run
+  lint`, `eslint .`) gates every commit.
+- Python (`scripts/`): `ruff check` and `black` gate every commit; `mypy` gates
+  every commit; `pytest` gates every push.
+
+One-time setup:
 
 ```sh
 pipx install pre-commit          # or: pip install --user pre-commit
 pre-commit install --hook-type pre-commit --hook-type pre-push
+# The Python linters must be on PATH (the Rust and TypeScript ones come from
+# the repo's own toolchains):
+pipx install ruff black          # pip install --user mypy pytest
+npm install                      # provides eslint via node_modules/.bin
 ```
 
-fmt and clippy gate every commit; the full test suite gates every push. You can
-still run the same commands by hand from `engine/` when you want a faster loop.
+The hooks fire only on the files they cover, so a docs-only change runs nothing.
+You can still run the same commands by hand (`cargo` from `engine/`, `npx
+--no-install eslint`, `ruff check scripts`, ...) when you want a faster loop.
 Bypass the hooks in a pinch with `git commit --no-verify` (use sparingly).
 
 ## Running checks by hand
