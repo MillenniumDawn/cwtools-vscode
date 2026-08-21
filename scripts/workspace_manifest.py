@@ -43,7 +43,7 @@ def has_lints_workspace(text: str) -> bool:
 
 
 def main() -> int:
-    ws_root = Path(os.environ.get("CWTOOLS_RS") or (REPO_ROOT / "cwtools-rs"))
+    ws_root = Path(os.environ.get("CWTOOLS_RS") or (REPO_ROOT / "engine"))
     crates_dir = ws_root / "crates"
     if not crates_dir.is_dir():
         die(f"crates dir not found: {crates_dir}")

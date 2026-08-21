@@ -192,7 +192,7 @@ def build_config(
     bin_path = Path(
         args.bin
         or env.get("CWTOOLS_BIN")
-        or (repo_root / "cwtools-rs" / "target" / "release" / "cwtools")
+        or (repo_root / "engine" / "target" / "release" / "cwtools")
     )
     game = args.game or env.get("CWTOOLS_GAME") or "hoi4"
 
@@ -281,7 +281,7 @@ def run_guard(config: Config) -> int:
         print("guard: cargo build --release -p cwtools_cli")
         built = subprocess.run(
             ["cargo", "build", "--release", "-p", "cwtools_cli"],
-            cwd=config.repo_root / "cwtools-rs",
+            cwd=config.repo_root / "engine",
         )
         if built.returncode != 0:
             die("release build failed; nothing to validate with")

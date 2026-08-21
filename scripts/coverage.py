@@ -20,7 +20,7 @@ def main() -> int:
         )
         return 1
 
-    workspace = Path(os.environ.get("CWTOOLS_RS") or (REPO_ROOT / "cwtools-rs"))
+    workspace = Path(os.environ.get("CWTOOLS_RS") or (REPO_ROOT / "engine"))
     coverage_dir = workspace / "target" / "coverage"
     coverage_dir.mkdir(parents=True, exist_ok=True)
 

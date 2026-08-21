@@ -2,33 +2,33 @@ import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "node:url";
 
 // Node-only unit tests for the near-pure modules (no real vscode API needed).
-// The vscode-host suites live in client/test/suite and run under
+// The VS Code host suites live in extension/test/host and run under
 // @vscode/test-cli (see .vscode-test.mjs). Coverage here owns engine.ts,
 // executable.ts, games.ts, rulesManifest.ts, rulesSetup.ts, and the webview
 // graph module; the host run excludes them so the two reports stay disjoint.
 export default defineConfig({
 	test: {
-		include: ["client/test/unit/**/*.test.ts", "build/**/*.test.ts"],
+		include: ["extension/test/unit/**/*.test.ts", "build/**/*.test.ts"],
 		environment: "node",
 		coverage: {
 			provider: "v8",
 			include: [
 				"build/changelog.ts",
 				"build/rulesPins.ts",
-				"client/extension/commandProgress.ts",
-				"client/extension/commands.ts",
-				"client/extension/diagnosticsSignature.ts",
-				"client/extension/engine.ts",
-				"client/extension/executable.ts",
-				"client/extension/fileListSignature.ts",
-				"client/extension/fnv1a.ts",
-				"client/extension/focusTracking.ts",
-				"client/extension/games.ts",
-				"client/extension/logger.ts",
-				"client/extension/reindexSettings.ts",
-				"client/extension/rulesManifest.ts",
-				"client/extension/rulesSetup.ts",
-				"client/webview/graph.ts",
+				"extension/src/host/commandProgress.ts",
+				"extension/src/host/commands.ts",
+				"extension/src/host/diagnosticsSignature.ts",
+				"extension/src/host/engine.ts",
+				"extension/src/host/executable.ts",
+				"extension/src/host/fileListSignature.ts",
+				"extension/src/host/fnv1a.ts",
+				"extension/src/host/focusTracking.ts",
+				"extension/src/host/games.ts",
+				"extension/src/host/logger.ts",
+				"extension/src/host/reindexSettings.ts",
+				"extension/src/host/rulesManifest.ts",
+				"extension/src/host/rulesSetup.ts",
+				"extension/src/webview/graph.ts",
 			],
 			reporter: ["text-summary", "html", "lcov", "json-summary"],
 			reportsDirectory: "coverage-node",
@@ -39,7 +39,7 @@ export default defineConfig({
 		// so these tests stay out of the Electron host.
 		alias: {
 			vscode: fileURLToPath(
-				new URL("./client/test/unit/_stubs/vscode.ts", import.meta.url),
+				new URL("./extension/test/unit/_stubs/vscode.ts", import.meta.url),
 			),
 		},
 	},

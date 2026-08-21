@@ -11,8 +11,8 @@
 			"vscode-languageclient/node": ["node_modules/vscode-languageclient/lib/node/main"],
 			"vscode-languageserver-protocol": ["node_modules/vscode-languageserver-protocol/lib/common/api"]
 		},
-		"rootDir": "client",
-		"outDir": "release/bin/client",
+		"rootDir": "extension",
+		"outDir": "dist/extension/bin/client",
 		"lib": [ "es2020", "dom" ],
 		"sourceMap": true,
 		"esModuleInterop": true,
@@ -20,7 +20,7 @@
 		"skipLibCheck": true
 	},
 	"include": [
-		"client"
+		"extension"
 	],
 	"exclude": [
 		"node_modules",

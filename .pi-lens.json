@@ -1,9 +1,9 @@
 {
   "ignore": [
-    "client/test/fixtures/**",
-    "client/test/sample/**",
-    "cwtools-rs/fuzz/seeds/**",
-    "cwtools-rs/testfiles/**"
+    "extension/test/fixtures/**",
+    "extension/test/workspaces/**",
+    "engine/fuzz/seeds/**",
+    "engine/testfiles/**"
   ],
   "rules": {
     "high-complexity": { "threshold": 12 },

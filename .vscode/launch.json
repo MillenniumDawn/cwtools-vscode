@@ -1,83 +1,73 @@
-// A launch configuration that compiles the extension and then opens it inside a new window
-// Use IntelliSense to learn about possible attributes.
-// Hover to view descriptions of existing attributes.
-// For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
 {
-	"version": "0.2.0",
-    "configurations": [
-        {
-            "preLaunchTask": "Build",
-            "name": "Quick update, Build and Launch Extension",
-            "type": "extensionHost",
-            "runtimeExecutable": "${execPath}",
-            "args": [
-                "${input:gamePath}",
-                "--extensionDevelopmentPath=${workspaceRoot}/release"
-            ],
-            "request": "launch",
-            "sourceMaps": false,
-            "presentation": {
-                "hidden": true
-            }
-        },
-        {
-    "name": "Extension Tests",
-    "type": "extensionHost",
-    "request": "launch",
-    "preLaunchTask": "Build",
-    // "runtimeExecutable": "${execPath}",
-    "testConfiguration": "${workspaceFolder}/.vscode-test.mjs",
-    // "args": [
-        // "--extensionDevelopmentPath=${workspaceFolder}/release",
-        // "--extensionTestsPath=${workspaceFolder}/release/bin/client/test/suite/index"
-    // ],
-    // "outFiles": [
-        // "${workspaceFolder}/release/bin/client/test/**/*.js"
-    // ]
-},
-        {
-            "preLaunchTask": "BuildDebug",
-            "name": "Quick update, Build and Launch Extension (Debug)",
-            "type": "extensionHost",
-            "runtimeExecutable": "${execPath}",
-            "args": [
-                "${input:gamePath}",
-                "--extensionDevelopmentPath=${workspaceRoot}/release",
-                "--disable-extensions"
-            ],
-            "request": "launch",
-            "sourceMaps": false,
-            "presentation": {
-                "hidden": true
-            }
-        },
-    ],
-    "compounds": [
-        {
-            "name": "Debug cwtools",
-            "configurations": ["Quick update, Build and Launch Extension (Debug)"],
-            "presentation": {
-                "group": "Full",
-                "order": 2
-            }
-        },
-        {
-            "name": "Run cwtools (optimised)",
-            "configurations": [
-                "Quick update, Build and Launch Extension"
-            ],
-            "presentation": {
-                "group": "Full",
-                "order": 1
-            }
-        }
-    ],
-    "inputs": [
-        {
-            "id": "gamePath",
-            "type": "promptString",
-            "description": "Game/mod folder to open in the Extension Host",
-            "default": "/mnt/Linux/Millennium-Dawn"
-        }
-    ]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "preLaunchTask": "Build",
+      "name": "Quick update, Build and Launch Extension",
+      "type": "extensionHost",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "${input:gamePath}",
+        "--extensionDevelopmentPath=${workspaceRoot}/dist/extension"
+      ],
+      "request": "launch",
+      "sourceMaps": false,
+      "presentation": {
+        "hidden": true
+      }
+    },
+    {
+      "name": "Extension Tests",
+      "type": "extensionHost",
+      "request": "launch",
+      "preLaunchTask": "Build",
+      "testConfiguration": "${workspaceFolder}/.vscode-test.mjs"
+    },
+    {
+      "preLaunchTask": "BuildDebug",
+      "name": "Quick update, Build and Launch Extension (Debug)",
+      "type": "extensionHost",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "${input:gamePath}",
+        "--extensionDevelopmentPath=${workspaceRoot}/dist/extension",
+        "--disable-extensions"
+      ],
+      "request": "launch",
+      "sourceMaps": false,
+      "presentation": {
+        "hidden": true
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug cwtools",
+      "configurations": [
+        "Quick update, Build and Launch Extension (Debug)"
+      ],
+      "presentation": {
+        "group": "Full",
+        "order": 2
+      }
+    },
+    {
+      "name": "Run cwtools (optimised)",
+      "configurations": [
+        "Quick update, Build and Launch Extension"
+      ],
+      "presentation": {
+        "group": "Full",
+        "order": 1
+      }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "gamePath",
+      "type": "promptString",
+      "description": "Game/mod folder to open in the Extension Host",
+      "default": "/mnt/Linux/Millennium-Dawn"
+    }
+  ]
 }

@@ -29,12 +29,13 @@ jobs:
     timeout-minutes: 90
     defaults:
       run:
-        working-directory: cwtools-rs
+        working-directory: engine
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install Rust toolchain (stable)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
 
       # Registry cache only. The target dir is deliberately not cached: a warm
       # target dir is the thing this workflow is measuring the absence of.
@@ -44,7 +45,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ matrix.os }}-cargo-registry-${{ hashFiles('cwtools-rs/Cargo.lock') }}
+          key: >-
+            ${{ matrix.os }}-cargo-registry-${{
+            hashFiles('engine/Cargo.lock') }}
 
       - name: cargo clean
         run: cargo clean
@@ -55,17 +58,27 @@ jobs:
           $timer = [System.Diagnostics.Stopwatch]::StartNew()
           cargo build --workspace --release
           $timer.Stop()
-          "duration_ms=$($timer.ElapsedMilliseconds)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "duration_s=$([math]::Round($timer.Elapsed.TotalSeconds, 1))" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "duration_ms=$($timer.ElapsedMilliseconds)" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "duration_s=$([math]::Round($timer.Elapsed.TotalSeconds, 1))" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append
         shell: pwsh
 
       - name: Binary sizes
         id: sizes
         run: |
-          $cli = Get-Item "target/release/cwtools.exe" -ErrorAction SilentlyContinue
-          $srv = Get-Item "target/release/cwtools-server.exe" -ErrorAction SilentlyContinue
-          if (-not $cli) { $cli = Get-Item "target/release/cwtools" -ErrorAction SilentlyContinue }
-          if (-not $srv) { $srv = Get-Item "target/release/cwtools-server" -ErrorAction SilentlyContinue }
+          $cli = Get-Item "target/release/cwtools.exe" `
+            -ErrorAction SilentlyContinue
+          $srv = Get-Item "target/release/cwtools-server.exe" `
+            -ErrorAction SilentlyContinue
+          if (-not $cli) {
+            $cli = Get-Item "target/release/cwtools" `
+              -ErrorAction SilentlyContinue
+          }
+          if (-not $srv) {
+            $srv = Get-Item "target/release/cwtools-server" `
+              -ErrorAction SilentlyContinue
+          }
           $cliSize = if ($cli) { $cli.Length } else { 0 }
           $srvSize = if ($srv) { $srv.Length } else { 0 }
           "cli_bytes=$cliSize" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
@@ -85,7 +98,8 @@ jobs:
         shell: pwsh
 
       - name: Summary job annotation
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        # v9.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const os = '${{ matrix.os }}';
@@ -95,5 +109,7 @@ jobs:
             core.summary.addHeading(`${os} build results`, 3);
             core.summary.addRaw(`- Clean release build: **${dur}**\n`);
             core.summary.addRaw(`- cwtools: **${(cli/1e6).toFixed(1)}MB**\n`);
-            core.summary.addRaw(`- cwtools-server: **${(srv/1e6).toFixed(1)}MB**\n`);
+            core.summary.addRaw(
+              `- cwtools-server: **${(srv/1e6).toFixed(1)}MB**\n`
+            );
             core.summary.write();

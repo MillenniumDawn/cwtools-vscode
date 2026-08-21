@@ -17,9 +17,9 @@
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
 // language (no rules repo to clone). The sample workspace has no game name in
-// its path, but client/test/sample/common/species_classes (added for #185,
-// unrelated to detection) is Stellaris's content marker (see
-// client/extension/games.ts), so it already detects as `stellaris` and fetches
+// its path, but extension/test/workspaces/stellaris/common/species_classes
+// (added for #185, unrelated to detection) is Stellaris's content marker (see
+// extension/src/host/games.ts), so it already detects as `stellaris` and fetches
 // real rules in the background on activation. `host` needs the built server
 // binary, so it is gated in pr.yml's `build` job rather than `check`; two of
 // its assertions stay `test.skip` against genuine engine gaps
@@ -30,9 +30,9 @@
 // resolveRulesCache/fetchRulesInBackground actually run (see rulesSetup.ts).
 // games.ts and rulesManifest.ts read CWTOOLS_TEST_HOI4_REPO/_REF and
 // CWTOOLS_TEST_RULES_MANIFEST_URL (below) to point that sync at the
-// checked-in bare repo under client/test/fixtures/hoi4-rules.git instead of
+// checked-in bare repo under extension/test/fixtures/hoi4-rules.git instead of
 // the real network. It still needs a real cwtools-server binary staged at
-// release/bin/server: activation's init() returns before it ever reaches the
+// dist/extension/bin/server: activation's init() returns before it reaches the
 // rules sync when the binary is missing, same as `smoke`/`live`. Left out of
 // test:smoke for now rather than folded in unasked; wiring it into CI's smoke
 // step (pr.yml) is a separate call.
@@ -43,50 +43,50 @@
 import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";
 
-const sampleWorkspace = "./client/test/sample";
-const liveWorkspace = "./client/test/sample-live";
-const rulesSyncWorkspace = "./client/test/sample-hoi4";
-const sampleFile = "./client/test/sample/events/irm.txt";
-const liveSampleFile = "./client/test/sample-live/events/irm.txt";
-const rulesSyncSampleFile = "./client/test/sample-hoi4/events/irm.txt";
+const sampleWorkspace = "./extension/test/workspaces/stellaris";
+const liveWorkspace = "./extension/test/workspaces/live";
+const rulesSyncWorkspace = "./extension/test/workspaces/hoi4";
+const sampleFile = "./extension/test/workspaces/stellaris/events/irm.txt";
+const liveSampleFile = "./extension/test/workspaces/live/events/irm.txt";
+const rulesSyncSampleFile = "./extension/test/workspaces/hoi4/events/irm.txt";
 const hoi4RulesFixture = path.resolve(
 	import.meta.dirname,
-	"client/test/fixtures/hoi4-rules.git",
+	"extension/test/fixtures/hoi4-rules.git",
 );
 // Root hooks only, no tests: names the in-flight test if the host exits before
 // mocha reports (#216). First in every label, since the abort has now been seen
 // on `live` as well as `host`.
 const abortDiagnostics =
-	"./release/bin/client/test/support/abortDiagnostics.js";
+	"./dist/extension/bin/client/test/support/abortDiagnostics.js";
 const unitFiles = [
 	abortDiagnostics,
-	"./release/bin/client/test/suite/graphTypes.test.js",
-	"./release/bin/client/test/suite/fileExplorer.test.js",
+	"./dist/extension/bin/client/test/host/graphTypes.test.js",
+	"./dist/extension/bin/client/test/host/fileExplorer.test.js",
 ];
 // Live-settings fixture is isolated: its .vscode/settings.json pins
 // cwtools.rules_folder to .cwtools-test-rules, which replaces the ruleset.
 // Running it in the shared sample workspace would pollute the host/unit
 // suites (they expect the generic paradox ruleset), so it lives in
-// sample-live with its own workspace.
+// extension/test/workspaces/live with its own workspace.
 const smokeFiles = [
 	...unitFiles,
-	"./release/bin/client/test/suite/extension.test.js",
+	"./dist/extension/bin/client/test/host/extension.test.js",
 ];
 const liveFiles = [
 	abortDiagnostics,
-	"./release/bin/client/test/suite/liveSettings.test.js",
+	"./dist/extension/bin/client/test/host/liveSettings.test.js",
 ];
 const rulesSyncFiles = [
 	abortDiagnostics,
-	"./release/bin/client/test/suite/rulesSync.test.js",
+	"./dist/extension/bin/client/test/host/rulesSync.test.js",
 ];
 const hostFiles = [
 	abortDiagnostics,
-	"./release/bin/client/test/suite/graphTypes.test.js",
-	"./release/bin/client/test/suite/fileExplorer.test.js",
-	"./release/bin/client/test/suite/extension.test.js",
-	"./release/bin/client/test/suite/hover.test.js",
-	"./release/bin/client/test/suite/completion.test.js",
+	"./dist/extension/bin/client/test/host/graphTypes.test.js",
+	"./dist/extension/bin/client/test/host/fileExplorer.test.js",
+	"./dist/extension/bin/client/test/host/extension.test.js",
+	"./dist/extension/bin/client/test/host/hover.test.js",
+	"./dist/extension/bin/client/test/host/completion.test.js",
 ];
 
 // CI already renders the graph webview in software (#210's logs show the GPU
@@ -96,7 +96,7 @@ const softwareRendering = "--disable-gpu";
 
 const base = {
 	vscode: "stable",
-	extensionDevelopmentPath: "release",
+	extensionDevelopmentPath: "dist/extension",
 };
 
 export default defineConfig({
@@ -153,15 +153,15 @@ export default defineConfig({
 		// build/coverage-summary.ts is what actually drops node_modules and the
 		// vitest-owned files from the rendered report and recomputes the totals.
 		// The excludes below are kept as declared intent.
-		include: ["**/client/extension/**", "**/client/common/**"],
+		include: ["**/extension/src/host/**", "**/extension/src/common/**"],
 		exclude: [
-			"**/client/extension/engine.ts",
-			"**/client/extension/executable.ts",
-			"**/client/extension/games.ts",
-			"**/client/extension/rulesManifest.ts",
-			"**/client/extension/rulesSetup.ts",
-			"**/client/test/**",
-			"**/client/webview/**",
+			"**/extension/src/host/engine.ts",
+			"**/extension/src/host/executable.ts",
+			"**/extension/src/host/games.ts",
+			"**/extension/src/host/rulesManifest.ts",
+			"**/extension/src/host/rulesSetup.ts",
+			"**/extension/test/**",
+			"**/extension/src/webview/**",
 			"**/node_modules/**",
 		],
 	},
