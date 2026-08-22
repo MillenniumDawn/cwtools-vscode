@@ -144,24 +144,19 @@ export default defineConfig({
 	],
 	coverage: {
 		reporter: ["text-summary", "html", "lcov", "json-summary"],
-		// Intent: only the hand-written client source. vscode-test instruments
-		// every loaded file though, and doesn't reliably honor these globs: it
-		// leaks node_modules into the raw report (semver, vscode-jsonrpc, ...)
-		// and still reports engine.ts / executable.ts / games.ts / rulesManifest.ts
-		// / rulesSetup.ts even when excluded. Those are owned by the node unit
-		// tests (vitest, see vitest.config.ts);
-		// build/coverage-summary.ts is what actually drops node_modules and the
-		// vitest-owned files from the rendered report and recomputes the totals.
-		// The excludes below are kept as declared intent.
-		include: ["**/extension/src/host/**", "**/extension/src/common/**"],
+		// c8 filters emitted JavaScript paths before it remaps source maps, so
+		// these globs name the extension bundle and tsc output rather than the
+		// TypeScript source tree. The bundle's source map still brings bundled
+		// dependencies and Vitest-owned modules into the raw report;
+		// build/coverage-summary.ts filters those after remapping.
+		include: [
+			"**/dist/extension/bin/client/extension/extension.js",
+			"**/dist/extension/bin/client/src/host/**",
+			"**/dist/extension/bin/client/src/common/**",
+		],
 		exclude: [
-			"**/extension/src/host/engine.ts",
-			"**/extension/src/host/executable.ts",
-			"**/extension/src/host/games.ts",
-			"**/extension/src/host/rulesManifest.ts",
-			"**/extension/src/host/rulesSetup.ts",
-			"**/extension/test/**",
-			"**/extension/src/webview/**",
+			"**/dist/extension/bin/client/test/**",
+			"**/dist/extension/bin/client/webview/**",
 			"**/node_modules/**",
 		],
 	},

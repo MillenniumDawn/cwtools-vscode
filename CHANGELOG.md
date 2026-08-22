@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Extension
+
+* Extension-host coverage follows the emitted JavaScript paths again after the repository reorganization. The command removes old artifacts first, rejects empty reports, and names its `unit` label and source scope in the rendered summary. (#402)
+
 #### Engine
 
 * Localisation key changes now revalidate only other open localisation files whose cached `$ref$` set mentions a changed key. Parsed buffers are reused, while stale, missing, and fatally malformed buffers fall back to full revalidation. (#396)
