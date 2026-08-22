@@ -509,6 +509,7 @@ dependencies = [
  "cwtools_rules",
  "cwtools_string_table",
  "cwtools_validation",
+ "futures-util",
  "parking_lot",
  "rayon",
  "rustc-hash",

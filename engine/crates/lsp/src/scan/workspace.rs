@@ -1460,11 +1460,15 @@ mod tests {
     const SENTINEL_REV: u64 = 7;
 
     fn test_backend() -> Backend {
+        test_backend_with_socket().0
+    }
+
+    fn test_backend_with_socket() -> (Backend, tower_lsp::ClientSocket) {
         let state = Arc::new(DocumentState::new());
         let captured = Arc::new(parking_lot::Mutex::new(None));
         let slot = captured.clone();
         let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
+        let (_service, socket) = tower_lsp::LspService::new(move |client| {
             *slot.lock() = Some(client.clone());
             Backend {
                 client,
@@ -1472,7 +1476,7 @@ mod tests {
             }
         });
         let client = captured.lock().take().unwrap();
-        Backend { client, state }
+        (Backend { client, state }, socket)
     }
 
     fn clone_backend(backend: &Backend) -> Backend {
@@ -1845,6 +1849,72 @@ mod tests {
             WORKSPACE_DIAGNOSTICS_BUDGET,
             "only the budgeted number of closed files should be published"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_missing_workspace_root_logs_error_to_client() {
+        use futures_util::stream::StreamExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("no_such_workspace");
+        let missing_uri = Url::from_file_path(&missing).unwrap();
+        let (backend, socket) = test_backend_with_socket();
+        {
+            let mut cfg = backend.state.config.write();
+            cfg.workspace_uri = Some(missing_uri.as_str().into());
+            cfg.workspace_prefix = Some(crate::paths::workspace_prefix_of(missing_uri.as_str()));
+        }
+
+        let expected_root = missing.to_string_lossy().to_string();
+        let expected_root_for_collector = expected_root.clone();
+        let (found_tx, found_rx) = tokio::sync::oneshot::channel();
+        let collector = tokio::spawn(async move {
+            let mut socket = socket;
+            let mut found_tx = Some(found_tx);
+            while let Some(req) = socket.next().await {
+                if req.method() != "window/logMessage" {
+                    continue;
+                }
+                let Some(params) = req.params() else {
+                    continue;
+                };
+                let Some(msg_type) = params["type"].as_i64() else {
+                    continue;
+                };
+                let Some(msg) = params["message"].as_str() else {
+                    continue;
+                };
+                if msg_type == 1
+                    && msg.starts_with("error: discovery failed for")
+                    && msg.contains(&expected_root_for_collector)
+                    && let Some(tx) = found_tx.take()
+                {
+                    let _ = tx.send(msg.to_string());
+                }
+            }
+        });
+
+        let scan = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.validate_entire_workspace(false),
+        )
+        .await
+        .expect("missing-root workspace validation timed out");
+        assert!(scan);
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(2), found_rx)
+            .await
+            .expect("missing-root log message timed out")
+            .expect("missing-root log collector stopped");
+        assert!(
+            msg.starts_with("error: discovery failed for"),
+            "message must match CLI parity prefix, got: {msg}"
+        );
+        assert!(
+            msg.contains(&expected_root),
+            "message must name the missing root, got: {msg}"
+        );
+        collector.abort();
+        let _ = collector.await;
     }
 
     /// Slices out of lock-step must fail loudly. `chunks().zip()` truncates to
