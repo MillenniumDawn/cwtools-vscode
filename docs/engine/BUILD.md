@@ -105,11 +105,8 @@ default linker and needs no extra install.
 ## CI
 
 The `build-bench` workflow (`.github/workflows/build-bench.yml`) measures clean
-release-build time across all three platforms. Run it manually from the Actions
-tab or push to the `perf/build-time-improvements` branch.
+release-build time across all three platforms. Run it from the Actions tab.
 
-The `release` workflow (`.github/workflows/release.yml`) builds and archives
-binaries for all three platforms and runs the release-profile workspace tests
-in parallel when a `v*` tag is pushed. Publishing waits for every build and the
-test suite. `workflow_dispatch` is a manual re-run: off a tag ref it builds the
-archives and runs the tests but skips the publish step.
+The `release` workflow (`.github/workflows/release.yml`) builds the server on
+every platform, packages one vsix per platform plus the universal fallback,
+smoke-tests them, and publishes when a `v*` tag is pushed.

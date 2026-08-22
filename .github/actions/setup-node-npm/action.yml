@@ -1,3 +1,4 @@
+---
 name: Setup Node and install
 description: setup-node with npm cache, then npm ci
 
@@ -5,13 +6,40 @@ inputs:
   node-version:
     description: Node version
     default: "26"
+  cache-vscode:
+    description: Cache the vscode-test download under .vscode-test
+    default: "false"
 
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+    # v7.0.0
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
       with:
         node-version: ${{ inputs.node-version }}
         cache: npm
     - run: npm ci
       shell: bash
+    # vscode-test resolves "stable" (.vscode-test.mjs) through this same
+    # update API, so keying the cache on the resolved version writes a new
+    # entry only when stable moves. Restore-keys seed the newest prior cache
+    # if the resolve hiccups, costing a top-up instead of a full download.
+    - name: Resolve VS Code stable version
+      if: inputs.cache-vscode == 'true'
+      id: vscode-version
+      shell: bash
+      run: |
+        url=https://update.code.visualstudio.com/api/releases/stable
+        version="$(curl -fsSL "$url" | jq -r '.[0]' || true)"
+        echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
+    - name: Cache VS Code download
+      if: inputs.cache-vscode == 'true'
+      # v6.1.0
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: .vscode-test
+        key: >-
+          ${{ runner.os }}-vscode-test-${{
+          steps.vscode-version.outputs.version }}
+        restore-keys: |
+          ${{ runner.os }}-vscode-test-

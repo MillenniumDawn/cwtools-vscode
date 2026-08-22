@@ -1,0 +1,54 @@
+---
+name: Setup Rust
+description: Install a Rust toolchain and cache cargo registry and target
+
+inputs:
+  toolchain:
+    description: rustup toolchain name or version
+    default: stable
+  components:
+    description: Comma-separated rustup components
+    default: ""
+  targets:
+    description: Comma-separated rustup targets
+    default: ""
+  cache-prefix:
+    description: Target cache key prefix. Must differ across build profiles.
+    default: cargo-target
+  cache-target-path:
+    description: Directory to cache as the cargo target dir
+    default: engine/target
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      # stable branch, 2026-03-27
+      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+    # Registry cache is shared across jobs. ~/.cargo/bin rides along so
+    # cargo-machete / cargo-llvm-cov / cargo-fuzz restore instead of rebuild.
+    - name: Cache cargo registry
+      # v6.1.0
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/bin
+        key: >-
+          ${{ runner.os }}-cargo-registry-${{
+          hashFiles('engine/Cargo.lock') }}
+    - name: Cache cargo target
+      # v6.1.0
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ${{ inputs.cache-target-path }}
+        key: >-
+          ${{ runner.os }}-${{ inputs.cache-prefix }}-${{
+          hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ inputs.cache-prefix }}-
