@@ -356,6 +356,7 @@ mod tests {
                 ast: Some(Arc::new(parsed)),
                 ast_version: Some(0),
                 ast_source_bytes: source.len(),
+                loc_cache: None,
             },
         );
 

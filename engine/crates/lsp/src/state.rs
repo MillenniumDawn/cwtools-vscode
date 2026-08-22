@@ -751,6 +751,7 @@ impl DocumentStore {
         };
         document.version = version;
         document.text = text;
+        document.loc_cache = None;
         self.retained_text_bytes = retained;
         Ok(())
     }
@@ -769,6 +770,33 @@ impl DocumentStore {
         let new_len = document.retained_bytes();
         self.retained_text_bytes = self.retained_text_bytes - old_len + new_len;
         true
+    }
+
+    pub(crate) fn set_loc_cache(
+        &mut self,
+        uri: &str,
+        version: i32,
+        cache: Arc<LocDocumentCache>,
+    ) -> std::result::Result<bool, DocumentRejection> {
+        let Some(document) = self.documents.get(uri) else {
+            return Ok(false);
+        };
+        if document.version != version || cache.version != version {
+            return Ok(false);
+        }
+        let old_len = document.retained_bytes();
+        let new_len = document
+            .text
+            .len()
+            .max(document.ast_source_bytes)
+            .saturating_add(cache.retained_bytes);
+        let retained = self.replacement_total(old_len, new_len)?;
+        let Some(document) = self.documents.get_mut(uri) else {
+            return Ok(false);
+        };
+        document.loc_cache = Some(cache);
+        self.retained_text_bytes = retained;
+        Ok(true)
     }
 
     pub(crate) fn remove(&mut self, uri: &str) -> Option<ParsedDoc> {
@@ -849,6 +877,13 @@ pub(crate) struct SemanticCacheEntry {
     pub(crate) hash: u64,
 }
 
+pub(crate) struct LocDocumentCache {
+    pub(crate) version: i32,
+    pub(crate) retained_bytes: usize,
+    pub(crate) files: Vec<cwtools_localization::LocFile>,
+    pub(crate) references: HashSet<String>,
+}
+
 pub(crate) struct ParsedDoc {
     pub(crate) version: i32,
     /// `Arc` so every reader that only needs to look at the text (completion,
@@ -865,11 +900,17 @@ pub(crate) struct ParsedDoc {
     /// Source size represented by the cached AST. A stale AST keeps this much
     /// of the aggregate document budget charged after a smaller broken edit.
     pub(crate) ast_source_bytes: usize,
+    /// Versioned parsed localisation and its lowercased `$ref$` set.
+    pub(crate) loc_cache: Option<Arc<LocDocumentCache>>,
 }
 
 impl ParsedDoc {
     pub(crate) fn retained_bytes(&self) -> usize {
-        self.text.len().max(self.ast_source_bytes)
+        self.text.len().max(self.ast_source_bytes).saturating_add(
+            self.loc_cache
+                .as_ref()
+                .map_or(0, |cache| cache.retained_bytes),
+        )
     }
 }
 

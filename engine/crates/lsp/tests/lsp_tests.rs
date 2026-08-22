@@ -7240,10 +7240,97 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
 }
 
 #[test]
-fn test_watched_loc_new_keys_resolve_cross_file_with_one_sweep() {
-    // New keys in watched (non-open) loc files must still reach cross-file
-    // validation (via the watched-files overlay), and a batch of loc files
-    // must produce ONE coalesced sweep of the open loc files, not one per file.
+fn test_open_loc_key_edit_revalidates_only_referencing_open_files() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let definition_text = "\u{FEFF}l_english:\n DEF_KEY:0 \"definition\"\n";
+    let definition_uri = write_loc_file(
+        ws.path(),
+        "localisation/definition_l_english.yml",
+        " DEF_KEY:0 \"definition\"\n",
+    );
+    let reference_text = "\u{FEFF}l_english:\n REF_KEY:0 \"see $new_key$\"\n";
+    let reference_uri = write_loc_file(
+        ws.path(),
+        "localisation/reference_l_english.yml",
+        " REF_KEY:0 \"see $new_key$\"\n",
+    );
+    let unrelated_text = "\u{FEFF}l_english:\n OTHER_KEY:0 \"nothing relevant\"\n";
+    let unrelated_uri = write_loc_file(
+        ws.path(),
+        "localisation/unrelated_l_english.yml",
+        " OTHER_KEY:0 \"nothing relevant\"\n",
+    );
+
+    let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
+    for (uri, suffix, text) in [
+        (&definition_uri, "definition_l_english.yml", definition_text),
+        (&reference_uri, "reference_l_english.yml", reference_text),
+        (&unrelated_uri, "unrelated_l_english.yml", unrelated_text),
+    ] {
+        write_frame(
+            &mut child,
+            &jsonrpc_notification(
+                "textDocument/didOpen",
+                serde_json::json!({"textDocument":{"uri":uri,"languageId":"paradox","version":1,"text":text}}),
+            ),
+        )
+        .unwrap();
+        let codes = diags_for(&mut reader, suffix, 1).expect("didOpen publish");
+        if suffix == "reference_l_english.yml" {
+            assert!(codes.contains(&"CW225".to_string()), "got: {codes:?}");
+        }
+    }
+    let rx = spawn_frame_collector(reader);
+
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didChange",
+            serde_json::json!({
+                "textDocument": {"uri": definition_uri, "version": 2},
+                "contentChanges": [{"text": "\u{FEFF}l_english:\n DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n"}]
+            }),
+        ),
+    )
+    .unwrap();
+    let frames = drain_after_first(
+        &rx,
+        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(8),
+    );
+    child.kill().ok();
+
+    assert_eq!(count_publishes(&frames, "definition_l_english.yml"), 1);
+    assert_eq!(count_publishes(&frames, "reference_l_english.yml"), 1);
+    assert_eq!(
+        count_publishes(&frames, "unrelated_l_english.yml"),
+        0,
+        "an unrelated current cache must exclude its document from the sweep"
+    );
+    let reference_publish = frames
+        .iter()
+        .find(|frame| {
+            frame["method"] == "textDocument/publishDiagnostics"
+                && frame["params"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| uri.ends_with("reference_l_english.yml"))
+        })
+        .expect("reference diagnostics publish");
+    assert_eq!(reference_publish["params"]["version"], 1);
+    let codes: Vec<String> = reference_publish["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|diagnostic| diagnostic["code"].as_str().map(String::from))
+        .collect();
+    assert!(!codes.contains(&"CW225".to_string()), "got: {codes:?}");
+}
+
+#[test]
+fn test_watched_loc_new_keys_revalidate_only_referencing_open_files() {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
     let vanilla = tempfile::tempdir().unwrap();
@@ -7258,13 +7345,18 @@ fn test_watched_loc_new_keys_resolve_cross_file_with_one_sweep() {
         "localisation/c_l_english.yml",
         " C_KEY:0 \"c\"\n",
     );
-    // CW225 only fires for refs with lowercase letters (uppercase may be a
-    // game variable), so the refs are spelled lowercase.
-    let open_text = "\u{FEFF}l_english:\n OPEN_KEY:0 \"see $new_key$ and $new_key2$\"\n";
+    let open_text =
+        "\u{FEFF}l_english:\n malformed line\n OPEN_KEY:0 \"see $NeW_KeY$ and $new_key2$\"\n";
     let open_uri = write_loc_file(
         ws.path(),
         "localisation/open_l_english.yml",
-        " OPEN_KEY:0 \"see $new_key$ and $new_key2$\"\n",
+        " malformed line\n OPEN_KEY:0 \"see $NeW_KeY$ and $new_key2$\"\n",
+    );
+    let unrelated_text = "\u{FEFF}l_english:\n OTHER_KEY:0 \"nothing relevant\"\n";
+    let unrelated_uri = write_loc_file(
+        ws.path(),
+        "localisation/unrelated_l_english.yml",
+        " OTHER_KEY:0 \"nothing relevant\"\n",
     );
 
     let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
@@ -7281,6 +7373,16 @@ fn test_watched_loc_new_keys_resolve_cross_file_with_one_sweep() {
         codes.contains(&"CW225".to_string()),
         "the open file's refs must be unresolved before the watched batch, got: {codes:?}"
     );
+    assert!(codes.contains(&"CW001".to_string()), "got: {codes:?}");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({"textDocument":{"uri":unrelated_uri,"languageId":"paradox","version":1,"text":unrelated_text}}),
+        ),
+    )
+    .unwrap();
+    let _ = diags_for(&mut reader, "unrelated_l_english.yml", 1).expect("didOpen publish");
     let rx = spawn_frame_collector(reader);
 
     write_loc_file(
@@ -7314,7 +7416,12 @@ fn test_watched_loc_new_keys_resolve_cross_file_with_one_sweep() {
     assert_eq!(
         open_publishes.len(),
         1,
-        "a batch of watched loc files must sweep the open loc files once, not per file"
+        "a batch must revalidate the matching open loc file once"
+    );
+    assert_eq!(
+        count_publishes(&frames, "unrelated_l_english.yml"),
+        0,
+        "an open loc file without changed-key references must not be revalidated"
     );
     let codes: Vec<String> = open_publishes[0]["params"]["diagnostics"]
         .as_array()
@@ -7325,6 +7432,10 @@ fn test_watched_loc_new_keys_resolve_cross_file_with_one_sweep() {
     assert!(
         !codes.contains(&"CW225".to_string()),
         "keys added by watched loc files must resolve cross-file, got: {codes:?}"
+    );
+    assert!(
+        codes.contains(&"CW001".to_string()),
+        "cached validation must preserve malformed-line diagnostics, got: {codes:?}"
     );
 }
 

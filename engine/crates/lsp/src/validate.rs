@@ -15,6 +15,7 @@ use cwtools_validation::{
 use crate::paths::{
     encoded_position_len, logical_path_from_uri, source_column_to_lsp, uri_to_path_str,
 };
+use crate::state::LocDocumentCache;
 use crate::{Backend, LocTextMap};
 
 #[allow(clippy::too_many_arguments)]
@@ -75,11 +76,16 @@ pub(crate) fn loc_diag_to_validation_error(
     }
 }
 
-/// Parse one loc buffer into the `LocFile`s every consumer of an edit shares:
-/// the live-overlay key set, the diagnostics, and the hover text. Empty when the
-/// text doesn't parse as loc at all (#87).
+/// Parse one loc buffer while preserving fatal errors as cache misses.
+fn try_parse_loc_buffer(
+    text: &str,
+    path: &str,
+) -> Result<Vec<cwtools_localization::LocFile>, cwtools_localization::LocFileParseError> {
+    cwtools_localization::parse_loc_files(path, text, None)
+}
+
 fn parse_loc_buffer(text: &str, path: &str) -> Vec<cwtools_localization::LocFile> {
-    cwtools_localization::parse_loc_files(path, text, None).unwrap_or_default()
+    try_parse_loc_buffer(text, path).unwrap_or_default()
 }
 
 /// Lowercased loc keys defined in a single loc file's text. A cheap single-file
@@ -97,6 +103,47 @@ fn loc_keys_from(files: &[cwtools_localization::LocFile]) -> HashSet<String> {
         }
     }
     keys
+}
+
+fn loc_cache(
+    version: i32,
+    source_bytes: usize,
+    files: Vec<cwtools_localization::LocFile>,
+) -> Arc<LocDocumentCache> {
+    let references: HashSet<String> = files
+        .iter()
+        .flat_map(|file| &file.entries)
+        .flat_map(|entry| &entry.refs)
+        .map(|reference| reference.to_lowercase())
+        .collect();
+    let reference_bytes = references.iter().fold(
+        references
+            .capacity()
+            .saturating_mul(std::mem::size_of::<String>()),
+        |bytes, reference| bytes.saturating_add(reference.capacity()),
+    );
+    Arc::new(LocDocumentCache {
+        version,
+        retained_bytes: source_bytes.saturating_add(reference_bytes),
+        files,
+        references,
+    })
+}
+
+fn loc_cache_needs_revalidation(
+    cache: Option<&LocDocumentCache>,
+    version: i32,
+    changed_keys: &HashSet<String>,
+) -> bool {
+    cache
+        .is_none_or(|cache| cache.version != version || !cache.references.is_disjoint(changed_keys))
+}
+
+struct OpenLocTarget {
+    uri: String,
+    version: i32,
+    text: Arc<str>,
+    cache: Option<Arc<LocDocumentCache>>,
 }
 
 /// Names whose dependents a loc-key change may affect: the changed keys
@@ -1438,24 +1485,6 @@ impl Backend {
         extra
     }
 
-    /// Validate one loc file without updating overlays or triggering cross-file work.
-    fn validate_loc_text(
-        &self,
-        path: &str,
-        text: &str,
-        lines: &DocLines,
-        additional_loc_keys: &HashSet<String>,
-        extra: &HashSet<String>,
-    ) -> Vec<Diagnostic> {
-        self.validate_loc_parsed(
-            path,
-            &parse_loc_buffer(text, path),
-            lines,
-            additional_loc_keys,
-            extra,
-        )
-    }
-
     fn validate_loc_parsed(
         &self,
         path: &str,
@@ -1484,36 +1513,81 @@ impl Backend {
         .collect()
     }
 
-    /// Re-validate and republish every OTHER open loc file. Called when an edited
-    /// loc file's key set changed, so a `$ref$` to a key that was just added or
-    /// removed updates in the other open `.yml` files without a reload (#36).
-    /// Bounded by the number of open loc files.
+    /// Revalidate open loc files whose current cache references a changed key.
     async fn revalidate_other_open_loc_files(
         &self,
         except_uri: &str,
+        changed_keys: &HashSet<String>,
         additional_loc_keys: &HashSet<String>,
         extra: &HashSet<String>,
     ) {
-        let targets: Vec<(String, Arc<str>)> = {
+        let targets: Vec<OpenLocTarget> = {
             let docs = self.state.documents.lock();
             docs.iter()
-                .filter(|(u, _)| u.as_str() != except_uri && crate::paths::is_loc_file(u))
-                .map(|(u, d)| (u.clone(), d.text.clone()))
+                .filter(|(uri, _)| uri.as_str() != except_uri && crate::paths::is_loc_file(uri))
+                .filter(|(_, document)| {
+                    loc_cache_needs_revalidation(
+                        document.loc_cache.as_deref(),
+                        document.version,
+                        changed_keys,
+                    )
+                })
+                .map(|(uri, document)| OpenLocTarget {
+                    uri: uri.clone(),
+                    version: document.version,
+                    text: Arc::clone(&document.text),
+                    cache: document
+                        .loc_cache
+                        .clone()
+                        .filter(|cache| cache.version == document.version),
+                })
                 .collect()
         };
         let encoding = self.state.config.read().position_encoding.clone();
-        for (u, text) in targets {
-            let path = uri_to_path_str(&u);
-            let lines = DocLines::new(&text, encoding.clone());
-            let diags = self.validate_loc_text(&path, &text, &lines, additional_loc_keys, extra);
-            if let Ok(obj) = Url::parse(&u) {
-                self.publish_gated(
-                    obj,
-                    diags,
-                    None,
-                    Some(cwtools_cache::workspace::content_hash(&text)),
-                )
-                .await;
+        for target in targets {
+            let path = uri_to_path_str(&target.uri);
+            let cache = match target.cache {
+                Some(cache) => cache,
+                None => {
+                    let (cache, cacheable) = match try_parse_loc_buffer(&target.text, &path) {
+                        Ok(files) => (loc_cache(target.version, target.text.len(), files), true),
+                        Err(_) => (
+                            loc_cache(target.version, target.text.len(), Vec::new()),
+                            false,
+                        ),
+                    };
+                    if cacheable {
+                        match self.state.documents.lock().set_loc_cache(
+                            &target.uri,
+                            target.version,
+                            Arc::clone(&cache),
+                        ) {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(rejection) => {
+                                tracing::debug!(
+                                    uri = %target.uri,
+                                    reason = rejection.reason(),
+                                    "localisation cache not retained"
+                                );
+                            }
+                        }
+                    }
+                    cache
+                }
+            };
+            let lines = DocLines::new(&target.text, encoding.clone());
+            let diagnostics =
+                self.validate_loc_parsed(&path, &cache.files, &lines, additional_loc_keys, extra);
+            let still_current = self
+                .state
+                .documents
+                .lock()
+                .get(&target.uri)
+                .is_some_and(|document| document.version == target.version);
+            if still_current && let Ok(obj) = Url::parse(&target.uri) {
+                self.publish_gated(obj, diagnostics, Some(target.version), None)
+                    .await;
             }
         }
     }
@@ -1560,7 +1634,7 @@ impl Backend {
     pub(crate) async fn refresh_after_watched_loc_changes(&self, changed_keys: &HashSet<String>) {
         let additional_loc_keys = self.loc_overlay_keys();
         let extra = self.loc_ref_names();
-        self.revalidate_other_open_loc_files("", &additional_loc_keys, &extra)
+        self.revalidate_other_open_loc_files("", changed_keys, &additional_loc_keys, &extra)
             .await;
         let generation = self
             .state
@@ -1615,11 +1689,13 @@ impl Backend {
             // that would otherwise hold a runtime worker for its whole duration,
             // and MD ships loc files in the hundreds of KB. Matches how the scan
             // paths already fence their sync work. (#87)
-            let (changed_keys, diagnostics) = tokio::task::block_in_place(|| {
+            let (changed_keys, diagnostics, cache) = tokio::task::block_in_place(|| {
                 // One parse of the edited buffer, shared by the key set, the
                 // diagnostics and the hover text below — each used to parse the
                 // whole file itself, and two of them copied it first (#87).
-                let parsed_loc = parse_loc_buffer(text, &path);
+                let parsed_loc = try_parse_loc_buffer(text, &path);
+                let cache_version = parsed_version.filter(|_| parsed_loc.is_ok());
+                let parsed_loc = parsed_loc.unwrap_or_default();
                 let is_open = self.state.documents.lock().contains_key(uri);
                 let changed_keys: HashSet<String> = if is_open {
                     let new_keys = loc_keys_from(&parsed_loc);
@@ -1651,8 +1727,22 @@ impl Backend {
                 // Update the hover loc_text map so tooltips reflect the latest
                 // edits without waiting for a full workspace rescan (#53).
                 self.update_loc_text_for_file(&parsed_loc);
-                (changed_keys, diagnostics)
+                let cache = cache_version.map(|version| loc_cache(version, text.len(), parsed_loc));
+                (changed_keys, diagnostics, cache)
             });
+            if let Some(cache) = cache
+                && let Err(rejection) =
+                    self.state
+                        .documents
+                        .lock()
+                        .set_loc_cache(uri, cache.version, cache)
+            {
+                tracing::debug!(
+                    %uri,
+                    reason = rejection.reason(),
+                    "localisation cache not retained"
+                );
+            }
             // A change to this file's key set can fix or break `$ref$` checks in
             // other open loc files, so refresh them — that's the cross-file part
             // of the index that previously only updated on a window reload.
@@ -1666,8 +1756,13 @@ impl Backend {
             if !changed_keys.is_empty() {
                 let additional_loc_keys = self.loc_overlay_keys();
                 let extra = self.loc_ref_names();
-                self.revalidate_other_open_loc_files(uri, &additional_loc_keys, &extra)
-                    .await;
+                self.revalidate_other_open_loc_files(
+                    uri,
+                    &changed_keys,
+                    &additional_loc_keys,
+                    &extra,
+                )
+                .await;
                 let generation = self
                     .state
                     .edit_generation
@@ -2205,6 +2300,74 @@ mod info_revision_tests {
             .is_some_and(|entry| entry.revision == current && !entry.items.is_empty())
     }
 
+    fn open_loc_doc(backend: &Backend, uri: &str, text: &str) {
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.to_string(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_loc_cache_miss_is_parsed_and_installed() {
+        let backend = test_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/target_l_english.yml");
+        open_loc_doc(&backend, &uri, "l_english:\n KEY:0 \"$other_ref$\"\n");
+
+        backend
+            .revalidate_other_open_loc_files(
+                "",
+                &HashSet::from(["unrelated_key".to_string()]),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .await;
+
+        let documents = backend.state.documents.lock();
+        let cache = documents
+            .get(&uri)
+            .and_then(|document| document.loc_cache.as_ref())
+            .expect("cache installed");
+        assert_eq!(cache.version, 1);
+        assert!(cache.references.contains("other_ref"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fatal_loc_parse_stays_a_cache_miss() {
+        let backend = test_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/target_l_english.yml");
+        open_loc_doc(&backend, &uri, "l_english");
+
+        backend
+            .revalidate_other_open_loc_files(
+                "",
+                &HashSet::from(["unrelated_key".to_string()]),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .await;
+
+        assert!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .is_some_and(|document| document.loc_cache.is_none())
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_loc_key_change_only_invalidates_the_overlay_cache() {
         let backend = test_backend();
@@ -2222,6 +2385,7 @@ mod info_revision_tests {
                     ast: None,
                     ast_version: None,
                     ast_source_bytes: 0,
+                    loc_cache: None,
                 },
             )
             .unwrap();
@@ -2541,6 +2705,23 @@ mod whole_line_range_tests {
         assert!(keys.contains("my_key"), "got: {:?}", keys);
         assert!(keys.contains("other_key"), "got: {:?}", keys);
         assert!(!keys.contains("absent"));
+    }
+
+    #[test]
+    fn loc_cache_scopes_mixed_case_refs_and_falls_back_safely() {
+        let text = "l_english:\n malformed line\n KEY:0 \"$MiXeD_Key$\"\n";
+        let files = try_parse_loc_buffer(text, "a_l_english.yml").unwrap();
+        assert!(!files[0].parse_errors.is_empty());
+        let cache = loc_cache(7, text.len(), files);
+        assert!(cache.references.contains("mixed_key"));
+
+        let matching = HashSet::from(["mixed_key".to_string()]);
+        let unrelated = HashSet::from(["other_key".to_string()]);
+        assert!(loc_cache_needs_revalidation(Some(&cache), 7, &matching));
+        assert!(!loc_cache_needs_revalidation(Some(&cache), 7, &unrelated));
+        assert!(loc_cache_needs_revalidation(Some(&cache), 8, &unrelated));
+        assert!(loc_cache_needs_revalidation(None, 7, &unrelated));
+        assert!(try_parse_loc_buffer("l_english", "a_l_english.yml").is_err());
     }
 
     #[test]
@@ -3429,6 +3610,7 @@ mod ignored_tests {
                     ast: None,
                     ast_version: None,
                     ast_source_bytes: 0,
+                    loc_cache: None,
                 },
             )
             .unwrap();
@@ -3440,6 +3622,7 @@ mod ignored_tests {
                     ast: None,
                     ast_version: None,
                     ast_source_bytes: 0,
+                    loc_cache: None,
                 },
             )
             .unwrap();
@@ -3540,6 +3723,7 @@ mod ignored_tests {
                     ast: Some(kept_parsed.clone()),
                     ast_version: Some(1),
                     ast_source_bytes: 0,
+                    loc_cache: None,
                 },
             )
             .unwrap();
@@ -3551,6 +3735,7 @@ mod ignored_tests {
                     ast: Some(ignored_parsed.clone()),
                     ast_version: Some(1),
                     ast_source_bytes: 0,
+                    loc_cache: None,
                 },
             )
             .unwrap();
