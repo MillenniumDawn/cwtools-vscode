@@ -7628,6 +7628,112 @@ fn test_watched_loc_removed_key_stops_resolving() {
 }
 
 #[test]
+fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    std::fs::write(rules_dir.path().join("missing.cwt"), MISSING_LOC_RULES).unwrap();
+    let watched_rel = "localisation/watched_l_english.yml";
+    let watched_uri = write_loc_file(ws.path(), watched_rel, " WATCHED_KEY:0 \"watched\"\n");
+    let loc_text = "\u{FEFF}l_english:\n REF_KEY:0 \"see $new_thing_desc$\"\n";
+    let loc_uri = write_loc_file(
+        ws.path(),
+        "localisation/dependent_l_english.yml",
+        " REF_KEY:0 \"see $new_thing_desc$\"\n",
+    );
+    let game_rel = "common/things/new_thing.txt";
+    let game_path = ws.path().join(game_rel);
+    std::fs::create_dir_all(game_path.parent().unwrap()).unwrap();
+    std::fs::write(&game_path, "new_thing = { x = 1 }\n").unwrap();
+    let game_uri = path_uri(&game_path);
+
+    let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({"textDocument":{"uri":loc_uri,"languageId":"paradox","version":1,"text":loc_text}}),
+        ),
+    )
+    .unwrap();
+    let codes = diags_for(&mut reader, "dependent_l_english.yml", 1).expect("loc didOpen publish");
+    assert!(codes.contains(&"CW225".to_string()), "got: {codes:?}");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({"textDocument":{"uri":game_uri,"languageId":"hoi4","version":1,"text":"new_thing = { x = 1 }\n"}}),
+        ),
+    )
+    .unwrap();
+    let codes = diags_for(&mut reader, "new_thing.txt", 1).expect("game didOpen publish");
+    assert!(codes.contains(&"CW100".to_string()), "got: {codes:?}");
+    let rx = spawn_frame_collector(reader);
+
+    write_loc_file(
+        ws.path(),
+        watched_rel,
+        " WATCHED_KEY:0 \"watched\"\n NEW_THING:0 \"New thing\"\n NEW_THING_DESC:0 \"Description\"\n",
+    );
+    write_frame(
+        &mut child,
+        &watched_changes(std::slice::from_ref(&watched_uri)),
+    )
+    .unwrap();
+    let frames = drain_after_first(
+        &rx,
+        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(8),
+    );
+    let loc_codes = publish_codes_for(&frames, "dependent_l_english.yml");
+    assert!(
+        loc_codes
+            .last()
+            .is_some_and(|codes| !codes.contains(&"CW225".to_string())),
+        "the watched keys must resolve the loc reference, got: {loc_codes:?}"
+    );
+    let game_codes = publish_codes_for(&frames, "new_thing.txt");
+    assert!(
+        game_codes
+            .last()
+            .is_some_and(|codes| !codes.contains(&"CW100".to_string())),
+        "the watched keys must resolve the game file's required loc keys, got: {game_codes:?}"
+    );
+
+    std::fs::remove_file(ws.path().join(watched_rel)).unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "workspace/didChangeWatchedFiles",
+            serde_json::json!({ "changes": [{ "uri": watched_uri, "type": 3 }] }),
+        ),
+    )
+    .unwrap();
+    let frames = drain_after_first(
+        &rx,
+        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(8),
+    );
+    child.kill().ok();
+
+    let loc_codes = publish_codes_for(&frames, "dependent_l_english.yml");
+    assert!(
+        loc_codes
+            .last()
+            .is_some_and(|codes| codes.contains(&"CW225".to_string())),
+        "deleting the watched key must restore CW225, got: {loc_codes:?}"
+    );
+    let game_codes = publish_codes_for(&frames, "new_thing.txt");
+    assert!(
+        game_codes
+            .last()
+            .is_some_and(|codes| codes.contains(&"CW100".to_string())),
+        "deleting the watched keys must restore CW100, got: {game_codes:?}"
+    );
+}
+
+#[test]
 fn test_config_no_op_skips_revalidate_then_real_change_runs() {
     // Identical didChangeConfiguration payloads must not trigger a revalidate on
     // the second send; a genuinely changed ignoredErrorCodes must trigger

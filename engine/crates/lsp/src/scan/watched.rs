@@ -205,10 +205,14 @@ impl Backend {
             let Ok(_validation_permit) = self.state.validation_permits.acquire().await else {
                 return;
             };
+            // Loc keys added or removed across the batch's loc files are swept
+            // ONCE after the loop. The per-file cross-file sweep is the
+            // open-doc edit path's job (#90).
+            let mut changed_loc_keys: HashSet<String> = HashSet::new();
             // Deletions first, so a re-created file's later change validates
             // against an index that already forgot the stale entry.
             if !deletes.is_empty() {
-                self.process_watched_deletes(&deletes).await;
+                changed_loc_keys.extend(self.process_watched_deletes(&deletes).await);
             }
             // Keep FileIndex current for CW113 / icon completions: newly
             // created workspace files land in the index between full scans.
@@ -230,11 +234,6 @@ impl Backend {
                     }
                 }
             }
-            // Loc keys added or removed across the batch's loc files, recorded
-            // per file in the watched overlay and swept ONCE after the loop —
-            // the per-file cross-file sweep is the open-doc edit path's job
-            // (#90).
-            let mut changed_loc_keys: HashSet<String> = HashSet::new();
             for uri in changes {
                 if self.is_ignored_uri(&uri) {
                     self.clear_ignored_file_state(&uri);
@@ -368,7 +367,7 @@ impl Backend {
     /// batch, then publish empty diagnostics per URI outside every lock. The
     /// empty publish goes through `publish_filtered` so the deleted file's
     /// `fixAllWorkspace` entry is dropped with its diagnostics (#133).
-    async fn process_watched_deletes(&self, deletes: &[String]) {
+    async fn process_watched_deletes(&self, deletes: &[String]) -> HashSet<String> {
         // Keep FileIndex current for CW113 / icon completions: remove deleted
         // workspace files. Only when the index is already populated (vanilla
         // present); a mod-only workspace has an empty index by design.
@@ -387,16 +386,21 @@ impl Backend {
                 info.clear_file(uri);
             }
         }
+        let mut removed_loc_keys = HashSet::new();
         {
             let mut overlay = self.loc_live_overlay_mut();
             for uri in deletes {
-                overlay.remove(uri);
+                if let Some(keys) = overlay.remove(uri) {
+                    removed_loc_keys.extend(keys);
+                }
             }
         }
         {
             let mut watched = self.loc_watched_overlay_mut();
             for uri in deletes {
-                watched.remove(uri);
+                if let Some(keys) = watched.remove(uri) {
+                    removed_loc_keys.extend(keys);
+                }
             }
         }
         {
@@ -431,5 +435,6 @@ impl Backend {
                 self.publish_filtered(uri_obj, vec![], None, None).await;
             }
         }
+        removed_loc_keys
     }
 }
