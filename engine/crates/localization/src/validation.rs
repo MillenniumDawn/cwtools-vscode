@@ -105,7 +105,13 @@ pub fn validate_loc_file(
         .iter()
         .map(|s| s.as_ref().to_lowercase())
         .collect();
-    validate_loc_file_with_hardcoded(file, all_keys, extra_valid_refs, &hardcoded)
+    validate_loc_file_with_hardcoded(
+        file,
+        all_keys,
+        &HashSet::new(),
+        extra_valid_refs,
+        &hardcoded,
+    )
 }
 
 /// Lowercased [`HARDCODED_LOC`], built once. The project-validation hot path
@@ -120,6 +126,7 @@ pub fn hardcoded_loc_set() -> &'static HashSet<String> {
 pub(crate) fn validate_loc_file_with_hardcoded(
     file: &LocFile,
     all_keys: &LocKeySet,
+    additional_loc_keys: &HashSet<String>,
     extra_valid_refs: &HashSet<String>,
     hardcoded: &HashSet<String>,
 ) -> Vec<LocValidationError> {
@@ -146,7 +153,7 @@ pub(crate) fn validate_loc_file_with_hardcoded(
         // ---- Undefined references ----
         for r in &entry.refs {
             let lowercase = r.to_lowercase();
-            if all_keys.contains(lowercase.as_str()) {
+            if all_keys.contains(lowercase.as_str()) || additional_loc_keys.contains(&lowercase) {
                 // Defined – check for recursion (case-insensitive, matching F# checkRef)
                 if lowercase == entry.key.to_lowercase() && !hardcoded.contains(&lowercase) {
                     errors.push(LocValidationError {
@@ -346,6 +353,22 @@ mod tests {
         let file = parse_loc_text(text, "test.yml").unwrap();
         let keys = key_set(["key1"]);
         let errors = validate_loc_file(&file, &keys, &HashSet::new(), &Vec::<String>::new());
+
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, LocErrorKind::RecursiveLocRef);
+    }
+
+    #[test]
+    fn additional_loc_key_keeps_recursive_ref_semantics() {
+        let text = "l_english:\n key1: \"Hello $key1$\"\n";
+        let file = parse_loc_text(text, "test.yml").unwrap();
+        let errors = validate_loc_file_with_hardcoded(
+            &file,
+            &LocKeySet::default(),
+            &HashSet::from(["key1".to_string()]),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
 
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].kind, LocErrorKind::RecursiveLocRef);

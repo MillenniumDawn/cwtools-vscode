@@ -384,11 +384,9 @@ pub(crate) struct DocumentState {
     /// `loc_overlay_revision`. Was rebuilt (and every key cloned) per validated
     /// file, which on a watched batch meant once per file in the batch.
     pub(crate) loc_overlay_keys_cache: parking_lot::Mutex<Option<(u64, Arc<HashSet<String>>)>>,
-    /// Cached [`Backend::loc_ref_names`] set, keyed on
-    /// `(info_revision, loc_overlay_revision)`. ~200K Strings on Millennium
-    /// Dawn, previously rebuilt from scratch on every loc edit.
-    #[allow(clippy::type_complexity)]
-    pub(crate) loc_ref_names_cache: parking_lot::Mutex<Option<((u64, u64), Arc<HashSet<String>>)>>,
+    /// Cached [`Backend::loc_ref_names`] set, keyed on `info_revision`.
+    /// Holds only modifier and type names; loc overlays are cached separately.
+    pub(crate) loc_ref_names_cache: parking_lot::Mutex<Option<(u64, Arc<HashSet<String>>)>>,
     /// When `false` (the default), hover shows localisation for the primary
     /// language only (the first of `config.loc_languages`, else English) and the
     /// `loc_text` map only stores that language. Set via the

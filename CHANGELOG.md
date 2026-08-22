@@ -37,7 +37,7 @@ This is the first release with the engine in-repo under `engine/`. The extension
 
 #### Engine
 
-* Saving immediately after an edit no longer starts a second validation while that buffer's debounced validation is still pending. A localisation key edit also keeps the large `$ref$` name cache it just built instead of invalidating it before the save. The edit-plus-save path drops from two validation passes to one inside the 250 ms debounce, and the committed Millennium Dawn-scale benchmark puts each avoided name-set rebuild at roughly 70-90 ms.
+* Saving immediately after an edit no longer starts a second validation while that buffer's debounced validation is still pending. The `$ref$` cache keeps its 240k modifier/type names separate from live localisation keys, so adding a key rebuilds only the small overlay and leaves unrelated completion caches alone. On the committed Millennium Dawn-scale fixture, the full name build takes 76.5 ms; rebuilding a 4k-key overlay takes 0.24 ms instead of 25.7 ms to clone and merge an already-built base. A newly added self-referencing loc key also reports CW259 immediately rather than being mistaken for a modifier/type reference.
 
 * The Millennium Dawn guard baseline drops 614 CW266 rows on scripted-GUI `[!callback]` localisation (`!foo_click`, `!foo_click_enabled`). The engine already resolved those against scripted-GUI effects/triggers (MillenniumDawn/cwtools#350); the baseline had not been re-blessed. Five other CW266 rows remain.
 
