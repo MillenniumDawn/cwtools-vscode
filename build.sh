@@ -1,3 +1,3 @@
 #!/bin/bash
 
-npx --yes tsx build/build.ts "$@"
+python3 scripts/build/build.py "$@"

@@ -148,7 +148,7 @@ export default defineConfig({
 		// these globs name the extension bundle and tsc output rather than the
 		// TypeScript source tree. The bundle's source map still brings bundled
 		// dependencies and Vitest-owned modules into the raw report;
-		// build/coverage-summary.ts filters those after remapping.
+		// scripts/build/coverage_summary.py filters those after remapping.
 		include: [
 			"**/dist/extension/bin/client/extension/extension.js",
 			"**/dist/extension/bin/client/src/host/**",

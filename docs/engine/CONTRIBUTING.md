@@ -13,9 +13,9 @@ can't fix. Commands mirror CI so local failures match it.
   code is always rustfmt-clean) and `cargo clippy -D warnings` gates every
   commit; `cargo test --workspace` gates every push (see
   `.github/workflows/ci.yml`).
-- TypeScript (`extension/`, `build/`): `eslint --fix` applies autofixes on
+- TypeScript (`extension/`): `eslint --fix` applies autofixes on
   commit (the same rules as `npm run lint`, `eslint .`).
-- Python (`scripts/`): `ruff check --fix` and `black` reformat/fix on commit;
+- Python (`scripts/`, `tests/scripts/`): `ruff check --fix` and `black` reformat/fix on commit;
   `mypy` gates every commit; `pytest` gates every push.
 
 One-time setup:

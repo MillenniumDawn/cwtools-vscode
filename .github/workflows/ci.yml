@@ -119,7 +119,7 @@ jobs:
       - name: Test build
         run: npm run build -- package-prebuilt
       # Host V8 coverage: mocha forces the instrumented host to exit after
-      # the unit label, and host-coverage.ts kills a leftover process tree
+      # the unit label, and host_coverage.py kills a leftover process tree
       # if Electron still hangs under xvfb. Tight step timeout so a hang
       # cannot burn the whole build job.
       - name: Host coverage
@@ -196,7 +196,7 @@ jobs:
       - name: scripts unit tests
         if: github.event_name != 'schedule'
         working-directory: ${{ github.workspace }}
-        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+        run: python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
 
   # Releases ship Linux, Windows, and macOS binaries, so a platform-only
   # break must fail here before it ships. The tag-triggered release workflow
@@ -593,7 +593,7 @@ jobs:
           name: rust-coverage
           path: engine/target/coverage
       - name: Coverage summary
-        run: npx --no-install tsx build/coverage-summary.ts
+        run: python3 scripts/build/coverage_summary.py
       - name: Coverage PR comment
         if: github.event_name == 'pull_request'
         # v3.0.5

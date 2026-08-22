@@ -8,13 +8,11 @@ import { fileURLToPath } from "node:url";
 // graph module; the host run excludes them so the two reports stay disjoint.
 export default defineConfig({
 	test: {
-		include: ["extension/test/unit/**/*.test.ts", "build/**/*.test.ts"],
+		include: ["extension/test/unit/**/*.test.ts"],
 		environment: "node",
 		coverage: {
 			provider: "v8",
 			include: [
-				"build/changelog.ts",
-				"build/rulesPins.ts",
 				"extension/src/host/commandProgress.ts",
 				"extension/src/host/commands.ts",
 				"extension/src/host/diagnosticsSignature.ts",

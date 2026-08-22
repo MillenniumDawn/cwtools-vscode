@@ -4,7 +4,7 @@ export interface GameDef {
 	id: string;
 	display: string;
 	repo: string;
-	// Rules commit the extension fetches. Bumped by build/rulesPins.ts, never
+	// Rules commit the extension fetches. Bumped by scripts/build/rules_pins.py, never
 	// tracked live, so a push to an upstream repo can't reach users unasked.
 	repoRef: string;
 	exeName: string;

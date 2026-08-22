@@ -52,7 +52,7 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      # --- TypeScript (extension/, build/) --------------------------------
+      # --- TypeScript (extension/) ---------------------------------------
       # Applies eslint's autofixes to the files you changed (typescript-eslint's
       # projectService resolves each one against its tsconfig), so it stays fast
       # while running the same rules as `npm run lint` (eslint .).
@@ -63,7 +63,7 @@ repos:
         files: \.(ts|mjs|js)$
         stages: [pre-commit]
 
-      # --- Python (scripts/) ----------------------------------------------
+      # --- Python (scripts/, tests/scripts/) ------------------------------
       # Applies ruff's autofixes (e.g. explicit check=False on subprocess.run);
       # anything it can't fix (shebang-without-exec-bit, type errors) is caught
       # by the other hooks or left for you to fix.
@@ -71,7 +71,7 @@ repos:
         name: ruff check --fix
         entry: ruff check --fix
         language: system
-        files: ^scripts/.*\.py$
+        files: ^(scripts|tests/scripts)/.*\.py$
         stages: [pre-commit]
 
       # Reformats the changed files in place (black, not --check), so the
@@ -80,21 +80,21 @@ repos:
         name: black
         entry: black
         language: system
-        files: ^scripts/.*\.py$
+        files: ^(scripts|tests/scripts)/.*\.py$
         stages: [pre-commit]
 
       - id: mypy
         name: mypy
-        entry: mypy scripts
+        entry: mypy scripts tests/scripts
         language: system
-        files: ^scripts/.*\.py$
+        files: ^(scripts|tests/scripts)/.*\.py$
         pass_filenames: false
         stages: [pre-commit]
 
       - id: pytest
         name: pytest (scripts)
-        entry: pytest scripts
+        entry: pytest tests/scripts
         language: system
-        files: ^scripts/.*\.py$
+        files: ^(scripts|tests/scripts)/.*\.py$
         pass_filenames: false
         stages: [pre-push]
