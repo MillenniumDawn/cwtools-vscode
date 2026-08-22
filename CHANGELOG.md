@@ -6,6 +6,9 @@
 * LSP: deleting a watched localisation file now revalidates affected open
   localisation and game files, so stale CW225/CW100 diagnostics return
   immediately. (#398)
+* LSP integration tests now stop their server processes cleanly, so coverage
+  includes the real server paths and the Rust coverage gate reflects the suite.
+  (#404)
 
 ### 3.2.1
 

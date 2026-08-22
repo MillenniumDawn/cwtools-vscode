@@ -53,6 +53,20 @@ fn write_frame(child: &mut std::process::Child, body: &str) -> std::io::Result<(
     write_frame_to(child.stdin.as_mut().unwrap(), body)
 }
 
+// A graceful exit lets spawned coverage runtimes flush their profiles.
+fn stop_server(child: &mut std::process::Child) {
+    if child.stdin.is_some() {
+        let shutdown = jsonrpc_request(2_147_483_647, "shutdown", serde_json::json!(null));
+        let exit = jsonrpc_notification("exit", serde_json::json!({}));
+        let _ = write_frame(child, &shutdown);
+        let _ = write_frame(child, &exit);
+        drop(child.stdin.take());
+    } else {
+        std::process::Child::kill(child).ok();
+    }
+    child.wait().ok();
+}
+
 /// [`write_frame`] against a bare stdin handle owned by the deadline worker.
 fn write_frame_to(stdin: &mut impl Write, body: &str) -> std::io::Result<()> {
     write!(stdin, "Content-Length: {}\r\n\r\n{}", body.len(), body)?;
@@ -76,7 +90,7 @@ fn run_child_with_deadline<T: Send + 'static>(
         let _ = tx.send(f(&mut stdin, &mut reader));
     });
     let result = rx.recv_timeout(std::time::Duration::from_secs(secs)).ok();
-    child.kill().ok();
+    stop_server(&mut child);
     let _ = child.wait();
     worker.join().expect("deadline worker panicked");
     result
@@ -224,7 +238,7 @@ fn test_lsp_rejects_an_oversized_frame_without_waiting_for_the_body() {
         }
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
-    child.kill().ok();
+    stop_server(&mut child);
     child.wait().ok();
     panic!("server waited for the oversized frame body");
 }
@@ -264,7 +278,7 @@ fn test_lsp_full_lifecycle() {
     let body = jsonrpc_request(2, "shutdown", serde_json::json!(null));
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no shutdown response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2);
@@ -305,7 +319,7 @@ fn test_lsp_unknown_notification_does_not_crash() {
     let body = jsonrpc_request(99, "shutdown", serde_json::json!(null));
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("server should respond");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 99);
@@ -402,7 +416,7 @@ fn test_did_open_folds_a_percent_encoded_uri_onto_the_canonical_one() {
             break;
         }
     }
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         published.as_deref(),
@@ -550,7 +564,7 @@ fn completion_labels(rel_path: &str, text: &str, line0: u32, char0: u32) -> Vec<
     );
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no completion response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2, "got: {}", resp_str);
@@ -700,7 +714,7 @@ fn test_completion_resolve_fills_alias_documentation() {
     );
 
     let resolved = resolve_request(&mut child, &mut reader, 3, always.clone());
-    child.kill().ok();
+    stop_server(&mut child);
     let doc = &resolved["result"]["documentation"];
     let doc_text = doc.as_str().or_else(|| doc["value"].as_str());
     assert_eq!(
@@ -829,7 +843,7 @@ fn test_completion_after_change_with_stale_ast_stays_incomplete() {
     );
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no completion response");
-    child.kill().ok();
+    stop_server(&mut child);
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     let is_incomplete = resp["result"]["isIncomplete"]
         .as_bool()
@@ -1013,7 +1027,7 @@ fn completion_response(rel_path: &str, text: &str, line0: u32, char0: u32) -> se
     );
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no completion response");
-    child.kill().ok();
+    stop_server(&mut child);
     serde_json::from_str(&resp_str).unwrap()
 }
 
@@ -1253,7 +1267,7 @@ fn completion_labels_with_files(
     );
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no completion response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2, "got: {}", resp_str);
@@ -1650,7 +1664,7 @@ fn completion_labels_custom_rules(
     );
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no completion response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2, "got: {}", resp_str);
@@ -1738,7 +1752,7 @@ fn completion_items_custom_rules(
     );
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no completion response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2, "got: {}", resp_str);
@@ -2189,7 +2203,7 @@ fn completion_labels_after_change(
     );
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no completion response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2, "got: {}", resp_str);
@@ -2398,7 +2412,7 @@ fn hover_markdowns_with_live_settings(
         }
         hover_values.push(hover_value);
     }
-    child.kill().ok();
+    stop_server(&mut child);
     hover_values
 }
 
@@ -2654,7 +2668,7 @@ fn test_loc_edit_updates_hover_without_a_rescan() {
     );
 
     let neighbour = hover_at(&mut child, &mut reader, 2, 16, "Other Text", 500);
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         neighbour.contains("Other Text"),
         "editing one key must leave an untouched key's hover alone, got: {neighbour}"
@@ -3015,7 +3029,7 @@ fn goto_def(
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
-    child.kill().ok();
+    stop_server(&mut child);
     out
 }
 
@@ -3405,7 +3419,7 @@ fn test_goto_vanilla_definition_resolves_to_vanilla_file() {
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert!(
         out.iter()
@@ -3589,7 +3603,7 @@ fn test_vanilla_loc_is_read_once_and_the_mod_wins_a_shared_key() {
     );
 
     let after = goto(&mut child, &mut reader, 2, 400);
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         after.iter().any(|u| u.ends_with("base_l_english.yml")),
         "the base game's loc must survive a re-index without being re-read, got: {:?}",
@@ -3913,7 +3927,7 @@ fn test_did_open_definition_clears_open_caller_stale_error() {
 
     // The did_open dependent sweep must re-publish B without the CW263.
     let after = diags_for(&mut reader, "b.txt", 1).expect("B re-validated");
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         !after.contains(&"CW263".to_string()),
         "opening the definition file should clear B's stale CW263, got: {:?}",
@@ -4111,7 +4125,7 @@ fn test_scan_reports_unused_should_be_used_instance() {
     // nothing in the workspace references gets CW239 without any file open.
     let (_ws, mut child, mut reader, _a, _b) = spawn_unused_workspace();
     let a_diags = diags_for(&mut reader, "a.txt", 1).expect("a.txt scan diagnostics");
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         a_diags.contains(&"CW239".to_string()),
         "lone_thing is referenced nowhere, expected CW239, got: {a_diags:?}"
@@ -4126,7 +4140,7 @@ fn test_scan_reports_alias_branch_limit() {
     );
     let diagnostics =
         diags_for(&mut reader, CAPPED_ALIAS_REL_PATH, 1).expect("capped-file diagnostics");
-    child.kill().ok();
+    stop_server(&mut child);
     assert_eq!(
         diagnostics
             .iter()
@@ -4149,7 +4163,7 @@ fn test_alias_branch_limit_survives_the_per_file_diagnostic_cap() {
     );
     let diagnostics =
         diags_for(&mut reader, CAPPED_ALIAS_REL_PATH, 1).expect("capped-file diagnostics");
-    child.kill().ok();
+    stop_server(&mut child);
     let (limit, rest): (Vec<_>, Vec<_>) = diagnostics.iter().partition(|c| c.as_str() == "CW277");
     assert_eq!(
         limit.len(),
@@ -4225,7 +4239,7 @@ fn test_capped_file_suppresses_cw239_until_it_validates_again() {
     )
     .unwrap();
     let after_fix = diags_for(&mut reader, "a.txt", 1).expect("a.txt re-validated after the fix");
-    child.kill().ok();
+    stop_server(&mut child);
     drop(ws);
     assert!(
         after_fix.contains(&"CW239".to_string()),
@@ -4300,7 +4314,7 @@ fn test_edit_toggling_reference_updates_open_cw239() {
     )
     .unwrap();
     let after_remove = diags_for(&mut reader, "a.txt", 1).expect("a.txt re-validated after remove");
-    child.kill().ok();
+    stop_server(&mut child);
     drop(ws);
     assert!(
         after_remove.contains(&"CW239".to_string()),
@@ -4382,7 +4396,7 @@ fn test_closing_a_buffer_with_discarded_edits_restores_disk_uses() {
         std::time::Duration::from_millis(800),
         std::time::Duration::from_secs(6),
     );
-    child.kill().ok();
+    stop_server(&mut child);
     drop(ws);
 
     let republished = frames
@@ -4483,7 +4497,7 @@ fn test_closed_file_cw239_only_catches_up_on_the_next_scan() {
                     .is_some_and(|u| u.ends_with("a.txt"))
         },
     );
-    child.kill().ok();
+    stop_server(&mut child);
     drop(ws);
 
     let codes: Vec<&str> = republished["params"]["diagnostics"]
@@ -4596,7 +4610,7 @@ fn feature_request(
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
-    child.kill().ok();
+    stop_server(&mut child);
     result
 }
 
@@ -5275,7 +5289,7 @@ fn at_const_rename_without_workspace(doc_uri: &str, text: &str) -> serde_json::V
     )
     .unwrap();
     let resp = read_response(&mut reader).expect("no rename response");
-    child.kill().ok();
+    stop_server(&mut child);
     serde_json::from_str(&resp).unwrap()
 }
 
@@ -5405,7 +5419,7 @@ fn test_rename_does_not_edit_through_a_symlink() {
     )
     .unwrap();
     let resp_str = read_response(&mut reader).expect("no rename response");
-    child.kill().ok();
+    stop_server(&mut child);
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
 
     // The symlinked definition is rejected by the scan, so rename only edits
@@ -5820,7 +5834,7 @@ fn perf_completion_md() {
     )
     .unwrap();
     let _ = read_response(&mut reader);
-    child.kill().ok();
+    stop_server(&mut child);
     stderr_thread.join().ok();
 
     let lines = stderr_lines.lock().unwrap();
@@ -5949,7 +5963,7 @@ fn test_rescan_prunes_deleted_file_from_index() {
     .unwrap();
 
     let after = diags_for(&mut reader, "b.txt", 1).expect("B diagnostics after rescan");
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         after.contains(&"CW263".to_string()),
         "deleting A should resurrect B's CW263 once the rescan prunes it, got: {:?}",
@@ -6056,7 +6070,7 @@ fn test_clear_all_caches_only_deletes_cwtools_caches() {
     )
     .unwrap();
     let result = result_for(&mut reader, 2).expect("clearAllCaches result");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let message = result.as_str().unwrap_or_default();
     assert!(
@@ -6261,7 +6275,7 @@ fn test_background_reindex_picks_up_new_file_quietly() {
     std::fs::write(&a_path, "my_se = { log = \"hi\" }\n").unwrap();
 
     let result = wait_for_cleared_diag_quiet(&mut reader, "b.txt", "CW263");
-    child.kill().ok();
+    stop_server(&mut child);
     if let Err(e) = result {
         panic!("{e}");
     }
@@ -6346,7 +6360,7 @@ fn test_background_reindex_survives_a_panicking_pass() {
         std::time::Duration::from_secs(15),
     );
     let log = fetch_profiling_log(&mut child, &rx, 2001);
-    child.kill().ok();
+    stop_server(&mut child);
 
     if let Err(e) = result {
         panic!("{e}");
@@ -6442,7 +6456,7 @@ fn test_background_reindex_idle_window_from_init_option() {
             continue;
         };
         if v["method"] == "loadingBar" {
-            child.kill().ok();
+            stop_server(&mut child);
             panic!("unexpected loadingBar during quiet background pass: {v}");
         }
         if v["method"] == "textDocument/publishDiagnostics"
@@ -6460,7 +6474,7 @@ fn test_background_reindex_idle_window_from_init_option() {
             }
         }
     }
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         cleared,
         "config-driven idle window of 0s should let the background pass clear CW263 within 10s"
@@ -6528,7 +6542,7 @@ fn test_clear_all_caches_reports_reindexed_message() {
     )
     .unwrap();
     let resp_str = read_response(&mut reader).expect("no clearAllCaches response");
-    child.kill().ok();
+    stop_server(&mut child);
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2, "got: {}", resp_str);
     // The file count in the middle depends on what the scan cached, so the two
@@ -6796,7 +6810,7 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1001);
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         count_validate_log(&log, "watched"),
@@ -6842,7 +6856,7 @@ fn test_watched_batch_panic_is_recovered_and_retried() {
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1010);
-    child.kill().ok();
+    stop_server(&mut child);
 
     // Pin the precondition: without this, the test would pass just as well on
     // a build where the injection never actually fired (env var drift, the
@@ -6945,7 +6959,7 @@ fn test_debounced_validate_panic_is_logged_and_next_edit_recovers() {
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1011);
-    child.kill().ok();
+    stop_server(&mut child);
 
     // Pin the precondition: without this the test passes just as well on a
     // build where the injection never fired, since a validation that simply
@@ -6990,7 +7004,7 @@ fn test_watched_distinct_files_each_validate_once() {
         std::time::Duration::from_secs(10),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1002);
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         count_validate_log(&log, "watched"),
@@ -7036,7 +7050,7 @@ fn test_watched_change_on_a_symlink_neither_validates_nor_publishes() {
         std::time::Duration::from_secs(10),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1003);
-    child.kill().ok();
+    stop_server(&mut child);
 
     // The real file is the precondition: without it a boundary that refused
     // everything would pass this test too.
@@ -7082,7 +7096,7 @@ fn test_watched_bulk_flood_uses_rescan_not_per_file() {
         std::time::Duration::from_secs(20),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1003);
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         count_validate_log(&log, "watched"),
@@ -7137,7 +7151,7 @@ fn test_watched_overcap_batch_does_not_spin_against_running_scan() {
         std::time::Duration::from_secs(30),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1004);
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         log.matches("watched batch over cap").count(),
@@ -7225,7 +7239,7 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
         std::time::Duration::from_millis(1200),
         std::time::Duration::from_secs(8),
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         count_publishes(&frames, "watched_l_english.yml"),
@@ -7301,7 +7315,7 @@ fn test_open_loc_key_edit_revalidates_only_referencing_open_files() {
         std::time::Duration::from_millis(1200),
         std::time::Duration::from_secs(8),
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(count_publishes(&frames, "definition_l_english.yml"), 1);
     assert_eq!(count_publishes(&frames, "reference_l_english.yml"), 1);
@@ -7402,7 +7416,7 @@ fn test_watched_loc_new_keys_revalidate_only_referencing_open_files() {
         std::time::Duration::from_millis(1200),
         std::time::Duration::from_secs(8),
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     let open_publishes: Vec<&serde_json::Value> = frames
         .iter()
@@ -7540,7 +7554,7 @@ fn test_watched_loc_keys_survive_scan_index_install() {
         std::time::Duration::from_millis(1500),
         std::time::Duration::from_secs(15),
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     let opens = publish_codes_for(&frames, "open_l_english.yml");
     assert!(
@@ -7617,7 +7631,7 @@ fn test_watched_loc_removed_key_stops_resolving() {
         std::time::Duration::from_millis(1200),
         std::time::Duration::from_secs(8),
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     let opens = publish_codes_for(&frames, "open_l_english.yml");
     assert_eq!(opens.len(), 1, "the removal must trigger one sweep");
@@ -7715,7 +7729,7 @@ fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
         std::time::Duration::from_millis(1200),
         std::time::Duration::from_secs(8),
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     let loc_codes = publish_codes_for(&frames, "dependent_l_english.yml");
     assert!(
@@ -7730,6 +7744,81 @@ fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
             .last()
             .is_some_and(|codes| codes.contains(&"CW100".to_string())),
         "deleting the watched keys must restore CW100, got: {game_codes:?}"
+    );
+}
+
+#[test]
+fn test_watched_loc_delete_revalidates_live_overlay_dependents() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let source_rel = "localisation/source_l_english.yml";
+    let source_uri = write_loc_file(ws.path(), source_rel, " BASE_KEY:0 \"base\"\n");
+    let dependent_text = "\u{FEFF}l_english:\n REF_KEY:0 \"see $live_key$\"\n";
+    let dependent_uri = write_loc_file(
+        ws.path(),
+        "localisation/dependent_l_english.yml",
+        " REF_KEY:0 \"see $live_key$\"\n",
+    );
+
+    let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({"textDocument":{"uri":dependent_uri,"languageId":"paradox","version":1,"text":dependent_text}}),
+        ),
+    )
+    .unwrap();
+    let codes =
+        diags_for(&mut reader, "dependent_l_english.yml", 1).expect("dependent didOpen publish");
+    assert!(codes.contains(&"CW225".to_string()), "got: {codes:?}");
+    let rx = spawn_frame_collector(reader);
+
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({"textDocument":{"uri":source_uri,"languageId":"paradox","version":1,"text":"\u{FEFF}l_english:\n BASE_KEY:0 \"base\"\n LIVE_KEY:0 \"live\"\n"}}),
+        ),
+    )
+    .unwrap();
+    let frames = drain_after_first(
+        &rx,
+        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(8),
+    );
+    let codes = publish_codes_for(&frames, "dependent_l_english.yml");
+    assert!(
+        codes
+            .last()
+            .is_some_and(|codes| !codes.contains(&"CW225".to_string())),
+        "the live key must resolve the dependent, got: {codes:?}"
+    );
+
+    std::fs::remove_file(ws.path().join(source_rel)).unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "workspace/didChangeWatchedFiles",
+            serde_json::json!({ "changes": [{ "uri": source_uri, "type": 3 }] }),
+        ),
+    )
+    .unwrap();
+    let frames = drain_after_first(
+        &rx,
+        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(8),
+    );
+    stop_server(&mut child);
+
+    let codes = publish_codes_for(&frames, "dependent_l_english.yml");
+    assert!(
+        codes
+            .last()
+            .is_some_and(|codes| codes.contains(&"CW225".to_string())),
+        "deleting the open source must restore CW225, got: {codes:?}"
     );
 }
 
@@ -7806,7 +7895,7 @@ fn test_config_no_op_skips_revalidate_then_real_change_runs() {
     write_frame(&mut child, &cfg(&["CW998"])).unwrap();
     drain_after_first(&rx, quiet, budget);
     let log3 = fetch_profiling_log(&mut child, &rx, 1103);
-    child.kill().ok();
+    stop_server(&mut child);
     assert_eq!(
         count_validate_log(&log3, "configChange"),
         2,
@@ -7867,7 +7956,7 @@ fn test_config_idle_only_change_passes_noop_guard() {
     write_frame(&mut child, &cfg(5)).unwrap();
     drain_until_quiet(&rx, quiet, budget);
     let log2 = fetch_profiling_log(&mut child, &rx, 1202);
-    child.kill().ok();
+    stop_server(&mut child);
     assert_eq!(
         count_validate_log(&log2, "configChange"),
         1,
@@ -7969,7 +8058,7 @@ fn test_config_partial_payload_keeps_ignore_lists() {
     .unwrap();
     drain_until_quiet(&rx, quiet, budget);
     let log3 = fetch_profiling_log(&mut child, &rx, 1303);
-    child.kill().ok();
+    stop_server(&mut child);
     assert_eq!(
         count_validate_log(&log3, "configChange"),
         1,
@@ -8033,7 +8122,7 @@ fn test_live_ignore_clears_closed_localisation_diagnostics() {
                     .is_some_and(Vec::is_empty)
         },
     );
-    child.kill().ok();
+    stop_server(&mut child);
 }
 
 #[test]
@@ -8121,7 +8210,7 @@ fn test_init_ignore_pattern_caps_cut_hostile_payload() {
     )
     .unwrap();
     wait_for_scan_done(&mut reader);
-    child.kill().ok();
+    stop_server(&mut child);
 }
 
 #[test]
@@ -8166,7 +8255,7 @@ fn test_get_file_types_answers_during_watched_flood() {
             Err(_) => continue,
         }
     }
-    child.kill().ok();
+    stop_server(&mut child);
 
     let elapsed = elapsed.expect("getFileTypes never responded");
     assert!(
@@ -8209,7 +8298,7 @@ fn test_unknown_execute_command_returns_error() {
             _ => continue,
         }
     }
-    child.kill().ok();
+    stop_server(&mut child);
 
     let v = response.expect("no response to the unknown command");
     assert!(
@@ -8249,7 +8338,7 @@ fn test_validate_workspace_command_returns_summary() {
     )
     .unwrap();
     let raw = read_response(&mut reader).expect("no response to validateWorkspace");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let result = v["result"]
@@ -8318,7 +8407,7 @@ fn test_did_open_burst_stops_at_the_document_count_limit() {
         request_id += 1;
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    child.kill().ok();
+    stop_server(&mut child);
     child.wait().ok();
 
     assert_eq!(validations, MAX_OPEN_DOCUMENTS);
@@ -8355,7 +8444,7 @@ fn test_did_open_validates_deferred() {
         std::time::Duration::from_secs(6),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1004);
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         count_validate_log(&log, "didOpen"),
@@ -8408,7 +8497,7 @@ fn test_did_open_then_immediate_close_ends_empty() {
         std::time::Duration::from_millis(1000),
         std::time::Duration::from_secs(6),
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     let last_publish = frames.iter().rev().find(|v| {
         v["method"] == "textDocument/publishDiagnostics"
@@ -8473,7 +8562,7 @@ fn test_did_save_revalidates_the_open_document() {
         std::time::Duration::from_secs(6),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1020);
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         count_validate_log(&log, "didSave"),
@@ -8517,7 +8606,7 @@ fn test_did_save_for_a_document_that_was_never_opened_is_a_no_op() {
         std::time::Duration::from_secs(6),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1021);
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(
         count_validate_log(&log, "didSave"),
@@ -8586,7 +8675,7 @@ fn test_did_close_restores_disk_definition() {
     )
     .unwrap();
     let raw = read_response(&mut reader).expect("no definition response after didClose");
-    child.kill().ok();
+    stop_server(&mut child);
     let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let result = &response["result"];
     assert!(
@@ -8755,7 +8844,7 @@ fn did_open_indexes_own_subtype_membership() {
     .unwrap();
 
     let codes = diags_for(&mut reader, rel_path, 1).expect("diagnostics for ships.txt after edit");
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert!(
         !codes.contains(&"CW263".to_string()),
@@ -8884,7 +8973,7 @@ fn test_keystroke_edit_reports_missing_loc_once_loc_index_is_built() {
     .unwrap();
 
     let codes = diags_for(&mut reader, rel_path, 1).expect("diagnostics after keystroke edit");
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert!(
         codes.contains(&"CW100".to_string()),
@@ -9016,7 +9105,7 @@ types = {
     );
     write_frame(&mut child, &ca_req).unwrap();
     let resp_str = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2, "got: {resp_str}");
@@ -9192,7 +9281,7 @@ types = {
         !publish_has_code(&publish, "CW281"),
         "directive must suppress CW281: {publish}"
     );
-    child.kill().ok();
+    stop_server(&mut child);
 }
 
 #[test]
@@ -9279,7 +9368,7 @@ types = {
         },
         |v| v["method"] == "loadingBar" && v["params"]["enable"] == serde_json::Value::Bool(false),
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert!(
         clean_published,
@@ -9370,7 +9459,7 @@ types = {
     );
     write_frame(&mut child, &ca_req).unwrap();
     let resp_str = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2, "got: {resp_str}");
@@ -9485,7 +9574,7 @@ decision = {
     )
     .unwrap();
     let response = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let response: serde_json::Value = serde_json::from_str(&response).unwrap();
     let actions = response["result"].as_array().expect("array result");
@@ -9613,7 +9702,7 @@ thing = {
     )
     .unwrap();
     let response = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let response: serde_json::Value = serde_json::from_str(&response).unwrap();
     let actions = response["result"].as_array().expect("array result");
@@ -9736,7 +9825,7 @@ types = {
     );
     write_frame(&mut child, &ca_req).unwrap();
     let resp_str = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     let e = resp["result"][0]["edit"]["changes"]
@@ -9856,7 +9945,7 @@ types = {
     .unwrap();
     let in_tree_codes =
         diags_for(&mut reader, in_tree_rel, 1).expect("diagnostics published for the in-tree yml");
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         in_tree_codes.is_empty(),
         "a yml in a game dir is still not game script, got: {in_tree_codes:?}"
@@ -9973,7 +10062,7 @@ types = {
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert_eq!(hint["label"], "My Decision", "got: {hint}");
     // Anchored just past `my_decision` on line 1: "    ref = my_decision" ends at col 21.
@@ -10068,7 +10157,7 @@ decision = {
     )
     .unwrap();
     let response = read_response(&mut reader).unwrap();
-    child.kill().ok();
+    stop_server(&mut child);
     let value: serde_json::Value = serde_json::from_str(&response).unwrap();
     let hints = value["result"]
         .as_array()
@@ -10259,7 +10348,7 @@ fn graph_data_response(files: &[(&str, &str)], arguments: serde_json::Value) -> 
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
-    child.kill().ok();
+    stop_server(&mut child);
     response
 }
 
@@ -10289,7 +10378,7 @@ fn test_get_graph_data_is_advertised_in_capabilities() {
     )
     .unwrap();
     let resp_str = read_response(&mut reader).expect("no init response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     let commands = resp["result"]["capabilities"]["executeCommandProvider"]["commands"]
@@ -10428,7 +10517,7 @@ fn test_get_graph_data_rejects_bad_requests() {
         );
         assert_eq!(resp["error"]["code"], -32602, "{arguments}: got {resp}");
     }
-    child.kill().ok();
+    stop_server(&mut child);
 }
 
 #[test]
@@ -10451,7 +10540,7 @@ fn test_get_graph_data_on_empty_workspace_reports_not_ready() {
     )
     .unwrap();
     let raw = read_response(&mut reader).expect("no getGraphData response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(resp["result"].is_null(), "got: {resp}");
@@ -10639,7 +10728,7 @@ my_focus = {
     );
     write_frame(&mut child, &body).unwrap();
     let raw = read_response(&mut reader).expect("no semanticTokens response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(resp["id"], 2, "got: {raw}");
@@ -10731,7 +10820,7 @@ second_focus = {
     );
     write_frame(&mut child, &body).unwrap();
     let raw = read_response(&mut reader).expect("no semanticTokens/range response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(resp["id"], 2, "got: {raw}");
@@ -10769,7 +10858,7 @@ fn test_semantic_tokens_range_end_column_zero_is_exclusive() {
     );
     write_frame(&mut child, &body).unwrap();
     let raw = read_response(&mut reader).expect("no semanticTokens/range response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let data = resp["result"]["data"].as_array().expect("token data");
@@ -10808,7 +10897,7 @@ fn test_semantic_tokens_skip_loc_and_cwt_files() {
             "{rel} should get no tokens: {raw}"
         );
     }
-    child.kill().ok();
+    stop_server(&mut child);
 }
 
 #[test]
@@ -10889,7 +10978,7 @@ communism = {
             assert_eq!(edit, "{ 51 102 153 }", "bytes stay bytes");
         }
     }
-    child.kill().ok();
+    stop_server(&mut child);
 }
 
 #[test]
@@ -10914,7 +11003,7 @@ fn test_color_presentation_writes_a_new_pick_in_the_source_convention() {
     );
     write_frame(&mut child, &body).unwrap();
     let raw = read_response(&mut reader).expect("no colorPresentation response");
-    child.kill().ok();
+    stop_server(&mut child);
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     println!("colorPresentation (new pick) = {}", resp["result"]);
     assert_eq!(
@@ -10947,7 +11036,7 @@ fn test_initialize_advertises_the_new_capabilities() {
     )
     .unwrap();
     let raw = read_response(&mut reader).expect("no init response");
-    child.kill().ok();
+    stop_server(&mut child);
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let caps = &resp["result"]["capabilities"];
     println!(
@@ -11217,7 +11306,7 @@ types = {
     )
     .unwrap();
     let raw = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     println!("source.fixAll action = {}", resp["result"]);
     let actions = resp["result"].as_array().expect("actions");
@@ -11410,7 +11499,7 @@ thing = { x = scalar }
     )
     .unwrap();
     let resp_str = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     let actions = resp["result"].as_array().expect("array result");
@@ -11572,7 +11661,7 @@ thing = { x = scalar }
     )
     .unwrap();
     let resp_str = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     let actions = resp["result"].as_array().expect("array result");
@@ -11744,7 +11833,7 @@ thing = { x = scalar }
     )
     .unwrap();
     let resp_str = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     let actions = resp["result"].as_array().expect("array result");
@@ -11940,7 +12029,7 @@ thing = { x = scalar }
     )
     .unwrap();
     let second_resp_str = read_response(&mut reader).expect("no second codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let second_resp: serde_json::Value = serde_json::from_str(&second_resp_str).unwrap();
     let second_actions = second_resp["result"].as_array().expect("array result");
@@ -12039,7 +12128,7 @@ types = {
     .unwrap();
     let (resp_str, applied_edit) =
         read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(
@@ -12142,7 +12231,7 @@ types = {
     .unwrap();
     let (resp_str, applied_edit) =
         read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert!(applied_edit.is_none(), "stale fixes must not be applied");
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
@@ -12258,7 +12347,7 @@ fn test_deleting_a_watched_file_drops_its_fixable_edits() {
     .unwrap();
     let (resp_str, applied_edit) =
         read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
-    child.kill().ok();
+    stop_server(&mut child);
     drop(ws);
 
     assert!(applied_edit.is_none(), "a deleted file has nothing to fix");
@@ -12315,7 +12404,7 @@ fn test_closing_a_document_drops_its_fixable_edits() {
     .unwrap();
     let (resp_str, applied_edit) =
         read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
-    child.kill().ok();
+    stop_server(&mut child);
     drop(ws);
 
     assert!(
@@ -12374,7 +12463,7 @@ fn test_fix_all_workspace_reports_nothing_to_fix() {
     .unwrap();
     let (resp_str, applied_edit) =
         read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         applied_edit.is_none(),
         "nothing to fix -> no applyEdit call"
@@ -12510,7 +12599,7 @@ types = {
     .unwrap();
     let (resp_str2, applied_edit2) = read_response_answering_apply_edit(&mut child, &mut reader)
         .expect("no second command response");
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         applied_edit2.is_none(),
         "nothing left to fix -> no second applyEdit call"
@@ -12650,7 +12739,7 @@ thing = { x = scalar }
     )
     .unwrap();
     let resp_str = read_response(&mut reader).expect("no codeAction response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     let actions = resp["result"].as_array().expect("array result");
@@ -12819,7 +12908,7 @@ types = {
     .unwrap();
     let (resp_str, applied_edit) =
         read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
-    child.kill().ok();
+    stop_server(&mut child);
 
     let edit = applied_edit.expect("the server must call workspace/applyEdit");
     let changes = edit["changes"].as_object().expect("changes map");
@@ -13667,7 +13756,7 @@ fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
             break;
         }
     }
-    child.kill().ok();
+    stop_server(&mut child);
     assert!(
         reindexed.is_some(),
         "no scan could start after the cancelled one released the guard"
@@ -14417,7 +14506,7 @@ fn test_reloadrulesconfig_retries_until_it_wins_the_scan_guard() {
         std::time::Duration::from_secs(30),
         "reloadrulesconfig to answer once it won the guard",
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert!(
         saw_revalidation,
@@ -14478,7 +14567,7 @@ fn test_reloadrulesconfig_reports_queued_revalidation_when_scan_never_releases()
         std::time::Duration::from_secs(5),
         "reloadrulesconfig to give up on its 1s deadline",
     );
-    child.kill().ok();
+    stop_server(&mut child);
 
     assert!(
         !saw_revalidation,
@@ -14557,7 +14646,7 @@ fn test_reloadrulesconfig_give_up_lands_queued_revalidation() {
         std::time::Duration::from_secs(30),
         "the deferred revalidation to run after the reload gave up",
     );
-    child.kill().ok();
+    stop_server(&mut child);
 }
 
 // ── #162: the cache path the client names ────────────────────────────────────
@@ -14878,7 +14967,7 @@ fn test_access_boundary_allows_an_auto_discovered_vanilla_install() {
     .unwrap();
     let response: serde_json::Value =
         serde_json::from_str(&read_response(&mut reader).expect("no response")).unwrap();
-    child.kill().ok();
+    stop_server(&mut child);
     child.wait().ok();
 
     let ranges = expect_ranges(&response);
@@ -15165,7 +15254,7 @@ fn test_loc_rename_with_desc_sibling() {
     write_frame(&mut child, &req).unwrap();
     let resp_str = read_response(&mut reader).unwrap();
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
-    child.kill().ok();
+    stop_server(&mut child);
     let edit = &resp["result"];
     assert!(
         !edit.is_null(),
@@ -15464,7 +15553,7 @@ fn test_loc_rename_only_existing_siblings() {
     write_frame(&mut child, &req).unwrap();
     let resp_str = read_response(&mut reader).unwrap();
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
-    child.kill().ok();
+    stop_server(&mut child);
     let edit = &resp["result"];
     let new_texts = {
         let mut v = Vec::new();
@@ -15561,7 +15650,7 @@ fn test_loc_rename_across_languages() {
     write_frame(&mut child, &req).unwrap();
     let resp_str = read_response(&mut reader).unwrap();
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
-    child.kill().ok();
+    stop_server(&mut child);
     let edit = &resp["result"];
     assert!(!edit.is_null(), "rename must succeed, got {}", resp_str);
     let mut uris = Vec::new();
@@ -15662,7 +15751,7 @@ fn test_loc_rename_updates_dollar_refs_in_yml() {
     write_frame(&mut child, &req).unwrap();
     let resp_str = read_response(&mut reader).unwrap();
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
-    child.kill().ok();
+    stop_server(&mut child);
     let edit = &resp["result"];
     assert!(!edit.is_null(), "rename must succeed, got {}", resp_str);
     let mut uris = Vec::new();
@@ -15852,5 +15941,5 @@ fn test_ignored_file_is_not_validated_on_open_and_after_config_change() {
         later_cleared.as_array().is_some_and(|a| a.is_empty()),
         "later.txt must clear diagnostics after being added to ignoreFilePatterns while open, got: {later_cleared}"
     );
-    child.kill().ok();
+    stop_server(&mut child);
 }
