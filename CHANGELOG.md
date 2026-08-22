@@ -1,8 +1,9 @@
-### Unreleased
+### 3.2.1
 
 #### Engine
 
 * LSP: added unit and end-to-end coverage for missing workspace roots, asserting discovery failures are logged via `window/logMessage` at ERROR level. (#231)
+* Saving immediately after an edit no longer starts a second validation while that buffer's debounced validation is still pending. The `$ref$` cache keeps its 240k modifier/type names separate from live localisation keys, so adding a key rebuilds only the small overlay and leaves unrelated completion caches alone. On the committed Millennium Dawn-scale fixture, the full name build takes 76.5 ms; rebuilding a 4k-key overlay takes 0.24 ms instead of 25.7 ms to clone and merge an already-built base. A newly added self-referencing loc key also reports CW259 immediately rather than being mistaken for a modifier/type reference.
 
 ### 3.2.0
 
