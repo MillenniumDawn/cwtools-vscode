@@ -2300,6 +2300,74 @@ mod info_revision_tests {
             .is_some_and(|entry| entry.revision == current && !entry.items.is_empty())
     }
 
+    fn open_loc_doc(backend: &Backend, uri: &str, text: &str) {
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.to_string(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_loc_cache_miss_is_parsed_and_installed() {
+        let backend = test_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/target_l_english.yml");
+        open_loc_doc(&backend, &uri, "l_english:\n KEY:0 \"$other_ref$\"\n");
+
+        backend
+            .revalidate_other_open_loc_files(
+                "",
+                &HashSet::from(["unrelated_key".to_string()]),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .await;
+
+        let documents = backend.state.documents.lock();
+        let cache = documents
+            .get(&uri)
+            .and_then(|document| document.loc_cache.as_ref())
+            .expect("cache installed");
+        assert_eq!(cache.version, 1);
+        assert!(cache.references.contains("other_ref"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_fatal_loc_parse_stays_a_cache_miss() {
+        let backend = test_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/target_l_english.yml");
+        open_loc_doc(&backend, &uri, "l_english");
+
+        backend
+            .revalidate_other_open_loc_files(
+                "",
+                &HashSet::from(["unrelated_key".to_string()]),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .await;
+
+        assert!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .is_some_and(|document| document.loc_cache.is_none())
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_loc_key_change_only_invalidates_the_overlay_cache() {
         let backend = test_backend();

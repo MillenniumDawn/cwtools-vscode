@@ -7240,6 +7240,96 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
 }
 
 #[test]
+fn test_open_loc_key_edit_revalidates_only_referencing_open_files() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let definition_text = "\u{FEFF}l_english:\n DEF_KEY:0 \"definition\"\n";
+    let definition_uri = write_loc_file(
+        ws.path(),
+        "localisation/definition_l_english.yml",
+        " DEF_KEY:0 \"definition\"\n",
+    );
+    let reference_text = "\u{FEFF}l_english:\n REF_KEY:0 \"see $new_key$\"\n";
+    let reference_uri = write_loc_file(
+        ws.path(),
+        "localisation/reference_l_english.yml",
+        " REF_KEY:0 \"see $new_key$\"\n",
+    );
+    let unrelated_text = "\u{FEFF}l_english:\n OTHER_KEY:0 \"nothing relevant\"\n";
+    let unrelated_uri = write_loc_file(
+        ws.path(),
+        "localisation/unrelated_l_english.yml",
+        " OTHER_KEY:0 \"nothing relevant\"\n",
+    );
+
+    let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
+    for (uri, suffix, text) in [
+        (&definition_uri, "definition_l_english.yml", definition_text),
+        (&reference_uri, "reference_l_english.yml", reference_text),
+        (&unrelated_uri, "unrelated_l_english.yml", unrelated_text),
+    ] {
+        write_frame(
+            &mut child,
+            &jsonrpc_notification(
+                "textDocument/didOpen",
+                serde_json::json!({"textDocument":{"uri":uri,"languageId":"paradox","version":1,"text":text}}),
+            ),
+        )
+        .unwrap();
+        let codes = diags_for(&mut reader, suffix, 1).expect("didOpen publish");
+        if suffix == "reference_l_english.yml" {
+            assert!(codes.contains(&"CW225".to_string()), "got: {codes:?}");
+        }
+    }
+    let rx = spawn_frame_collector(reader);
+
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didChange",
+            serde_json::json!({
+                "textDocument": {"uri": definition_uri, "version": 2},
+                "contentChanges": [{"text": "\u{FEFF}l_english:\n DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n"}]
+            }),
+        ),
+    )
+    .unwrap();
+    let frames = drain_after_first(
+        &rx,
+        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(8),
+    );
+    child.kill().ok();
+
+    assert_eq!(count_publishes(&frames, "definition_l_english.yml"), 1);
+    assert_eq!(count_publishes(&frames, "reference_l_english.yml"), 1);
+    assert_eq!(
+        count_publishes(&frames, "unrelated_l_english.yml"),
+        0,
+        "an unrelated current cache must exclude its document from the sweep"
+    );
+    let reference_publish = frames
+        .iter()
+        .find(|frame| {
+            frame["method"] == "textDocument/publishDiagnostics"
+                && frame["params"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| uri.ends_with("reference_l_english.yml"))
+        })
+        .expect("reference diagnostics publish");
+    assert_eq!(reference_publish["params"]["version"], 1);
+    let codes: Vec<String> = reference_publish["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|diagnostic| diagnostic["code"].as_str().map(String::from))
+        .collect();
+    assert!(!codes.contains(&"CW225".to_string()), "got: {codes:?}");
+}
+
+#[test]
 fn test_watched_loc_new_keys_revalidate_only_referencing_open_files() {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();

@@ -1360,6 +1360,16 @@ mod tests {
             store.set_loc_cache("file:///doc", 1, loc_document_cache(1, MAX_DOCUMENT_BYTES)),
             Err(DocumentRejection::TooLarge)
         );
+        store
+            .open("file:///cached".to_string(), document("z"))
+            .unwrap();
+        assert_eq!(
+            store.set_loc_cache("file:///cached", 1, loc_document_cache(1, 10)),
+            Ok(true)
+        );
+        assert_eq!(store.retained_text_bytes, "text".len() + 10 + 1 + 10);
+        store.remove("file:///cached");
+        assert_eq!(store.retained_text_bytes, "text".len() + 10);
 
         store.change("file:///doc", 2, Arc::from("x")).unwrap();
         assert_eq!(store.retained_text_bytes, 1);
@@ -1508,11 +1518,13 @@ mod tests {
                 document("l_english:\n KEY:0 \"value\"\n"),
             )
             .unwrap();
-        state
-            .documents
-            .lock()
-            .set_loc_cache(old_uri, 1, loc_document_cache(1, 10))
-            .unwrap();
+        assert!(
+            state
+                .documents
+                .lock()
+                .set_loc_cache(old_uri, 1, loc_document_cache(1, 10))
+                .unwrap()
+        );
 
         backend
             .did_rename_files(RenameFilesParams {
