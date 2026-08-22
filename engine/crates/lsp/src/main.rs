@@ -778,6 +778,10 @@ impl LanguageServer for Backend {
         }) else {
             return;
         };
+        if self.state.debounce_handles.lock().contains_key(&uri) {
+            tracing::debug!(%uri, version, "didSave covered by pending validation");
+            return;
+        }
         let generation = self.state.edit_generation.load(Ordering::Relaxed);
         self.spawn_debounced_validate(uri, version, generation, ValidateTrigger::DidSave, 0);
     }
@@ -1433,6 +1437,57 @@ mod tests {
 
         assert!(state.documents.lock().is_empty());
         assert!(state.debounce_handles.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn did_save_keeps_the_pending_validation() {
+        let state = Arc::new(DocumentState::new());
+        let captured_client = Arc::new(Mutex::new(None));
+        let client_slot = captured_client.clone();
+        let server_state = state.clone();
+        let (_service, _socket) = LspService::new(move |client| {
+            *client_slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: server_state.clone(),
+            }
+        });
+        let backend = Backend {
+            client: captured_client.lock().take().unwrap(),
+            state: state.clone(),
+        };
+        let uri = "file:///pending.txt";
+        state
+            .documents
+            .lock()
+            .open(uri.to_string(), document("root = { value = 1 }"))
+            .unwrap();
+        let pending = tokio::spawn(std::future::pending::<()>());
+        let (_finished_tx, finished) = tokio::sync::oneshot::channel();
+        state.debounce_handles.lock().insert(
+            uri.to_string(),
+            DebounceTask {
+                id: 7,
+                abort: pending.abort_handle(),
+                finished,
+            },
+        );
+
+        backend
+            .did_save(DidSaveTextDocumentParams {
+                text_document: TextDocumentIdentifier {
+                    uri: Url::parse(uri).unwrap(),
+                },
+                text: None,
+            })
+            .await;
+
+        assert_eq!(
+            state.debounce_handles.lock().get(uri).map(|task| task.id),
+            Some(7),
+            "didSave must not replace a validation already covering this buffer"
+        );
+        pending.abort();
     }
 
     #[test]

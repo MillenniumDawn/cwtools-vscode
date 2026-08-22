@@ -1661,6 +1661,10 @@ impl Backend {
                 } else {
                     HashSet::new()
                 };
+                // Cache only after every revision it depends on is current.
+                if !changed_keys.is_empty() {
+                    self.bump_info_revision();
+                }
                 // Built once here and shared with the cross-file sweep below,
                 // which would otherwise rebuild the whole name set per open
                 // `.yml`.
@@ -1682,7 +1686,6 @@ impl Backend {
             // whose tokens mention a changed key or a definition name it derives
             // from, instead of every open game file.
             if !changed_keys.is_empty() {
-                self.bump_info_revision();
                 self.revalidate_other_open_loc_files(uri, &extra).await;
                 let generation = self
                     .state
@@ -2209,6 +2212,45 @@ mod info_revision_tests {
             .lock()
             .as_ref()
             .is_some_and(|entry| entry.revision == current && !entry.items.is_empty())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_loc_key_change_keeps_the_ref_name_cache_current() {
+        let backend = test_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
+        let text: Arc<str> = Arc::from("l_english:\n NEW_KEY:0 \"$my_idea$\"\n");
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::clone(&text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                },
+            )
+            .unwrap();
+
+        backend
+            .parse_and_validate(&uri, &text, crate::ValidateTrigger::DidChange, Some(1))
+            .await;
+
+        let cached = backend
+            .state
+            .loc_ref_names_cache
+            .lock()
+            .as_ref()
+            .map(|(_, names)| Arc::clone(names))
+            .expect("loc validation should populate the ref-name cache");
+        let next = backend.loc_ref_names();
+        assert!(
+            Arc::ptr_eq(&cached, &next),
+            "the info-revision bump must not immediately stale the new cache entry"
+        );
     }
 
     #[tokio::test]
