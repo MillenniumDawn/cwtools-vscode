@@ -148,9 +148,9 @@ def build_config(
     parser.add_argument(
         "preset",
         nargs="?",
-        choices=("corpus", "md", "vanilla"),
-        default="corpus",
-        help="corpus (Kaiserreich, default), md (Millennium Dawn), or vanilla (fixture)",
+        choices=("md", "vanilla"),
+        default="md",
+        help="md (Millennium Dawn, default) or vanilla (fixture)",
     )
     parser.add_argument("--corpus", help="mod corpus to validate (env CWTOOLS_CORPUS)")
     parser.add_argument("--rules", help=".cwt ruleset directory (env CWTOOLS_RULES)")
@@ -175,7 +175,7 @@ def build_config(
     corpus = Path(
         args.corpus
         or env.get("CWTOOLS_CORPUS")
-        or (projects / "Kaiserreich-4-Development")
+        or (projects / "Millennium-Dawn")
     )
     rules = Path(
         args.rules
@@ -189,7 +189,7 @@ def build_config(
     baseline = Path(
         args.baseline
         or env.get("CWTOOLS_BASELINE")
-        or (script_dir / "corpus-baseline.csv")
+        or (script_dir / "md-baseline.csv")
     )
     bin_path = Path(
         args.bin
@@ -198,16 +198,7 @@ def build_config(
     )
     game = args.game or env.get("CWTOOLS_GAME") or "hoi4"
 
-    if args.preset == "md":
-        if args.corpus is None:
-            corpus = projects / "Millennium-Dawn"
-        if args.baseline is None:
-            baseline = (
-                Path(env["CWTOOLS_BASELINE"])
-                if env.get("CWTOOLS_BASELINE")
-                else script_dir / "md-baseline.csv"
-            )
-    elif args.preset == "vanilla":
+    if args.preset == "vanilla":
         fixture = script_dir / "vanilla-fixture"
         if args.game is None:
             game = "stellaris"

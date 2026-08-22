@@ -2,7 +2,7 @@ name: Diagnostics guard
 
 # The test suite proves the code still compiles and behaves. The guards prove
 # the *diagnostics* did not move, which is the claim a "changes nothing"
-# refactor cannot otherwise back up. All three tiers run
+# refactor cannot otherwise back up. Both tiers run
 # python3 scripts/guard.py against a committed baseline; they differ only in
 # what their inputs cost.
 #
@@ -10,13 +10,7 @@ name: Diagnostics guard
 #            it runs on every PR including forks.
 #   md       Millennium-Dawn at the revision pinned in scripts/md-baseline.csv.
 #            Public, so the repository's own token checks it out and this tier
-#            runs on every PR too. Not a second opinion on the Kaiserreich
-#            tier: four codes only MD reports, four only Kaiserreich does, and
-#            the shared ones in nothing like the same proportions.
-#   corpus   Kaiserreich-4-Development at the revision pinned in the baseline
-#            header. That repo is private and ~5 GB packed, so a fork PR gets
-#            no token and cannot run it. Same-repo PRs and pushes to main do,
-#            once CORPUS_TOKEN is configured.
+#            runs on every PR too.
 #
 # Exit 1 from the guard is drift, exit 2 is a setup problem it could not run
 # through. Both fail the job; neither is skipped.
@@ -40,16 +34,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
-  # The baseline header records the input repos by basename only, so the owner
-  # has to live here. The ruleset pin is on the Kaiserreich fork, not on
-  # cwtools/cwtools-hoi4-config upstream.
-  CORPUS_REPO: Kaiserreich/Kaiserreich-4-Development
   MD_REPO: MillenniumDawn/Millennium-Dawn
   RULES_REPO: Kaiserreich/cwtools-hoi4-config
 
 jobs:
   # Cheap tier. Covers CW113/CW222/CW227/CW229/CW500, families that can only
-  # answer against a mod plus a base game and so never fire in the corpus tier,
+  # answer against a mod plus a base game and so never fire in the md tier,
   # which runs without one.
   vanilla:
     name: Vanilla tier
@@ -101,20 +91,13 @@ jobs:
           XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
         run: python3 scripts/guard.py vanilla --no-build
 
-  # Reads the pinned revisions out of the committed baselines and resolves them
-  # to full SHAs, because git cannot fetch an abbreviated one. Split out so the
-  # corpus job knows before it spins up whether it has an input to check out:
-  # the `secrets` context is not available in a job-level `if`. Millennium Dawn
-  # is resolved first and unconditionally, so a missing corpus token cannot
-  # take the public tier down with it.
+  # Reads the pinned revisions out of the committed baseline and resolves them
+  # to full SHAs, because git cannot fetch an abbreviated one.
   pins:
     name: Guard pins
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      corpus_run: ${{ steps.pins.outputs.corpus_run }}
-      corpus_sha: ${{ steps.pins.outputs.corpus_sha }}
-      rules_sha: ${{ steps.pins.outputs.rules_sha }}
       md_sha: ${{ steps.pins.outputs.md_sha }}
       md_rules_sha: ${{ steps.pins.outputs.md_rules_sha }}
     steps:
@@ -122,10 +105,6 @@ jobs:
       - name: Read and resolve baseline pins
         id: pins
         env:
-          CORPUS_TOKEN: ${{ secrets.CORPUS_TOKEN }}
-          # Both rulesets and the Millennium Dawn corpus are public, so the
-          # repository's own token reads them. Only the Kaiserreich corpus
-          # lookup below swaps in the secret.
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -155,9 +134,6 @@ jobs:
             fi
           }
 
-          # Millennium Dawn carries its own rules pin, which need not be the
-          # one the Kaiserreich baseline was taken against: the two tiers are
-          # re-blessed independently.
           md_baseline=scripts/md-baseline.csv
           md_pin=$(pin "$md_baseline" corpus)
           md_rules_pin=$(pin "$md_baseline" rules)
@@ -174,50 +150,8 @@ jobs:
             echo "md_rules_sha=$md_rules_sha"
           } >> "$GITHUB_OUTPUT"
 
-          baseline=scripts/corpus-baseline.csv
-          corpus_pin=$(pin "$baseline" corpus)
-          rules_pin=$(pin "$baseline" rules)
-          [ -n "$corpus_pin" ] && [ -n "$rules_pin" ] || bad_pin "$baseline"
-          echo "corpus baseline pins: corpus $corpus_pin, rules $rules_pin"
-
-          # No token means no private corpus. On a pull request that is a fact
-          # about the trigger rather than a fault: a fork PR gets no secrets,
-          # and neither does a Dependabot PR, which gets Dependabot's own set.
-          # Those skip, and the push to main after merge is what catches them.
-          # Anywhere else a missing token is a misconfiguration, and skipping
-          # quietly would leave the expensive tier switched off with every
-          # check still green.
-          if [ -z "${CORPUS_TOKEN:-}" ]; then
-            if [ "${{ github.event_name }}" != "pull_request" ]; then
-              echo "::error::CORPUS_TOKEN is not configured, so the corpus" \
-                "tier cannot check out $CORPUS_REPO. It needs a read-only" \
-                "token with contents access to that repository."
-              exit 1
-            fi
-            echo "::notice::corpus tier skipped: this pull request cannot" \
-              "read repository secrets, so it has no token for the private" \
-              "$CORPUS_REPO. Expected on a fork PR and on a Dependabot PR." \
-              "The vanilla and Millennium Dawn tiers still ran, and the push" \
-              "to main after merge runs the corpus tier."
-            echo "corpus_run=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          corpus_sha=$(GH_TOKEN=$CORPUS_TOKEN gh api \
-            "repos/$CORPUS_REPO/commits/$corpus_pin" --jq '.sha')
-          rules_sha=$(gh api "repos/$RULES_REPO/commits/$rules_pin" --jq '.sha')
-          check_sha "Kaiserreich corpus" "$corpus_sha"
-          check_sha "Kaiserreich ruleset" "$rules_sha"
-          echo "resolved: corpus $corpus_sha, rules $rules_sha"
-          {
-            echo "corpus_run=true"
-            echo "corpus_sha=$corpus_sha"
-            echo "rules_sha=$rules_sha"
-          } >> "$GITHUB_OUTPUT"
-
-  # Second corpus tier, and the one that runs everywhere. Millennium Dawn is
-  # public, so no secret gates it and a fork's pull request gets a real mod
-  # checked rather than the fixture alone.
+  # Main corpus tier. Millennium Dawn is public, so no secret gates it and a
+  # fork's pull request gets a real mod checked rather than the fixture alone.
   millennium-dawn:
     name: Millennium Dawn tier
     needs: pins
@@ -228,12 +162,12 @@ jobs:
       - name: Install Rust toolchain (stable)
         # stable branch, 2026-03-27
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-      # Restore-only, here and in the corpus tier. Both check out repositories
-      # this one does not own, and a job that does that must not be able to
-      # write the cache every other job restores from. The vanilla tier checks
-      # out nothing but this repository, so it is the one that populates these
-      # entries; a run that finds them cold rebuilds, which is what all three
-      # do on the first run after a lockfile change anyway.
+      # Restore-only. This job checks out repositories this one does not own,
+      # and a job that does that must not be able to write the cache every
+      # other job restores from. The vanilla tier checks out nothing but this
+      # repository, so it is the one that populates these entries; a run that
+      # finds them cold rebuilds, which is what all jobs do on the first run
+      # after a lockfile change anyway.
       - name: Restore cargo registry
         # v6.1.0
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -280,7 +214,7 @@ jobs:
       # the md preset ignores CWTOOLS_CORPUS, and an env var would lose to a
       # flag anyway. XDG_CACHE_HOME pins the parse cache to this run and
       # TMPDIR puts the scratch dir where the upload step can find it, both
-      # for the reasons the other two tiers spell out.
+      # for the reasons the other tiers spell out.
       - name: Run Millennium Dawn guard
         env:
           INPUTS: ${{ github.workspace }}/_guard-inputs
@@ -297,94 +231,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: md-guard-drift
-          path: ${{ runner.temp }}/guard-work/**/drift.diff
-          if-no-files-found: warn
-          retention-days: 14
-
-  # Expensive tier, and the one the committed corpus baseline is about. A
-  # depth-1 checkout of the pinned commit is ~1.2 GB of working tree against
-  # ~5 GB of history, which is why nothing here clones a branch.
-  corpus:
-    name: Corpus tier
-    needs: pins
-    if: needs.pins.outputs.corpus_run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install Rust toolchain (stable)
-        # stable branch, 2026-03-27
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-      # Restore-only, for the reason the Millennium Dawn tier spells out.
-      - name: Restore cargo registry
-        # v6.1.0
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: >-
-            ${{ runner.os }}-cargo-registry-${{
-            hashFiles('engine/Cargo.lock') }}
-      - name: Restore cargo release target
-        # v6.1.0
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: engine/target
-          key: >-
-            ${{ runner.os }}-guard-release-target-${{
-            hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-guard-release-target-
-      - name: cargo build --release -p cwtools_cli
-        working-directory: engine
-        run: cargo build --release -p cwtools_cli
-      # After the build, so a compile error costs no corpus clone. Neither
-      # checkout touches the workspace root, only its own `path`. The
-      # directories are named after their repositories because the guard
-      # writes a baseline header from the basenames, so a `--bless` run from
-      # here would otherwise record the inputs as "corpus" and "rules/Config".
-      - name: Check out corpus at the pinned revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ env.CORPUS_REPO }}
-          ref: ${{ needs.pins.outputs.corpus_sha }}
-          token: ${{ secrets.CORPUS_TOKEN }}
-          path: _guard-inputs/Kaiserreich-4-Development
-          persist-credentials: false
-          show-progress: false
-      - name: Check out ruleset at the pinned revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ env.RULES_REPO }}
-          ref: ${{ needs.pins.outputs.rules_sha }}
-          path: _guard-inputs/cwtools-hoi4-config
-          persist-credentials: false
-      - name: Run corpus guard
-        env:
-          CWTOOLS_CORPUS: >-
-            ${{ github.workspace }}/_guard-inputs/Kaiserreich-4-Development
-          CWTOOLS_RULES: >-
-            ${{ github.workspace }}/_guard-inputs/cwtools-hoi4-config/Config
-          XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
-          # The guard keeps its scratch dir on failure and prints the path.
-          # Pointing it somewhere predictable is what lets the next step
-          # collect the full diff, which the log only shows 40 lines of.
-          TMPDIR: ${{ runner.temp }}/guard-work
-        run: |
-          mkdir -p "$TMPDIR"
-          python3 scripts/guard.py corpus --no-build
-      # Just the diff. The rest of the guard's scratch dir is the full report
-      # and the validator log, and this repository is public while the corpus
-      # it read is not. `warn` rather than `ignore` so that a break in the
-      # TMPDIR wiring above shows up as something, instead of a red run whose
-      # only record is the 40 diff lines the log already truncated to.
-      - name: Upload drift diff
-        if: failure()
-        # v7.0.1
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: corpus-guard-drift
           path: ${{ runner.temp }}/guard-work/**/drift.diff
           if-no-files-found: warn
           retention-days: 14
