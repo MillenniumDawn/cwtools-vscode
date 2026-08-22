@@ -194,8 +194,7 @@ export function renderCoverageSection(
 
 function renderSection(source: CoverageSource): string[] {
 	if (!existsSync(source.path)) {
-		// Host coverage stays local (Electron never exits under xvfb). Rust and
-		// node summaries are present in CI once their jobs upload them.
+		// A missing summary is a skipped section (partial CI), not an error.
 		return [];
 	}
 	let data: CoverageSummary;
