@@ -1,3 +1,9 @@
+### Unreleased
+
+#### Engine
+
+* LSP: added unit and end-to-end coverage for missing workspace roots, asserting discovery failures are logged via `window/logMessage` at ERROR level. (#231)
+
 ### 3.2.0
 
 This is the first release with the engine in-repo under `engine/`. The extension and engine now share one version number; there is no separate submodule pin to report.

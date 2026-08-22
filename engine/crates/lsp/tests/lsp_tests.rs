@@ -53,18 +53,17 @@ fn write_frame(child: &mut std::process::Child, body: &str) -> std::io::Result<(
     write_frame_to(child.stdin.as_mut().unwrap(), body)
 }
 
-/// [`write_frame`] against a bare stdin handle, for the worker thread in
-/// [`run_with_deadline`] which owns the pipe rather than the `Child`.
+/// [`write_frame`] against a bare stdin handle owned by the deadline worker.
 fn write_frame_to(stdin: &mut impl Write, body: &str) -> std::io::Result<()> {
     write!(stdin, "Content-Length: {}\r\n\r\n{}", body.len(), body)?;
     stdin.flush()
 }
 
-/// Hand the server's pipes to a worker thread and wait at most `secs` for its
-/// result. `read_frame` blocks with no timeout, so a test that waits on a
-/// notification the server never sends would wedge the whole binary instead of
-/// failing on its own. `None` means the deadline passed.
-fn run_with_deadline<T: Send + 'static>(
+/// Run a child interaction with a deadline and clean up every owner on exit.
+/// `read_frame` blocks with no timeout, so killing the child on timeout is what
+/// lets the worker thread join instead of leaking for the rest of the binary.
+fn run_child_with_deadline<T: Send + 'static>(
+    mut child: std::process::Child,
     mut stdin: std::process::ChildStdin,
     mut reader: BufReader<std::process::ChildStdout>,
     secs: u64,
@@ -73,10 +72,31 @@ fn run_with_deadline<T: Send + 'static>(
     + 'static,
 ) -> Option<T> {
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    let worker = std::thread::spawn(move || {
         let _ = tx.send(f(&mut stdin, &mut reader));
     });
-    rx.recv_timeout(std::time::Duration::from_secs(secs)).ok()
+    let result = rx.recv_timeout(std::time::Duration::from_secs(secs)).ok();
+    child.kill().ok();
+    let _ = child.wait();
+    worker.join().expect("deadline worker panicked");
+    result
+}
+
+#[test]
+fn run_child_with_deadline_reaps_a_blocked_server() {
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let stdin = child.stdin.take().unwrap();
+    let result = run_child_with_deadline(child, stdin, reader, 1, |_stdin, reader| {
+        let _ = read_frame(reader);
+        true
+    });
+    assert_eq!(result, None);
 }
 
 /// Read one LSP frame, or `Err` once the server closes its stdout.
@@ -10750,6 +10770,81 @@ fn test_initialize_advertises_the_new_capabilities() {
 }
 
 #[test]
+fn test_missing_workspace_root_is_reported_as_error_log_message() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("no_such_workspace");
+    let missing_path = missing.to_string_lossy().to_string();
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let stdin = child.stdin.take().unwrap();
+    let missing_path_for_test = missing_path.clone();
+    let found = run_child_with_deadline(child, stdin, reader, 5, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                1,
+                "initialize",
+                serde_json::json!({
+                    "processId": std::process::id(),
+                    "rootUri": path_uri(&missing),
+                    "capabilities": {},
+                }),
+            ),
+        )
+        .map_err(|error| format!("initialize failed: {error}"))?;
+        let raw = read_response(reader).map_err(|error| format!("no init response: {error}"))?;
+        let resp: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|error| format!("invalid init response: {error}"))?;
+        if let Some(error) = resp.get("error") {
+            return Err(format!(
+                "initialize must not error for a missing root: {error}"
+            ));
+        }
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .map_err(|error| format!("initialized notification failed: {error}"))?;
+
+        for _ in 0..2000 {
+            let Ok(raw) = read_frame(reader) else {
+                return Ok(false);
+            };
+            if raw.is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            if v["method"] == "window/logMessage"
+                && v["params"]["type"].as_i64() == Some(1)
+                && v["params"]["message"].as_str().is_some_and(|m| {
+                    m.starts_with("error: discovery failed for")
+                        && m.contains(&missing_path_for_test)
+                        && m.contains("directory does not exist")
+                })
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    });
+    match found {
+        Some(Ok(true)) => {}
+        Some(Ok(false)) => {
+            panic!("expected window/logMessage ERROR for missing workspace root")
+        }
+        Some(Err(error)) => panic!("missing-root LSP interaction failed: {error}"),
+        None => panic!("missing-root LSP interaction timed out"),
+    }
+}
+
+#[test]
 fn test_semantic_tokens_refresh_waits_for_advertised_client_support() {
     let (ws, _) = boundary_workspace();
     let mut child = cwtools_server_cmd()
@@ -10762,7 +10857,7 @@ fn test_semantic_tokens_refresh_waits_for_advertised_client_support() {
     let stdin = child.stdin.take().unwrap();
     let workspace = path_uri(ws.path());
 
-    let result = run_with_deadline(stdin, reader, 5, move |stdin, reader| {
+    let result = run_child_with_deadline(child, stdin, reader, 5, move |stdin, reader| {
         write_frame_to(
             stdin,
             &jsonrpc_request(
@@ -10807,8 +10902,6 @@ fn test_semantic_tokens_refresh_waits_for_advertised_client_support() {
         }
         false
     });
-    child.kill().ok();
-    child.wait().ok();
 
     assert_eq!(result, Some(true), "scan did not request semantic refresh");
 }
@@ -12573,7 +12666,7 @@ fn test_scan_reports_standard_work_done_progress() {
     .unwrap();
 
     let stdin = child.stdin.take().unwrap();
-    let collected = run_with_deadline(stdin, reader, 90, |stdin, reader| {
+    let collected = run_child_with_deadline(child, stdin, reader, 90, |stdin, reader| {
         let mut created = false;
         let mut kinds: Vec<String> = Vec::new();
         let mut saw_loading_bar = false;
@@ -12612,7 +12705,6 @@ fn test_scan_reports_standard_work_done_progress() {
         }
         (created, kinds, saw_loading_bar)
     });
-    child.kill().ok();
 
     let (created, kinds, saw_loading_bar) =
         collected.expect("timed out waiting for the progress stream");
@@ -12689,7 +12781,7 @@ fn test_execute_command_reports_progress_against_the_client_token() {
     // it opens its own stream — draining frames without replying wedges the
     // scan and the test with it.
     let stdin = child.stdin.take().unwrap();
-    let collected = run_with_deadline(stdin, reader, 120, |stdin, reader| {
+    let collected = run_child_with_deadline(child, stdin, reader, 120, |stdin, reader| {
         let mut kinds: Vec<String> = Vec::new();
         let mut percentages: Vec<u64> = Vec::new();
         let mut foreign_during_command: Vec<String> = Vec::new();
@@ -12801,7 +12893,6 @@ fn test_execute_command_reports_progress_against_the_client_token() {
             result,
         )
     });
-    child.kill().ok();
 
     let (kinds, percentages, foreign_during_command, created_for_command, result) =
         collected.expect("timed out waiting for the command to finish");
@@ -12902,7 +12993,7 @@ fn test_concurrent_commands_keep_separate_progress_streams() {
     // because answering `window/workDoneProgress/create` is what lets the
     // startup scan finish.
     let stdin = child.stdin.take().unwrap();
-    let collected = run_with_deadline(stdin, reader, 180, |stdin, reader| {
+    let collected = run_child_with_deadline(child, stdin, reader, 180, |stdin, reader| {
         // Every `$/progress` frame as `(token, kind)`, in arrival order — the
         // interleaving is the thing under test.
         let mut events: Vec<(String, String)> = Vec::new();
@@ -13009,7 +13100,6 @@ fn test_concurrent_commands_keep_separate_progress_streams() {
         }
         (events, reindex_token, vanilla_token, reindex_result)
     });
-    child.kill().ok();
 
     let (events, reindex_token, vanilla_token, reindex_result) =
         collected.expect("timed out waiting for the commands to finish");
@@ -13095,7 +13185,7 @@ fn test_work_done_progress_cancel_stops_a_command() {
     // closure so it can answer `window/workDoneProgress/create` while waiting
     // out the startup scan.
     let stdin = child.stdin.take().unwrap();
-    let collected = run_with_deadline(stdin, reader, 120, |stdin, reader| {
+    let collected = run_child_with_deadline(child, stdin, reader, 120, |stdin, reader| {
         let mut saw_cancellable_begin = false;
         // Same scan-guard race as the token test above: the bar-off notification
         // precedes the flag release, so a command sent on it can lose the CAS.
@@ -13172,7 +13262,6 @@ fn test_work_done_progress_cancel_stops_a_command() {
         }
         (saw_cancellable_begin, None)
     });
-    child.kill().ok();
 
     let (saw_cancellable_begin, result) = collected.expect("timed out; the command never answered");
     assert!(
@@ -13446,7 +13535,7 @@ fn test_did_change_workspace_folders_repoints_and_rescans() {
     // The re-scan must index the new root: its file gets diagnostics published.
     let stdin = child.stdin.take().unwrap();
     let old_uri = path_uri(&old);
-    let result = run_with_deadline(stdin, reader, 90, move |stdin, reader| {
+    let result = run_child_with_deadline(child, stdin, reader, 90, move |stdin, reader| {
         let mut requested_old_symbols = false;
         for _ in 0..2000 {
             let Ok(raw) = read_frame(reader) else { break };
@@ -13478,7 +13567,6 @@ fn test_did_change_workspace_folders_repoints_and_rescans() {
         }
         false
     });
-    child.kill().ok();
     assert_eq!(
         result,
         Some(true),
@@ -13528,7 +13616,7 @@ fn test_rules_config_errors_publish_after_initialized() {
     write_frame(&mut child, &body).unwrap();
 
     let stdin = child.stdin.take().unwrap();
-    let saw = run_with_deadline(stdin, reader, 30, |_stdin, reader| {
+    let saw = run_child_with_deadline(child, stdin, reader, 30, |_stdin, reader| {
         for _ in 0..400 {
             let Ok(raw) = read_frame(reader) else {
                 return false;
@@ -13552,7 +13640,6 @@ fn test_rules_config_errors_publish_after_initialized() {
         }
         false
     });
-    child.kill().ok();
     assert_eq!(
         saw,
         Some(true),
@@ -13620,7 +13707,7 @@ fn test_published_diagnostic_range_stays_on_its_own_line() {
     write_frame(&mut child, &body).unwrap();
 
     let stdin = child.stdin.take().unwrap();
-    let found = run_with_deadline(stdin, reader, 60, |_stdin, reader| {
+    let found = run_child_with_deadline(child, stdin, reader, 60, |_stdin, reader| {
         // No fixed frame budget: the diagnostic can trail an arbitrary number of
         // other notifications (progress, other files' diagnostics), and under a
         // loaded CI box the server is slow to emit them. The outer deadline is
@@ -13657,7 +13744,6 @@ fn test_published_diagnostic_range_stays_on_its_own_line() {
             }
         }
     });
-    child.kill().ok();
 
     let range = found.flatten().expect("no CW223 diagnostic published");
     // `NOT` sits at line index 1, columns 4..7.
@@ -13725,7 +13811,7 @@ fn test_scan_publish_falls_back_and_did_open_republishes_precise_range() {
     .unwrap();
 
     let stdin = child.stdin.take().unwrap();
-    let found = run_with_deadline(stdin, reader, 60, move |stdin, reader| {
+    let found = run_child_with_deadline(child, stdin, reader, 60, move |stdin, reader| {
         // Phase 1: the scan's publish. e.txt is on disk and not open yet, so
         // the scan validates it with no document text and publishes the
         // version-less fallback range.
@@ -13794,7 +13880,6 @@ fn test_scan_publish_falls_back_and_did_open_republishes_precise_range() {
             }
         }
     });
-    child.kill().ok();
 
     let (scan_version, scan_range, open_version, open_range) = found
         .flatten()
@@ -13890,7 +13975,7 @@ fn test_rules_config_diagnostics_clear_after_a_clean_reload() {
     .unwrap();
 
     let stdin = child.stdin.take().unwrap();
-    let cleared = run_with_deadline(stdin, reader, 30, |_stdin, reader| {
+    let cleared = run_child_with_deadline(child, stdin, reader, 30, |_stdin, reader| {
         for _ in 0..400 {
             let Ok(raw) = read_frame(reader) else {
                 return false;
@@ -13914,7 +13999,6 @@ fn test_rules_config_diagnostics_clear_after_a_clean_reload() {
         }
         false
     });
-    child.kill().ok();
     assert_eq!(
         cleared,
         Some(true),
@@ -13970,7 +14054,7 @@ fn test_rules_config_toast_defers_to_initialized_and_dedupes() {
 
     let broken_path = broken.clone();
     let stdin = child.stdin.take().unwrap();
-    let phases = run_with_deadline(stdin, reader, 60, move |stdin, reader| {
+    let phases = run_child_with_deadline(child, stdin, reader, 60, move |stdin, reader| {
         let is_toast = |v: &serde_json::Value| v["method"] == "window/showMessage";
         // Toasts seen until a response with `id` arrives; None = frame cap hit.
         let toasts_until_response =
@@ -14044,7 +14128,6 @@ fn test_rules_config_toast_defers_to_initialized_and_dedupes() {
 
         Some((boot_toast, same_reload, changed_reload))
     });
-    child.kill().ok();
 
     let (boot_toast, same_reload, changed_reload) =
         phases.flatten().expect("server went quiet mid-test");
@@ -14284,7 +14367,7 @@ fn a_vanilla_cache_naming_a_character_device_does_not_stall_initialize() {
     std::fs::write(&script, "a = { b = 1 }\n").unwrap();
     let script_uri = path_uri(&script);
 
-    let answered = run_with_deadline(stdin, reader, 30, move |stdin, reader| {
+    let answered = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
         let init = jsonrpc_request(
             1,
             "initialize",
@@ -14316,9 +14399,6 @@ fn a_vanilla_cache_naming_a_character_device_does_not_stall_initialize() {
         .ok()?;
         serde_json::from_str::<serde_json::Value>(&read_response(reader).ok()?).ok()
     });
-    child.kill().ok();
-    // Reap it: a server that blew its deadline is still reading the device.
-    child.wait().ok();
 
     let response = answered
         .flatten()
@@ -14381,7 +14461,7 @@ fn folding_ranges_for(
 
     // Deadline-bounded: before the boundary existed a `/dev/zero` request read
     // until it ran the machine out of memory rather than answering.
-    let result = run_with_deadline(stdin, reader, 30, move |stdin, reader| {
+    let result = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
         let init = jsonrpc_request(
             1,
             "initialize",
@@ -14435,10 +14515,6 @@ fn folding_ranges_for(
         }
         Some(response)
     });
-    child.kill().ok();
-    // Reap it: a server that blew its deadline is still running, and on the
-    // `/dev/zero` path it is still allocating.
-    child.wait().ok();
     result.flatten()
 }
 
@@ -14653,7 +14729,7 @@ fn auto_discovered_vanilla_response(game: &str, folder: &str) -> serde_json::Val
     let file_uri = path_uri(&vanilla_file);
     let game = game.to_string();
 
-    let response = run_with_deadline(stdin, reader, 60, move |stdin, reader| {
+    let response = run_child_with_deadline(child, stdin, reader, 60, move |stdin, reader| {
         write_frame_to(
             stdin,
             &jsonrpc_request(
@@ -14687,8 +14763,6 @@ fn auto_discovered_vanilla_response(game: &str, folder: &str) -> serde_json::Val
         .ok()?;
         serde_json::from_str::<serde_json::Value>(&read_response(reader).ok()?).ok()
     });
-    child.kill().ok();
-    child.wait().ok();
     response.flatten().expect("the server never answered")
 }
 
