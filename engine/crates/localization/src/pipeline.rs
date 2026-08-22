@@ -190,6 +190,7 @@ fn build_diagnostics(
     file: &LocFile,
     file_path: &str,
     union: &LocKeySet,
+    additional_loc_keys: &HashSet<String>,
     extra_valid_refs: &HashSet<String>,
     hardcoded: &HashSet<String>,
     emit_cw254: bool,
@@ -230,7 +231,13 @@ fn build_diagnostics(
         });
     }
 
-    for err in validate_loc_file_with_hardcoded(file, union, extra_valid_refs, hardcoded) {
+    for err in validate_loc_file_with_hardcoded(
+        file,
+        union,
+        additional_loc_keys,
+        extra_valid_refs,
+        hardcoded,
+    ) {
         let (code, severity, message) = loc_error_parts(&err.kind, &err.key, lang);
         out.push(LocDiagnostic {
             file: file_path.to_string(),
@@ -313,6 +320,7 @@ pub fn validate_loc_project_with_union(
     // Lowercased hardcoded-loc set, built once and shared read-only across the
     // per-file parallel pass (was re-lowercased + re-collected per file).
     let hardcoded = hardcoded_loc_set();
+    let additional_loc_keys = HashSet::new();
     service
         .files()
         .par_iter()
@@ -324,6 +332,7 @@ pub fn validate_loc_project_with_union(
                 file,
                 &file.path,
                 union,
+                &additional_loc_keys,
                 extra_valid_refs,
                 hardcoded,
                 should_emit_cw254(file),
@@ -449,6 +458,7 @@ pub fn validate_loc_file_text(
         &file,
         path,
         union,
+        &HashSet::new(),
         extra_valid_refs,
         hardcoded_loc_set(),
         false,
@@ -468,6 +478,22 @@ pub fn validate_parsed_loc_files(
     union: &LocKeySet,
     extra_valid_refs: &HashSet<String>,
 ) -> Vec<LocDiagnostic> {
+    validate_parsed_loc_files_with_additional_keys(
+        files,
+        path,
+        union,
+        &HashSet::new(),
+        extra_valid_refs,
+    )
+}
+
+pub fn validate_parsed_loc_files_with_additional_keys(
+    files: &[LocFile],
+    path: &str,
+    union: &LocKeySet,
+    additional_loc_keys: &HashSet<String>,
+    extra_valid_refs: &HashSet<String>,
+) -> Vec<LocDiagnostic> {
     files
         .iter()
         .filter(|file| !file.is_csv)
@@ -476,6 +502,7 @@ pub fn validate_parsed_loc_files(
                 file,
                 path,
                 union,
+                additional_loc_keys,
                 extra_valid_refs,
                 hardcoded_loc_set(),
                 false,

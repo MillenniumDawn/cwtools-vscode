@@ -679,10 +679,14 @@ impl Backend {
                 .fetch_add(1, std::sync::atomic::Ordering::Release);
             self.state.pending_changed_names.lock().extend(dropped);
         }
-        let loc_removed = self.state.loc_live_overlay.write().remove(uri).is_some()
-            || self.state.loc_watched_overlay.write().remove(uri).is_some();
+        if self.state.loc_live_overlay.read().contains_key(uri) {
+            self.loc_live_overlay_mut().remove(uri);
+        }
+        if self.state.loc_watched_overlay.read().contains_key(uri) {
+            self.loc_watched_overlay_mut().remove(uri);
+        }
         self.state.watched_signatures.lock().remove(uri);
-        if bump_info || loc_removed {
+        if bump_info {
             self.bump_info_revision();
         }
     }
@@ -1409,30 +1413,12 @@ impl Backend {
         }
     }
 
-    /// The names a `$ref$` in a loc file may resolve to: [`loc_extra_valid_refs`]
-    /// plus both loc overlays (the current keys of every open `.yml` and of the
-    /// watched files changed since the last scan).
-    ///
-    /// This is a full copy of the modifier-key and index-name universe (~200K
-    /// Strings on Millennium Dawn), so it is built ONCE per edit and shared by
-    /// `Arc` with every file that edit revalidates — building it per file cost
-    /// the keystroke path one whole copy per open `.yml`.
-    ///
-    /// Cached across edits too, keyed on `(info_revision, loc_overlay_revision)`
-    /// — its inputs are the ruleset's modifier keys and the type index (both
-    /// covered by `info_revision`) plus the two overlays. Keying on
-    /// `info_revision` alone would be wrong: an open loc edit writes the overlay
-    /// before it bumps that counter, so the set the edit itself validates
-    /// against would still be missing the key just typed (#87).
+    /// Cached modifier and type names that a localisation `$ref$` may resolve to.
     fn loc_ref_names(&self) -> Arc<HashSet<String>> {
-        let revision = (
-            self.state
-                .info_revision
-                .load(std::sync::atomic::Ordering::Relaxed),
-            self.state
-                .loc_overlay_revision
-                .load(std::sync::atomic::Ordering::Acquire),
-        );
+        let revision = self
+            .state
+            .info_revision
+            .load(std::sync::atomic::Ordering::Acquire);
         let cached = {
             let guard = self.state.loc_ref_names_cache.lock();
             guard
@@ -1443,47 +1429,39 @@ impl Backend {
         if let Some(names) = cached {
             return names;
         }
-        // Lock order: rules -> info_service. The overlay locks are independent
-        // and taken after, never nested inside the others.
-        let mut extra = {
+        let extra = {
             let modifier_keys = self.state.rules.read().modifier_keys.clone();
             let info = self.state.info_service.read();
-            loc_extra_valid_refs(&modifier_keys, &info.type_index)
+            Arc::new(loc_extra_valid_refs(&modifier_keys, &info.type_index))
         };
-        // Lets a key just added to an open `.yml` (or saved to a watched one)
-        // resolve immediately, in that file and cross-file.
-        for keys in self.state.loc_live_overlay.read().values() {
-            extra.extend(keys.iter().cloned());
-        }
-        for keys in self.state.loc_watched_overlay.read().values() {
-            extra.extend(keys.iter().cloned());
-        }
-        let extra = Arc::new(extra);
         *self.state.loc_ref_names_cache.lock() = Some((revision, Arc::clone(&extra)));
         extra
     }
 
-    /// Validate one loc file's text into diagnostics against the scanned union
-    /// and the shared `extra` name set from [`loc_ref_names`]. Pure: it neither
-    /// updates the overlay nor triggers any cross-file work, so the cross-file
-    /// sweep can call it safely (#36).
+    /// Validate one loc file without updating overlays or triggering cross-file work.
     fn validate_loc_text(
         &self,
         path: &str,
         text: &str,
         lines: &DocLines,
+        additional_loc_keys: &HashSet<String>,
         extra: &HashSet<String>,
     ) -> Vec<Diagnostic> {
-        self.validate_loc_parsed(path, &parse_loc_buffer(text, path), lines, extra)
+        self.validate_loc_parsed(
+            path,
+            &parse_loc_buffer(text, path),
+            lines,
+            additional_loc_keys,
+            extra,
+        )
     }
 
-    /// [`validate_loc_text`] over an already-parsed buffer, so the edited file's
-    /// own validate shares the one parse its key set and hover text came from.
     fn validate_loc_parsed(
         &self,
         path: &str,
         files: &[cwtools_localization::LocFile],
         lines: &DocLines,
+        additional_loc_keys: &HashSet<String>,
         extra: &HashSet<String>,
     ) -> Vec<Diagnostic> {
         // Hold the read guard across the validate call to avoid cloning the full
@@ -1494,17 +1472,28 @@ impl Backend {
             .as_deref()
             .map(|idx| idx.union())
             .unwrap_or(&empty_union);
-        cwtools_localization::validate_parsed_loc_files(files, path, union, extra)
-            .iter()
-            .map(|d| validation_error_to_diagnostic(&loc_diag_to_validation_error(d), lines))
-            .collect()
+        cwtools_localization::pipeline::validate_parsed_loc_files_with_additional_keys(
+            files,
+            path,
+            union,
+            additional_loc_keys,
+            extra,
+        )
+        .iter()
+        .map(|d| validation_error_to_diagnostic(&loc_diag_to_validation_error(d), lines))
+        .collect()
     }
 
     /// Re-validate and republish every OTHER open loc file. Called when an edited
     /// loc file's key set changed, so a `$ref$` to a key that was just added or
     /// removed updates in the other open `.yml` files without a reload (#36).
     /// Bounded by the number of open loc files.
-    async fn revalidate_other_open_loc_files(&self, except_uri: &str, extra: &HashSet<String>) {
+    async fn revalidate_other_open_loc_files(
+        &self,
+        except_uri: &str,
+        additional_loc_keys: &HashSet<String>,
+        extra: &HashSet<String>,
+    ) {
         let targets: Vec<(String, Arc<str>)> = {
             let docs = self.state.documents.lock();
             docs.iter()
@@ -1516,7 +1505,7 @@ impl Backend {
         for (u, text) in targets {
             let path = uri_to_path_str(&u);
             let lines = DocLines::new(&text, encoding.clone());
-            let diags = self.validate_loc_text(&path, &text, &lines, extra);
+            let diags = self.validate_loc_text(&path, &text, &lines, additional_loc_keys, extra);
             if let Ok(obj) = Url::parse(&u) {
                 self.publish_gated(
                     obj,
@@ -1555,15 +1544,7 @@ impl Backend {
         changed
     }
 
-    /// Whether an overlay already holds exactly `new_keys` for `uri`, checked
-    /// under a read lock.
-    ///
-    /// Taking the write guard is what bumps `loc_overlay_revision`, and most
-    /// loc keystrokes change a value rather than the key set — so re-inserting
-    /// an identical set invalidated both derived caches on every edit and the
-    /// `$ref$` name universe was rebuilt anyway. Skipping the write when
-    /// nothing moved is what makes those caches actually hit while a `.yml` is
-    /// being typed in.
+    /// Whether the overlay already has this file's exact key set.
     fn loc_overlay_entry_matches(
         &self,
         overlay: &parking_lot::RwLock<std::collections::HashMap<String, HashSet<String>>>,
@@ -1577,9 +1558,10 @@ impl Backend {
     /// whole watched batch whose loc key sets changed (#90). `changed_keys` is
     /// the batch-wide union of additions and removals.
     pub(crate) async fn refresh_after_watched_loc_changes(&self, changed_keys: &HashSet<String>) {
-        self.bump_info_revision();
+        let additional_loc_keys = self.loc_overlay_keys();
         let extra = self.loc_ref_names();
-        self.revalidate_other_open_loc_files("", &extra).await;
+        self.revalidate_other_open_loc_files("", &additional_loc_keys, &extra)
+            .await;
         let generation = self
             .state
             .edit_generation
@@ -1633,7 +1615,7 @@ impl Backend {
             // that would otherwise hold a runtime worker for its whole duration,
             // and MD ships loc files in the hundreds of KB. Matches how the scan
             // paths already fence their sync work. (#87)
-            let (changed_keys, extra, diagnostics) = tokio::task::block_in_place(|| {
+            let (changed_keys, diagnostics) = tokio::task::block_in_place(|| {
                 // One parse of the edited buffer, shared by the key set, the
                 // diagnostics and the hover text below — each used to parse the
                 // whole file itself, and two of them copied it first (#87).
@@ -1641,11 +1623,7 @@ impl Backend {
                 let is_open = self.state.documents.lock().contains_key(uri);
                 let changed_keys: HashSet<String> = if is_open {
                     let new_keys = loc_keys_from(&parsed_loc);
-                    // Skip the write when the key set is unchanged, which is
-                    // the common keystroke: taking the write guard bumps the
-                    // revision the derived caches key on, so re-inserting an
-                    // identical set rebuilt the whole `$ref$` name universe on
-                    // every edit. See `loc_overlay_entry_matches`.
+                    // A value-only edit keeps the cached overlay union.
                     if self.loc_overlay_entry_matches(&self.state.loc_live_overlay, uri, &new_keys)
                     {
                         HashSet::new()
@@ -1661,15 +1639,19 @@ impl Backend {
                 } else {
                     HashSet::new()
                 };
-                // Built once here and shared with the cross-file sweep below,
-                // which would otherwise rebuild the whole name set per open
-                // `.yml`.
+                let additional_loc_keys = self.loc_overlay_keys();
                 let extra = self.loc_ref_names();
-                let diagnostics = self.validate_loc_parsed(&path, &parsed_loc, &lines, &extra);
+                let diagnostics = self.validate_loc_parsed(
+                    &path,
+                    &parsed_loc,
+                    &lines,
+                    &additional_loc_keys,
+                    &extra,
+                );
                 // Update the hover loc_text map so tooltips reflect the latest
                 // edits without waiting for a full workspace rescan (#53).
                 self.update_loc_text_for_file(&parsed_loc);
-                (changed_keys, extra, diagnostics)
+                (changed_keys, diagnostics)
             });
             // A change to this file's key set can fix or break `$ref$` checks in
             // other open loc files, so refresh them — that's the cross-file part
@@ -1682,8 +1664,10 @@ impl Backend {
             // whose tokens mention a changed key or a definition name it derives
             // from, instead of every open game file.
             if !changed_keys.is_empty() {
-                self.bump_info_revision();
-                self.revalidate_other_open_loc_files(uri, &extra).await;
+                let additional_loc_keys = self.loc_overlay_keys();
+                let extra = self.loc_ref_names();
+                self.revalidate_other_open_loc_files(uri, &additional_loc_keys, &extra)
+                    .await;
                 let generation = self
                     .state
                     .edit_generation
@@ -1934,10 +1918,7 @@ mod perf_bench {
         });
     }
 
-    /// The `$ref$` name set every loc-file edit builds ([`loc_ref_names`]), at
-    /// Millennium-Dawn scale. `validate_loc_text` used to build one of these per
-    /// call, so an edit with N loc files open paid it N+1 times; it is now built
-    /// once and shared, and this is what each avoided rebuild cost.
+    /// Millennium-Dawn-scale `$ref$` cache build and overlay invalidation costs.
     #[test]
     #[ignore]
     fn perf_loc_ref_names() {
@@ -1973,6 +1954,19 @@ mod perf_bench {
 
         bench("loc_extra_valid_refs", 20, || {
             loc_extra_valid_refs(&modifier_keys, &type_index).len()
+        });
+
+        let base = loc_extra_valid_refs(&modifier_keys, &type_index);
+        let overlay: HashSet<String> = (0..4_000).map(|i| format!("overlay_key_{i:06}")).collect();
+        bench("overlay merge (before)", 20, || {
+            let mut combined = base.clone();
+            combined.extend(overlay.iter().cloned());
+            combined.len()
+        });
+        bench("overlay rebuild (after)", 20, || {
+            let mut keys = HashSet::new();
+            keys.extend(overlay.iter().cloned());
+            keys.len()
         });
     }
 
@@ -2209,6 +2203,69 @@ mod info_revision_tests {
             .lock()
             .as_ref()
             .is_some_and(|entry| entry.revision == current && !entry.items.is_empty())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_loc_key_change_only_invalidates_the_overlay_cache() {
+        let backend = test_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
+        let text: Arc<str> = Arc::from("l_english:\n NEW_KEY:0 \"$new_key$\"\n");
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::clone(&text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                },
+            )
+            .unwrap();
+        let settled = revision(&backend);
+        let names_before = backend.loc_ref_names();
+        let overlay_before = backend.loc_overlay_keys();
+        seed_fallback_cache(&backend);
+
+        let (diagnostics, _) = backend
+            .parse_and_validate(&uri, &text, crate::ValidateTrigger::DidChange, Some(1))
+            .await;
+
+        assert_eq!(revision(&backend), settled);
+        assert!(Arc::ptr_eq(&names_before, &backend.loc_ref_names()));
+        let overlay_after = backend.loc_overlay_keys();
+        assert!(!Arc::ptr_eq(&overlay_before, &overlay_after));
+        assert!(overlay_after.contains("new_key"));
+        assert!(fallback_cache_hits(&backend));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == Some(NumberOrString::String("CW259".to_string()))
+        }));
+    }
+
+    #[test]
+    fn clearing_ignored_loc_state_invalidates_both_overlays() {
+        let backend = test_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/ignored_l_english.yml");
+        backend
+            .loc_live_overlay_mut()
+            .insert(uri.clone(), HashSet::from(["live_key".to_string()]));
+        backend
+            .loc_watched_overlay_mut()
+            .insert(uri.clone(), HashSet::from(["watched_key".to_string()]));
+        let settled = revision(&backend);
+        let before = backend.loc_overlay_keys();
+
+        backend.clear_ignored_file_state(&uri);
+
+        assert_eq!(revision(&backend), settled);
+        let after = backend.loc_overlay_keys();
+        assert!(!Arc::ptr_eq(&before, &after));
+        assert!(after.is_empty());
+        assert!(!backend.state.loc_live_overlay.read().contains_key(&uri));
+        assert!(!backend.state.loc_watched_overlay.read().contains_key(&uri));
     }
 
     #[tokio::test]

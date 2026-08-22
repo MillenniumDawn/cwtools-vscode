@@ -43,6 +43,8 @@ This is the first release with the engine in-repo under `engine/`. The extension
 
 #### Engine
 
+* Saving immediately after an edit no longer starts a second validation while that buffer's debounced validation is still pending. The `$ref$` cache keeps its 240k modifier/type names separate from live localisation keys, so adding a key rebuilds only the small overlay and leaves unrelated completion caches alone. On the committed Millennium Dawn-scale fixture, the full name build takes 76.5 ms; rebuilding a 4k-key overlay takes 0.24 ms instead of 25.7 ms to clone and merge an already-built base. A newly added self-referencing loc key also reports CW259 immediately rather than being mistaken for a modifier/type reference.
+
 * The Millennium Dawn guard baseline drops 614 CW266 rows on scripted-GUI `[!callback]` localisation (`!foo_click`, `!foo_click_enabled`). The engine already resolved those against scripted-GUI effects/triggers (MillenniumDawn/cwtools#350); the baseline had not been re-blessed. Five other CW266 rows remain.
 
 * LSP: opt-in workspace-wide diagnostics control. A new `workspaceWideDiagnostics` setting (default `true`) decides whether the scan publishes diagnostics for closed files; set it to `false` to keep the Problems panel scoped to open documents only. A new `validateWorkspace` execute command runs a full scan and returns a JSON summary (`totalFiles`, `filesWithErrors`, `totalErrors`, `totalWarnings`, `totalInfos`, `totalHints`) regardless of the setting, so "is my mod clean?" has a direct answer. The scan also caps closed-file `publishDiagnostics` traffic at 2,000 files per pass and yields every 50 publishes so a 10k-file mod cannot flood the client. (MillenniumDawn/cwtools#106)
