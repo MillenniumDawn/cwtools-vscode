@@ -13,7 +13,7 @@
     "test:host": "npm run compile && vscode-test --label host",
     "test:smoke": "npm run compile && vscode-test --label smoke --label live",
     "test:rules-sync": "npm run compile && vscode-test --label rules-sync",
-    "test:coverage": "npm run compile && vscode-test --label unit --coverage",
+    "test:coverage": "tsx build/host-coverage.ts && tsx build/coverage-summary.ts --host-only",
     "test:node": "vitest run",
     "test:node:watch": "vitest",
     "test:node:coverage": "vitest run --coverage",

@@ -13,23 +13,21 @@ import {
 	writeFileSync,
 	appendFileSync,
 	mkdirSync,
+	existsSync,
 } from "node:fs";
-import { relative } from "node:path";
+import { relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+	COVERAGE_METRICS,
+	HOST_COVERAGE_DROPS,
+	HOST_COVERAGE_LABELS,
+	HOST_COVERAGE_SCOPES,
+	type CoverageMetric,
+	type CoverageSummary,
+	type FileCoverage,
+} from "./coverage";
 
-interface Metric {
-	pct?: number;
-	covered?: number;
-	total?: number;
-}
-interface FileCoverage {
-	statements: Metric;
-	branches: Metric;
-	functions: Metric;
-	lines: Metric;
-}
-type Summary = { total: FileCoverage } & Record<string, FileCoverage>;
-
-interface Source {
+export interface CoverageSource {
 	title: string;
 	path: string;
 	// Where the browsable HTML report lands as a CI artifact.
@@ -38,21 +36,21 @@ interface Source {
 	// dropped). vscode-test's c8 run can't reliably exclude specific files, so
 	// the modules owned by the node report are filtered out of the host report
 	// here instead — same belt-and-suspenders as node_modules.
-	drop?: string[];
+	drop?: readonly string[];
+	labels?: readonly string[];
+	scopes?: readonly string[];
+	scopeNote?: string;
 }
 
-const sources: Source[] = [
+const sources: CoverageSource[] = [
 	{
 		title: "extension-host client",
 		path: "coverage/coverage-summary.json",
 		htmlArtifact: "coverage-html",
-		drop: [
-			"extension/src/host/engine.ts",
-			"extension/src/host/executable.ts",
-			"extension/src/host/games.ts",
-			"extension/src/host/rulesManifest.ts",
-			"extension/src/host/rulesSetup.ts",
-		],
+		drop: HOST_COVERAGE_DROPS,
+		labels: HOST_COVERAGE_LABELS,
+		scopes: HOST_COVERAGE_SCOPES,
+		scopeNote: "Modules measured only by Vitest are excluded.",
 	},
 	{
 		title: "node unit",
@@ -68,78 +66,123 @@ const AMBER = 50;
 const light = (n: number | undefined) =>
 	typeof n !== "number" ? "⚪" : n >= GREEN ? "🟢" : n >= AMBER ? "🟡" : "🔴";
 
-const num = (m: Metric) =>
+const num = (m: CoverageMetric) =>
 	m && typeof m.pct === "number" ? m.pct.toFixed(1) : "-";
-const cell = (m: Metric) => `${light(m?.pct)} ${num(m)}`;
+const cell = (m: CoverageMetric) => `${light(m?.pct)} ${num(m)}`;
 const row = (name: string, m: FileCoverage) =>
 	`| ${name} | ${cell(m.lines)} | ${cell(m.statements)} | ${cell(m.branches)} | ${cell(m.functions)} |`;
 
-// Sum one metric across every source file. An empty set reports 100%.
 function aggregate(
 	files: string[],
-	data: Summary,
+	data: CoverageSummary,
 	metric: keyof FileCoverage,
-): Metric {
+): CoverageMetric {
 	const covered = files.reduce((n, f) => n + (data[f][metric].covered ?? 0), 0);
 	const total = files.reduce((n, f) => n + (data[f][metric].total ?? 0), 0);
-	return { covered, total, pct: total ? (100 * covered) / total : 100 };
+	return { covered, total, pct: total ? (100 * covered) / total : undefined };
 }
 
-function renderSection(source: Source): string[] {
-	let data: Summary;
-	try {
-		data = JSON.parse(readFileSync(source.path, "utf8")) as Summary;
-	} catch {
-		// Report absent (e.g. host coverage is not collected in CI). Omit the
-		// section rather than print a placeholder.
-		return [];
-	}
-
+export function renderCoverageSection(
+	source: CoverageSource,
+	data: CoverageSummary,
+	cwd = process.cwd(),
+): string[] {
 	// vscode-test instruments every file the extension loads, including its
 	// dependencies, and its coverage `exclude` doesn't reliably drop them. So
 	// filter node_modules (and any source-owned `drop` paths) out here and
 	// recompute the total from the real client source, otherwise the
 	// dependencies dwarf the numbers we care about.
 	const drop = source.drop ?? [];
-	const isSource = (k: string) =>
-		k !== "total" &&
-		!k.includes("node_modules") &&
-		!drop.some((d) => k.includes(d));
+	const scopes = source.scopes ?? [];
+	const isSource = (key: string) => {
+		const normalized = key.split("\\").join("/");
+		return (
+			key !== "total" &&
+			!normalized.includes("node_modules") &&
+			!drop.some((item) => normalized.includes(item)) &&
+			(scopes.length === 0 ||
+				scopes.some((scope) => normalized.includes(`/${scope}/`)))
+		);
+	};
 
 	// Worst-covered files first, so the gaps are what you see.
 	const files = Object.keys(data)
 		.filter(isSource)
 		.sort((a, b) => (data[a].lines.pct ?? 0) - (data[b].lines.pct ?? 0));
+	if (files.length === 0) {
+		throw new Error(`${source.title} coverage contains no source files`);
+	}
 
-	const t: FileCoverage = {
+	const total: FileCoverage = {
 		lines: aggregate(files, data, "lines"),
 		statements: aggregate(files, data, "statements"),
 		branches: aggregate(files, data, "branches"),
 		functions: aggregate(files, data, "functions"),
 	};
-	const headline = `${light(t.lines.pct)} **${num(t.lines)}% lines** · ${num(t.functions)}% functions · ${num(t.branches)}% branches`;
+	for (const metric of COVERAGE_METRICS) {
+		if (total[metric].total === 0) {
+			throw new Error(`${source.title} coverage has a zero ${metric} total`);
+		}
+	}
+	const headline = `${light(total.lines.pct)} **${num(total.lines)}% lines** · ${num(total.functions)}% functions · ${num(total.branches)}% branches`;
+	const labels = source.labels?.map((label) => `\`${label}\``).join(", ");
+	const scope = source.scopes?.map((path) => `\`${path}\``).join(", ");
+	const details = labels && scope
+		? `Measured labels: ${labels}. Source scope: ${scope}. ${source.scopeNote ?? ""}`.trim()
+		: undefined;
 
 	return [
 		`## Coverage (${source.title})`,
 		"",
+		...(details ? [details, ""] : []),
 		headline,
 		"",
 		"| File | % Lines | % Stmts | % Branch | % Funcs |",
 		"| --- | --- | --- | --- | --- |",
-		row("**All files**", t),
-		...files.map((f) => row(relative(process.cwd(), f), data[f])),
+		row("**All files**", total),
+		...files.map((file) => row(relative(cwd, file), data[file])),
 		"",
 		`<sub>🟢 ≥80% · 🟡 ≥50% · 🔴 <50%. Full HTML report is in the \`${source.htmlArtifact}\` artifact.</sub>`,
 		"",
 	];
 }
 
-const md = sources.flatMap(renderSection).join("\n").trimEnd();
-
-mkdirSync("coverage", { recursive: true });
-writeFileSync("coverage/summary.md", md + "\n");
-
-if (process.env.GITHUB_STEP_SUMMARY) {
-	appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + "\n");
+function renderSection(source: CoverageSource): string[] {
+	if (!existsSync(source.path)) {
+		// Host coverage is intentionally absent from CI, which publishes only the
+		// node report.
+		return [];
+	}
+	let data: CoverageSummary;
+	try {
+		data = JSON.parse(readFileSync(source.path, "utf8")) as CoverageSummary;
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`could not read ${source.path}: ${detail}`, { cause: error });
+	}
+	return renderCoverageSection(source, data);
 }
-console.log(md);
+
+export function renderCoverageSummary(
+	selectedSources: CoverageSource[] = sources,
+): string {
+	return selectedSources.flatMap(renderSection).join("\n").trimEnd();
+}
+
+function main(): void {
+	const selectedSources = process.argv.includes("--host-only")
+		? sources.filter((source) => source.labels?.includes("unit"))
+		: sources;
+	const md = renderCoverageSummary(selectedSources);
+	mkdirSync("coverage", { recursive: true });
+	writeFileSync("coverage/summary.md", `${md}\n`);
+
+	if (process.env.GITHUB_STEP_SUMMARY) {
+		appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`);
+	}
+	console.log(md);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	main();
+}

@@ -90,7 +90,7 @@ npm run test:node      # node-only unit tests for the pure modules (vitest, fast
 npm test               # unit label: VS Code API, no language server
 npm run test:smoke     # unit plus activation against the real server
 npm run test:host      # everything, including hover and completion
-npm run test:coverage  # unit label with V8 coverage
+npm run test:coverage  # unit label with validated V8 coverage
 npm run test:node:coverage  # vitest coverage into coverage-node/
 npm run bench:node     # client hot-path benchmarks
 ```
@@ -124,4 +124,4 @@ workspace detects as `stellaris` (its `common/species_classes` content marker),
 so the hover and completion suites fetch real rules on activation and run in CI
 like everything else.
 
-`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/` — open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The numbers count only the hand-written extension source (`extension/src/host`, `extension/src/common`); dependencies are filtered out so the figures mean something. CI renders the node coverage summary as a markdown table in the job summary and as a sticky PR comment, and uploads the raw report as the `coverage-node` artifact. It's all local/OSS, no external service. Coverage is informational, not a merge gate (see issue #7).
+`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/`. Open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The command removes the previous host report first and fails if the `unit` label produces no host/common source coverage or a zero statement, branch, function, or line total. Its rendered summary names the measured label and counts only `extension/src/host` and `extension/src/common`; bundled dependencies and modules measured only by Vitest are filtered out. CI renders the node coverage summary as a markdown table in the job summary and as a sticky PR comment, and uploads the raw report as the `coverage-node` artifact. It's all local/OSS, no external service. Coverage is informational, not a merge gate (see issue #7).
