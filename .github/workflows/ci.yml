@@ -1,0 +1,527 @@
+# One PR-path gate for the merged repo. The TypeScript client, Rust engine,
+# cargo-deny, and diagnostics guards used to be four workflows; they share
+# this file so the Checks tab is one group instead of a leftover-from-the-
+# merger pile. CodeQL, release, marketplace publish, rules-pins, and the
+# build bench stay on their own triggers.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    # Weekly cargo-deny sweep so a new advisory against an already-merged
+    # crate is not waiting on the next PR. Other jobs skip this event.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+name: CI
+
+permissions:
+  contents: read
+
+# event_name keeps a push to main from cancelling the weekly deny sweep.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  MD_REPO: MillenniumDawn/Millennium-Dawn
+  RULES_REPO: Kaiserreich/cwtools-hoi4-config
+
+jobs:
+  # Fast client gate: typecheck, lint, and unit tests. Gives contributors
+  # quick feedback while the heavier jobs catch up.
+  check:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-node-npm
+        with:
+          cache-vscode: true
+      - name: Typecheck and lint
+        run: npm run check
+      - name: Node unit tests
+        run: npm run test:node
+      # Step-scoped so a hung extension host fails here in minutes instead of
+      # burning the job's whole 20m budget with no mocha output to show for it.
+      - name: Unit tests
+        timeout-minutes: 5
+        run: xvfb-run -a npm test
+
+  # Catches a vulnerable dependency before merge, not as an alert after. Reads
+  # every manifest in the diff, so this one job covers package-lock.json and
+  # the engine's Cargo.lock.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v5.0.0
+      - uses: >-
+          actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
+
+  # Full client build: compile the engine and the client, run the host smoke
+  # suite against the real server, package the vsix, collect node coverage.
+  # The engine lives in-repo at engine/, so this is the same tree the rust
+  # jobs lint and test, built here the way the extension actually consumes it.
+  build:
+    if: github.event_name != 'schedule'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-node-npm
+        with:
+          cache-vscode: true
+      - uses: ./.github/actions/setup-rust
+        with:
+          # quick builds --release -p cwtools_lsp. Share the release cache
+          # with the vanilla guard so the two warm each other.
+          cache-prefix: cargo-release-target
+      - name: Build engine and client
+        run: npm run build -- quick
+      # Boots the extension host against the freshly built server: activation,
+      # command registration and the graph/file-explorer UI, plus the
+      # live-settings suite in its own workspace (see .vscode-test.mjs).
+      - name: Host smoke tests
+        timeout-minutes: 10
+        run: xvfb-run -a npm run test:smoke
+      # The `host` label adds hover and completion, which need rule data: the
+      # sample workspace detects as `stellaris` (see .vscode-test.mjs) and the
+      # extension fetches its pinned rules over git in the background.
+      - name: Host tests (hover/completion)
+        timeout-minutes: 10
+        run: xvfb-run -a npm run test:host
+      # Packages what was just built, server included, so the PR artifact is
+      # an installable extension rather than a client-only shell.
+      - name: Test build
+        run: npm run build -- package-prebuilt
+      # Host V8 coverage is not run in CI: the instrumented Electron process
+      # never exits under xvfb, so c8 waits for it until the job timeout. The
+      # unit suites are already gated in the check job. Node coverage below
+      # is what the coverage-report job publishes next to rust.
+      - name: Node unit tests (with coverage)
+        if: always()
+        run: npm run test:node:coverage
+      - name: Upload node coverage
+        if: always()
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-node
+          path: coverage-node
+          retention-days: 5
+      - name: Upload VSIX
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cwtools-vscode-pipeline.vsix
+          path: artifacts/vsix/*.vsix
+          retention-days: 5
+
+  lint-rs:
+    name: Rust format / clippy / unused-deps
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt, clippy
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: >-
+          cargo clippy --workspace --all-targets --all-features --
+          -D warnings
+      - name: cargo machete (unused dependencies)
+        run: |
+          cargo install cargo-machete --locked --force
+          cargo machete
+      # Advisory + license gate. Dependency review catches what a PR adds;
+      # this catches what a published advisory turns an already-merged crate
+      # into. Runs on the weekly schedule as well as every PR.
+      - name: cargo-deny
+        # v2.1.1
+        uses: >-
+          EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        with:
+          manifest-path: engine/Cargo.toml
+      # Keeps the engine's inheritance posture (repository, [lints], shared
+      # test deps) from drifting when a new crate is added. Runs from repo
+      # root so the script can see both engine/ and scripts/.
+      - name: workspace manifest inheritance
+        working-directory: ${{ github.workspace }}
+        run: python3 scripts/workspace_manifest.py
+      - name: scripts unit tests
+        if: github.event_name != 'schedule'
+        working-directory: ${{ github.workspace }}
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
+  # Releases ship Linux, Windows, and macOS binaries, so a platform-only
+  # break must fail here before it ships. The tag-triggered release workflow
+  # separately builds the server binaries the vsix bundles.
+  test-rs:
+    if: github.event_name != 'schedule'
+    name: Rust build & test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+      # Same feature set as the test step below, or the test step recompiles
+      # every crate whose features differ instead of reusing these artifacts.
+      - name: cargo build (debug)
+        run: cargo build --workspace --all-targets --all-features
+      - name: cargo test
+        run: cargo test --workspace --all-features --no-fail-fast
+
+  # A declared MSRV nobody builds at is a comment. Stable is 1.95; the floor
+  # is 1.88 (let-chains), so seven releases' worth of newer APIs compile
+  # fine on a developer machine and break the MSRV silently. This job is
+  # what makes `rust-version` in engine/Cargo.toml mean something.
+  msrv-rs:
+    if: github.event_name != 'schedule'
+    name: Rust MSRV build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Read the version out of Cargo.toml rather than repeating it here, so
+      # bumping the MSRV is a one-line change and can't leave CI testing the
+      # old floor.
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          msrv=$(grep -m1 -oP '^rust-version\s*=\s*"\K[^"]+' Cargo.toml)
+          if [ -z "$msrv" ]; then
+            echo "::error::no rust-version found in engine/Cargo.toml"
+            exit 1
+          fi
+          echo "Declared MSRV: $msrv"
+          echo "version=$msrv" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+          # Keyed on the MSRV: a different rustc invalidates every
+          # fingerprint, so sharing the stable job's target cache would just
+          # force two full rebuilds per run. The prefix is `msrv-target`
+          # rather than `cargo-target-msrv` because the other jobs
+          # restore-key on `cargo-target-`, which would otherwise match this
+          # cache and hand them a target dir built by 1.88.
+          cache-prefix: msrv-target-${{ steps.msrv.outputs.version }}
+      # The `+${{ ... }}` is load-bearing. rust-toolchain.toml pins the
+      # channel to stable, and a directory toolchain file outranks whatever
+      # rustup default the install step set, so a bare `cargo build` here
+      # would quietly build on stable and this job would pass no matter
+      # what the MSRV is.
+      - name: cargo build at MSRV
+        run: >-
+          cargo +${{ steps.msrv.outputs.version }} build --workspace
+          --all-targets
+
+  # Fuzzing in CI is a smoke run, not a fuzzing campaign: -runs=0 replays
+  # the committed seed corpus once and exits. Deterministic, ~seconds of
+  # target time, and it re-checks the two crashes the seeds encode. A real
+  # campaign is nondeterministic and belongs on a machine that can run for
+  # hours, not on the PR path where a fresh find would turn every unrelated
+  # PR red.
+  fuzz-smoke:
+    if: github.event_name != 'schedule'
+    name: Fuzz seed-corpus smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # cargo-fuzz needs nightly. Pinned to a date for the same reason every
+      # `uses:` here is pinned to a SHA: an unpinned nightly means a
+      # toolchain regression lands as a red build on an unrelated PR. Bump
+      # it deliberately when there's a reason to.
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly-2026-07-24
+          cache-prefix: cargo-fuzz-target
+          cache-target-path: engine/fuzz/target
+      # Explicit +toolchain throughout: rust-toolchain.toml says stable, and
+      # letting it win would make rustup fetch a second toolchain to run
+      # cargo-fuzz on, which then can't build the nightly-only targets.
+      # Version-pinned: `fuzz run`'s positional-corpus and `-- -runs=0`
+      # handling is the whole contract this job depends on.
+      - name: Install cargo-fuzz
+        run: >-
+          cargo +nightly-2026-07-24 install cargo-fuzz --version 0.13.2
+          --locked
+      - name: parse_string over seed corpus
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run parse_string
+          fuzz/seeds/parse_string -- -runs=0
+      - name: parse_loc_text over seed corpus
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run parse_loc_text
+          fuzz/seeds/parse_loc_text -- -runs=0
+
+  # Coverage is a hard target, but this path starts with a 85% line floor so
+  # we can see which gaps remain before making it a required gate. The
+  # report step is continue-on-error, so this job reports the number without
+  # failing the run on it; the lcov artifact is the record. The rendered
+  # comment is the coverage-report job, next to the client numbers.
+  coverage-rs:
+    if: github.event_name != 'schedule'
+    name: Rust coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: llvm-tools
+          cache-prefix: cargo-coverage-target
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked --version 0.8.7
+      - name: Run coverage (85% line floor)
+        env:
+          COVERAGE_THRESHOLD: 85
+        run: python3 ../scripts/coverage.py
+        continue-on-error: true
+      - name: Upload rust coverage
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: rust-coverage
+          path: |
+            engine/target/coverage/lcov.info
+            engine/target/coverage/coverage-summary.json
+          if-no-files-found: error
+
+  # Cheap guard tier. Covers CW113/CW222/CW227/CW229/CW500, families that
+  # can only answer against a mod plus a base game and so never fire in the
+  # md tier, which runs without one.
+  vanilla:
+    if: github.event_name != 'schedule'
+    name: Vanilla tier
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: cargo-release-target
+      # Built here rather than by the guard's own `cargo build`, so a
+      # compile failure reads as a compile failure instead of the guard's
+      # exit 2.
+      - name: cargo build --release -p cwtools_cli
+        working-directory: engine
+        run: cargo build --release -p cwtools_cli
+      - name: Run vanilla guard
+        env:
+          # `validate` always enables the .cwb parse cache and has no flag
+          # to turn it off, so it would otherwise read whatever an earlier
+          # run left under the OS cache dir. Nothing caches this path, which
+          # makes every run start cold and the report a function of the
+          # inputs alone.
+          XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
+        run: python3 scripts/guard.py vanilla --no-build
+
+  # Reads the pinned revisions out of the committed baseline and resolves
+  # them to full SHAs, because git cannot fetch an abbreviated one.
+  pins:
+    if: github.event_name != 'schedule'
+    name: Guard pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      md_sha: ${{ steps.pins.outputs.md_sha }}
+      md_rules_sha: ${{ steps.pins.outputs.md_rules_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Read and resolve baseline pins
+        id: pins
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # Anchored on end-of-line so a `(dirty)` suffix does not match. A
+          # baseline blessed against a modified checkout pins nothing CI can
+          # reproduce, and failing here says so instead of reporting the
+          # drift as a code change later.
+          pin() {
+            sed -n "s|^# $2:[[:space:]]*[^@]*@ \([0-9a-f]\{7,40\}\)$|\1|p" \
+              "$1" | head -n 1
+          }
+          bad_pin() {
+            echo "::error::no clean revision pin in $1 (a '(dirty)' pin is" \
+              "not reproducible; re-bless from a clean checkout)"
+            grep '^#' -- "$1" >&2
+            exit 1
+          }
+          # An empty ref is not an error to actions/checkout, it is the
+          # default branch. Letting one through would validate whatever the
+          # corpus tip happens to be and report the difference as drift.
+          check_sha() {
+            if ! [[ $2 =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::could not resolve the $1 pin to a full SHA" \
+                "(got '$2')"
+              exit 1
+            fi
+          }
+
+          md_baseline=scripts/md-baseline.csv
+          md_pin=$(pin "$md_baseline" corpus)
+          md_rules_pin=$(pin "$md_baseline" rules)
+          [ -n "$md_pin" ] && [ -n "$md_rules_pin" ] || bad_pin "$md_baseline"
+          echo "md baseline pins: corpus $md_pin, rules $md_rules_pin"
+          md_sha=$(gh api "repos/$MD_REPO/commits/$md_pin" --jq '.sha')
+          md_rules_sha=$(gh api "repos/$RULES_REPO/commits/$md_rules_pin" \
+            --jq '.sha')
+          check_sha "Millennium Dawn corpus" "$md_sha"
+          check_sha "Millennium Dawn ruleset" "$md_rules_sha"
+          echo "resolved: md $md_sha, rules $md_rules_sha"
+          {
+            echo "md_sha=$md_sha"
+            echo "md_rules_sha=$md_rules_sha"
+          } >> "$GITHUB_OUTPUT"
+
+  # Main corpus tier. Millennium Dawn is public, so no secret gates it and
+  # a fork's pull request gets a real mod checked rather than the fixture
+  # alone.
+  millennium-dawn:
+    if: github.event_name != 'schedule'
+    name: Millennium Dawn tier
+    needs: pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Restore-only. This job checks out repositories this one does not
+      # own, and a job that does that must not be able to write the cache
+      # every other job restores from. The vanilla tier and the client
+      # build check out nothing but this repository, so they populate these
+      # entries; a run that finds them cold rebuilds, which is what all
+      # jobs do on the first run after a lockfile change anyway.
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-prefix: cargo-release-target
+          save: "false"
+      - name: cargo build --release -p cwtools_cli
+        working-directory: engine
+        run: cargo build --release -p cwtools_cli
+      # After the build, so a compile error costs no checkout. Most of that
+      # working tree is art the guard never opens, and there is no trimming
+      # it down: the run indexes whatever is on disk, so a narrower checkout
+      # here than on a developer's machine would report the difference as
+      # drift.
+      - name: Check out Millennium Dawn at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.MD_REPO }}
+          ref: ${{ needs.pins.outputs.md_sha }}
+          path: _guard-inputs/Millennium-Dawn
+          persist-credentials: false
+          show-progress: false
+      - name: Check out ruleset at the pinned revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.RULES_REPO }}
+          ref: ${{ needs.pins.outputs.md_rules_sha }}
+          path: _guard-inputs/cwtools-hoi4-config
+          persist-credentials: false
+      # Both inputs as flags rather than CWTOOLS_CORPUS/CWTOOLS_RULES: the
+      # md preset ignores CWTOOLS_CORPUS, and an env var would lose to a
+      # flag anyway. XDG_CACHE_HOME pins the parse cache to this run and
+      # TMPDIR puts the scratch dir where the upload step can find it.
+      - name: Run Millennium Dawn guard
+        env:
+          INPUTS: ${{ github.workspace }}/_guard-inputs
+          XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
+          TMPDIR: ${{ runner.temp }}/guard-work
+        run: |
+          mkdir -p "$TMPDIR"
+          python3 scripts/guard.py md --no-build \
+            --corpus "$INPUTS/Millennium-Dawn" \
+            --rules "$INPUTS/cwtools-hoi4-config/Config"
+      - name: Upload drift diff
+        if: failure()
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: md-guard-drift
+          path: ${{ runner.temp }}/guard-work/**/drift.diff
+          if-no-files-found: warn
+          retention-days: 14
+
+  # One PR comment for both ecosystems. Host coverage stays local: the
+  # instrumented Electron process never exits under xvfb.
+  coverage-report:
+    name: Coverage report
+    needs: [build, coverage-rs]
+    if: >-
+      always()
+      && !cancelled()
+      && github.event_name != 'schedule'
+      && (needs.build.result == 'success'
+      || needs.coverage-rs.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-node-npm
+      - name: Download node coverage
+        if: needs.build.result == 'success'
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: coverage-node
+          path: coverage-node
+      - name: Download rust coverage
+        if: needs.coverage-rs.result == 'success'
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rust-coverage
+          path: engine/target/coverage
+      - name: Coverage summary
+        run: npx --no-install tsx build/coverage-summary.ts
+      - name: Coverage PR comment
+        if: github.event_name == 'pull_request'
+        # v3.0.5
+        uses: >-
+          marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88
+        with:
+          header: coverage
+          path: coverage/summary.md

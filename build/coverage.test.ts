@@ -100,4 +100,35 @@ suite("renderCoverageSection", () => {
 			/no source files/,
 		);
 	});
+
+	test("lists the worst-covered rust files and keeps relative paths", () => {
+		const rust = {
+			title: "rust engine",
+			path: "engine/target/coverage/coverage-summary.json",
+			htmlArtifact: "rust-coverage",
+			maxFiles: 2,
+		};
+		const file = (pct: number) => ({
+			lines: { total: 10, covered: pct / 10, pct },
+			statements: { total: 10, covered: pct / 10, pct },
+			branches: { total: 2, covered: 2, pct: 100 },
+			functions: { total: 1, covered: 1, pct: 100 },
+		});
+		const rendered = renderCoverageSection(
+			rust,
+			{
+				total: fileCoverage(),
+				"engine/crates/a.rs": file(10),
+				"engine/crates/b.rs": file(20),
+				"engine/crates/c.rs": file(90),
+			},
+			"/repo",
+		).join("\n");
+
+		assert.match(rendered, /engine\/crates\/a\.rs/);
+		assert.match(rendered, /engine\/crates\/b\.rs/);
+		assert.doesNotMatch(rendered, /engine\/crates\/c\.rs/);
+		assert.match(rendered, /Showing the 2 worst-covered files of 3/);
+		assert.match(rendered, /Full report is in the `rust-coverage` artifact/);
+	});
 });

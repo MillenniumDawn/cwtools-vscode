@@ -6,6 +6,7 @@ updates:
       - /
       # `/` covers workflows but not composite actions.
       - /.github/actions/setup-node-npm
+      - /.github/actions/setup-rust
     schedule:
       interval: weekly
       day: monday
@@ -25,9 +26,9 @@ updates:
           - "*"
 
   # The Rust engine. MSRV is declared in engine/Cargo.toml and the "Rust
-  # MSRV build" job in engine-ci.yml fails any update whose own rust-version
+  # MSRV build" job in ci.yml fails any update whose own rust-version
   # climbs past it, so a floor bump is a red check rather than something a
-  # reviewer has to spot. cargo-deny (deny.yml) is the advisory gate.
+  # reviewer has to spot. cargo-deny in the rust lint job is the advisory gate.
   - package-ecosystem: cargo
     directory: /engine
     schedule:

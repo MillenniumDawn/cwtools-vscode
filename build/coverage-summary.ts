@@ -3,10 +3,11 @@
 // the GitHub Actions job summary when $GITHUB_STEP_SUMMARY is set, and prints
 // to stdout. Run after the coverage test runs.
 //
-// Two reports are stitched together, one section each:
+// Reports are stitched together, one section each, for whichever summaries
+// exist:
+//   - rust engine: cargo-llvm-cov (engine/target/coverage/coverage-summary.json)
 //   - extension-host client: vscode-test + c8 (coverage/coverage-summary.json)
-//   - node unit: vitest + v8       (coverage-node/coverage-summary.json)
-// They cover disjoint modules, so each gets its own headline and table.
+//   - node unit: vitest + v8 (coverage-node/coverage-summary.json)
 
 import {
 	readFileSync,
@@ -30,7 +31,7 @@ import {
 export interface CoverageSource {
 	title: string;
 	path: string;
-	// Where the browsable HTML report lands as a CI artifact.
+	// Where the full report lands as a CI artifact.
 	htmlArtifact: string;
 	// Extra path substrings to drop from this report (node_modules is always
 	// dropped). vscode-test's c8 run can't reliably exclude specific files, so
@@ -40,9 +41,17 @@ export interface CoverageSource {
 	labels?: readonly string[];
 	scopes?: readonly string[];
 	scopeNote?: string;
+	// Worst-covered files to list. Omit to list every source file.
+	maxFiles?: number;
 }
 
 const sources: CoverageSource[] = [
+	{
+		title: "rust engine",
+		path: "engine/target/coverage/coverage-summary.json",
+		htmlArtifact: "rust-coverage",
+		maxFiles: 20,
+	},
 	{
 		title: "extension-host client",
 		path: "coverage/coverage-summary.json",
@@ -131,6 +140,15 @@ export function renderCoverageSection(
 		? `Measured labels: ${labels}. Source scope: ${scope}. ${source.scopeNote ?? ""}`.trim()
 		: undefined;
 
+	const shown =
+		source.maxFiles !== undefined && files.length > source.maxFiles
+			? files.slice(0, source.maxFiles)
+			: files;
+	const truncated =
+		shown.length < files.length
+			? ` Showing the ${shown.length} worst-covered files of ${files.length}.`
+			: "";
+
 	return [
 		`## Coverage (${source.title})`,
 		"",
@@ -140,17 +158,19 @@ export function renderCoverageSection(
 		"| File | % Lines | % Stmts | % Branch | % Funcs |",
 		"| --- | --- | --- | --- | --- |",
 		row("**All files**", total),
-		...files.map((file) => row(relative(cwd, file), data[file])),
+		...shown.map((file) =>
+			row(relative(cwd, resolve(cwd, file)), data[file]),
+		),
 		"",
-		`<sub>🟢 ≥80% · 🟡 ≥50% · 🔴 <50%. Full HTML report is in the \`${source.htmlArtifact}\` artifact.</sub>`,
+		`<sub>🟢 ≥80% · 🟡 ≥50% · 🔴 <50%.${truncated} Full report is in the \`${source.htmlArtifact}\` artifact.</sub>`,
 		"",
 	];
 }
 
 function renderSection(source: CoverageSource): string[] {
 	if (!existsSync(source.path)) {
-		// Host coverage is intentionally absent from CI, which publishes only the
-		// node report.
+		// Host coverage stays local (Electron never exits under xvfb). Rust and
+		// node summaries are present in CI once their jobs upload them.
 		return [];
 	}
 	let data: CoverageSummary;
@@ -174,6 +194,9 @@ function main(): void {
 		? sources.filter((source) => source.labels?.includes("unit"))
 		: sources;
 	const md = renderCoverageSummary(selectedSources);
+	if (!md) {
+		throw new Error("no coverage summaries found");
+	}
 	mkdirSync("coverage", { recursive: true });
 	writeFileSync("coverage/summary.md", `${md}\n`);
 

@@ -12,7 +12,7 @@ can't fix. Commands mirror CI so local failures match it.
 - Rust (`engine/`): `cargo fmt` formats the workspace in place (so committed
   code is always rustfmt-clean) and `cargo clippy -D warnings` gates every
   commit; `cargo test --workspace` gates every push (see
-  `.github/workflows/engine-ci.yml`).
+  `.github/workflows/ci.yml`).
 - TypeScript (`extension/`, `build/`): `eslint --fix` applies autofixes on
   commit (the same rules as `npm run lint`, `eslint .`).
 - Python (`scripts/`): `ruff check --fix` and `black` reformat/fix on commit;

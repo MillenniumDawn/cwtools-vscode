@@ -25,6 +25,7 @@ def _load(name: str) -> ModuleType:
     return module
 
 
+coverage_script = _load("coverage")
 guard = _load("guard")
 smoke_test_vsix = _load("smoke_test_vsix")
 stage_release_binaries = _load("stage_release_binaries")
@@ -199,6 +200,79 @@ class StageReleaseTests(unittest.TestCase):
                 / "cwtools-server"
             )
             self.assertTrue(staged.is_file())
+
+
+class CoverageSummaryTests(unittest.TestCase):
+    def test_lcov_summary_records_and_repo_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workspace = repo / "engine"
+            workspace.mkdir()
+            lcov = """\
+SF:crates/parser/src/lib.rs
+DA:10,1
+DA:11,0
+LF:2
+LH:1
+FNF:1
+FNH:1
+BRF:2
+BRH:1
+end_of_record
+SF:crates/empty.rs
+LF:0
+LH:0
+end_of_record
+"""
+            summary = coverage_script.lcov_to_summary(lcov, repo, workspace)
+            path = "engine/crates/parser/src/lib.rs"
+            self.assertIn(path, summary)
+            self.assertNotIn("engine/crates/empty.rs", summary)
+            self.assertEqual(summary[path]["lines"]["total"], 2)
+            self.assertEqual(summary[path]["lines"]["covered"], 1)
+            self.assertEqual(summary[path]["statements"]["total"], 2)
+            self.assertEqual(summary[path]["functions"]["total"], 1)
+            self.assertEqual(summary[path]["branches"]["covered"], 1)
+            self.assertEqual(summary["total"]["lines"]["total"], 2)
+
+    def test_lcov_falls_back_to_hit_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            workspace = repo / "engine"
+            sf = workspace / "src" / "main.rs"
+            lcov = f"""\
+SF:{sf}
+FN:1,main
+FNDA:3,main
+DA:1,3
+DA:2,0
+BRDA:1,0,0,1
+BRDA:1,0,1,-
+end_of_record
+"""
+            summary = coverage_script.lcov_to_summary(lcov, repo, workspace)
+            path = "engine/src/main.rs"
+            self.assertEqual(summary[path]["lines"]["covered"], 1)
+            self.assertEqual(summary[path]["lines"]["total"], 2)
+            self.assertEqual(summary[path]["functions"]["covered"], 1)
+            self.assertEqual(summary[path]["branches"]["covered"], 1)
+            self.assertEqual(summary[path]["branches"]["total"], 2)
+
+    def test_lcov_skips_bad_integers(self) -> None:
+        repo = Path("/repo")
+        workspace = repo / "engine"
+        lcov = """\
+SF:crates/x.rs
+DA:1,nope
+LF:abc
+LH:1
+DA:2,1
+end_of_record
+"""
+        summary = coverage_script.lcov_to_summary(lcov, repo, workspace)
+        path = "engine/crates/x.rs"
+        self.assertEqual(summary[path]["lines"]["total"], 1)
+        self.assertEqual(summary[path]["lines"]["covered"], 1)
 
 
 class SyncSyntaxTests(unittest.TestCase):

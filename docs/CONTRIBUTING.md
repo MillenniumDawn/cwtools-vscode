@@ -119,9 +119,11 @@ diagnostics alone has to prove it. See
 [the engine contributor guide](engine/CONTRIBUTING.md) for the flags, the
 pinned input revisions and when re-blessing a baseline is appropriate.
 
-CI gates on `test:node`, `test`, `test:smoke` and `test:host`. The sample
+CI gates on `test:node`, `test`, `test:smoke` and `test:host` in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml), along with the
+engine suite, cargo-deny, and the diagnostics guards. The sample
 workspace detects as `stellaris` (its `common/species_classes` content marker),
 so the hover and completion suites fetch real rules on activation and run in CI
 like everything else.
 
-`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/`. Open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The command removes the previous host report first and fails if the `unit` label produces no host/common source coverage or a zero statement, branch, function, or line total. Its rendered summary names the measured label and counts only `extension/src/host` and `extension/src/common`; bundled dependencies and modules measured only by Vitest are filtered out. CI renders the node coverage summary as a markdown table in the job summary and as a sticky PR comment, and uploads the raw report as the `coverage-node` artifact. It's all local/OSS, no external service. Coverage is informational, not a merge gate (see issue #7).
+`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/`. Open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The command removes the previous host report first and fails if the `unit` label produces no host/common source coverage or a zero statement, branch, function, or line total. Its rendered summary names the measured label and counts only `extension/src/host` and `extension/src/common`; bundled dependencies and modules measured only by Vitest are filtered out. CI renders rust and node coverage as one markdown table in the job summary and as a sticky PR comment. Host coverage stays local: the instrumented Electron process never exits under xvfb. The raw reports are the `rust-coverage` and `coverage-node` artifacts. It's all local/OSS, no external service. Coverage is informational, not a merge gate (see issue #7).
