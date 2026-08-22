@@ -57,19 +57,19 @@ COVERAGE_THRESHOLD=85 python3 ../scripts/coverage.py
 The command writes `target/coverage/lcov.info`, which is the source for CI and
 local review diffs.
 
-## Corpus guard
+## Diagnostics guard
 
-The test suite says the code still compiles and behaves. The corpus guard says
-the *diagnostics* didn't move. Anything that touches the parser, the rule engine
-or a validator should run it, because a refactor that was supposed to change
-nothing is easy to believe and hard to prove.
+The test suite says the code still compiles and behaves. The diagnostics guard
+says the *diagnostics* didn't move. Anything that touches the parser, the rule
+engine or a validator should run it, because a refactor that was supposed to
+change nothing is easy to believe and hard to prove.
 
-It validates a pinned real mod and diffs the report against a committed
-baseline (`scripts/corpus-baseline.csv`, 4048 diagnostics as of writing). Run it
-from the repo root:
+It validates the pinned Millennium Dawn mod and diffs the report against a
+committed baseline (`scripts/md-baseline.csv`, 9208 diagnostics as of writing).
+Run it from the repo root:
 
 ```sh
-python3 scripts/guard.py corpus
+python3 scripts/guard.py md
 ```
 
 Exit 0 means the report matched. Exit 1 prints what moved: row counts, a
@@ -81,7 +81,7 @@ Two inputs, both git checkouts, looked for side by side under
 `~/Documents/github-projects` (point `CWTOOLS_PROJECTS` at wherever you keep
 them):
 
-- corpus: [Kaiserreich-4-Development](https://github.com/Kaiserreich/Kaiserreich-4-Development)
+- corpus: [Millennium-Dawn](https://github.com/MillenniumDawn/Millennium-Dawn)
 - rules: [cwtools-hoi4-config](https://github.com/cwtools/cwtools-hoi4-config), the `Config` directory
 
 Override either on its own with `--corpus` / `--rules` or `CWTOOLS_CORPUS` /
@@ -90,17 +90,13 @@ against are recorded in its `#` header, and the script prints the revisions it
 actually ran on, so an input that has moved on is visible before you go hunting
 through the diff.
 
-No `--vanilla`. It would need a Steam install of HOI4, which puts the guard out
-of reach of CI and of anyone else's machine, and the point here is a
-reproducible diff rather than vanilla coverage.
-
 ### Vanilla tier
 
-The cost of that is a blind spot. CW113, CW222, CW227, CW229, CW250 and CW500
-compare script against the union of the mod's definitions and the base game's,
-so without a base game they report nothing at all and the corpus baseline never
-covers them. `cwtools validate` now says so on stderr, and in the `github` and
-`sarif` reports, but a silent check is still a check nothing guards.
+CW113, CW222, CW227, CW229, CW250 and CW500 compare script against the union of
+the mod's definitions and the base game's, so without a base game they report
+nothing at all and the md baseline never covers them. `cwtools validate` says so
+on stderr, and in the `github` and `sarif` reports, but a silent check is still
+a check nothing guards.
 
 The second tier fills that in:
 
@@ -118,47 +114,20 @@ same way, `python3 scripts/guard.py vanilla --bless`, and say why in the commit
 message.
 
 Adding a family to the fixture is the way to keep it honest as more checks go
-behind the base-game gate. Run it alongside the corpus guard for anything that
+behind the base-game gate. Run it alongside the md guard for anything that
 touches those six codes.
 
-### Millennium Dawn tier
-
-One real mod is one mod's worth of coverage, and the two big HOI4 mods do not
-write the same script. The third tier validates
-[Millennium Dawn](https://github.com/MillenniumDawn/Millennium-Dawn) against a
-baseline of its own (`scripts/md-baseline.csv`, 9208 diagnostics as of
-writing):
-
-```sh
-python3 scripts/guard.py md
-```
-
-Same script underneath, same flags, same exit codes, same ruleset. It expects
-`Millennium-Dawn` beside the other checkouts under `CWTOOLS_PROJECTS`, and it
-passes a `--corpus` of its own rather than reading `CWTOOLS_CORPUS`, since an
-exported one is almost always pointing at Kaiserreich and would have this tier
-validate that mod against the wrong baseline. Pass `--corpus` yourself to move
-it.
-
-The overlap between the two corpora is smaller than a second mod sounds like it
-would be. Kaiserreich is the only side reporting CW122, CW248, CW251 and CW280,
-Millennium Dawn the only side reporting CW105, CW255, CW262 and CW268, and the
-codes they share come out in nothing like the same proportions: 4651 CW272 in
-MD against 78 in Kaiserreich, 2725 CW223 in Kaiserreich against 1 in MD. A
-change that moves one baseline and leaves the other alone has usually found
-something. Run both.
-
 Each baseline records its own corpus and rules revisions and is re-blessed on
-its own, so the two rules pins can sit on different commits. CI reads each
-tier's revisions out of the header of the baseline that tier checks against.
+its own. CI reads each tier's revisions out of the header of the baseline that
+tier checks against.
 
 When a change is *meant* to move diagnostics, re-bless the baselines it moved
 in the same commit and say in the message which codes moved and why:
 
 ```sh
-python3 scripts/guard.py corpus --bless
 python3 scripts/guard.py md --bless
-git add scripts/corpus-baseline.csv scripts/md-baseline.csv
+python3 scripts/guard.py vanilla --bless
+git add scripts/md-baseline.csv scripts/vanilla-baseline.csv
 ```
 
 A re-bless that isn't explained in the commit message is indistinguishable from

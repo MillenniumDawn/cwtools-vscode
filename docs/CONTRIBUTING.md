@@ -111,10 +111,11 @@ cargo test --workspace
 ```
 
 Anything that touches the parser, the rule engine, a validator or the ruleset
-types also runs the corpus guards from the repo root
-(`python3 scripts/guard.py corpus` and `python3 scripts/guard.py md`). They validate two
-pinned real mods and diff the report against a committed baseline, so a change
-meant to leave diagnostics alone has to prove it. See
+types also runs the diagnostics guards from the repo root
+(`python3 scripts/guard.py md` and `python3 scripts/guard.py vanilla`). They
+validate the pinned Millennium Dawn mod (and a synthetic vanilla fixture) and
+diff the report against a committed baseline, so a change meant to leave
+diagnostics alone has to prove it. See
 [the engine contributor guide](engine/CONTRIBUTING.md) for the flags, the
 pinned input revisions and when re-blessing a baseline is appropriate.
 

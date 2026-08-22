@@ -26,8 +26,8 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 
 ### Guards and corpora
 
-- `python3 scripts/guard.py corpus` and `scripts/corpus-baseline.csv` are the diagnostics regression gate, and `python3 scripts/guard.py md` with `scripts/md-baseline.csv` is the same gate over a second real mod. `python3 scripts/guard.py vanilla` and `scripts/vanilla-baseline.csv` are the tier over a committed synthetic base game, for the checks that need one (CW113, CW222, CW227, CW229, CW250, CW500).
-- Three sibling checkouts matter, expected next to this repo (override the location with `CWTOOLS_PROJECTS`): `cwtools-hoi4-config` holds the `.cwt` rules, which are not bundled, so a behavior change is as likely to belong there as here; `Kaiserreich-4-Development` and `Millennium-Dawn` are the pinned corpora the guards validate. Neither corpus substitutes for the other; each reports codes the other never does.
+- `python3 scripts/guard.py md` and `scripts/md-baseline.csv` are the diagnostics regression gate against a pinned real mod (Millennium Dawn). `python3 scripts/guard.py vanilla` and `scripts/vanilla-baseline.csv` are the tier over a committed synthetic base game, for the checks that need one (CW113, CW222, CW227, CW229, CW250, CW500).
+- Two sibling checkouts matter, expected next to this repo (override the location with `CWTOOLS_PROJECTS`): `cwtools-hoi4-config` holds the `.cwt` rules, which are not bundled, so a behavior change is as likely to belong there as here; `Millennium-Dawn` is the pinned corpus the guard validates.
 
 ### Build System
 
@@ -91,20 +91,20 @@ cargo test --workspace
 
 While iterating, scope tests down: `cargo test -p cwtools_validation`, or `cargo test -p cwtools_parser <substring>` for one test. Packages are named `cwtools_*`; the short directory names under `engine/crates/` won't resolve.
 
-Then, from the repo root, the corpus guards. Run both for anything that touches the parser, the rule engine, a validator, or the ruleset types:
+Then, from the repo root, the guards. Run both for anything that touches the parser, the rule engine, a validator, or the ruleset types:
 
 ```plaintext
-python3 scripts/guard.py corpus
 python3 scripts/guard.py md
+python3 scripts/guard.py vanilla
 ```
 
 The test suite proves the code compiles and behaves. The guards prove the *diagnostics* did not move, which is the thing a "this changes nothing" refactor is easy to believe and hard to demonstrate. Details are in [the engine contributor guide](docs/engine/CONTRIBUTING.md).
 
 Three things to know about them:
 
-- Each committed baseline is pinned to specific corpus and rules revisions, recorded in its `#` header and printed on every run. When either checkout has moved on you get a diff that has nothing to do with your change. Capture your own before-baseline against the current inputs (`CWTOOLS_BASELINE=/tmp/before.csv python3 scripts/guard.py corpus --bless` on a clean tree) and compare against that instead.
+- Each committed baseline is pinned to specific corpus and rules revisions, recorded in its `#` header and printed on every run. When either checkout has moved on you get a diff that has nothing to do with your change. Capture your own before-baseline against the current inputs (`CWTOOLS_BASELINE=/tmp/before.csv python3 scripts/guard.py md --bless` on a clean tree) and compare against that instead.
 - Re-blessing a committed baseline is for changes that are *meant* to move diagnostics, and the commit message has to say which codes moved and why. A re-bless with no explanation reads as a regression someone papered over.
-- The two corpora are not a second opinion on each other. Kaiserreich is the only one reporting CW122, CW248, CW251 and CW280, Millennium Dawn the only one reporting CW105, CW255, CW262 and CW268, and the codes they share come out in nothing like the same proportions. A change that moves one baseline and not the other is usually telling you something.
+- The vanilla tier covers base-game-dependent codes (CW113, CW222, CW227, CW229, CW250, CW500) that never fire in the md tier. A change that moves one baseline and not the other is usually telling you something.
 
 ## Key Files
 

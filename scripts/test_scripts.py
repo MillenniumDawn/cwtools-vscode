@@ -77,11 +77,10 @@ class GuardNormalizeTests(unittest.TestCase):
 
 
 class GuardConfigTests(unittest.TestCase):
-    def test_md_ignores_corpus_env(self) -> None:
+    def test_md_uses_default_corpus(self) -> None:
         cfg = guard.build_config(
             ["md"],
             {
-                "CWTOOLS_CORPUS": "/tmp/Kaiserreich-4-Development",
                 "CWTOOLS_PROJECTS": "/tmp/projects",
             },
         )
@@ -92,7 +91,7 @@ class GuardConfigTests(unittest.TestCase):
         cfg = guard.build_config(
             ["md", "--corpus", "/tmp/other"],
             {
-                "CWTOOLS_CORPUS": "/tmp/Kaiserreich-4-Development",
+                "CWTOOLS_CORPUS": "/tmp/other-base",
                 "CWTOOLS_PROJECTS": "/tmp/projects",
             },
         )
@@ -103,12 +102,12 @@ class GuardConfigTests(unittest.TestCase):
         self.assertEqual(cfg.game, "stellaris")
         self.assertEqual(cfg.corpus, guard.SCRIPT_DIR / "vanilla-fixture" / "mod")
 
-    def test_corpus_reads_env(self) -> None:
+    def test_md_reads_env(self) -> None:
         cfg = guard.build_config(
-            ["corpus"],
-            {"CWTOOLS_CORPUS": "/tmp/KR", "CWTOOLS_PROJECTS": "/tmp/projects"},
+            ["md"],
+            {"CWTOOLS_CORPUS": "/tmp/MD", "CWTOOLS_PROJECTS": "/tmp/projects"},
         )
-        self.assertEqual(cfg.corpus, Path("/tmp/KR"))
+        self.assertEqual(cfg.corpus, Path("/tmp/MD"))
         self.assertEqual(cfg.game, "hoi4")
 
 
