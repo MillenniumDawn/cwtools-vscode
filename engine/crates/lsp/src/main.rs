@@ -642,6 +642,7 @@ impl LanguageServer for Backend {
                 ast: None,
                 ast_version: None,
                 ast_source_bytes: 0,
+                loc_cache: None,
             },
             || self.is_workspace_document(&uri),
         );
@@ -1151,7 +1152,8 @@ impl LanguageServer for Backend {
                 docs.remove(old)
                     .map(|doc| (old.to_string(), new.to_string(), doc))
             };
-            if let Some((old_uri, new_uri, doc)) = moved {
+            if let Some((old_uri, new_uri, mut doc)) = moved {
+                doc.loc_cache = None;
                 let _ = self.state.documents.lock().open(new_uri.clone(), doc);
                 // Move cached tokens to the new URI so delta resumes. Bound to a
                 // `let` so the take's guard drops before the insert re-locks the
@@ -1254,7 +1256,8 @@ mod tests {
 
     use super::*;
     use crate::state::{
-        Config, DocumentRejection, DocumentStore, MAX_OPEN_DOCUMENTS, MAX_RETAINED_DOCUMENT_BYTES,
+        Config, DocumentRejection, DocumentStore, LocDocumentCache, MAX_OPEN_DOCUMENTS,
+        MAX_RETAINED_DOCUMENT_BYTES,
     };
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
@@ -1293,7 +1296,17 @@ mod tests {
             ast: None,
             ast_version: None,
             ast_source_bytes: 0,
+            loc_cache: None,
         }
+    }
+
+    fn loc_document_cache(version: i32, retained_bytes: usize) -> Arc<LocDocumentCache> {
+        Arc::new(LocDocumentCache {
+            version,
+            retained_bytes,
+            files: Vec::new(),
+            references: HashSet::new(),
+        })
     }
 
     #[test]
@@ -1322,6 +1335,35 @@ mod tests {
             .change("file:///doc", 2, Arc::from("replacement"))
             .unwrap();
         assert_eq!(store.retained_text_bytes, "replacement".len());
+
+        store.remove("file:///doc");
+        assert_eq!(store.retained_text_bytes, 0);
+    }
+
+    #[test]
+    fn document_store_versions_and_accounts_for_loc_caches() {
+        let mut store = DocumentStore::new();
+        store
+            .open("file:///doc".to_string(), document("text"))
+            .unwrap();
+
+        assert_eq!(
+            store.set_loc_cache("file:///doc", 0, loc_document_cache(0, 10)),
+            Ok(false)
+        );
+        assert_eq!(
+            store.set_loc_cache("file:///doc", 1, loc_document_cache(1, 10)),
+            Ok(true)
+        );
+        assert_eq!(store.retained_text_bytes, "text".len() + 10);
+        assert_eq!(
+            store.set_loc_cache("file:///doc", 1, loc_document_cache(1, MAX_DOCUMENT_BYTES)),
+            Err(DocumentRejection::TooLarge)
+        );
+
+        store.change("file:///doc", 2, Arc::from("x")).unwrap();
+        assert_eq!(store.retained_text_bytes, 1);
+        assert!(store.get("file:///doc").unwrap().loc_cache.is_none());
 
         store.remove("file:///doc");
         assert_eq!(store.retained_text_bytes, 0);
@@ -1437,6 +1479,53 @@ mod tests {
 
         assert!(state.documents.lock().is_empty());
         assert!(state.debounce_handles.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn did_rename_clears_the_path_bound_loc_cache() {
+        let state = Arc::new(DocumentState::new());
+        let captured_client = Arc::new(Mutex::new(None));
+        let client_slot = captured_client.clone();
+        let server_state = state.clone();
+        let (_service, _socket) = LspService::new(move |client| {
+            *client_slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: server_state.clone(),
+            }
+        });
+        let backend = Backend {
+            client: captured_client.lock().take().unwrap(),
+            state: state.clone(),
+        };
+        let old_uri = "file:///localisation/a_l_english.yml";
+        let new_uri = "file:///localisation/a_l_french.yml";
+        state
+            .documents
+            .lock()
+            .open(
+                old_uri.to_string(),
+                document("l_english:\n KEY:0 \"value\"\n"),
+            )
+            .unwrap();
+        state
+            .documents
+            .lock()
+            .set_loc_cache(old_uri, 1, loc_document_cache(1, 10))
+            .unwrap();
+
+        backend
+            .did_rename_files(RenameFilesParams {
+                files: vec![FileRename {
+                    old_uri: old_uri.to_string(),
+                    new_uri: new_uri.to_string(),
+                }],
+            })
+            .await;
+
+        let documents = state.documents.lock();
+        assert!(!documents.contains_key(old_uri));
+        assert!(documents.get(new_uri).unwrap().loc_cache.is_none());
     }
 
     #[tokio::test]

@@ -1293,6 +1293,7 @@ mod tests {
                     ast: None,
                     ast_version: None,
                     ast_source_bytes: 0,
+                    loc_cache: None,
                 },
             )
             .unwrap();

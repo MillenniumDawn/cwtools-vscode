@@ -1,3 +1,9 @@
+### Unreleased
+
+#### Engine
+
+* Localisation key changes now revalidate only other open localisation files whose cached `$ref$` set mentions a changed key. Parsed buffers are reused, while stale, missing, and fatally malformed buffers fall back to full revalidation. (#396)
+
 ### 3.2.1
 
 #### Engine
