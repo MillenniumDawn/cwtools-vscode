@@ -78,7 +78,8 @@ jobs:
           comment-summary-in-pr: on-failure
 
   # Full client build: compile the engine and the client, run the host smoke
-  # suite against the real server, package the vsix, collect node coverage.
+  # suite against the real server, package the vsix, collect host and node
+  # coverage.
   # The engine lives in-repo at engine/, so this is the same tree the rust
   # jobs lint and test, built here the way the extension actually consumes it.
   build:
@@ -117,10 +118,22 @@ jobs:
       # an installable extension rather than a client-only shell.
       - name: Test build
         run: npm run build -- package-prebuilt
-      # Host V8 coverage is not run in CI: the instrumented Electron process
-      # never exits under xvfb, so c8 waits for it until the job timeout. The
-      # unit suites are already gated in the check job. Node coverage below
-      # is what the coverage-report job publishes next to rust.
+      # Host V8 coverage: mocha forces the instrumented host to exit after
+      # the unit label, and host-coverage.ts kills a leftover process tree
+      # if Electron still hangs under xvfb. Tight step timeout so a hang
+      # cannot burn the whole build job.
+      - name: Host coverage
+        if: always()
+        timeout-minutes: 8
+        run: xvfb-run -a npm run test:coverage
+      - name: Upload host coverage
+        if: always()
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: coverage-html
+          path: coverage
+          retention-days: 5
       - name: Node unit tests (with coverage)
         if: always()
         run: npm run test:node:coverage
@@ -537,8 +550,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # One PR comment for both ecosystems. Host coverage stays local: the
-  # instrumented Electron process never exits under xvfb.
+  # One PR comment for rust, extension-host, and node coverage.
   coverage-report:
     name: Coverage report
     needs: [build, coverage-rs]
@@ -559,6 +571,13 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-node-npm
+      - name: Download host coverage
+        if: needs.build.result == 'success'
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: coverage-html
+          path: coverage
       - name: Download node coverage
         if: needs.build.result == 'success'
         # v8.0.1

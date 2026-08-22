@@ -2,6 +2,7 @@
 
 #### Extension
 
+* CI publishes extension-host coverage next to rust and node. The host runner forces the instrumented Electron process to exit after mocha and kills a leftover process tree if it hangs under xvfb. (#390)
 * PR CI is one workflow. Test, Engine CI, cargo-deny and the diagnostics guards fold into `.github/workflows/ci.yml`, cargo-deny runs in the rust lint job, and the coverage comment reports rust and node together. (#388)
 * Extension-host coverage follows the emitted JavaScript paths again after the repository reorganization. The command removes old artifacts first, rejects empty reports, and names its `unit` label and source scope in the rendered summary. (#402)
 
