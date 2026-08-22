@@ -17,9 +17,6 @@ inputs:
   cache-target-path:
     description: Directory to cache as the cargo target dir
     default: engine/target
-  save:
-    description: Save caches after the job. Set false for restore-only.
-    default: "true"
 
 runs:
   using: composite
@@ -34,20 +31,7 @@ runs:
     # Registry cache is shared across jobs. ~/.cargo/bin rides along so
     # cargo-machete / cargo-llvm-cov / cargo-fuzz restore instead of rebuild.
     - name: Cache cargo registry
-      if: inputs.save == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          ~/.cargo/bin
-        key: >-
-          ${{ runner.os }}-cargo-registry-${{
-          hashFiles('engine/Cargo.lock') }}
-    - name: Restore cargo registry
-      if: inputs.save != 'true'
-      # v6.1.0
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: |
           ~/.cargo/registry
@@ -57,19 +41,7 @@ runs:
           ${{ runner.os }}-cargo-registry-${{
           hashFiles('engine/Cargo.lock') }}
     - name: Cache cargo target
-      if: inputs.save == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ inputs.cache-target-path }}
-        key: >-
-          ${{ runner.os }}-${{ inputs.cache-prefix }}-${{
-          hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
-        restore-keys: |
-          ${{ runner.os }}-${{ inputs.cache-prefix }}-
-    - name: Restore cargo target
-      if: inputs.save != 'true'
-      # v6.1.0
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: ${{ inputs.cache-target-path }}
         key: >-

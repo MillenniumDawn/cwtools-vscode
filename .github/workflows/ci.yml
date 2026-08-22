@@ -362,8 +362,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      md_sha: ${{ steps.pins.outputs.md_sha }}
-      md_rules_sha: ${{ steps.pins.outputs.md_rules_sha }}
+      md_rev: ${{ steps.pins.outputs.md_rev }}
+      rules_rev: ${{ steps.pins.outputs.rules_rev }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Read and resolve baseline pins
@@ -410,8 +410,8 @@ jobs:
           check_sha "Millennium Dawn ruleset" "$md_rules_sha"
           echo "resolved: md $md_sha, rules $md_rules_sha"
           {
-            echo "md_sha=$md_sha"
-            echo "md_rules_sha=$md_rules_sha"
+            echo "md_rev=$md_sha"
+            echo "rules_rev=$md_rules_sha"
           } >> "$GITHUB_OUTPUT"
 
   # Main corpus tier. Millennium Dawn is public, so no secret gates it and
@@ -425,16 +425,34 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Restore-only. This job checks out repositories this one does not
-      # own, and a job that does that must not be able to write the cache
-      # every other job restores from. The vanilla tier and the client
-      # build check out nothing but this repository, so they populate these
-      # entries; a run that finds them cold rebuilds, which is what all
-      # jobs do on the first run after a lockfile change anyway.
-      - uses: ./.github/actions/setup-rust
+      # Restore-only, and not via setup-rust: that composite also contains
+      # cache-save steps, and CodeQL treats them as cache-write even when
+      # save is false. This job later checks out two foreign trees, so a
+      # cache-write in the same job is cache poisoning.
+      - name: Install Rust toolchain
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+      - name: Restore cargo registry
+        # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          cache-prefix: cargo-release-target
-          save: "false"
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          key: >-
+            ${{ runner.os }}-cargo-registry-${{
+            hashFiles('engine/Cargo.lock') }}
+      - name: Restore cargo release target
+        # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: engine/target
+          key: >-
+            ${{ runner.os }}-cargo-release-target-${{
+            hashFiles('engine/Cargo.lock', 'engine/**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-target-
       - name: cargo build --release -p cwtools_cli
         working-directory: engine
         run: cargo build --release -p cwtools_cli
@@ -446,16 +464,16 @@ jobs:
       - name: Check out Millennium Dawn at the pinned revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ env.MD_REPO }}
-          ref: ${{ needs.pins.outputs.md_sha }}
+          repository: MillenniumDawn/Millennium-Dawn
+          ref: ${{ needs.pins.outputs.md_rev }}
           path: _guard-inputs/Millennium-Dawn
           persist-credentials: false
           show-progress: false
       - name: Check out ruleset at the pinned revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ env.RULES_REPO }}
-          ref: ${{ needs.pins.outputs.md_rules_sha }}
+          repository: Kaiserreich/cwtools-hoi4-config
+          ref: ${{ needs.pins.outputs.rules_rev }}
           path: _guard-inputs/cwtools-hoi4-config
           persist-credentials: false
       # Both inputs as flags rather than CWTOOLS_CORPUS/CWTOOLS_RULES: the
