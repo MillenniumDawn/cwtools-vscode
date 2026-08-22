@@ -116,9 +116,7 @@ def is_source_file(key: str, drop: Sequence[str], scopes: Sequence[str]) -> bool
     return not scopes or any(f"/{scope}/" in normalized for scope in scopes)
 
 
-def listed_files(
-    files: Sequence[str], max_files: int | None
-) -> tuple[list[str], str]:
+def listed_files(files: Sequence[str], max_files: int | None) -> tuple[list[str], str]:
     if max_files is None or len(files) <= max_files:
         return list(files), ""
     return (
@@ -155,11 +153,7 @@ def render_coverage_section(
 ) -> list[str]:
     workdir = os.getcwd() if cwd is None else cwd
     files = sorted(
-        (
-            key
-            for key in data
-            if is_source_file(key, source.drop, source.scopes)
-        ),
+        (key for key in data if is_source_file(key, source.drop, source.scopes)),
         key=lambda key: _pct(data[key].get("lines")) or 0,
     )
     if not files:
@@ -223,7 +217,9 @@ def render_coverage_summary(
     selected_sources: Iterable[CoverageSource] | None = None,
 ) -> str:
     sources = SOURCES if selected_sources is None else selected_sources
-    return "\n".join(line for source in sources for line in render_section(source)).rstrip()
+    return "\n".join(
+        line for source in sources for line in render_section(source)
+    ).rstrip()
 
 
 def main(argv: list[str] | None = None) -> int:

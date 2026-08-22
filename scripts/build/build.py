@@ -79,7 +79,11 @@ def run_or_null(
 def rust_workspace() -> Path:
     from_env = os.environ.get("CWTOOLS_RUST_WORKSPACE", "").strip()
     if from_env:
-        return Path(from_env).resolve() if Path(from_env).is_absolute() else (REPO_ROOT / from_env)
+        return (
+            Path(from_env).resolve()
+            if Path(from_env).is_absolute()
+            else (REPO_ROOT / from_env)
+        )
     return ENGINE_ROOT
 
 
@@ -276,7 +280,9 @@ def find_vsixes() -> list[str]:
         else []
     )
     if not files:
-        raise RuntimeError("no .vsix found in artifacts/vsix; run package-prebuilt first")
+        raise RuntimeError(
+            "no .vsix found in artifacts/vsix; run package-prebuilt first"
+        )
     return [str(VSIX_ROOT / name) for name in files]
 
 
@@ -289,7 +295,16 @@ def publish_github_release(
     if run_or_null("gh", ["release", "view", tag]) == 0:
         print(f"release {tag} already exists; deleting before recreate")
         run("gh", ["release", "delete", tag, "--yes"])
-    args = ["release", "create", tag, *vsixes, "--title", tag, "--notes-file", str(notes_file)]
+    args = [
+        "release",
+        "create",
+        tag,
+        *vsixes,
+        "--title",
+        tag,
+        "--notes-file",
+        str(notes_file),
+    ]
     if pre_release:
         args.append("--prerelease")
     run("gh", args)
@@ -357,13 +372,21 @@ def cmd_release() -> None:
         raise RuntimeError(
             "working tree has uncommitted changes; commit them before tagging a release"
         )
-    if run_or_null("git", ["rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"]) == 0:
+    if (
+        run_or_null("git", ["rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"])
+        == 0
+    ):
         raise RuntimeError(f"tag {tag} already exists locally")
-    if run_or_null("git", ["ls-remote", "--exit-code", "origin", f"refs/tags/{tag}"]) == 0:
+    if (
+        run_or_null("git", ["ls-remote", "--exit-code", "origin", f"refs/tags/{tag}"])
+        == 0
+    ):
         raise RuntimeError(f"tag {tag} already exists on origin")
     run("git", ["tag", tag])
     run("git", ["push", "origin", tag])
-    print(f"pushed {tag}; the Release workflow now builds, smoke-tests, and publishes it.")
+    print(
+        f"pushed {tag}; the Release workflow now builds, smoke-tests, and publishes it."
+    )
 
 
 COMMANDS: dict[str, Callable[[], object]] = {

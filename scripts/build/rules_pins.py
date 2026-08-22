@@ -174,7 +174,9 @@ def refresh_pins(
             continue
         next_source = replace_pin(next_source, game.repo_ref, head, today)
         pins[game.game_id] = head
-        bumped.append(f"- `{game.game_id}` {game.repo}/compare/{game.repo_ref}...{head}")
+        bumped.append(
+            f"- `{game.game_id}` {game.repo}/compare/{game.repo_ref}...{head}"
+        )
 
     if not bumped:
         return None, None, ["rules pins are already current"]
