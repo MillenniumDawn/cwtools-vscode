@@ -8365,6 +8365,64 @@ fn test_validate_workspace_command_returns_summary() {
     );
 }
 
+/// #223: `validateWorkspace` retries while another scan holds the guard, then
+/// answers `{ "busy": true }` if it never wins. A regression in the deadline,
+/// the CAS `Busy` result, or the JSON mapping could hang the command or return
+/// a stale summary.
+#[test]
+fn test_validate_workspace_reports_busy_when_scan_never_releases() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+
+    // Hold every scan open for 10s, but give validateWorkspace only 1s to win
+    // the guard: it must give up and report busy.
+    let (mut child, reader) = storm_server_env(
+        ws.path(),
+        rules_dir.path(),
+        vanilla.path(),
+        &[
+            ("CWTOOLS_SCAN_HOLD_MS", "10000"),
+            ("CWTOOLS_RETRY_DEADLINE_MS", "1000"),
+        ],
+    );
+    let rx = spawn_frame_collector(reader);
+
+    // Start a competing scan and wait for the scan-started signal, so the hold
+    // is definitely active for the command's whole deadline.
+    reindex_until_scan_starts(&mut child, &rx);
+
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            903,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "validateWorkspace", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    // The competing scan releases only after 10s, so any answer inside this
+    // window must be the command's own give-up response.
+    let (response, saw_revalidation) = wait_for_response_watching_scans(
+        &rx,
+        903,
+        std::time::Duration::from_secs(5),
+        "validateWorkspace to give up on its 1s deadline",
+    );
+    stop_server(&mut child);
+
+    assert!(
+        !saw_revalidation,
+        "a revalidation ran after validateWorkspace gave up"
+    );
+    assert_eq!(
+        response["result"],
+        serde_json::json!({ "busy": true }),
+        "validateWorkspace must report busy when the guard never releases, got: {response}"
+    );
+}
+
 #[test]
 fn test_did_open_burst_stops_at_the_document_count_limit() {
     const MAX_OPEN_DOCUMENTS: usize = 128;

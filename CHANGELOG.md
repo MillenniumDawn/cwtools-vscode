@@ -6,6 +6,7 @@
 
 #### Engine
 
+* LSP: `validateWorkspace` now has a contention test that it gives up with `{ "busy": true }` when another scan holds the guard past the retry deadline. (#223)
 * Localisation key changes now revalidate only other open localisation files whose cached `$ref$` set mentions a changed key. Parsed buffers are reused, while stale, missing, and fatally malformed buffers fall back to full revalidation. (#396)
 * LSP: deleting a watched localisation file now revalidates affected open
   localisation and game files, so stale CW225/CW100 diagnostics return
