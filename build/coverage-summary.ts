@@ -36,7 +36,7 @@ export interface CoverageSource {
 	// Extra path substrings to drop from this report (node_modules is always
 	// dropped). vscode-test's c8 run can't reliably exclude specific files, so
 	// the modules owned by the node report are filtered out of the host report
-	// here instead — same belt-and-suspenders as node_modules.
+	// here instead. Same belt-and-suspenders as node_modules.
 	drop?: readonly string[];
 	labels?: readonly string[];
 	scopes?: readonly string[];
@@ -68,12 +68,23 @@ const sources: CoverageSource[] = [
 	},
 ];
 
-// Traffic light per percentage. Tuned low for now — coverage is a work in
+// Traffic light per percentage. Tuned low for now; coverage is a work in
 // progress (see issue #7), so this informs rather than gates.
 const GREEN = 80;
 const AMBER = 50;
-const light = (n: number | undefined) =>
-	typeof n !== "number" ? "⚪" : n >= GREEN ? "🟢" : n >= AMBER ? "🟡" : "🔴";
+
+function light(n: number | undefined): string {
+	if (typeof n !== "number") {
+		return "⚪";
+	}
+	if (n >= GREEN) {
+		return "🟢";
+	}
+	if (n >= AMBER) {
+		return "🟡";
+	}
+	return "🔴";
+}
 
 const num = (m: CoverageMetric) =>
 	m && typeof m.pct === "number" ? m.pct.toFixed(1) : "-";
@@ -91,6 +102,46 @@ function aggregate(
 	return { covered, total, pct: total ? (100 * covered) / total : undefined };
 }
 
+function isSourceFile(
+	key: string,
+	drop: readonly string[],
+	scopes: readonly string[],
+): boolean {
+	const normalized = key.split("\\").join("/");
+	if (key === "total" || normalized.includes("node_modules")) {
+		return false;
+	}
+	if (drop.some((item) => normalized.includes(item))) {
+		return false;
+	}
+	return (
+		scopes.length === 0 ||
+		scopes.some((scope) => normalized.includes(`/${scope}/`))
+	);
+}
+
+function listedFiles(
+	files: string[],
+	maxFiles?: number,
+): { shown: string[]; note: string } {
+	if (maxFiles === undefined || files.length <= maxFiles) {
+		return { shown: files, note: "" };
+	}
+	return {
+		shown: files.slice(0, maxFiles),
+		note: ` Showing the ${maxFiles} worst-covered files of ${files.length}.`,
+	};
+}
+
+function sectionDetails(source: CoverageSource): string | undefined {
+	const labels = source.labels?.map((label) => `\`${label}\``).join(", ");
+	const scope = source.scopes?.map((path) => `\`${path}\``).join(", ");
+	if (!labels || !scope) {
+		return undefined;
+	}
+	return `Measured labels: ${labels}. Source scope: ${scope}. ${source.scopeNote ?? ""}`.trim();
+}
+
 export function renderCoverageSection(
 	source: CoverageSource,
 	data: CoverageSummary,
@@ -103,20 +154,8 @@ export function renderCoverageSection(
 	// dependencies dwarf the numbers we care about.
 	const drop = source.drop ?? [];
 	const scopes = source.scopes ?? [];
-	const isSource = (key: string) => {
-		const normalized = key.split("\\").join("/");
-		return (
-			key !== "total" &&
-			!normalized.includes("node_modules") &&
-			!drop.some((item) => normalized.includes(item)) &&
-			(scopes.length === 0 ||
-				scopes.some((scope) => normalized.includes(`/${scope}/`)))
-		);
-	};
-
-	// Worst-covered files first, so the gaps are what you see.
 	const files = Object.keys(data)
-		.filter(isSource)
+		.filter((key) => isSourceFile(key, drop, scopes))
 		.sort((a, b) => (data[a].lines.pct ?? 0) - (data[b].lines.pct ?? 0));
 	if (files.length === 0) {
 		throw new Error(`${source.title} coverage contains no source files`);
@@ -134,20 +173,8 @@ export function renderCoverageSection(
 		}
 	}
 	const headline = `${light(total.lines.pct)} **${num(total.lines)}% lines** · ${num(total.functions)}% functions · ${num(total.branches)}% branches`;
-	const labels = source.labels?.map((label) => `\`${label}\``).join(", ");
-	const scope = source.scopes?.map((path) => `\`${path}\``).join(", ");
-	const details = labels && scope
-		? `Measured labels: ${labels}. Source scope: ${scope}. ${source.scopeNote ?? ""}`.trim()
-		: undefined;
-
-	const shown =
-		source.maxFiles !== undefined && files.length > source.maxFiles
-			? files.slice(0, source.maxFiles)
-			: files;
-	const truncated =
-		shown.length < files.length
-			? ` Showing the ${shown.length} worst-covered files of ${files.length}.`
-			: "";
+	const details = sectionDetails(source);
+	const { shown, note } = listedFiles(files, source.maxFiles);
 
 	return [
 		`## Coverage (${source.title})`,
@@ -158,11 +185,9 @@ export function renderCoverageSection(
 		"| File | % Lines | % Stmts | % Branch | % Funcs |",
 		"| --- | --- | --- | --- | --- |",
 		row("**All files**", total),
-		...shown.map((file) =>
-			row(relative(cwd, resolve(cwd, file)), data[file]),
-		),
+		...shown.map((file) => row(relative(cwd, resolve(cwd, file)), data[file])),
 		"",
-		`<sub>🟢 ≥80% · 🟡 ≥50% · 🔴 <50%.${truncated} Full report is in the \`${source.htmlArtifact}\` artifact.</sub>`,
+		`<sub>🟢 ≥80% · 🟡 ≥50% · 🔴 <50%.${note} Full report is in the \`${source.htmlArtifact}\` artifact.</sub>`,
 		"",
 	];
 }
@@ -178,7 +203,9 @@ function renderSection(source: CoverageSource): string[] {
 		data = JSON.parse(readFileSync(source.path, "utf8")) as CoverageSummary;
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
-		throw new Error(`could not read ${source.path}: ${detail}`, { cause: error });
+		throw new Error(`could not read ${source.path}: ${detail}`, {
+			cause: error,
+		});
 	}
 	return renderCoverageSection(source, data);
 }
@@ -203,9 +230,12 @@ function main(): void {
 	if (process.env.GITHUB_STEP_SUMMARY) {
 		appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`);
 	}
-	console.log(md);
+	process.stdout.write(`${md}\n`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+	process.argv[1] &&
+	resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
 	main();
 }

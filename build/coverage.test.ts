@@ -4,7 +4,9 @@ import { validateHostCoverageSummary } from "./coverage";
 import { renderCoverageSection } from "./coverage-summary";
 
 const metric = (total: number) => ({ total, covered: total, pct: 100 });
-const fileCoverage = (totals = { lines: 1, statements: 1, branches: 1, functions: 1 }) => ({
+const fileCoverage = (
+	totals = { lines: 1, statements: 1, branches: 1, functions: 1 },
+) => ({
 	lines: metric(totals.lines),
 	statements: metric(totals.statements),
 	branches: metric(totals.branches),

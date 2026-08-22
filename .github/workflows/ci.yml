@@ -38,7 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-node-npm
         with:
           cache-vscode: true
@@ -63,7 +66,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       # v5.0.0
       - uses: >-
           actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
@@ -81,7 +87,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-node-npm
         with:
           cache-vscode: true
@@ -139,7 +148,10 @@ jobs:
       run:
         working-directory: engine
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
@@ -189,7 +201,10 @@ jobs:
       run:
         working-directory: engine
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-rust
       # Same feature set as the test step below, or the test step recompiles
       # every crate whose features differ instead of reusing these artifacts.
@@ -211,7 +226,10 @@ jobs:
       run:
         working-directory: engine
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       # Read the version out of Cargo.toml rather than repeating it here, so
       # bumping the MSRV is a one-line change and can't leave CI testing the
       # old floor.
@@ -219,8 +237,9 @@ jobs:
         id: msrv
         run: |
           msrv=$(grep -m1 -oP '^rust-version\s*=\s*"\K[^"]+' Cargo.toml)
-          if [ -z "$msrv" ]; then
-            echo "::error::no rust-version found in engine/Cargo.toml"
+          if ! [[ $msrv =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::invalid rust-version in engine/Cargo.toml" \
+              "(got '$msrv')"
             exit 1
           fi
           echo "Declared MSRV: $msrv"
@@ -235,15 +254,16 @@ jobs:
           # restore-key on `cargo-target-`, which would otherwise match this
           # cache and hand them a target dir built by 1.88.
           cache-prefix: msrv-target-${{ steps.msrv.outputs.version }}
-      # The `+${{ ... }}` is load-bearing. rust-toolchain.toml pins the
-      # channel to stable, and a directory toolchain file outranks whatever
-      # rustup default the install step set, so a bare `cargo build` here
-      # would quietly build on stable and this job would pass no matter
-      # what the MSRV is.
+      # The `+$MSRV` is load-bearing. rust-toolchain.toml pins the channel
+      # to stable, and a directory toolchain file outranks whatever rustup
+      # default the install step set, so a bare `cargo build` here would
+      # quietly build on stable and this job would pass no matter what the
+      # MSRV is. The version is an env var, not a template splice, so a
+      # crafted rust-version cannot inject into the shell.
       - name: cargo build at MSRV
-        run: >-
-          cargo +${{ steps.msrv.outputs.version }} build --workspace
-          --all-targets
+        env:
+          MSRV: ${{ steps.msrv.outputs.version }}
+        run: cargo +"$MSRV" build --workspace --all-targets
 
   # Fuzzing in CI is a smoke run, not a fuzzing campaign: -runs=0 replays
   # the committed seed corpus once and exits. Deterministic, ~seconds of
@@ -260,7 +280,10 @@ jobs:
       run:
         working-directory: engine
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       # cargo-fuzz needs nightly. Pinned to a date for the same reason every
       # `uses:` here is pinned to a SHA: an unpinned nightly means a
       # toolchain regression lands as a red build on an unrelated PR. Bump
@@ -302,7 +325,10 @@ jobs:
       run:
         working-directory: engine
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-rust
         with:
           components: llvm-tools
@@ -334,7 +360,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-rust
         with:
           cache-prefix: cargo-release-target
@@ -365,7 +394,10 @@ jobs:
       md_rev: ${{ steps.pins.outputs.md_rev }}
       rules_rev: ${{ steps.pins.outputs.rules_rev }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - name: Read and resolve baseline pins
         id: pins
         env:
@@ -424,7 +456,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       # Restore-only, and not via setup-rust: that composite also contains
       # cache-save steps, and CodeQL treats them as cache-write even when
       # save is false. This job later checks out two foreign trees, so a
@@ -462,7 +497,8 @@ jobs:
       # here than on a developer's machine would report the difference as
       # drift.
       - name: Check out Millennium Dawn at the pinned revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: MillenniumDawn/Millennium-Dawn
           ref: ${{ needs.pins.outputs.md_rev }}
@@ -470,7 +506,8 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Check out ruleset at the pinned revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Kaiserreich/cwtools-hoi4-config
           ref: ${{ needs.pins.outputs.rules_rev }}
@@ -517,7 +554,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-node-npm
       - name: Download node coverage
         if: needs.build.result == 'success'
