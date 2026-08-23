@@ -9,6 +9,7 @@
 
 #### Engine
 
+* Driver discovery smoke tests now pin unsorted multi-mod Session/direct parity, empty `include_dirs`, and global lexical order across folders. (#234)
 * LSP: `validateWorkspace` now has a contention test that it gives up with `{ "busy": true }` when another scan holds the guard past the retry deadline. (#223)
 * Localisation key changes now revalidate only other open localisation files whose cached `$ref$` set mentions a changed key. Parsed buffers are reused, while stale, missing, and fatally malformed buffers fall back to full revalidation. (#396)
 * LSP: deleting a watched localisation file now revalidates affected open
