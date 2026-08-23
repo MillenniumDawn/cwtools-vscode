@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from paths import (
@@ -76,6 +77,19 @@ def _run(cmd: list[str]) -> None:
         raise RuntimeError(f"command failed ({result.returncode}): {' '.join(cmd)}")
 
 
+def wait_for_watcher_exit(
+    procs: list[subprocess.Popen[bytes]], *, poll_interval: float = 0.05
+) -> int:
+    while True:
+        codes = [proc.poll() for proc in procs]
+        exited = [code for code in codes if code is not None]
+        if exited:
+            if all(code is not None for code in codes):
+                return next((code for code in exited if code != 0), 0)
+            return exited[0] if exited[0] != 0 else 1
+        time.sleep(poll_interval)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     watch = "--watch" in args
@@ -90,12 +104,8 @@ def main(argv: list[str] | None = None) -> int:
 
     procs = [subprocess.Popen(command, cwd=REPO_ROOT) for command in commands]
     print("[esbuild] watching extension + webview...")
-    status = 0
     try:
-        for proc in procs:
-            code = proc.wait()
-            if code != 0 and status == 0:
-                status = code
+        status = wait_for_watcher_exit(procs)
     except KeyboardInterrupt:
         status = 130
     finally:

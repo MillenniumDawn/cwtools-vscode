@@ -1,4 +1,4 @@
 @echo off
 cls
 
-python scripts\build\build.py %*
+node scripts\build\python.mjs scripts\build\build.py %*

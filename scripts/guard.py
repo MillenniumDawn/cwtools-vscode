@@ -173,9 +173,7 @@ def build_config(
     args = parser.parse_args(argv)
 
     corpus = Path(
-        args.corpus
-        or env.get("CWTOOLS_CORPUS")
-        or (projects / "Millennium-Dawn")
+        args.corpus or env.get("CWTOOLS_CORPUS") or (projects / "Millennium-Dawn")
     )
     rules = Path(
         args.rules
@@ -187,9 +185,7 @@ def build_config(
     )
     vanilla = Path(vanilla_raw) if vanilla_raw else None
     baseline = Path(
-        args.baseline
-        or env.get("CWTOOLS_BASELINE")
-        or (script_dir / "md-baseline.csv")
+        args.baseline or env.get("CWTOOLS_BASELINE") or (script_dir / "md-baseline.csv")
     )
     bin_path = Path(
         args.bin

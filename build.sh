@@ -1,3 +1,3 @@
 #!/bin/bash
 
-python3 scripts/build/build.py "$@"
+node scripts/build/python.mjs scripts/build/build.py "$@"

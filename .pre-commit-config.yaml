@@ -87,7 +87,7 @@ repos:
         name: mypy
         entry: mypy scripts tests/scripts
         language: system
-        files: ^(scripts|tests/scripts)/.*\.py$
+        files: ^((scripts|tests/scripts)/.*\.py|mypy\.ini)$
         pass_filenames: false
         stages: [pre-commit]
 

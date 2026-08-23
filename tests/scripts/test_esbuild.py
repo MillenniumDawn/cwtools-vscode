@@ -7,6 +7,14 @@ from load import load_build
 esbuild = load_build("esbuild")
 
 
+class FakeProcess:
+    def __init__(self, code: int | None) -> None:
+        self.code = code
+
+    def poll(self) -> int | None:
+        return self.code
+
+
 class EsbuildArgsTests(unittest.TestCase):
     def test_extension_bundle_is_node_cjs(self) -> None:
         args = esbuild.extension_args(watch=False)
@@ -39,6 +47,18 @@ class EsbuildArgsTests(unittest.TestCase):
         for command in commands:
             self.assertGreaterEqual(len(command), 2)
             self.assertTrue(command[1].endswith("esbuild") or "esbuild" in command[1])
+
+    def test_watch_returns_when_the_second_bundle_exits(self) -> None:
+        status = esbuild.wait_for_watcher_exit(
+            [FakeProcess(None), FakeProcess(7)], poll_interval=0
+        )
+        self.assertEqual(status, 7)
+
+    def test_watch_treats_an_early_clean_exit_as_failure(self) -> None:
+        status = esbuild.wait_for_watcher_exit(
+            [FakeProcess(None), FakeProcess(0)], poll_interval=0
+        )
+        self.assertEqual(status, 1)
 
 
 if __name__ == "__main__":
