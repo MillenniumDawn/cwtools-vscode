@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import unittest
 
 from load import load_build
@@ -41,12 +42,12 @@ class EsbuildArgsTests(unittest.TestCase):
         self.assertIn("--watch", joined)
         self.assertIn("--watch", " ".join(esbuild.extension_args(watch=True)))
 
-    def test_bundle_commands_run_through_node(self) -> None:
+    def test_bundle_commands_use_the_platform_esbuild_entrypoint(self) -> None:
         commands = esbuild.bundle_commands(watch=False, dev=False)
         self.assertEqual(len(commands), 2)
+        esbuild_index = 1 if sys.platform == "win32" else 0
         for command in commands:
-            self.assertGreaterEqual(len(command), 2)
-            self.assertTrue(command[1].endswith("esbuild") or "esbuild" in command[1])
+            self.assertEqual(command[esbuild_index], str(esbuild.esbuild_bin()))
 
     def test_watch_returns_when_the_second_bundle_exits(self) -> None:
         status = esbuild.wait_for_watcher_exit(

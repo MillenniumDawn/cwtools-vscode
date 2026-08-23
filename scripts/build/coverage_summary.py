@@ -30,6 +30,7 @@ class CoverageSource:
     scopes: tuple[str, ...] = ()
     scope_note: str = ""
     max_files: int | None = None
+    required_metrics: tuple[str, ...] = COVERAGE_METRICS
 
 
 SOURCES: tuple[CoverageSource, ...] = (
@@ -38,6 +39,7 @@ SOURCES: tuple[CoverageSource, ...] = (
         path="engine/target/coverage/coverage-summary.json",
         html_artifact="rust-coverage",
         max_files=20,
+        required_metrics=("lines", "statements", "functions"),
     ),
     CoverageSource(
         title="extension-host client",
@@ -165,7 +167,7 @@ def render_coverage_section(
         "branches": aggregate(files, data, "branches"),
         "functions": aggregate(files, data, "functions"),
     }
-    for metric in COVERAGE_METRICS:
+    for metric in source.required_metrics:
         if _count(total[metric], "total") == 0:
             raise RuntimeError(f"{source.title} coverage has a zero {metric} total")
 

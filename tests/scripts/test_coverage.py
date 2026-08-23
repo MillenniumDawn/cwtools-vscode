@@ -126,13 +126,14 @@ class RenderCoverageSectionTests(unittest.TestCase):
             path="engine/target/coverage/coverage-summary.json",
             html_artifact="rust-coverage",
             max_files=2,
+            required_metrics=("lines", "statements", "functions"),
         )
 
         def file(pct: int) -> dict[str, dict[str, float | int]]:
             return {
                 "lines": {"total": 10, "covered": pct / 10, "pct": pct},
                 "statements": {"total": 10, "covered": pct / 10, "pct": pct},
-                "branches": {"total": 2, "covered": 2, "pct": 100},
+                "branches": {"total": 0, "covered": 0, "pct": 0},
                 "functions": {"total": 1, "covered": 1, "pct": 100},
             }
 

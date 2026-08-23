@@ -64,10 +64,13 @@ def webview_args(*, watch: bool, dev: bool) -> list[str]:
 
 
 def bundle_commands(*, watch: bool, dev: bool) -> list[list[str]]:
-    return [
-        [_node(), *extension_args(watch=watch)],
-        [_node(), *webview_args(watch=watch, dev=dev)],
+    commands = [
+        extension_args(watch=watch),
+        webview_args(watch=watch, dev=dev),
     ]
+    if sys.platform == "win32":
+        return [[_node(), *command] for command in commands]
+    return commands
 
 
 def _run(cmd: list[str]) -> None:
