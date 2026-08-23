@@ -393,8 +393,16 @@ jobs:
   # md tier, which runs without one.
   vanilla:
     if: github.event_name != 'schedule'
-    name: Vanilla tier
-    runs-on: ubuntu-latest
+    name: Vanilla tier (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: python3
+          - os: windows-latest
+            python: python
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       # v7.0.1
@@ -418,7 +426,7 @@ jobs:
           # makes every run start cold and the report a function of the
           # inputs alone.
           XDG_CACHE_HOME: ${{ runner.temp }}/cwtools-cache
-        run: python3 scripts/guard.py vanilla --no-build
+        run: ${{ matrix.python }} scripts/guard.py vanilla --no-build
 
   # Reads the pinned revisions out of the committed baseline and resolves
   # them to full SHAs, because git cannot fetch an abbreviated one.
