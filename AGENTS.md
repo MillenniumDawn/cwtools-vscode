@@ -31,8 +31,8 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 
 ### Build System
 
-- **Build orchestrator** (`build/build.ts`, run via `tsx`): builds and deploys the Rust server, compiles the client, packages and publishes the vsix. No .NET toolchain is involved.
-- **TypeScript compilation**: `tsc` type-checks and emits the per-file client output (which the tests run against); `esbuild` (`build/esbuild.ts`, run via `tsx`) bundles the two shipped artifacts: the extension host (`extension.js`) and the webview graph (`graph.js`).
+- **Build orchestrator** (`scripts/build/build.py`): builds and deploys the Rust server, compiles the client, packages and publishes the vsix. No .NET toolchain is involved.
+- **TypeScript compilation**: `tsc` type-checks and emits the per-file client output (which the tests run against); `esbuild` (`scripts/build/esbuild.py`) bundles the two shipped artifacts: the extension host (`extension.js`) and the webview graph (`graph.js`).
 - **Release packaging**: Assembles `dist/extension/` from checked-in package inputs and generated binaries, then creates `.vsix` files under `artifacts/vsix/`. The client is bundled, so `node_modules` is excluded by `extension/package/.vscodeignore`.
 
 ## Development Commands
@@ -75,7 +75,7 @@ Two test layers. `npm run test:node` runs the fast node-only unit tests under `e
 
 Single test: `npx --no-install vitest run extension/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `npx --no-install vscode-test --label unit --grep 'name'`. Watch modes: `npm run test:watch` and `npm run test:node:watch`.
 
-Coverage: `npm run test:coverage` (unit label, V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). The two runs cover disjoint modules (engine.ts and executable.ts are vitest-owned), and `build/coverage-summary.ts` renders rust, host, and node into the PR comment.
+Coverage: `npm run test:coverage` (unit label, V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). The two runs cover disjoint modules (engine.ts and executable.ts are vitest-owned), and `scripts/build/coverage_summary.py` renders rust, host, and node into the PR comment.
 
 Host suites must not import extension modules directly: the host runs the esbuild bundle, so a direct import is a second copy of the module. Reach the extension's own modules through its activation API (`graphPanelModule()` in `extension/test/support/utils.ts`).
 
@@ -110,8 +110,8 @@ Three things to know about them:
 
 - `package.json`: Node.js dependencies and scripts for the TypeScript client
 - `extension/package/package.json`: VS Code extension manifest and configuration
-- `build/build.ts`: build/package/release orchestrator
-- `build/esbuild.ts`: esbuild bundler driver for the client (extension + webview)
+- `scripts/build/build.py`: build/package/release orchestrator
+- `scripts/build/esbuild.py`: esbuild bundler driver for the client (extension + webview)
 - `.vscode-test.mjs`: host test runner config (labeled: unit/smoke/host)
 - `vitest.config.ts`: node-only unit test config
 - `engine/Cargo.toml`: the Rust workspace manifest; all crates inherit its version
@@ -128,7 +128,7 @@ Three things to know about them:
 
 ## Conventions
 
-Every substantive PR or push updates `CHANGELOG.md` as part of the change, engine work included. New version headings (`### x.y.z`) are numbered from the latest git tag, not the previous heading; unreleased work goes under `### Unreleased`. `build/build.ts` copies the changelog into `dist/extension/` and reads the top version heading for the release version.
+Every substantive PR or push updates `CHANGELOG.md` as part of the change, engine work included. New version headings (`### x.y.z`) are numbered from the latest git tag, not the previous heading; unreleased work goes under `### Unreleased`. `scripts/build/build.py` copies the changelog into `dist/extension/` and reads the top version heading for the release version.
 
 ## Releasing
 

@@ -28,7 +28,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           pins=(extension/src/host/games.ts rules-pins.json)
-          summary=$(npx --no-install tsx build/rulesPins.ts)
+          summary=$(python3 scripts/build/rules_pins.py)
           echo "$summary"
           if git diff --quiet -- "${pins[@]}"; then
             exit 0
@@ -45,7 +45,7 @@ jobs:
           git commit -m 'chore: bump the pinned rules commits' -- "${pins[@]}"
           git push origin "$branch"
           description='Weekly refresh of the reviewed rules manifest'
-          description+=' by build/rulesPins.ts.'
+          description+=' by scripts/build/rules_pins.py.'
           body=$(printf '%s\n\n%s\n\n' "$description" "$summary")
           body+=$(printf '%s %s\n' \
             'Installed extensions fetch these exact commits.' \

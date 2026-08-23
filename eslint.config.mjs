@@ -16,11 +16,10 @@ export default tseslint.config(
 		extends: [tseslint.configs.recommendedTypeChecked],
 		languageOptions: {
 			parserOptions: {
-			projectService: {
-				allowDefaultProject: ["build/*.ts", "vitest.config.ts"],
-				maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING:
-					16,
-			},
+				projectService: {
+					allowDefaultProject: ["vitest.config.ts"],
+					maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 16,
+				},
 			},
 		},
 	},

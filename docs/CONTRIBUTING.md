@@ -25,7 +25,7 @@ npm install        # client dependencies
 
 `quick` builds the Rust server, assembles the client, and leaves a runnable extension in `dist/extension/`.
 
-The client is bundled with esbuild (`build/esbuild.ts`): `tsc` type-checks and emits the per-file output the tests run against, then esbuild produces the two shipped bundles (`extension.js`, `webview/graph.js`). `npm run compile` does both; `npm run check` runs the typecheck and lint.
+The client is bundled with esbuild (`scripts/build/esbuild.py`): `tsc` type-checks and emits the per-file output the tests run against, then esbuild produces the two shipped bundles (`extension.js`, `webview/graph.js`). `npm run compile` does both; `npm run check` runs the typecheck and lint.
 
 The Rust server builds from the in-repo `engine` workspace. To build from another checkout, point it there:
 
@@ -69,7 +69,7 @@ reach users on its own and an offline activation cannot move a cache backwards.
 Refresh the pins with:
 
 ```bash
-npx --no-install tsx build/rulesPins.ts
+python3 scripts/build/rules_pins.py
 ```
 
 It reads each repo's default branch head, rewrites both pin sets, and increments
@@ -93,13 +93,15 @@ npm run test:host      # everything, including hover and completion
 npm run test:coverage  # unit label with validated V8 coverage
 npm run test:node:coverage  # vitest coverage into coverage-node/
 npm run bench:node     # client hot-path benchmarks
+python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
 
 Two layers. `test:node` runs under vitest with no Electron and owns the pure
 modules (`engine.ts`, `executable.ts`, `games.ts`, the signature/settings
 helpers, the manifest and nls guards). The rest run in a real extension host
 against the sample mod in `extension/test/workspaces/stellaris/`, picked by label from
-`.vscode-test.mjs`.
+`.vscode-test.mjs`. Helper scripts under `scripts/` (including `scripts/build/`)
+are tested from `tests/scripts/`.
 
 The Rust side has its own suite and its own gates:
 

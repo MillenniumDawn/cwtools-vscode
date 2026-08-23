@@ -45,8 +45,17 @@ jobs:
       - uses: ./.github/actions/setup-node-npm
         with:
           cache-vscode: true
+      - name: Install Python checks
+        run: >-
+          python3 -m pip install black==26.5.1 mypy==2.3.0 ruff==0.16.0
       - name: Typecheck and lint
         run: npm run check
+      - name: Ruff
+        run: ruff check scripts tests/scripts
+      - name: Black
+        run: black --check scripts tests/scripts
+      - name: mypy
+        run: mypy scripts tests/scripts
       - name: Node unit tests
         run: npm run test:node
       # Step-scoped so a hung extension host fails here in minutes instead of
@@ -119,7 +128,7 @@ jobs:
       - name: Test build
         run: npm run build -- package-prebuilt
       # Host V8 coverage: mocha forces the instrumented host to exit after
-      # the unit label, and host-coverage.ts kills a leftover process tree
+      # the unit label, and host_coverage.py kills a leftover process tree
       # if Electron still hangs under xvfb. Tight step timeout so a hang
       # cannot burn the whole build job.
       - name: Host coverage
@@ -196,7 +205,7 @@ jobs:
       - name: scripts unit tests
         if: github.event_name != 'schedule'
         working-directory: ${{ github.workspace }}
-        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+        run: python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
 
   # Releases ship Linux, Windows, and macOS binaries, so a platform-only
   # break must fail here before it ships. The tag-triggered release workflow
@@ -219,6 +228,21 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
+      - name: Setup Node for the Windows client build
+        if: matrix.os == 'windows-latest'
+        # v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "26"
+          cache: npm
+      - name: Install client dependencies on Windows
+        if: matrix.os == 'windows-latest'
+        working-directory: ${{ github.workspace }}
+        run: npm ci
+      - name: Compile the client on Windows
+        if: matrix.os == 'windows-latest'
+        working-directory: ${{ github.workspace }}
+        run: npm run compile
       # Same feature set as the test step below, or the test step recompiles
       # every crate whose features differ instead of reusing these artifacts.
       - name: cargo build (debug)
@@ -593,7 +617,7 @@ jobs:
           name: rust-coverage
           path: engine/target/coverage
       - name: Coverage summary
-        run: npx --no-install tsx build/coverage-summary.ts
+        run: python3 scripts/build/coverage_summary.py
       - name: Coverage PR comment
         if: github.event_name == 'pull_request'
         # v3.0.5

@@ -1,35 +1,20 @@
-#!/usr/bin/env python3
-
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
-import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-from types import ModuleType
 from unittest.mock import patch
 
+from load import load_script
 
-def _load(name: str) -> ModuleType:
-    path = Path(__file__).with_name(f"{name}.py")
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(name)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-coverage_script = _load("coverage")
-guard = _load("guard")
-smoke_test_vsix = _load("smoke_test_vsix")
-stage_release_binaries = _load("stage_release_binaries")
-sync_paradox_syntax = _load("sync_paradox_syntax")
+coverage_script = load_script("coverage")
+guard = load_script("guard")
+smoke_test_vsix = load_script("smoke_test_vsix")
+stage_release_binaries = load_script("stage_release_binaries")
+sync_paradox_syntax = load_script("sync_paradox_syntax")
 
 
 class GuardNormalizeTests(unittest.TestCase):
