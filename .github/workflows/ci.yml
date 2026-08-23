@@ -338,7 +338,7 @@ jobs:
       - name: Install cargo-fuzz
         run: >-
           cargo +nightly-2026-07-24 install cargo-fuzz --version 0.13.2
-          --locked
+          --locked --force
       - name: parse_string over seed corpus
         run: >-
           cargo +nightly-2026-07-24 fuzz run parse_string

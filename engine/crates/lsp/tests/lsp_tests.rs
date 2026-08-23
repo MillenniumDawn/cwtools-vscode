@@ -6582,6 +6582,16 @@ fn storm_server_env(
     vanilla: &std::path::Path,
     extra_env: &[(&str, &str)],
 ) -> (std::process::Child, BufReader<std::process::ChildStdout>) {
+    storm_server_env_with_ignore(ws, rules_dir, vanilla, extra_env, &[])
+}
+
+fn storm_server_env_with_ignore(
+    ws: &std::path::Path,
+    rules_dir: &std::path::Path,
+    vanilla: &std::path::Path,
+    extra_env: &[(&str, &str)],
+    ignore_files: &[&str],
+) -> (std::process::Child, BufReader<std::process::ChildStdout>) {
     let ws_uri = path_uri(ws);
     let mut cmd = cwtools_server_cmd();
     // The `[validate]` line is a tracing event now, read back via
@@ -6609,6 +6619,7 @@ fn storm_server_env(
                 "language": "hoi4",
                 "rulesCache": rules_dir.to_string_lossy(),
                 "vanilla": vanilla.to_string_lossy(),
+                "ignoreFilePatterns": ignore_files,
             }
         }),
     );
@@ -7335,6 +7346,149 @@ fn test_open_loc_key_edit_revalidates_only_referencing_open_files() {
         .expect("reference diagnostics publish");
     assert_eq!(reference_publish["params"]["version"], 1);
     let codes: Vec<String> = reference_publish["params"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|diagnostic| diagnostic["code"].as_str().map(String::from))
+        .collect();
+    assert!(!codes.contains(&"CW225".to_string()), "got: {codes:?}");
+}
+
+#[test]
+fn test_open_loc_revalidation_skips_ignored_targets() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let definition_text = "\u{FEFF}l_english:\n DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n";
+    let definition_uri = write_loc_file(
+        ws.path(),
+        "localisation/definition_l_english.yml",
+        " DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n",
+    );
+    let reference_text = "\u{FEFF}l_english:\n REF_KEY:0 \"see $new_key$\"\n";
+    let reference_uri = write_loc_file(
+        ws.path(),
+        "localisation/ignored_l_english.yml",
+        " REF_KEY:0 \"see $new_key$\"\n",
+    );
+
+    let (mut child, mut reader) = storm_server_env_with_ignore(
+        ws.path(),
+        rules_dir.path(),
+        vanilla.path(),
+        &[],
+        &["ignored_l_english.yml"],
+    );
+    for (uri, suffix, text) in [
+        (&definition_uri, "definition_l_english.yml", definition_text),
+        (&reference_uri, "ignored_l_english.yml", reference_text),
+    ] {
+        write_frame(
+            &mut child,
+            &jsonrpc_notification(
+                "textDocument/didOpen",
+                serde_json::json!({"textDocument":{"uri":uri,"languageId":"paradox","version":1,"text":text}}),
+            ),
+        )
+        .unwrap();
+        let _ = diags_for(&mut reader, suffix, 1).expect("didOpen publish");
+    }
+    let rx = spawn_frame_collector(reader);
+
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didChange",
+            serde_json::json!({
+                "textDocument": {"uri": definition_uri, "version": 2},
+                "contentChanges": [{"text": "\u{FEFF}l_english:\n DEF_KEY:0 \"definition\"\n"}]
+            }),
+        ),
+    )
+    .unwrap();
+    let frames = drain_after_first(
+        &rx,
+        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(8),
+    );
+    stop_server(&mut child);
+
+    assert_eq!(
+        count_publishes(&frames, "ignored_l_english.yml"),
+        0,
+        "an ignored target must not be revalidated by a loc-key sweep"
+    );
+}
+
+#[test]
+fn test_open_loc_revalidation_applies_inline_ignore() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let definition_text = "\u{FEFF}l_english:\n DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n";
+    let definition_uri = write_loc_file(
+        ws.path(),
+        "localisation/definition_l_english.yml",
+        " DEF_KEY:0 \"definition\"\n NEW_KEY:0 \"new\"\n",
+    );
+    let reference_text =
+        "\u{FEFF}l_english:\n REF_KEY:0 \"see $new_key$\" # cwtools-ignore CW225\n";
+    let reference_uri = write_loc_file(
+        ws.path(),
+        "localisation/reference_l_english.yml",
+        " REF_KEY:0 \"see $new_key$\" # cwtools-ignore CW225\n",
+    );
+
+    let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
+    for (uri, suffix, text) in [
+        (&definition_uri, "definition_l_english.yml", definition_text),
+        (&reference_uri, "reference_l_english.yml", reference_text),
+    ] {
+        write_frame(
+            &mut child,
+            &jsonrpc_notification(
+                "textDocument/didOpen",
+                serde_json::json!({"textDocument":{"uri":uri,"languageId":"paradox","version":1,"text":text}}),
+            ),
+        )
+        .unwrap();
+        let codes = diags_for(&mut reader, suffix, 1).expect("didOpen publish");
+        if suffix == "reference_l_english.yml" {
+            assert!(!codes.contains(&"CW225".to_string()), "got: {codes:?}");
+        }
+    }
+    let rx = spawn_frame_collector(reader);
+
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didChange",
+            serde_json::json!({
+                "textDocument": {"uri": definition_uri, "version": 2},
+                "contentChanges": [{"text": "\u{FEFF}l_english:\n DEF_KEY:0 \"definition\"\n"}]
+            }),
+        ),
+    )
+    .unwrap();
+    let frames = drain_after_first(
+        &rx,
+        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(8),
+    );
+    stop_server(&mut child);
+
+    let target_publish = frames
+        .iter()
+        .find(|frame| {
+            frame["method"] == "textDocument/publishDiagnostics"
+                && frame["params"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| uri.ends_with("reference_l_english.yml"))
+        })
+        .expect("reference diagnostics publish");
+    let codes: Vec<String> = target_publish["params"]["diagnostics"]
         .as_array()
         .unwrap()
         .iter()
