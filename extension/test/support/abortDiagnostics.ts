@@ -8,6 +8,7 @@ export {};
 let inFlight: string | undefined;
 let lastCompleted: string | undefined;
 let mochaFinished = false;
+let failed = false;
 
 setup(function () {
 	inFlight = this.currentTest?.fullTitle();
@@ -16,10 +17,19 @@ setup(function () {
 teardown(function () {
 	lastCompleted = inFlight ?? lastCompleted;
 	inFlight = undefined;
+	if (this.currentTest?.state === "failed") {
+		failed = true;
+	}
 });
 
 suiteTeardown(function () {
 	mochaFinished = true;
+	// V8 coverage keeps the instrumented host alive under xvfb; flush and die.
+	if (!process.env.NODE_V8_COVERAGE) {
+		return;
+	}
+	const code = failed ? 1 : 0;
+	setImmediate(() => process.exit(code));
 });
 
 process.on("exit", (code) => {
