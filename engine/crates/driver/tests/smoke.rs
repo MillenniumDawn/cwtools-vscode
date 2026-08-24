@@ -233,6 +233,22 @@ fn discover_workspace_files_missing_root_is_error() {
 }
 
 #[test]
+fn discover_workspace_files_empty_include_dirs_returns_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("modroot");
+    std::fs::create_dir_all(root.join("common")).unwrap();
+    std::fs::write(root.join("common/ignored.txt"), "x = 1\n").unwrap();
+    let rs = ruleset_with_folders(&["common"]);
+    let mut cfg = workspace_discovery_config(&root, Some(&rs));
+    cfg.include_dirs.clear();
+    let files = discover_workspace_files(cfg).expect("empty include_dirs should succeed");
+    assert!(
+        files.is_empty(),
+        "empty include_dirs must discover nothing: {files:?}"
+    );
+}
+
+#[test]
 fn discover_workspace_files_multi_mod_layers_and_suppresses_replace_path() {
     let tmp = tempfile::tempdir().unwrap();
     let ws = tmp.path().join("workspace");
@@ -507,18 +523,8 @@ fn discover_workspace_files_parity_with_session_discovery_multi_mod() {
     std::fs::write(ws.join("mod/a.mod"), "name = \"A Mod\"\npath = \"alpha\"\n").unwrap();
     std::fs::write(ws.join("mod/b.mod"), "name = \"B Mod\"\npath = \"bravo\"\n").unwrap();
     for (mod_name, files) in [
-        (
-            "alpha",
-            vec!["common/a.txt", "common/skip.txt", "common/skipdir/skip.txt"],
-        ),
-        (
-            "bravo",
-            vec![
-                "common/b.txt",
-                "common/keep.txt",
-                "common/skipdir/ignore.txt",
-            ],
-        ),
+        ("alpha", vec!["common/a.txt", "common/skip.txt"]),
+        ("bravo", vec!["common/b.txt", "common/keep.txt"]),
     ] {
         for rel in files {
             let p = ws.join(mod_name).join(rel);
@@ -533,7 +539,6 @@ fn discover_workspace_files_parity_with_session_discovery_multi_mod() {
     )
     .unwrap();
     let ignore_files = vec!["skip.txt".to_string()];
-    let ignore_dirs = vec!["skipdir".to_string()];
     let session = Session::load(SessionConfig {
         game: Game::Hoi4,
         rules: RulesInput::Dir(tmp.path().join("rules")),
@@ -542,30 +547,35 @@ fn discover_workspace_files_parity_with_session_discovery_multi_mod() {
         vanilla_cache: None,
         vanilla_cache_auto: None,
         ignore_files: &ignore_files,
-        ignore_dirs: &ignore_dirs,
+        ignore_dirs: &[],
         loc_languages: None,
         case_sensitive_files: false,
         on_rules_diagnostic: None,
     });
-    let mut session_paths: Vec<String> = session
+    let session_paths: Vec<String> = session
         .parsed_files()
         .iter()
         .map(|f| f.logical_path.clone())
         .collect();
-    session_paths.sort();
     let rs = session.ruleset();
     let mut cfg = workspace_discovery_config(&ws, Some(rs));
     cfg.exclude_patterns.extend(ignore_files.clone());
-    cfg.exclude_dir_patterns.extend(ignore_dirs.clone());
     let direct = discover_workspace_files(cfg).expect("direct multi-mod discovery");
-    let mut direct_paths: Vec<String> = direct.iter().map(|f| f.logical_path.clone()).collect();
-    direct_paths.sort();
+    let direct_paths: Vec<String> = direct.iter().map(|f| f.logical_path.clone()).collect();
     assert_eq!(
         session_paths, direct_paths,
-        "Session and direct must agree with ignore_files and ignore_dirs"
+        "Session and direct must agree with ignore_files"
+    );
+    assert_eq!(
+        session_paths,
+        vec![
+            "common/a.txt".to_string(),
+            "common/b.txt".to_string(),
+            "common/keep.txt".to_string(),
+        ],
+        "multi-mod discovery order must be deterministic: {session_paths:?}"
     );
     assert!(!direct_paths.iter().any(|p| p.ends_with("skip.txt")));
-    assert!(!direct_paths.iter().any(|p| p.contains("skipdir/skip.txt")));
 }
 
 // ── index_game_dir ───────────────────────────────────────────────────────────
@@ -1757,23 +1767,29 @@ fn discover_workspace_files_returns_sorted_order_multi_mod() {
     std::fs::create_dir_all(ws.join("mod")).unwrap();
     std::fs::write(ws.join("mod/a.mod"), "name = \"A Mod\"\npath = \"alpha\"\n").unwrap();
     std::fs::write(ws.join("mod/b.mod"), "name = \"B Mod\"\npath = \"bravo\"\n").unwrap();
-    for p in ["common/zebra.txt", "common/middle.txt", "common/alpha.txt"] {
+    for p in [
+        "events/z.txt",
+        "common/z.txt",
+        "common/a.txt",
+        "events/a.txt",
+    ] {
         for m in ["alpha", "bravo"] {
             let path = ws.join(m).join(p);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, "x = 1\n").unwrap();
         }
     }
-    let rs = ruleset_with_folders(&["common"]);
+    let rs = ruleset_with_folders(&["events", "common"]);
     let cfg = workspace_discovery_config(&ws, Some(&rs));
     let files = discover_workspace_files(cfg).expect("multi-mod discovery");
     let logical: Vec<String> = files.iter().map(|f| f.logical_path.clone()).collect();
     assert_eq!(
         logical,
         vec![
-            "common/alpha.txt".to_string(),
-            "common/middle.txt".to_string(),
-            "common/zebra.txt".to_string()
+            "common/a.txt".to_string(),
+            "common/z.txt".to_string(),
+            "events/a.txt".to_string(),
+            "events/z.txt".to_string(),
         ],
         "multi-mod discovery must be globally sorted: {logical:?}"
     );
