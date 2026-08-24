@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import os
 import unittest
+from contextlib import redirect_stderr
 from unittest import mock
 
 from load import load_build
@@ -113,17 +115,27 @@ def fake_which(name: str) -> str:
 
 
 class MainTests(unittest.TestCase):
-    def run_main(self, argv: list[str]) -> list[str]:
-        completed = mock.Mock(returncode=0)
+    def call_main(
+        self, argv: list[str], *, returncode: int = 0, platform: str = "linux"
+    ) -> tuple[int, list[str], str]:
+        completed = mock.Mock(returncode=returncode)
+        stderr = io.StringIO()
         with without_override(), mock.patch.object(
             hosttest.shutil, "which", side_effect=fake_which
         ), mock.patch.object(hosttest, "TEST_CLI", INSTALLED_CLI), mock.patch.object(
             hosttest.subprocess, "run", return_value=completed
         ) as run, mock.patch.object(
-            hosttest.sys, "platform", "linux"
+            hosttest.sys, "platform", platform
+        ), redirect_stderr(
+            stderr
         ):
-            self.assertEqual(hosttest.main(argv), 0)
-        return list(run.call_args.args[0])
+            status = hosttest.main(argv)
+        return status, list(run.call_args.args[0]), stderr.getvalue()
+
+    def run_main(self, argv: list[str]) -> list[str]:
+        status, command, _ = self.call_main(argv)
+        self.assertEqual(status, 0)
+        return command
 
     def test_defaults_to_the_unit_label_under_the_display_prefix(self) -> None:
         command = self.run_main([])
@@ -138,6 +150,22 @@ class MainTests(unittest.TestCase):
     def test_native_drops_the_display_prefix(self) -> None:
         command = self.run_main(["--native"])
         self.assertEqual(command[0], "/usr/bin/node")
+
+    # A runner that swallowed a failing exit code would turn every red CI run
+    # green, so this is the one that matters most.
+    def test_propagates_a_failing_exit_code(self) -> None:
+        status, _, _ = self.call_main([], returncode=3)
+        self.assertEqual(status, 3)
+
+    def test_reports_the_missing_backend_on_other_platforms(self) -> None:
+        status, command, stderr = self.call_main([], platform="darwin")
+        self.assertEqual(status, 0)
+        self.assertEqual(command[0], "/usr/bin/node")
+        self.assertIn("darwin", stderr)
+
+    def test_says_nothing_when_a_backend_was_found(self) -> None:
+        _, _, stderr = self.call_main([])
+        self.assertEqual(stderr, "")
 
 
 if __name__ == "__main__":
