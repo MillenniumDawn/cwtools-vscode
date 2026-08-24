@@ -18,6 +18,20 @@ select = ["ARG", "B", "C4", "E", "F", "I", "PTH", "RUF", "SIM", "UP", "W"]
 [tool.black]
 line-length = 88
 target-version = ["py312"]
+# black's default exclude list contains "build", which silently skips every
+# file in scripts/build when black is handed a directory. Setting exclude
+# replaces that list rather than adding to it, so name only the directories
+# that really have nothing to format.
+exclude = '''
+/(
+    \.git
+  | \.mypy_cache
+  | \.pytest_cache
+  | \.ruff_cache
+  | node_modules
+  | dist
+)/
+'''
 
 [tool.mypy]
 python_version = "3.12"
