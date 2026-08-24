@@ -2,6 +2,7 @@
 
 #### Extension
 
+* Extension-host tests no longer open a VS Code window on the developer's desktop. Every label runs through `scripts/build/hosttest.py`, which uses `xvfb-run` on Linux and fails with install instructions when it is missing rather than falling back to a visible window. macOS and Windows still run natively and say so. `CWTOOLS_TEST_DISPLAY` selects `xvfb`, `ozone` or `native`, and `npm run test:native` is the explicit visible-window runner. CI drops its own `xvfb-run` prefixes. (#406)
 * Coverage comments and job summaries show one suite overview and keep per-file tables in collapsed sections. (#417)
 * Build, package, release, coverage, and rules-pin helpers live under `scripts/build/` as Python. Tests moved to `tests/scripts/`. (#386)
 * CI publishes extension-host coverage next to rust and node. The host runner forces the instrumented Electron process to exit after mocha and kills a leftover process tree if it hangs under xvfb. (#390)

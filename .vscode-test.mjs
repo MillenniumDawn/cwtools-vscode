@@ -94,6 +94,15 @@ const hostFiles = [
 // machine on the same path, which takes a GPU-process crash off #216's list.
 const softwareRendering = "--disable-gpu";
 
+// scripts/build/hosttest.py resolves the display backend and exports the name
+// it settled on. `ozone` is Electron's own headless Chromium backend: it needs
+// no system package, but the flag is an undocumented Chromium detail, so it is
+// opt-in (CWTOOLS_TEST_DISPLAY=ozone) rather than the Linux default.
+const headless =
+	process.env.CWTOOLS_TEST_DISPLAY === "ozone"
+		? ["--ozone-platform=headless"]
+		: [];
+
 const base = {
 	vscode: "stable",
 	extensionDevelopmentPath: "dist/extension",
@@ -106,28 +115,28 @@ export default defineConfig({
 			label: "unit",
 			files: unitFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile, softwareRendering],
+			launchArgs: [sampleFile, softwareRendering, ...headless],
 		},
 		{
 			...base,
 			label: "smoke",
 			files: smokeFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile, softwareRendering],
+			launchArgs: [sampleFile, softwareRendering, ...headless],
 		},
 		{
 			...base,
 			label: "live",
 			files: liveFiles,
 			workspaceFolder: liveWorkspace,
-			launchArgs: [liveSampleFile, softwareRendering],
+			launchArgs: [liveSampleFile, softwareRendering, ...headless],
 		},
 		{
 			...base,
 			label: "rules-sync",
 			files: rulesSyncFiles,
 			workspaceFolder: rulesSyncWorkspace,
-			launchArgs: [rulesSyncSampleFile, softwareRendering],
+			launchArgs: [rulesSyncSampleFile, softwareRendering, ...headless],
 			env: {
 				CWTOOLS_TEST_HOI4_REPO: hoi4RulesFixture,
 				CWTOOLS_TEST_HOI4_REF: "3f03757a6f15565f763434e5752021c3ba8c0c3e",
@@ -139,7 +148,7 @@ export default defineConfig({
 			label: "host",
 			files: hostFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile, softwareRendering, "--log=debug"],
+			launchArgs: [sampleFile, softwareRendering, "--log=debug", ...headless],
 		},
 	],
 	coverage: {

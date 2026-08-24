@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from coverage_metrics import validate_host_coverage_summary
+from hosttest import resolve_display, test_cli_command
 from paths import REPO_ROOT
 
 HOST_COVERAGE_TIMEOUT_MS = 5 * 60 * 1000
@@ -87,6 +88,7 @@ def run_with_timeout(
     timeout_ms: int,
     grace_ms: int,
     stdio: str = "inherit",
+    env: dict[str, str] | None = None,
 ) -> None:
     stdout = None if stdio == "inherit" else subprocess.DEVNULL
     proc = subprocess.Popen(
@@ -94,6 +96,7 @@ def run_with_timeout(
         cwd=cwd,
         stdout=stdout,
         stderr=stdout,
+        env=env,
     )
     if proc.pid is None:
         raise RuntimeError(f"{name} failed to start")
@@ -124,13 +127,6 @@ def _run(name: str, command: str, args: list[str]) -> None:
         raise RuntimeError(f"{name} failed with exit code {result.returncode}")
 
 
-def _node() -> str:
-    found = shutil.which("node")
-    if found is None:
-        raise RuntimeError("node is not on PATH")
-    return found
-
-
 def _npm() -> str:
     found = shutil.which("npm")
     if found is None:
@@ -148,17 +144,19 @@ def clean_coverage() -> None:
 def main() -> int:
     clean_coverage()
     try:
+        display = resolve_display()
+        if display.note is not None:
+            sys.stderr.write(f"{display.note}\n")
         _run("extension compilation", _npm(), ["run", "compile"])
-        vscode_test = (
-            REPO_ROOT / "node_modules" / "@vscode" / "test-cli" / "out" / "bin.mjs"
-        )
+        command = display.prefix + test_cli_command(["unit"], coverage=True)
         run_with_timeout(
             "extension-host coverage",
-            _node(),
-            [str(vscode_test), "--label", "unit", "--coverage"],
+            command[0],
+            command[1:],
             cwd=str(REPO_ROOT),
             timeout_ms=HOST_COVERAGE_TIMEOUT_MS,
             grace_ms=HOST_COVERAGE_KILL_GRACE_MS,
+            env=display.env(),
         )
         raw = json.loads(SUMMARY_PATH.read_text(encoding="utf-8"))
         validate_host_coverage_summary(raw)

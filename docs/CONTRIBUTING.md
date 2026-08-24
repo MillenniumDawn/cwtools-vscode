@@ -92,6 +92,7 @@ npm run test:smoke     # unit plus activation against the real server
 npm run test:host      # everything, including hover and completion
 npm run test:coverage  # unit label with validated V8 coverage
 npm run test:node:coverage  # vitest coverage into coverage-node/
+npm run test:native    # unit label in a visible window, on purpose
 npm run bench:node     # client hot-path benchmarks
 python3 -m unittest discover -s tests/scripts -p 'test_*.py'
 ```
@@ -102,6 +103,36 @@ helpers, the manifest and nls guards). The rest run in a real extension host
 against the sample mod in `extension/test/workspaces/stellaris/`, picked by label from
 `.vscode-test.mjs`. Helper scripts under `scripts/` (including `scripts/build/`)
 are tested from `tests/scripts/`.
+
+### The extension-host window
+
+Every host label runs through `scripts/build/hosttest.py`, which picks a display
+backend before it hands off to `vscode-test`. The point is that running the
+tests should not throw a VS Code window onto the desktop you are working on.
+
+On Linux the backend is `xvfb-run -a`. If `xvfb-run` is not installed the run
+fails and tells you how to install it; it does not quietly fall back to a
+visible window. macOS and Windows have no equivalent (Electron has no supported
+headless desktop mode, and Xvfb is Linux-only), so they run natively and print a
+notice saying so. Issue #406 tracks closing that gap, most likely with a
+container.
+
+`CWTOOLS_TEST_DISPLAY` overrides the choice:
+
+| value    | effect |
+| -------- | ------ |
+| `xvfb`   | force `xvfb-run -a`, and fail if it is missing |
+| `ozone`  | pass `--ozone-platform=headless` to Electron. No system package, but the flag is an undocumented Chromium detail, so it is opt-in |
+| `native` | a real window, same as `npm run test:native` |
+
+`npm run test:native` is the documented escape hatch for debugging something
+you can only see, and it takes the same arguments as the other commands
+(`npm run test:native -- --label host`). Unrecognized arguments pass straight
+through to `vscode-test`, so `--grep` works everywhere.
+
+CI runs the same commands with no wrapper of its own: the runner resolves xvfb
+on the Linux runners. A green Linux run is not evidence about native Windows or
+macOS behavior, and the host suites are not currently run on either.
 
 The Rust side has its own suite and its own gates:
 

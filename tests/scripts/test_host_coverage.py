@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from load import load_build
 
@@ -76,6 +77,28 @@ class RunWithTimeoutTests(unittest.TestCase):
 class KillProcessTreeTests(unittest.TestCase):
     def test_does_not_throw_for_a_pid_that_is_already_gone(self) -> None:
         host_coverage.kill_process_tree(1_000_000_007, "SIGTERM")
+
+
+class DisplayBackendTests(unittest.TestCase):
+    def test_an_unavailable_backend_fails_before_the_compile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            coverage_dir = Path(tmp) / "coverage"
+            coverage_dir.mkdir()
+            (coverage_dir / "coverage-summary.json").write_text("{}", encoding="utf-8")
+            with mock.patch.object(
+                host_coverage, "COVERAGE_DIR", coverage_dir
+            ), mock.patch.object(
+                host_coverage,
+                "resolve_display",
+                side_effect=RuntimeError("xvfb-run is not on PATH"),
+            ), mock.patch.object(
+                host_coverage, "_run"
+            ) as compile_step, self.assertRaisesRegex(
+                RuntimeError, "xvfb-run is not on PATH"
+            ):
+                host_coverage.main()
+            compile_step.assert_not_called()
+            self.assertFalse(coverage_dir.exists())
 
 
 if __name__ == "__main__":
