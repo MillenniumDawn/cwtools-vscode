@@ -2,6 +2,7 @@
 
 #### Extension
 
+* Coverage comments and job summaries show one suite overview and keep per-file tables in collapsed sections. (#417)
 * Build, package, release, coverage, and rules-pin helpers live under `scripts/build/` as Python. Tests moved to `tests/scripts/`. (#386)
 * CI publishes extension-host coverage next to rust and node. The host runner forces the instrumented Electron process to exit after mocha and kills a leftover process tree if it hangs under xvfb. (#390)
 * PR CI is one workflow. Test, Engine CI, cargo-deny and the diagnostics guards fold into `.github/workflows/ci.yml`, cargo-deny runs in the rust lint job, and the coverage comment reports rust and node together. (#388)
