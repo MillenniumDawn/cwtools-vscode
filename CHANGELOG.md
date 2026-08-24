@@ -11,6 +11,7 @@
 
 #### Engine
 
+* Multi-mod discovery now honors `ignoreDirectories` (`exclude_dir_patterns`) during the walk, so single- and multi-mod workspaces agree on directory ignore semantics. (#412)
 * Driver discovery smoke tests now pin unsorted multi-mod Session/direct parity, empty `include_dirs`, and global lexical order across folders. (#234)
 * LSP: workspace diagnostic publishing injects its 1ms batch throttle, while normal tests skip the elapsed wait and a deterministic scan test covers the publish boundary. (#228)
 * LSP: `validateWorkspace` now has a contention test that it gives up with `{ "busy": true }` when another scan holds the guard past the retry deadline. (#223)

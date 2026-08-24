@@ -293,6 +293,43 @@ fn discover_workspace_files_multi_mod_layers_and_suppresses_replace_path() {
     );
 }
 
+/// `exclude_dir_patterns` (`ignoreDirectories`) must prune an ignored subtree
+/// through the shared driver discovery path on a multi-mod workspace, matching
+/// single-mod semantics (#412).
+#[test]
+fn discover_workspace_files_multi_mod_honours_ignore_dirs() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("workspace");
+    std::fs::create_dir_all(ws.join("mod")).unwrap();
+    std::fs::write(
+        ws.join("mod/alpha.mod"),
+        "name = \"Alpha Mod\"\npath = \"alpha\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(ws.join("alpha/common/temp")).unwrap();
+    std::fs::create_dir_all(ws.join("alpha/common/template")).unwrap();
+    std::fs::write(ws.join("alpha/common/keep.txt"), "x = 1").unwrap();
+    std::fs::write(ws.join("alpha/common/temp/skip.txt"), "x = 1").unwrap();
+    std::fs::write(ws.join("alpha/common/template/keep2.txt"), "x = 1").unwrap();
+    let rs = ruleset_with_folders(&["common"]);
+    let mut cfg = workspace_discovery_config(&ws, Some(&rs));
+    cfg.exclude_dir_patterns.push("temp".to_string());
+    let files = discover_workspace_files(cfg).expect("multi-mod discovery");
+    let logical: Vec<String> = files.iter().map(|f| f.logical_path.clone()).collect();
+    assert!(
+        logical.contains(&"common/keep.txt".to_string()),
+        "keep must survive: {logical:?}"
+    );
+    assert!(
+        logical.contains(&"common/template/keep2.txt".to_string()),
+        "template/ must NOT match the exact 'temp' pattern: {logical:?}"
+    );
+    assert!(
+        !logical.iter().any(|p| p.ends_with("temp/skip.txt")),
+        "temp/ must be skipped by ignore dirs in multi-mod: {logical:?}"
+    );
+}
+
 #[test]
 fn discover_workspace_files_multi_mod_layers_lower_priority_replace_path_does_not_invalidate_higher_priority_files()
  {

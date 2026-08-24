@@ -592,6 +592,7 @@ impl FileManager {
             None,
             &mods,
             &self.config.include_dirs,
+            &self.config.exclude_dir_patterns,
             self.config.scan_budget,
         )
         .into_iter()
@@ -842,6 +843,7 @@ pub fn discover_files_multi_mod(
     vanilla_root: Option<&Path>,
     mods: &[ResolvedMod],
     include_dirs: &[String],
+    exclude_dir_patterns: &[String],
     budget: ScanBudget,
 ) -> Vec<(PathBuf, String)> {
     // Collect (logical_path, absolute_path, source_priority) triples.
@@ -873,7 +875,14 @@ pub fn discover_files_multi_mod(
             if !dir.is_dir() {
                 continue;
             }
-            collect_files_recursive(&dir, &root_prefix, *priority, &mut best, &mut remaining);
+            collect_files_recursive(
+                &dir,
+                &root_prefix,
+                *priority,
+                exclude_dir_patterns,
+                &mut best,
+                &mut remaining,
+            );
         }
     }
 
@@ -917,6 +926,7 @@ fn collect_files_recursive(
     dir: &Path,
     root_prefix: &str,
     priority: usize,
+    exclude_dir_patterns: &[String],
     out: &mut std::collections::HashMap<String, (PathBuf, usize)>,
     remaining_files: &mut usize,
 ) {
@@ -936,12 +946,30 @@ fn collect_files_recursive(
         }
         if ft.is_dir() {
             // Skip VCS/build/editor dirs, same as the single-root walk, so a
-            // mod's nested `.git`/`target`/… never contributes files.
+            // mod's nested `.git`/`target`/… never contributes files, and honor
+            // the configured directory globs (`ignoreDirectories`) exactly as
+            // `walk_dir_generic` does so single- and multi-mod discovery agree.
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if is_excluded_dir(name) {
+            let dir_relative = if has_path_pattern(exclude_dir_patterns) {
+                compute_logical_path_with_root(&path, root_prefix)
+            } else {
+                String::new()
+            };
+            let skip = is_excluded_dir(name)
+                || exclude_dir_patterns
+                    .iter()
+                    .any(|pat| ignore_glob_match(pat, name, &dir_relative));
+            if skip {
                 continue;
             }
-            collect_files_recursive(&path, root_prefix, priority, out, remaining_files);
+            collect_files_recursive(
+                &path,
+                root_prefix,
+                priority,
+                exclude_dir_patterns,
+                out,
+                remaining_files,
+            );
         } else {
             *remaining_files -= 1;
             let logical = compute_logical_path_with_root(&path, root_prefix);
@@ -1732,6 +1760,59 @@ mod tests {
         );
     }
 
+    /// `exclude_dir_patterns` (`ignoreDirectories`) must prune an ignored
+    /// subtree in a multi-mod workspace just as it does for single-mod
+    /// discovery, so the two paths agree on directory ignore semantics (#412).
+    #[test]
+    fn exclude_dir_patterns_skips_matching_dirs_multi_mod() {
+        use std::fs;
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws = tmp.path();
+
+        // A multi-mod workspace: `mod/` descriptor resolving to `alpha/`.
+        fs::create_dir_all(ws.join("mod")).unwrap();
+        fs::write(
+            ws.join("mod/alpha.mod"),
+            "name = \"Alpha Mod\"\npath = \"alpha\"\n",
+        )
+        .unwrap();
+        //   alpha/common/keep.txt          (include)
+        //   alpha/common/temp/skip.txt     (skip: dir matches "temp")
+        //   alpha/common/template/keep2.txt (include: dir does NOT match "temp")
+        fs::create_dir_all(ws.join("alpha/common/temp")).unwrap();
+        fs::create_dir_all(ws.join("alpha/common/template")).unwrap();
+        fs::write(ws.join("alpha/common/keep.txt"), "x = 1").unwrap();
+        fs::write(ws.join("alpha/common/temp/skip.txt"), "x = 1").unwrap();
+        fs::write(ws.join("alpha/common/template/keep2.txt"), "x = 1").unwrap();
+
+        let fm = FileManager::new(FileManagerConfig {
+            root: ws.to_path_buf(),
+            include_dirs: vec!["common".into()],
+            exclude_dir_patterns: vec!["temp".into()],
+            ..Default::default()
+        });
+        let names: Vec<String> = fm
+            .discover_files_multi_mod()
+            .into_iter()
+            .map(|f| f.logical_path)
+            .collect();
+
+        assert!(
+            names.iter().any(|n| n.ends_with("common/keep.txt")),
+            "keep must survive: {names:?}"
+        );
+        assert!(
+            names
+                .iter()
+                .any(|n| n.ends_with("common/template/keep2.txt")),
+            "template/ must NOT match the exact 'temp' pattern: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.ends_with("common/temp/skip.txt")),
+            "temp/ must be skipped by exclude_dir_patterns in multi-mod: {names:?}"
+        );
+    }
+
     /// A root-level `resources/` is dev scratch the game never loads, but
     /// `common/resources/` defines the `resource` type (oil, steel, …). The
     /// default excludes must skip the former and keep the latter, on BOTH the
@@ -1969,8 +2050,13 @@ mod tests {
         ];
 
         let include_dirs = vec!["common".to_string(), "events".to_string()];
-        let files =
-            discover_files_multi_mod(Some(&vanilla), &mods, &include_dirs, ScanBudget::default());
+        let files = discover_files_multi_mod(
+            Some(&vanilla),
+            &mods,
+            &include_dirs,
+            &[],
+            ScanBudget::default(),
+        );
 
         // Build logical_path → content map
         let by_logical: HashMap<String, String> = files
@@ -2333,8 +2419,13 @@ mod tests {
             },
             root: root.join("moda"),
         }];
-        let files =
-            discover_files_multi_mod(None, &mods, &["common".to_string()], ScanBudget::default());
+        let files = discover_files_multi_mod(
+            None,
+            &mods,
+            &["common".to_string()],
+            &[],
+            ScanBudget::default(),
+        );
         let names: Vec<String> = files.iter().map(|(_, lp)| lp.clone()).collect();
         assert!(names.iter().any(|n| n.ends_with("real.txt")));
         assert!(
