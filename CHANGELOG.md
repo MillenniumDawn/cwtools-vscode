@@ -5,16 +5,20 @@
 * Build, package, release, coverage, and rules-pin helpers live under `scripts/build/` as Python. Tests moved to `tests/scripts/`. (#386)
 * CI publishes extension-host coverage next to rust and node. The host runner forces the instrumented Electron process to exit after mocha and kills a leftover process tree if it hangs under xvfb. (#390)
 * PR CI is one workflow. Test, Engine CI, cargo-deny and the diagnostics guards fold into `.github/workflows/ci.yml`, cargo-deny runs in the rust lint job, and the coverage comment reports rust and node together. (#388)
+* The vanilla diagnostics guard runs on Windows as well as Linux, catching path and executable-resolution regressions in the cross-platform driver. (#383)
 * Extension-host coverage follows the emitted JavaScript paths again after the repository reorganization. The command removes old artifacts first, rejects empty reports, and names its `unit` label and source scope in the rendered summary. (#402)
 
 #### Engine
 
 * Driver discovery smoke tests now pin unsorted multi-mod Session/direct parity, empty `include_dirs`, and global lexical order across folders. (#234)
+* LSP: workspace diagnostic publishing injects its 1ms batch throttle, while normal tests skip the elapsed wait and a deterministic scan test covers the publish boundary. (#228)
 * LSP: `validateWorkspace` now has a contention test that it gives up with `{ "busy": true }` when another scan holds the guard past the retry deadline. (#223)
 * Localisation key changes now revalidate only other open localisation files whose cached `$ref$` set mentions a changed key. Parsed buffers are reused, while stale, missing, and fatally malformed buffers fall back to full revalidation. (#396)
 * LSP: deleting a watched localisation file now revalidates affected open
   localisation and game files, so stale CW225/CW100 diagnostics return
   immediately. (#398)
+* LSP: localisation cross-file revalidation now respects ignored files and
+  inline `cwtools-ignore` directives. (#395)
 * LSP integration tests now stop their server processes cleanly, so coverage
   includes the real server paths and the Rust coverage gate reflects the suite.
   (#404)

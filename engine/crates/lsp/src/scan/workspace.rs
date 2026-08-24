@@ -52,6 +52,59 @@ const WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET: usize = 2_000;
 #[cfg(test)]
 const WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET: usize = 2;
 
+const WORKSPACE_PUBLISH_BATCH_SIZE: usize = 50;
+
+#[derive(Clone)]
+struct WorkspacePublishThrottle {
+    interval: std::time::Duration,
+    #[cfg(test)]
+    wait_count: Option<Arc<std::sync::atomic::AtomicUsize>>,
+}
+
+impl WorkspacePublishThrottle {
+    const fn new(interval: std::time::Duration) -> Self {
+        Self {
+            interval,
+            #[cfg(test)]
+            wait_count: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_wait_count(
+        interval: std::time::Duration,
+        wait_count: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Self {
+        Self {
+            interval,
+            wait_count: Some(wait_count),
+        }
+    }
+
+    const fn should_wait_after(&self, entry_index: usize) -> bool {
+        entry_index % WORKSPACE_PUBLISH_BATCH_SIZE == WORKSPACE_PUBLISH_BATCH_SIZE - 1
+    }
+
+    async fn wait(&self) {
+        #[cfg(test)]
+        if let Some(wait_count) = &self.wait_count {
+            wait_count.fetch_add(1, Ordering::Relaxed);
+        }
+        if !self.interval.is_zero() {
+            tokio::time::sleep(self.interval).await;
+        }
+    }
+}
+
+const PRODUCTION_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
+    WorkspacePublishThrottle::new(std::time::Duration::from_millis(1));
+#[cfg(not(test))]
+const DEFAULT_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
+    PRODUCTION_WORKSPACE_PUBLISH_THROTTLE;
+#[cfg(test)]
+const DEFAULT_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
+    WorkspacePublishThrottle::new(std::time::Duration::ZERO);
+
 /// Map four lock-step slices in parallel, `chunk` elements at a time, yielding
 /// to the runtime between chunks so a long scan stays cancellable and the
 /// progress bar keeps moving.
@@ -188,7 +241,9 @@ impl Backend {
             return ScanOutcome::Busy;
         }
         let guard = ScanGuard::for_scan(self, quiet);
-        let completed = self.validate_entire_workspace_inner(quiet, progress).await;
+        let completed = self
+            .validate_entire_workspace_inner(quiet, progress, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
+            .await;
         guard.finish().await;
         // Drain any watched events an over-cap batch requeued after losing the
         // CAS to this scan — the loser suppresses its own re-arm so it doesn't
@@ -258,6 +313,7 @@ impl Backend {
         &self,
         quiet: bool,
         progress: Option<&CommandProgress>,
+        publish_throttle: WorkspacePublishThrottle,
     ) -> bool {
         let cancel = cancel_flag_of(progress);
         cwtools_profiling::log_rss("workspace_scan_start");
@@ -1120,10 +1176,10 @@ impl Backend {
                 }
             }
 
-            if i % 50 == 49 {
+            if publish_throttle.should_wait_after(i) {
                 // Throttle the notification stream slightly so a large workspace
                 // does not saturate the client with publishDiagnostics traffic.
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                publish_throttle.wait().await;
                 tokio::task::yield_now().await;
                 // Publishing is serial and async, so unlike the rayon passes it
                 // reports for itself rather than through a sampler.
@@ -1484,6 +1540,52 @@ mod tests {
             client: backend.client.clone(),
             state: backend.state.clone(),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn workspace_scan_applies_injected_publish_throttle_at_batch_boundary() {
+        assert_eq!(
+            DEFAULT_WORKSPACE_PUBLISH_THROTTLE.interval,
+            std::time::Duration::ZERO,
+            "normal unit tests must not wait for the production throttle"
+        );
+        assert_eq!(
+            PRODUCTION_WORKSPACE_PUBLISH_THROTTLE.interval,
+            std::time::Duration::from_millis(1)
+        );
+        assert!(!PRODUCTION_WORKSPACE_PUBLISH_THROTTLE.should_wait_after(48));
+        assert!(PRODUCTION_WORKSPACE_PUBLISH_THROTTLE.should_wait_after(49));
+        assert!(!PRODUCTION_WORKSPACE_PUBLISH_THROTTLE.should_wait_after(50));
+
+        let (backend, _tmp) = setup_error_workspace(WORKSPACE_PUBLISH_BATCH_SIZE + 1);
+        let wait_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let throttle = WorkspacePublishThrottle::with_wait_count(
+            PRODUCTION_WORKSPACE_PUBLISH_THROTTLE.interval,
+            wait_count.clone(),
+        );
+        let progress =
+            CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
+        assert!(
+            backend
+                .validate_entire_workspace_inner(false, Some(&progress), throttle)
+                .await
+        );
+        assert_eq!(
+            backend
+                .state
+                .last_scan_summary
+                .lock()
+                .as_ref()
+                .expect("completed scan must record a summary")
+                .validated_files,
+            WORKSPACE_PUBLISH_BATCH_SIZE + 1,
+            "the scan must validate the deterministic file count"
+        );
+        assert_eq!(
+            wait_count.load(Ordering::Relaxed),
+            1,
+            "a 51-file scan must throttle once after its 50th publish entry"
+        );
     }
 
     fn setup_workspace(gate: Option<Arc<Pass2Gate>>) -> (Backend, tempfile::TempDir) {

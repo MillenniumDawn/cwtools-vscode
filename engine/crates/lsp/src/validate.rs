@@ -18,6 +18,38 @@ use crate::paths::{
 use crate::state::LocDocumentCache;
 use crate::{Backend, LocTextMap};
 
+#[cfg(test)]
+mod loc_sweep_test_hook {
+    use super::Backend;
+    use parking_lot::Mutex;
+    use std::collections::HashMap;
+    use std::sync::{Arc, OnceLock};
+
+    type Hook = Box<dyn FnOnce(&Backend, &str) + Send>;
+    static HOOKS: OnceLock<Mutex<HashMap<usize, Hook>>> = OnceLock::new();
+
+    fn key(backend: &Backend) -> usize {
+        Arc::as_ptr(&backend.state) as usize
+    }
+
+    pub(super) fn set(backend: &Backend, hook: Hook) {
+        HOOKS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .insert(key(backend), hook);
+    }
+
+    pub(super) fn run(backend: &Backend, uri: &str) {
+        let hook = HOOKS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .remove(&key(backend));
+        if let Some(hook) = hook {
+            hook(backend, uri);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn make_prepared<'a>(
     ruleset: &'a cwtools_rules::rules_types::RuleSet,
@@ -1521,7 +1553,7 @@ impl Backend {
         additional_loc_keys: &HashSet<String>,
         extra: &HashSet<String>,
     ) {
-        let targets: Vec<OpenLocTarget> = {
+        let mut targets: Vec<OpenLocTarget> = {
             let docs = self.state.documents.lock();
             docs.iter()
                 .filter(|(uri, _)| uri.as_str() != except_uri && crate::paths::is_loc_file(uri))
@@ -1543,6 +1575,9 @@ impl Backend {
                 })
                 .collect()
         };
+        // Match the regular validation path: ignored documents must not be
+        // reintroduced into the Problems panel by a cross-file refresh.
+        targets.retain(|target| !self.is_ignored_uri(&target.uri));
         let encoding = self.state.config.read().position_encoding.clone();
         for target in targets {
             let path = uri_to_path_str(&target.uri);
@@ -1577,8 +1612,13 @@ impl Backend {
                 }
             };
             let lines = DocLines::new(&target.text, encoding.clone());
-            let diagnostics =
+            let inline_ignored =
+                cwtools_validation::inline_ignore::extract_inline_ignored_codes(&target.text);
+            let mut diagnostics =
                 self.validate_loc_parsed(&path, &cache.files, &lines, additional_loc_keys, extra);
+            drop_inline_suppressed(&mut diagnostics, &inline_ignored);
+            #[cfg(test)]
+            loc_sweep_test_hook::run(self, &target.uri);
             let still_current = self
                 .state
                 .documents
@@ -3220,6 +3260,7 @@ mod ignored_tests {
     use crate::state::DocumentState;
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
+    use futures_util::stream::StreamExt;
     use parking_lot::Mutex;
     use tower_lsp::{LanguageServer, LspService};
 
@@ -3255,6 +3296,22 @@ mod ignored_tests {
         Backend { client, state }
     }
 
+    fn backend_with_socket() -> (Backend, tower_lsp::ClientSocket) {
+        let state = Arc::new(DocumentState::new());
+        let captured = Arc::new(Mutex::new(None));
+        let slot = captured.clone();
+        let st = state.clone();
+        let (_svc, socket) = LspService::new(move |client| {
+            *slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: st.clone(),
+            }
+        });
+        let client = captured.lock().take().expect("client");
+        (Backend { client, state }, socket)
+    }
+
     fn backend_with_ignore_and_dirs(
         file_patterns: Vec<String>,
         dir_patterns: Vec<String>,
@@ -3266,6 +3323,69 @@ mod ignored_tests {
             cfg.ignore_dir_patterns = dir_patterns;
         }
         backend
+    }
+
+    #[tokio::test]
+    async fn revalidate_other_open_loc_files_drops_stale_snapshot() {
+        let (backend, mut socket) = backend_with_socket();
+        let uri = if cfg!(windows) {
+            "file:///C:/ws/localisation/target_l_english.yml".to_string()
+        } else {
+            "file:///ws/localisation/target_l_english.yml".to_string()
+        };
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from("l_english:\n KEY:0 \"$changed_key$\"\n"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let changed_uri = uri.clone();
+        super::loc_sweep_test_hook::set(
+            &backend,
+            Box::new(move |backend, _| {
+                backend
+                    .state
+                    .documents
+                    .lock()
+                    .change(&changed_uri, 2, Arc::from("l_english:\n KEY:0 changed\n"))
+                    .expect("target remains open");
+            }),
+        );
+
+        backend
+            .revalidate_other_open_loc_files(
+                "",
+                &HashSet::from(["changed_key".to_string()]),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .await;
+
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .map(|document| document.version),
+            Some(2)
+        );
+        let published =
+            tokio::time::timeout(std::time::Duration::from_millis(50), socket.next()).await;
+        assert!(
+            published.is_err(),
+            "stale diagnostics must not publish after the target changes"
+        );
     }
 
     #[test]
