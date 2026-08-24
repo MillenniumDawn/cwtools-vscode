@@ -132,8 +132,7 @@ class RenderCoverageSectionTests(unittest.TestCase):
 
         self.assertEqual(
             section.overview,
-            "| **Extension-host client** | 🔴 10.0 | 🔴 10.0 "
-            "| 🟢 100.0 | 🟢 100.0 |",
+            "| **Extension-host client** | 🔴 10.0 | 🔴 10.0 | 🟢 100.0 | 🟢 100.0 |",
         )
 
     def test_renders_one_overview_with_collapsed_file_sections(self) -> None:
