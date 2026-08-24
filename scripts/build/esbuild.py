@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import shutil
 import subprocess
 import sys
@@ -26,11 +27,12 @@ def esbuild_bin() -> Path:
 
 
 def extension_args(*, watch: bool) -> list[str]:
+    outfile = EXTENSION_DIST_ROOT / "bin" / "client" / "extension" / "extension.js"
     args = [
         str(esbuild_bin()),
         str(EXTENSION_HOST_ROOT / "extension.ts"),
         "--bundle",
-        f"--outfile={EXTENSION_DIST_ROOT / 'bin' / 'client' / 'extension' / 'extension.js'}",
+        f"--outfile={outfile}",
         "--platform=node",
         "--format=cjs",
         "--target=node18",
@@ -105,18 +107,20 @@ def main(argv: list[str] | None = None) -> int:
             _run(command)
         return 0
 
-    procs = [subprocess.Popen(command, cwd=REPO_ROOT) for command in commands]
-    print("[esbuild] watching extension + webview...")
-    try:
-        status = wait_for_watcher_exit(procs)
-    except KeyboardInterrupt:
-        status = 130
-    finally:
-        for proc in procs:
-            if proc.poll() is None:
-                proc.terminate()
-        for proc in procs:
-            proc.wait()
+    with contextlib.ExitStack() as stack:
+        procs = [
+            stack.enter_context(subprocess.Popen(command, cwd=REPO_ROOT))
+            for command in commands
+        ]
+        print("[esbuild] watching extension + webview...")
+        try:
+            status = wait_for_watcher_exit(procs)
+        except KeyboardInterrupt:
+            status = 130
+        finally:
+            for proc in procs:
+                if proc.poll() is None:
+                    proc.terminate()
     return status
 
 

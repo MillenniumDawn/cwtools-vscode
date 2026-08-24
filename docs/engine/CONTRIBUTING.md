@@ -16,16 +16,18 @@ can't fix. Commands mirror CI so local failures match it.
 - TypeScript (`extension/`): `eslint --fix` applies autofixes on
   commit (the same rules as `npm run lint`, `eslint .`).
 - Python (`scripts/`, `tests/scripts/`): `ruff check --fix` and `black` reformat/fix on commit;
-  `mypy` gates every commit; `pytest` gates every push.
+  `pylint` and `mypy` gate every commit; `pytest` gates every push. All five
+  read `pyproject.toml`.
 
 One-time setup:
 
 ```sh
 pipx install pre-commit          # or: pip install --user pre-commit
 pre-commit install --hook-type pre-commit --hook-type pre-push
-# The Python linters must be on PATH (the Rust and TypeScript ones come from
-# the repo's own toolchains):
-pipx install ruff black          # pip install --user mypy pytest
+# The Python checks must be on PATH, in one environment so mypy can see
+# pytest's types (the Rust and TypeScript ones come from the repo's own
+# toolchains):
+python3 -m pip install -r requirements-dev.txt
 npm install                      # provides eslint via node_modules/.bin
 ```
 

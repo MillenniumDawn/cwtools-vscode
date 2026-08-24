@@ -22,7 +22,8 @@ def main() -> int:
     if not syntaxes.is_dir():
         print(f"error: '{syntaxes}' not found.", file=sys.stderr)
         print(
-            "       Clone the upstream repo next to this one, or set PARADOX_SYNTAX_SRC.",
+            "       Clone the upstream repo next to this one, or set "
+            "PARADOX_SYNTAX_SRC.",
             file=sys.stderr,
         )
         return 1

@@ -115,7 +115,8 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
             if names != {platform}:
                 carried = " ".join(sorted(names))
                 gh_error(
-                    f"{vsix.name}: targets {target} but carries [{carried}] instead of just {platform}"
+                    f"{vsix.name}: targets {target} but carries [{carried}] "
+                    f"instead of just {platform}"
                 )
                 raise SystemExit(1)
             print(f"  {target}: {platform} only, OK")
