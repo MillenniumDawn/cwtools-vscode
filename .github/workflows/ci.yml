@@ -58,11 +58,14 @@ jobs:
         run: mypy scripts tests/scripts
       - name: Node unit tests
         run: npm run test:node
+      # No xvfb-run prefix here or in the build job: scripts/build/hosttest.py
+      # picks the virtual display itself, so CI and a developer machine run the
+      # host suites the same way (#406).
       # Step-scoped so a hung extension host fails here in minutes instead of
       # burning the job's whole 20m budget with no mocha output to show for it.
       - name: Unit tests
         timeout-minutes: 5
-        run: xvfb-run -a npm test
+        run: npm test
 
   # Catches a vulnerable dependency before merge, not as an alert after. Reads
   # every manifest in the diff, so this one job covers package-lock.json and
@@ -116,13 +119,13 @@ jobs:
       # live-settings suite in its own workspace (see .vscode-test.mjs).
       - name: Host smoke tests
         timeout-minutes: 10
-        run: xvfb-run -a npm run test:smoke
+        run: npm run test:smoke
       # The `host` label adds hover and completion, which need rule data: the
       # sample workspace detects as `stellaris` (see .vscode-test.mjs) and the
       # extension fetches its pinned rules over git in the background.
       - name: Host tests (hover/completion)
         timeout-minutes: 10
-        run: xvfb-run -a npm run test:host
+        run: npm run test:host
       # Packages what was just built, server included, so the PR artifact is
       # an installable extension rather than a client-only shell.
       - name: Test build
@@ -134,7 +137,7 @@ jobs:
       - name: Host coverage
         if: always()
         timeout-minutes: 8
-        run: xvfb-run -a npm run test:coverage
+        run: npm run test:coverage
       - name: Upload host coverage
         if: always()
         # v7.0.1

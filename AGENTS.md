@@ -73,7 +73,9 @@ Run as `npm run build -- <command>` or `./build.sh <command>`:
 
 Two test layers. `npm run test:node` runs the fast node-only unit tests under `extension/test/unit/`. The rest run in a real extension host against `extension/test/workspaces/stellaris`, picked by label from `.vscode-test.mjs`: `npm test` runs the `unit` label, `npm run test:smoke` adds activation against the real server, and `npm run test:host` adds hover and completion. CI gates on all four.
 
-Single test: `npx --no-install vitest run extension/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `npx --no-install vscode-test --label unit --grep 'name'`. Watch modes: `npm run test:watch` and `npm run test:node:watch`.
+Every host label goes through `scripts/build/hosttest.py`, which picks a display backend so a local run does not open a VS Code window on your desktop. On Linux that is `xvfb-run -a`, and a missing `xvfb-run` fails with install instructions rather than falling back to a visible window. macOS and Windows have no such backend yet, so they run natively and print a notice (#406). `CWTOOLS_TEST_DISPLAY` overrides the choice with `xvfb`, `ozone` (Electron's headless Ozone backend, no system package), or `native`. `npm run test:native` is the explicit visible-window runner for platform debugging.
+
+Single test: `npx --no-install vitest run extension/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `node scripts/build/python.mjs scripts/build/hosttest.py --label unit --grep 'name'` (unrecognized arguments pass through to `vscode-test`). Watch modes: `npm run test:watch` and `npm run test:node:watch`.
 
 Coverage: `npm run test:coverage` (unit label, V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). The two runs cover disjoint modules (engine.ts and executable.ts are vitest-owned), and `scripts/build/coverage_summary.py` renders rust, host, and node into the PR comment.
 
@@ -113,6 +115,7 @@ Three things to know about them:
 - `scripts/build/build.py`: build/package/release orchestrator
 - `scripts/build/esbuild.py`: esbuild bundler driver for the client (extension + webview)
 - `.vscode-test.mjs`: host test runner config (labeled: unit/smoke/host)
+- `scripts/build/hosttest.py`: display-backend picker in front of `vscode-test`
 - `vitest.config.ts`: node-only unit test config
 - `engine/Cargo.toml`: the Rust workspace manifest; all crates inherit its version
 - `scripts/guard.py`: the diagnostics regression gate
