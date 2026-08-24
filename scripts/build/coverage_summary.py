@@ -33,16 +33,22 @@ class CoverageSource:
     required_metrics: tuple[str, ...] = COVERAGE_METRICS
 
 
+@dataclass(frozen=True)
+class RenderedCoverageSection:
+    overview: str
+    details: tuple[str, ...]
+
+
 SOURCES: tuple[CoverageSource, ...] = (
     CoverageSource(
-        title="rust engine",
+        title="Rust engine",
         path="engine/target/coverage/coverage-summary.json",
         html_artifact="rust-coverage",
         max_files=20,
         required_metrics=("lines", "statements", "functions"),
     ),
     CoverageSource(
-        title="extension-host client",
+        title="Extension-host client",
         path="coverage/coverage-summary.json",
         html_artifact="coverage-html",
         drop=HOST_COVERAGE_DROPS,
@@ -51,7 +57,7 @@ SOURCES: tuple[CoverageSource, ...] = (
         scope_note="Modules measured only by Vitest are excluded.",
     ),
     CoverageSource(
-        title="node unit",
+        title="Node unit",
         path="coverage-node/coverage-summary.json",
         html_artifact="coverage-node",
     ),
@@ -120,10 +126,12 @@ def is_source_file(key: str, drop: Sequence[str], scopes: Sequence[str]) -> bool
 
 def listed_files(files: Sequence[str], max_files: int | None) -> tuple[list[str], str]:
     if max_files is None or len(files) <= max_files:
-        return list(files), ""
+        noun = "file" if len(files) == 1 else "files"
+        return list(files), f"{len(files)} {noun}"
+    noun = "file" if max_files == 1 else "files"
     return (
         list(files[:max_files]),
-        f" Showing the {max_files} worst-covered files of {len(files)}.",
+        f"{max_files} worst-covered {noun} of {len(files)}",
     )
 
 
@@ -152,7 +160,7 @@ def render_coverage_section(
     source: CoverageSource,
     data: Mapping[str, FileCoverage],
     cwd: str | None = None,
-) -> list[str]:
+) -> RenderedCoverageSection:
     workdir = os.getcwd() if cwd is None else cwd
     files = sorted(
         (key for key in data if is_source_file(key, source.drop, source.scopes)),
@@ -171,41 +179,38 @@ def render_coverage_section(
         if _count(total[metric], "total") == 0:
             raise RuntimeError(f"{source.title} coverage has a zero {metric} total")
 
-    headline = (
-        f"{light(_pct(total['lines']))} **{num(total['lines'])}% lines** · "
-        f"{num(total['functions'])}% functions · {num(total['branches'])}% branches"
-    )
     details = section_details(source)
-    shown, note = listed_files(files, source.max_files)
+    shown, file_label = listed_files(files, source.max_files)
     lines = [
-        f"## Coverage ({source.title})",
+        "<details>",
+        f"<summary><strong>{source.title} details</strong>: {file_label}</summary>",
         "",
     ]
     if details:
         lines.extend([details, ""])
     lines.extend(
         [
-            headline,
-            "",
             "| File | % Lines | % Stmts | % Branch | % Funcs |",
             "| --- | --- | --- | --- | --- |",
-            row("**All files**", total),
             *(row(_rel(workdir, file), data[file]) for file in shown),
             "",
-            (
-                f"<sub>🟢 ≥80% · 🟡 ≥50% · 🔴 <50%.{note} "
-                f"Full report is in the `{source.html_artifact}` artifact.</sub>"
-            ),
+            f"<sub>Full report is in the `{source.html_artifact}` artifact.</sub>",
             "",
+            "</details>",
         ]
     )
-    return lines
+    return RenderedCoverageSection(
+        overview=row(f"**{source.title}**", total),
+        details=tuple(lines),
+    )
 
 
-def render_section(source: CoverageSource, cwd: str | None = None) -> list[str]:
+def render_section(
+    source: CoverageSource, cwd: str | None = None
+) -> RenderedCoverageSection | None:
     path = Path(source.path)
     if not path.is_file():
-        return []
+        return None
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -215,13 +220,38 @@ def render_section(source: CoverageSource, cwd: str | None = None) -> list[str]:
     return render_coverage_section(source, raw, cwd)
 
 
+def render_coverage_report(sections: Sequence[RenderedCoverageSection]) -> str:
+    if not sections:
+        return ""
+    lines = [
+        "## Coverage",
+        "",
+        "| Suite | % Lines | % Stmts | % Branch | % Funcs |",
+        "| --- | --- | --- | --- | --- |",
+        *(section.overview for section in sections),
+        "",
+        (
+            "<sub>🟢 ≥80% · 🟡 ≥50% · 🔴 <50% · ⚪ unavailable. "
+            "Expand a section for file coverage and the full-report artifact.</sub>"
+        ),
+        "",
+    ]
+    for section in sections:
+        lines.extend(section.details)
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
 def render_coverage_summary(
     selected_sources: Iterable[CoverageSource] | None = None,
 ) -> str:
     sources = SOURCES if selected_sources is None else selected_sources
-    return "\n".join(
-        line for source in sources for line in render_section(source)
-    ).rstrip()
+    sections: list[RenderedCoverageSection] = []
+    for source in sources:
+        section = render_section(source)
+        if section is not None:
+            sections.append(section)
+    return render_coverage_report(sections)
 
 
 def main(argv: list[str] | None = None) -> int:
