@@ -789,6 +789,45 @@ impl TypeIndex {
         out
     }
 
+    /// Every type name under `base_type_name` that indexes a definition in
+    /// `file_uri`, including its subtype-qualified membership names.
+    /// `instances_in_file` deliberately omits those membership entries for
+    /// outline consumers, but reference lookups need them to find uses written
+    /// as `<type.subtype>`.
+    pub fn instance_type_names_in_file<'a>(
+        &'a self,
+        file_uri: &str,
+        base_type_name: &str,
+        name: &str,
+        location: SourceLocation,
+    ) -> Vec<&'a str> {
+        let Some(type_positions) = self.file_positions.get(file_uri) else {
+            return Vec::new();
+        };
+        let mut type_names = Vec::new();
+        for (type_name, positions) in type_positions {
+            if type_name != base_type_name
+                && !type_name
+                    .strip_prefix(base_type_name)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+            {
+                continue;
+            }
+            let Some(entries) = self.map.get(type_name.as_str()) else {
+                continue;
+            };
+            if positions.iter().any(|&pos| {
+                let (_, instance) = &entries[pos];
+                instance.name == name
+                    && instance.location.line == location.line
+                    && instance.location.col == location.col
+            }) {
+                type_names.push(type_name.as_str());
+            }
+        }
+        type_names
+    }
+
     /// Merge per-file results into the index.
     ///
     /// A subtype-qualified key (`"type.subtype"`, recognised by the `.`) is a
@@ -1139,7 +1178,7 @@ mod tests {
             "file://a.txt",
             HashMap::from([
                 ("event".to_string(), vec![inst("a_ev", 1)]),
-                ("tech".to_string(), vec![inst("a_tech", 2)]),
+                ("tech".to_string(), vec![inst("a_tech", 2), inst("a_ev", 1)]),
             ]),
         );
         idx.merge_base_game_with_uris(vec![
@@ -1159,7 +1198,23 @@ mod tests {
             .map(|(ty, i)| (ty, i.name.as_str()))
             .collect();
         got.sort();
-        assert_eq!(got, vec![("event", "a_ev"), ("tech", "a_tech")]);
+        assert_eq!(
+            got,
+            vec![("event", "a_ev"), ("tech", "a_ev"), ("tech", "a_tech")]
+        );
+        let location = SourceLocation {
+            line: 1,
+            col: 0,
+            end: (1, 0),
+        };
+        let mut type_names =
+            idx.instance_type_names_in_file("file://a.txt", "event", "a_ev", location);
+        type_names.sort();
+        assert_eq!(type_names, vec!["event", "event.subt"]);
+        assert_eq!(
+            idx.instance_type_names_in_file("file://a.txt", "tech", "a_ev", location),
+            vec!["tech"]
+        );
 
         assert!(idx.instances_in_file("file://never.txt").is_empty());
     }

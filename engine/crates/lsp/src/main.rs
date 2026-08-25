@@ -14,6 +14,7 @@ use cwtools_validation::position::rules_at_pos;
 mod access;
 mod cache_purge;
 mod code_action;
+mod codelens;
 mod color;
 mod command_progress;
 mod completion;
@@ -205,6 +206,13 @@ impl Backend {
         // for visible editors. Ignore errors from clients that advertised support
         // but reject the request.
         let _ = self.client.semantic_tokens_refresh().await;
+    }
+
+    pub(crate) async fn request_code_lens_refresh(&self) {
+        if !self.state.code_lens_refresh_support.load(Ordering::Relaxed) {
+            return;
+        }
+        let _ = self.client.code_lens_refresh().await;
     }
 
     /// Called when the VS Code extension tells us the user switched to a file.
@@ -955,6 +963,7 @@ impl LanguageServer for Backend {
             )
             .await;
         }
+        self.request_code_lens_refresh().await;
     }
 
     // --- Language features ---
@@ -963,6 +972,17 @@ impl LanguageServer for Backend {
         self.mark_activity();
         canonicalize_url(&mut params.text_document_position_params.text_document.uri);
         self.hover_impl(params).await
+    }
+
+    async fn code_lens(&self, mut params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        self.mark_activity();
+        canonicalize_url(&mut params.text_document.uri);
+        self.code_lens_impl(params).await
+    }
+
+    async fn code_lens_resolve(&self, lens: CodeLens) -> Result<CodeLens> {
+        self.mark_activity();
+        self.code_lens_resolve_impl(lens).await
     }
 
     async fn completion(&self, mut params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1174,6 +1194,7 @@ impl LanguageServer for Backend {
             }
         }
         self.request_semantic_refresh().await;
+        self.request_code_lens_refresh().await;
     }
 
     async fn did_delete_files(&self, mut params: DeleteFilesParams) {
@@ -1182,6 +1203,7 @@ impl LanguageServer for Backend {
             self.invalidate_semantic_tokens(f.uri.as_str());
         }
         self.request_semantic_refresh().await;
+        self.request_code_lens_refresh().await;
     }
 
     async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {

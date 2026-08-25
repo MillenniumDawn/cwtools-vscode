@@ -10,6 +10,7 @@
 * PR CI is one workflow. Test, Engine CI, cargo-deny and the diagnostics guards fold into `.github/workflows/ci.yml`, cargo-deny runs in the rust lint job, and the coverage comment reports rust and node together. (#388)
 * The vanilla diagnostics guard runs on Windows as well as Linux, catching path and executable-resolution regressions in the cross-platform driver. (#383)
 * Extension-host coverage follows the emitted JavaScript paths again after the repository reorganization. The command removes old artifacts first, rejects empty reports, and names its `unit` label and source scope in the rendered summary. (#402)
+* CodeLens displays the number of references above type-instance definitions and opens VS Code's reference view. (#308)
 
 #### Engine
 

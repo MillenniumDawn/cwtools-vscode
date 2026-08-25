@@ -10872,6 +10872,56 @@ fn editor_server(
     (ws, rules_dir, child, reader)
 }
 
+#[test]
+fn test_code_lens_resolves_reference_locations() {
+    let definition = "FOCUS_A = { cost = 1 }\n";
+    let use_site = "FOCUS_B = { prerequisite = FOCUS_A }\n";
+    let definition_rel = "game/common/national_focus/definition.txt";
+    let (ws, _rules, mut child, mut reader) = editor_server(&[
+        (definition_rel, definition),
+        ("game/common/national_focus/use.txt", use_site),
+    ]);
+    let uri = path_uri(ws.path().join(definition_rel));
+
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "textDocument/codeLens",
+            serde_json::json!({ "textDocument": { "uri": uri } }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response(&mut reader).expect("no codeLens response");
+    let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let lens = response["result"]
+        .as_array()
+        .and_then(|lenses| {
+            lenses
+                .iter()
+                .find(|lens| lens["data"]["instanceName"] == "FOCUS_A")
+        })
+        .expect("FOCUS_A code lens")
+        .clone();
+
+    write_frame(&mut child, &jsonrpc_request(3, "codeLens/resolve", lens)).unwrap();
+    let raw = read_response(&mut reader).expect("no codeLens resolve response");
+    stop_server(&mut child);
+    let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(response["result"]["command"]["title"], "1 reference");
+    assert_eq!(
+        response["result"]["command"]["command"],
+        "cwtools.showReferences"
+    );
+    assert_eq!(response["result"]["command"]["arguments"][0], uri);
+    assert_eq!(
+        response["result"]["command"]["arguments"][2]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+}
+
 /// Drain frames until the `publishDiagnostics` for `rel_path` arrives, returning
 /// the whole diagnostics array (the code-action tests need the payloads, not
 /// just the readiness signal `wait_for_diagnostics` gives).
@@ -11273,6 +11323,7 @@ fn test_initialize_advertises_the_new_capabilities() {
         "declaration"
     );
     assert_eq!(caps["colorProvider"], true);
+    assert_eq!(caps["codeLensProvider"]["resolveProvider"], true);
     let kinds = caps["codeActionProvider"]["codeActionKinds"]
         .as_array()
         .expect("code action kinds");

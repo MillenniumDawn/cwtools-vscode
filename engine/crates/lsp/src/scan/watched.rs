@@ -328,6 +328,7 @@ impl Backend {
             // upgrades for visible files; refresh client tokens.
             self.invalidate_all_semantic_tokens();
             self.request_semantic_refresh().await;
+            self.request_code_lens_refresh().await;
         }
         // Clear our slot before the final check so a producer that queued an
         // event while we ran can arm the next window (or we do it here). Setting
