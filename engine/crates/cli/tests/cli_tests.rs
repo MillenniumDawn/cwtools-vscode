@@ -1,6 +1,6 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -235,14 +235,17 @@ fn test_discover_multi_mod_workspace_uses_the_layered_file_set() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
     }
-    let winner = root.join("mods/b/common/shared.txt");
+    let winner_suffix = Path::new("mods")
+        .join("b")
+        .join("common")
+        .join("shared.txt");
 
     cwtools()
         .args(["discover", root.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("Discovered and parsed 2 files"))
-        .stdout(predicate::str::contains(winner.to_str().unwrap()));
+        .stdout(predicate::str::contains(winner_suffix.to_str().unwrap()));
 }
 
 // ── Rules ────────────────────────────────────────────────────────────────────
