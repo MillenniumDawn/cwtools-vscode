@@ -85,7 +85,12 @@ impl Backend {
                     }
                     let type_names: Vec<String> = info
                         .type_index
-                        .instance_type_names_in_file(data.uri, &instance.name, instance.location)
+                        .instance_type_names_in_file(
+                            data.uri,
+                            data.type_name,
+                            &instance.name,
+                            instance.location,
+                        )
                         .into_iter()
                         .map(str::to_string)
                         .collect();
