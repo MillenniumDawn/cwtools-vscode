@@ -87,6 +87,7 @@ const hostFiles = [
 	"./dist/extension/bin/client/test/host/extension.test.js",
 	"./dist/extension/bin/client/test/host/hover.test.js",
 	"./dist/extension/bin/client/test/host/completion.test.js",
+	"./dist/extension/bin/client/test/host/codeLens.test.js",
 ];
 
 // CI already renders the graph webview in software (#210's logs show the GPU

@@ -584,6 +584,17 @@ impl Backend {
             .semantic_tokens_refresh_support
             .store(semantic_tokens_refresh, Ordering::Relaxed);
 
+        let code_lens_refresh = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.code_lens.as_ref())
+            .and_then(|c| c.refresh_support)
+            .unwrap_or(false);
+        self.state
+            .code_lens_refresh_support
+            .store(code_lens_refresh, Ordering::Relaxed);
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 position_encoding,
@@ -618,6 +629,9 @@ impl Backend {
                 }),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(true),
+                }),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "getFileTypes".to_string(),

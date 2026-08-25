@@ -48,11 +48,79 @@ export function publishCommandAvailability(client: LanguageClient): void {
 	);
 }
 
+function protocolRecord(value: unknown): Record<string, unknown> | undefined {
+	return value !== null && typeof value === "object"
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function protocolPosition(value: unknown): vscode.Position | undefined {
+	const position = protocolRecord(value);
+	const line = position?.line;
+	const character = position?.character;
+	if (
+		typeof line !== "number" ||
+		typeof character !== "number" ||
+		!Number.isSafeInteger(line) ||
+		!Number.isSafeInteger(character) ||
+		line < 0 ||
+		character < 0
+	) {
+		return undefined;
+	}
+	return new vscode.Position(line, character);
+}
+
+function protocolLocation(value: unknown): vscode.Location | undefined {
+	const location = protocolRecord(value);
+	const uri = location?.uri;
+	const range = protocolRecord(location?.range);
+	if (typeof uri !== "string" || range === undefined) {
+		return undefined;
+	}
+	const start = protocolPosition(range.start);
+	const end = protocolPosition(range.end);
+	if (start === undefined || end === undefined) {
+		return undefined;
+	}
+	return new vscode.Location(
+		vscode.Uri.parse(uri),
+		new vscode.Range(start, end),
+	);
+}
+
+async function showReferences(
+	uriValue: unknown,
+	positionValue: unknown,
+	locationsValue: unknown,
+): Promise<void> {
+	if (typeof uriValue !== "string" || !Array.isArray(locationsValue)) {
+		return;
+	}
+	const position = protocolPosition(positionValue);
+	const locations = locationsValue.map(protocolLocation);
+	if (
+		position === undefined ||
+		locations.some((location) => location === undefined)
+	) {
+		return;
+	}
+	await commands.executeCommand(
+		"editor.action.showReferences",
+		vscode.Uri.parse(uriValue),
+		position,
+		locations,
+	);
+}
+
 export function registerCommands(
 	context: ExtensionContext,
 	client: LanguageClient,
 	tracker: EditorTracker,
 ): void {
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.showReferences", showReferences),
+	);
 	let currentGraphDepth = 3;
 	const wheelSensitivity = (): number =>
 		workspace.getConfiguration("cwtools.graph").get("zoomSensitivity") ?? 1;

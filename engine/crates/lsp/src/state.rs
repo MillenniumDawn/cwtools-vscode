@@ -433,6 +433,8 @@ pub(crate) struct DocumentState {
     /// A refresh is a server-to-client request, so a client that lacks this
     /// capability may never answer and would hold the workspace scan open.
     pub(crate) semantic_tokens_refresh_support: std::sync::atomic::AtomicBool,
+    /// Whether the client advertised `workspace.codeLens.refreshSupport`.
+    pub(crate) code_lens_refresh_support: std::sync::atomic::AtomicBool,
     /// Whether the scan's `$/progress` token is currently live, so the phase
     /// updates pair one `begin` with one `end` on a token that exists.
     pub(crate) scan_progress_active: std::sync::atomic::AtomicBool,
@@ -1041,6 +1043,7 @@ impl DocumentState {
             completion_label_details: std::sync::atomic::AtomicBool::new(false),
             client_work_done_progress: std::sync::atomic::AtomicBool::new(false),
             semantic_tokens_refresh_support: std::sync::atomic::AtomicBool::new(false),
+            code_lens_refresh_support: std::sync::atomic::AtomicBool::new(false),
             scan_progress_active: std::sync::atomic::AtomicBool::new(false),
             command_cancels: parking_lot::Mutex::new(HashMap::new()),
             loading_bar_active: std::sync::atomic::AtomicBool::new(false),

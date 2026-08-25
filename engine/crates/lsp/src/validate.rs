@@ -1149,6 +1149,7 @@ impl Backend {
         let (diagnostics, parsed) = self
             .parse_and_validate(&uri, &text, trigger, Some(expected_version))
             .await;
+        let code_lenses_changed = parsed.is_some();
         {
             let ast = parsed.map(Arc::new);
             // Update tokens before taking documents lock (doc_tokens must be
@@ -1233,6 +1234,9 @@ impl Backend {
                 .await;
         } else {
             tracing::debug!(uri = %uri, "exports unchanged; skipping dependent sweep");
+        }
+        if code_lenses_changed {
+            self.request_code_lens_refresh().await;
         }
     }
 

@@ -789,6 +789,36 @@ impl TypeIndex {
         out
     }
 
+    /// Every type name that indexes a definition in `file_uri`, including its
+    /// subtype-qualified membership names. `instances_in_file` deliberately
+    /// omits those membership entries for outline consumers, but reference
+    /// lookups need them to find uses written as `<type.subtype>`.
+    pub fn instance_type_names_in_file<'a>(
+        &'a self,
+        file_uri: &str,
+        name: &str,
+        location: SourceLocation,
+    ) -> Vec<&'a str> {
+        let Some(type_positions) = self.file_positions.get(file_uri) else {
+            return Vec::new();
+        };
+        let mut type_names = Vec::new();
+        for (type_name, positions) in type_positions {
+            let Some(entries) = self.map.get(type_name.as_str()) else {
+                continue;
+            };
+            if positions.iter().any(|&pos| {
+                let (_, instance) = &entries[pos];
+                instance.name == name
+                    && instance.location.line == location.line
+                    && instance.location.col == location.col
+            }) {
+                type_names.push(type_name.as_str());
+            }
+        }
+        type_names
+    }
+
     /// Merge per-file results into the index.
     ///
     /// A subtype-qualified key (`"type.subtype"`, recognised by the `.`) is a
@@ -1160,6 +1190,14 @@ mod tests {
             .collect();
         got.sort();
         assert_eq!(got, vec![("event", "a_ev"), ("tech", "a_tech")]);
+        let location = SourceLocation {
+            line: 1,
+            col: 0,
+            end: (1, 0),
+        };
+        let mut type_names = idx.instance_type_names_in_file("file://a.txt", "a_ev", location);
+        type_names.sort();
+        assert_eq!(type_names, vec!["event", "event.subt"]);
 
         assert!(idx.instances_in_file("file://never.txt").is_empty());
     }

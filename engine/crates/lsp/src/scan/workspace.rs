@@ -1339,6 +1339,7 @@ impl Backend {
         // and ask the client to re-request visible files (#184).
         self.invalidate_all_semantic_tokens();
         self.request_semantic_refresh().await;
+        self.request_code_lens_refresh().await;
         // The status bar is cleared by the `validate_entire_workspace` wrapper on
         // return, so every exit path (this one and the early returns above) clears
         // it uniformly.
