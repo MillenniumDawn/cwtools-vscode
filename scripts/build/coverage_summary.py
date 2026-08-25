@@ -161,7 +161,7 @@ def render_coverage_section(
     data: Mapping[str, FileCoverage],
     cwd: str | None = None,
 ) -> RenderedCoverageSection:
-    workdir = os.getcwd() if cwd is None else cwd
+    workdir = str(Path.cwd()) if cwd is None else cwd
     files = sorted(
         (key for key in data if is_source_file(key, source.drop, source.scopes)),
         key=lambda key: _pct(data[key].get("lines")) or 0,

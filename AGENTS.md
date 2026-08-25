@@ -81,6 +81,12 @@ Coverage: `npm run test:coverage` (unit label, V8 coverage into `coverage/`) and
 
 Host suites must not import extension modules directly: the host runs the esbuild bundle, so a direct import is a second copy of the module. Reach the extension's own modules through its activation API (`graphPanelModule()` in `extension/test/support/utils.ts`).
 
+### The Python helpers
+
+`scripts/` and `tests/scripts/` are their own toolchain: ruff, black, pylint, mypy and pytest, configured in `pyproject.toml` and pinned in `requirements-dev.txt` (`python3 -m pip install -r requirements-dev.txt`, one environment so mypy can see pytest's types). Run `ruff check scripts tests/scripts`, `black --check scripts tests/scripts`, `pylint scripts tests/scripts`, `mypy scripts tests/scripts`, and `pytest` before calling a change to them done. mypy is strict and pylint has to stay at 10.00; the `Python lint & tests` CI job runs that same list.
+
+Tests are pytest-native: plain functions, `pytest.raises`, `tmp_path`, `monkeypatch`, and `@pytest.mark.parametrize` rather than `unittest.TestCase`. `scripts/build/*.py` import each other by bare name, so they are importable directly (`pythonpath` in `pyproject.toml`, `source-roots` for pylint). The standalone entry points in `scripts/` load by path from fixtures in `tests/scripts/conftest.py`, which is what keeps `scripts/coverage.py` from shadowing the `coverage` package.
+
 ## Before you call an engine change done
 
 From `engine/`:
@@ -117,6 +123,8 @@ Three things to know about them:
 - `.vscode-test.mjs`: host test runner config (labeled: unit/smoke/host)
 - `scripts/build/hosttest.py`: display-backend picker in front of `vscode-test`
 - `vitest.config.ts`: node-only unit test config
+- `pyproject.toml`: ruff/black/pylint/mypy/pytest config for `scripts/` and `tests/scripts/`
+- `requirements-dev.txt`: the pinned versions of those five
 - `engine/Cargo.toml`: the Rust workspace manifest; all crates inherit its version
 - `scripts/guard.py`: the diagnostics regression gate
 - Build scripts: `build.cmd` (Windows) / `build.sh` (Unix)

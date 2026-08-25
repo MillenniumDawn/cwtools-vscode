@@ -8,7 +8,7 @@ This repo holds both halves of CWTools. `extension/` contains the TypeScript hos
 
 - Node 26
 - Rust (stable) with cargo, for the server
-- Python 3, for the helpers under `scripts/`
+- Python 3.12 or newer, for the helpers under `scripts/`
 
 ## Getting the source
 
@@ -94,7 +94,7 @@ npm run test:coverage  # unit label with validated V8 coverage
 npm run test:node:coverage  # vitest coverage into coverage-node/
 npm run test:native    # unit label in a visible window, on purpose
 npm run bench:node     # client hot-path benchmarks
-python3 -m unittest discover -s tests/scripts -p 'test_*.py'
+pytest                 # the Python helpers under scripts/
 ```
 
 Two layers. `test:node` runs under vitest with no Electron and owns the pure
@@ -103,6 +103,32 @@ helpers, the manifest and nls guards). The rest run in a real extension host
 against the sample mod in `extension/test/workspaces/stellaris/`, picked by label from
 `.vscode-test.mjs`. Helper scripts under `scripts/` (including `scripts/build/`)
 are tested from `tests/scripts/`.
+
+### The Python helpers
+
+`scripts/` and its tests have their own toolchain: ruff, black, pylint, mypy
+and pytest, all configured in [`pyproject.toml`](../pyproject.toml) and pinned
+in [`requirements-dev.txt`](../requirements-dev.txt). Install them into one
+environment so mypy can see pytest's types:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+ruff check scripts tests/scripts
+black --check scripts tests/scripts
+pylint scripts tests/scripts
+mypy scripts tests/scripts
+pytest
+```
+
+The `Python lint & tests` CI job runs exactly that list, and the pre-commit
+hooks in [`.pre-commit-config.yaml`](../.pre-commit-config.yaml) run it on the
+files you touch. mypy is in strict mode and pylint has to stay at 10.00.
+
+`scripts/build/*.py` import each other by bare name, so pytest puts that
+directory on `sys.path` (`pythonpath` in `pyproject.toml`) and pylint resolves
+it through `source-roots`. The standalone entry points in `scripts/` have no
+sibling imports and load by path from `tests/scripts/conftest.py`, which is
+also what keeps `scripts/coverage.py` from shadowing the `coverage` package.
 
 ### The extension-host window
 

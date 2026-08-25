@@ -107,9 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         watch=args.watch,
         extra=extra,
     )
-    result = subprocess.run(
-        command, cwd=REPO_ROOT, check=False, env=display.env()
-    )
+    result = subprocess.run(command, cwd=REPO_ROOT, check=False, env=display.env())
     return result.returncode
 
 

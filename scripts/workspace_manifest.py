@@ -69,7 +69,8 @@ def main() -> int:
             note(f"{crate}: missing [lints] workspace = true")
         if DEP_LINE.search(text) and not DEP_WORKSPACE.search(text):
             note(
-                f"{crate}: tempfile/assert_cmd/predicates must use {{ workspace = true }}"
+                f"{crate}: tempfile/assert_cmd/predicates must use "
+                "{ workspace = true }"
             )
 
     meta = subprocess.run(

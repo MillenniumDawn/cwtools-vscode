@@ -1,172 +1,202 @@
 from __future__ import annotations
 
-import io
-import os
-import unittest
-from contextlib import redirect_stderr
-from unittest import mock
+import shutil
+import subprocess
+import sys
+from collections.abc import Callable
+from typing import NamedTuple
 
-from load import load_build
+import pytest
 
-hosttest = load_build("hosttest")
-
-
-def without_override() -> mock._patch_dict:
-    return mock.patch.dict(os.environ, {"CWTOOLS_TEST_DISPLAY": ""})
-
-
-class ResolveDisplayTests(unittest.TestCase):
-    def test_linux_uses_xvfb_run(self) -> None:
-        with without_override(), mock.patch.object(
-            hosttest.shutil, "which", return_value="/usr/bin/xvfb-run"
-        ):
-            display = hosttest.resolve_display(platform="linux")
-        self.assertEqual(display.name, "xvfb")
-        self.assertEqual(display.prefix, ["/usr/bin/xvfb-run", "-a"])
-        self.assertIsNone(display.note)
-
-    def test_linux_without_xvfb_run_fails_with_install_instructions(self) -> None:
-        with without_override(), mock.patch.object(
-            hosttest.shutil, "which", return_value=None
-        ), self.assertRaisesRegex(RuntimeError, "sudo apt install xvfb"):
-            hosttest.resolve_display(platform="linux")
-
-    def test_other_platforms_run_native_with_a_notice(self) -> None:
-        with without_override():
-            display = hosttest.resolve_display(platform="darwin")
-        self.assertEqual(display.name, "native")
-        self.assertEqual(display.prefix, [])
-        self.assertIsNotNone(display.note)
-        self.assertIn("darwin", str(display.note))
-
-    def test_native_flag_wins_over_the_linux_backend(self) -> None:
-        with without_override(), mock.patch.object(
-            hosttest.shutil, "which", return_value="/usr/bin/xvfb-run"
-        ):
-            display = hosttest.resolve_display(native=True, platform="linux")
-        self.assertEqual(display.name, "native")
-        self.assertEqual(display.prefix, [])
-        self.assertIsNone(display.note)
-
-    def test_ozone_override_adds_no_prefix(self) -> None:
-        with mock.patch.dict(os.environ, {"CWTOOLS_TEST_DISPLAY": "ozone"}):
-            display = hosttest.resolve_display(platform="win32")
-        self.assertEqual(display.name, "ozone")
-        self.assertEqual(display.prefix, [])
-
-    def test_xvfb_override_applies_off_linux(self) -> None:
-        with mock.patch.dict(
-            os.environ, {"CWTOOLS_TEST_DISPLAY": "xvfb"}
-        ), mock.patch.object(hosttest.shutil, "which", return_value="/bin/xvfb-run"):
-            display = hosttest.resolve_display(platform="darwin")
-        self.assertEqual(display.name, "xvfb")
-
-    def test_an_unknown_backend_is_rejected(self) -> None:
-        with mock.patch.dict(
-            os.environ, {"CWTOOLS_TEST_DISPLAY": "wayland"}
-        ), self.assertRaisesRegex(RuntimeError, "xvfb, ozone, native"):
-            hosttest.resolve_display(platform="linux")
-
-    def test_env_carries_the_resolved_backend(self) -> None:
-        with without_override():
-            display = hosttest.resolve_display(platform="darwin")
-        self.assertEqual(display.env()["CWTOOLS_TEST_DISPLAY"], "native")
-
+import hosttest
+from paths import REPO_ROOT
 
 # The runner only asks whether the CLI entry point exists, so a checked-in file
 # stands in for it and the suite does not need node_modules installed.
-INSTALLED_CLI = hosttest.REPO_ROOT / "package.json"
-MISSING_CLI = hosttest.REPO_ROOT / "node_modules" / "@vscode" / "not-installed.mjs"
+INSTALLED_CLI = REPO_ROOT / "package.json"
+MISSING_CLI = REPO_ROOT / "node_modules" / "@vscode" / "not-installed.mjs"
 
 
-class TestCliCommandTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.node = mock.patch.object(
-            hosttest.shutil, "which", return_value="/usr/bin/node"
-        )
-        self.cli = mock.patch.object(hosttest, "TEST_CLI", INSTALLED_CLI)
-        self.node.start()
-        self.cli.start()
-        self.addCleanup(self.node.stop)
-        self.addCleanup(self.cli.stop)
-
-    def test_repeats_the_label_flag(self) -> None:
-        command = hosttest.test_cli_command(["smoke", "live"])
-        self.assertEqual(command[2:], ["--label", "smoke", "--label", "live"])
-
-    def test_appends_coverage_watch_and_passthrough_arguments(self) -> None:
-        command = hosttest.test_cli_command(
-            ["unit"], coverage=True, watch=True, extra=["--grep", "hover"]
-        )
-        self.assertEqual(
-            command[2:],
-            ["--label", "unit", "--coverage", "-w", "--grep", "hover"],
-        )
-
-    def test_missing_test_cli_names_npm_ci(self) -> None:
-        with mock.patch.object(
-            hosttest, "TEST_CLI", MISSING_CLI
-        ), self.assertRaisesRegex(RuntimeError, "npm ci"):
-            hosttest.test_cli_command(["unit"])
+@pytest.fixture(name="no_override")
+def no_override_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "")
 
 
-def fake_which(name: str) -> str:
-    return f"/usr/bin/{name}"
+def found(path: str) -> Callable[[str], str]:
+    return lambda _name: path
 
 
-class MainTests(unittest.TestCase):
-    def call_main(
-        self, argv: list[str], *, returncode: int = 0, platform: str = "linux"
-    ) -> tuple[int, list[str], str]:
-        completed = mock.Mock(returncode=returncode)
-        stderr = io.StringIO()
-        with without_override(), mock.patch.object(
-            hosttest.shutil, "which", side_effect=fake_which
-        ), mock.patch.object(hosttest, "TEST_CLI", INSTALLED_CLI), mock.patch.object(
-            hosttest.subprocess, "run", return_value=completed
-        ) as run, mock.patch.object(
-            hosttest.sys, "platform", platform
-        ), redirect_stderr(
-            stderr
-        ):
-            status = hosttest.main(argv)
-        return status, list(run.call_args.args[0]), stderr.getvalue()
+@pytest.mark.usefixtures("no_override")
+def test_linux_uses_xvfb_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", found("/usr/bin/xvfb-run"))
 
-    def run_main(self, argv: list[str]) -> list[str]:
-        status, command, _ = self.call_main(argv)
-        self.assertEqual(status, 0)
-        return command
+    display = hosttest.resolve_display(platform="linux")
 
-    def test_defaults_to_the_unit_label_under_the_display_prefix(self) -> None:
-        command = self.run_main([])
-        self.assertEqual(command[:2], ["/usr/bin/xvfb-run", "-a"])
-        self.assertEqual(command[2], "/usr/bin/node")
-        self.assertEqual(command[-2:], ["--label", "unit"])
-
-    def test_passes_unrecognized_arguments_through(self) -> None:
-        command = self.run_main(["--label", "host", "--grep", "completion"])
-        self.assertEqual(command[-4:], ["--label", "host", "--grep", "completion"])
-
-    def test_native_drops_the_display_prefix(self) -> None:
-        command = self.run_main(["--native"])
-        self.assertEqual(command[0], "/usr/bin/node")
-
-    # A runner that swallowed a failing exit code would turn every red CI run
-    # green, so this is the one that matters most.
-    def test_propagates_a_failing_exit_code(self) -> None:
-        status, _, _ = self.call_main([], returncode=3)
-        self.assertEqual(status, 3)
-
-    def test_reports_the_missing_backend_on_other_platforms(self) -> None:
-        status, command, stderr = self.call_main([], platform="darwin")
-        self.assertEqual(status, 0)
-        self.assertEqual(command[0], "/usr/bin/node")
-        self.assertIn("darwin", stderr)
-
-    def test_says_nothing_when_a_backend_was_found(self) -> None:
-        _, _, stderr = self.call_main([])
-        self.assertEqual(stderr, "")
+    assert display.name == "xvfb"
+    assert display.prefix == ["/usr/bin/xvfb-run", "-a"]
+    assert display.note is None
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.usefixtures("no_override")
+def test_linux_without_xvfb_run_fails_with_install_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match="sudo apt install xvfb"):
+        hosttest.resolve_display(platform="linux")
+
+
+@pytest.mark.usefixtures("no_override")
+def test_other_platforms_run_native_with_a_notice() -> None:
+    display = hosttest.resolve_display(platform="darwin")
+
+    assert display.name == "native"
+    assert display.prefix == []
+    assert display.note is not None
+    assert "darwin" in display.note
+
+
+@pytest.mark.usefixtures("no_override")
+def test_native_flag_wins_over_the_linux_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", found("/usr/bin/xvfb-run"))
+
+    display = hosttest.resolve_display(native=True, platform="linux")
+
+    assert display.name == "native"
+    assert display.prefix == []
+    assert display.note is None
+
+
+def test_ozone_override_adds_no_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "ozone")
+
+    display = hosttest.resolve_display(platform="win32")
+
+    assert display.name == "ozone"
+    assert display.prefix == []
+
+
+def test_xvfb_override_applies_off_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "xvfb")
+    monkeypatch.setattr(shutil, "which", found("/bin/xvfb-run"))
+
+    assert hosttest.resolve_display(platform="darwin").name == "xvfb"
+
+
+def test_an_unknown_backend_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "wayland")
+
+    with pytest.raises(RuntimeError, match="xvfb, ozone, native"):
+        hosttest.resolve_display(platform="linux")
+
+
+@pytest.mark.usefixtures("no_override")
+def test_env_carries_the_resolved_backend() -> None:
+    display = hosttest.resolve_display(platform="darwin")
+
+    assert display.env()["CWTOOLS_TEST_DISPLAY"] == "native"
+
+
+@pytest.fixture(name="installed_cli")
+def installed_cli_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(hosttest, "TEST_CLI", INSTALLED_CLI)
+
+
+@pytest.mark.usefixtures("installed_cli")
+def test_repeats_the_label_flag() -> None:
+    command = hosttest.test_cli_command(["smoke", "live"])
+
+    assert command[2:] == ["--label", "smoke", "--label", "live"]
+
+
+@pytest.mark.usefixtures("installed_cli")
+def test_appends_coverage_watch_and_passthrough_arguments() -> None:
+    command = hosttest.test_cli_command(
+        ["unit"], coverage=True, watch=True, extra=["--grep", "hover"]
+    )
+
+    assert command[2:] == ["--label", "unit", "--coverage", "-w", "--grep", "hover"]
+
+
+@pytest.mark.usefixtures("installed_cli")
+def test_missing_test_cli_names_npm_ci(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hosttest, "TEST_CLI", MISSING_CLI)
+
+    with pytest.raises(RuntimeError, match="npm ci"):
+        hosttest.test_cli_command(["unit"])
+
+
+class Run(NamedTuple):
+    status: int
+    command: list[str]
+    stderr: str
+
+
+@pytest.fixture(name="run_main")
+def run_main_fixture(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> Callable[..., Run]:
+    def run(argv: list[str], *, returncode: int = 0, platform: str = "linux") -> Run:
+        commands: list[list[str]] = []
+
+        def fake_run(
+            command: list[str], **_kwargs: object
+        ) -> subprocess.CompletedProcess[bytes]:
+            commands.append(list(command))
+            return subprocess.CompletedProcess(command, returncode)
+
+        monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "")
+        monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(hosttest, "TEST_CLI", INSTALLED_CLI)
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(sys, "platform", platform)
+
+        status = hosttest.main(argv)
+        return Run(status, commands[-1], capsys.readouterr().err)
+
+    return run
+
+
+def test_defaults_to_the_unit_label_under_the_display_prefix(
+    run_main: Callable[..., Run],
+) -> None:
+    result = run_main([])
+
+    assert result.status == 0
+    assert result.command[:2] == ["/usr/bin/xvfb-run", "-a"]
+    assert result.command[2] == "/usr/bin/node"
+    assert result.command[-2:] == ["--label", "unit"]
+
+
+def test_passes_unrecognized_arguments_through(run_main: Callable[..., Run]) -> None:
+    result = run_main(["--label", "host", "--grep", "completion"])
+
+    assert result.command[-4:] == ["--label", "host", "--grep", "completion"]
+
+
+def test_native_drops_the_display_prefix(run_main: Callable[..., Run]) -> None:
+    assert run_main(["--native"]).command[0] == "/usr/bin/node"
+
+
+# A runner that swallowed a failing exit code would turn every red CI run green,
+# so this is the one that matters most.
+def test_propagates_a_failing_exit_code(run_main: Callable[..., Run]) -> None:
+    assert run_main([], returncode=3).status == 3
+
+
+def test_reports_the_missing_backend_on_other_platforms(
+    run_main: Callable[..., Run],
+) -> None:
+    result = run_main([], platform="darwin")
+
+    assert result.status == 0
+    assert result.command[0] == "/usr/bin/node"
+    assert "darwin" in result.stderr
+
+
+def test_says_nothing_when_a_backend_was_found(run_main: Callable[..., Run]) -> None:
+    assert run_main([]).stderr == ""

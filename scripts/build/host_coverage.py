@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -91,34 +92,34 @@ def run_with_timeout(
     env: dict[str, str] | None = None,
 ) -> None:
     stdout = None if stdio == "inherit" else subprocess.DEVNULL
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         [command, *args],
         cwd=cwd,
         stdout=stdout,
         stderr=stdout,
         env=env,
-    )
-    if proc.pid is None:
-        raise RuntimeError(f"{name} failed to start")
-    deadline = time.monotonic() + (timeout_ms / 1000)
-    while proc.poll() is None and time.monotonic() < deadline:
-        time.sleep(0.05)
-    if proc.poll() is None:
-        kill_process_tree(proc.pid, "SIGTERM")
-        grace_deadline = time.monotonic() + (grace_ms / 1000)
-        while proc.poll() is None and time.monotonic() < grace_deadline:
+    ) as proc:
+        if proc.pid is None:
+            raise RuntimeError(f"{name} failed to start")
+        deadline = time.monotonic() + (timeout_ms / 1000)
+        while proc.poll() is None and time.monotonic() < deadline:
             time.sleep(0.05)
         if proc.poll() is None:
-            kill_process_tree(proc.pid, "SIGKILL")
-            proc.wait()
-        raise RuntimeError(f"{name} timed out after {timeout_ms}ms")
-    if proc.returncode == 0:
-        return
-    if proc.returncode is None:
-        raise RuntimeError(f"{name} failed with exit code unknown")
-    if proc.returncode < 0:
-        raise RuntimeError(f"{name} failed with signal {-proc.returncode}")
-    raise RuntimeError(f"{name} failed with exit code {proc.returncode}")
+            kill_process_tree(proc.pid, "SIGTERM")
+            grace_deadline = time.monotonic() + (grace_ms / 1000)
+            while proc.poll() is None and time.monotonic() < grace_deadline:
+                time.sleep(0.05)
+            if proc.poll() is None:
+                kill_process_tree(proc.pid, "SIGKILL")
+                proc.wait()
+            raise RuntimeError(f"{name} timed out after {timeout_ms}ms")
+        if proc.returncode == 0:
+            return
+        if proc.returncode is None:
+            raise RuntimeError(f"{name} failed with exit code unknown")
+        if proc.returncode < 0:
+            raise RuntimeError(f"{name} failed with signal {-proc.returncode}")
+        raise RuntimeError(f"{name} failed with exit code {proc.returncode}")
 
 
 def _run(name: str, command: str, args: list[str]) -> None:
@@ -135,10 +136,8 @@ def _npm() -> str:
 
 
 def clean_coverage() -> None:
-    try:
+    with contextlib.suppress(FileNotFoundError):
         shutil.rmtree(COVERAGE_DIR)
-    except FileNotFoundError:
-        return
 
 
 def main() -> int:

@@ -1,0 +1,80 @@
+# Python tooling for the helpers under scripts/ and their tests in
+# tests/scripts/. This repo ships no Python package; the file is here so ruff,
+# black, pylint, mypy and pytest read one config instead of five.
+#
+# Versions are pinned in requirements-dev.txt. Install them with
+# `python3 -m pip install -r requirements-dev.txt`.
+
+[tool.ruff]
+line-length = 88
+# The floor the helpers actually need, not the version CI runs. Keeps a 3.13+
+# only construct from landing without anyone noticing.
+target-version = "py312"
+src = ["scripts", "scripts/build", "tests/scripts"]
+
+[tool.ruff.lint]
+select = ["ARG", "B", "C4", "E", "F", "I", "PTH", "RUF", "SIM", "UP", "W"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+# black's default exclude list contains "build", which silently skips every
+# file in scripts/build when black is handed a directory. Setting exclude
+# replaces that list rather than adding to it, so name only the directories
+# that really have nothing to format.
+exclude = '''
+/(
+    \.git
+  | \.mypy_cache
+  | \.pytest_cache
+  | \.ruff_cache
+  | node_modules
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "scripts/build,tests/scripts"
+explicit_package_bases = true
+
+[tool.pylint.main]
+py-version = "3.12"
+# scripts/build/*.py import their siblings by bare name, the way both the CLI
+# entry points and pytest's pythonpath resolve them at run time. scripts/ is
+# deliberately absent: listing it would make scripts/build a package and turn
+# every sibling import into an unresolvable name.
+source-roots = ["scripts/build", "tests/scripts"]
+jobs = 0
+
+[tool.pylint."messages control"]
+disable = [
+  # This codebase does not use docstrings; naming carries the intent.
+  "missing-module-docstring",
+  "missing-class-docstring",
+  "missing-function-docstring",
+  # black formats and ruff's E501 enforces the limit. One owner, not two.
+  "line-too-long",
+  # Fires on the identical `if __name__ == "__main__"` epilogue every entry
+  # point carries. Sharing it would mean a helper module to save six lines.
+  "duplicate-code",
+  # pylint is here for correctness smells, not size policing. guard.py's main
+  # and coverage.py's lcov loop are long because the work is, and splitting
+  # them to satisfy a counter would not make either easier to follow.
+  "too-many-arguments",
+  "too-many-branches",
+  "too-many-instance-attributes",
+  "too-many-locals",
+  "too-many-statements",
+  "too-few-public-methods",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/scripts"]
+# scripts/build/*.py import each other by bare name, so the directory has to be
+# importable. scripts/*.py are standalone entry points with no sibling imports
+# and load by path from conftest, which keeps scripts/coverage.py from
+# shadowing the coverage package.
+pythonpath = ["scripts/build"]
+addopts = ["-ra", "--strict-config", "--strict-markers"]

@@ -240,7 +240,8 @@ def compose_current(
 ) -> str:
     rules_label = f"{config.rules.parent.name}/{config.rules.name}"
     lines = [
-        f"# cwtools guard baseline. Regenerate with python3 scripts/guard.py {config.preset} --bless",
+        "# cwtools guard baseline. Regenerate with "
+        f"python3 scripts/guard.py {config.preset} --bless",
         f"# corpus: {config.corpus.name} @ {corpus_rev}",
         f"# rules:  {rules_label} @ {rules_rev}",
     ]
@@ -445,7 +446,8 @@ def run_guard(config: Config) -> int:
         print(f"  full diff:   {drift_path}")
         print(f"  full report: {current_path}")
         print(
-            f"  if the change is intended, re-bless: python3 scripts/guard.py {config.preset} --bless"
+            "  if the change is intended, re-bless: "
+            f"python3 scripts/guard.py {config.preset} --bless"
         )
         return 1
     finally:

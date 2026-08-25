@@ -45,17 +45,8 @@ jobs:
       - uses: ./.github/actions/setup-node-npm
         with:
           cache-vscode: true
-      - name: Install Python checks
-        run: >-
-          python3 -m pip install black==26.5.1 mypy==2.3.0 ruff==0.16.0
       - name: Typecheck and lint
         run: npm run check
-      - name: Ruff
-        run: ruff check scripts tests/scripts
-      - name: Black
-        run: black --check scripts tests/scripts
-      - name: mypy
-        run: mypy scripts tests/scripts
       - name: Node unit tests
         run: npm run test:node
       # No xvfb-run prefix here or in the build job: scripts/build/hosttest.py
@@ -66,6 +57,41 @@ jobs:
       - name: Unit tests
         timeout-minutes: 5
         run: npm test
+
+  # The helpers under scripts/ are their own toolchain, so they get their own
+  # job instead of riding along in the node and Rust ones. Versions come from
+  # requirements-dev.txt and the config for all five is in pyproject.toml, so
+  # this job runs what a contributor's pre-commit hooks already ran.
+  python:
+    if: github.event_name != 'schedule'
+    name: Python lint & tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # v6.3.0. Pinned to the floor pyproject.toml targets rather than the
+      # newest release, so syntax past that floor fails here instead of on a
+      # contributor's older interpreter.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install checks
+        run: python3 -m pip install -r requirements-dev.txt
+      - name: ruff
+        run: ruff check scripts tests/scripts
+      - name: black
+        run: black --check scripts tests/scripts
+      - name: pylint
+        run: pylint scripts tests/scripts
+      - name: mypy
+        run: mypy scripts tests/scripts
+      - name: pytest
+        run: pytest
 
   # Catches a vulnerable dependency before merge, not as an alert after. Reads
   # every manifest in the diff, so this one job covers package-lock.json and
@@ -205,10 +231,6 @@ jobs:
       - name: workspace manifest inheritance
         working-directory: ${{ github.workspace }}
         run: python3 scripts/workspace_manifest.py
-      - name: scripts unit tests
-        if: github.event_name != 'schedule'
-        working-directory: ${{ github.workspace }}
-        run: python3 -m unittest discover -s tests/scripts -p 'test_*.py' -v
 
   # Releases ship Linux, Windows, and macOS binaries, so a platform-only
   # break must fail here before it ships. The tag-triggered release workflow

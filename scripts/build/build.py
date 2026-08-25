@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -88,10 +89,8 @@ def rust_workspace() -> Path:
 
 
 def remove_tree(path: Path) -> None:
-    try:
+    with contextlib.suppress(FileNotFoundError):
         shutil.rmtree(path)
-    except FileNotFoundError:
-        return
 
 
 def copy_dir(src: Path, dest: Path) -> None:
@@ -316,7 +315,8 @@ def publish_to_marketplace(vsixes: list[str]) -> None:
         is_tag_release = os.environ.get("TAG_RELEASE", "").lower() in {"1", "true"}
         if os.environ.get("CI") and not is_tag_release:
             print(
-                "No VSCE_TOKEN set; skipping VS Code Marketplace publish (not a tag release)."
+                "No VSCE_TOKEN set; skipping VS Code Marketplace publish "
+                "(not a tag release)."
             )
             return
         raise RuntimeError("VSCE_TOKEN is not set; cannot publish to the Marketplace.")

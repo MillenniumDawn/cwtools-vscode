@@ -5,14 +5,15 @@
 #   pipx install pre-commit          # or: pip install --user pre-commit
 #   pre-commit install --hook-type pre-commit --hook-type pre-push
 #   # Rust (engine/) and the node tools come from the repo's own toolchains;
-#   # the Python linters need to be on PATH:
-#   pipx install ruff black          # pip install --user mypy pytest
+#   # the Python checks need to be on PATH, in one environment so mypy can
+#   # see pytest's types:
+#   python3 -m pip install -r requirements-dev.txt
 #   npm install                      # provides eslint via node_modules/.bin
 #
 # The fixers (cargo fmt, ruff --fix, black, eslint --fix) rewrite the files
 # you stage and the commit picks up the result; the gates (cargo clippy,
-# mypy) still fail the commit on anything they can't fix. The test suites
-# (cargo test, pytest) gate every push, mirroring CI. Bypass with
+# pylint, mypy) still fail the commit on anything they can't fix. The test
+# suites (cargo test, pytest) gate every push, mirroring CI. Bypass with
 # `git commit --no-verify`.
 
 minimum_pre_commit_version: "3.2.0"
@@ -83,18 +84,29 @@ repos:
         files: ^(scripts|tests/scripts)/.*\.py$
         stages: [pre-commit]
 
+      # Whole-tree, not the staged files: pylint resolves the sibling imports
+      # in scripts/build through pyproject's source-roots, so a partial run
+      # reports imports it cannot see.
+      - id: pylint
+        name: pylint
+        entry: pylint scripts tests/scripts
+        language: system
+        files: ^((scripts|tests/scripts)/.*\.py|pyproject\.toml)$
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: mypy
         name: mypy
         entry: mypy scripts tests/scripts
         language: system
-        files: ^((scripts|tests/scripts)/.*\.py|mypy\.ini)$
+        files: ^((scripts|tests/scripts)/.*\.py|pyproject\.toml)$
         pass_filenames: false
         stages: [pre-commit]
 
       - id: pytest
         name: pytest (scripts)
-        entry: pytest tests/scripts
+        entry: pytest
         language: system
-        files: ^(scripts|tests/scripts)/.*\.py$
+        files: ^((scripts|tests/scripts)/.*\.py|pyproject\.toml)$
         pass_filenames: false
         stages: [pre-push]

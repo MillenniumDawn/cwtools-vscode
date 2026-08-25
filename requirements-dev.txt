@@ -1,0 +1,11 @@
+# Python checks for scripts/ and tests/scripts/. CI, the pre-commit hooks and a
+# local run all install from here so they agree on versions.
+#
+#   python3 -m pip install -r requirements-dev.txt
+#
+# Config for all five lives in pyproject.toml.
+black==26.5.1
+mypy==2.3.0
+pylint==4.0.6
+pytest==9.1.1
+ruff==0.16.0

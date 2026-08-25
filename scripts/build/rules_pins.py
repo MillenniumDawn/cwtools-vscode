@@ -6,7 +6,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from paths import EXTENSION_HOST_ROOT, REPO_ROOT
@@ -212,7 +212,7 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError(f"could not read pin inputs: {error}") from error
 
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     new_source, new_manifest, lines = refresh_pins(
         games_source, manifest_raw, git_ls_remote, today
     )
