@@ -28,8 +28,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use cwtools_cache::workspace::{self as workspace_cache, SourceCacheKey};
 use cwtools_file_manager::file_manager::{
-    DirectoryType, DiscoveredFile, FileError, FileManager, FileManagerConfig, ScanBudget,
-    ScanBytes, classify_directory,
+    DirectoryType, DiscoveredFile, DiscoveredPath, DiscoveryReport, FileError, FileKind,
+    FileManager, FileManagerConfig, ScanBudget, ScanBytes, classify_directory, discover_paths,
+    discover_paths_multi_mod,
 };
 use cwtools_file_manager::{read_text, read_text_capped};
 use cwtools_game::constants::Game;
@@ -51,6 +52,19 @@ use cwtools_validation::{
     ErrorSeverity, InlineScripts, Prepared, ValidationError, build_modifier_keys,
     build_scope_registry_arc, checks_from_env, validate_prepared, validate_prepared_tracking_uses,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryPolicy {
+    Workspace,
+    Vanilla,
+}
+
+pub struct WorkspaceDiscoveryRequest {
+    pub roots: Vec<PathBuf>,
+    pub kinds: Vec<FileKind>,
+    pub config: FileManagerConfig,
+    pub policy: DiscoveryPolicy,
+}
 
 /// A discovered workspace/mod file, retained between indexing and validation.
 pub struct SourceFile {
@@ -453,15 +467,45 @@ impl Session {
                 .extend(ignore_dirs.iter().cloned());
         }
 
-        let discovered = discover_workspace_files(fm_config);
-        let (files, discovery_failed) = match discovered {
-            Ok(files) => (
-                parse_discovered_files(files, &rules_table, parse_cache.as_ref()),
-                false,
-            ),
+        let discovery = discover_workspace(WorkspaceDiscoveryRequest {
+            roots: vec![directory.clone()],
+            kinds: vec![FileKind::Script, FileKind::Localisation],
+            config: fm_config,
+            policy: DiscoveryPolicy::Workspace,
+        });
+        let (files, loc_paths, discovery_failed) = match discovery {
+            Ok(discovery) => {
+                for failure in discovery.failures {
+                    eprintln!(
+                        "warn: discovery skipped {}: {}",
+                        failure.path.display(),
+                        failure.error
+                    );
+                }
+                let files = discovery
+                    .files
+                    .iter()
+                    .filter(|file| file.kind == FileKind::Script)
+                    .map(|file| DiscoveredFile {
+                        path: file.path.clone(),
+                        logical_path: file.root_relative_path.clone(),
+                    })
+                    .collect();
+                let loc_paths = discovery
+                    .files
+                    .into_iter()
+                    .filter(|file| file.kind == FileKind::Localisation)
+                    .map(|file| file.path)
+                    .collect();
+                (
+                    parse_discovered_files(files, &rules_table, parse_cache.as_ref()),
+                    loc_paths,
+                    false,
+                )
+            }
             Err(e) => {
                 eprintln!("error: discovery failed for {}: {}", directory.display(), e);
-                (Vec::new(), true)
+                (Vec::new(), Vec::new(), true)
             }
         };
         if let Some(cache) = &parse_cache
@@ -613,6 +657,8 @@ impl Session {
             // (CW113), same coverage as a live vanilla walk.
             type_index.file_index = build_file_index(
                 &directory,
+                ignore_files,
+                ignore_dirs,
                 VanillaFiles::Cached(aux.file_paths),
                 case_sensitive_files,
             );
@@ -692,6 +738,8 @@ impl Session {
             // vanilla is present: mod files commonly reference base-game assets.
             type_index.file_index = build_file_index(
                 &directory,
+                ignore_files,
+                ignore_dirs,
                 VanillaFiles::Install(vanilla_dir),
                 case_sensitive_files,
             );
@@ -714,22 +762,18 @@ impl Session {
         // base-game loc keys doesn't false-positive). Only mod-path loc files are
         // reported by the caller. With a vanilla cache, the cached key sets stand
         // in for walking the install's loc files.
-        let mut loc_service = load_loc_service(
-            &[directory.as_path()],
-            loc_languages.as_deref(),
-            ignore_files,
-            ignore_dirs,
-        );
+        let mut loc_service =
+            LocService::from_paths(loc_paths, ScanBudget::default(), loc_languages.as_deref());
         let mut loc_index = LocIndex::build_scoped(&loc_service, loc_languages.as_deref());
         if cached_loc_keys.is_none()
             && let Some(v) = &vanilla
         {
-            let vanilla_loc = LocService::from_folders_filtered(
-                &[v],
+            let vanilla_paths =
+                localisation_paths(std::slice::from_ref(v), &[], &[], DiscoveryPolicy::Vanilla);
+            let vanilla_loc = LocService::from_paths(
+                vanilla_paths,
                 ScanBudget::default(),
                 loc_languages.as_deref(),
-                &[],
-                &[],
             );
             let vanilla_index = LocIndex::build_scoped(&vanilla_loc, None);
             loc_index.merge_from(&vanilla_index, loc_languages.as_deref());
@@ -1083,6 +1127,35 @@ fn parse_errors_to_validation(
         .collect()
 }
 
+fn localisation_paths(
+    roots: &[PathBuf],
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+    policy: DiscoveryPolicy,
+) -> Vec<PathBuf> {
+    match discover_localisation_files(roots, ignore_files, ignore_dirs, policy) {
+        Ok(discovery) => {
+            for failure in discovery.failures {
+                eprintln!(
+                    "warn: discovery skipped {}: {}",
+                    failure.path.display(),
+                    failure.error
+                );
+            }
+            discovery
+                .files
+                .into_iter()
+                .filter(|file| file.kind == FileKind::Localisation)
+                .map(|file| file.path)
+                .collect()
+        }
+        Err(error) => {
+            eprintln!("error: localisation discovery failed: {error}");
+            Vec::new()
+        }
+    }
+}
+
 /// Load the loc files under `dirs` with workspace discovery filters applied.
 pub fn load_loc_service(
     dirs: &[&Path],
@@ -1090,13 +1163,14 @@ pub fn load_loc_service(
     ignore_files: &[String],
     ignore_dirs: &[String],
 ) -> LocService {
-    LocService::from_folders_filtered(
-        dirs,
-        ScanBudget::default(),
-        langs,
+    let roots: Vec<PathBuf> = dirs.iter().map(|dir| (*dir).to_path_buf()).collect();
+    let paths = localisation_paths(
+        &roots,
         ignore_files,
         ignore_dirs,
-    )
+        DiscoveryPolicy::Workspace,
+    );
+    LocService::from_paths(paths, ScanBudget::default(), langs)
 }
 
 /// Cache file for `game` at `fingerprint` under `dir`. The name comes from the
@@ -1220,6 +1294,8 @@ pub enum VanillaFiles<'a> {
 /// every reference into vanilla content.
 pub fn build_file_index(
     workspace_root: &Path,
+    workspace_ignore_files: &[String],
+    workspace_ignore_dirs: &[String],
     vanilla: VanillaFiles<'_>,
     case_sensitive: bool,
 ) -> FileIndex {
@@ -1227,12 +1303,68 @@ pub fn build_file_index(
     // Before any path is added: the flag decides whether on-disk case is
     // recorded as the index is built.
     index.set_case_sensitive(case_sensitive);
-    index.add_root(workspace_root);
+    index.add_paths(discover_file_index_paths(
+        workspace_root,
+        workspace_ignore_files,
+        workspace_ignore_dirs,
+        DiscoveryPolicy::Workspace,
+    ));
     match vanilla {
         VanillaFiles::Cached(paths) => index.add_paths(paths),
-        VanillaFiles::Install(dir) => index.add_root(dir),
+        VanillaFiles::Install(dir) => index.add_paths(discover_file_index_paths(
+            dir,
+            &[],
+            &[],
+            DiscoveryPolicy::Vanilla,
+        )),
     }
     index
+}
+
+fn discover_file_index_paths(
+    root: &Path,
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+    policy: DiscoveryPolicy,
+) -> Vec<String> {
+    let mut config = FileManagerConfig {
+        include_dirs: vec![".".to_string()],
+        ..Default::default()
+    };
+    if policy == DiscoveryPolicy::Workspace {
+        config.exclude_patterns.extend(ignore_files.iter().cloned());
+        config
+            .exclude_dir_patterns
+            .extend(ignore_dirs.iter().cloned());
+    }
+    match discover_workspace(WorkspaceDiscoveryRequest {
+        roots: vec![root.to_path_buf()],
+        kinds: vec![FileKind::Script, FileKind::Localisation, FileKind::Resource],
+        config,
+        policy,
+    }) {
+        Ok(discovery) => {
+            for failure in discovery.failures {
+                eprintln!(
+                    "warn: discovery skipped {}: {}",
+                    failure.path.display(),
+                    failure.error
+                );
+            }
+            discovery
+                .files
+                .into_iter()
+                .map(|file| file.root_relative_path)
+                .collect()
+        }
+        Err(error) => {
+            eprintln!(
+                "error: file discovery failed for {}: {error}",
+                root.display()
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Walk a vanilla install for the cache's aux payload: per-language loc keys
@@ -1244,13 +1376,24 @@ pub fn build_vanilla_cache_aux(
     vanilla_dir: &Path,
     index: &TypeIndex,
 ) -> cwtools_index::vanilla_cache::VanillaCacheAux {
-    let loc_service = LocService::from_folders(&[vanilla_dir], ScanBudget::default());
+    let loc_paths = localisation_paths(
+        &[vanilla_dir.to_path_buf()],
+        &[],
+        &[],
+        DiscoveryPolicy::Vanilla,
+    );
+    let loc_service = LocService::from_paths(loc_paths, ScanBudget::default(), None);
     let loc_keys = cwtools_localization::loc_index::per_language_keys(&loc_service);
     let mut file_index = cwtools_index::FileIndex::new();
     // Collect on-disk case so a later case-sensitive run can case-check vanilla
     // references restored from this cache.
     file_index.set_case_sensitive(true);
-    file_index.add_root(vanilla_dir);
+    file_index.add_paths(discover_file_index_paths(
+        vanilla_dir,
+        &[],
+        &[],
+        DiscoveryPolicy::Vanilla,
+    ));
     cwtools_index::vanilla_cache::VanillaCacheAux {
         loc_keys,
         file_paths: file_index.paths_exact().cloned().collect(),
@@ -1391,6 +1534,93 @@ pub fn discover_workspace_files(
     } else {
         manager.discover_files()
     }
+}
+
+pub fn discover_and_parse_workspace(
+    config: FileManagerConfig,
+) -> Result<Vec<cwtools_file_manager::ParsedFile>, FileError> {
+    let is_multi_mod = classify_directory(&config.root) == DirectoryType::MultipleMod;
+    let mut manager = FileManager::new(config);
+    if is_multi_mod {
+        manager.discover_and_parse_multi_mod()
+    } else {
+        manager.discover_and_parse()
+    }
+}
+
+pub fn discover_workspace(
+    request: WorkspaceDiscoveryRequest,
+) -> Result<DiscoveryReport, FileError> {
+    let WorkspaceDiscoveryRequest {
+        mut roots,
+        kinds,
+        mut config,
+        policy,
+    } = request;
+    if roots.is_empty() {
+        roots.push(config.root.clone());
+    }
+    if policy == DiscoveryPolicy::Vanilla {
+        let defaults = FileManagerConfig::default();
+        config.exclude_patterns = defaults.exclude_patterns;
+        config.exclude_dir_patterns = defaults.exclude_dir_patterns;
+    }
+
+    let mut report = DiscoveryReport::default();
+    if kinds.contains(&FileKind::Script) {
+        for root in &roots {
+            let mut script_config = config.clone();
+            script_config.root = root.clone();
+            let files = discover_workspace_files(script_config)?;
+            report
+                .files
+                .extend(files.into_iter().map(|file| DiscoveredPath {
+                    path: file.path,
+                    root_relative_path: file.logical_path,
+                    kind: FileKind::Script,
+                }));
+        }
+    }
+
+    let other_kinds: Vec<FileKind> = kinds
+        .into_iter()
+        .filter(|kind| *kind != FileKind::Script)
+        .collect();
+    if !other_kinds.is_empty() {
+        for root in &roots {
+            let mut other_config = config.clone();
+            other_config.root = root.clone();
+            let discovered = if classify_directory(root) == DirectoryType::MultipleMod {
+                discover_paths_multi_mod(&other_config, &other_kinds)
+            } else {
+                discover_paths(&[root], &other_config, &other_kinds)?
+            };
+            report.files.extend(discovered.files);
+            report.failures.extend(discovered.failures);
+        }
+    }
+    Ok(report)
+}
+
+pub fn discover_localisation_files(
+    roots: &[PathBuf],
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+    policy: DiscoveryPolicy,
+) -> Result<DiscoveryReport, FileError> {
+    let mut config = FileManagerConfig::default();
+    if policy == DiscoveryPolicy::Workspace {
+        config.exclude_patterns.extend(ignore_files.iter().cloned());
+        config
+            .exclude_dir_patterns
+            .extend(ignore_dirs.iter().cloned());
+    }
+    discover_workspace(WorkspaceDiscoveryRequest {
+        roots: roots.to_vec(),
+        kinds: vec![FileKind::Localisation],
+        config,
+        policy,
+    })
 }
 
 /// Decide whether to search a directory directly (as a leaf directory containing
@@ -1724,5 +1954,80 @@ mod tests {
         let filtered = load_loc_service(&[tmp.path()], None, &["skip_*".to_string()], &[]);
         assert_eq!(filtered.files().len(), 1);
         assert!(filtered.files()[0].path.contains("keep"));
+    }
+
+    #[test]
+    fn localisation_discovery_layers_multi_mod_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for (name, path, replace_path) in
+            [("a", "mods/a", None), ("b", "mods/b", Some("localisation"))]
+        {
+            let descriptor = root.join("mod").join(format!("{name}.mod"));
+            std::fs::create_dir_all(descriptor.parent().unwrap()).unwrap();
+            let replace_path = replace_path
+                .map(|path| format!("replace_path = \"{path}\"\n"))
+                .unwrap_or_default();
+            std::fs::write(
+                descriptor,
+                format!("name = \"{name}\"\npath = \"{path}\"\n{replace_path}"),
+            )
+            .unwrap();
+        }
+        for path in [
+            "mods/a/localisation/shared_l_english.yml",
+            "mods/b/localisation/shared_l_english.yml",
+        ] {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+
+        let discovery = discover_localisation_files(
+            &[root.to_path_buf()],
+            &[],
+            &[],
+            DiscoveryPolicy::Workspace,
+        )
+        .unwrap();
+
+        assert_eq!(discovery.files.len(), 1);
+        assert!(discovery.files[0].path.starts_with(root.join("mods/b")));
+        assert_eq!(
+            discovery.files[0].root_relative_path,
+            "localisation/shared_l_english.yml"
+        );
+    }
+
+    #[test]
+    fn discovery_policy_keeps_workspace_ignores_out_of_vanilla() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("localisation/skip_l_english.yml");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "l_english:\n k:0 \"hi\"\n").unwrap();
+        let mut config = FileManagerConfig {
+            root: tmp.path().to_path_buf(),
+            ..Default::default()
+        };
+        config.exclude_patterns.push("skip_*".to_string());
+        let roots = vec![tmp.path().to_path_buf()];
+
+        let workspace = discover_workspace(WorkspaceDiscoveryRequest {
+            roots: roots.clone(),
+            kinds: vec![FileKind::Localisation],
+            config: config.clone(),
+            policy: DiscoveryPolicy::Workspace,
+        })
+        .unwrap();
+        let vanilla = discover_workspace(WorkspaceDiscoveryRequest {
+            roots,
+            kinds: vec![FileKind::Localisation],
+            config,
+            policy: DiscoveryPolicy::Vanilla,
+        })
+        .unwrap();
+
+        assert!(workspace.files.is_empty());
+        assert_eq!(vanilla.files.len(), 1);
     }
 }

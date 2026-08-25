@@ -18,6 +18,11 @@
 
 #### Engine
 
+* Workspace discovery now supplies scripts, localisation, resources, and file
+  indexes through one driver API. CLI and LSP localisation scans, signatures,
+  references, and create-key actions share root-relative ignores, limits,
+  symlink handling, and failure reporting. Vanilla scans keep workspace ignores
+  out. (#250)
 * Multi-mod discovery now honors `ignoreDirectories` (`exclude_dir_patterns`) during the walk, so single- and multi-mod workspaces agree on directory ignore semantics. (#412)
 * Driver discovery smoke tests now pin unsorted multi-mod Session/direct parity, empty `include_dirs`, and global lexical order across folders. (#234)
 * LSP: workspace diagnostic publishing injects its 1ms batch throttle, while normal tests skip the elapsed wait and a deterministic scan test covers the publish boundary. (#228)

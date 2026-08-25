@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use tower_lsp::lsp_types::*;
 
-use cwtools_localization::{Lang, LocService};
+use cwtools_localization::Lang;
 
 use crate::Backend;
 use crate::paths::source_column_to_lsp;
@@ -103,7 +103,7 @@ fn generated_loc_file_path(workspace_root: &Path, lang: Lang) -> PathBuf {
 /// Resolve where `lang`'s stub line goes, in the three-tier priority order:
 /// a sibling key's site, else an existing loc file for the language, else a
 /// new one. `discovered_loc_files` is the workspace's loc-file listing
-/// (`LocService::discover_files`), walked once up front by the caller and
+/// (shared discovery), walked once up front by the caller and
 /// shared across languages.
 ///
 /// Every tier is filtered by the edit boundary against `edit_roots`, so the
@@ -476,17 +476,42 @@ impl Backend {
                 Some((root, files, sig)) if root == workspace_root && sig == cur_sig => files,
                 _ => {
                     let discovered_root = workspace_root.clone();
-                    let files = tokio::task::spawn_blocking(move || {
-                        let roots = [discovered_root.as_path()];
-                        LocService::discover_files_filtered(
-                            &roots,
-                            cwtools_file_manager::file_manager::ScanBudget::default(),
+                    let files = match tokio::task::spawn_blocking(move || {
+                        cwtools_driver::discover_localisation_files(
+                            &[discovered_root],
                             &ignore_files,
                             &ignore_dirs,
+                            cwtools_driver::DiscoveryPolicy::Workspace,
                         )
                     })
                     .await
-                    .unwrap_or_default();
+                    {
+                        Ok(Ok(discovery)) => {
+                            for failure in discovery.failures {
+                                tracing::warn!(
+                                    path = %failure.path.display(),
+                                    error = %failure.error,
+                                    "localisation discovery skipped path"
+                                );
+                            }
+                            discovery
+                                .files
+                                .into_iter()
+                                .filter(|file| {
+                                    file.kind == cwtools_file_manager::FileKind::Localisation
+                                })
+                                .map(|file| file.path)
+                                .collect()
+                        }
+                        Ok(Err(error)) => {
+                            tracing::warn!(error = %error, "localisation discovery failed");
+                            Vec::new()
+                        }
+                        Err(error) => {
+                            tracing::warn!(error = %error, "localisation discovery task failed");
+                            Vec::new()
+                        }
+                    };
                     *self.state.loc_discovery_cache.lock() =
                         Some((workspace_root.clone(), files.clone(), cur_sig));
                     files

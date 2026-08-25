@@ -213,6 +213,38 @@ fn test_discover_empty_directory() {
         .stdout(predicate::str::contains("Discovered and parsed 0 files"));
 }
 
+#[test]
+fn test_discover_multi_mod_workspace_uses_the_layered_file_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    for (name, path) in [("a", "mods/a"), ("b", "mods/b")] {
+        let descriptor = root.join("mod").join(format!("{name}.mod"));
+        std::fs::create_dir_all(descriptor.parent().unwrap()).unwrap();
+        std::fs::write(
+            descriptor,
+            format!("name = \"{name}\"\npath = \"{path}\"\n"),
+        )
+        .unwrap();
+    }
+    for (path, content) in [
+        ("mods/a/common/shared.txt", "value = a\n"),
+        ("mods/b/common/shared.txt", "value = b\n"),
+        ("mods/b/events/only_b.txt", "value = b\n"),
+    ] {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+    let winner = root.join("mods/b/common/shared.txt");
+
+    cwtools()
+        .args(["discover", root.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Discovered and parsed 2 files"))
+        .stdout(predicate::str::contains(winner.to_str().unwrap()));
+}
+
 // ── Rules ────────────────────────────────────────────────────────────────────
 
 #[test]
