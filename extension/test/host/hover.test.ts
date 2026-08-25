@@ -87,12 +87,7 @@ suite('LSP Hover Tests', function () {
 	});
 
 	suite('Localization Hover', function () {
-		// MillenniumDawn/cwtools#317 (hovering a value[…] string reported the
-		// enclosing trigger instead of previewing the localisation the key
-		// resolves to) is fixed upstream in 786a11bb, which the pinned d38febcd
-		// predates. Passes against a server built from the fix; still skipped
-		// because CI builds the pin. Un-skip when the pin moves past it.
-		test.skip('previews the localisation a pop faction flag resolves to', async function () {
+		test('previews the localisation a pop faction flag resolves to', async function () {
 			const uri = vscode.Uri.file(testEffectsFile);
 			testDocument = await vscode.workspace.openTextDocument(uri);
 			await vscode.window.showTextDocument(testDocument);

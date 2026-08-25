@@ -2,6 +2,10 @@
 
 #### Extension
 
+* The host hover test for quoted `value[…]` localisation keys runs again. The
+  in-repo engine already resolves those values through their unquoted
+  localisation keys; the unrelated `pop_faction_flag` completion skip remains.
+  (#219)
 * The Python helpers under `scripts/` get a real toolchain. `pyproject.toml` holds the ruff, black, pylint, mypy and pytest config, `requirements-dev.txt` pins the versions CI and the pre-commit hooks install, and `mypy.ini` is gone. ruff runs a wider rule set, mypy runs strict, and pylint is new and at 10.00. The suites in `tests/scripts/` are pytest-native rather than `unittest.TestCase`, and CI runs them with pytest in a `Python lint & tests` job of its own instead of `unittest discover` inside the Rust lint job. (#387)
 * Extension-host tests no longer open a VS Code window on the developer's desktop. Every label runs through `scripts/build/hosttest.py`, which uses `xvfb-run` on Linux and fails with install instructions when it is missing rather than falling back to a visible window. macOS and Windows still run natively and say so. `CWTOOLS_TEST_DISPLAY` selects `xvfb`, `ozone` or `native`, and `npm run test:native` is the explicit visible-window runner. CI drops its own `xvfb-run` prefixes. (#406)
 * Coverage comments and job summaries show one suite overview and keep per-file tables in collapsed sections. (#417)
