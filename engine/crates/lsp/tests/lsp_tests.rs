@@ -13363,19 +13363,26 @@ fn test_startup_scan_logs_each_phase_duration() {
     });
 
     let phases = collected.expect("timed out waiting for the scan to finish");
-    for expected in [
-        "Scanning workspace…",
-        "Indexing workspace…",
-        "Indexing base game…",
-        "Building localisation index…",
-        "Validating workspace…",
-        "Publishing diagnostics…",
-    ] {
-        assert!(
-            phases.iter().any(|p| p.starts_with(expected)),
-            "no duration logged for phase {expected:?}, got {phases:?}"
-        );
-    }
+    // Not asserting the phase text itself: it's an i18n string (`progress.*`
+    // in `cwtools_i18n`) and a reworded or translated value must not fail this
+    // test. Six distinct labels, one per `Phase` variant, is what actually
+    // matters — `label ({duration}s)` is the format `command_progress.rs`
+    // logs, so splitting on the trailing `" ("` recovers the label without
+    // depending on its wording.
+    assert_eq!(
+        phases.len(),
+        6,
+        "expected 6 phase-finish log lines, got {phases:?}"
+    );
+    let distinct_labels: std::collections::HashSet<&str> = phases
+        .iter()
+        .map(|p| p.rsplit_once(" (").map_or(p.as_str(), |(label, _)| label))
+        .collect();
+    assert_eq!(
+        distinct_labels.len(),
+        6,
+        "expected 6 distinct phase labels, got {phases:?}"
+    );
 }
 
 /// #221 itself: the percentage has to move *inside* a phase, not only at the
@@ -13388,10 +13395,6 @@ fn test_startup_scan_logs_each_phase_duration() {
 /// what was reported, not on winning a race with a 200ms timer.
 #[test]
 fn test_the_bar_percentage_moves_inside_a_phase() {
-    // Every value the boundary reports can produce. A percentage outside this
-    // set can only have come from a sampler reading the phase's counter.
-    const BOUNDARIES: [u64; 6] = [0, 3, 40, 55, 70, 92];
-
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
     std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
@@ -13441,7 +13444,12 @@ fn test_the_bar_percentage_moves_inside_a_phase() {
 
     let stdin = child.stdin.take().unwrap();
     let collected = run_child_with_deadline(child, stdin, reader, 90, |_stdin, reader| {
-        let mut pcts: Vec<u64> = Vec::new();
+        // `value` is the phase label (whatever `Phase::label()` currently
+        // says); pairing it with the percentage lets the assertion below find
+        // each phase's own opening boundary from the stream itself instead of
+        // a hardcoded `Phase::span()` mirror that a re-weighting would
+        // silently outdate.
+        let mut samples: Vec<(String, u64)> = Vec::new();
         for _ in 0..20_000 {
             let Ok(raw) = read_frame(reader) else { break };
             if raw.is_empty() {
@@ -13454,23 +13462,40 @@ fn test_the_bar_percentage_moves_inside_a_phase() {
             if v["params"]["enable"] == serde_json::Value::Bool(false) {
                 break;
             }
-            if let Some(pct) = v["params"]["percentage"].as_u64() {
-                pcts.push(pct);
+            if let (Some(value), Some(pct)) = (
+                v["params"]["value"].as_str(),
+                v["params"]["percentage"].as_u64(),
+            ) {
+                samples.push((value.to_string(), pct));
             }
         }
-        pcts
+        samples
     });
 
-    let pcts = collected.expect("timed out waiting for the scan to finish");
-    assert!(!pcts.is_empty(), "the scan reported no percentages at all");
-    let sampled: Vec<u64> = pcts
-        .iter()
-        .copied()
-        .filter(|p| !BOUNDARIES.contains(p))
-        .collect();
+    let samples = collected.expect("timed out waiting for the scan to finish");
     assert!(
-        !sampled.is_empty(),
-        "every percentage was a phase boundary, so the bar never moved inside a phase: {pcts:?}"
+        !samples.is_empty(),
+        "the scan reported no percentages at all"
+    );
+
+    // The first percentage reported for a phase label is that phase's opening
+    // boundary (`report_phase`/`start_phase`'s initial report); any later
+    // percentage under the same label came from the sampler reading the
+    // phase's counter, i.e. the bar moving inside the phase.
+    let mut boundaries: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    let moved_inside_a_phase =
+        samples
+            .iter()
+            .any(|(value, pct)| match boundaries.entry(value.as_str()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(*pct);
+                    false
+                }
+                std::collections::hash_map::Entry::Occupied(entry) => *entry.get() != *pct,
+            });
+    assert!(
+        moved_inside_a_phase,
+        "every percentage matched its phase's opening boundary, so the bar never moved inside a phase: {samples:?}"
     );
 }
 

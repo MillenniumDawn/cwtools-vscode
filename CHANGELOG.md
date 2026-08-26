@@ -34,6 +34,12 @@
 * LSP progress integration tests now assert that both cancel paths close their
   client-owned `workDoneToken`, so a cancelled command cannot strand its bar.
   (#437)
+* The startup-scan progress tests no longer hardcode the i18n phase labels or
+  a copy of `Phase::span()`'s boundary percentages. One derives its expected
+  labels from the count of distinct `Scan phase finished:` log lines, and the
+  other reads each phase's opening percentage back from the `loadingBar`
+  stream, so rewording a `progress.*` string or re-weighting `Phase::span()`
+  no longer breaks or silently weakens either test. (#436)
 * LSP workspace-scan tests now prove pass 2 leaves concurrent info-service
   and localisation-index writers unblocked while it validates against
   snapshots. (#235)
