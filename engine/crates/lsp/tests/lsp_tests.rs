@@ -14018,6 +14018,8 @@ fn test_work_done_progress_cancel_stops_a_command() {
     let stdin = child.stdin.take().unwrap();
     let collected = run_child_with_deadline(child, stdin, reader, 120, |stdin, reader| {
         let mut saw_cancellable_begin = false;
+        let mut progress_end = None;
+        let mut result = None;
         // Same scan-guard race as the token test above: the bar-off notification
         // precedes the flag release, so a command sent on it can lose the CAS.
         // Retry until one actually starts a scan to cancel.
@@ -14050,11 +14052,17 @@ fn test_work_done_progress_cancel_stops_a_command() {
                 if v["result"] == serde_json::json!("Re-index already in progress.") {
                     attempt += 1;
                     saw_cancellable_begin = false;
+                    progress_end = None;
+                    result = None;
                     std::thread::sleep(std::time::Duration::from_millis(100));
                     token = send_attempt(stdin, attempt);
                     continue;
                 }
-                return (saw_cancellable_begin, Some(v["result"].clone()));
+                result = Some(v["result"].clone());
+                if progress_end.is_some() {
+                    break;
+                }
+                continue;
             }
             match v["method"].as_str() {
                 Some("window/workDoneProgress/create") => write_frame_to(
@@ -14088,13 +14096,23 @@ fn test_work_done_progress_cancel_stops_a_command() {
                     )
                     .unwrap();
                 }
+                Some("$/progress")
+                    if v["params"]["token"] == token.as_str()
+                        && v["params"]["value"]["kind"] == "end" =>
+                {
+                    progress_end = Some(v["params"]["value"].clone());
+                    if result.is_some() {
+                        break;
+                    }
+                }
                 _ => {}
             }
         }
-        (saw_cancellable_begin, None)
+        (saw_cancellable_begin, result, progress_end)
     });
 
-    let (saw_cancellable_begin, result) = collected.expect("timed out; the command never answered");
+    let (saw_cancellable_begin, result, progress_end) =
+        collected.expect("timed out; the command never answered");
     assert!(
         saw_cancellable_begin,
         "a command bar must advertise itself as cancellable"
@@ -14105,13 +14123,14 @@ fn test_work_done_progress_cancel_stops_a_command() {
         Some("Re-index cancelled."),
         "a cancelled command must return, and say so"
     );
+    let progress_end = progress_end.expect("cancelled command never closed its progress token");
+    assert_eq!(progress_end["message"], "Re-index cancelled.");
 }
 
 /// #204: the client cancels a long `workspace/executeCommand` while its scan is
 /// running. `tower-lsp` answers `$/cancelRequest` by dropping the handler, so
-/// nothing on the normal exit path runs — both progress channels have to be
-/// closed by the scan guard's `Drop`, and the guard has to release the scan so
-/// the next command can index.
+/// `CommandProgress::Drop` has to close the client token while `ScanGuard::Drop`
+/// closes the loading bar and releases the scan for the next command.
 #[test]
 fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
     let ws = tempfile::tempdir().unwrap();
@@ -14191,22 +14210,28 @@ fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
         "the startup scan never closed its loading bar"
     );
 
+    let token = "cwtools/command/204/cancel";
     write_frame(
         &mut child,
         &jsonrpc_request(
             900,
             "workspace/executeCommand",
-            serde_json::json!({ "command": "reindexWorkspace", "arguments": [] }),
+            serde_json::json!({
+                "command": "reindexWorkspace",
+                "arguments": [],
+                "workDoneToken": token,
+            }),
         ),
     )
     .unwrap();
-    // Cancel once the scan has both channels open — the `begin` is the last of
-    // the two, so it also proves the create round-trip finished.
+    // Cancel only once the client token opens, so its registry entry exists
+    // and the dropped handler has an `end` notification to send.
     assert!(
         pump(&mut child, 30, &|v| v["method"] == "$/progress"
+            && v["params"]["token"] == token
             && v["params"]["value"]["kind"] == "begin")
         .is_some(),
-        "no $/progress begin after reindexWorkspace"
+        "no $/progress begin for the command token"
     );
 
     write_frame(
@@ -14224,7 +14249,9 @@ fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
             v["id"] == 900
                 || (v["method"] == "loadingBar"
                     && v["params"]["enable"] == serde_json::Value::Bool(false))
-                || (v["method"] == "$/progress" && v["params"]["value"]["kind"] == "end")
+                || (v["method"] == "$/progress"
+                    && v["params"]["token"] == token
+                    && v["params"]["value"]["kind"] == "end")
         }) else {
             continue;
         };
@@ -14241,6 +14268,7 @@ fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
                 !saw_progress_end,
                 "duplicate $/progress end after cancellation"
             );
+            assert_eq!(v["params"]["value"]["message"], "Cancelled.");
             saw_progress_end = true;
         }
     }
