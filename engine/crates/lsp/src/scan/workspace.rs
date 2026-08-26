@@ -1695,6 +1695,68 @@ mod tests {
         assert_stores_unchanged(&backend);
     }
 
+    async fn assert_pass2_allows_write(
+        lock_name: &str,
+        write: impl FnOnce(&DocumentState) + Send + 'static,
+    ) {
+        let gate = Pass2Gate::new(Pass2HoldPoint::Before);
+        let (backend, _tmp) = setup_workspace(Some(gate.clone()));
+        let scan_backend = clone_backend(&backend);
+        let handle = tokio::spawn(async move {
+            let progress = CommandProgress::for_tests(
+                scan_backend.state.clone(),
+                Arc::new(AtomicBool::new(false)),
+            );
+            scan_backend
+                .validate_entire_workspace_inner(
+                    false,
+                    Some(&progress),
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                )
+                .await
+        });
+        wait_arrived(&gate, Pass2HoldPoint::Before).await;
+
+        let state = backend.state.clone();
+        let mut writer = tokio::task::spawn_blocking(move || write(&state));
+        let acquired = tokio::time::timeout(std::time::Duration::from_secs(5), &mut writer).await;
+        let acquired_before_release = acquired.is_ok();
+        gate.release();
+        let writer_result = match acquired {
+            Ok(result) => result,
+            Err(_) => writer.await,
+        };
+        let scan_result = match handle.await {
+            Ok(result) => result,
+            Err(error) => panic!("scan panicked: {error}"),
+        };
+
+        if let Err(error) = writer_result {
+            panic!("writer panicked: {error}");
+        }
+        assert!(scan_result, "scan must complete");
+        assert!(
+            acquired_before_release,
+            "pass 2 blocked concurrent {lock_name}.write()"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pass2_snapshot_allows_info_service_write() {
+        assert_pass2_allows_write("info_service", |state| {
+            drop(state.info_service.write());
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pass2_snapshot_allows_loc_index_write() {
+        assert_pass2_allows_write("loc_index", |state| {
+            drop(state.loc_index.write());
+        })
+        .await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pass2_completed_scan_merges_type_uses() {
         let (backend, _tmp) = setup_workspace(None);

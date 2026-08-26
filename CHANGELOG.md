@@ -18,6 +18,9 @@
 
 #### Engine
 
+* LSP workspace-scan tests now prove pass 2 leaves concurrent info-service
+  and localisation-index writers unblocked while it validates against
+  snapshots. (#235)
 * Workspace discovery now supplies scripts, localisation, resources, and file
   indexes through one driver API. CLI and LSP localisation scans, signatures,
   references, and create-key actions share root-relative ignores, limits,
