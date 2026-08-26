@@ -8,8 +8,8 @@ from typing import NamedTuple
 
 import pytest
 
-import hosttest
-from paths import REPO_ROOT
+import hosttest  # pyright: ignore[reportMissingImports]
+from paths import REPO_ROOT  # pyright: ignore[reportMissingImports]
 
 # The runner only asks whether the CLI entry point exists, so a checked-in file
 # stands in for it and the suite does not need node_modules installed.
@@ -194,6 +194,26 @@ def test_native_drops_the_display_prefix(run_main: Callable[..., Run]) -> None:
 # so this is the one that matters most.
 def test_propagates_a_failing_exit_code(run_main: Callable[..., Run]) -> None:
     assert run_main([], returncode=3).status == 3
+
+
+# The unit tests above use a fake subprocess.run, so they prove hosttest.py
+# forwards a non-zero status once the child returns it. The remaining untested
+# hop is xvfb-run itself: some old builds returned the cleanup command's exit
+# code instead of the wrapped command's. This test exercises the real wrapper.
+@pytest.mark.skipif(
+    shutil.which("xvfb-run") is None,
+    reason="xvfb-run is not installed",
+)
+def test_xvfb_run_preserves_a_failing_child_exit_code() -> None:
+    xvfb_run = shutil.which("xvfb-run")
+    assert xvfb_run is not None
+    result = subprocess.run(
+        [xvfb_run, "-a", sys.executable, "-c", "raise SystemExit(5)"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+    )
+    assert result.returncode == 5
 
 
 def test_reports_the_missing_backend_on_other_platforms(
