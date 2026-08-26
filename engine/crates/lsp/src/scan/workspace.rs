@@ -13,7 +13,8 @@ use cwtools_validation::validate_prepared_tracking_uses;
 
 use crate::Backend;
 use crate::command_progress::{
-    CancelFlag, CommandProgress, Phase, ScanOutcome, cancel_flag_of, phase_percentage, start_phase,
+    CancelFlag, CommandProgress, Phase, PhaseTicker, ScanOutcome, cancel_flag_of, phase_percentage,
+    start_phase,
 };
 use crate::paths::{logical_path_from_uri, path_to_uri, uri_to_path_str};
 use crate::validate::{
@@ -262,6 +263,43 @@ impl Backend {
         }
     }
 
+    /// Close the running phase and open `phase`: log how long the old one took,
+    /// put the new one's label and starting percentage on the bar, and start a
+    /// sampler for it.
+    ///
+    /// `total` is the phase's item count, or 0 when it has none — see
+    /// [`start_phase`]. A quiet pass gets an inert ticker and says nothing.
+    async fn enter_phase(
+        &self,
+        ticker: &mut PhaseTicker,
+        progress: Option<&CommandProgress>,
+        quiet: bool,
+        phase: Phase,
+        total: usize,
+    ) {
+        self.end_phase(ticker).await;
+        if quiet {
+            return;
+        }
+        self.send_loading_bar_pct(
+            progress,
+            true,
+            phase.label(),
+            Some(phase_percentage(phase, 0, total)),
+        )
+        .await;
+        *ticker = start_phase(self, progress, phase, total);
+    }
+
+    /// Stop the running phase's sampler and log how long it ran. A scan that
+    /// exits early on cancel skips this and lets `Drop` stop the sampler — a
+    /// phase nobody waited out has no duration worth reporting.
+    async fn end_phase(&self, ticker: &mut PhaseTicker) {
+        if let Some(summary) = std::mem::replace(ticker, PhaseTicker::inert()).stop() {
+            self.client.log_message(MessageType::INFO, summary).await;
+        }
+    }
+
     /// Retry a revalidation in the background, bounded, for a caller that gave
     /// up on landing one itself.
     ///
@@ -317,10 +355,14 @@ impl Backend {
     ) -> bool {
         let cancel = cancel_flag_of(progress);
         cwtools_profiling::log_rss("workspace_scan_start");
-        if !quiet {
-            self.send_loading_bar_pct(progress, true, Phase::Discover.label(), Some(0))
-                .await;
-        }
+        // One ticker at a time, handed from phase to phase. It owns the bar
+        // between the boundary reports, so the percentage keeps moving inside a
+        // phase and a phase that overruns says so in the output channel — on the
+        // startup scan too, which used to show only the six boundary values and
+        // sit on "Validating workspace… 70%" for the whole of pass 2 (#221).
+        let mut phase = PhaseTicker::inert();
+        self.enter_phase(&mut phase, progress, quiet, Phase::Discover, 0)
+            .await;
         hold_scan_for_tests().await;
 
         let workspace_uri = self.state.config.read().workspace_uri.clone();
@@ -478,15 +520,8 @@ impl Backend {
         // persist for the next scan. The disk cache speeds the cold→warm scan
         // across restarts; keeping the AST resident avoids a pass-2 re-parse
         // within a single scan.
-        if !quiet {
-            self.send_loading_bar_pct(
-                progress,
-                true,
-                Phase::Parse.label(),
-                Some(phase_percentage(Phase::Parse, 0, 1)),
-            )
+        self.enter_phase(&mut phase, progress, quiet, Phase::Parse, scan_files.len())
             .await;
-        }
         // Snapshot the set of currently-open document URIs so both passes can
         // skip them: open docs were already indexed by did_open/did_change and
         // their fresher in-memory diagnostics must not be clobbered by stale
@@ -524,11 +559,10 @@ impl Backend {
         // so the LSP request loop is not starved while rayon parses.
         let scan_bytes = cwtools_file_manager::file_manager::ScanBytes::new();
         // The rayon section can neither await nor reach the client, so progress
-        // rides an atomic the closure bumps and a sampler task turns into
-        // `$/progress` traffic. The cancel check is the same shape: a latch the
+        // rides an atomic the closure bumps and the phase's sampler task turns
+        // into bar traffic. The cancel check is the same shape: a latch the
         // closure polls, so a cancelled pass drains through the remaining files
         // at one atomic load each instead of parsing them.
-        let parse_ticker = start_phase(progress, Phase::Parse, scan_files.len());
         let outcomes: Vec<Option<ParseOutcome>> = tokio::task::block_in_place(|| {
             scan_files
                 .par_iter()
@@ -536,7 +570,7 @@ impl Backend {
                     if cancel.is_cancelled() {
                         return None;
                     }
-                    parse_ticker.tick();
+                    phase.tick();
                     // Open docs are already indexed from their in-memory text;
                     // skip so we don't re-index stale disk content on top of the
                     // live version.
@@ -644,7 +678,6 @@ impl Backend {
                 })
                 .collect()
         });
-        parse_ticker.stop();
         // A cancelled parse pass produced a hole-ridden `outcomes`, and every
         // later phase (the index merge, the prune, validation) would read it as
         // "these files have nothing in them". Stop before any of that lands.
@@ -793,15 +826,9 @@ impl Backend {
         // game is indexed by a single `spawn_blocking` call into the engine, so
         // there is no per-file seam to poll the flag at. Cancelling during it
         // takes effect when it returns.
-        if !quiet {
-            self.send_loading_bar_pct(
-                progress,
-                true,
-                Phase::Vanilla.label(),
-                Some(phase_percentage(Phase::Vanilla, 0, 1)),
-            )
+        // Same reason it has no item count for the bar, and it sets its own text.
+        self.enter_phase(&mut phase, progress, quiet, Phase::Vanilla, 0)
             .await;
-        }
         self.ensure_vanilla_index(progress, false, quiet).await;
         if cancel.is_cancelled() {
             return false;
@@ -827,15 +854,8 @@ impl Backend {
         // rebuilds, so a user-triggered rescan never serves stale loc
         // diagnostics — it just also records the signature for the next
         // quiet pass to compare against.
-        if !quiet {
-            self.send_loading_bar_pct(
-                progress,
-                true,
-                Phase::Localisation.label(),
-                Some(phase_percentage(Phase::Localisation, 0, 1)),
-            )
+        self.enter_phase(&mut phase, progress, quiet, Phase::Localisation, 0)
             .await;
-        }
         let loc_signature = tokio::task::block_in_place(|| self.compute_loc_signature(&root_path));
         let loc_unchanged = *self.state.last_loc_signature.lock() == Some(loc_signature);
         if quiet && loc_unchanged {
@@ -867,15 +887,16 @@ impl Backend {
         // open (populated by did_open) — the scan used to insert every
         // workspace file there, pinning all texts+ASTs in memory for the
         // whole session.
-        if !quiet {
-            self.send_loading_bar_pct(
-                progress,
-                true,
-                Phase::Validate.label(),
-                Some(phase_percentage(Phase::Validate, 0, 1)),
-            )
-            .await;
-        }
+        // Opened here rather than at the rayon call below so the snapshot clones
+        // between the two are inside the phase the heartbeat is timing.
+        self.enter_phase(
+            &mut phase,
+            progress,
+            quiet,
+            Phase::Validate,
+            scan_files.len(),
+        )
+        .await;
         let mut total_errors = 0usize;
         let mut total_warnings = 0usize;
         let mut total_infos = 0usize;
@@ -961,7 +982,6 @@ impl Backend {
         assert_eq!(scan_files.len(), parsed_files.len());
         assert_eq!(scan_files.len(), source_hashes.len());
         assert_eq!(scan_files.len(), inline_ignores.len());
-        let validate_ticker = start_phase(progress, Phase::Validate, scan_files.len());
         let registry = scan_registry.as_ref();
         let prepared = scan_ruleset.as_ref().map(|ruleset| {
             make_prepared(
@@ -995,7 +1015,7 @@ impl Backend {
                     if cancel.is_cancelled() {
                         return None;
                     }
-                    validate_ticker.tick();
+                    phase.tick();
                     // Skip files that failed to parse in pass 1, and open docs
                     // whose fresher in-memory diagnostics must not be overwritten.
                     let parsed = parsed_opt.as_ref()?;
@@ -1039,7 +1059,6 @@ impl Backend {
         )
         .await
         else {
-            validate_ticker.stop();
             return false;
         };
         // Unused-instance second phase: same global merge as before, but against
@@ -1102,7 +1121,6 @@ impl Backend {
                 (uri, diagnostics, source_hash, inline_ignored)
             })
             .collect();
-        validate_ticker.stop();
         if cancel.is_cancelled() {
             return false;
         }
@@ -1121,9 +1139,12 @@ impl Backend {
         };
         let mut published_this_scan = std::collections::HashSet::with_capacity(publish_total);
 
+        self.enter_phase(&mut phase, progress, quiet, Phase::Publish, publish_total)
+            .await;
         for (i, (uri, mut diagnostics, source_hash, inline_ignored)) in
             results.into_iter().enumerate()
         {
+            phase.tick();
             // Inline `# cwtools-ignore` directives, before the error count and
             // the publish so both see the same set the editor's Problems panel
             // gets.
@@ -1181,19 +1202,8 @@ impl Backend {
                 // does not saturate the client with publishDiagnostics traffic.
                 publish_throttle.wait().await;
                 tokio::task::yield_now().await;
-                // Publishing is serial and async, so unlike the rayon passes it
-                // reports for itself rather than through a sampler.
                 if cancel.is_cancelled() {
                     return false;
-                }
-                if !quiet {
-                    self.send_loading_bar_pct(
-                        progress,
-                        true,
-                        Phase::Publish.label(),
-                        Some(phase_percentage(Phase::Publish, i + 1, publish_total)),
-                    )
-                    .await;
                 }
             }
         }
@@ -1261,6 +1271,7 @@ impl Backend {
         // validation peak.
         drop(parsed_files);
 
+        self.end_phase(&mut phase).await;
         self.client
             .log_message(
                 MessageType::INFO,
@@ -2078,6 +2089,77 @@ mod tests {
             msg.contains(&expected_root),
             "message must name the missing root, got: {msg}"
         );
+        collector.abort();
+        let _ = collector.await;
+    }
+
+    /// #221: a scan with no client token behind it — the startup scan — used to
+    /// get an inert ticker, so its percentage moved only at the six phase
+    /// boundaries and sat on "Validating workspace… 70%" for the whole of pass
+    /// 2. Only a quiet pass may go unsampled now.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_tokenless_phase_is_still_sampled() {
+        let backend = test_backend();
+        let ticker = start_phase(&backend, None, Phase::Validate, 4);
+        ticker.tick();
+        let summary = ticker
+            .stop()
+            .expect("a phase with no command token behind it must still be sampled");
+        assert!(
+            summary.contains(Phase::Validate.label()),
+            "the phase summary must name its phase, got {summary}"
+        );
+    }
+
+    /// The heartbeat is the only thing that reaches the user while a phase is
+    /// running, so the sampler task has to actually run: asserting on the string
+    /// [`heartbeat_message`] formats proves nothing about whether anything ever
+    /// calls it.
+    ///
+    /// `window/logMessage` is the one client call `tower-lsp` sends before the
+    /// handshake completes, so it is what a unit-level backend can observe —
+    /// `loadingBar` and `$/progress` are gated on `State::Initialized` and need
+    /// the real server the integration suite spawns.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_running_phase_reports_a_heartbeat() {
+        use futures_util::stream::StreamExt;
+
+        let (backend, socket) = test_backend_with_socket();
+        let (found_tx, found_rx) = tokio::sync::oneshot::channel();
+        let collector = tokio::spawn(async move {
+            let mut socket = socket;
+            let mut found_tx = Some(found_tx);
+            while let Some(req) = socket.next().await {
+                if req.method() != "window/logMessage" {
+                    continue;
+                }
+                let Some(params) = req.params() else { continue };
+                let Some(msg) = params["message"].as_str() else {
+                    continue;
+                };
+                if msg.starts_with("Scan phase still running:")
+                    && let Some(tx) = found_tx.take()
+                {
+                    let _ = tx.send(msg.to_string());
+                }
+            }
+        });
+
+        let ticker = start_phase(&backend, None, Phase::Validate, 4);
+        ticker.tick();
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(20), found_rx)
+            .await
+            .expect("a phase past the heartbeat interval must report one")
+            .expect("heartbeat collector stopped");
+        assert!(
+            msg.contains(Phase::Validate.label()),
+            "the heartbeat must name its phase, got {msg}"
+        );
+        assert!(
+            msg.contains("1/4"),
+            "the heartbeat must say how far the phase got, got {msg}"
+        );
+        ticker.stop();
         collector.abort();
         let _ = collector.await;
     }

@@ -24,6 +24,13 @@
 
 #### Engine
 
+* LSP: the startup scan's progress bar moves inside a phase instead of only at
+  the six phase boundaries, so a long validation pass no longer sits on
+  "Validating workspace… 70%" and reads as a hang. Every visible scan gets a
+  phase sampler now, not just one a client drove with a `workDoneToken`, and
+  each phase logs how long it took. A phase running past 30 seconds says so in
+  the output channel, with its file count, so a slow scan is distinguishable
+  from a wedged one. (#221)
 * LSP workspace-scan tests now prove pass 2 leaves concurrent info-service
   and localisation-index writers unblocked while it validates against
   snapshots. (#235)

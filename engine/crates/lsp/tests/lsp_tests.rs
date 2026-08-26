@@ -13294,6 +13294,268 @@ fn test_scan_reports_standard_work_done_progress() {
     );
 }
 
+/// #221: the startup scan carries no client token, so between "Indexing pass"
+/// and "Workspace validation complete" it used to log nothing at all while the
+/// bar sat on one phase boundary percentage — a slow phase and a wedged one
+/// looked identical. Every phase now says how long it took.
+#[test]
+fn test_startup_scan_logs_each_phase_duration() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    let p = ws.path().join("common/national_focus/tree.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "my_focus = {\n    id = my_focus\n}\n").unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+
+    let stdin = child.stdin.take().unwrap();
+    let collected = run_child_with_deadline(child, stdin, reader, 90, |_stdin, reader| {
+        let mut phases: Vec<String> = Vec::new();
+        for _ in 0..5000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if v["method"] == "window/logMessage"
+                && let Some(msg) = v["params"]["message"].as_str()
+                && let Some(phase) = msg.strip_prefix("Scan phase finished: ")
+            {
+                phases.push(phase.to_string());
+            }
+            if v["method"] == "loadingBar"
+                && v["params"]["enable"] == serde_json::Value::Bool(false)
+            {
+                break;
+            }
+        }
+        phases
+    });
+
+    let phases = collected.expect("timed out waiting for the scan to finish");
+    for expected in [
+        "Scanning workspace…",
+        "Indexing workspace…",
+        "Indexing base game…",
+        "Building localisation index…",
+        "Validating workspace…",
+        "Publishing diagnostics…",
+    ] {
+        assert!(
+            phases.iter().any(|p| p.starts_with(expected)),
+            "no duration logged for phase {expected:?}, got {phases:?}"
+        );
+    }
+}
+
+/// #221 itself: the percentage has to move *inside* a phase, not only at the
+/// six phase boundaries. The startup scan carries no `workDoneToken`, which is
+/// exactly the case that used to get an inert sampler and sit on "Validating
+/// workspace… 70%" for the whole of pass 2.
+///
+/// `CWTOOLS_SAMPLE_INTERVAL_MS=1` so a fixture small enough to keep the test
+/// quick still gets sampled several times per phase; the assertion is then on
+/// what was reported, not on winning a race with a 200ms timer.
+#[test]
+fn test_the_bar_percentage_moves_inside_a_phase() {
+    // Every value the boundary reports can produce. A percentage outside this
+    // set can only have come from a sampler reading the phase's counter.
+    const BOUNDARIES: [u64; 6] = [0, 3, 40, 55, 70, 92];
+
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    let focus_dir = ws.path().join("common/national_focus");
+    std::fs::create_dir_all(&focus_dir).unwrap();
+    // Enough files that a phase outlasts a 1ms sample by a wide margin, few
+    // enough that the debug-build scan stays quick.
+    for i in 0..200 {
+        std::fs::write(
+            focus_dir.join(format!("{i}.txt")),
+            format!("focus_{i} = {{\n    id = focus_{i}\n}}\n"),
+        )
+        .unwrap();
+    }
+
+    let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_SAMPLE_INTERVAL_MS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+
+    let stdin = child.stdin.take().unwrap();
+    let collected = run_child_with_deadline(child, stdin, reader, 90, |_stdin, reader| {
+        let mut pcts: Vec<u64> = Vec::new();
+        for _ in 0..20_000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if v["method"] != "loadingBar" {
+                continue;
+            }
+            if v["params"]["enable"] == serde_json::Value::Bool(false) {
+                break;
+            }
+            if let Some(pct) = v["params"]["percentage"].as_u64() {
+                pcts.push(pct);
+            }
+        }
+        pcts
+    });
+
+    let pcts = collected.expect("timed out waiting for the scan to finish");
+    assert!(!pcts.is_empty(), "the scan reported no percentages at all");
+    let sampled: Vec<u64> = pcts
+        .iter()
+        .copied()
+        .filter(|p| !BOUNDARIES.contains(p))
+        .collect();
+    assert!(
+        !sampled.is_empty(),
+        "every percentage was a phase boundary, so the bar never moved inside a phase: {pcts:?}"
+    );
+}
+
+/// #221: the scan's end state is a closed bar that stays closed. The phase
+/// samplers are detached tasks on a timer, and this pins that none of them
+/// outlives the scan far enough to put the status bar back up with nothing
+/// behind it.
+///
+/// It cannot force that race — a scan this small likely finishes before any
+/// sampler's first tick — so treat it as an end-state guard, not as coverage of
+/// `report_loading_bar_pct`'s open-bar check.
+#[test]
+fn test_the_bar_stays_closed_after_the_scan_closes_it() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    let p = ws.path().join("common/national_focus/tree.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "my_focus = {\n    id = my_focus\n}\n").unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+
+    let rx = spawn_frame_collector(reader);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut closed = false;
+    while std::time::Instant::now() < deadline {
+        let Ok(v) = rx.recv_timeout(std::time::Duration::from_millis(200)) else {
+            continue;
+        };
+        if v["method"] == "loadingBar" && v["params"]["enable"] == serde_json::Value::Bool(false) {
+            closed = true;
+            break;
+        }
+    }
+    assert!(closed, "the startup scan never closed the bar");
+
+    // Well past the 200ms sampler interval, so a tick that outlived the scan
+    // has had many chances to land.
+    let after = drain_until_quiet(
+        &rx,
+        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(3),
+    );
+    stop_server(&mut child);
+    let reopened: Vec<&serde_json::Value> = after
+        .iter()
+        .filter(|v| {
+            v["method"] == "loadingBar" && v["params"]["enable"] == serde_json::Value::Bool(true)
+        })
+        .collect();
+    assert!(
+        reopened.is_empty(),
+        "a sampler tick reopened the bar after the scan closed it: {reopened:?}"
+    );
+}
+
 /// #145: a command that carries a `workDoneToken` gets its progress reported
 /// against *that* token — one bar for the operation, driven by the client's own
 /// notification — rather than the server opening its `cwtools/scan` stream

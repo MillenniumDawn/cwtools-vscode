@@ -32,6 +32,38 @@ use crate::{Backend, DocumentState};
 /// 12k-file parse doesn't spend its time writing to stdout.
 const SAMPLE_INTERVAL_MS: u64 = 200;
 
+/// The sampler's period, overridable by `CWTOOLS_SAMPLE_INTERVAL_MS`.
+///
+/// The e2e suite has no other way to see the bar move: at 200ms a fixture small
+/// enough to run fast finishes every phase before the first sample, and one big
+/// enough to outlast it turns a timing margin into the assertion. Turning the
+/// period down makes "the percentage moves inside a phase" — the whole of #221
+/// — a deterministic check instead of a race. Zero is ignored rather than
+/// panicking `tokio::time::interval`; unset, which is every real run, is 200ms.
+fn sample_interval() -> std::time::Duration {
+    parse_sample_interval(std::env::var("CWTOOLS_SAMPLE_INTERVAL_MS").ok().as_deref())
+}
+
+/// The env parse, split out so the fallbacks are testable without mutating the
+/// process environment out from under every other test in the binary.
+fn parse_sample_interval(raw: Option<&str>) -> std::time::Duration {
+    let ms = raw
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(SAMPLE_INTERVAL_MS);
+    std::time::Duration::from_millis(ms)
+}
+
+/// How long a single phase may run before it says so in the output channel,
+/// then again every interval after that. Long enough that a healthy scan is
+/// silent (every phase of a warm Millennium Dawn scan is under this), short
+/// enough that a user watching a frozen bar gets an answer while they watch.
+/// 1s in tests so a heartbeat assertion doesn't sit for half a minute.
+#[cfg(not(test))]
+const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+#[cfg(test)]
+const HEARTBEAT_INTERVAL_SECS: u64 = 1;
+
 /// A shared "the user pressed Cancel" flag, polled by the scan.
 ///
 /// `None` for work with no client token behind it — the startup scan and the
@@ -175,7 +207,8 @@ impl ProgressSink {
     }
 }
 
-/// Turns a counter the parallel passes bump into a moving percentage.
+/// Turns a counter the parallel passes bump into a moving percentage, and says
+/// so in the output channel when a phase overruns.
 ///
 /// The rayon sections can't report for themselves: they hold `parking_lot`
 /// guards, run under `block_in_place`, and have no async context to send a
@@ -184,38 +217,52 @@ impl ProgressSink {
 /// round trip per chunk, so instead they bump an atomic and this task samples
 /// it on a timer.
 ///
-/// Inert (no task spawned, [`PhaseTicker::tick`] a no-op) when the command
-/// carried no token — the background pass must not pay for progress nobody
-/// asked for.
+/// Inert (no task spawned, [`PhaseTicker::tick`] a no-op) only for a quiet
+/// pass, which must not reach the user at all. Every visible scan gets one,
+/// with or without a client token behind it: the startup scan is exactly the
+/// one that used to sit on a phase boundary percentage for its whole longest
+/// phase and read as a hang (#221).
 pub(crate) struct PhaseTicker {
-    done: Option<Arc<AtomicUsize>>,
-    sampler: Option<tokio::task::JoinHandle<()>>,
+    live: Option<LivePhase>,
+}
+
+struct LivePhase {
+    phase: Phase,
+    started: std::time::Instant,
+    done: Arc<AtomicUsize>,
+    sampler: tokio::task::JoinHandle<()>,
 }
 
 impl PhaseTicker {
     /// A ticker for work with no progress stream behind it.
     pub(crate) fn inert() -> Self {
-        Self {
-            done: None,
-            sampler: None,
-        }
+        Self { live: None }
     }
 
     /// Count one item finished. Called from inside the rayon closures, so it
     /// must stay a single relaxed atomic add.
     pub(crate) fn tick(&self) {
-        if let Some(done) = self.done.as_ref() {
-            done.fetch_add(1, Ordering::Relaxed);
+        if let Some(live) = self.live.as_ref() {
+            live.done.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Stop sampling. Not `async`: the sampler owns nothing that needs
-    /// draining, and its last report is already on the wire or superseded by
-    /// the caller's own end-of-phase report.
-    pub(crate) fn stop(mut self) {
-        if let Some(handle) = self.sampler.take() {
-            handle.abort();
-        }
+    /// Stop sampling and describe the phase that just ended, for the output
+    /// channel. Not `async`: the sampler owns nothing that needs draining, and
+    /// its last report is already on the wire or superseded by the caller's own
+    /// end-of-phase report.
+    pub(crate) fn stop(mut self) -> Option<String> {
+        self.halt()
+    }
+
+    fn halt(&mut self) -> Option<String> {
+        let live = self.live.take()?;
+        live.sampler.abort();
+        Some(format!(
+            "Scan phase finished: {} ({:.1}s)",
+            live.phase.label(),
+            live.started.elapsed().as_secs_f64()
+        ))
     }
 }
 
@@ -223,9 +270,7 @@ impl Drop for PhaseTicker {
     fn drop(&mut self) {
         // A ticker dropped without `stop` (an early return on cancel) must not
         // leave a task reporting progress for a phase that is over.
-        if let Some(handle) = self.sampler.take() {
-            handle.abort();
-        }
+        self.halt();
     }
 }
 
@@ -342,37 +387,6 @@ impl CommandProgress {
         }
     }
 
-    /// Start sampling a counter for a parallel phase. The returned ticker is
-    /// bumped once per item by the worker closures.
-    pub(crate) fn start_phase(&self, phase: Phase, total: usize) -> PhaseTicker {
-        let Some(sink) = self.sink.clone() else {
-            return PhaseTicker {
-                done: None,
-                sampler: None,
-            };
-        };
-        let done = Arc::new(AtomicUsize::new(0));
-        let counter = done.clone();
-        let sampler = tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(std::time::Duration::from_millis(SAMPLE_INTERVAL_MS));
-            // The first tick of a tokio interval fires immediately; the phase
-            // has done nothing yet, so let the caller's own boundary report
-            // stand and start sampling one interval in.
-            interval.tick().await;
-            loop {
-                interval.tick().await;
-                let seen = counter.load(Ordering::Relaxed);
-                sink.report(phase.label(), Some(phase_percentage(phase, seen, total)))
-                    .await;
-            }
-        });
-        PhaseTicker {
-            done: Some(done),
-            sampler: Some(sampler),
-        }
-    }
-
     /// Close the stream and deregister the token.
     pub(crate) async fn finish(mut self, message: Option<String>) {
         self.ended = true;
@@ -416,16 +430,88 @@ impl Drop for CommandProgress {
     }
 }
 
-/// [`CommandProgress::start_phase`] for a scan that may have no command behind
-/// it, so the scan body doesn't branch on `Option` at every phase.
+/// Start sampling a phase. The returned ticker is bumped once per item by the
+/// worker closures, and its task turns that counter into bar updates plus a
+/// heartbeat line whenever the phase runs long.
+///
+/// `progress` is the command that started the scan, or `None` for the startup
+/// and background passes — it decides which `$/progress` stream the updates go
+/// to, not whether they happen. A `total` of 0 is a phase with no per-item
+/// counter (base-game indexing, the loc rebuild): the bar holds at the boundary
+/// value the caller reported and only the heartbeat runs.
 pub(crate) fn start_phase(
+    backend: &Backend,
     progress: Option<&CommandProgress>,
     phase: Phase,
     total: usize,
 ) -> PhaseTicker {
-    match progress {
-        Some(progress) => progress.start_phase(phase, total),
-        None => PhaseTicker::inert(),
+    let done = Arc::new(AtomicUsize::new(0));
+    let counter = done.clone();
+    let token = progress.and_then(CommandProgress::token).cloned();
+    let backend = Backend {
+        client: backend.client.clone(),
+        state: backend.state.clone(),
+    };
+    let sampler = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(sample_interval());
+        // The first tick of a tokio interval fires immediately; the phase has
+        // done nothing yet, so let the caller's own boundary report stand and
+        // start sampling one interval in.
+        interval.tick().await;
+        let started = std::time::Instant::now();
+        let heartbeat = std::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
+        let mut next_heartbeat = heartbeat;
+        loop {
+            interval.tick().await;
+            let seen = counter.load(Ordering::Relaxed);
+            if total > 0 {
+                backend
+                    .report_loading_bar_pct(
+                        token.as_ref(),
+                        phase.label(),
+                        phase_percentage(phase, seen, total),
+                    )
+                    .await;
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= next_heartbeat {
+                next_heartbeat += heartbeat;
+                backend
+                    .client
+                    .log_message(
+                        MessageType::INFO,
+                        heartbeat_message(phase, seen, total, elapsed),
+                    )
+                    .await;
+            }
+        }
+    });
+    PhaseTicker {
+        live: Some(LivePhase {
+            phase,
+            started: std::time::Instant::now(),
+            done,
+            sampler,
+        }),
+    }
+}
+
+/// The "this is still running" line. A phase with a counter says how far it
+/// got, so a stalled one is distinguishable from a slow one at a glance.
+fn heartbeat_message(
+    phase: Phase,
+    seen: usize,
+    total: usize,
+    elapsed: std::time::Duration,
+) -> String {
+    let secs = elapsed.as_secs_f64();
+    if total > 0 {
+        format!(
+            "Scan phase still running: {} ({secs:.0}s, {seen}/{total} files)",
+            phase.label()
+        )
+    } else {
+        format!("Scan phase still running: {} ({secs:.0}s)", phase.label())
     }
 }
 
@@ -538,13 +624,55 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_sample_interval_falls_back_to_the_default() {
+        let default = std::time::Duration::from_millis(SAMPLE_INTERVAL_MS);
+        assert_eq!(parse_sample_interval(None), default, "unset");
+        assert_eq!(parse_sample_interval(Some("")), default, "empty");
+        assert_eq!(parse_sample_interval(Some("soon")), default, "unparseable");
+        // `tokio::time::interval` panics on a zero period, so a stray `=0` must
+        // fall back rather than take the scan down with it.
+        assert_eq!(parse_sample_interval(Some("0")), default, "zero");
+    }
+
+    #[test]
+    fn test_sample_interval_honors_a_positive_override() {
+        assert_eq!(
+            parse_sample_interval(Some("5")),
+            std::time::Duration::from_millis(5)
+        );
+    }
+
+    #[test]
+    fn test_heartbeat_says_how_far_a_counted_phase_got() {
+        let msg = heartbeat_message(
+            Phase::Validate,
+            1200,
+            7514,
+            std::time::Duration::from_secs(90),
+        );
+        assert!(msg.contains(Phase::Validate.label()), "{msg}");
+        assert!(msg.contains("90s"), "{msg}");
+        assert!(
+            msg.contains("1200/7514"),
+            "a stalled phase must be distinguishable from a slow one: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_heartbeat_omits_the_count_for_an_uncounted_phase() {
+        let msg = heartbeat_message(Phase::Vanilla, 0, 0, std::time::Duration::from_secs(30));
+        assert!(msg.contains(Phase::Vanilla.label()), "{msg}");
+        assert!(!msg.contains('/'), "no counter, no ratio: {msg}");
+    }
+
     #[tokio::test]
     async fn test_inert_ticker_is_a_no_op() {
-        let ticker = PhaseTicker {
-            done: None,
-            sampler: None,
-        };
+        let ticker = PhaseTicker::inert();
         ticker.tick();
-        ticker.stop();
+        assert!(
+            ticker.stop().is_none(),
+            "a quiet pass's ticker has no phase to report the duration of"
+        );
     }
 }
