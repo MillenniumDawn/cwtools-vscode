@@ -157,12 +157,15 @@ jobs:
       - name: Test build
         run: npm run build -- package-prebuilt
       # Host V8 coverage: mocha forces the instrumented host to exit after
-      # the unit label, and host_coverage.py kills a leftover process tree
-      # if Electron still hangs under xvfb. Tight step timeout so a hang
-      # cannot burn the whole build job.
+      # the host label (a superset of unit's and smoke's files, so this one
+      # run measures everything those would, including modules like
+      # graphPanel.ts that only extension.test.ts exercises), and
+      # host_coverage.py kills a leftover process tree if Electron still
+      # hangs under xvfb. Tight step timeout so a hang cannot burn the whole
+      # build job.
       - name: Host coverage
         if: always()
-        timeout-minutes: 8
+        timeout-minutes: 15
         run: npm run test:coverage
       - name: Upload host coverage
         if: always()

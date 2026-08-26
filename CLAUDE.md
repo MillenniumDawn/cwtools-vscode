@@ -77,7 +77,7 @@ Every host label goes through `scripts/build/hosttest.py`, which picks a display
 
 Single test: `npx --no-install vitest run extension/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `node scripts/build/python.mjs scripts/build/hosttest.py --label unit --grep 'name'` (unrecognized arguments pass through to `vscode-test`). Watch modes: `npm run test:watch` and `npm run test:node:watch`.
 
-Coverage: `npm run test:coverage` (unit label, V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). The two runs cover disjoint modules (engine.ts and executable.ts are vitest-owned), and `scripts/build/coverage_summary.py` renders rust, host, and node into the PR comment.
+Coverage: `npm run test:coverage` (`host` label, needs a built server binary like `test:host`; V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). The two runs cover disjoint modules (engine.ts and executable.ts are vitest-owned, and `HOST_COVERAGE_DROPS` in `scripts/build/coverage_metrics.py` keeps them out of the host report), and `scripts/build/coverage_summary.py` renders rust, host, and node into the PR comment.
 
 Host suites must not import extension modules directly: the host runs the esbuild bundle, so a direct import is a second copy of the module. Reach the extension's own modules through its activation API (`graphPanelModule()` in `extension/test/support/utils.ts`).
 

@@ -257,7 +257,7 @@ def render_coverage_summary(
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     selected = (
-        [source for source in SOURCES if "unit" in source.labels]
+        [source for source in SOURCES if source.labels]
         if "--host-only" in args
         else list(SOURCES)
     )

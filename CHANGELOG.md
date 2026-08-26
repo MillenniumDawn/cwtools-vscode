@@ -2,6 +2,12 @@
 
 #### Extension
 
+* `test:coverage` runs the `host` label instead of `unit`, so it measures
+  modules like `graphPanel.ts` that only `extension.test.ts` exercises
+  instead of reporting them at a misleadingly low, accidental number.
+  `HOST_COVERAGE_DROPS` now matches `vitest.config.ts`'s `coverage.include`
+  exactly, so vitest-owned modules (e.g. `commandProgress.ts`) stay out of
+  the host report instead of leaking in with a stale, partial figure. (#220)
 * `test:watch` reruns from compiled client output instead of repository
   bookkeeping, and test hosts disable Electron's crash reporter so interrupted
   sessions leave no detached Crashpad process. (#422)

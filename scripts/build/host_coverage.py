@@ -14,7 +14,7 @@ from coverage_metrics import validate_host_coverage_summary
 from hosttest import resolve_display, test_cli_command
 from paths import REPO_ROOT
 
-HOST_COVERAGE_TIMEOUT_MS = 5 * 60 * 1000
+HOST_COVERAGE_TIMEOUT_MS = 12 * 60 * 1000
 HOST_COVERAGE_KILL_GRACE_MS = 5_000
 
 COVERAGE_DIR = REPO_ROOT / "coverage"
@@ -147,7 +147,12 @@ def main() -> int:
         if display.note is not None:
             sys.stderr.write(f"{display.note}\n")
         _run("extension compilation", _npm(), ["run", "compile"])
-        command = display.prefix + test_cli_command(["unit"], coverage=True)
+        # host's file list is a superset of unit's and smoke's (see
+        # .vscode-test.mjs), so this one run measures everything those would
+        # and picks up modules (e.g. graphPanel.ts) that only extension.test.ts
+        # exercises. It needs a built cwtools-server binary and network access
+        # for the background rules fetch, same as `npm run test:host`.
+        command = display.prefix + test_cli_command(["host"], coverage=True)
         run_with_timeout(
             "extension-host coverage",
             command[0],

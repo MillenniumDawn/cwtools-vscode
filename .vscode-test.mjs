@@ -38,7 +38,8 @@
 // step (pr.yml) is a separate call.
 //
 // Coverage applies globally when `--coverage` is passed (test:coverage runs the
-// `unit` label).
+// `host` label, since its file list is a superset of `unit`'s and `smoke`'s
+// and it's the only label that exercises modules like graphPanel.ts).
 
 import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";

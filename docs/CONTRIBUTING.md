@@ -90,7 +90,7 @@ npm run test:node      # node-only unit tests for the pure modules (vitest, fast
 npm test               # unit label: VS Code API, no language server
 npm run test:smoke     # unit plus activation against the real server
 npm run test:host      # everything, including hover and completion
-npm run test:coverage  # unit label with validated V8 coverage
+npm run test:coverage  # host label with validated V8 coverage
 npm run test:node:coverage  # vitest coverage into coverage-node/
 npm run test:native    # unit label in a visible window, on purpose
 npm run bench:node     # client hot-path benchmarks
