@@ -8,8 +8,8 @@ from typing import NamedTuple
 
 import pytest
 
-import hosttest
-from paths import REPO_ROOT
+import hosttest  # pyright: ignore[reportMissingImports]
+from paths import REPO_ROOT  # pyright: ignore[reportMissingImports]
 
 # The runner only asks whether the CLI entry point exists, so a checked-in file
 # stands in for it and the suite does not need node_modules installed.
