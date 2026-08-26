@@ -94,6 +94,7 @@ const hostFiles = [
 // process failing under xvfb), so ask for it explicitly and put a developer
 // machine on the same path, which takes a GPU-process crash off #216's list.
 const softwareRendering = "--disable-gpu";
+const disableCrashReporter = "--disable-crash-reporter";
 
 // scripts/build/hosttest.py resolves the display backend and exports the name
 // it settled on. `ozone` is Electron's own headless Chromium backend: it needs
@@ -116,28 +117,48 @@ export default defineConfig({
 			label: "unit",
 			files: unitFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile, softwareRendering, ...headless],
+			launchArgs: [
+				sampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
 		},
 		{
 			...base,
 			label: "smoke",
 			files: smokeFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile, softwareRendering, ...headless],
+			launchArgs: [
+				sampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
 		},
 		{
 			...base,
 			label: "live",
 			files: liveFiles,
 			workspaceFolder: liveWorkspace,
-			launchArgs: [liveSampleFile, softwareRendering, ...headless],
+			launchArgs: [
+				liveSampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
 		},
 		{
 			...base,
 			label: "rules-sync",
 			files: rulesSyncFiles,
 			workspaceFolder: rulesSyncWorkspace,
-			launchArgs: [rulesSyncSampleFile, softwareRendering, ...headless],
+			launchArgs: [
+				rulesSyncSampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
 			env: {
 				CWTOOLS_TEST_HOI4_REPO: hoi4RulesFixture,
 				CWTOOLS_TEST_HOI4_REF: "3f03757a6f15565f763434e5752021c3ba8c0c3e",
@@ -149,7 +170,13 @@ export default defineConfig({
 			label: "host",
 			files: hostFiles,
 			workspaceFolder: sampleWorkspace,
-			launchArgs: [sampleFile, softwareRendering, "--log=debug", ...headless],
+			launchArgs: [
+				sampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				"--log=debug",
+				...headless,
+			],
 		},
 	],
 	coverage: {
