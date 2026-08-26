@@ -119,7 +119,7 @@ impl LocService {
     /// inside the parallel map alongside parsing — mirroring the CLI's
     /// `discover_and_parse` — so a large loc tree isn't read sequentially before
     /// the parse fans out.
-    fn from_paths(paths: Vec<PathBuf>, budget: ScanBudget, langs: Option<&[Lang]>) -> Self {
+    pub fn from_paths(paths: Vec<PathBuf>, budget: ScanBudget, langs: Option<&[Lang]>) -> Self {
         use rayon::prelude::*;
         let bytes = ScanBytes::new();
         let results: Vec<Result<Vec<LocFile>, (String, String)>> = paths

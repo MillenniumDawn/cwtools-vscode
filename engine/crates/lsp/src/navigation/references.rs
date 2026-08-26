@@ -122,13 +122,34 @@ impl Backend {
         };
         if !roots.is_empty() {
             let discovered = tokio::task::block_in_place(|| {
-                let refs: Vec<&std::path::Path> = roots.iter().map(|p| p.as_path()).collect();
-                cwtools_localization::LocService::discover_files_filtered(
-                    &refs,
-                    cwtools_file_manager::file_manager::ScanBudget::default(),
+                match cwtools_driver::discover_localisation_files(
+                    &roots,
                     &ignore_files,
                     &ignore_dirs,
-                )
+                    cwtools_driver::DiscoveryPolicy::Workspace,
+                ) {
+                    Ok(discovery) => {
+                        for failure in discovery.failures {
+                            tracing::warn!(
+                                path = %failure.path.display(),
+                                error = %failure.error,
+                                "localisation discovery skipped path"
+                            );
+                        }
+                        discovery
+                            .files
+                            .into_iter()
+                            .filter(|file| {
+                                file.kind == cwtools_file_manager::FileKind::Localisation
+                            })
+                            .map(|file| file.path)
+                            .collect()
+                    }
+                    Err(error) => {
+                        tracing::warn!(error = %error, "localisation discovery failed");
+                        Vec::new()
+                    }
+                }
             });
             for path in discovered {
                 uris.insert(crate::paths::path_to_uri(&path));

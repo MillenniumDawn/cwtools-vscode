@@ -256,9 +256,16 @@ impl Backend {
         // the CLI's --case-sensitive-files. With no workspace folder there is
         // no mod half and the check stays silent, as does a mod-only run with
         // no base game. Clone, not take — must survive across scans.
-        let workspace_root = match self.state.config.read().workspace_roots.first().cloned() {
-            Some(r) => r,
-            None => return,
+        let (workspace_root, ignore_files, ignore_dirs) = {
+            let config = self.state.config.read();
+            let Some(workspace_root) = config.workspace_roots.first().cloned() else {
+                return;
+            };
+            (
+                workspace_root,
+                config.ignore_file_patterns.clone(),
+                config.ignore_dir_patterns.clone(),
+            )
         };
         let vanilla_paths = match self.state.vanilla_file_paths.lock().clone() {
             Some(p) => p,
@@ -266,6 +273,8 @@ impl Backend {
         };
         let file_index = cwtools_driver::build_file_index(
             &workspace_root,
+            &ignore_files,
+            &ignore_dirs,
             cwtools_driver::VanillaFiles::Cached(vanilla_paths),
             false,
         );

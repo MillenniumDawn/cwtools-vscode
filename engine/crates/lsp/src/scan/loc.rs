@@ -11,6 +11,35 @@ use crate::{Backend, LocLocationMap, LocTextMap};
 
 use super::{VanillaLoc, stat_signature_for};
 
+fn localisation_paths(
+    roots: &[std::path::PathBuf],
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+    policy: cwtools_driver::DiscoveryPolicy,
+) -> Vec<std::path::PathBuf> {
+    match cwtools_driver::discover_localisation_files(roots, ignore_files, ignore_dirs, policy) {
+        Ok(discovery) => {
+            for failure in discovery.failures {
+                tracing::warn!(
+                    path = %failure.path.display(),
+                    error = %failure.error,
+                    "localisation discovery skipped path"
+                );
+            }
+            discovery
+                .files
+                .into_iter()
+                .filter(|file| file.kind == cwtools_file_manager::FileKind::Localisation)
+                .map(|file| file.path)
+                .collect()
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "localisation discovery failed");
+            Vec::new()
+        }
+    }
+}
+
 /// Extract the per-key hover text and a representative definition site from a
 /// loaded [`LocService`], keyed by `index`'s interned keys so the maps share
 /// their allocations with the loc index.
@@ -67,9 +96,8 @@ impl Backend {
     /// Stat-only signature (path, size, mtime) over the loc files
     /// `rebuild_and_publish_loc` re-reads on every scan. Lets a quiet background
     /// pass detect "nothing loc-related changed" and skip the full rebuild
-    /// without reading or parsing a single file. Discovers files via
-    /// `LocService::discover_files_filtered` — the exact filtered walk
-    /// `rebuild_and_publish_loc` uses — so this can't drift from what it reads.
+    /// without reading or parsing a single file. Uses the shared workspace
+    /// discovery entry point, which is also used for the rebuild.
     /// The base-game install is deliberately absent: it can't change while the
     /// editor is running and its contribution is memoized by
     /// [`Backend::vanilla_loc`], so stat'ing its ~2000 loc files every pass
@@ -83,11 +111,11 @@ impl Backend {
                 config.ignore_dir_patterns.clone(),
             )
         };
-        let files = cwtools_localization::LocService::discover_files_filtered(
-            &[root_path],
-            cwtools_file_manager::file_manager::ScanBudget::default(),
+        let files = localisation_paths(
+            &[root_path.to_path_buf()],
             &ignore_files,
             &ignore_dirs,
+            cwtools_driver::DiscoveryPolicy::Workspace,
         );
         stat_signature_for(&files)
     }
@@ -129,12 +157,15 @@ impl Backend {
         {
             return Some(Arc::clone(loc));
         }
-        let service = cwtools_localization::LocService::from_folders_filtered(
-            &[&key.0],
+        let service = cwtools_localization::LocService::from_paths(
+            localisation_paths(
+                std::slice::from_ref(&key.0),
+                &[],
+                &[],
+                cwtools_driver::DiscoveryPolicy::Vanilla,
+            ),
             cwtools_file_manager::file_manager::ScanBudget::default(),
             key.1.as_deref(),
-            &[],
-            &[],
         );
         if service.files().is_empty() {
             tracing::warn!(dir = %key.0.display(), "base-game dir holds no localisation files");
@@ -220,12 +251,15 @@ impl Backend {
                 } else {
                     self.state.vanilla_loc_keys.lock().clone()
                 };
-                let service = cwtools_localization::LocService::from_folders_filtered(
-                    &[root_path],
+                let service = cwtools_localization::LocService::from_paths(
+                    localisation_paths(
+                        &[root_path.to_path_buf()],
+                        &ignore_files,
+                        &ignore_dirs,
+                        cwtools_driver::DiscoveryPolicy::Workspace,
+                    ),
                     cwtools_file_manager::file_manager::ScanBudget::default(),
                     parsed_languages,
-                    &ignore_files,
-                    &ignore_dirs,
                 );
                 let mut idx = cwtools_localization::LocIndex::build_scoped(
                     &service,

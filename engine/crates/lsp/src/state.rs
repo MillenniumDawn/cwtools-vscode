@@ -571,7 +571,7 @@ pub(crate) struct DocumentState {
     /// nothing loc-related has changed on disk. `None` until the first scan
     /// runs.
     pub(crate) last_loc_signature: parking_lot::Mutex<Option<u64>>,
-    /// Cached `LocService::discover_files` result for the workspace root, so a
+    /// Cached shared-discovery result for the workspace root, so a
     /// code-action request (fired on cursor movement) doesn't re-walk the whole
     /// tree when nothing loc-related changed on disk. `(root, files, sig)` where
     /// `sig` is the scan's `last_loc_signature` value at population time: the

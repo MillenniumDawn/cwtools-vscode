@@ -149,7 +149,7 @@ pub fn decode_bytes(bytes: Vec<u8>) -> (String, FileEncoding) {
 }
 
 /// How the file should be treated during discovery.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileKind {
     /// Paradox script (.txt / .gui / .gfx) — parsed into an AST.
     Script,
@@ -286,6 +286,25 @@ pub struct DiscoveredFile {
     pub logical_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredPath {
+    pub path: PathBuf,
+    pub root_relative_path: String,
+    pub kind: FileKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveryFailure {
+    pub path: PathBuf,
+    pub error: String,
+}
+
+#[derive(Debug, Default)]
+pub struct DiscoveryReport {
+    pub files: Vec<DiscoveredPath>,
+    pub failures: Vec<DiscoveryFailure>,
+}
+
 /// A discovered script file with its parsed AST.
 pub struct ParsedFile {
     /// Absolute path on disk.
@@ -316,6 +335,7 @@ pub enum DirectoryType {
 }
 
 /// Configuration for file discovery.
+#[derive(Clone)]
 pub struct FileManagerConfig {
     /// Root directory to search.
     pub root: PathBuf,
@@ -655,6 +675,133 @@ impl FileManager {
             errors: parsed.errors,
         })
     }
+}
+
+pub fn discover_paths(
+    roots: &[&Path],
+    config: &FileManagerConfig,
+    kinds: &[FileKind],
+) -> Result<DiscoveryReport, FileError> {
+    let mut report = DiscoveryReport::default();
+
+    for root in roots {
+        if !root.is_dir() {
+            return Err(FileError::MissingRoot((*root).to_path_buf()));
+        }
+        let root_prefix = normalize_root_prefix(root);
+        let mut accept = |path: &Path| {
+            let root_relative_path = compute_logical_path_with_root(path, &root_prefix);
+            accept_discovered_path(config, kinds, path, root_relative_path)
+        };
+        let mut on_err = |path: &Path, error: std::io::Error| {
+            report.failures.push(DiscoveryFailure {
+                path: path.to_path_buf(),
+                error: error.to_string(),
+            });
+        };
+        let mut state = WalkState {
+            out: Vec::new(),
+            remaining_files: config.scan_budget.max_files,
+        };
+        walk_dir_generic(
+            root,
+            WalkRoot {
+                prefix: &root_prefix,
+                is_root_level: true,
+            },
+            config,
+            &[],
+            &mut accept,
+            &mut on_err,
+            &mut state,
+        )
+        .map_err(FileError::from)?;
+        report.files.extend(state.out);
+    }
+    Ok(report)
+}
+
+pub fn discover_paths_multi_mod(config: &FileManagerConfig, kinds: &[FileKind]) -> DiscoveryReport {
+    let include_dirs = [".".to_string()];
+    let mods = expand_multiple_mods(&config.root);
+    let files = discover_files_multi_mod(
+        None,
+        &mods,
+        &include_dirs,
+        &config.exclude_dir_patterns,
+        config.scan_budget,
+    );
+    DiscoveryReport {
+        files: files
+            .into_iter()
+            .filter_map(|(path, root_relative_path)| {
+                accept_discovered_path(config, kinds, &path, root_relative_path)
+            })
+            .collect(),
+        failures: Vec::new(),
+    }
+}
+
+fn accept_discovered_path(
+    config: &FileManagerConfig,
+    kinds: &[FileKind],
+    path: &Path,
+    root_relative_path: String,
+) -> Option<DiscoveredPath> {
+    let kind = classify_extension(path);
+    if !kinds.contains(&kind) {
+        return None;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if config
+        .exclude_patterns
+        .iter()
+        .any(|pattern| ignore_glob_match(pattern, file_name, &root_relative_path))
+    {
+        return None;
+    }
+    if kind == FileKind::Script
+        && (!is_included_script_path(&root_relative_path, &config.include_dirs)
+            || !accept_script_file(config, path, &root_relative_path))
+    {
+        return None;
+    }
+    if kind == FileKind::Localisation
+        && (!is_localisation_path(&root_relative_path) || has_hidden_component(&root_relative_path))
+    {
+        return None;
+    }
+    Some(DiscoveredPath {
+        path: path.to_path_buf(),
+        root_relative_path,
+        kind,
+    })
+}
+
+fn is_included_script_path(path: &str, include_dirs: &[String]) -> bool {
+    include_dirs.iter().any(|dir| {
+        if dir == "." {
+            return true;
+        }
+        let dir = dir.replace('\\', "/").trim_matches('/').to_string();
+        path.strip_prefix(&dir)
+            .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+fn is_localisation_path(path: &str) -> bool {
+    path.split('/').any(|component| {
+        component.eq_ignore_ascii_case("localisation")
+            || component.eq_ignore_ascii_case("localisation_synced")
+            || component.eq_ignore_ascii_case("localization")
+    })
+}
+
+fn has_hidden_component(path: &str) -> bool {
+    path.split('/').any(|component| component.starts_with('.'))
 }
 
 /// Compute the logical (game-relative) path by stripping the root prefix.
@@ -2748,5 +2895,151 @@ mod tests {
             "a/b/skip.txt",
             &["**\\skip.txt".to_string()]
         ));
+    }
+
+    #[test]
+    fn discover_paths_applies_kind_and_ignore_policy_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for path in [
+            "common/keep.txt",
+            "localisation/keep_l_english.yml",
+            "localisation/ignored_l_english.yml",
+            ".cache/localisation/hidden_l_english.yml",
+            "gfx/icon.dds",
+        ] {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let mut config = FileManagerConfig {
+            root: root.to_path_buf(),
+            ..Default::default()
+        };
+        config
+            .exclude_patterns
+            .push("localisation/ignored_l_english.yml".to_string());
+
+        let report = discover_paths(
+            &[root],
+            &config,
+            &[FileKind::Script, FileKind::Localisation, FileKind::Resource],
+        )
+        .unwrap();
+        let files: Vec<(FileKind, String)> = report
+            .files
+            .iter()
+            .map(|file| (file.kind, file.root_relative_path.clone()))
+            .collect();
+
+        assert_eq!(
+            files,
+            vec![
+                (FileKind::Script, "common/keep.txt".to_string()),
+                (FileKind::Resource, "gfx/icon.dds".to_string()),
+                (
+                    FileKind::Localisation,
+                    "localisation/keep_l_english.yml".to_string()
+                ),
+            ]
+        );
+        assert!(report.failures.is_empty());
+    }
+
+    #[test]
+    fn discover_paths_enforces_the_budget_per_root() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        for root in [first.path(), second.path()] {
+            let path = root.join("localisation/test_l_english.yml");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let config = FileManagerConfig {
+            root: first.path().to_path_buf(),
+            scan_budget: ScanBudget {
+                max_files: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let report = discover_paths(
+            &[first.path(), second.path()],
+            &config,
+            &[FileKind::Localisation],
+        )
+        .unwrap();
+
+        assert_eq!(report.files.len(), 2);
+        assert!(report.files[0].path.starts_with(first.path()));
+        assert!(report.files[1].path.starts_with(second.path()));
+    }
+
+    #[test]
+    fn discover_paths_multi_mod_layers_localisation_and_resources() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        for (name, path, replace_path) in
+            [("a", "mods/a", None), ("b", "mods/b", Some("localisation"))]
+        {
+            let descriptor = root.join("mod").join(format!("{name}.mod"));
+            std::fs::create_dir_all(descriptor.parent().unwrap()).unwrap();
+            let replace_path = replace_path
+                .map(|path| format!("replace_path = \"{path}\"\n"))
+                .unwrap_or_default();
+            std::fs::write(
+                descriptor,
+                format!("name = \"{name}\"\npath = \"{path}\"\n{replace_path}"),
+            )
+            .unwrap();
+        }
+        for path in [
+            "mods/a/localisation/shared_l_english.yml",
+            "mods/a/gfx/shared.dds",
+            "mods/b/localisation/shared_l_english.yml",
+            "mods/b/gfx/shared.dds",
+        ] {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let config = FileManagerConfig {
+            root: root.to_path_buf(),
+            ..Default::default()
+        };
+
+        let report =
+            discover_paths_multi_mod(&config, &[FileKind::Localisation, FileKind::Resource]);
+
+        assert_eq!(report.files.len(), 2);
+        assert!(
+            report
+                .files
+                .iter()
+                .all(|file| file.path.starts_with(root.join("mods/b")))
+        );
+        assert_eq!(
+            report
+                .files
+                .iter()
+                .map(|file| file.root_relative_path.as_str())
+                .collect::<Vec<_>>(),
+            ["gfx/shared.dds", "localisation/shared_l_english.yml"]
+        );
+    }
+
+    #[test]
+    fn discover_paths_missing_root_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing");
+        let config = FileManagerConfig {
+            root: missing.clone(),
+            ..Default::default()
+        };
+
+        let error = discover_paths(&[&missing], &config, &[FileKind::Localisation]).unwrap_err();
+
+        assert!(matches!(error, FileError::MissingRoot(path) if path == missing));
     }
 }
