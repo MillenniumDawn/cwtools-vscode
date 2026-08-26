@@ -5,6 +5,9 @@
 * `test:watch` reruns from compiled client output instead of repository
   bookkeeping, and test hosts disable Electron's crash reporter so interrupted
   sessions leave no detached Crashpad process. (#422)
+* `tests/scripts/test_hosttest.py` now guards the real `hosttest.TEST_CLI` path
+  when `node_modules/@vscode/test-cli` is installed, skipping cleanly when it
+  is not. (#423)
 * The host hover test for quoted `value[…]` localisation keys runs again. The
   in-repo engine already resolves those values through their unquoted
   localisation keys; the unrelated `pop_faction_flag` completion skip remains.
