@@ -2111,25 +2111,57 @@ mod tests {
         );
     }
 
-    /// A sampler is a detached task on a timer, so a tick can always land after
-    /// the scan closed the bar. That tick must be dropped: re-opening leaves the
-    /// status bar showing forever and begins a `$/progress` token nothing ends.
+    /// The heartbeat is the only thing that reaches the user while a phase is
+    /// running, so the sampler task has to actually run: asserting on the string
+    /// [`heartbeat_message`] formats proves nothing about whether anything ever
+    /// calls it.
+    ///
+    /// `window/logMessage` is the one client call `tower-lsp` sends before the
+    /// handshake completes, so it is what a unit-level backend can observe —
+    /// `loadingBar` and `$/progress` are gated on `State::Initialized` and need
+    /// the real server the integration suite spawns.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_sampler_tick_cannot_reopen_a_closed_bar() {
-        let backend = test_backend();
-        backend
-            .send_loading_bar_pct(None, true, Phase::Validate.label(), Some(70))
-            .await;
-        backend.send_loading_bar_pct(None, false, "", None).await;
-        assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
+    async fn a_running_phase_reports_a_heartbeat() {
+        use futures_util::stream::StreamExt;
 
-        backend
-            .report_loading_bar_pct(None, Phase::Validate.label(), 80)
-            .await;
+        let (backend, socket) = test_backend_with_socket();
+        let (found_tx, found_rx) = tokio::sync::oneshot::channel();
+        let collector = tokio::spawn(async move {
+            let mut socket = socket;
+            let mut found_tx = Some(found_tx);
+            while let Some(req) = socket.next().await {
+                if req.method() != "window/logMessage" {
+                    continue;
+                }
+                let Some(params) = req.params() else { continue };
+                let Some(msg) = params["message"].as_str() else {
+                    continue;
+                };
+                if msg.starts_with("Scan phase still running:")
+                    && let Some(tx) = found_tx.take()
+                {
+                    let _ = tx.send(msg.to_string());
+                }
+            }
+        });
+
+        let ticker = start_phase(&backend, None, Phase::Validate, 4);
+        ticker.tick();
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(20), found_rx)
+            .await
+            .expect("a phase past the heartbeat interval must report one")
+            .expect("heartbeat collector stopped");
         assert!(
-            !backend.state.loading_bar_active.load(Ordering::SeqCst),
-            "a late sampler tick must not reopen the bar the scan already closed"
+            msg.contains(Phase::Validate.label()),
+            "the heartbeat must name its phase, got {msg}"
         );
+        assert!(
+            msg.contains("1/4"),
+            "the heartbeat must say how far the phase got, got {msg}"
+        );
+        ticker.stop();
+        collector.abort();
+        let _ = collector.await;
     }
 
     /// Slices out of lock-step must fail loudly. `chunks().zip()` truncates to

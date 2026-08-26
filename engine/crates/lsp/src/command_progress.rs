@@ -36,7 +36,11 @@ const SAMPLE_INTERVAL_MS: u64 = 200;
 /// then again every interval after that. Long enough that a healthy scan is
 /// silent (every phase of a warm Millennium Dawn scan is under this), short
 /// enough that a user watching a frozen bar gets an answer while they watch.
+/// 1s in tests so a heartbeat assertion doesn't sit for half a minute.
+#[cfg(not(test))]
 const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+#[cfg(test)]
+const HEARTBEAT_INTERVAL_SECS: u64 = 1;
 
 /// A shared "the user pressed Cancel" flag, polled by the scan.
 ///
