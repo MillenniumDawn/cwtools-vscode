@@ -13294,6 +13294,90 @@ fn test_scan_reports_standard_work_done_progress() {
     );
 }
 
+/// #221: the startup scan carries no client token, so between "Indexing pass"
+/// and "Workspace validation complete" it used to log nothing at all while the
+/// bar sat on one phase boundary percentage — a slow phase and a wedged one
+/// looked identical. Every phase now says how long it took.
+#[test]
+fn test_startup_scan_logs_each_phase_duration() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    let p = ws.path().join("common/national_focus/tree.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "my_focus = {\n    id = my_focus\n}\n").unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+
+    let stdin = child.stdin.take().unwrap();
+    let collected = run_child_with_deadline(child, stdin, reader, 90, |_stdin, reader| {
+        let mut phases: Vec<String> = Vec::new();
+        for _ in 0..5000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if v["method"] == "window/logMessage"
+                && let Some(msg) = v["params"]["message"].as_str()
+                && let Some(phase) = msg.strip_prefix("Scan phase finished: ")
+            {
+                phases.push(phase.to_string());
+            }
+            if v["method"] == "loadingBar"
+                && v["params"]["enable"] == serde_json::Value::Bool(false)
+            {
+                break;
+            }
+        }
+        phases
+    });
+
+    let phases = collected.expect("timed out waiting for the scan to finish");
+    for expected in [
+        "Scanning workspace…",
+        "Indexing workspace…",
+        "Indexing base game…",
+        "Building localisation index…",
+        "Validating workspace…",
+        "Publishing diagnostics…",
+    ] {
+        assert!(
+            phases.iter().any(|p| p.starts_with(expected)),
+            "no duration logged for phase {expected:?}, got {phases:?}"
+        );
+    }
+}
+
 /// #145: a command that carries a `workDoneToken` gets its progress reported
 /// against *that* token — one bar for the operation, driven by the client's own
 /// notification — rather than the server opening its `cwtools/scan` stream

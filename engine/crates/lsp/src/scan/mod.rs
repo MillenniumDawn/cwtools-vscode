@@ -223,6 +223,52 @@ impl Backend {
         if !enable && !was_active {
             return;
         }
+        self.emit_loading_bar(
+            owner.and_then(CommandProgress::token).cloned(),
+            enable,
+            value,
+            percentage,
+            true,
+        )
+        .await;
+    }
+
+    /// Move a bar that is *already* open, without opening or closing one.
+    ///
+    /// This is what the phase samplers use. They are detached tasks on a timer,
+    /// so a tick can always land after the scan they were sampling has closed
+    /// the bar; treating that tick as an open would leave the status bar showing
+    /// forever, and re-opening the server's `$/progress` stream would begin a
+    /// token the scan will never end. Dropping it is the mirror of
+    /// [`send_loading_bar_pct`]'s rule that closing what was never opened is
+    /// dropped.
+    ///
+    /// [`send_loading_bar_pct`]: Backend::send_loading_bar_pct
+    pub(crate) async fn report_loading_bar_pct(
+        &self,
+        token: Option<&ProgressToken>,
+        value: &str,
+        percentage: u32,
+    ) {
+        if !self.state.loading_bar_active.load(Ordering::SeqCst) {
+            return;
+        }
+        self.emit_loading_bar(token.cloned(), true, value, Some(percentage), false)
+            .await;
+    }
+
+    /// Put one update on both channels. `open_stream` is whether this update is
+    /// allowed to create the server's `cwtools/scan` token when it isn't live
+    /// yet — true for the phase boundaries that own the bar, false for a
+    /// sampler tick.
+    async fn emit_loading_bar(
+        &self,
+        command_token: Option<ProgressToken>,
+        enable: bool,
+        value: &str,
+        percentage: Option<u32>,
+        open_stream: bool,
+    ) {
         let payload = match percentage {
             Some(pct) => {
                 serde_json::json!({ "enable": enable, "value": value, "percentage": pct })
@@ -230,7 +276,7 @@ impl Backend {
             None => serde_json::json!({ "enable": enable, "value": value }),
         };
         self.client.send_notification::<LoadingBar>(payload).await;
-        self.send_work_done_progress(owner, enable, value, percentage)
+        self.send_work_done_progress(command_token, enable, value, percentage, open_stream)
             .await;
     }
 
@@ -241,17 +287,17 @@ impl Backend {
     /// client that didn't advertise support isn't required to answer it.
     async fn send_work_done_progress(
         &self,
-        owner: Option<&CommandProgress>,
+        command_token: Option<ProgressToken>,
         enable: bool,
         value: &str,
         percentage: Option<u32>,
+        open_stream: bool,
     ) {
         use tower_lsp::lsp_types::request::WorkDoneProgressCreate;
         // A command that passed its own `workDoneToken` owns this scan: its
         // phases report against that token and its `end` is sent by
         // `CommandProgress`, so opening the server's stream on top would show
         // two bars for one operation.
-        let command_token = owner.and_then(CommandProgress::token).cloned();
         if let Some(token) = command_token
             && enable
         {
@@ -294,6 +340,11 @@ impl Backend {
                 percentage,
             }),
             (true, false) => {
+                // A sampler tick must not open the stream: the scan that would
+                // have ended it is over.
+                if !open_stream {
+                    return;
+                }
                 // The client may refuse the token; leave the stream closed so a
                 // later phase creates it again instead of reporting against a
                 // token that was never registered.
