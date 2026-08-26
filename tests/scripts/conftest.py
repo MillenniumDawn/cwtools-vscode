@@ -33,6 +33,11 @@ def guard() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def resolve_pins() -> ModuleType:
+    return _load("resolve_pins")
+
+
+@pytest.fixture(scope="session")
 def rust_coverage() -> ModuleType:
     return _load("coverage")
 

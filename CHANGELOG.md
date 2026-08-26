@@ -2,6 +2,9 @@
 
 #### Extension
 
+* The `pins` job's inline bash for reading and resolving the guard baseline's
+  revision pins moved to `scripts/resolve_pins.py`, tested under
+  `tests/scripts/`. (#381)
 * `test:watch` reruns from compiled client output instead of repository
   bookkeeping, and test hosts disable Electron's crash reporter so interrupted
   sessions leave no detached Crashpad process. (#422)
