@@ -93,6 +93,14 @@ def test_an_unknown_backend_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None
         hosttest.resolve_display(platform="linux")
 
 
+@pytest.mark.skipif(
+    not (REPO_ROOT / "node_modules" / "@vscode" / "test-cli").is_dir(),
+    reason="node_modules/@vscode/test-cli is not installed",
+)
+def test_vendored_test_cli_path_resolves_to_file() -> None:
+    assert hosttest.TEST_CLI.is_file()
+
+
 @pytest.mark.usefixtures("no_override")
 def test_env_carries_the_resolved_backend() -> None:
     display = hosttest.resolve_display(platform="darwin")
