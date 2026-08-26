@@ -200,12 +200,19 @@ impl Backend {
     /// one — returns `false` so a caller like the `reindexWorkspace` command
     /// can report that back instead of the scan silently no-oping.
     ///
-    /// `quiet` suppresses every `loadingBar` notification the scan would
-    /// otherwise send, so the periodic background pass doesn't flash the
-    /// status bar while the user is working. `send_update_file_list` still
-    /// fires either way — it's cheap and keeps the file explorer honest —
-    /// except when the quiet short-circuit returns early: the file set is
-    /// unchanged by definition, so the list it would send is identical.
+    /// `quiet` suppresses every `loadingBar` notification and the server's own
+    /// `$/progress` stream, so the periodic background pass doesn't flash the
+    /// status bar while the user is working. It does not suppress a command
+    /// `workDoneToken` passed via [`validate_entire_workspace_tracked`]'s
+    /// `progress` — a client that explicitly asked for progress on a quiet
+    /// call still gets it, straight through its own token; see
+    /// [`Backend::enter_phase`]. `send_update_file_list` still fires either
+    /// way — it's cheap and keeps the file explorer honest — except when the
+    /// quiet short-circuit returns early: the file set is unchanged by
+    /// definition, so the list it would send is identical.
+    ///
+    /// [`validate_entire_workspace_tracked`]: Backend::validate_entire_workspace_tracked
+    /// [`Backend::enter_phase`]: Backend::enter_phase
     pub(crate) async fn validate_entire_workspace(&self, quiet: bool) -> bool {
         matches!(
             self.validate_entire_workspace_tracked(quiet, None).await,
@@ -268,7 +275,13 @@ impl Backend {
     /// sampler for it.
     ///
     /// `total` is the phase's item count, or 0 when it has none — see
-    /// [`start_phase`]. A quiet pass gets an inert ticker and says nothing.
+    /// [`start_phase`]. `quiet` means "do not touch the server's own
+    /// indicator" — the `loadingBar` notification and the server's own
+    /// `$/progress` stream — not "say nothing at all": a quiet pass carrying a
+    /// command `workDoneToken` (a client explicitly asked for progress on this
+    /// call) still reports its phases against that token, straight through
+    /// `progress`'s own stream. Only a quiet pass with no token gets an inert
+    /// ticker and says nothing.
     async fn enter_phase(
         &self,
         ticker: &mut PhaseTicker,
@@ -278,17 +291,24 @@ impl Backend {
         total: usize,
     ) {
         self.end_phase(ticker).await;
-        if quiet {
+        let token = progress.and_then(CommandProgress::token);
+        if quiet && token.is_none() {
             return;
         }
-        self.send_loading_bar_pct(
-            progress,
-            true,
-            phase.label(),
-            Some(phase_percentage(phase, 0, total)),
-        )
-        .await;
-        *ticker = start_phase(self, progress, phase, total);
+        if quiet {
+            if let Some(cp) = progress {
+                cp.report_phase(phase).await;
+            }
+        } else {
+            self.send_loading_bar_pct(
+                progress,
+                true,
+                phase.label(),
+                Some(phase_percentage(phase, 0, total)),
+            )
+            .await;
+        }
+        *ticker = start_phase(self, progress, quiet, phase, total);
     }
 
     /// Stop the running phase's sampler and log how long it ran. A scan that
@@ -2096,11 +2116,11 @@ mod tests {
     /// #221: a scan with no client token behind it — the startup scan — used to
     /// get an inert ticker, so its percentage moved only at the six phase
     /// boundaries and sat on "Validating workspace… 70%" for the whole of pass
-    /// 2. Only a quiet pass may go unsampled now.
+    /// 2. Only a tokenless quiet pass may go unsampled now.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_tokenless_phase_is_still_sampled() {
         let backend = test_backend();
-        let ticker = start_phase(&backend, None, Phase::Validate, 4);
+        let ticker = start_phase(&backend, None, false, Phase::Validate, 4);
         ticker.tick();
         let summary = ticker
             .stop()
@@ -2109,6 +2129,57 @@ mod tests {
             summary.contains(Phase::Validate.label()),
             "the phase summary must name its phase, got {summary}"
         );
+    }
+
+    /// #435: `enter_phase`'s `quiet` short-circuit used to drop phase
+    /// reporting entirely, even when the scan carried a command
+    /// `workDoneToken` — a client that explicitly asked for progress on a
+    /// quiet call got none. `quiet` must suppress only the server's own
+    /// `loadingBar`/`$/progress` indicator, not a caller's own token.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_quiet_phase_with_a_token_still_reports_against_it() {
+        let backend = test_backend();
+        let progress = CommandProgress::begin(
+            &backend,
+            Some(ProgressToken::String("test/435".to_string())),
+            "test",
+            false,
+        )
+        .await;
+        let mut ticker = PhaseTicker::inert();
+        backend
+            .enter_phase(&mut ticker, Some(&progress), true, Phase::Validate, 4)
+            .await;
+        ticker.tick();
+        let summary = ticker
+            .stop()
+            .expect("a quiet phase carrying a command token must still be sampled");
+        assert!(
+            summary.contains(Phase::Validate.label()),
+            "the phase summary must name its phase, got {summary}"
+        );
+        assert!(
+            !backend.state.loading_bar_active.load(Ordering::SeqCst),
+            "a quiet pass must never touch the server's own loadingBar indicator"
+        );
+        progress.finish(None).await;
+    }
+
+    /// The mirror case: a quiet pass with no token behind it stays fully
+    /// silent, unchanged from before #435.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_quiet_phase_with_no_token_stays_inert() {
+        let backend = test_backend();
+        let mut ticker = PhaseTicker::inert();
+        backend
+            .enter_phase(&mut ticker, None, true, Phase::Validate, 4)
+            .await;
+        ticker.tick();
+        assert!(
+            ticker.stop().is_none(),
+            "a quiet pass with no command token must get an inert ticker"
+        );
+        assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
     }
 
     /// The heartbeat is the only thing that reaches the user while a phase is
@@ -2145,7 +2216,7 @@ mod tests {
             }
         });
 
-        let ticker = start_phase(&backend, None, Phase::Validate, 4);
+        let ticker = start_phase(&backend, None, false, Phase::Validate, 4);
         ticker.tick();
         let msg = tokio::time::timeout(std::time::Duration::from_secs(20), found_rx)
             .await
