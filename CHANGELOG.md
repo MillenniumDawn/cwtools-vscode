@@ -2,6 +2,9 @@
 
 #### Extension
 
+* `test:watch` reruns from compiled client output instead of repository
+  bookkeeping, and test hosts disable Electron's crash reporter so interrupted
+  sessions leave no detached Crashpad process. (#422)
 * The host hover test for quoted `value[…]` localisation keys runs again. The
   in-repo engine already resolves those values through their unquoted
   localisation keys; the unrelated `pop_faction_flag` completion skip remains.
