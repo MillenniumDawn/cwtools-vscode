@@ -32,6 +32,28 @@ use crate::{Backend, DocumentState};
 /// 12k-file parse doesn't spend its time writing to stdout.
 const SAMPLE_INTERVAL_MS: u64 = 200;
 
+/// The sampler's period, overridable by `CWTOOLS_SAMPLE_INTERVAL_MS`.
+///
+/// The e2e suite has no other way to see the bar move: at 200ms a fixture small
+/// enough to run fast finishes every phase before the first sample, and one big
+/// enough to outlast it turns a timing margin into the assertion. Turning the
+/// period down makes "the percentage moves inside a phase" — the whole of #221
+/// — a deterministic check instead of a race. Zero is ignored rather than
+/// panicking `tokio::time::interval`; unset, which is every real run, is 200ms.
+fn sample_interval() -> std::time::Duration {
+    parse_sample_interval(std::env::var("CWTOOLS_SAMPLE_INTERVAL_MS").ok().as_deref())
+}
+
+/// The env parse, split out so the fallbacks are testable without mutating the
+/// process environment out from under every other test in the binary.
+fn parse_sample_interval(raw: Option<&str>) -> std::time::Duration {
+    let ms = raw
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(SAMPLE_INTERVAL_MS);
+    std::time::Duration::from_millis(ms)
+}
+
 /// How long a single phase may run before it says so in the output channel,
 /// then again every interval after that. Long enough that a healthy scan is
 /// silent (every phase of a warm Millennium Dawn scan is under this), short
@@ -431,8 +453,7 @@ pub(crate) fn start_phase(
         state: backend.state.clone(),
     };
     let sampler = tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_millis(SAMPLE_INTERVAL_MS));
+        let mut interval = tokio::time::interval(sample_interval());
         // The first tick of a tokio interval fires immediately; the phase has
         // done nothing yet, so let the caller's own boundary report stand and
         // start sampling one interval in.
@@ -601,6 +622,25 @@ mod tests {
             assert!(pct >= last, "percentage went backwards at {done}");
             last = pct;
         }
+    }
+
+    #[test]
+    fn test_sample_interval_falls_back_to_the_default() {
+        let default = std::time::Duration::from_millis(SAMPLE_INTERVAL_MS);
+        assert_eq!(parse_sample_interval(None), default, "unset");
+        assert_eq!(parse_sample_interval(Some("")), default, "empty");
+        assert_eq!(parse_sample_interval(Some("soon")), default, "unparseable");
+        // `tokio::time::interval` panics on a zero period, so a stray `=0` must
+        // fall back rather than take the scan down with it.
+        assert_eq!(parse_sample_interval(Some("0")), default, "zero");
+    }
+
+    #[test]
+    fn test_sample_interval_honors_a_positive_override() {
+        assert_eq!(
+            parse_sample_interval(Some("5")),
+            std::time::Duration::from_millis(5)
+        );
     }
 
     #[test]

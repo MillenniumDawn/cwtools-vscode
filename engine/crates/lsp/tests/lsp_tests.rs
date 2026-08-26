@@ -13378,6 +13378,102 @@ fn test_startup_scan_logs_each_phase_duration() {
     }
 }
 
+/// #221 itself: the percentage has to move *inside* a phase, not only at the
+/// six phase boundaries. The startup scan carries no `workDoneToken`, which is
+/// exactly the case that used to get an inert sampler and sit on "Validating
+/// workspace… 70%" for the whole of pass 2.
+///
+/// `CWTOOLS_SAMPLE_INTERVAL_MS=1` so a fixture small enough to keep the test
+/// quick still gets sampled several times per phase; the assertion is then on
+/// what was reported, not on winning a race with a 200ms timer.
+#[test]
+fn test_the_bar_percentage_moves_inside_a_phase() {
+    // Every value the boundary reports can produce. A percentage outside this
+    // set can only have come from a sampler reading the phase's counter.
+    const BOUNDARIES: [u64; 6] = [0, 3, 40, 55, 70, 92];
+
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    let focus_dir = ws.path().join("common/national_focus");
+    std::fs::create_dir_all(&focus_dir).unwrap();
+    // Enough files that a phase outlasts a 1ms sample by a wide margin, few
+    // enough that the debug-build scan stays quick.
+    for i in 0..200 {
+        std::fs::write(
+            focus_dir.join(format!("{i}.txt")),
+            format!("focus_{i} = {{\n    id = focus_{i}\n}}\n"),
+        )
+        .unwrap();
+    }
+
+    let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_SAMPLE_INTERVAL_MS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+
+    let stdin = child.stdin.take().unwrap();
+    let collected = run_child_with_deadline(child, stdin, reader, 90, |_stdin, reader| {
+        let mut pcts: Vec<u64> = Vec::new();
+        for _ in 0..20_000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if v["method"] != "loadingBar" {
+                continue;
+            }
+            if v["params"]["enable"] == serde_json::Value::Bool(false) {
+                break;
+            }
+            if let Some(pct) = v["params"]["percentage"].as_u64() {
+                pcts.push(pct);
+            }
+        }
+        pcts
+    });
+
+    let pcts = collected.expect("timed out waiting for the scan to finish");
+    assert!(!pcts.is_empty(), "the scan reported no percentages at all");
+    let sampled: Vec<u64> = pcts
+        .iter()
+        .copied()
+        .filter(|p| !BOUNDARIES.contains(p))
+        .collect();
+    assert!(
+        !sampled.is_empty(),
+        "every percentage was a phase boundary, so the bar never moved inside a phase: {pcts:?}"
+    );
+}
+
 /// #221: the scan's end state is a closed bar that stays closed. The phase
 /// samplers are detached tasks on a timer, and this pins that none of them
 /// outlives the scan far enough to put the status bar back up with nothing
