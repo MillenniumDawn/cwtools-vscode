@@ -24,10 +24,13 @@ HOST_COVERAGE_DROPS = (
     "extension/src/host/fnv1a.ts",
     "extension/src/host/focusTracking.ts",
     "extension/src/host/games.ts",
+    "extension/src/host/graphAvailability.ts",
     "extension/src/host/logger.ts",
     "extension/src/host/reindexSettings.ts",
     "extension/src/host/rulesManifest.ts",
     "extension/src/host/rulesSetup.ts",
+    "extension/src/host/trustedPaths.ts",
+    "extension/src/host/watchedFiles.ts",
 )
 
 COVERAGE_METRICS = ("lines", "statements", "branches", "functions")

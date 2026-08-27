@@ -2,6 +2,9 @@
 
 #### Extension
 
+* Node coverage now reports `watchedFiles.ts`, `graphAvailability.ts`, and
+  `trustedPaths.ts` next to the vitest suites that own them. The host report
+  drops those three so the two numbers stay disjoint. (#446)
 * `test:coverage` runs the `host` label instead of `unit`, so it measures
   modules like `graphPanel.ts` that only `extension.test.ts` exercises
   instead of reporting them at a misleadingly low, accidental number.
