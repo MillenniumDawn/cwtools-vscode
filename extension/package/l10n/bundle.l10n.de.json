@@ -42,5 +42,12 @@
   "CWTools: fixAllWorkspace failed: {0}": "CWTools: fixAllWorkspace fehlgeschlagen: {0}",
   "CWTools: this language server doesn't support formatting the workspace. Update the language server to enable it.": "CWTools: Dieser Sprachserver kann den Arbeitsbereich nicht formatieren. Aktualisiere den Sprachserver, um das freizuschalten.",
   "CWTools: Format workspace": "CWTools: Arbeitsbereich formatieren",
-  "CWTools: formatWorkspace failed: {0}": "CWTools: formatWorkspace fehlgeschlagen: {0}"
+  "CWTools: formatWorkspace failed: {0}": "CWTools: formatWorkspace fehlgeschlagen: {0}",
+  "CWTools: starting": "CWTools: startet",
+  "CWTools: ready": "CWTools: bereit",
+  "CWTools: stopped": "CWTools: gestoppt",
+  "Restart Server": "Server neu starten",
+  "Show Output": "Ausgabe anzeigen",
+  "CWTools: failed to restart the language server: {0}": "CWTools: der Sprachserver konnte nicht neu gestartet werden: {0}",
+  "CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.": "CWTools: der Sprachserver ist in den letzten 3 Minuten {0} Mal abgestürzt und wird nicht neu gestartet. Weitere Details im Ausgabekanal."
 }

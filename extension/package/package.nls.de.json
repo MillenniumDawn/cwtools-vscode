@@ -16,6 +16,8 @@
   "commands.exportProfilingLog.title": "Profiling-Protokoll exportieren",
   "commands.fixAllWorkspace.title": "Alle automatisch behebbaren Probleme im Arbeitsbereich beheben",
   "commands.formatWorkspace.title": "Arbeitsbereich formatieren",
+  "commands.restartServer.title": "Server neu starten",
+  "commands.showOutput.title": "Ausgabe anzeigen",
   "commands.showGraph.title": "Graph anzeigen",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "Graph aus JSON wiederherstellen",

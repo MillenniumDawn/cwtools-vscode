@@ -176,6 +176,16 @@
         "category": "cwtools"
       },
       {
+        "command": "cwtools.restartServer",
+        "title": "%commands.restartServer.title%",
+        "category": "cwtools"
+      },
+      {
+        "command": "cwtools.showOutput",
+        "title": "%commands.showOutput.title%",
+        "category": "cwtools"
+      },
+      {
         "command": "cwtools.showGraph",
         "title": "%commands.showGraph.title%",
         "category": "cwtools",

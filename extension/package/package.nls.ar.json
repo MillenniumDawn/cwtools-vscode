@@ -16,6 +16,8 @@
   "commands.exportProfilingLog.title": "تصدير سجل قياس الأداء",
   "commands.fixAllWorkspace.title": "إصلاح كل المشكلات القابلة للإصلاح تلقائيًا في مساحة العمل",
   "commands.formatWorkspace.title": "تنسيق مساحة العمل",
+  "commands.restartServer.title": "إعادة تشغيل الخادم",
+  "commands.showOutput.title": "عرض المخرجات",
   "commands.showGraph.title": "عرض المخطط",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "إعادة إنشاء المخطط من ملف JSON",

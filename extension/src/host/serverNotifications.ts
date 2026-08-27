@@ -1,6 +1,7 @@
-import type { ExtensionContext, StatusBarItem } from "vscode";
-import { window, StatusBarAlignment } from "vscode";
-import type { LanguageClient } from "vscode-languageclient/node";
+import type { ExtensionContext } from "vscode";
+import { window, l10n, commands, StatusBarAlignment } from "vscode";
+import type { LanguageClient, StateChangeEvent } from "vscode-languageclient/node";
+import { State } from "vscode-languageclient/node";
 
 import type { FileListItem } from "./fileExplorer";
 import { FileExplorer } from "./fileExplorer";
@@ -17,13 +18,22 @@ interface UpdateFileList {
 	fileList: FileListItem[];
 }
 
+const statusMenuCommand = "cwtools.statusBarMenu";
+
+export interface ServerNotifications {
+	initialScanDone: Promise<void>;
+	/** The status bar item's current text, for the host tests. */
+	statusText: () => string | undefined;
+	/** Called once the client's error handler gives up restarting. */
+	markStopped: () => void;
+}
+
 export function registerServerNotifications(
 	context: ExtensionContext,
 	client: LanguageClient,
-): Promise<void> {
+): ServerNotifications {
 	const loadingBarNotification = "loadingBar";
 	const updateFileList = "updateFileList";
-	let status: StatusBarItem | undefined;
 	let fileExplorer: FileExplorer;
 	let lastFileListSignature: string | undefined;
 	let initialScanStarted = false;
@@ -33,6 +43,39 @@ export function registerServerNotifications(
 		(resolve) => (resolveInitialScan = resolve),
 	);
 
+	// Persistent and visible even when idle, rather than the scan-only item
+	// this used to be, so restart/stopped state has somewhere to show.
+	const status = window.createStatusBarItem(StatusBarAlignment.Left);
+	status.command = statusMenuCommand;
+	status.text = l10n.t("CWTools: starting");
+	context.subscriptions.push(status);
+	status.show();
+
+	context.subscriptions.push(
+		commands.registerCommand(statusMenuCommand, async () => {
+			const restart = l10n.t("Restart Server");
+			const showOutput = l10n.t("Show Output");
+			const choice = await window.showQuickPick([restart, showOutput]);
+			if (choice === restart) {
+				await commands.executeCommand("cwtools.restartServer");
+			} else if (choice === showOutput) {
+				await commands.executeCommand("cwtools.showOutput");
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		// onDidChangeState is a lib getter returning Event<StateChangeEvent>;
+		// type-aware lint resolves it as unsafe under skipLibCheck though tsc
+		// types it (client, the handler and the returned Disposable are typed).
+		// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument
+		client.onDidChangeState((e: StateChangeEvent) => {
+			if (e.newState === State.Starting) {
+				status.text = l10n.t("CWTools: starting");
+			}
+		}),
+	);
+
 	client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
 		if (param.enable) {
 			if (initialScanPending) {
@@ -40,25 +83,17 @@ export function registerServerNotifications(
 			}
 			// A command notification is showing the same phases with a cancel
 			// button attached; a status-bar copy alongside it is the third
-			// indicator for one operation (cwtools-vscode#145). The scan-started
-			// bookkeeping above still runs, so the activation gate is unaffected.
+			// indicator for one operation (cwtools-vscode#145). Leave the
+			// persistent item's text as-is rather than duplicating the phase.
 			if (commandProgressActive()) {
-				status?.hide();
 				return;
-			}
-			// One persistent item updated in place: a scan emits many progress
-			// ticks, and dispose+recreate per tick makes the status bar churn.
-			if (status === undefined) {
-				status = window.createStatusBarItem(StatusBarAlignment.Left);
-				context.subscriptions.push(status);
 			}
 			status.text =
 				typeof param.percentage === "number"
 					? `${param.value} ${param.percentage}%`
 					: param.value;
-			status.show();
 		} else {
-			status?.hide();
+			status.text = l10n.t("CWTools: ready");
 			if (initialScanPending && initialScanStarted) {
 				initialScanPending = false;
 				resolveInitialScan();
@@ -78,5 +113,11 @@ export function registerServerNotifications(
 			lastFileListSignature = signature;
 		}
 	});
-	return initialScanDone;
+	return {
+		initialScanDone,
+		statusText: () => status.text,
+		markStopped: () => {
+			status.text = l10n.t("CWTools: stopped");
+		},
+	};
 }

@@ -42,5 +42,12 @@
   "CWTools: fixAllWorkspace failed: {0}": "CWTools: فشل fixAllWorkspace: {0}",
   "CWTools: this language server doesn't support formatting the workspace. Update the language server to enable it.": "CWTools: هذا الخادم لا يدعم تنسيق مساحة العمل. حدّث خادم اللغة لتفعيل هذه الميزة.",
   "CWTools: Format workspace": "CWTools: تنسيق مساحة العمل",
-  "CWTools: formatWorkspace failed: {0}": "CWTools: فشل formatWorkspace: {0}"
+  "CWTools: formatWorkspace failed: {0}": "CWTools: فشل formatWorkspace: {0}",
+  "CWTools: starting": "CWTools: قيد البدء",
+  "CWTools: ready": "CWTools: جاهز",
+  "CWTools: stopped": "CWTools: متوقف",
+  "Restart Server": "إعادة تشغيل الخادم",
+  "Show Output": "عرض المخرجات",
+  "CWTools: failed to restart the language server: {0}": "CWTools: تعذّرت إعادة تشغيل خادم اللغة: {0}",
+  "CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.": "CWTools: تعطّل خادم اللغة {0} مرات في آخر 3 دقائق ولن تجري إعادة تشغيله. راجع المخرجات لمزيد من التفاصيل."
 }

@@ -13,7 +13,7 @@ import {
 	formatWorkspaceAvailable,
 } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";
-import { errorMessage, logError } from "./logger";
+import { errorMessage, logError, outputChannel } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
 // Type-only: the graph panel stays lazily imported (it pulls in the webview
 // plumbing), and `import type` is erased, so naming its shape here doesn't
@@ -132,6 +132,27 @@ export function registerCommands(
 ): void {
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showReferences", showReferences),
+	);
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.showOutput", () => {
+			outputChannel.show();
+		}),
+	);
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.restartServer", async () => {
+			try {
+				await client.restart();
+				publishCommandAvailability(client);
+			} catch (err) {
+				const msg = errorMessage(err);
+				window.showErrorMessage(
+					l10n.t(
+						"CWTools: failed to restart the language server: {0}",
+						msg,
+					),
+				);
+			}
+		}),
 	);
 	let currentGraphDepth = 3;
 	const wheelSensitivity = (): number =>

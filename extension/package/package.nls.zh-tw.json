@@ -16,6 +16,8 @@
   "commands.exportProfilingLog.title": "匯出效能分析記錄",
   "commands.fixAllWorkspace.title": "修正工作區中所有可自動修正的問題",
   "commands.formatWorkspace.title": "格式化工作區",
+  "commands.restartServer.title": "重新啟動伺服器",
+  "commands.showOutput.title": "顯示輸出",
   "commands.showGraph.title": "顯示圖表",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "從 JSON 重新建立圖表",

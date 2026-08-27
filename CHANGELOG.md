@@ -2,6 +2,12 @@
 
 #### Extension
 
+* A persistent status bar item shows the language server's state (starting,
+  scanning n%, ready, stopped) even when idle. Clicking it offers Restart
+  Server and Show Output. `cwtools.restartServer` stops and restarts the
+  client, re-running the initial scan; `cwtools.showOutput` reveals the
+  CWTools output channel. If the client's error handler gives up restarting
+  after repeated crashes, the item says stopped instead of going quiet. (#440)
 * Format Document and Format Selection work on Paradox script. Workspace-wide
   format is a palette command gated on the server advertising `formatWorkspace`.
   New `cwtools.formatting` settings cover indent style/size, trailing

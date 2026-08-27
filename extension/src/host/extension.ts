@@ -27,6 +27,8 @@ export let defaultClient: LanguageClient;
 // language below it. Exposed via CwtoolsApi so the rules-sync host suite
 // can find what activation chose without guessing globalStorage's path.
 let rulesCacheRoot: string | undefined;
+// The status item's text getter, once registerServerNotifications has run.
+let statusText: (() => string | undefined) | undefined;
 
 // What activate() hands back to other extensions and to the host tests. The
 // tests can't import graphPanel.ts directly: the extension host runs the
@@ -39,6 +41,8 @@ export interface CwtoolsApi {
 	serverCommands(): readonly string[];
 	/** The rules cache root dir, once activation has resolved it. */
 	rulesCacheRoot(): string | undefined;
+	/** The status bar item's current text, once activation has created it. */
+	serverStatusText(): string | undefined;
 }
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
@@ -104,17 +108,23 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			workspace.getConfiguration("cwtools").get<string>(`cache.${language}`),
 		]);
 
-		const client = createLanguageClient(context, {
-			language,
-			serverExe,
-			cacheDir,
-			rulesCache,
-		});
+		// registerServerNotifications (below) owns markStopped, but the
+		// errorHandler that calls it has to be in clientOptions before the
+		// client exists, so this holder lets the client be created first.
+		const stopped: { notify?: () => void } = {};
+		const client = createLanguageClient(
+			context,
+			{ language, serverExe, cacheDir, rulesCache },
+			() => stopped.notify?.(),
+		);
 		defaultClient = client;
 		client.registerProposedFeatures();
 
 		const tracker = await registerDocumentLanguage(context, client, "paradox");
-		const initialScanDone = registerServerNotifications(context, client);
+		const notifications = registerServerNotifications(context, client);
+		const initialScanDone = notifications.initialScanDone;
+		statusText = notifications.statusText;
+		stopped.notify = notifications.markStopped;
 
 		if (workspace.name === undefined) {
 			void window.showWarningMessage(
@@ -199,5 +209,6 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			defaultClient?.initializeResult?.capabilities.executeCommandProvider
 				?.commands ?? [],
 		rulesCacheRoot: () => rulesCacheRoot,
+		serverStatusText: () => statusText?.(),
 	};
 }

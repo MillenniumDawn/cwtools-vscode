@@ -2,6 +2,7 @@ import * as path from "path";
 import type { ExtensionContext } from "vscode";
 import { CancellationError, Uri, l10n, workspace, window } from "vscode";
 import type {
+	ErrorHandler,
 	LanguageClientOptions,
 	ServerOptions,
 } from "vscode-languageclient/node";
@@ -10,6 +11,8 @@ import {
 	TransportKind,
 	RevealOutputChannelOn,
 	State,
+	ErrorAction,
+	CloseAction,
 	DidChangeConfigurationNotification,
 } from "vscode-languageclient/node";
 import {
@@ -132,9 +135,47 @@ async function openGeneratedLoc(result: unknown): Promise<void> {
 	}
 }
 
+// Same restart-limiting shape as the library's own DefaultErrorHandler
+// (createDefaultErrorHandler), reimplemented because that one is an instance
+// method and errorHandler has to be in clientOptions before the client
+// exists. The addition is onStopped, called once restarts give up so the
+// status bar item can say so instead of just going quiet.
+function createRestartLimitingErrorHandler(
+	onStopped: () => void,
+): ErrorHandler {
+	const maxRestartCount = 4;
+	const restarts: number[] = [];
+	return {
+		error: (_error, _message, count) =>
+			count !== undefined && count <= 3
+				? { action: ErrorAction.Continue }
+				: { action: ErrorAction.Shutdown },
+		closed: () => {
+			restarts.push(Date.now());
+			if (restarts.length <= maxRestartCount) {
+				return { action: CloseAction.Restart };
+			}
+			const diff = restarts[restarts.length - 1] - restarts[0];
+			if (diff <= 3 * 60 * 1000) {
+				onStopped();
+				return {
+					action: CloseAction.DoNotRestart,
+					message: l10n.t(
+						"CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.",
+						maxRestartCount + 1,
+					),
+				};
+			}
+			restarts.shift();
+			return { action: CloseAction.Restart };
+		},
+	};
+}
+
 export function createLanguageClient(
 	context: ExtensionContext,
 	cfg: ClientConfig,
+	onStopped: () => void,
 ): LanguageClient {
 	// If the extension is launched in debug mode then the debug server options are used
 	// Otherwise the run options are used.
@@ -352,6 +393,7 @@ export function createLanguageClient(
 		// them ourselves too makes client.start() throw "command already exists",
 		// so the UX (result toasts, opening the generated loc) lives here instead.
 		middleware,
+		errorHandler: createRestartLimitingErrorHandler(onStopped),
 	};
 
 	const client = new LanguageClient(
