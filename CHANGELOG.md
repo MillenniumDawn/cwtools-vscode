@@ -40,6 +40,10 @@
 * LSP workspace-scan tests now prove pass 2 leaves concurrent info-service
   and localisation-index writers unblocked while it validates against
   snapshots. (#235)
+* LSP: a quiet scan carrying a command `workDoneToken` now reports its phases
+  against that token again. `quiet` means "do not touch the server's own
+  `loadingBar`/`$/progress` indicator", not "say nothing" — a client that
+  explicitly asked for progress on a quiet call was getting none. (#435)
 * Workspace discovery now supplies scripts, localisation, resources, and file
   indexes through one driver API. CLI and LSP localisation scans, signatures,
   references, and create-key actions share root-relative ignores, limits,
