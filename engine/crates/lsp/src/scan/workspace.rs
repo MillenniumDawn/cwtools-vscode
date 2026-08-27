@@ -23,8 +23,8 @@ use crate::validate::{
 };
 
 use super::{
-    OpenDocSnapshot, ScanGuard, ScanSummary, ScannedFile, hold_scan_for_tests, quiet_pass_can_skip,
-    spawn_logging_panics, stat_signature_for,
+    OpenDocSnapshot, ScanGuard, ScanSummary, ScannedFile, hold_parse_for_tests,
+    hold_scan_for_tests, quiet_pass_can_skip, spawn_logging_panics, stat_signature_for,
 };
 
 /// ~one rayon work unit; 256 balances per-chunk rayon parallelism vs UI
@@ -542,6 +542,7 @@ impl Backend {
         // within a single scan.
         self.enter_phase(&mut phase, progress, quiet, Phase::Parse, scan_files.len())
             .await;
+        hold_parse_for_tests().await;
         // Snapshot the set of currently-open document URIs so both passes can
         // skip them: open docs were already indexed by did_open/did_change and
         // their fresher in-memory diagnostics must not be clobbered by stale
