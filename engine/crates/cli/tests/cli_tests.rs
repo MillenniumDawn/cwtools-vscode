@@ -144,7 +144,8 @@ fn test_completions_cover_the_subcommands_and_flags() {
         .success()
         .stdout(predicate::str::contains("validate"))
         .stdout(predicate::str::contains("--fail-on"))
-        .stdout(predicate::str::contains("list-codes"));
+        .stdout(predicate::str::contains("list-codes"))
+        .stdout(predicate::str::contains("format"));
 }
 
 #[test]
@@ -2810,4 +2811,78 @@ fn test_unknown_engine_fails() {
 #[test]
 fn test_no_subcommand_fails() {
     cwtools().assert().failure();
+}
+
+// ── Format ───────────────────────────────────────────────────────────────────
+
+fn format_mod_dir() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    let common = tmp.path().join("common");
+    std::fs::create_dir_all(&common).unwrap();
+    std::fs::write(common.join("a.txt"), "root={\n a=1\n}\n").unwrap();
+    tmp
+}
+
+#[test]
+fn test_format_dry_run_exits_nonzero_when_files_would_change() {
+    let tmp = format_mod_dir();
+    cwtools()
+        .args(["format", "--directory", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("would be formatted"));
+}
+
+#[test]
+fn test_format_apply_rewrites_and_second_dry_run_is_clean() {
+    let tmp = format_mod_dir();
+    let path = tmp.path().join("common").join("a.txt");
+    cwtools()
+        .args([
+            "format",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Formatted 1 file"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text, "root = {\n    a = 1\n}\n");
+    cwtools()
+        .args(["format", "--directory", tmp.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 file(s) would be formatted"));
+}
+
+#[test]
+fn test_format_skips_a_parse_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let common = tmp.path().join("common");
+    std::fs::create_dir_all(&common).unwrap();
+    std::fs::write(common.join("bad.txt"), "root = {\n").unwrap();
+    cwtools()
+        .args(["format", "--directory", tmp.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("failed to parse"));
+}
+
+#[test]
+fn test_format_rejects_an_unknown_indent_style() {
+    let tmp = format_mod_dir();
+    cwtools()
+        .args([
+            "format",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--indent-style",
+            "banana",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("indent-style"));
 }

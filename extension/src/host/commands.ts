@@ -10,6 +10,7 @@ import {
 import {
 	graphDataAvailable,
 	fixAllWorkspaceAvailable,
+	formatWorkspaceAvailable,
 } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";
 import { errorMessage, logError } from "./logger";
@@ -33,6 +34,12 @@ function serverProvidesFixAll(client: LanguageClient): boolean {
 	);
 }
 
+function serverProvidesFormatWorkspace(client: LanguageClient): boolean {
+	return formatWorkspaceAvailable(
+		client.initializeResult?.capabilities.executeCommandProvider?.commands,
+	);
+}
+
 // Gates the palette entries and the editor-title button; call once the server
 // has started and its capabilities are known.
 export function publishCommandAvailability(client: LanguageClient): void {
@@ -45,6 +52,11 @@ export function publishCommandAvailability(client: LanguageClient): void {
 		"setContext",
 		"cwtoolsFixAllAvailable",
 		serverProvidesFixAll(client),
+	);
+	void commands.executeCommand(
+		"setContext",
+		"cwtoolsFormatWorkspaceAvailable",
+		serverProvidesFormatWorkspace(client),
 	);
 }
 
@@ -361,6 +373,38 @@ export function registerCommands(
 				const msg = errorMessage(err);
 				window.showErrorMessage(
 					l10n.t("CWTools: fixAllWorkspace failed: {0}", msg),
+				);
+			}
+		}),
+	);
+
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.formatWorkspace", async () => {
+			if (!serverProvidesFormatWorkspace(client)) {
+				window.showWarningMessage(
+					l10n.t(
+						"CWTools: this language server doesn't support formatting the workspace. Update the language server to enable it.",
+					),
+				);
+				return;
+			}
+			try {
+				const result = await runCancellableExecuteCommand(
+					client,
+					"formatWorkspace",
+					[],
+					l10n.t("CWTools: Format workspace"),
+				);
+				if (typeof result === "string" && result.length > 0) {
+					window.showInformationMessage(`CWTools: ${result}`);
+				}
+			} catch (err) {
+				if (err instanceof vscode.CancellationError) {
+					return;
+				}
+				const msg = errorMessage(err);
+				window.showErrorMessage(
+					l10n.t("CWTools: formatWorkspace failed: {0}", msg),
 				);
 			}
 		}),

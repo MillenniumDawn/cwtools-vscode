@@ -8,6 +8,7 @@ mod cache;
 mod discover;
 mod explain;
 mod fix;
+mod format;
 mod loc;
 mod parse;
 mod rules;
@@ -34,6 +35,7 @@ pub(crate) fn dispatch(command: Commands) {
         } => cache::vanilla(game, vanilla, rules, output),
         Commands::Loc(args) => loc::run(args),
         Commands::Fix(args) => fix::run(args),
+        Commands::Format(args) => format::run(args),
         Commands::Explain { code } => explain::explain(code),
         Commands::ListCodes => explain::list(),
         Commands::Completions { shell } => completions(shell),

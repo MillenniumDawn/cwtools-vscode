@@ -15,6 +15,7 @@
   // Save the language server's timing/memory log to a file, for a bug report
   "commands.exportProfilingLog.title": "匯出效能分析記錄",
   "commands.fixAllWorkspace.title": "修正工作區中所有可自動修正的問題",
+  "commands.formatWorkspace.title": "格式化工作區",
   "commands.showGraph.title": "顯示圖表",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "從 JSON 重新建立圖表",
@@ -27,6 +28,7 @@
   "configuration.title.localisation": "CWTools：本地化",
   "configuration.title.errors": "CWTools：錯誤與診斷",
   "configuration.title.cache": "CWTools：遊戲安裝路徑",
+  "configuration.title.formatting": "CWTools：格式化",
   "configuration.title.graph": "CWTools：圖表",
   "configuration.title.advanced": "CWTools：進階",
   // Trace here refers to very detailed logs
@@ -55,6 +57,10 @@
   "configuration.cwtools.hover.scopeDisplay.context": "顯示停留欄位所在的環境作用域。",
   // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
   "configuration.cwtools.hover.scopeDisplay.resolved": "同時顯示停留的連結或 FROM/ROOT/PREV 關鍵字解析到的作用域。",
+  "configuration.cwtools.formatting.indentStyle.description": "用空格或定位字元縮排。Format Document 改用編輯器的 insertSpaces/tabSize。",
+  "configuration.cwtools.formatting.indentSize.description": "indentStyle 為 space 時每一層縮排的空格數。Format Document 改用編輯器的 tabSize。",
+  "configuration.cwtools.formatting.trimTrailingWhitespace.description": "格式化時去掉每行結尾空白。",
+  "configuration.cwtools.formatting.insertFinalNewline.description": "格式化時確保檔案以換行結束。",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code
   "configuration.cwtools.inlayHints.locTitles.description": "在指向已知實體的值後方內嵌顯示其本地化標題，不必停留就能看到事件或國策 id 對應的遊戲內名稱。變更後請**重新載入視窗**。",
   "configuration.cwtools.inlayHints.scopes.description": "在會改變作用域的索引鍵後方內嵌顯示它解析到的作用域。隨附的伺服器尚未產生這類提示，因此目前開啟後不會顯示任何內容。變更後請**重新載入視窗**。",

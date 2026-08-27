@@ -96,6 +96,10 @@ pub(crate) enum Commands {
     /// Apply machine-applicable fixes for the curated fixable diagnostics.
     /// Dry-run by default (prints a unified-diff preview); pass `--apply` to write.
     Fix(FixArgs),
+    /// Reprint Paradox script with normalized whitespace. Dry-run by default
+    /// (lists files that would change and exits 1 when any would); pass
+    /// `--apply` to write. Parse errors skip the file rather than rewriting it.
+    Format(FormatArgs),
     /// Print what one CWxxx code means: its severity, its message template, the
     /// long form from the error-code reference, and whether the check is wired.
     Explain {
@@ -372,6 +376,35 @@ pub(crate) struct FixArgs {
     pub(crate) apply: bool,
     /// Accept a run with nothing to fix. Without this, a ruleset that loads
     /// no types or a directory that yields no files is an error (exit 4).
+    #[arg(long)]
+    pub(crate) allow_empty: bool,
+}
+
+#[derive(Args)]
+pub(crate) struct FormatArgs {
+    /// Read settings from this cwtools.toml instead of searching for one.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) config: Option<PathBuf>,
+    /// Directory containing game files
+    #[arg(long, short)]
+    pub(crate) directory: Option<PathBuf>,
+    /// Extra filename glob patterns to skip. May be repeated.
+    #[arg(long = "ignore-file", value_name = "GLOB")]
+    pub(crate) ignore_files: Vec<String>,
+    /// Extra directory glob patterns to skip. May be repeated.
+    #[arg(long = "ignore-dir", value_name = "GLOB")]
+    pub(crate) ignore_dirs: Vec<String>,
+    /// Indent with `space` (default) or `tab`.
+    #[arg(long, default_value = "space")]
+    pub(crate) indent_style: String,
+    /// Spaces per indent level when `--indent-style space`. Ignored for tabs.
+    #[arg(long, default_value_t = 4)]
+    pub(crate) indent_size: u32,
+    /// Write the formatted files. Without this the command is a dry run.
+    #[arg(long)]
+    pub(crate) apply: bool,
+    /// Accept a run with no files. Without this, an empty directory is an
+    /// error (exit 4).
     #[arg(long)]
     pub(crate) allow_empty: bool,
 }

@@ -92,6 +92,10 @@ suite("reindexSettings — buildSettingsPayload", () => {
 		hoverShowAllLanguages: false,
 		hoverDebug: false,
 		hoverScopeDisplay: "context",
+		formattingIndentStyle: "space",
+		formattingIndentSize: 4,
+		formattingTrimTrailingWhitespace: true,
+		formattingInsertFinalNewline: true,
 	};
 
 	test("carries the server keys and spreads the ignore options", () => {
@@ -134,6 +138,10 @@ suite("reindexSettings — buildSettingsPayload", () => {
 			hoverShowAllLanguages: true,
 			hoverDebug: true,
 			hoverScopeDisplay: "resolved",
+			formattingIndentStyle: "space",
+			formattingIndentSize: 4,
+			formattingTrimTrailingWhitespace: true,
+			formattingInsertFinalNewline: true,
 		};
 		const payload = buildSettingsPayload(ignore, 10, 20, live);
 		// payload wins over the stale key in ignoreOptions
@@ -155,6 +163,10 @@ suite("reindexSettings — buildSettingsPayload", () => {
 			hoverShowAllLanguages: false,
 			hoverDebug: false,
 			hoverScopeDisplay: "context",
+			formattingIndentStyle: "space",
+			formattingIndentSize: 4,
+			formattingTrimTrailingWhitespace: true,
+			formattingInsertFinalNewline: true,
 		} satisfies LiveServerSettings);
 		assert.deepStrictEqual(payload.localisationLanguages, []);
 	});
@@ -169,6 +181,10 @@ suite("reindexSettings — buildSettingsPayload", () => {
 				hoverShowAllLanguages: true,
 				hoverDebug: true,
 				hoverScopeDisplay: "resolved",
+				formattingIndentStyle: "tab",
+				formattingIndentSize: 2,
+				formattingTrimTrailingWhitespace: false,
+				formattingInsertFinalNewline: false,
 			} satisfies LiveServerSettings,
 		);
 		assert.deepStrictEqual(payload.localisationLanguages, [

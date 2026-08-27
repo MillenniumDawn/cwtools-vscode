@@ -5,6 +5,8 @@ import {
 	graphDataAvailable,
 	FIX_ALL_WORKSPACE_COMMAND,
 	fixAllWorkspaceAvailable,
+	FORMAT_WORKSPACE_COMMAND,
+	formatWorkspaceAvailable,
 } from "../../src/host/graphAvailability";
 
 suite("graphAvailability", () => {
@@ -34,5 +36,18 @@ suite("graphAvailability", () => {
 		assert.strictEqual(fixAllWorkspaceAvailable(["getFileTypes", "clearAllCaches"]), false);
 		assert.strictEqual(fixAllWorkspaceAvailable([]), false);
 		assert.strictEqual(fixAllWorkspaceAvailable(undefined), false);
+	});
+
+	test("formatWorkspace available when advertised", () => {
+		assert.strictEqual(
+			formatWorkspaceAvailable(["getFileTypes", FORMAT_WORKSPACE_COMMAND]),
+			true,
+		);
+	});
+
+	test("formatWorkspace unavailable otherwise", () => {
+		assert.strictEqual(formatWorkspaceAvailable(["getFileTypes", "clearAllCaches"]), false);
+		assert.strictEqual(formatWorkspaceAvailable([]), false);
+		assert.strictEqual(formatWorkspaceAvailable(undefined), false);
 	});
 });

@@ -21,6 +21,7 @@ mod completion;
 mod config;
 mod cursor;
 mod documentlink;
+mod format;
 mod graph;
 mod hover;
 mod inlay;
@@ -1048,6 +1049,22 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<FoldingRange>>> {
         canonicalize_url(&mut params.text_document.uri);
         self.folding_range_impl(params).await
+    }
+
+    async fn formatting(
+        &self,
+        mut params: DocumentFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        canonicalize_url(&mut params.text_document.uri);
+        self.formatting_impl(params).await
+    }
+
+    async fn range_formatting(
+        &self,
+        mut params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        canonicalize_url(&mut params.text_document.uri);
+        self.range_formatting_impl(params).await
     }
 
     async fn document_highlight(

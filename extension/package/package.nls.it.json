@@ -15,6 +15,7 @@
   // Save the language server's timing/memory log to a file, for a bug report
   "commands.exportProfilingLog.title": "Esporta il log di profilazione",
   "commands.fixAllWorkspace.title": "Correggi tutti i problemi correggibili automaticamente nell'area di lavoro",
+  "commands.formatWorkspace.title": "Formatta l'area di lavoro",
   "commands.showGraph.title": "Mostra il grafo",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "Ricrea il grafo da un JSON",
@@ -27,6 +28,7 @@
   "configuration.title.localisation": "CWTools: localizzazione",
   "configuration.title.errors": "CWTools: errori e diagnostica",
   "configuration.title.cache": "CWTools: percorsi di installazione dei giochi",
+  "configuration.title.formatting": "CWTools: formattazione",
   "configuration.title.graph": "CWTools: grafo",
   "configuration.title.advanced": "CWTools: avanzate",
   // Trace here refers to very detailed logs
@@ -55,6 +57,10 @@
   "configuration.cwtools.hover.scopeDisplay.context": "Mostra lo scope ambiente in cui si trova il campo sotto il puntatore.",
   // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
   "configuration.cwtools.hover.scopeDisplay.resolved": "Mostra anche lo scope a cui si risolve il link o la parola chiave FROM/ROOT/PREV sotto il puntatore.",
+  "configuration.cwtools.formatting.indentStyle.description": "Indenta con spazi o tabulazioni. Format Document usa insertSpaces/tabSize dell'editor.",
+  "configuration.cwtools.formatting.indentSize.description": "Spazi per livello di indentazione se indentStyle è space. Format Document usa tabSize dell'editor.",
+  "configuration.cwtools.formatting.trimTrailingWhitespace.description": "Rimuovi gli spazi finali da ogni riga in fase di formattazione.",
+  "configuration.cwtools.formatting.insertFinalNewline.description": "Assicura che il file termini con un a capo in fase di formattazione.",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code
   "configuration.cwtools.inlayHints.locTitles.description": "Mostra il titolo localizzato in linea dopo un valore che nomina un'entità nota, così un id di evento o di focus si legge come il suo nome nel gioco senza passarci sopra. **Ricarica la finestra** dopo averlo cambiato.",
   "configuration.cwtools.inlayHints.scopes.description": "Mostra in linea, dopo la chiave, lo scope a cui si risolve una chiave che cambia scope. Il server incluso non produce ancora questi suggerimenti, quindi attivarlo al momento non mostra nulla. **Ricarica la finestra** dopo averlo cambiato.",

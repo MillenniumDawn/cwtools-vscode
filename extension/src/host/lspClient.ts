@@ -18,6 +18,7 @@ import {
 	buildSettingsPayload,
 	mapIgnoreOptions,
 	isLiveSettingsChange,
+	type FormattingIndentStyle,
 	type HoverScopeDisplay,
 	type LiveServerSettings,
 } from "./reindexSettings";
@@ -72,6 +73,9 @@ function readLiveServerSettings(): LiveServerSettings {
 	const rawScope = cfg.get<string>("hover.scopeDisplay");
 	const hoverScopeDisplay: HoverScopeDisplay =
 		rawScope === "resolved" || rawScope === "context" ? rawScope : "context";
+	const rawIndent = cfg.get<string>("formatting.indentStyle");
+	const formattingIndentStyle: FormattingIndentStyle =
+		rawIndent === "tab" || rawIndent === "space" ? rawIndent : "space";
 	return {
 		localisationLanguages: cfg.get<string[]>("localisation.languages") ?? [
 			"English",
@@ -80,6 +84,12 @@ function readLiveServerSettings(): LiveServerSettings {
 			cfg.get<boolean>("localisation.hoverShowAllLanguages") ?? false,
 		hoverDebug: cfg.get<boolean>("hover.debug") ?? false,
 		hoverScopeDisplay,
+		formattingIndentStyle,
+		formattingIndentSize: cfg.get<number>("formatting.indentSize") ?? 4,
+		formattingTrimTrailingWhitespace:
+			cfg.get<boolean>("formatting.trimTrailingWhitespace") ?? true,
+		formattingInsertFinalNewline:
+			cfg.get<boolean>("formatting.insertFinalNewline") ?? true,
 	};
 }
 
