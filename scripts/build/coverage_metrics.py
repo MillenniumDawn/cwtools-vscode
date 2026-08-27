@@ -2,15 +2,30 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-HOST_COVERAGE_LABELS = ("unit",)
+# The host label's file list is a superset of unit's and smoke's (see
+# .vscode-test.mjs), so running it alone measures everything those would.
+HOST_COVERAGE_LABELS = ("host",)
 HOST_COVERAGE_SCOPES = (
     "extension/src/host",
     "extension/src/common",
 )
+# Modules vitest.config.ts already covers with real node-side tests (its
+# `coverage.include`). Keep this list in sync with that one: the host suite
+# loads these transitively without exercising them the way the node tests do,
+# so leaving them in would show a misleadingly low number next to the
+# accurate one already in the "Node unit" section.
 HOST_COVERAGE_DROPS = (
+    "extension/src/host/commandProgress.ts",
+    "extension/src/host/commands.ts",
+    "extension/src/host/diagnosticsSignature.ts",
     "extension/src/host/engine.ts",
     "extension/src/host/executable.ts",
+    "extension/src/host/fileListSignature.ts",
+    "extension/src/host/fnv1a.ts",
+    "extension/src/host/focusTracking.ts",
     "extension/src/host/games.ts",
+    "extension/src/host/logger.ts",
+    "extension/src/host/reindexSettings.ts",
     "extension/src/host/rulesManifest.ts",
     "extension/src/host/rulesSetup.ts",
 )

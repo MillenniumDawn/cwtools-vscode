@@ -139,6 +139,7 @@ jobs:
           # with the vanilla guard so the two warm each other.
           cache-prefix: cargo-release-target
       - name: Build engine and client
+        id: build-engine
         run: npm run build -- quick
       # Boots the extension host against the freshly built server: activation,
       # command registration and the graph/file-explorer UI, plus the
@@ -157,12 +158,17 @@ jobs:
       - name: Test build
         run: npm run build -- package-prebuilt
       # Host V8 coverage: mocha forces the instrumented host to exit after
-      # the unit label, and host_coverage.py kills a leftover process tree
-      # if Electron still hangs under xvfb. Tight step timeout so a hang
-      # cannot burn the whole build job.
+      # the host label (a superset of unit's and smoke's files, so this one
+      # run measures everything those would, including modules like
+      # graphPanel.ts that only extension.test.ts exercises), and
+      # host_coverage.py kills a leftover process tree if Electron still
+      # hangs under xvfb. Tight step timeout so a hang cannot burn the whole
+      # build job. Gated on the build step: the host label needs the built
+      # server binary, so running it after a failed build would burn the
+      # timeout on a doomed suite and bury the real failure.
       - name: Host coverage
-        if: always()
-        timeout-minutes: 8
+        if: always() && steps.build-engine.outcome == 'success'
+        timeout-minutes: 15
         run: npm run test:coverage
       - name: Upload host coverage
         if: always()

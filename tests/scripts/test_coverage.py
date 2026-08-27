@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from coverage_metrics import FileCoverage, Metric, validate_host_coverage_summary
+from coverage_metrics import (
+    HOST_COVERAGE_DROPS,
+    HOST_COVERAGE_LABELS,
+    FileCoverage,
+    Metric,
+    validate_host_coverage_summary,
+)
 from coverage_summary import (
+    SOURCES,
     CoverageSource,
     render_coverage_report,
     render_coverage_section,
@@ -14,6 +22,8 @@ from coverage_summary import (
 )
 
 METRIC_NAMES = ("lines", "statements", "branches", "functions")
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def metric(total: int) -> Metric:
@@ -226,3 +236,29 @@ def test_lists_the_worst_covered_rust_files() -> None:
     assert "engine/crates/c.rs" not in rendered
     assert "2 worst-covered files of 3" in rendered
     assert "Full report is in the `rust-coverage` artifact" in rendered
+
+
+def test_host_coverage_drops_match_vitest_owned_host_modules() -> None:
+    # vitest.config.ts's `coverage.include` is the source of truth for which
+    # host modules the node report already covers accurately. HOST_COVERAGE_
+    # DROPS has to mirror the host/common-scoped entries in that list, or a
+    # vitest-owned module leaks back into the host report with a misleading
+    # partial number (the bug behind #220's commandProgress.ts example).
+    config = (REPO_ROOT / "vitest.config.ts").read_text(encoding="utf-8")
+    # Assumes double-quoted paths and no `]` (even in a comment) inside the
+    # include array; a `]` there would silently truncate the captured list.
+    match = re.search(r"coverage:\s*\{.*?include:\s*\[(.*?)\]", config, re.DOTALL)
+    assert match is not None, "could not find coverage.include in vitest.config.ts"
+    included = re.findall(r'"([^"]+)"', match.group(1))
+    host_owned = {
+        path
+        for path in included
+        if path.startswith(("extension/src/host/", "extension/src/common/"))
+    }
+    assert set(HOST_COVERAGE_DROPS) == host_owned
+
+
+def test_host_only_selects_the_labeled_source() -> None:
+    selected = [source for source in SOURCES if source.labels]
+    assert [source.title for source in selected] == ["Extension-host client"]
+    assert selected[0].labels == HOST_COVERAGE_LABELS
