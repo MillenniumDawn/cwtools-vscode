@@ -39,5 +39,8 @@
   "CWTools: profiling log written to {0}": "CWTools: كُتب سجل قياس الأداء إلى {0}",
   "CWTools: this language server doesn't support fixing the workspace. Update the language server to enable it.": "CWTools: هذا الخادم لا يدعم إصلاح مساحة العمل. حدّث خادم اللغة لتفعيل هذه الميزة.",
   "CWTools: Fix all auto-fixable problems in workspace": "CWTools: إصلاح كل المشكلات القابلة للإصلاح تلقائيًا في مساحة العمل",
-  "CWTools: fixAllWorkspace failed: {0}": "CWTools: فشل fixAllWorkspace: {0}"
+  "CWTools: fixAllWorkspace failed: {0}": "CWTools: فشل fixAllWorkspace: {0}",
+  "CWTools: this language server doesn't support formatting the workspace. Update the language server to enable it.": "CWTools: هذا الخادم لا يدعم تنسيق مساحة العمل. حدّث خادم اللغة لتفعيل هذه الميزة.",
+  "CWTools: Format workspace": "CWTools: تنسيق مساحة العمل",
+  "CWTools: formatWorkspace failed: {0}": "CWTools: فشل formatWorkspace: {0}"
 }

@@ -15,6 +15,7 @@
   // Save the language server's timing/memory log to a file, for a bug report
   "commands.exportProfilingLog.title": "تصدير سجل قياس الأداء",
   "commands.fixAllWorkspace.title": "إصلاح كل المشكلات القابلة للإصلاح تلقائيًا في مساحة العمل",
+  "commands.formatWorkspace.title": "تنسيق مساحة العمل",
   "commands.showGraph.title": "عرض المخطط",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "إعادة إنشاء المخطط من ملف JSON",
@@ -27,6 +28,7 @@
   "configuration.title.localisation": "CWTools: الترجمة",
   "configuration.title.errors": "CWTools: الأخطاء والتشخيصات",
   "configuration.title.cache": "CWTools: مسارات تثبيت الألعاب",
+  "configuration.title.formatting": "CWTools: التنسيق",
   "configuration.title.graph": "CWTools: المخطط",
   "configuration.title.advanced": "CWTools: خيارات متقدمة",
   // Trace here refers to very detailed logs
@@ -55,6 +57,10 @@
   "configuration.cwtools.hover.scopeDisplay.context": "إظهار الـ scope المحيط الذي يقع فيه الحقل تحت المؤشر.",
   // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
   "configuration.cwtools.hover.scopeDisplay.resolved": "إظهار الـ scope الذي يُحَل إليه الرابط أو الكلمة المفتاحية FROM/ROOT/PREV تحت المؤشر أيضًا.",
+  "configuration.cwtools.formatting.indentStyle.description": "المسافة البادئة بمسافات أو علامات جدولة. Format Document يستخدم insertSpaces/tabSize من المحرر.",
+  "configuration.cwtools.formatting.indentSize.description": "عدد المسافات لكل مستوى عندما يكون indentStyle هو space. Format Document يستخدم tabSize من المحرر.",
+  "configuration.cwtools.formatting.trimTrailingWhitespace.description": "إزالة المسافات الزائدة في نهاية كل سطر عند التنسيق.",
+  "configuration.cwtools.formatting.insertFinalNewline.description": "التأكد من أن الملف ينتهي بسطر جديد عند التنسيق.",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code
   "configuration.cwtools.inlayHints.locTitles.description": "إظهار العنوان المترجم مباشرةً بعد قيمة تشير إلى كيان معروف، حتى يُقرأ معرّف حدث أو تركيز باسمه داخل اللعبة دون تحويم. **أعد تحميل النافذة** بعد التغيير.",
   "configuration.cwtools.inlayHints.scopes.description": "إظهار الـ scope الذي يُحَل إليه مفتاح يغيّر الـ scope، مباشرةً بعد المفتاح. الخادم المرفق لا ينتج هذه التلميحات بعد، لذا تفعيل الخيار لا يُظهر شيئًا حاليًا. **أعد تحميل النافذة** بعد التغيير.",

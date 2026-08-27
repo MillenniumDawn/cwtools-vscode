@@ -143,6 +143,42 @@ suite(`Debug Integration Test: `, function () {
 		});
 	});
 
+	describe("formatWorkspace gating", function () {
+		this.timeout(1 * 60 * 1000);
+
+		it("runs against the pinned server without a protocol error", async function () {
+			const api = await activate();
+			assert.ok(api, "activation API should be exposed");
+			const advertised = api.serverCommands();
+			assert.ok(
+				advertised.includes("formatWorkspace"),
+				`pinned server should advertise formatWorkspace, got: ${advertised.join(", ")}`,
+			);
+
+			const sandbox = sinon.createSandbox();
+			const warn = sandbox.stub(vscode.window, "showWarningMessage");
+			const err = sandbox.stub(vscode.window, "showErrorMessage");
+			try {
+				await vscode.commands.executeCommand("cwtools.formatWorkspace");
+			} finally {
+				sandbox.restore();
+			}
+			const warnings = warn.getCalls().map((c) => String(c.args[0]));
+			assert.strictEqual(
+				warnings.some((m) =>
+					m.includes("doesn't support formatting the workspace"),
+				),
+				false,
+				`unexpected upgrade warning: ${warnings.join(" | ")}`,
+			);
+			assert.strictEqual(
+				err.called,
+				false,
+				"no raw protocol error should be surfaced",
+			);
+		});
+	});
+
 	describe("Diagnostics and Language Features", function () {
 		this.timeout(2 * 60 * 1000);
 

@@ -18,3 +18,9 @@ export const FIX_ALL_WORKSPACE_COMMAND = 'fixAllWorkspace';
 export function fixAllWorkspaceAvailable(serverCommands: readonly string[] | undefined): boolean {
 	return serverCommands?.includes(FIX_ALL_WORKSPACE_COMMAND) ?? false;
 }
+
+export const FORMAT_WORKSPACE_COMMAND = 'formatWorkspace';
+
+export function formatWorkspaceAvailable(serverCommands: readonly string[] | undefined): boolean {
+	return serverCommands?.includes(FORMAT_WORKSPACE_COMMAND) ?? false;
+}

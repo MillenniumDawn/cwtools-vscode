@@ -28,7 +28,8 @@
 //!
 //! `validate` reads every key. `fix` reads all but `report-type`,
 //! `min-severity` and `fail-on` (it writes edits, not a report), and takes
-//! `only-codes` as the config spelling of its `--code`. `loc` reads the keys
+//! `only-codes` as the config spelling of its `--code`. `format` reads
+//! `directory`, the ignore lists and `allow-empty`. `loc` reads the keys
 //! that shape a localisation scan: `game` and `rules` (which turn on the scope
 //! checks), `directory`, `report-type`, `min-severity`, `fail-on`,
 //! `ignore-files`, `ignore-dirs`, `loc-languages`, the two code lists and
@@ -91,6 +92,10 @@ pub(crate) const FIX_KEYS: &[&str] = &[
     "only-codes",
     "allow-empty",
 ];
+
+/// `format` reprints script files; it does not load rules or the base game.
+pub(crate) const FORMAT_KEYS: &[&str] =
+    &["directory", "ignore-files", "ignore-dirs", "allow-empty"];
 
 /// `loc` lints a directory of loc files. It reads the ruleset for its scopes and
 /// links, but never indexes the base game, so the vanilla keys don't apply.

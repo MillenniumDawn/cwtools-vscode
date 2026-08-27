@@ -168,6 +168,9 @@ pub(crate) struct Config {
     pub(crate) workspace_wide_diagnostics: bool,
     /// Position encoding negotiated with the client. LSP defaults to UTF-16.
     pub(crate) position_encoding: tower_lsp::lsp_types::PositionEncodingKind,
+    /// Workspace/CLI formatter defaults. `textDocument/formatting` overlays the
+    /// editor's `tabSize`/`insertSpaces` on top of these.
+    pub(crate) formatting: cwtools_parser::format::FormatOptions,
 }
 
 impl Config {
@@ -193,6 +196,7 @@ impl Config {
             background_reindex_idle_seconds: 15,
             workspace_wide_diagnostics: true,
             position_encoding: tower_lsp::lsp_types::PositionEncodingKind::UTF16,
+            formatting: cwtools_parser::format::FormatOptions::default(),
         }
     }
 

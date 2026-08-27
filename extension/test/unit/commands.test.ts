@@ -88,6 +88,7 @@ suite("manifest — command registration", () => {
 			"cwtools.showGraph": "cwtoolsGraphAvailable",
 			"cwtools.setGraphDepth": "cwtoolsGraphAvailable",
 			"cwtools.fixAllWorkspace": "cwtoolsFixAllAvailable",
+			"cwtools.formatWorkspace": "cwtoolsFormatWorkspaceAvailable",
 		};
 		for (const [id, key] of Object.entries(gated)) {
 			const entry = palette.find((e) => e.command === id);

@@ -39,5 +39,8 @@
   "CWTools: profiling log written to {0}": "CWTools: log di profilazione scritto in {0}",
   "CWTools: this language server doesn't support fixing the workspace. Update the language server to enable it.": "CWTools: questo server di linguaggio non sa correggere l'area di lavoro. Aggiornalo per abilitare la funzione.",
   "CWTools: Fix all auto-fixable problems in workspace": "CWTools: correggi tutti i problemi correggibili automaticamente nell'area di lavoro",
-  "CWTools: fixAllWorkspace failed: {0}": "CWTools: fixAllWorkspace non riuscito: {0}"
+  "CWTools: fixAllWorkspace failed: {0}": "CWTools: fixAllWorkspace non riuscito: {0}",
+  "CWTools: this language server doesn't support formatting the workspace. Update the language server to enable it.": "CWTools: questo language server non supporta la formattazione dell'area di lavoro. Aggiorna il language server per abilitarla.",
+  "CWTools: Format workspace": "CWTools: formatta l'area di lavoro",
+  "CWTools: formatWorkspace failed: {0}": "CWTools: formatWorkspace non riuscito: {0}"
 }

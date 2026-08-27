@@ -15,6 +15,7 @@
   // Save the language server's timing/memory log to a file, for a bug report
   "commands.exportProfilingLog.title": "Profiling-Protokoll exportieren",
   "commands.fixAllWorkspace.title": "Alle automatisch behebbaren Probleme im Arbeitsbereich beheben",
+  "commands.formatWorkspace.title": "Arbeitsbereich formatieren",
   "commands.showGraph.title": "Graph anzeigen",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "Graph aus JSON wiederherstellen",
@@ -27,6 +28,7 @@
   "configuration.title.localisation": "CWTools: Lokalisierung",
   "configuration.title.errors": "CWTools: Fehler und Diagnosen",
   "configuration.title.cache": "CWTools: Spielinstallationspfade",
+  "configuration.title.formatting": "CWTools: Formatierung",
   "configuration.title.graph": "CWTools: Graph",
   "configuration.title.advanced": "CWTools: Erweitert",
   // Trace here refers to very detailed logs
@@ -55,6 +57,10 @@
   "configuration.cwtools.hover.scopeDisplay.context": "Den umgebenden Scope des Felds unter dem Zeiger anzeigen.",
   // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
   "configuration.cwtools.hover.scopeDisplay.resolved": "Zusätzlich den Scope anzeigen, auf den der Link oder das FROM/ROOT/PREV-Schlüsselwort unter dem Zeiger aufgelöst wird.",
+  "configuration.cwtools.formatting.indentStyle.description": "Mit Leerzeichen oder Tabulatoren einrücken. Format Document verwendet stattdessen die Editor-Einstellungen insertSpaces/tabSize.",
+  "configuration.cwtools.formatting.indentSize.description": "Leerzeichen pro Einrückungsebene, wenn indentStyle space ist. Format Document verwendet stattdessen tabSize.",
+  "configuration.cwtools.formatting.trimTrailingWhitespace.description": "Beim Formatieren nachgestellten Leerraum in jeder Zeile entfernen.",
+  "configuration.cwtools.formatting.insertFinalNewline.description": "Beim Formatieren sicherstellen, dass die Datei mit einem Zeilenumbruch endet.",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code
   "configuration.cwtools.inlayHints.locTitles.description": "Den lokalisierten Titel direkt hinter einem Wert anzeigen, der eine bekannte Entität benennt, sodass eine Event- oder Fokus-ID ohne Hover als ihr Name im Spiel lesbar ist. Nach einer Änderung **das Fenster neu laden**.",
   "configuration.cwtools.inlayHints.scopes.description": "Den Scope, auf den ein scope-wechselnder Schlüssel aufgelöst wird, direkt hinter dem Schlüssel anzeigen. Der mitgelieferte Server erzeugt diese Hinweise noch nicht, eingeschaltet zeigt sich derzeit also nichts. Nach einer Änderung **das Fenster neu laden**.",

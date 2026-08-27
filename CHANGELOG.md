@@ -2,6 +2,11 @@
 
 #### Extension
 
+* Format Document and Format Selection work on Paradox script. Workspace-wide
+  format is a palette command gated on the server advertising `formatWorkspace`.
+  New `cwtools.formatting` settings cover indent style/size, trailing
+  whitespace, and a final newline. The `[paradox]` editor default is 4 spaces
+  so it matches the formatter. (#439, #441)
 * Node coverage now reports `watchedFiles.ts`, `graphAvailability.ts`, and
   `trustedPaths.ts` next to the vitest suites that own them. The host report
   drops those three so the two numbers stay disjoint. (#446)
@@ -36,6 +41,11 @@
 
 #### Engine
 
+* The parser reprints script from the AST (indent, trailing whitespace, final
+  newline). Parse errors yield no edits. `textDocument/formatting` and
+  `textDocument/rangeFormatting` are advertised, `formatWorkspace` applies one
+  workspace edit, and `cwtools format` dry-runs with exit 1 when files would
+  change. (#439, #441)
 * LSP: the startup scan's progress bar moves inside a phase instead of only at
   the six phase boundaries, so a long validation pass no longer sits on
   "Validating workspace… 70%" and reads as a hang. Every visible scan gets a

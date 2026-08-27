@@ -11336,6 +11336,219 @@ fn test_initialize_advertises_the_new_capabilities() {
         caps["workspace"]["workspaceFolders"]["changeNotifications"],
         true
     );
+    assert_eq!(caps["documentFormattingProvider"], true);
+    assert_eq!(caps["documentRangeFormattingProvider"], true);
+    let commands = caps["executeCommandProvider"]["commands"]
+        .as_array()
+        .expect("execute commands");
+    assert!(
+        commands.iter().any(|c| c == "formatWorkspace"),
+        "formatWorkspace must be advertised: {commands:?}"
+    );
+}
+
+#[test]
+fn test_formatting_rewrites_a_badly_indented_open_file() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("a.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let text = "root={\n a=1\n}\n";
+    std::fs::write(&p, text).unwrap();
+    let uri = path_uri(&p);
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "hoi4",
+                    "version": 1,
+                    "text": text,
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "textDocument/formatting",
+            serde_json::json!({
+                "textDocument": { "uri": uri },
+                "options": { "tabSize": 4, "insertSpaces": true },
+            }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response(&mut reader).expect("no formatting response");
+    stop_server(&mut child);
+    let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(resp.get("error").is_none(), "got: {raw}");
+    let edits = resp["result"].as_array().expect("edits");
+    assert!(!edits.is_empty(), "badly indented file must produce edits");
+    let new_text = edits[0]["newText"].as_str().unwrap_or("");
+    assert!(new_text.contains("root = {"), "{new_text}");
+    assert!(new_text.contains("    a = 1"), "{new_text}");
+}
+
+#[test]
+fn test_formatting_parse_error_returns_no_edits() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("bad.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let text = "root = {\n";
+    std::fs::write(&p, text).unwrap();
+    let uri = path_uri(&p);
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "hoi4",
+                    "version": 1,
+                    "text": text,
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "textDocument/formatting",
+            serde_json::json!({
+                "textDocument": { "uri": uri },
+                "options": { "tabSize": 4, "insertSpaces": true },
+            }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response(&mut reader).expect("no formatting response");
+    stop_server(&mut child);
+    let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(resp.get("error").is_none(), "got: {raw}");
+    let empty = resp["result"].is_null() || resp["result"].as_array().is_some_and(|a| a.is_empty());
+    assert!(
+        empty,
+        "parse error must not rewrite, got: {}",
+        resp["result"]
+    );
+}
+
+#[test]
+fn test_format_workspace_applies_one_edit() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("a.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "root={\n a=1\n}\n").unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "formatWorkspace", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    let (resp_str, applied_edit) =
+        read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
+    stop_server(&mut child);
+    let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
+    assert!(
+        resp["result"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("Formatted ")),
+        "got: {resp_str}"
+    );
+    let edit = applied_edit.expect("the server must call workspace/applyEdit");
+    let changes = edit["changes"].as_object().expect("changes map");
+    assert_eq!(changes.len(), 1, "one file touched: {edit}");
 }
 
 #[test]

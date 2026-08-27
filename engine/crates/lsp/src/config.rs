@@ -141,6 +141,32 @@ fn extract_bool_setting(opts: &Value, key: &str) -> Option<bool> {
     parsed
 }
 
+fn apply_formatting_settings(
+    opts: &Value,
+    mut current: cwtools_parser::format::FormatOptions,
+) -> cwtools_parser::format::FormatOptions {
+    if let Some(style) = opts.get("formattingIndentStyle").and_then(|v| v.as_str()) {
+        match style {
+            "tab" => current.indent_style = cwtools_parser::format::IndentStyle::Tab,
+            "space" => current.indent_style = cwtools_parser::format::IndentStyle::Space,
+            _ => tracing::warn!(
+                value = style,
+                "ignoring formattingIndentStyle: expected space or tab"
+            ),
+        }
+    }
+    if let Some(size) = extract_u64_setting(opts, "formattingIndentSize") {
+        current.indent_size = (size as u32).clamp(1, 16);
+    }
+    if let Some(trim) = extract_bool_setting(opts, "formattingTrimTrailingWhitespace") {
+        current.trim_trailing_whitespace = trim;
+    }
+    if let Some(newline) = extract_bool_setting(opts, "formattingInsertFinalNewline") {
+        current.insert_final_newline = newline;
+    }
+    current
+}
+
 fn extract_hover_scope_display(opts: &Value) -> Option<bool> {
     let value = opts.get("hoverScopeDisplay")?;
     match value.as_str() {
@@ -345,6 +371,10 @@ impl Backend {
                 self.state
                     .inlay_hints_scopes
                     .store(on, std::sync::atomic::Ordering::Relaxed);
+            }
+            {
+                let mut cfg = self.state.config.write();
+                cfg.formatting = apply_formatting_settings(opts, cfg.formatting);
             }
 
             // Persistent cache directory for the base-game index (so it isn't
@@ -641,6 +671,7 @@ impl Backend {
                         "reloadrulesconfig".to_string(),
                         "genlocall".to_string(),
                         "fixAllWorkspace".to_string(),
+                        "formatWorkspace".to_string(),
                         "reindexWorkspace".to_string(),
                         "validateWorkspace".to_string(),
                         // The extension greys out its graph commands unless it
@@ -713,6 +744,8 @@ impl Backend {
                 // and the native picker. `colorPresentation` re-reads the source
                 // span so the picker writes back the convention it found.
                 color_provider: Some(ColorProviderCapability::Simple(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
+                document_range_formatting_provider: Some(OneOf::Left(true)),
                 // Multi-root: the server tracks one primary folder (the first),
                 // so a folder change re-points it and re-scans.
                 workspace: Some(WorkspaceServerCapabilities {
@@ -1142,6 +1175,10 @@ impl Backend {
         let hover_resolved_scope = extract_hover_scope_display(&params.settings);
         let workspace_wide_diagnostics =
             extract_bool_setting(&params.settings, "workspaceWideDiagnostics");
+        {
+            let mut cfg = self.state.config.write();
+            cfg.formatting = apply_formatting_settings(&params.settings, cfg.formatting);
+        }
 
         let (
             current_loc_languages,
@@ -1313,6 +1350,7 @@ impl Backend {
             // one `workspace/applyEdit`, mirroring `cwtools fix --apply`. See
             // `code_action::fix_all_workspace_impl`.
             "fixAllWorkspace" => Ok(Some(Value::String(self.fix_all_workspace_impl().await))),
+            "formatWorkspace" => Ok(Some(Value::String(self.format_workspace_impl(token).await))),
             // User-triggered re-index (no cache purge, unlike clearAllCaches).
             // validate_entire_workspace's CAS guard returns false when a scan
             // (the startup scan's tail, another reindex, the periodic background
@@ -2025,5 +2063,24 @@ mod tests {
         let (files, dirs) = extract_ignore_patterns(&opts);
         assert_eq!(files, vec!["*.tmp".to_string(), "keep.txt".to_string()]);
         assert_eq!(dirs, vec!["build".to_string()]);
+    }
+
+    #[test]
+    fn apply_formatting_settings_overlays_present_keys() {
+        let base = cwtools_parser::format::FormatOptions::default();
+        let out = apply_formatting_settings(
+            &json!({
+                "formattingIndentStyle": "tab",
+                "formattingIndentSize": 2,
+                "formattingTrimTrailingWhitespace": false,
+                "formattingInsertFinalNewline": false,
+            }),
+            base,
+        );
+        assert_eq!(out.indent_style, cwtools_parser::format::IndentStyle::Tab);
+        assert_eq!(out.indent_size, 2);
+        assert!(!out.trim_trailing_whitespace);
+        assert!(!out.insert_final_newline);
+        assert_eq!(apply_formatting_settings(&json!({}), base), base);
     }
 }

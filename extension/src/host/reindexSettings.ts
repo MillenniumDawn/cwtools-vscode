@@ -38,11 +38,17 @@ export function normalizeBackgroundReindexIdleSeconds(
 
 export type HoverScopeDisplay = "context" | "resolved";
 
+export type FormattingIndentStyle = "space" | "tab";
+
 export interface LiveServerSettings {
 	localisationLanguages: string[];
 	hoverShowAllLanguages: boolean;
 	hoverDebug: boolean;
 	hoverScopeDisplay: HoverScopeDisplay;
+	formattingIndentStyle: FormattingIndentStyle;
+	formattingIndentSize: number;
+	formattingTrimTrailingWhitespace: boolean;
+	formattingInsertFinalNewline: boolean;
 }
 
 export const LIVE_SETTINGS_KEYS = [
@@ -55,6 +61,10 @@ export const LIVE_SETTINGS_KEYS = [
 	"cwtools.localisation.hoverShowAllLanguages",
 	"cwtools.hover.debug",
 	"cwtools.hover.scopeDisplay",
+	"cwtools.formatting.indentStyle",
+	"cwtools.formatting.indentSize",
+	"cwtools.formatting.trimTrailingWhitespace",
+	"cwtools.formatting.insertFinalNewline",
 ] as const;
 
 export function isLiveSettingsChange(e: {

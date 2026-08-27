@@ -39,5 +39,8 @@
   "CWTools: profiling log written to {0}": "CWTools：效能分析記錄已寫入 {0}",
   "CWTools: this language server doesn't support fixing the workspace. Update the language server to enable it.": "CWTools：此語言伺服器不支援修正工作區。請更新語言伺服器以啟用此功能。",
   "CWTools: Fix all auto-fixable problems in workspace": "CWTools：修正工作區中所有可自動修正的問題",
-  "CWTools: fixAllWorkspace failed: {0}": "CWTools：fixAllWorkspace 失敗：{0}"
+  "CWTools: fixAllWorkspace failed: {0}": "CWTools：fixAllWorkspace 失敗：{0}",
+  "CWTools: this language server doesn't support formatting the workspace. Update the language server to enable it.": "CWTools：此語言伺服器不支援格式化工作區。請更新語言伺服器以啟用此功能。",
+  "CWTools: Format workspace": "CWTools：格式化工作區",
+  "CWTools: formatWorkspace failed: {0}": "CWTools：formatWorkspace 失敗：{0}"
 }

@@ -15,6 +15,7 @@
   // Save the language server's timing/memory log to a file, for a bug report
   "commands.exportProfilingLog.title": "Export profiling log",
   "commands.fixAllWorkspace.title": "Fix all auto-fixable problems in workspace",
+  "commands.formatWorkspace.title": "Format workspace",
   "commands.showGraph.title": "Show graph",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "Recreate graph from json",
@@ -27,6 +28,7 @@
   "configuration.title.localisation": "CWTools: Localisation",
   "configuration.title.errors": "CWTools: Errors & diagnostics",
   "configuration.title.cache": "CWTools: Game install paths",
+  "configuration.title.formatting": "CWTools: Formatting",
   "configuration.title.graph": "CWTools: Graph",
   "configuration.title.advanced": "CWTools: Advanced",
   // Trace here refers to very detailed logs
@@ -55,6 +57,10 @@
   "configuration.cwtools.hover.scopeDisplay.context": "Show the ambient scope the hovered field is in.",
   // FROM/ROOT/PREV are Paradox script keywords and stay untranslated
   "configuration.cwtools.hover.scopeDisplay.resolved": "Also show the scope the hovered link or FROM/ROOT/PREV keyword resolves to.",
+  "configuration.cwtools.formatting.indentStyle.description": "Indent with spaces or tabs. Format Document uses the editor's insertSpaces/tabSize instead.",
+  "configuration.cwtools.formatting.indentSize.description": "Spaces per indent level when indentStyle is space. Format Document uses the editor's tabSize instead.",
+  "configuration.cwtools.formatting.trimTrailingWhitespace.description": "Strip trailing whitespace from each line when formatting.",
+  "configuration.cwtools.formatting.insertFinalNewline.description": "Ensure the file ends with a newline when formatting.",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code
   "configuration.cwtools.inlayHints.locTitles.description": "Show the localised title inline after a value that names a known entity, so an event or focus id reads as its in-game name without hovering. **Reload the window** after changing this.",
   "configuration.cwtools.inlayHints.scopes.description": "Show the scope a scope-changing key resolves to, inline after the key. The bundled server does not produce these hints yet, so turning this on currently shows nothing. **Reload the window** after changing this.",
