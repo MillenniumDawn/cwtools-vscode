@@ -16,6 +16,10 @@
   `HOST_COVERAGE_DROPS` now matches `vitest.config.ts`'s `coverage.include`
   exactly, so vitest-owned modules (e.g. `commandProgress.ts`) stay out of
   the host report instead of leaking in with a stale, partial figure. (#220)
+* `docs/CONTRIBUTING.md`'s coverage paragraph named the wrong label and called
+  coverage a non-gate; it now says `test:coverage` runs `host`, and that CI's
+  `Host coverage` step has no continue-on-error even though no percentage
+  threshold gates a merge. (#448)
 * The `pins` job's inline bash for reading and resolving the guard baseline's
   revision pins moved to `scripts/resolve_pins.py`, tested under
   `tests/scripts/`. (#381)
