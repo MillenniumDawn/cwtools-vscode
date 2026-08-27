@@ -62,13 +62,15 @@ suite('LSP Completion Tests', function () {
 		expect(labels).to.not.have.members(['is_ai', 'is_country_type']);
 	});
 
-	// Red against MillenniumDawn/cwtools#318: the pop_faction_flag value set is
-	// built per file, so a flag set in common/button_effects is not offered in
-	// common/pop_faction_types. Only regionalist_dublicated (set in this same
-	// file) comes back.
-	test.skip('offers a pop faction flag set in another file', async function () {
+	// MillenniumDawn/cwtools#318 diagnosed this as a per-file value set, but the
+	// index is workspace-wide; the real bug was requesting completion mid-token
+	// ("regiona"), whose subsequence filter drops sector_policy_leadership. An
+	// empty-token position admits everything, so it proves the cross-file merge:
+	// regionalist_dublicated (set in this file) and sector_policy_leadership (set
+	// in common/button_effects) must both come back.
+	test('offers a pop faction flag set in another file', async function () {
 		const document = await openDocumentAndShow(vscode.Uri.file(testNicheFile));
-		const labels = await getCompletionLabels(document.uri, new vscode.Position(26, 41));
+		const labels = await getCompletionLabels(document.uri, new vscode.Position(26, 34));
 		expect(labels).to.include.members(['regionalist_dublicated', 'sector_policy_leadership']);
 	});
 });

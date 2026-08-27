@@ -1418,6 +1418,41 @@ fn test_completion_country_flags_for_has_country_flag() {
     );
 }
 
+#[test]
+fn test_completion_country_flags_merged_from_two_other_files() {
+    // #237: the value set merges contributions from every file in the
+    // workspace, not just the first one found. Two other files each set a
+    // different flag; both must be offered together.
+    let setter_a = (
+        "common/decisions/setter_a.txt",
+        "decision_a = {\n    complete_effect = {\n        set_country_flag = flag_from_a\n    }\n    cost = 1\n}\n",
+    );
+    let setter_b = (
+        "common/decisions/setter_b.txt",
+        "decision_b = {\n    complete_effect = {\n        set_country_flag = flag_from_b\n    }\n    cost = 1\n}\n",
+    );
+    let text =
+        "my_decision = {\n    allowed = {\n        has_country_flag = \n    }\n    cost = 5\n}\n";
+    // Cursor right after `has_country_flag = ` (line 2, col 27).
+    let labels = completion_labels_with_files(
+        "common/decisions/test.txt",
+        text,
+        &[setter_a, setter_b],
+        2,
+        27,
+    );
+    assert!(
+        labels.iter().any(|l| l == "flag_from_a"),
+        "flag set in one other file should be offered, got: {:?}",
+        labels
+    );
+    assert!(
+        labels.iter().any(|l| l == "flag_from_b"),
+        "flag set in a second other file should be offered, got: {:?}",
+        labels
+    );
+}
+
 // ── #74/#75/#79: matched-but-empty value positions must not dump variables ────
 
 #[test]
