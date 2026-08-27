@@ -34,6 +34,14 @@ def test_parses_a_clean_pin(resolve_pins: ModuleType) -> None:
     assert resolve_pins.parse_pin(CLEAN_BASELINE, "rules") == "46d5886"
 
 
+def test_parses_the_committed_baseline_header(resolve_pins: ModuleType) -> None:
+    # The other tests use a hand-typed fixture; this one reads the real file
+    # so a header format drift fails here instead of only in CI.
+    text = resolve_pins.MD_BASELINE.read_text(encoding="utf-8")
+    assert resolve_pins.parse_pin(text, "corpus") is not None
+    assert resolve_pins.parse_pin(text, "rules") is not None
+
+
 def test_rejects_a_dirty_pin(resolve_pins: ModuleType) -> None:
     assert resolve_pins.parse_pin(DIRTY_BASELINE, "corpus") is None
 
