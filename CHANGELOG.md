@@ -8,6 +8,9 @@
   `HOST_COVERAGE_DROPS` now matches `vitest.config.ts`'s `coverage.include`
   exactly, so vitest-owned modules (e.g. `commandProgress.ts`) stay out of
   the host report instead of leaking in with a stale, partial figure. (#220)
+* The `pins` job's inline bash for reading and resolving the guard baseline's
+  revision pins moved to `scripts/resolve_pins.py`, tested under
+  `tests/scripts/`. (#381)
 * `test:watch` reruns from compiled client output instead of repository
   bookkeeping, and test hosts disable Electron's crash reporter so interrupted
   sessions leave no detached Crashpad process. (#422)
@@ -40,9 +43,19 @@
 * LSP progress integration tests now assert that both cancel paths close their
   client-owned `workDoneToken`, so a cancelled command cannot strand its bar.
   (#437)
+* The startup-scan progress tests no longer hardcode the i18n phase labels or
+  a copy of `Phase::span()`'s boundary percentages. One derives its expected
+  labels from the count of distinct `Scan phase finished:` log lines, and the
+  other reads each phase's opening percentage back from the `loadingBar`
+  stream, so rewording a `progress.*` string or re-weighting `Phase::span()`
+  no longer breaks or silently weakens either test. (#436)
 * LSP workspace-scan tests now prove pass 2 leaves concurrent info-service
   and localisation-index writers unblocked while it validates against
   snapshots. (#235)
+* LSP: a quiet scan carrying a command `workDoneToken` now reports its phases
+  against that token again. `quiet` means "do not touch the server's own
+  `loadingBar`/`$/progress` indicator", not "say nothing" — a client that
+  explicitly asked for progress on a quiet call was getting none. (#435)
 * Workspace discovery now supplies scripts, localisation, resources, and file
   indexes through one driver API. CLI and LSP localisation scans, signatures,
   references, and create-key actions share root-relative ignores, limits,

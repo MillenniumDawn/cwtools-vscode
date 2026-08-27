@@ -474,53 +474,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      # An empty ref is not an error to actions/checkout, it is the default
+      # branch. Letting one through would validate whatever the corpus tip
+      # happens to be and report the difference as drift, so resolve_pins.py
+      # requires each pin to resolve to a full 40-character SHA.
       - name: Read and resolve baseline pins
         id: pins
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          # Anchored on end-of-line so a `(dirty)` suffix does not match. A
-          # baseline blessed against a modified checkout pins nothing CI can
-          # reproduce, and failing here says so instead of reporting the
-          # drift as a code change later.
-          pin() {
-            sed -n "s|^# $2:[[:space:]]*[^@]*@ \([0-9a-f]\{7,40\}\)$|\1|p" \
-              "$1" | head -n 1
-          }
-          bad_pin() {
-            echo "::error::no clean revision pin in $1 (a '(dirty)' pin is" \
-              "not reproducible; re-bless from a clean checkout)"
-            grep '^#' -- "$1" >&2
-            exit 1
-          }
-          # An empty ref is not an error to actions/checkout, it is the
-          # default branch. Letting one through would validate whatever the
-          # corpus tip happens to be and report the difference as drift.
-          check_sha() {
-            if ! [[ $2 =~ ^[0-9a-f]{40}$ ]]; then
-              echo "::error::could not resolve the $1 pin to a full SHA" \
-                "(got '$2')"
-              exit 1
-            fi
-          }
-
-          md_baseline=scripts/md-baseline.csv
-          md_pin=$(pin "$md_baseline" corpus)
-          md_rules_pin=$(pin "$md_baseline" rules)
-          [ -n "$md_pin" ] && [ -n "$md_rules_pin" ] || bad_pin "$md_baseline"
-          echo "md baseline pins: corpus $md_pin, rules $md_rules_pin"
-          md_sha=$(gh api "repos/$MD_REPO/commits/$md_pin" --jq '.sha')
-          md_rules_sha=$(gh api "repos/$RULES_REPO/commits/$md_rules_pin" \
-            --jq '.sha')
-          check_sha "Millennium Dawn corpus" "$md_sha"
-          check_sha "Millennium Dawn ruleset" "$md_rules_sha"
-          echo "resolved: md $md_sha, rules $md_rules_sha"
-          {
-            echo "md_rev=$md_sha"
-            echo "rules_rev=$md_rules_sha"
-          } >> "$GITHUB_OUTPUT"
+        run: python3 scripts/resolve_pins.py
 
   # Main corpus tier. Millennium Dawn is public, so no secret gates it and
   # a fork's pull request gets a real mod checked rather than the fixture
