@@ -182,6 +182,10 @@ pub(crate) fn phase_percentage(phase: Phase, done: usize, total: usize) -> u32 {
 struct ProgressSink {
     client: Client,
     token: ProgressToken,
+    /// `send_notification` no-ops before the handshake, so a unit test can't
+    /// observe `$/progress` on the wire; this counts reports instead.
+    #[cfg(test)]
+    reports: Arc<AtomicUsize>,
 }
 
 impl ProgressSink {
@@ -198,6 +202,8 @@ impl ProgressSink {
     /// whatever `begin` established, so the one place that decides stays the
     /// one place that says it.
     async fn report(&self, message: &str, percentage: Option<u32>) {
+        #[cfg(test)]
+        self.reports.fetch_add(1, Ordering::Relaxed);
         self.send(WorkDoneProgress::Report(WorkDoneProgressReport {
             cancellable: None,
             message: Some(message.to_string()),
@@ -218,7 +224,8 @@ impl ProgressSink {
 /// it on a timer.
 ///
 /// Inert (no task spawned, [`PhaseTicker::tick`] a no-op) only for a quiet
-/// pass, which must not reach the user at all. Every visible scan gets one,
+/// pass with no command token behind it, which must not reach the user at
+/// all. Every visible scan gets one,
 /// with or without a client token behind it: the startup scan is exactly the
 /// one that used to sit on a phase boundary percentage for its whole longest
 /// phase and read as a hang (#221).
@@ -333,6 +340,8 @@ impl CommandProgress {
         let sink = ProgressSink {
             client: backend.client.clone(),
             token,
+            #[cfg(test)]
+            reports: Arc::new(AtomicUsize::new(0)),
         };
         sink.send(WorkDoneProgress::Begin(WorkDoneProgressBegin {
             title: title.to_string(),
@@ -360,6 +369,14 @@ impl CommandProgress {
             cancel: CancelFlag(Some(flag)),
             ended: true,
         }
+    }
+
+    /// How many reports have gone to this command's token.
+    #[cfg(test)]
+    pub(crate) fn reports_sent(&self) -> usize {
+        self.sink
+            .as_ref()
+            .map_or(0, |sink| sink.reports.load(Ordering::Relaxed))
     }
 
     /// The flag to hand to the scan.
@@ -439,15 +456,28 @@ impl Drop for CommandProgress {
 /// to, not whether they happen. A `total` of 0 is a phase with no per-item
 /// counter (base-game indexing, the loc rebuild): the bar holds at the boundary
 /// value the caller reported and only the heartbeat runs.
+///
+/// `quiet` decides how a sample is delivered, not whether it is: a quiet pass
+/// reports straight to `progress`'s own stream (bypassing the server's
+/// `loadingBar`/`$/progress` indicator entirely) when it carries a token, and
+/// says nothing otherwise. A non-quiet pass always goes through
+/// [`Backend::report_loading_bar_pct`], which drives the server indicator and,
+/// when `progress` carries a token, that stream too. The overrun heartbeat is
+/// output-channel logging, not the indicator, so it is not gated on `quiet`:
+/// any pass that samples also heartbeats.
+///
+/// [`Backend::report_loading_bar_pct`]: crate::Backend::report_loading_bar_pct
 pub(crate) fn start_phase(
     backend: &Backend,
     progress: Option<&CommandProgress>,
+    quiet: bool,
     phase: Phase,
     total: usize,
 ) -> PhaseTicker {
     let done = Arc::new(AtomicUsize::new(0));
     let counter = done.clone();
     let token = progress.and_then(CommandProgress::token).cloned();
+    let sink = progress.and_then(|p| p.sink.clone());
     let backend = Backend {
         client: backend.client.clone(),
         state: backend.state.clone(),
@@ -465,13 +495,16 @@ pub(crate) fn start_phase(
             interval.tick().await;
             let seen = counter.load(Ordering::Relaxed);
             if total > 0 {
-                backend
-                    .report_loading_bar_pct(
-                        token.as_ref(),
-                        phase.label(),
-                        phase_percentage(phase, seen, total),
-                    )
-                    .await;
+                let percentage = phase_percentage(phase, seen, total);
+                match (quiet, sink.as_ref()) {
+                    (true, Some(sink)) => sink.report(phase.label(), Some(percentage)).await,
+                    (true, None) => {}
+                    (false, _) => {
+                        backend
+                            .report_loading_bar_pct(token.as_ref(), phase.label(), percentage)
+                            .await;
+                    }
+                }
             }
             let elapsed = started.elapsed();
             if elapsed >= next_heartbeat {
