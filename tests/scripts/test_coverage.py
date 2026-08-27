@@ -245,6 +245,8 @@ def test_host_coverage_drops_match_vitest_owned_host_modules() -> None:
     # vitest-owned module leaks back into the host report with a misleading
     # partial number (the bug behind #220's commandProgress.ts example).
     config = (REPO_ROOT / "vitest.config.ts").read_text(encoding="utf-8")
+    # Assumes double-quoted paths and no `]` (even in a comment) inside the
+    # include array; a `]` there would silently truncate the captured list.
     match = re.search(r"coverage:\s*\{.*?include:\s*\[(.*?)\]", config, re.DOTALL)
     assert match is not None, "could not find coverage.include in vitest.config.ts"
     included = re.findall(r'"([^"]+)"', match.group(1))
