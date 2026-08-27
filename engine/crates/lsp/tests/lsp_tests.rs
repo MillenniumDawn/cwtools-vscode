@@ -14058,6 +14058,120 @@ fn test_the_bar_percentage_moves_inside_a_phase() {
     );
 }
 
+/// #433: a sampler tick must not retry `window/workDoneProgress/create` on
+/// its own once the client has refused it — that's the guard in
+/// `send_work_done_progress`'s `(true, false)` arm (`!open_stream` returns
+/// before the request goes out). The server *does* retry the create at the
+/// next phase boundary by design, on the chance a later answer differs, so
+/// this can't assert "at most one create" — that would fail even with the
+/// guard in place. Instead it bounds the count by the phase-boundary count:
+/// a retry per phase boundary is expected, one per sampler tick is the bug.
+///
+/// `CWTOOLS_SAMPLE_INTERVAL_MS=1` over the same 200-file fixture as
+/// `test_the_bar_percentage_moves_inside_a_phase` guarantees sampler ticks
+/// land mid-phase. Every create the server sends is answered with a
+/// JSON-RPC error, so `scan_progress_active` never latches true and every
+/// tick for the rest of the scan exercises the guarded branch.
+#[test]
+fn test_sampler_ticks_do_not_retry_a_refused_progress_create() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    let focus_dir = ws.path().join("common/national_focus");
+    std::fs::create_dir_all(&focus_dir).unwrap();
+    for i in 0..200 {
+        std::fs::write(
+            focus_dir.join(format!("{i}.txt")),
+            format!("focus_{i} = {{\n    id = focus_{i}\n}}\n"),
+        )
+        .unwrap();
+    }
+
+    let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_SAMPLE_INTERVAL_MS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": { "window": { "workDoneProgress": true } },
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+
+    // Everything from here runs inside the deadline closure: the server
+    // blocks the scan on the create round-trip, so every create must be
+    // answered as it arrives or the scan (and the test) wedges.
+    let stdin = child.stdin.take().unwrap();
+    let collected = run_child_with_deadline(child, stdin, reader, 90, |stdin, reader| {
+        let mut creates = 0u32;
+        for _ in 0..20_000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            match v["method"].as_str() {
+                Some("window/workDoneProgress/create") => {
+                    assert_eq!(v["params"]["token"], "cwtools/scan");
+                    creates += 1;
+                    write_frame_to(
+                        stdin,
+                        &serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": v["id"],
+                            "error": { "code": -32601, "message": "refused" }
+                        })
+                        .to_string(),
+                    )
+                    .unwrap();
+                }
+                Some("loadingBar") if v["params"]["enable"] == serde_json::Value::Bool(false) => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+        creates
+    });
+
+    let creates = collected.expect("timed out waiting for the scan to finish");
+    assert!(
+        creates > 0,
+        "the scan never attempted window/workDoneProgress/create at all"
+    );
+    // Six phases (Discover, Parse, Vanilla, Localisation, Validate, Publish),
+    // one boundary retry each; no vanilla dir is configured here, so no
+    // extra "Indexing base game…" emit. The slack above that keeps this from
+    // being a mirror of the phase count while still catching a
+    // sampler-driven retry, which would blow well past it at a 1ms interval.
+    assert!(
+        creates <= 8,
+        "a sampler tick retried window/workDoneProgress/create instead of leaving it to the \
+         next phase boundary: {creates} attempts, expected at most one per phase"
+    );
+}
+
 /// #221: the scan's end state is a closed bar that stays closed. The phase
 /// samplers are detached tasks on a timer, and this pins that none of them
 /// outlives the scan far enough to put the status bar back up with nothing

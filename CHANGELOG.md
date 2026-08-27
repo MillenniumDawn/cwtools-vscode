@@ -41,6 +41,9 @@
 
 #### Engine
 
+* LSP: a test now covers the sampler guard that stops a late or refused
+  progress tick from opening the scan's `workDoneProgress` stream on its own.
+  (#433)
 * The parser reprints script from the AST (indent, trailing whitespace, final
   newline). Parse errors yield no edits. `textDocument/formatting` and
   `textDocument/rangeFormatting` are advertised, `formatWorkspace` applies one
