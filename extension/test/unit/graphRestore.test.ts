@@ -143,7 +143,12 @@ suite("graph panel restore", () => {
 		executeCommand.mock.calls.filter((call) => call[0] === "getGraphData");
 
 	beforeAll(async () => {
-		registerCommands(context, client as unknown as LanguageClient, tracker);
+		registerCommands(
+			context,
+			client as unknown as LanguageClient,
+			tracker,
+			undefined,
+		);
 		await vi.waitFor(() => {
 			if (serializers.length === 0) {
 				throw new Error("serializer not registered");

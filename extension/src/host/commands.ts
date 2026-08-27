@@ -15,6 +15,7 @@ import {
 import type { EditorTracker } from "./documentLanguage";
 import { errorMessage, logError, outputChannel } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
+import { showServerBlockedDialog } from "./serverBlockedDialog";
 // Type-only: the graph panel stays lazily imported (it pulls in the webview
 // plumbing), and `import type` is erased, so naming its shape here doesn't
 // pull it into the activation path.
@@ -129,6 +130,7 @@ export function registerCommands(
 	context: ExtensionContext,
 	client: LanguageClient,
 	tracker: EditorTracker,
+	serverExe: string | undefined,
 ): void {
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showReferences", showReferences),
@@ -157,6 +159,9 @@ export function registerCommands(
 				}
 				publishCommandAvailability(client);
 			} catch (err) {
+				if (showServerBlockedDialog(err, serverExe)) {
+					return;
+				}
 				const msg = errorMessage(err);
 				window.showErrorMessage(
 					l10n.t(
