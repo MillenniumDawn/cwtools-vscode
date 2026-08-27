@@ -39,21 +39,29 @@ struct InlineScript {
 }
 
 impl InlineScripts {
-    /// Register `ast` under the name a call site would reference it by. Returns
-    /// false (and keeps the existing entry) when `logical_path` doesn't sit under
-    /// `common/inline_scripts`.
-    pub fn insert(&mut self, logical_path: &str, ast: ParsedFile) -> bool {
-        let Some(name) = script_name(logical_path) else {
-            return false;
-        };
+    /// Register `ast` under the name a call site would reference it by.
+    /// Returns the name it was registered under (replacing any existing entry
+    /// for it), or `None` when `logical_path` doesn't sit under
+    /// `common/inline_scripts` — the registry is left unchanged in that case.
+    pub fn insert(&mut self, logical_path: &str, ast: ParsedFile) -> Option<String> {
+        let name = script_name(logical_path)?;
         self.scripts.insert(
-            name,
+            name.clone(),
             InlineScript {
                 logical_path: logical_path.to_string(),
                 ast,
             },
         );
-        true
+        Some(name)
+    }
+
+    /// Drop the entry `logical_path` maps to, if any. Returns the name that
+    /// was removed, or `None` when the path isn't a script path or nothing was
+    /// registered under it — a caller sweeping the callers of a deleted script
+    /// only has work to do in the `Some` case.
+    pub fn remove(&mut self, logical_path: &str) -> Option<String> {
+        let name = script_name(logical_path)?;
+        self.scripts.remove(&name).map(|_| name)
     }
 
     /// Whether `logical_path` names a file the registry would hold, so a loader
@@ -330,7 +338,7 @@ mod tests {
     fn registry(entries: &[(&str, &str)], table: &StringTable) -> InlineScripts {
         let mut scripts = InlineScripts::default();
         for (path, body) in entries {
-            assert!(scripts.insert(path, parse_string(body, table)));
+            assert!(scripts.insert(path, parse_string(body, table)).is_some());
         }
         scripts
     }

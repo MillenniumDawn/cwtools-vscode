@@ -4,12 +4,12 @@ use std::sync::Arc;
 use tower_lsp::lsp_types::*;
 
 use cwtools_parser::ast::{ParseError, ParsedFile};
-use cwtools_parser::parser::parse_string;
+use cwtools_parser::parser::{parse_string, parse_string_without_comments};
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringId;
 use cwtools_validation::references::{UsedInstances, check_unused_instances, needs_use_tracking};
 use cwtools_validation::{
-    Prepared, ValidationError, validate_prepared, validate_prepared_tracking_uses,
+    InlineScripts, Prepared, ValidationError, validate_prepared, validate_prepared_tracking_uses,
 };
 
 use crate::paths::{
@@ -59,6 +59,7 @@ pub(crate) fn make_prepared<'a>(
     modifier_keys: &'a std::collections::HashSet<String>,
     loc_index: Option<&'a cwtools_localization::LocIndex>,
     extra_loc_keys: Option<&'a std::collections::HashSet<String>>,
+    inline_scripts: Option<&'a cwtools_validation::InlineScripts>,
     registry: Option<&'a std::sync::Arc<cwtools_game::scope_registry::ScopeRegistry>>,
     scope_checks: bool,
     var_checks: bool,
@@ -71,10 +72,7 @@ pub(crate) fn make_prepared<'a>(
         modifier_keys: Some(modifier_keys),
         loc_index,
         extra_loc_keys,
-        // The editor keeps no inline-script registry yet (#256), so a call site
-        // is accepted as written instead of being checked against a body the
-        // server hasn't loaded.
-        inline_scripts: None,
+        inline_scripts,
         registry,
         scope_checks,
         var_checks,
@@ -852,6 +850,44 @@ impl Backend {
         }
     }
 
+    /// Re-register `uri`'s text in the inline-script registry when it names a
+    /// `common/inline_scripts` body, so an edit to the script is visible to
+    /// the next validate of anything that calls it — without waiting for a
+    /// workspace scan (#259). Cheap to call unconditionally: the path check
+    /// rejects everything outside `common/inline_scripts` before the (fresh,
+    /// comment-free) reparse `InlineScripts::insert` wants.
+    ///
+    /// Returns the script's call name when the registry actually changed, so
+    /// the caller can queue it for the dependent sweep (`pending_changed_names`)
+    /// the same way a changed export already is — a call site names the script
+    /// as a plain string token, which `doc_tokens` already captures, so no new
+    /// sweep mechanism is needed.
+    pub(crate) fn refresh_inline_script(&self, uri: &str, text: &str) -> Option<String> {
+        if self.is_ignored_uri(uri) {
+            return None;
+        }
+        let ws_prefix = self.state.config.read().workspace_prefix.clone();
+        let logical_path = logical_path_from_uri(uri, &ws_prefix);
+        if !InlineScripts::is_script_path(&logical_path) {
+            return None;
+        }
+        let parsed = parse_string_without_comments(text, &self.state.string_table);
+        self.state
+            .inline_scripts
+            .write()
+            .insert(&logical_path, parsed)
+    }
+
+    /// Drop `uri`'s entry from the inline-script registry (a deletion, or a
+    /// close that restores a since-vanished file). Returns the removed
+    /// script's call name, for the same dependent-sweep queueing
+    /// [`Backend::refresh_inline_script`] does.
+    pub(crate) fn remove_inline_script(&self, uri: &str) -> Option<String> {
+        let ws_prefix = self.state.config.read().workspace_prefix.clone();
+        let logical_path = logical_path_from_uri(uri, &ws_prefix);
+        self.state.inline_scripts.write().remove(&logical_path)
+    }
+
     /// Validate an already-parsed document against the (already-built) workspace
     /// index, with the ruleset already locked and the per-run scope registry
     /// prebuilt by the caller. Multi-file callers (the workspace scan, the
@@ -875,6 +911,7 @@ impl Backend {
         let overlay = self.loc_overlay_keys();
         let info_guard = self.state.info_service.read();
         let loc_guard = self.state.loc_index.read();
+        let inline_guard = self.state.inline_scripts.read();
         let (scope_checks, var_checks) = {
             let cfg = self.state.config.read();
             (cfg.scope_checks, cfg.var_checks)
@@ -887,6 +924,7 @@ impl Backend {
             modifier_keys,
             loc_guard.as_deref(),
             Some(&overlay),
+            Some(&inline_guard),
             registry,
             scope_checks,
             var_checks,
@@ -951,6 +989,7 @@ impl Backend {
         }
         let info_guard = self.state.info_service.read();
         let loc_guard = self.state.loc_index.read();
+        let inline_guard = self.state.inline_scripts.read();
         let (scope_checks, var_checks) = {
             let cfg = self.state.config.read();
             (cfg.scope_checks, cfg.var_checks)
@@ -963,11 +1002,13 @@ impl Backend {
             &rules_guard.modifier_keys,
             loc_guard.as_deref(),
             None,
+            Some(&inline_guard),
             rules_guard.scope_registry.as_ref(),
             scope_checks,
             var_checks,
         );
         let (_, used) = validate_prepared_tracking_uses(parsed, uri, &prepared);
+        drop(inline_guard);
         drop(loc_guard);
         drop(info_guard);
         drop(rules_guard);
@@ -1878,7 +1919,17 @@ impl Backend {
             // its `<type.subtype>` membership while being edited).
             self.index_parsed_file(uri, &parsed, parsed_version);
 
-            // Validation. Lock order: rules -> info_service -> loc_index.
+            // Keep the inline-script registry current: if this file is a
+            // `common/inline_scripts` body, re-register it under its call
+            // name so the NEXT validate of any caller sees the new content.
+            // Queued for the dependent sweep below so callers already open
+            // see it on THIS pass too (#259).
+            if let Some(name) = self.refresh_inline_script(uri, text) {
+                self.state.pending_changed_names.lock().insert(name);
+            }
+
+            // Validation. Lock order: rules -> info_service -> loc_index ->
+            // inline_scripts.
             let (errors, log_msg) = {
                 let game = self.state.config.read().game();
                 // Live overlay of unsaved loc keys in open `.yml` files, so a
@@ -1893,6 +1944,7 @@ impl Backend {
                     let info_guard = self.state.info_service.read();
                     let type_index = &info_guard.type_index;
                     let loc_guard = self.state.loc_index.read();
+                    let inline_guard = self.state.inline_scripts.read();
                     // Single-file path: the scope registry is cached (built
                     // once at ruleset load).
                     let (scope_checks, var_checks) = {
@@ -1907,6 +1959,7 @@ impl Backend {
                         &rules_guard.modifier_keys,
                         loc_guard.as_deref(),
                         Some(&overlay),
+                        Some(&inline_guard),
                         rules_guard.scope_registry.as_ref(),
                         scope_checks,
                         var_checks,

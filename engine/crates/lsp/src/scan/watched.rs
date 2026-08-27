@@ -410,6 +410,21 @@ impl Backend {
                 sigs.remove(uri);
             }
         }
+        // A deleted `common/inline_scripts` file must stop expanding at its
+        // callers — queue its call name so the sweep below revalidates them
+        // and reports CW274 instead of the (now-gone) body (#259).
+        {
+            let removed_scripts: HashSet<String> = deletes
+                .iter()
+                .filter_map(|uri| self.remove_inline_script(uri))
+                .collect();
+            if !removed_scripts.is_empty() {
+                self.state
+                    .pending_changed_names
+                    .lock()
+                    .extend(removed_scripts);
+            }
+        }
         // A deleted file's recorded `<type>` uses must not keep suppressing
         // CW239 on the instances it referenced. Queue the affected names; the
         // batch's closing sweep republishes their open definition files.

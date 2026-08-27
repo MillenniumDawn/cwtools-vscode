@@ -28,7 +28,7 @@ fn run(script: &str, scripts: &[(&str, &str)]) -> Vec<ValidationError> {
     let mut registry = InlineScripts::default();
     for (path, body) in scripts {
         assert!(
-            registry.insert(path, parse_string(body, &table)),
+            registry.insert(path, parse_string(body, &table)).is_some(),
             "{path} is not an inline-script path"
         );
     }
