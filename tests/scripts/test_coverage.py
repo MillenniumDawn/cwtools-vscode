@@ -258,6 +258,23 @@ def test_host_coverage_drops_match_vitest_owned_host_modules() -> None:
     assert set(HOST_COVERAGE_DROPS) == host_owned
 
 
+def test_host_report_omits_vitest_owned_modules() -> None:
+    host = next(source for source in SOURCES if source.labels)
+    assert host.drop == HOST_COVERAGE_DROPS
+    section = render_coverage_section(
+        host,
+        {
+            "/repo/extension/src/host/fileExplorer.ts": file_coverage(),
+            **{f"/repo/{path}": file_coverage() for path in HOST_COVERAGE_DROPS},
+        },
+        "/repo",
+    )
+    rendered = "\n".join(section.details)
+    assert "extension/src/host/fileExplorer.ts" in rendered
+    for path in HOST_COVERAGE_DROPS:
+        assert path not in rendered
+
+
 def test_host_only_selects_the_labeled_source() -> None:
     selected = [source for source in SOURCES if source.labels]
     assert [source.title for source in selected] == ["Extension-host client"]
