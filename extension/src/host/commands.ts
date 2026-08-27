@@ -138,10 +138,23 @@ export function registerCommands(
 			outputChannel.show();
 		}),
 	);
+	let restartInFlight = false;
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.restartServer", async () => {
+			if (restartInFlight) {
+				return;
+			}
+			restartInFlight = true;
 			try {
-				await client.restart();
+				// restart()'s stop() half throws unless the client is Running.
+				// After the error handler gives up (Stopped/StartFailed) the
+				// library clears its start promise, so start() is the recovery
+				// path; while Starting it just joins the in-flight start.
+				if (client.isRunning()) {
+					await client.restart();
+				} else {
+					await client.start();
+				}
 				publishCommandAvailability(client);
 			} catch (err) {
 				const msg = errorMessage(err);
@@ -151,6 +164,8 @@ export function registerCommands(
 						msg,
 					),
 				);
+			} finally {
+				restartInFlight = false;
 			}
 		}),
 	);

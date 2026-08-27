@@ -237,6 +237,8 @@ suite("Restart command and status bar", function () {
 		);
 	});
 
+	// The literal English text is safe here: the downloaded test VS Code
+	// build ships no language packs, so l10n always resolves English.
 	test("the status item settles on the ready text once the initial scan finishes", async function () {
 		const api = await activate();
 		assert.ok(api, "activation API should be exposed");

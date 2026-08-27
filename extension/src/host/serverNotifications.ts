@@ -18,8 +18,6 @@ interface UpdateFileList {
 	fileList: FileListItem[];
 }
 
-const statusMenuCommand = "cwtools.statusBarMenu";
-
 export interface ServerNotifications {
 	initialScanDone: Promise<void>;
 	/** The status bar item's current text, for the host tests. */
@@ -46,13 +44,14 @@ export function registerServerNotifications(
 	// Persistent and visible even when idle, rather than the scan-only item
 	// this used to be, so restart/stopped state has somewhere to show.
 	const status = window.createStatusBarItem(StatusBarAlignment.Left);
-	status.command = statusMenuCommand;
+	status.command = "cwtools.statusBarMenu";
 	status.text = l10n.t("CWTools: starting");
 	context.subscriptions.push(status);
 	status.show();
 
 	context.subscriptions.push(
-		commands.registerCommand(statusMenuCommand, async () => {
+		// Literal id so the commands.test.ts namespace scan sees it.
+		commands.registerCommand("cwtools.statusBarMenu", async () => {
 			const restart = l10n.t("Restart Server");
 			const showOutput = l10n.t("Show Output");
 			const choice = await window.showQuickPick([restart, showOutput]);

@@ -147,7 +147,7 @@ function createRestartLimitingErrorHandler(
 	const restarts: number[] = [];
 	return {
 		error: (_error, _message, count) =>
-			count !== undefined && count <= 3
+			count !== undefined && count > 0 && count <= 3
 				? { action: ErrorAction.Continue }
 				: { action: ErrorAction.Shutdown },
 		closed: () => {

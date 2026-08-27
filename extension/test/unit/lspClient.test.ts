@@ -197,4 +197,42 @@ suite("lspClient — restart-limiting error handler", () => {
 		assert.strictEqual(result.action, 1 /* CloseAction.DoNotRestart */);
 		assert.strictEqual(stopped.length, 1, "onStopped should fire once");
 	});
+
+	test("crashes spread past the 3-minute window keep restarting", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(0);
+			const stopped: number[] = [];
+			create(() => stopped.push(1));
+			const errorHandler = lastClientOptions.value?.errorHandler;
+			assert.ok(errorHandler, "no errorHandler set on clientOptions");
+			for (let i = 0; i < 4; i++) {
+				const result = await errorHandler.closed();
+				assert.strictEqual(result.action, 2 /* CloseAction.Restart */);
+			}
+			// The 5th crash lands after the first has left the window, so the
+			// oldest is shifted out and the client restarts again.
+			vi.setSystemTime(3 * 60 * 1000 + 1);
+			const result = await errorHandler.closed();
+			assert.strictEqual(result.action, 2 /* CloseAction.Restart */);
+			assert.strictEqual(stopped.length, 0, "onStopped must not fire");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("transport errors continue three times, then shut down", async () => {
+		create();
+		const errorHandler = lastClientOptions.value?.errorHandler;
+		assert.ok(errorHandler, "no errorHandler set on clientOptions");
+		const boom = new Error("boom");
+		for (const count of [1, 2, 3]) {
+			const result = await errorHandler.error(boom, undefined, count);
+			assert.strictEqual(result.action, 1 /* ErrorAction.Continue */, `count ${count}`);
+		}
+		for (const count of [0, 4, undefined]) {
+			const result = await errorHandler.error(boom, undefined, count);
+			assert.strictEqual(result.action, 2 /* ErrorAction.Shutdown */, `count ${count}`);
+		}
+	});
 });
