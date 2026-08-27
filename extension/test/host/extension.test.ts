@@ -221,6 +221,38 @@ suite(`Debug Integration Test: `, function () {
 	});
 });
 
+suite("Restart command and status bar", function () {
+	this.timeout(90 * 1000);
+
+	test("cwtools.restartServer and cwtools.showOutput are registered", async function () {
+		await activate();
+		const registered = await vscode.commands.getCommands();
+		assert.ok(
+			registered.includes("cwtools.restartServer"),
+			"cwtools.restartServer should be registered",
+		);
+		assert.ok(
+			registered.includes("cwtools.showOutput"),
+			"cwtools.showOutput should be registered",
+		);
+	});
+
+	// The literal English text is safe here: the downloaded test VS Code
+	// build ships no language packs, so l10n always resolves English.
+	test("the status item settles on the ready text once the initial scan finishes", async function () {
+		const api = await activate();
+		assert.ok(api, "activation API should be exposed");
+		const ready = await waitUntil(
+			() => api.serverStatusText() === "CWTools: ready",
+			45_000,
+		);
+		assert.ok(
+			ready,
+			`status item should settle to ready, last seen: ${api.serverStatusText()}`,
+		);
+	});
+});
+
 describe("GraphPanel Tests", function () {
 	this.timeout(2 * 60 * 1000);
 	const testCyData = {

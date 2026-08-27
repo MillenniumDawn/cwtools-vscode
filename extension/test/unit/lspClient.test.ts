@@ -49,6 +49,8 @@ vi.mock("vscode", async (importOriginal) => ({
 vi.mock("vscode-languageclient/node", () => ({
 	DidChangeConfigurationNotification: { type: {} },
 	ExecuteCommandRequest: { type: {} },
+	ErrorAction: { Continue: 1, Shutdown: 2 },
+	CloseAction: { DoNotRestart: 1, Restart: 2 },
 	LanguageClient: class {
 		constructor(
 			_id: string,
@@ -94,14 +96,18 @@ const WATCHED: [path: string, watched: boolean][] = [
 	["music/track.ogg", false],
 ];
 
-function create(): { context: ExtensionContext } {
+function create(onStopped: () => void = () => {}): { context: ExtensionContext } {
 	const context = { subscriptions: [] } as unknown as ExtensionContext;
-	createLanguageClient(context, {
-		language: "hoi4",
-		serverExe: "/bin/cwtools-server",
-		cacheDir: "/cache",
-		rulesCache: "/rules",
-	});
+	createLanguageClient(
+		context,
+		{
+			language: "hoi4",
+			serverExe: "/bin/cwtools-server",
+			cacheDir: "/cache",
+			rulesCache: "/rules",
+		},
+		onStopped,
+	);
 	return { context };
 }
 
@@ -168,5 +174,65 @@ suite("lspClient — watched files", () => {
 			"file:///mod/common/ideas/x.txt",
 			"file:///mod/My%20Mod/events/y.txt",
 		]);
+	});
+});
+
+suite("lspClient — restart-limiting error handler", () => {
+	beforeEach(() => {
+		lastClientOptions.value = undefined;
+	});
+
+	test("restarts up to the limit, then stops and calls onStopped", async () => {
+		const stopped: number[] = [];
+		create(() => stopped.push(Date.now()));
+		const errorHandler = lastClientOptions.value?.errorHandler;
+		assert.ok(errorHandler, "no errorHandler set on clientOptions");
+		// 4 restarts allowed, the 5th within the 3-minute window gives up.
+		for (let i = 0; i < 4; i++) {
+			const result = await errorHandler.closed();
+			assert.strictEqual(result.action, 2 /* CloseAction.Restart */);
+		}
+		assert.strictEqual(stopped.length, 0, "onStopped fired too early");
+		const result = await errorHandler.closed();
+		assert.strictEqual(result.action, 1 /* CloseAction.DoNotRestart */);
+		assert.strictEqual(stopped.length, 1, "onStopped should fire once");
+	});
+
+	test("crashes spread past the 3-minute window keep restarting", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(0);
+			const stopped: number[] = [];
+			create(() => stopped.push(1));
+			const errorHandler = lastClientOptions.value?.errorHandler;
+			assert.ok(errorHandler, "no errorHandler set on clientOptions");
+			for (let i = 0; i < 4; i++) {
+				const result = await errorHandler.closed();
+				assert.strictEqual(result.action, 2 /* CloseAction.Restart */);
+			}
+			// The 5th crash lands after the first has left the window, so the
+			// oldest is shifted out and the client restarts again.
+			vi.setSystemTime(3 * 60 * 1000 + 1);
+			const result = await errorHandler.closed();
+			assert.strictEqual(result.action, 2 /* CloseAction.Restart */);
+			assert.strictEqual(stopped.length, 0, "onStopped must not fire");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("transport errors continue three times, then shut down", async () => {
+		create();
+		const errorHandler = lastClientOptions.value?.errorHandler;
+		assert.ok(errorHandler, "no errorHandler set on clientOptions");
+		const boom = new Error("boom");
+		for (const count of [1, 2, 3]) {
+			const result = await errorHandler.error(boom, undefined, count);
+			assert.strictEqual(result.action, 1 /* ErrorAction.Continue */, `count ${count}`);
+		}
+		for (const count of [0, 4, undefined]) {
+			const result = await errorHandler.error(boom, undefined, count);
+			assert.strictEqual(result.action, 2 /* ErrorAction.Shutdown */, `count ${count}`);
+		}
 	});
 });

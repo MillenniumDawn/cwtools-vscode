@@ -42,5 +42,12 @@
   "CWTools: fixAllWorkspace failed: {0}": "CWTools：fixAllWorkspace 失败：{0}",
   "CWTools: this language server doesn't support formatting the workspace. Update the language server to enable it.": "CWTools：此语言服务器不支持格式化工作区。请更新语言服务器以启用该功能。",
   "CWTools: Format workspace": "CWTools：格式化工作区",
-  "CWTools: formatWorkspace failed: {0}": "CWTools：formatWorkspace 失败：{0}"
+  "CWTools: formatWorkspace failed: {0}": "CWTools：formatWorkspace 失败：{0}",
+  "CWTools: starting": "CWTools：正在启动",
+  "CWTools: ready": "CWTools：就绪",
+  "CWTools: stopped": "CWTools：已停止",
+  "Restart Server": "重启服务器",
+  "Show Output": "显示输出",
+  "CWTools: failed to restart the language server: {0}": "CWTools：重启语言服务器失败：{0}",
+  "CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.": "CWTools：语言服务器在过去 3 分钟内崩溃了 {0} 次，将不再重启。详情请查看输出。"
 }
