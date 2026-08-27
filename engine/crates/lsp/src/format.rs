@@ -17,6 +17,31 @@ use crate::paths::{
 };
 use crate::{Backend, FileTextSnapshot};
 
+enum DiscoverOutcome {
+    Cancelled,
+    Failed(String),
+    Files(Vec<cwtools_file_manager::file_manager::DiscoveredFile>),
+}
+
+/// `CWTOOLS_FORMAT_HOLD_MS` parks after progress begins so a cancel test can
+/// land before discovery. Unset on every real run.
+async fn hold_format_for_tests(progress: &CommandProgress) {
+    let Some(ms) = std::env::var("CWTOOLS_FORMAT_HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+    else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    while std::time::Instant::now() < deadline {
+        if progress.is_cancelled() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
 impl Backend {
     pub(crate) async fn formatting_impl(
         &self,
@@ -65,6 +90,7 @@ impl Backend {
 
     pub(crate) async fn format_workspace_impl(&self, token: Option<ProgressToken>) -> String {
         let progress = CommandProgress::begin(self, token, "CWTools: Format workspace", true).await;
+        hold_format_for_tests(&progress).await;
         if progress.is_cancelled() {
             let msg = "Cancelled; no files were changed.".to_string();
             progress.finish(Some(msg.clone())).await;
@@ -98,9 +124,9 @@ impl Backend {
         let ruleset = self.state.rules.read().ruleset.clone();
         let cancel = progress.cancel_flag();
 
-        let discovered = tokio::task::spawn_blocking(move || {
+        let discovered = match tokio::task::spawn_blocking(move || {
             if cancel.is_cancelled() {
-                return None;
+                return DiscoverOutcome::Cancelled;
             }
             let mut fm_config =
                 cwtools_driver::workspace_discovery_config(&root_path, ruleset.as_deref());
@@ -110,21 +136,33 @@ impl Backend {
             fm_config
                 .exclude_dir_patterns
                 .extend(extra_dir_globs.iter().cloned());
-            cwtools_driver::discover_workspace_files(fm_config).ok()
+            match cwtools_driver::discover_workspace_files(fm_config) {
+                Ok(files) => DiscoverOutcome::Files(files),
+                Err(error) => DiscoverOutcome::Failed(error.to_string()),
+            }
         })
         .await
-        .ok()
-        .flatten();
+        {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                let msg = "Workspace discovery failed.".to_string();
+                progress.finish(Some(msg.clone())).await;
+                return msg;
+            }
+        };
 
-        if progress.is_cancelled() {
-            let msg = "Cancelled; no files were changed.".to_string();
-            progress.finish(Some(msg.clone())).await;
-            return msg;
-        }
-        let Some(files) = discovered else {
-            let msg = "No files needed formatting.".to_string();
-            progress.finish(Some(msg.clone())).await;
-            return msg;
+        let files = match discovered {
+            DiscoverOutcome::Cancelled => {
+                let msg = "Cancelled; no files were changed.".to_string();
+                progress.finish(Some(msg.clone())).await;
+                return msg;
+            }
+            DiscoverOutcome::Failed(error) => {
+                let msg = format!("Workspace discovery failed: {error}");
+                progress.finish(Some(msg.clone())).await;
+                return msg;
+            }
+            DiscoverOutcome::Files(files) => files,
         };
 
         let mut uris: Vec<String> = Vec::new();

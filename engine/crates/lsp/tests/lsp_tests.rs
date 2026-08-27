@@ -11631,6 +11631,273 @@ fn test_range_formatting_leaves_unselected_statements() {
 }
 
 #[test]
+fn test_format_workspace_reports_a_discovery_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("no_such_workspace");
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(&missing),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "formatWorkspace", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    let (resp_str, applied) =
+        read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
+    stop_server(&mut child);
+    let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
+    let msg = resp["result"].as_str().unwrap_or("");
+    assert!(
+        msg.contains("discovery failed"),
+        "a failed walk must not look like a clean no-op: {resp_str}"
+    );
+    assert!(applied.is_none(), "no edit on a failed walk: {applied:?}");
+}
+
+#[test]
+fn test_format_workspace_cancel_applies_nothing() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("a.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "root={\n a=1\n}\n").unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_FORMAT_HOLD_MS", "2000")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": { "window": { "workDoneProgress": true } },
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    let rx = spawn_frame_collector(reader);
+    let token = "cwtools/format/cancel";
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "workspace/executeCommand",
+            serde_json::json!({
+                "command": "formatWorkspace",
+                "arguments": [],
+                "workDoneToken": token,
+            }),
+        ),
+    )
+    .unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut saw_begin = false;
+    let mut result = None;
+    let mut applied = false;
+    while std::time::Instant::now() < deadline && result.is_none() {
+        let Ok(v) = rx.recv_timeout(std::time::Duration::from_millis(200)) else {
+            continue;
+        };
+        if v["method"] == "workspace/applyEdit" {
+            applied = true;
+            write_frame(
+                &mut child,
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": v["id"],
+                    "result": { "applied": true },
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        if v["method"].as_str() == Some(concat!("$", "/progress"))
+            && v["params"]["token"] == token
+            && v["params"]["value"]["kind"] == "begin"
+            && !saw_begin
+        {
+            saw_begin = true;
+            write_frame(
+                &mut child,
+                &jsonrpc_notification(
+                    "window/workDoneProgress/cancel",
+                    serde_json::json!({ "token": token }),
+                ),
+            )
+            .unwrap();
+        }
+        if v.get("id") == Some(&serde_json::json!(2)) {
+            result = Some(v);
+        }
+    }
+    stop_server(&mut child);
+    assert!(saw_begin, "progress never began");
+    let resp = result.expect("the cancelled command never answered");
+    let msg = resp["result"].as_str().unwrap_or("");
+    assert!(msg.contains("Cancelled"), "cancel must not format: {resp}");
+    assert!(!applied, "cancel must not send workspace/applyEdit");
+}
+
+#[test]
+fn test_formatting_leaves_diagnostic_codes_unchanged() {
+    const RULES: &str = r#"
+types = {
+    type[decision] = { path = "game/common/decisions" }
+}
+"#;
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), RULES).unwrap();
+    let rel = "common/decisions/test.txt";
+    let text = "a={\nlimit={\n}\n}\n";
+    let p = ws.path().join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, text).unwrap();
+    let doc_uri = path_uri(&p);
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                    "vanilla": vanilla.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    wait_for_scan_done(&mut reader);
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": doc_uri,
+                    "languageId": "hoi4",
+                    "version": 1,
+                    "text": text,
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let before = wait_for_diags(&mut reader, rel).expect("diagnostics before format");
+    let before_codes: Vec<String> = before
+        .iter()
+        .filter_map(|d| d["code"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        before_codes.iter().any(|c| c == "CW281"),
+        "need a real diagnostic to prove format does not drop it: {before:?}"
+    );
+
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "textDocument/formatting",
+            serde_json::json!({
+                "textDocument": { "uri": doc_uri },
+                "options": { "tabSize": 4, "insertSpaces": true },
+            }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response(&mut reader).expect("no formatting response");
+    let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let formatted = resp["result"][0]["newText"]
+        .as_str()
+        .expect("whole-file newText")
+        .to_string();
+    assert_ne!(formatted, text, "fixture must actually need formatting");
+
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didChange",
+            serde_json::json!({
+                "textDocument": { "uri": doc_uri, "version": 2 },
+                "contentChanges": [{ "text": formatted }],
+            }),
+        ),
+    )
+    .unwrap();
+    let after = wait_for_diags(&mut reader, rel).expect("diagnostics after format");
+    stop_server(&mut child);
+    let after_codes: Vec<String> = after
+        .iter()
+        .filter_map(|d| d["code"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        before_codes, after_codes,
+        "format must not move diagnostics"
+    );
+}
+
+#[test]
 fn test_missing_workspace_root_is_reported_as_error_log_message() {
     let tmp = tempfile::tempdir().unwrap();
     let missing = tmp.path().join("no_such_workspace");
