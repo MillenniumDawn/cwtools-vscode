@@ -11552,6 +11552,85 @@ fn test_format_workspace_applies_one_edit() {
 }
 
 #[test]
+fn test_range_formatting_leaves_unselected_statements() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("a.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let text = "foo=1\nbar=2\n";
+    std::fs::write(&p, text).unwrap();
+    let uri = path_uri(&p);
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "hoi4",
+                    "version": 1,
+                    "text": text,
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "textDocument/rangeFormatting",
+            serde_json::json!({
+                "textDocument": { "uri": uri },
+                "range": {
+                    "start": { "line": 1, "character": 0 },
+                    "end": { "line": 1, "character": 5 }
+                },
+                "options": { "tabSize": 4, "insertSpaces": true },
+            }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response(&mut reader).expect("no range formatting response");
+    stop_server(&mut child);
+    let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(resp.get("error").is_none(), "got: {raw}");
+    let edits = resp["result"].as_array().expect("edits");
+    assert_eq!(edits.len(), 1, "one statement: {resp}");
+    let start_line = edits[0]["range"]["start"]["line"].as_u64().unwrap();
+    assert_eq!(start_line, 1, "must not touch line 0: {resp}");
+    let new_text = edits[0]["newText"].as_str().unwrap_or("");
+    assert!(new_text.contains("bar = 2"), "{new_text}");
+    assert!(!new_text.contains("foo"), "{new_text}");
+}
+
+#[test]
 fn test_missing_workspace_root_is_reported_as_error_log_message() {
     let tmp = tempfile::tempdir().unwrap();
     let missing = tmp.path().join("no_such_workspace");

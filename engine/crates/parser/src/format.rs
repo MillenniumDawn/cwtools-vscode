@@ -140,25 +140,33 @@ pub fn format_range_edits(
     if replacement == original {
         return Vec::new();
     }
-    let start = if bom && replace_from == 0 {
-        SourcePos { line: 1, col: 0 }
-    } else {
-        start
-    };
+    // Positions were measured on the BOM-stripped body. A leading U+FEFF is
+    // one column on line 1 of `input`, so line-1 cols shift by one.
     let (kept, _) = plan_file_edits(
         input,
         vec![(
             (),
             SpanEdit {
                 range: SourceRange {
-                    start,
-                    end: last.end,
+                    start: shift_col_for_bom(start, bom),
+                    end: shift_col_for_bom(last.end, bom),
                 },
                 replacement,
             },
         )],
     );
     kept
+}
+
+fn shift_col_for_bom(pos: SourcePos, bom: bool) -> SourcePos {
+    if bom && pos.line == 1 {
+        SourcePos {
+            line: 1,
+            col: pos.col.saturating_add(1),
+        }
+    } else {
+        pos
+    }
 }
 
 fn parse_ok(input: &str, table: &StringTable) -> Option<ParsedFile> {
@@ -690,5 +698,130 @@ mod tests {
         assert_eq!(opts.indent_style, IndentStyle::Space);
         let tabs = FormatOptions::default().with_editor(4, false);
         assert_eq!(tabs.indent_style, IndentStyle::Tab);
+    }
+
+    #[test]
+    fn empty_file_gets_a_final_newline() {
+        assert_eq!(fmt(""), "\n");
+        let without = fmt_opts(
+            "",
+            FormatOptions {
+                insert_final_newline: false,
+                ..FormatOptions::default()
+            },
+        );
+        assert_eq!(without, "");
+    }
+
+    #[test]
+    fn empty_clause_is_padded() {
+        assert_eq!(fmt("foo={}\n"), "foo = { }\n");
+        assert_eq!(fmt("foo={ }\n"), "foo = { }\n");
+    }
+
+    #[test]
+    fn shorthand_clause_gets_an_equals() {
+        assert_eq!(fmt("foo { a = 1 }\n"), "foo = {\n    a = 1\n}\n");
+    }
+
+    #[test]
+    fn comparison_and_question_equal_keep_their_operator() {
+        assert_eq!(fmt("a >= 1\n"), "a >= 1\n");
+        assert_eq!(fmt("a ?= b\n"), "a ?= b\n");
+    }
+
+    #[test]
+    fn glued_greater_equal_is_tokenized_as_key_then_equals() {
+        // `>` is a key char, so `a>=1` is key `a>` plus `=`. Reprinting must
+        // follow that AST rather than invent a `>=` the parser did not see.
+        assert_eq!(fmt("a>=1\n"), "a> = 1\n");
+    }
+
+    #[test]
+    fn quoted_key_keeps_its_quotes() {
+        assert_eq!(fmt("\"a b\"=1\n"), "\"a b\" = 1\n");
+    }
+
+    #[test]
+    fn crlf_stays_crlf_and_is_idempotent() {
+        let src = "a={\r\n b=1\r\n}\r\n";
+        let out = fmt(src);
+        assert!(out.contains("\r\n"), "{out:?}");
+        assert!(!out.replace("\r\n", "").contains('\n'), "{out:?}");
+        assert_eq!(fmt(&out), out);
+    }
+
+    #[test]
+    fn bom_is_kept_on_a_whole_file_format() {
+        let mangled = "\u{FEFF}foo=1\n";
+        let out = fmt(mangled);
+        assert!(out.starts_with('\u{FEFF}'), "{out:?}");
+        assert_eq!(out, "\u{FEFF}foo = 1\n");
+        let table = table();
+        assert!(format_edits(&out, &table, &FormatOptions::default()).is_empty());
+    }
+
+    #[test]
+    fn hsv360_prefix_is_kept() {
+        let src = "color = hsv360 { 0 100 50 }\n";
+        let out = fmt(src);
+        assert!(out.contains("hsv360 { 0 100 50 }"), "{out}");
+        assert_eq!(dump(src), dump(&out));
+    }
+
+    #[test]
+    fn range_format_inside_a_clause_leaves_siblings() {
+        let table = table();
+        let src = "root = {\nfoo=1\nbar=2\n}\n";
+        let range = SourceRange {
+            start: SourcePos { line: 3, col: 0 },
+            end: SourcePos { line: 3, col: 5 },
+        };
+        let edits = format_range_edits(src, &table, &FormatOptions::default(), range);
+        let out = crate::fix::apply_edits(src, &edits);
+        assert!(
+            out.contains("foo=1"),
+            "sibling must stay unformatted: {out}"
+        );
+        assert!(out.contains("bar = 2"), "{out}");
+        assert!(!out.contains("foo = 1"), "{out}");
+    }
+
+    #[test]
+    fn range_format_keeps_a_leading_bom() {
+        let table = table();
+        let src = "\u{FEFF}foo=1\nbar=2\n";
+        let range = SourceRange {
+            start: SourcePos { line: 2, col: 0 },
+            end: SourcePos { line: 2, col: 5 },
+        };
+        let edits = format_range_edits(src, &table, &FormatOptions::default(), range);
+        let out = crate::fix::apply_edits(src, &edits);
+        assert!(out.starts_with('\u{FEFF}'), "bom dropped: {out:?}");
+        assert!(out.contains("foo=1"), "{out}");
+        assert!(out.contains("bar = 2"), "{out}");
+    }
+
+    #[test]
+    fn range_format_of_the_first_statement_keeps_a_leading_bom() {
+        let table = table();
+        let src = "\u{FEFF}foo=1\n";
+        let range = SourceRange {
+            start: SourcePos { line: 1, col: 0 },
+            end: SourcePos { line: 1, col: 5 },
+        };
+        let edits = format_range_edits(src, &table, &FormatOptions::default(), range);
+        let out = crate::fix::apply_edits(src, &edits);
+        assert!(out.starts_with('\u{FEFF}'), "bom dropped: {out:?}");
+        assert_eq!(out, "\u{FEFF}foo = 1\n");
+    }
+
+    #[test]
+    fn format_edits_is_idempotent_after_apply() {
+        let table = table();
+        let src = "foo={\nbar=1\n}\n";
+        let edits = format_edits(src, &table, &FormatOptions::default());
+        let once = crate::fix::apply_edits(src, &edits);
+        assert!(format_edits(&once, &table, &FormatOptions::default()).is_empty());
     }
 }

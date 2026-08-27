@@ -2869,3 +2869,20 @@ fn test_format_skips_a_parse_error() {
         .success()
         .stderr(predicate::str::contains("failed to parse"));
 }
+
+#[test]
+fn test_format_rejects_an_unknown_indent_style() {
+    let tmp = format_mod_dir();
+    cwtools()
+        .args([
+            "format",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--indent-style",
+            "banana",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("indent-style"));
+}
