@@ -2150,7 +2150,21 @@ mod tests {
         backend
             .enter_phase(&mut ticker, Some(&progress), true, Phase::Validate, 4)
             .await;
+        assert!(
+            progress.reports_sent() >= 1,
+            "the phase boundary must reach the command token"
+        );
         ticker.tick();
+        // The sampler runs on a timer, so wait for its first report to land
+        // on the token rather than only proving the task exists.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while progress.reports_sent() < 2 && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            progress.reports_sent() >= 2,
+            "a sampler tick must reach the command token"
+        );
         let summary = ticker
             .stop()
             .expect("a quiet phase carrying a command token must still be sampled");

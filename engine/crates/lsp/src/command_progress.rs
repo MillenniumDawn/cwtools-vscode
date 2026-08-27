@@ -182,6 +182,10 @@ pub(crate) fn phase_percentage(phase: Phase, done: usize, total: usize) -> u32 {
 struct ProgressSink {
     client: Client,
     token: ProgressToken,
+    /// `send_notification` no-ops before the handshake, so a unit test can't
+    /// observe `$/progress` on the wire; this counts reports instead.
+    #[cfg(test)]
+    reports: Arc<AtomicUsize>,
 }
 
 impl ProgressSink {
@@ -198,6 +202,8 @@ impl ProgressSink {
     /// whatever `begin` established, so the one place that decides stays the
     /// one place that says it.
     async fn report(&self, message: &str, percentage: Option<u32>) {
+        #[cfg(test)]
+        self.reports.fetch_add(1, Ordering::Relaxed);
         self.send(WorkDoneProgress::Report(WorkDoneProgressReport {
             cancellable: None,
             message: Some(message.to_string()),
@@ -334,6 +340,8 @@ impl CommandProgress {
         let sink = ProgressSink {
             client: backend.client.clone(),
             token,
+            #[cfg(test)]
+            reports: Arc::new(AtomicUsize::new(0)),
         };
         sink.send(WorkDoneProgress::Begin(WorkDoneProgressBegin {
             title: title.to_string(),
@@ -361,6 +369,14 @@ impl CommandProgress {
             cancel: CancelFlag(Some(flag)),
             ended: true,
         }
+    }
+
+    /// How many reports have gone to this command's token.
+    #[cfg(test)]
+    pub(crate) fn reports_sent(&self) -> usize {
+        self.sink
+            .as_ref()
+            .map_or(0, |sink| sink.reports.load(Ordering::Relaxed))
     }
 
     /// The flag to hand to the scan.
@@ -446,7 +462,9 @@ impl Drop for CommandProgress {
 /// `loadingBar`/`$/progress` indicator entirely) when it carries a token, and
 /// says nothing otherwise. A non-quiet pass always goes through
 /// [`Backend::report_loading_bar_pct`], which drives the server indicator and,
-/// when `progress` carries a token, that stream too.
+/// when `progress` carries a token, that stream too. The overrun heartbeat is
+/// output-channel logging, not the indicator, so it is not gated on `quiet`:
+/// any pass that samples also heartbeats.
 ///
 /// [`Backend::report_loading_bar_pct`]: crate::Backend::report_loading_bar_pct
 pub(crate) fn start_phase(
