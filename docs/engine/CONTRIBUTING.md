@@ -79,9 +79,8 @@ per-code gone/new tally, and the first 40 lines of the diff, with the full diff
 written to a temp dir. Exit 2 means the run never happened (missing corpus,
 missing binary, validator crashed).
 
-Two inputs, both git checkouts, looked for side by side under
-`~/Documents/github-projects` (point `CWTOOLS_PROJECTS` at wherever you keep
-them):
+Two inputs, both git checkouts, looked for side by side next to this repo
+(point `CWTOOLS_PROJECTS` at wherever you keep them):
 
 - corpus: [Millennium-Dawn](https://github.com/MillenniumDawn/Millennium-Dawn)
 - rules: [cwtools-hoi4-config](https://github.com/cwtools/cwtools-hoi4-config), the `Config` directory

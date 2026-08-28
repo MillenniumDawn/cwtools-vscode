@@ -58,6 +58,7 @@
 * The vanilla diagnostics guard runs on Windows as well as Linux, catching path and executable-resolution regressions in the cross-platform driver. (#383)
 * Extension-host coverage follows the emitted JavaScript paths again after the repository reorganization. The command removes old artifacts first, rejects empty reports, and names its `unit` label and source scope in the rendered summary. (#402)
 * CodeLens displays the number of references above type-instance definitions and opens VS Code's reference view. (#308)
+* `scripts/guard.py` defaults `CWTOOLS_PROJECTS` to this repo's parent directory instead of `~/Documents/github-projects`, matching where the docs already say the sibling `Millennium-Dawn` and `cwtools-hoi4-config` checkouts live. (#464)
 
 #### Engine
 
