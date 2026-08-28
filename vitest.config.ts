@@ -27,6 +27,7 @@ export default defineConfig({
 				"extension/src/host/reindexSettings.ts",
 				"extension/src/host/rulesManifest.ts",
 				"extension/src/host/rulesSetup.ts",
+				"extension/src/host/serverBlockedDialog.ts",
 				"extension/src/host/trustedPaths.ts",
 				"extension/src/host/watchedFiles.ts",
 				"extension/src/webview/graph.ts",
