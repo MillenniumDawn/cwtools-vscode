@@ -2,6 +2,11 @@
 
 #### Extension
 
+* The `md` guard baseline is re-blessed against current corpus/rules pins
+  (Millennium-Dawn @ 3ba6c58c0b, cwtools-hoi4-config/Config @ 3a0a4e9). The
+  committed baseline had drifted behind both checkouts and failed
+  `scripts/guard.py md` on a clean tree; the movement is corpus and rules
+  content, not an engine regression. (#460)
 * A persistent status bar item shows the language server's state (starting,
   scanning n%, ready, stopped) even when idle. Clicking it offers Restart
   Server and Show Output. `cwtools.restartServer` stops and restarts the
