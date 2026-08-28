@@ -1267,7 +1267,7 @@ mod tests {
         // discover_vanilla_dir relies on real Steam installs, which won't exist
         // in CI. Verify the mapping indirectly by exercising each known game id
         // and checking that non-existent games return None deterministically.
-        for game in ["hoi4", "stellaris", "eu4", "ck3", "vic3"] {
+        for game in ["hoi4", "stellaris", "eu4", "ck3", "vic3", "eu5"] {
             let _ = discover_vanilla_dir(game);
         }
         assert!(discover_vanilla_dir("nexus_games").is_none());

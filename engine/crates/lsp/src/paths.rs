@@ -575,6 +575,7 @@ pub(crate) fn discover_vanilla_dir(game: &str) -> Option<std::path::PathBuf> {
         "vic2" => "Victoria 2",
         "vic3" => "Victoria 3",
         "ir" => "ImperatorRome",
+        "eu5" => "Europa Universalis V",
         _ => return None,
     };
 
