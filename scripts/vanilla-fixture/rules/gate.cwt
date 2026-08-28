@@ -34,3 +34,22 @@ gate_ref = {
 	## cardinality = 0..1
 	art = filepath
 }
+
+### Minimal scopes/links so the guard builds its ScopeRegistry from config
+### (the from_config path) rather than the empty no-config fallback. The
+### hardcoded per-game tables are gone (#373); config is the only source.
+scopes = {
+	Country = {
+		aliases = { country }
+	}
+	Planet = {
+		aliases = { planet }
+	}
+}
+
+links = {
+	owner = {
+		input_scopes = { planet }
+		output_scope = country
+	}
+}

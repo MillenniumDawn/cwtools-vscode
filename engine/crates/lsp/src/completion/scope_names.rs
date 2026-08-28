@@ -128,19 +128,9 @@ pub(crate) fn scope_completion_names(
     names
 }
 
+/// Hand-written per-game link fallback for when no registry is loaded. Scope
+/// names themselves come only from the config-built registry (#373).
 pub(crate) fn scope_names_for_game(language: &str) -> Vec<String> {
-    let mut names: Vec<String> = normalized_game(language)
-        .map(|game| {
-            game.scope_defs()
-                .iter()
-                .flat_map(|scope| {
-                    std::iter::once(scope.name.to_ascii_lowercase())
-                        .chain(scope.aliases.iter().map(|alias| alias.to_ascii_lowercase()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
     let links: &[&str] = match normalized_game(language) {
         Some(Game::Hoi4) => &["OVERLORD", "FACTION_LEADER", "capital_scope", "owner"],
         Some(Game::Stellaris) => &[
@@ -155,8 +145,7 @@ pub(crate) fn scope_names_for_game(language: &str) -> Vec<String> {
         Some(Game::Ir) => &["owner", "controller", "capital_scope"],
         _ => &[],
     };
-    names.extend(links.iter().map(|s| s.to_string()));
-    names
+    links.iter().map(|s| s.to_string()).collect()
 }
 
 #[cfg(test)]

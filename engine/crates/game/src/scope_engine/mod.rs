@@ -1,22 +1,62 @@
-//! Scope engine: the live scope-transition machine ([`engine`]) and the
-//! per-game hardcoded scope-link tables ([`links`]).
+//! Scope engine: the live scope-transition machine ([`engine`]).
 
 mod engine;
-mod links;
 
 pub use engine::{
     SCOPE_ANY, SCOPE_INVALID, SavedContext, ScopeContext, ScopeId, ScopeLink, ScopeResult,
 };
-pub use links::load_scope_links;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::constants::Game;
+    use crate::scope_registry::{LinkInput, ScopeInput, ScopeRegistry};
+    use std::sync::Arc;
 
     fn stl_ctx() -> ScopeContext {
-        // Root = Country (200)
+        // Every game's hardcoded scope table is gone (#373), so `from_hardcoded`
+        // returns an empty registry regardless of `Game::Stellaris` here — these
+        // ids are opaque stack markers exercising PREV/FROM/ROOT mechanics, not
+        // real scope resolution.
         ScopeContext::new(Game::Stellaris, ScopeId(200))
+    }
+
+    /// Small EU4-shaped config fixture: Country/Province scopes plus `owner`
+    /// (Province -> Country) and `capital` (Country -> Province) links, enough
+    /// to exercise the link-resolution tests below without the deleted
+    /// hardcoded EU4 table.
+    fn eu4_registry() -> Arc<ScopeRegistry> {
+        let scopes = vec![
+            ScopeInput {
+                name: "Country".to_string(),
+                aliases: vec!["country".to_string()],
+                is_subscope_of: Vec::new(),
+            },
+            ScopeInput {
+                name: "Province".to_string(),
+                aliases: vec!["province".to_string()],
+                is_subscope_of: Vec::new(),
+            },
+        ];
+        let links = vec![
+            LinkInput {
+                name: "owner".to_string(),
+                output_scope: Some("country".to_string()),
+                input_scopes: vec!["province".to_string()],
+                prefix: None,
+                from_data: false,
+                data_source: Vec::new(),
+            },
+            LinkInput {
+                name: "capital".to_string(),
+                output_scope: Some("province".to_string()),
+                input_scopes: vec!["country".to_string()],
+                prefix: None,
+                from_data: false,
+                data_source: Vec::new(),
+            },
+        ];
+        Arc::new(ScopeRegistry::from_config(&scopes, &links, Game::Eu4))
     }
 
     // ── PREV chain tests ──────────────────────────────────────────────────────
@@ -167,26 +207,26 @@ mod tests {
 
     #[test]
     fn dotted_owner_capital() {
-        // EU4: Province (301) → owner (Country 300) → capital (Province 301)
-        let mut ctx = ScopeContext::new(Game::Eu4, ScopeId(301)); // start in Province
+        // EU4: Province → owner (Country) → capital (Province)
+        let reg = eu4_registry();
+        let province = reg.id_of("province").expect("province resolves");
+        let mut ctx = ScopeContext::from_registry(reg, province); // start in Province
         let res = ctx.change_scope("owner.capital");
-        // Should succeed (NewScope at Province level)
-        assert!(matches!(
+        assert_eq!(
             res,
             ScopeResult::NewScope {
-                scope: ScopeId(301),
-                ..
-            } | ScopeResult::NewScope {
-                scope: ScopeId(0),
-                ..
+                scope: province,
+                ignore_keys: vec![]
             }
-        ));
+        );
     }
 
     #[test]
     fn dotted_single_segment_same_as_plain() {
-        let mut ctx_dot = ScopeContext::new(Game::Eu4, ScopeId(300));
-        let mut ctx_plain = ScopeContext::new(Game::Eu4, ScopeId(300));
+        let reg = eu4_registry();
+        let country = reg.id_of("country").expect("country resolves");
+        let mut ctx_dot = ScopeContext::from_registry(reg.clone(), country);
+        let mut ctx_plain = ScopeContext::from_registry(reg, country);
         let r1 = ctx_dot.change_scope("owner");
         let r2 = ctx_plain.change_scope("owner");
         assert_eq!(r1, r2);
@@ -218,15 +258,18 @@ mod tests {
     #[test]
     fn hidden_prefix_stripped() {
         // hidden:owner in EU4 Province should resolve like plain owner
-        let mut ctx = ScopeContext::new(Game::Eu4, ScopeId(301));
+        let reg = eu4_registry();
+        let province = reg.id_of("province").expect("province resolves");
+        let country = reg.id_of("country").expect("country resolves");
+        let mut ctx = ScopeContext::from_registry(reg, province);
         let res = ctx.change_scope("hidden:owner");
-        assert!(matches!(
+        assert_eq!(
             res,
             ScopeResult::NewScope {
-                scope: ScopeId(300),
-                ..
+                scope: country,
+                ignore_keys: vec![]
             }
-        ));
+        );
     }
 
     // ── Meta scope tests ──────────────────────────────────────────────────────
@@ -279,7 +322,6 @@ mod tests {
     fn hoi4_state_owner() {
         // HOI4 is config-driven: build a minimal registry (state -> owner ->
         // country) instead of the removed hardcoded table.
-        use crate::scope_registry::ScopeRegistry;
         let mut reg = ScopeRegistry::default();
         reg.links.insert(
             "owner".to_string(),
@@ -289,7 +331,7 @@ mod tests {
                 ignore_keys: vec![],
             },
         );
-        let mut ctx = ScopeContext::from_registry(std::sync::Arc::new(reg), ScopeId(101)); // State
+        let mut ctx = ScopeContext::from_registry(Arc::new(reg), ScopeId(101)); // State
         let res = ctx.change_scope("owner");
         assert!(matches!(
             res,
@@ -302,28 +344,54 @@ mod tests {
 
     #[test]
     fn stellaris_planet_owner() {
-        // Start in Planet scope
-        let mut ctx = ScopeContext::new(Game::Stellaris, ScopeId(203));
+        // Small Stellaris-shaped fixture: Planet -> owner -> Country.
+        let scopes = vec![
+            ScopeInput {
+                name: "Country".to_string(),
+                aliases: vec!["country".to_string()],
+                is_subscope_of: Vec::new(),
+            },
+            ScopeInput {
+                name: "Planet".to_string(),
+                aliases: vec!["planet".to_string()],
+                is_subscope_of: Vec::new(),
+            },
+        ];
+        let links = vec![LinkInput {
+            name: "owner".to_string(),
+            output_scope: Some("country".to_string()),
+            input_scopes: vec!["planet".to_string()],
+            prefix: None,
+            from_data: false,
+            data_source: Vec::new(),
+        }];
+        let reg = Arc::new(ScopeRegistry::from_config(&scopes, &links, Game::Stellaris));
+        let planet = reg.id_of("planet").expect("planet resolves");
+        let country = reg.id_of("country").expect("country resolves");
+        let mut ctx = ScopeContext::from_registry(reg, planet);
         let res = ctx.change_scope("owner");
-        assert!(matches!(
+        assert_eq!(
             res,
             ScopeResult::NewScope {
-                scope: ScopeId(200),
-                ..
+                scope: country,
+                ignore_keys: vec![]
             }
-        ));
+        );
     }
 
     #[test]
     fn eu4_province_owner_gives_country() {
-        let mut ctx = ScopeContext::new(Game::Eu4, ScopeId(301));
+        let reg = eu4_registry();
+        let province = reg.id_of("province").expect("province resolves");
+        let country = reg.id_of("country").expect("country resolves");
+        let mut ctx = ScopeContext::from_registry(reg, province);
         let res = ctx.change_scope("owner");
-        assert!(matches!(
+        assert_eq!(
             res,
             ScopeResult::NewScope {
-                scope: ScopeId(300),
-                ..
+                scope: country,
+                ignore_keys: vec![]
             }
-        ));
+        );
     }
 }

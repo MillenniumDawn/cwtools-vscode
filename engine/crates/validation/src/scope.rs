@@ -11,8 +11,8 @@ use crate::resolve::find_type_rule_opts;
 use cwtools_error_codes as error_codes;
 
 /// Build the runtime [`ScopeRegistry`] for a ruleset. Thin wrapper over
-/// [`ScopeRegistry::from_config`], which owns the construction (config inputs
-/// merged over the game's hardcoded tables).
+/// [`ScopeRegistry::from_config`], which owns the construction; the config is
+/// the only source of scopes and links.
 pub(crate) fn build_scope_registry(ruleset: &RuleSet, game: Game) -> ScopeRegistry {
     ScopeRegistry::from_config(&ruleset.scope_inputs, &ruleset.link_inputs, game)
 }

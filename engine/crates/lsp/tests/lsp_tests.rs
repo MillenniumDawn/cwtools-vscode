@@ -16364,7 +16364,7 @@ fn test_access_boundary_allows_an_auto_discovered_vanilla_install() {
 
 /// Every game id `Game::from_str` accepts, with the Steam `steamapps/common`
 /// folder `discover_vanilla_dir` has to map it to. ARCHITECTURE.md lists that
-/// mapping as one of the nine sites a new game touches in lockstep, and as one
+/// mapping as one of the sites a new game touches in lockstep, and as one
 /// of the ones the compiler cannot catch: the match ends in `_ => None`, so a
 /// missing or misspelled arm compiles and quietly discovers nothing forever.
 /// `custom` is deliberately absent — it ships under no fixed Steam folder, and

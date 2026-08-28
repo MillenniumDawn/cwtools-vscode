@@ -101,12 +101,12 @@ pub struct ScopeLink {
 impl ScopeContext {
     // ── Constructors ────────────────────────────────────────────────────────
 
-    /// Create a fresh context rooted at `root` for the given `game`, using the
-    /// hardcoded scope/link tables (Stellaris/EU4/tests; HOI4 is config-driven
-    /// via [`Self::from_registry`]).
-    pub fn new(game: Game, root: ScopeId) -> Self {
+    /// Create a fresh context rooted at `root` with an empty registry — the
+    /// no-config fallback, where every link/scope lookup stays lenient. Real
+    /// resolution needs a config-built registry via [`Self::from_registry`].
+    pub fn new(_game: Game, root: ScopeId) -> Self {
         Self::from_registry(
-            std::sync::Arc::new(crate::scope_registry::ScopeRegistry::from_hardcoded(game)),
+            std::sync::Arc::new(crate::scope_registry::ScopeRegistry::default()),
             root,
         )
     }

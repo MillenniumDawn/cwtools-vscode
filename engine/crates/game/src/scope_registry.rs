@@ -1,9 +1,9 @@
-//! Runtime scope/link registry — the data-driven replacement for the hardcoded
-//! per-game scope tables. Built from `scopes.cwt` + `links.cwt` via
+//! Runtime scope/link registry, built from `scopes.cwt` + `links.cwt` via
 //! [`ScopeRegistry::from_config`] and held by every
 //! [`crate::scope_engine::ScopeContext`]. Construction lives here (not in the
-//! validation crate) so the scope graph has ONE source of truth: the config
-//! inputs merged over the hardcoded tables, both owned by this crate.
+//! validation crate) so the scope graph has ONE source of truth: the game's
+//! config. A game without a loaded config gets an empty registry, and every
+//! reader stays lenient on an empty registry.
 
 use crate::constants::Game;
 use crate::scope_engine::{SCOPE_ANY, SCOPE_INVALID, ScopeId, ScopeLink};
@@ -133,39 +133,18 @@ impl ScopeRegistry {
         false
     }
 
-    /// Build a registry from the hardcoded `const` scope tables for games that
-    /// don't (yet) load their scopes from config — Stellaris/EU4/etc. and unit
-    /// tests. HOI4 is config-driven and returns an empty registry here.
-    pub fn from_hardcoded(game: Game) -> Self {
-        let mut reg = ScopeRegistry::default();
-        for def in game.scope_defs() {
-            let id = def.id;
-            reg.by_name.insert(def.name.to_ascii_lowercase(), id);
-            for a in def.aliases {
-                reg.by_name.insert(a.to_ascii_lowercase(), id);
-            }
-            reg.by_id.insert(
-                id,
-                ScopeDefOwned {
-                    name: def.name.to_string(),
-                    aliases: def.aliases.iter().map(|s| s.to_string()).collect(),
-                    subscope_of: def.subscope_of.to_vec(),
-                },
-            );
-        }
-        crate::scope_engine::load_scope_links(game, &mut reg.links);
-        reg
-    }
-
     /// Build the runtime registry from a parsed config (`scopes.cwt` +
     /// `links.cwt`). When the config carries no scope defs (e.g. a game without
-    /// a scopes.cwt), fall back to that game's hardcoded table. A non-empty but
-    /// PARTIAL config is backfilled from the hardcoded table so missing scopes
-    /// don't silently resolve to `None`. This is the bridge that makes the
-    /// scope engine data-driven.
-    pub fn from_config(scope_inputs: &[ScopeInput], link_inputs: &[LinkInput], game: Game) -> Self {
+    /// a scopes.cwt, or no config loaded at all), the registry is empty and
+    /// every reader stays lenient. The `game` parameter is kept so call sites
+    /// keep saying which game they build for; nothing per-game is left here.
+    pub fn from_config(
+        scope_inputs: &[ScopeInput],
+        link_inputs: &[LinkInput],
+        _game: Game,
+    ) -> Self {
         if scope_inputs.is_empty() {
-            return ScopeRegistry::from_hardcoded(game);
+            return ScopeRegistry::default();
         }
         let mut reg = ScopeRegistry::default();
         let mut next_id = 100u32;
@@ -273,104 +252,7 @@ impl ScopeRegistry {
             }
         }
 
-        // A non-empty config can still be missing scopes/links that the game's
-        // hardcoded tables define (a partially-loaded scopes.cwt). Backfill those so
-        // they don't silently resolve to None. No-op for HOI4 (empty scope_defs);
-        // matters for games with hardcoded tables and an incomplete config.
-        backfill_hardcoded(&mut reg, game, &mut next_id);
-
         reg
-    }
-}
-
-/// Merge any hardcoded scope/link for `game` that `reg` (built from config) does
-/// not already define. Hardcoded ids live in their own space, so backfilled
-/// scopes get fresh ids in `reg`'s space and every referenced id (subscope_of,
-/// link target/valid scopes) is remapped through `hc_to_reg`.
-fn backfill_hardcoded(reg: &mut ScopeRegistry, game: Game, next_id: &mut u32) {
-    let hc = ScopeRegistry::from_hardcoded(game);
-    if hc.is_empty() {
-        return;
-    }
-
-    // Map each hardcoded id to its id in the merged registry: an existing reg id
-    // if the config already defines that scope by name, else a fresh id.
-    let mut hc_to_reg: FxHashMap<ScopeId, ScopeId> = FxHashMap::default();
-    for (hid, hdef) in &hc.by_id {
-        let existing = std::iter::once(&hdef.name)
-            .chain(hdef.aliases.iter())
-            .find_map(|n| reg.id_of(n));
-        let rid = match existing {
-            Some(id) => id,
-            None => {
-                let id = ScopeId(*next_id);
-                *next_id += 1;
-                reg.by_name.insert(hdef.name.to_ascii_lowercase(), id);
-                for a in &hdef.aliases {
-                    reg.by_name.insert(a.to_ascii_lowercase(), id);
-                }
-                reg.by_id.insert(
-                    id,
-                    ScopeDefOwned {
-                        name: hdef.name.clone(),
-                        aliases: hdef.aliases.clone(),
-                        subscope_of: Vec::new(), // resolved below
-                    },
-                );
-                id
-            }
-        };
-        hc_to_reg.insert(*hid, rid);
-    }
-
-    let remap = |id: ScopeId| -> ScopeId {
-        if id == SCOPE_ANY || id == SCOPE_INVALID {
-            id
-        } else {
-            hc_to_reg.get(&id).copied().unwrap_or(id)
-        }
-    };
-
-    // Resolve the backfilled scopes' parents now that every id is mapped. Only
-    // touch scopes we just added (existing config scopes keep their parents).
-    for (hid, hdef) in &hc.by_id {
-        let rid = hc_to_reg[hid];
-        if hdef.subscope_of.is_empty() {
-            continue;
-        }
-        if let Some(def) = reg.by_id.get_mut(&rid)
-            && def.subscope_of.is_empty()
-        {
-            def.subscope_of = hdef.subscope_of.iter().map(|p| remap(*p)).collect();
-        }
-    }
-
-    // Backfill links/prefix-links the config didn't define, remapping their ids.
-    for (k, link) in &hc.links {
-        if reg.links.contains_key(k) {
-            continue;
-        }
-        reg.links.insert(
-            k.clone(),
-            ScopeLink {
-                valid_scopes: link.valid_scopes.iter().map(|s| remap(*s)).collect(),
-                target: link.target.map(remap),
-                ignore_keys: link.ignore_keys.clone(),
-            },
-        );
-    }
-    for (p, link) in &hc.prefix_links {
-        if reg.prefix_links.iter().any(|(ep, _)| ep == p) {
-            continue;
-        }
-        reg.prefix_links.push((
-            p.clone(),
-            ScopeLink {
-                valid_scopes: link.valid_scopes.iter().map(|s| remap(*s)).collect(),
-                target: link.target.map(remap),
-                ignore_keys: link.ignore_keys.clone(),
-            },
-        ));
     }
 }
 
@@ -385,30 +267,6 @@ mod tests {
             aliases: vec!["country".to_string()],
             is_subscope_of: Vec::new(),
         }]
-    }
-
-    /// A partial config (only `Country`) for a game with hardcoded scopes must
-    /// still resolve the rest of that game's scopes via the hardcoded backfill,
-    /// instead of silently dropping them to None.
-    #[test]
-    fn partial_config_backfills_hardcoded_scopes() {
-        let reg = ScopeRegistry::from_config(&country_only(), &[], Game::Stellaris);
-
-        // The config-declared scope resolves to exactly one id (not duplicated).
-        let country = reg.id_of("country").expect("country resolves");
-        assert_eq!(reg.id_of("Country"), Some(country));
-
-        // Hardcoded Stellaris scopes absent from the partial config are backfilled.
-        assert!(reg.id_of("planet").is_some(), "planet backfilled");
-        assert!(reg.id_of("ship").is_some(), "ship backfilled");
-        assert!(reg.id_of("leader").is_some(), "leader backfilled");
-        let planet = reg.id_of("planet").expect("planet backfilled");
-        let owner = reg.links.get("owner").expect("owner link backfilled");
-        assert_eq!(owner.target, Some(country));
-        assert!(owner.valid_scopes.contains(&planet));
-        // System has several aliases; any of them must resolve to one id.
-        let system = reg.id_of("system").expect("system backfilled");
-        assert_eq!(reg.id_of("galactic_object"), Some(system));
     }
 
     #[test]
@@ -446,39 +304,21 @@ mod tests {
         assert_eq!(owner.valid_scopes, vec![country]);
     }
 
-    /// HOI4 has no hardcoded scope table, so the backfill is a no-op: a config
-    /// scope resolves, an unrelated name does not get invented.
+    /// The config is the only source of scopes (#373): a name the config does
+    /// not declare is never invented, even for a game that used to have a
+    /// hardcoded table.
     #[test]
-    fn hoi4_backfill_is_noop() {
-        let reg = ScopeRegistry::from_config(&country_only(), &[], Game::Hoi4);
+    fn config_is_the_only_scope_source() {
+        let reg = ScopeRegistry::from_config(&country_only(), &[], Game::Stellaris);
         assert!(reg.id_of("country").is_some());
-        assert!(reg.id_of("planet").is_none(), "no hardcoded HOI4 backfill");
+        assert!(reg.id_of("planet").is_none(), "no hardcoded backfill");
     }
 
-    /// #184: the redundant mixed-case "Alliance" alias was dropped from the
-    /// Stellaris Federation scope. It was redundant because `id_of` already
-    /// lowercases on its uppercase-fallback path, so `Alliance` resolves through
-    /// the `alliance` alias. This pins that all three forms still map to the one
-    /// Federation id after the removal.
+    /// No config at all yields an empty registry (readers stay lenient).
     #[test]
-    fn stellaris_federation_resolves_via_alliance_alias() {
-        let reg = ScopeRegistry::from_hardcoded(Game::Stellaris);
-        let fed = reg.id_of("federation").expect("federation scope resolves");
-        assert_eq!(
-            reg.id_of("alliance"),
-            Some(fed),
-            "the lowercase `alliance` alias maps to Federation",
-        );
-        assert_eq!(
-            reg.id_of("Alliance"),
-            Some(fed),
-            "mixed-case `Alliance` resolves via id_of's uppercase fallback, so the \
-             explicit `Alliance` alias entry was redundant",
-        );
-        assert_eq!(
-            reg.id_of("Federation"),
-            Some(fed),
-            "the mixed-case scope name resolves too",
-        );
+    fn no_config_yields_empty_registry() {
+        let reg = ScopeRegistry::from_config(&[], &[], Game::Stellaris);
+        assert!(reg.is_empty());
+        assert!(reg.id_of("country").is_none());
     }
 }

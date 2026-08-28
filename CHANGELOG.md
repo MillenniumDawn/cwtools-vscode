@@ -78,6 +78,14 @@
   churn from upstream mod content shifting, plus smaller moves in CW121,
   CW225, CW235, CW240, CW242, CW246, CW251, CW261, CW262, CW263, CW266,
   CW268, and CW275. The vanilla guard baseline is untouched. (#460)
+* The hardcoded per-game scope tables and link loaders are gone. Every game's
+  scopes and links come only from its config's `scopes.cwt`/`links.cwt`
+  (`ScopeRegistry::from_config`), the way HOI4 already worked; a game with no
+  config gets an empty registry and lenient scope checks. The config-over-
+  hardcoded backfill merge is deleted with the tables, and the vanilla guard
+  fixture now declares a minimal `scopes`/`links` block so that tier exercises
+  the config-built path. Scope-engine tests and benches run on small config
+  fixtures instead of the deleted tables. (#373)
 * LSP: the editor now expands `inline_script` call sites against the mod's
   `common/inline_scripts` bodies, matching `cwtools validate`. A call site's
   substituted body is validated against the caller's rules and scope, and a

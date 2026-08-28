@@ -38,7 +38,7 @@ pub struct RuleSet {
     pub scope_links: rustc_hash::FxHashSet<String>,
     /// Scope definitions from a top-level `scopes = { Name = { aliases = {..} } }`
     /// block (scopes.cwt). Used to build the runtime scope registry. Empty when no
-    /// scopes.cwt is loaded (the engine then falls back to the hardcoded table).
+    /// scopes.cwt is loaded (the registry is then empty and readers stay lenient).
     pub scope_inputs: Vec<ScopeInput>,
     /// Full link definitions from `links = { name = { ... } }` (links.cwt), with
     /// every field the scope engine needs (output/input scopes, prefix, from_data).

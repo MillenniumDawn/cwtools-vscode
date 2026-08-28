@@ -596,6 +596,20 @@ mod tests {
         rs
     }
 
+    /// Minimal config-built registry with just a `country` scope, for tests
+    /// that only need one resolvable scope id.
+    pub(crate) fn country_registry() -> cwtools_game::scope_registry::ScopeRegistry {
+        cwtools_game::scope_registry::ScopeRegistry::from_config(
+            &[cwtools_game::scope_registry::ScopeInput {
+                name: "Country".to_string(),
+                aliases: vec!["country".to_string()],
+                is_subscope_of: Vec::new(),
+            }],
+            &[],
+            cwtools_game::constants::Game::Stellaris,
+        )
+    }
+
     #[test]
     fn control_flow_effects_rank_with_scope_matched_effects() {
         // In a country-scope effect block every `## scope = country` effect
@@ -603,11 +617,7 @@ mod tests {
         // not sink below them (#94).
         let rs = scoped_effect_ruleset();
         let info = cwtools_info::InfoService::new();
-        // Hoi4's registry is config-driven (empty here); Stellaris has the same
-        // country scope hardcoded, which is all this test needs.
-        let reg = cwtools_game::scope_registry::ScopeRegistry::from_hardcoded(
-            cwtools_game::constants::Game::Stellaris,
-        );
+        let reg = country_registry();
         let country = reg.id_of("country").expect("country scope");
         let items = completions_from_rules(
             &effect_alias_usage(),
@@ -1553,9 +1563,7 @@ mod perf_bench {
     fn perf_completion_synthetic() {
         let rs = synthetic_ruleset();
         let info = synthetic_info();
-        let reg = cwtools_game::scope_registry::ScopeRegistry::from_hardcoded(
-            cwtools_game::constants::Game::Stellaris,
-        );
+        let reg = super::tests::country_registry();
         let country = reg.id_of("country").expect("country scope");
         let modifier_keys: HashSet<String> =
             cwtools_validation::build_modifier_keys(&rs, &info.type_index);
