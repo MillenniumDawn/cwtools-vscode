@@ -16367,8 +16367,8 @@ fn test_access_boundary_allows_an_auto_discovered_vanilla_install() {
 /// mapping as one of the nine sites a new game touches in lockstep, and as one
 /// of the ones the compiler cannot catch: the match ends in `_ => None`, so a
 /// missing or misspelled arm compiles and quietly discovers nothing forever.
-/// `eu5` and `custom` are deliberately absent — neither ships on Steam under a
-/// known folder, and both take the `None` arm today.
+/// `custom` is deliberately absent — it ships under no fixed folder, and
+/// takes the `None` arm today.
 #[cfg(unix)]
 const STEAM_INSTALL_FOLDERS: &[(&str, &str)] = &[
     ("hoi4", "Hearts of Iron IV"),
@@ -16379,6 +16379,7 @@ const STEAM_INSTALL_FOLDERS: &[(&str, &str)] = &[
     ("vic2", "Victoria 2"),
     ("vic3", "Victoria 3"),
     ("ir", "ImperatorRome"),
+    ("eu5", "Europa Universalis V"),
 ];
 
 /// Boot a server for `game` against a `$HOME` holding a base-game file under

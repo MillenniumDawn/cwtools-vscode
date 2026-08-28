@@ -176,7 +176,8 @@ A new `Game` variant touches these sites, in lockstep:
    `key_to_language`, `Lang::from_name`, `Display`) only if the new game ships a
    language cwtools doesn't already recognize.
 7. `localization/src/scope_validation.rs`: add the variant to `game_to_engine`'s
-   pass-through list (else loc scope checks fall back to lenient HOI4).
+   pass-through list (else loc scope checks are skipped for that game, unless
+   a config-driven registry is present).
 8. `lsp/src/paths.rs`: add the Steam install-folder name to `discover_vanilla_dir`.
 9. Ship `scopes.cwt` and `links.cwt` in the game's `.cwt` config (a separate repo).
 

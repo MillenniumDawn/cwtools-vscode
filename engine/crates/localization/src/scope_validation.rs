@@ -154,7 +154,13 @@ pub fn validate_loc_commands(
     let engine_game = if data.registry.is_some() {
         EngineGame::Hoi4 // unused: build_loc_ctx takes the registry branch
     } else {
-        game_to_engine(data.game)
+        match game_to_engine(data.game) {
+            Some(g) => g,
+            // No registry and no hardcoded scope table for this game (CK2,
+            // VIC2, Custom, or unset): there is nothing correct to validate
+            // against, so skip the scope check rather than judge it by HOI4's.
+            None => return Vec::new(),
+        }
     };
     let mut diags = Vec::new();
 
@@ -193,8 +199,9 @@ pub fn validate_loc_commands(
 /// Pick the engine `Game` whose scope table drives loc-command validation.
 ///
 /// The seven games with a scope table map to themselves; everything else
-/// (`None`, CK2, VIC2, Custom) falls back to Hoi4 (lenient).
-fn game_to_engine(game: Option<EngineGame>) -> EngineGame {
+/// (`None`, CK2, VIC2, Custom) has no table, so the caller skips the check
+/// for that entry rather than judge it against a different game's scopes.
+fn game_to_engine(game: Option<EngineGame>) -> Option<EngineGame> {
     static NO_MAPPING_WARNED: std::sync::Once = std::sync::Once::new();
     match game {
         Some(
@@ -205,17 +212,17 @@ fn game_to_engine(game: Option<EngineGame>) -> EngineGame {
             | EngineGame::Ir
             | EngineGame::Vic3
             | EngineGame::Eu5),
-        ) => g,
+        ) => Some(g),
         other => {
             // Without a registry this can run once per loc-referencing leaf;
             // warn only the first time per run rather than flooding the log.
             NO_MAPPING_WARNED.call_once(|| {
                 tracing::warn!(
-                    "localization game {:?} has no engine mapping; defaulting to Hoi4",
+                    "localization game {:?} has no engine mapping; skipping loc command scope validation",
                     other
                 );
             });
-            EngineGame::Hoi4 // fallback: lenient
+            None
         }
     }
 }
@@ -868,6 +875,85 @@ mod tests {
             diags.is_empty(),
             "without registry, unknown command should be accepted: {:?}",
             diags
+        );
+    }
+
+    // ── #339: no engine mapping and no registry means no table to check
+    //    against, so the scope check is skipped rather than judged by HOI4's ──
+
+    fn no_mapping_data(game: EngineGame) -> LocScopeData<'static> {
+        LocScopeData {
+            game: Some(game),
+            terminal_commands: ["GetName"]
+                .into_iter()
+                .map(str::to_ascii_lowercase)
+                .collect(),
+            question_mark_variable: true,
+            parameter_variables: true,
+            registry: None,
+            scripted_variables: None,
+            scripted_locs: Some(&|_: &str| false),
+            scripted_guis: Some(&|_: &str| false),
+        }
+    }
+
+    #[test]
+    fn ck2_without_registry_skips_loc_scope_validation() {
+        // Would be `ChainEndsInScope` under the old HOI4-fallback behavior.
+        let entry = make_entry_with_commands(vec!["totally_unknown_command".into()]);
+        let data = no_mapping_data(EngineGame::Ck2);
+        let diags = validate_loc_commands(&entry, ScopeId(0), &data);
+        assert!(
+            diags.is_empty(),
+            "CK2 has no engine mapping and no registry; the scope check must be \
+             skipped, not run against HOI4's table: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn vic2_without_registry_skips_loc_scope_validation() {
+        let entry = make_entry_with_commands(vec!["totally_unknown_command".into()]);
+        let data = no_mapping_data(EngineGame::Vic2);
+        let diags = validate_loc_commands(&entry, ScopeId(0), &data);
+        assert!(
+            diags.is_empty(),
+            "VIC2 has no engine mapping and no registry; the scope check must be \
+             skipped, not run against HOI4's table: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn mapped_game_without_registry_is_still_checked() {
+        // Contrast with the skip above: Stellaris DOES have a hardcoded scope
+        // table, so without a registry it must still be validated, not skipped.
+        let entry = make_entry_with_commands(vec!["totally_unknown_command".into()]);
+        let data = no_mapping_data(EngineGame::Stellaris);
+        let diags = validate_loc_commands(&entry, ScopeId(0), &data);
+        assert_eq!(
+            diags,
+            vec![LocCommandDiagnostic::ChainEndsInScope {
+                command: "totally_unknown_command".into(),
+            }],
+            "stellaris has a scope table and must still be checked: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn registry_present_path_unaffected_by_game_mapping() {
+        // `validate_loc_commands` never calls `game_to_engine` when a registry
+        // is present, so a CK2 entry with a registry validates through the
+        // registry exactly as HOI4 does — the #339 skip only ever applies to
+        // the no-registry, no-mapping combination.
+        let entry = make_entry_with_commands(vec!["controller.GetName".into()]);
+        let data = LocScopeData {
+            game: Some(EngineGame::Ck2),
+            ..hoi4_data()
+        };
+        let diags = validate_loc_commands(&entry, ScopeId(100), &data);
+        assert!(
+            matches!(diags[0], LocCommandDiagnostic::WrongScope { .. }),
+            "a registry-backed CK2 entry must still be validated through the \
+             registry: {diags:?}"
         );
     }
 

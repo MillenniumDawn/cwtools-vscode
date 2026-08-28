@@ -61,6 +61,12 @@
 
 #### Engine
 
+* `discover_vanilla_dir` now maps `eu5` to its Steam install folder,
+  `Europa Universalis V`, so the LSP auto-discovers an EU5 base-game install
+  like it already does for the other seven games. Loc command scope
+  validation for CK2, VIC2, Custom, or an unset game now skips the check
+  instead of validating against HOI4's scope table when there's no
+  config-driven registry to check against instead. (#339)
 * LSP: the editor now expands `inline_script` call sites against the mod's
   `common/inline_scripts` bodies, matching `cwtools validate`. A call site's
   substituted body is validated against the caller's rules and scope, and a
