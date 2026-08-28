@@ -41,10 +41,29 @@ def test_report_body_skips_hash_headers(guard: ModuleType) -> None:
     assert guard.report_body(text) == ["file,line,severity,code,message", "row"]
 
 
+def test_default_projects_falls_back_to_the_repo_root_parent(
+    guard: ModuleType,
+) -> None:
+    assert guard.default_projects({}) == guard.REPO_ROOT.parent
+
+
+def test_default_projects_env_wins(guard: ModuleType) -> None:
+    assert guard.default_projects({"CWTOOLS_PROJECTS": "/tmp/projects"}) == Path(
+        "/tmp/projects"
+    )
+
+
 def test_md_uses_the_default_corpus(guard: ModuleType) -> None:
     config = guard.build_config(["md"], {"CWTOOLS_PROJECTS": "/tmp/projects"})
     assert config.corpus == Path("/tmp/projects/Millennium-Dawn")
     assert str(config.baseline).endswith("md-baseline.csv")
+
+
+def test_md_falls_back_to_the_repo_root_parent_without_the_env(
+    guard: ModuleType,
+) -> None:
+    config = guard.build_config(["md"], {})
+    assert config.corpus == guard.REPO_ROOT.parent / "Millennium-Dawn"
 
 
 def test_md_corpus_flag_wins_over_the_env(guard: ModuleType) -> None:

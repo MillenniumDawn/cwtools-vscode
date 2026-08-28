@@ -125,7 +125,7 @@ def default_projects(env: Mapping[str, str]) -> Path:
     raw = env.get("CWTOOLS_PROJECTS")
     if raw:
         return Path(raw)
-    return Path.home() / "Documents" / "github-projects"
+    return REPO_ROOT.parent
 
 
 def build_config(
