@@ -56,6 +56,11 @@
 
 #### Engine
 
+* The CLI driver now merges mod-file complex-enum members into the index, the
+  same way it already does for value-set members and the vanilla cache does
+  for both. Completion-only: batch diagnostics don't read `complex_enum_values`
+  yet, so this closes an asymmetry between the driver and `collect.rs`'s index
+  builder rather than changing any output. (#454)
 * LSP: a test now covers the sampler guard that stops a late or refused
   progress tick from opening the scan's `workDoneProgress` stream on its own.
   (#433)

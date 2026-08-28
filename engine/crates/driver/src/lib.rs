@@ -529,6 +529,7 @@ impl Session {
             HashMap<String, Vec<cwtools_index::TypeInstance>>,
             Vec<String>,
             HashMap<String, Vec<String>>,
+            HashMap<String, Vec<String>>,
             Vec<String>,
             Vec<String>,
         );
@@ -558,6 +559,15 @@ impl Session {
                     &src.parsed,
                     &rules_table,
                 );
+                // Complex-enum members defined in mod files. The vanilla path
+                // collects these too; without this mod-defined members are
+                // missing from `complex_enum_values`. Completion-only otherwise.
+                let complex = cwtools_index::dynamic_values::collect_complex_enum_values(
+                    &ruleset,
+                    &src.parsed,
+                    &src.logical_path,
+                    &rules_table,
+                );
                 // Scripted-localisation names, so a loc command naming one is not
                 // reported as an unknown command (#348). Path-driven: the HOI4
                 // ruleset's `scripted_loc` type points at Stellaris's folder, so
@@ -577,6 +587,7 @@ impl Session {
                     collected.subtype_instances,
                     var_names,
                     value_sets,
+                    complex,
                     scripted_locs,
                     scripted_guis,
                 )
@@ -586,7 +597,15 @@ impl Session {
         let mut type_index = TypeIndex::new();
         for (
             src,
-            (instances, subtype_instances, var_names, value_sets, scripted_locs, scripted_guis),
+            (
+                instances,
+                subtype_instances,
+                var_names,
+                value_sets,
+                complex,
+                scripted_locs,
+                scripted_guis,
+            ),
         ) in parsed.iter().zip(per_file)
         {
             let file_uri = src.path.to_str().unwrap_or("");
@@ -598,6 +617,7 @@ impl Session {
                 type_index.var_index.add_name(n);
             }
             type_index.value_set_values.merge_file(file_uri, value_sets);
+            type_index.complex_enum_values.merge_file(file_uri, complex);
             type_index
                 .scripted_loc_index
                 .merge_file(file_uri, scripted_locs);

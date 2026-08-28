@@ -697,6 +697,60 @@ fn session_load_builds_indexes() {
     );
 }
 
+// ── mod-defined complex-enum members (#454) ─────────────────────────────────
+
+const COMPLEX_ENUM_RULES: &str = r#"
+enums = {
+    complex_enum[my_enum] = {
+        path = "game/common/my_enum"
+        start_from_root = yes
+        name = {
+            enum_name = scalar
+        }
+    }
+}
+"#;
+
+/// A mod-defined complex-enum member must reach the driver's `TypeIndex`, not
+/// only the vanilla-cache path (#454): the per-mod-file loop has to collect and
+/// merge `complex_enum_values` the same way `collect.rs`'s sequential builder
+/// does.
+#[test]
+fn session_load_collects_mod_defined_complex_enum_members() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
+    std::fs::write(
+        tmp.path().join("rules").join("enums.cwt"),
+        COMPLEX_ENUM_RULES,
+    )
+    .unwrap();
+    let enum_dir = tmp.path().join("mod").join("common").join("my_enum");
+    std::fs::create_dir_all(&enum_dir).unwrap();
+    std::fs::write(enum_dir.join("x.txt"), "MY_VALUE = \"something\"\n").unwrap();
+
+    let session = Session::load(SessionConfig {
+        game: Game::Hoi4,
+        rules: RulesInput::Dir(tmp.path().join("rules")),
+        directory: tmp.path().join("mod"),
+        vanilla: None,
+        vanilla_cache: None,
+        vanilla_cache_auto: None,
+        ignore_files: &[],
+        ignore_dirs: &[],
+        loc_languages: None,
+        case_sensitive_files: false,
+        on_rules_diagnostic: None,
+    });
+
+    assert!(
+        session
+            .type_index()
+            .complex_enum_values
+            .contains("my_enum", "MY_VALUE"),
+        "mod-defined complex-enum member should reach the index"
+    );
+}
+
 // ── CW100 loc gate ───────────────────────────────────────────────────────────
 
 const LOC_RULES: &str = r#"
