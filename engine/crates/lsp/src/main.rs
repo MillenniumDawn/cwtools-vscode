@@ -495,6 +495,7 @@ impl Backend {
         // info_service read is held only for the resolve; `rules_at_pos` returns
         // owned data, so it is dropped before the caller runs.
         let info_guard = self.state.info_service.read();
+        let inline_guard = self.state.inline_scripts.read();
         let prepared = crate::validate::make_prepared(
             &ruleset,
             &self.state.string_table,
@@ -503,11 +504,13 @@ impl Backend {
             &modifier_keys,
             None,
             None,
+            Some(&inline_guard),
             scope_registry.as_ref(),
             scope_checks,
             var_checks,
         );
         let rctx = rules_at_pos(&ast, logical_path, &prepared, line, col, false)?;
+        drop(inline_guard);
         drop(info_guard);
         Some(CursorResolution { rctx, ruleset })
     }
@@ -850,6 +853,7 @@ impl LanguageServer for Backend {
                     FileRead::Text(text) => DiskState::Parsed {
                         parsed: cwtools_parser::parser::parse_string(&text, &table),
                         discarded_edits: text != *buffer_text,
+                        text,
                     },
                     FileRead::Missing | FileRead::Refused => DiskState::Absent,
                 }
@@ -868,10 +872,23 @@ impl LanguageServer for Backend {
             }
 
             match &disk_ast {
-                DiskState::Parsed { parsed, .. } => self.index_parsed_file(&uri, parsed, None),
+                DiskState::Parsed { parsed, text, .. } => {
+                    self.index_parsed_file(&uri, parsed, None);
+                    // Reset the inline-script registry to disk truth: the
+                    // buffer that may have kept it live-updated is gone now
+                    // (#259).
+                    if let Some(name) = self.refresh_inline_script(&uri, text) {
+                        self.state.pending_changed_names.lock().insert(name);
+                    }
+                }
                 DiskState::Absent => {
                     self.state.info_service.write().clear_file(&uri);
                     self.bump_info_revision();
+                    // Gone from disk too, so it can no longer expand at its
+                    // callers; queue its name for the sweep below (#259).
+                    if let Some(name) = self.remove_inline_script(&uri) {
+                        self.state.pending_changed_names.lock().insert(name);
+                    }
                     // The file is gone from disk too, so its recorded `<type>` uses
                     // must not keep suppressing CW239 on the instances it referenced.
                     // Queue those names so the sweep below revalidates their
@@ -919,6 +936,7 @@ impl LanguageServer for Backend {
         if let DiskState::Parsed {
             parsed,
             discarded_edits: true,
+            ..
         } = &disk_ast
             && !self.state.documents.lock().contains_key(&uri)
         {

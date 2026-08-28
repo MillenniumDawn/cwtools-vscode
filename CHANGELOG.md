@@ -56,6 +56,13 @@
 
 #### Engine
 
+* LSP: the editor now expands `inline_script` call sites against the mod's
+  `common/inline_scripts` bodies, matching `cwtools validate`. A call site's
+  substituted body is validated against the caller's rules and scope, and a
+  call to a script that can't be pulled in reports CW274. The registry is
+  built during the workspace scan and kept current per file on an edit or a
+  watched-file event, which also revalidates open files that call the changed
+  script. (#259)
 * The CLI driver now merges mod-file complex-enum members into the index, the
   same way it already does for value-set members and the vanilla cache does
   for both. Completion-only: batch diagnostics don't read `complex_enum_values`

@@ -91,6 +91,7 @@ impl Backend {
         if scopes {
             let rules_guard = self.state.rules.read();
             let info_guard = self.state.info_service.read();
+            let inline_guard = self.state.inline_scripts.read();
             if let (Some(ruleset), Some(registry)) = (
                 rules_guard.ruleset.as_ref(),
                 rules_guard.scope_registry.as_ref(),
@@ -107,6 +108,7 @@ impl Backend {
                     rules_guard.modifier_keys.as_ref(),
                     None,
                     None,
+                    Some(&inline_guard),
                     Some(registry),
                     scope_checks,
                     var_checks,

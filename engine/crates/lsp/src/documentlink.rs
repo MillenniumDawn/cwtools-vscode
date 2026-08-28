@@ -74,6 +74,7 @@ impl Backend {
         // scope; probing runs after the guards drop.
         let candidates = {
             let info = self.state.info_service.read();
+            let inline_guard = self.state.inline_scripts.read();
             let prepared = crate::validate::make_prepared(
                 &ruleset,
                 &self.state.string_table,
@@ -82,6 +83,7 @@ impl Backend {
                 &modifier_keys,
                 None,
                 None,
+                Some(&inline_guard),
                 scope_registry.as_ref(),
                 scope_checks,
                 var_checks,

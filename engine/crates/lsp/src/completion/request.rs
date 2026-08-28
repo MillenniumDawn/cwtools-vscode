@@ -397,6 +397,7 @@ impl Backend {
                     }
                     context_is_clean = ast.errors.is_empty();
                     let info_guard = self.state.info_service.read();
+                    let inline_guard = self.state.inline_scripts.read();
                     let game = cwtools_game::constants::Game::from_str(&language);
                     let prepared = crate::validate::make_prepared(
                         rs,
@@ -406,6 +407,7 @@ impl Backend {
                         &modifier_keys_arc,
                         None,
                         None,
+                        Some(&inline_guard),
                         scope_registry_arc.as_ref(),
                         scope_checks,
                         var_checks,
