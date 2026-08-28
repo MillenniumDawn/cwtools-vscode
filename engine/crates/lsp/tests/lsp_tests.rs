@@ -14207,14 +14207,23 @@ fn test_sampler_ticks_do_not_retry_a_refused_progress_create() {
     );
 }
 
-/// #221: the scan's end state is a closed bar that stays closed. The phase
-/// samplers are detached tasks on a timer, and this pins that none of them
-/// outlives the scan far enough to put the status bar back up with nothing
-/// behind it.
+/// #221 / #434: a live phase sampler must never reopen a bar that something
+/// else already closed. The samplers are detached tasks on a timer, so this
+/// has to catch one that outlives its own scan's close, not just prove the
+/// startup scan itself ends tidily — a fixture too small to keep any sampler
+/// alive past the close would pass whether or not the guard exists.
 ///
-/// It cannot force that race — a scan this small likely finishes before any
-/// sampler's first tick — so treat it as an end-state guard, not as coverage of
-/// `report_loading_bar_pct`'s open-bar check.
+/// `CWTOOLS_PARSE_HOLD_FILE` holds the startup scan just inside Parse — a
+/// *counted* phase, unlike Discover, so its sampler actually calls
+/// `report_loading_bar_pct` on a 1ms `CWTOOLS_SAMPLE_INTERVAL_MS` — instead of
+/// racing to catch it exactly at a phase boundary. While it's held, `cacheVanilla`
+/// (no vanilla dir configured, so it does nothing) is sent with no
+/// `workDoneToken`: its `ScanGuard::finish` still unconditionally closes
+/// whatever bar is open, which is the *held* scan's, not its own. That leaves
+/// a live, un-aborted counted-phase sampler next to a bar that just closed —
+/// deterministically, not a race — so the guard in `report_loading_bar_pct`
+/// is the only thing standing between that tick and a reopened bar. Removing
+/// it turns this red (#434).
 #[test]
 fn test_the_bar_stays_closed_after_the_scan_closes_it() {
     let ws = tempfile::tempdir().unwrap();
@@ -14224,7 +14233,15 @@ fn test_the_bar_stays_closed_after_the_scan_closes_it() {
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(&p, "my_focus = {\n    id = my_focus\n}\n").unwrap();
 
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("parse-hold");
+    // Armed before the server starts, so it's the startup scan's own Parse
+    // phase that trips it.
+    std::fs::write(&gate, "").unwrap();
+
     let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_SAMPLE_INTERVAL_MS", "1")
+        .env("CWTOOLS_PARSE_HOLD_FILE", &gate)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -14256,27 +14273,63 @@ fn test_the_bar_stays_closed_after_the_scan_closes_it() {
     .unwrap();
 
     let rx = spawn_frame_collector(reader);
+
+    // Three `enable=true` reports: Discover's own boundary, Parse's boundary,
+    // and at least one sampler tick from inside the hold — proof the held
+    // phase's ticker is alive and reporting, not just present.
+    let mut opens = 0u32;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    let mut closed = false;
-    while std::time::Instant::now() < deadline {
-        let Ok(v) = rx.recv_timeout(std::time::Duration::from_millis(200)) else {
-            continue;
-        };
-        if v["method"] == "loadingBar" && v["params"]["enable"] == serde_json::Value::Bool(false) {
-            closed = true;
-            break;
+    while opens < 3 && std::time::Instant::now() < deadline {
+        if let Ok(v) = rx.recv_timeout(std::time::Duration::from_millis(200))
+            && is_scan_started(&v)
+        {
+            opens += 1;
         }
     }
-    assert!(closed, "the startup scan never closed the bar");
+    assert!(
+        opens >= 3,
+        "the held Parse phase never showed a live sampler tick"
+    );
 
-    // Well past the 200ms sampler interval, so a tick that outlived the scan
-    // has had many chances to land.
+    // A second, independent operation that closes the *shared* bar: with no
+    // vanilla dir configured `cacheVanilla` indexes nothing, but its guard
+    // still closes whatever bar is open regardless of who opened it.
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            9001,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "cacheVanilla", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    // Waits on the close notification itself rather than the command's
+    // response: they go out from the same task in that order, but a
+    // notification and a response ride separate channels with no ordering
+    // guarantee between them once both are in flight.
+    let mut saw_close = false;
+    let close_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !saw_close && std::time::Instant::now() < close_deadline {
+        if let Ok(v) = rx.recv_timeout(std::time::Duration::from_millis(200))
+            && v["method"] == "loadingBar"
+            && v["params"]["enable"] == serde_json::Value::Bool(false)
+        {
+            saw_close = true;
+        }
+    }
+    assert!(saw_close, "cacheVanilla never closed the shared bar");
+
+    // The startup scan's Parse-phase ticker is still alive and untouched (the
+    // hold file still exists) — its very next tick, at most 1ms away, is the
+    // one under test.
     let after = drain_until_quiet(
         &rx,
-        std::time::Duration::from_secs(1),
+        std::time::Duration::from_millis(500),
         std::time::Duration::from_secs(3),
     );
+    std::fs::remove_file(&gate).ok();
     stop_server(&mut child);
+
     let reopened: Vec<&serde_json::Value> = after
         .iter()
         .filter(|v| {
@@ -14285,7 +14338,7 @@ fn test_the_bar_stays_closed_after_the_scan_closes_it() {
         .collect();
     assert!(
         reopened.is_empty(),
-        "a sampler tick reopened the bar after the scan closed it: {reopened:?}"
+        "a sampler tick reopened the bar after cacheVanilla closed it: {reopened:?}"
     );
 }
 
