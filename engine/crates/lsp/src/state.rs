@@ -13,7 +13,7 @@ use cwtools_info::TypeInstance;
 use cwtools_parser::ast::ParsedFile;
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::{StringId, StringTable};
-use cwtools_validation::references;
+use cwtools_validation::{InlineScripts, references};
 
 use crate::scan::ScanSummary;
 
@@ -270,12 +270,13 @@ impl RuleData {
 /// Server state.
 ///
 /// LOCK ORDER: when holding more than one guard, acquire in this order —
-/// `documents` -> `rules` -> `info_service` -> `loc_index`. `config` is a
-/// settings snapshot: it is always read-clone-dropped and never held across
-/// another lock or an await. Most sites snapshot-and-drop the others too; the
-/// places that co-hold are the workspace scan and single-file validate
-/// (`rules` -> `info_service` -> `loc_index`). Never acquire an earlier lock
-/// while holding a later one.
+/// `documents` -> `rules` -> `info_service` -> `loc_index` ->
+/// `inline_scripts`. `config` is a settings snapshot: it is always
+/// read-clone-dropped and never held across another lock or an await. Most
+/// sites snapshot-and-drop the others too; the places that co-hold are the
+/// workspace scan and single-file validate (`rules` -> `info_service` ->
+/// `loc_index` -> `inline_scripts`). Never acquire an earlier lock while
+/// holding a later one.
 pub(crate) struct DocumentState {
     /// Open documents plus exact retained-text accounting under the same lock.
     pub(crate) documents: Mutex<DocumentStore>,
@@ -338,6 +339,17 @@ pub(crate) struct DocumentState {
     /// `Arc` so snapshot clone is a pointer bump, not a deep copy of the union
     /// (485f0b). `loc_key_index` already uses `Arc` for the same reason.
     pub(crate) loc_index: parking_lot::RwLock<Option<Arc<cwtools_localization::LocIndex>>>,
+    /// The mod's `common/inline_scripts` bodies, so an `inline_script` call
+    /// site expands and validates against them instead of standing unchecked
+    /// (#259) — the editor's counterpart of the batch driver's
+    /// `Session::inline_scripts`. Rebuilt wholesale on each full workspace
+    /// scan (a mod holds a handful of these files, so a fresh read+parse is
+    /// cheap — matches the driver's own `load_inline_scripts`, which re-reads
+    /// rather than reuses the indexing pass's ASTs); refreshed per entry by
+    /// [`Backend::refresh_inline_script`] / [`Backend::remove_inline_script`]
+    /// on an edit or a watched-file event, so a caller doesn't wait for the
+    /// next scan.
+    pub(crate) inline_scripts: parking_lot::RwLock<InlineScripts>,
     /// Sorted, prefix-searchable mirror of `loc_index`'s key union, built beside
     /// it on each scan so loc completion can binary-search for the typed token
     /// instead of sweeping all ~400K keys per keystroke. `None` until the first
@@ -1003,9 +1015,15 @@ pub(crate) enum DiskState {
     /// `discarded_edits` is set when the disk text differs from the buffer that
     /// just closed, i.e. the user closed it with unsaved changes. Anything
     /// derived from that buffer describes content that never hit disk.
+    ///
+    /// `text` is the disk read that produced `parsed`, kept alongside it so a
+    /// `common/inline_scripts` file can be re-registered against its on-disk
+    /// content (a comment-free reparse, see [`Backend::refresh_inline_script`])
+    /// instead of whatever an unsaved buffer last pushed into the registry.
     Parsed {
         parsed: ParsedFile,
         discarded_edits: bool,
+        text: String,
     },
     /// Nothing safe to index: deleted, unreadable, refused, or no longer parses.
     Absent,
@@ -1029,6 +1047,7 @@ impl DocumentState {
             vanilla_scripted_gui_names: Mutex::new(None),
             vanilla_loc: Mutex::new(None),
             loc_index: parking_lot::RwLock::new(None),
+            inline_scripts: parking_lot::RwLock::new(InlineScripts::default()),
             loc_key_index: parking_lot::RwLock::new(None),
             loc_text: parking_lot::RwLock::new(LocTextMap::default()),
             loc_locations: parking_lot::RwLock::new(LocLocationMap::default()),

@@ -443,13 +443,28 @@ where
 /// that parallel load can blow through (#198). Unset, which is every real run,
 /// both are no-ops.
 pub(crate) async fn hold_scan_for_tests() {
-    if let Some(ms) = std::env::var("CWTOOLS_SCAN_HOLD_MS")
+    hold_for_tests("CWTOOLS_SCAN_HOLD_MS", "CWTOOLS_SCAN_HOLD_FILE").await;
+}
+
+/// [`hold_scan_for_tests`], but placed at the start of Parse instead of
+/// Discover. Discover has no per-item counter, so nothing calls
+/// `report_loading_bar_pct` while it holds; a test that needs a *sampled*
+/// phase's ticker demonstrably alive — #434, proving a stray sampler tick
+/// can't reopen a bar another caller already closed — has nothing to hold at
+/// in Discover. `CWTOOLS_PARSE_HOLD_MS`/`CWTOOLS_PARSE_HOLD_FILE` are separate
+/// env vars from the scan hold's so arming one never also arms the other.
+pub(crate) async fn hold_parse_for_tests() {
+    hold_for_tests("CWTOOLS_PARSE_HOLD_MS", "CWTOOLS_PARSE_HOLD_FILE").await;
+}
+
+async fn hold_for_tests(ms_var: &str, file_var: &str) {
+    if let Some(ms) = std::env::var(ms_var)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
     {
         tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
     }
-    let Ok(gate) = std::env::var("CWTOOLS_SCAN_HOLD_FILE") else {
+    let Ok(gate) = std::env::var(file_var) else {
         return;
     };
     let gate = std::path::PathBuf::from(gate);

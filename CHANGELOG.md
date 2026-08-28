@@ -61,9 +61,29 @@
 
 #### Engine
 
+* LSP: the editor now expands `inline_script` call sites against the mod's
+  `common/inline_scripts` bodies, matching `cwtools validate`. A call site's
+  substituted body is validated against the caller's rules and scope, and a
+  call to a script that can't be pulled in reports CW274. The registry is
+  built during the workspace scan and kept current per file on an edit or a
+  watched-file event, which also revalidates open files that call the changed
+  script. (#259)
+* The CLI driver now merges mod-file complex-enum members into the index, the
+  same way it already does for value-set members and the vanilla cache does
+  for both. Completion-only: batch diagnostics don't read `complex_enum_values`
+  yet, so this closes an asymmetry between the driver and `collect.rs`'s index
+  builder rather than changing any output. (#454)
 * LSP: a test now covers the sampler guard that stops a late or refused
   progress tick from opening the scan's `workDoneProgress` stream on its own.
   (#433)
+* LSP: the bar-stays-closed scan test could not actually fail — its fixture
+  finished before any phase sampler's first tick, so the guard it names could
+  be deleted without turning it red. It now holds the startup scan inside
+  Parse (a new `CWTOOLS_PARSE_HOLD_MS`/`CWTOOLS_PARSE_HOLD_FILE` test hook,
+  since Discover has no per-item counter to sample) while `cacheVanilla`
+  closes the shared bar out from under it, so a stray sampler tick reopening
+  a bar someone else already closed is something the test can catch, not just
+  hope doesn't happen. (#434)
 * The parser reprints script from the AST (indent, trailing whitespace, final
   newline). Parse errors yield no edits. `textDocument/formatting` and
   `textDocument/rangeFormatting` are advertised, `formatWorkspace` applies one

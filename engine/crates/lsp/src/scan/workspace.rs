@@ -23,8 +23,8 @@ use crate::validate::{
 };
 
 use super::{
-    OpenDocSnapshot, ScanGuard, ScanSummary, ScannedFile, hold_scan_for_tests, quiet_pass_can_skip,
-    spawn_logging_panics, stat_signature_for,
+    OpenDocSnapshot, ScanGuard, ScanSummary, ScannedFile, hold_parse_for_tests,
+    hold_scan_for_tests, quiet_pass_can_skip, spawn_logging_panics, stat_signature_for,
 };
 
 /// ~one rayon work unit; 256 balances per-chunk rayon parallelism vs UI
@@ -542,6 +542,7 @@ impl Backend {
         // within a single scan.
         self.enter_phase(&mut phase, progress, quiet, Phase::Parse, scan_files.len())
             .await;
+        hold_parse_for_tests().await;
         // Snapshot the set of currently-open document URIs so both passes can
         // skip them: open docs were already indexed by did_open/did_change and
         // their fresher in-memory diagnostics must not be clobbered by stale
@@ -892,10 +893,36 @@ impl Backend {
         }
         *self.state.last_loc_signature.lock() = Some(loc_signature);
 
-        // The index (types + loc + vanilla) is now complete. Allow per-file
-        // handlers to publish real diagnostics again: anything opened/edited
-        // during indexing was held back to avoid transient cross-file "not found"
-        // errors, and pass 2 + the open-doc refresh below publish the real set.
+        // Rebuild the inline-script registry from what this scan discovered
+        // (#259), so a script created, deleted or edited outside a watched
+        // event (server restart, a periodic reindex) is still picked up. A
+        // full rebuild rather than a patch: it's the only way a deleted
+        // script drops out, and a mod holds a handful of these against
+        // thousands of script files, so re-reading them is cheap (mirrors
+        // `cwtools_driver`'s own `load_inline_scripts`). Skipped for an empty
+        // walk, same as the on-disk prune above — a transient read failure
+        // must not wipe every previously known script.
+        //
+        // Built as a local value rather than written straight into
+        // `state.inline_scripts`: pass 2 below borrows it for the whole
+        // parallel section, and doing that against the shared lock directly
+        // would block a concurrent edit's `write()` for the whole scan (the
+        // same reason `type_index`/`loc_index` are snapshotted instead of
+        // read-locked there). It's installed into state after pass 2 reads
+        // from it.
+        let fresh_inline_scripts = if scan_files.is_empty() {
+            None
+        } else {
+            Some(tokio::task::block_in_place(|| {
+                self.rebuild_inline_scripts(&scan_files)
+            }))
+        };
+
+        // The index (types + loc + vanilla + inline scripts) is now complete.
+        // Allow per-file handlers to publish real diagnostics again: anything
+        // opened/edited during indexing was held back to avoid transient
+        // cross-file "not found" errors, and pass 2 + the open-doc refresh
+        // below publish the real set.
         self.state
             .index_ready
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1012,6 +1039,7 @@ impl Backend {
                 &modifier_keys_snap,
                 loc_index_snap.as_deref(),
                 None,
+                fresh_inline_scripts.as_ref(),
                 registry,
                 scope_checks,
                 var_checks,
@@ -1134,6 +1162,13 @@ impl Backend {
                     diagnostics.push(validation_error_to_diagnostic(&err, &no_lines));
                 }
             }
+        }
+        // Pass 2 (including the unused-instance phase above) was the last
+        // reader of `prepared`, which borrowed `fresh_inline_scripts` — `prepared`
+        // is `Copy` and unused from here, so NLL already ends that borrow.
+        // Install the rebuilt registry into state now that nothing borrows it.
+        if let Some(inline_scripts) = fresh_inline_scripts {
+            *self.state.inline_scripts.write() = inline_scripts;
         }
         let results: Vec<(String, Vec<Diagnostic>, Option<u64>, InlineIgnoreMap)> = results
             .into_iter()
@@ -1375,6 +1410,55 @@ impl Backend {
         // return, so every exit path (this one and the early returns above) clears
         // it uniformly.
         true
+    }
+
+    /// Read+parse every `common/inline_scripts` file this scan discovered into
+    /// a fresh registry (#259). Re-reads rather than reuses pass 1's ASTs —
+    /// those are comment-stripped already but consumed indexing, and a mod
+    /// holds a handful of these against thousands of script files — same
+    /// tradeoff as `cwtools_driver::load_inline_scripts`. Unlike the rest of
+    /// the scan (which skips an open file entirely, trusting the keystroke
+    /// path to have indexed it), an open script's live buffer is read here —
+    /// nothing else feeds this registry for one that's open but unsaved.
+    /// Synchronous (file I/O): call inside `tokio::task::block_in_place`.
+    fn rebuild_inline_scripts(
+        &self,
+        scan_files: &[ScannedFile],
+    ) -> cwtools_validation::InlineScripts {
+        let ws_prefix = self.state.config.read().workspace_prefix.clone();
+        let mut registry = cwtools_validation::InlineScripts::default();
+        for file in scan_files {
+            let logical_path = logical_path_from_uri(&file.uri, &ws_prefix);
+            if !cwtools_validation::InlineScripts::is_script_path(&logical_path) {
+                continue;
+            }
+            let open_text = self
+                .state
+                .documents
+                .lock()
+                .get(&file.uri)
+                .map(|doc| doc.text.to_string());
+            let text = match open_text {
+                Some(text) => text,
+                None => match cwtools_file_manager::file_manager::read_text_capped(
+                    &file.path,
+                    crate::access::MAX_URI_READ_BYTES,
+                ) {
+                    Ok((text, _)) => text,
+                    Err(error) => {
+                        tracing::warn!(
+                            path = %file.path.display(),
+                            error = %error,
+                            "scan: skipping unreadable inline script"
+                        );
+                        continue;
+                    }
+                },
+            };
+            let parsed = parse_string_without_comments(&text, &self.state.string_table);
+            registry.insert(&logical_path, parsed);
+        }
+        registry
     }
 
     #[cfg(test)]
