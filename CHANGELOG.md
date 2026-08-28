@@ -2,6 +2,11 @@
 
 #### Extension
 
+* `cwtools.restartServer` now gives the same EPERM/EACCES guidance as
+  activation: if a restart fails because antivirus re-quarantined the server
+  binary, the error dialog offers Reveal Server Binary and Antivirus Help
+  instead of a raw error toast. The dialog is shared code
+  (`serverBlockedDialog.ts`) so both failure paths stay in sync. (#455)
 * A persistent status bar item shows the language server's state (starting,
   scanning n%, ready, stopped) even when idle. Clicking it offers Restart
   Server and Show Output. `cwtools.restartServer` stops and restarts the

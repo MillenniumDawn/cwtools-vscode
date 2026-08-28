@@ -8,7 +8,7 @@ import * as os from "os";
 import * as fsPromises from "fs/promises";
 import * as vscode from "vscode";
 import type { ExtensionContext } from "vscode";
-import { workspace, window, Uri, commands, env, l10n } from "vscode";
+import { workspace, window, commands, l10n } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 
 import { serverExe as resolveServerExe } from "./engine";
@@ -20,6 +20,7 @@ import { registerDocumentLanguage } from "./documentLanguage";
 import { registerCommands, publishCommandAvailability } from "./commands";
 import { setTrustedRoots } from "./trustedPaths";
 import { logInfo, logError, errorMessage } from "./logger";
+import { showServerBlockedDialog } from "./serverBlockedDialog";
 import type * as GraphPanelModule from "./graphPanel";
 
 export let defaultClient: LanguageClient;
@@ -134,7 +135,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			);
 		}
 
-		registerCommands(context, client, tracker);
+		registerCommands(context, client, tracker, serverExe);
 
 		// Subscriptions are pushed here so the client is disposed with the extension.
 		context.subscriptions.push(client);
@@ -159,37 +160,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		} catch (err) {
 			const msg = errorMessage(err);
 			logError("client.start() error", err);
-			// EPERM/EACCES means the OS refused to execute the server binary,
-			// almost always antivirus (Defender) quarantining the unsigned exe
-			// or a corporate exec policy. A raw "spawn EPERM" tells a modder
-			// nothing, so surface the cause and a self-serve fix instead.
-			const code = (err as NodeJS.ErrnoException | undefined)?.code;
-			if (code === "EPERM" || code === "EACCES") {
-				const reveal = l10n.t("Reveal Server Binary");
-				const help = l10n.t("Antivirus Help");
-				void window
-					.showErrorMessage(
-						l10n.t(
-							"CWTools server was blocked from running ({0}). This is almost always antivirus (e.g. Windows Defender) quarantining the unsigned server binary. Restore it from quarantine and add an exclusion for the extension's server folder, then reload the window.",
-							code,
-						),
-						reveal,
-						help,
-					)
-					.then((choice) => {
-						if (choice === reveal && serverExe) {
-							void commands.executeCommand(
-								"revealFileInOS",
-								Uri.file(serverExe),
-							);
-						} else if (choice === help) {
-							void env.openExternal(
-								Uri.parse(
-									"https://support.microsoft.com/windows/add-an-exclusion-to-windows-security-811816c0-4dfd-af4a-47e4-c301afe13b26",
-								),
-							);
-						}
-					});
+			if (showServerBlockedDialog(err, serverExe)) {
 				return;
 			}
 			window.showErrorMessage(
