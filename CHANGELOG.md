@@ -61,6 +61,14 @@
 
 #### Engine
 
+* Re-blessed the Millennium Dawn guard baseline (`scripts/md-baseline.csv`)
+  against the corpus and rules checkouts' current revisions: Millennium-Dawn
+  @ e28bb72afe (was 44940966fe), cwtools-hoi4-config/Config @ 3a0a4e9 (was
+  46d5886). The pinned baseline was stale; diagnostics moved 9208 -> 9760
+  (-1651/+2203 rows), mostly CW272 (-1011/+1438) and CW100 (-559/+550) row
+  churn from upstream mod content shifting, plus smaller moves in CW121,
+  CW225, CW235, CW240, CW242, CW246, CW251, CW261, CW262, CW263, CW266,
+  CW268, and CW275. The vanilla guard baseline is untouched. (#460)
 * LSP: the editor now expands `inline_script` call sites against the mod's
   `common/inline_scripts` bodies, matching `cwtools validate`. A call site's
   substituted body is validated against the caller's rules and scope, and a
