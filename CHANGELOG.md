@@ -56,6 +56,14 @@
 
 #### Engine
 
+* `discover_vanilla_dir` now maps `eu5` to its Steam install folder, "Europa
+  Universalis V", so the editor auto-discovers an installed EU5 base game the
+  same way it already does for ck3/vic3/ir. This turns on the vanilla-gated
+  checks (CW113, CW222, CW500) for EU5 users with the game installed. (#339)
+* Localisation scope validation now checks CK2 and VIC2 loc commands against
+  their own hardcoded scope tables (`CK2_SCOPES`/`VIC2_SCOPES`) instead of
+  silently falling back to HOI4's empty, config-driven one; only `None` and
+  `Custom` still take the lenient HOI4 fallback. (#339)
 * LSP: the editor now expands `inline_script` call sites against the mod's
   `common/inline_scripts` bodies, matching `cwtools validate`. A call site's
   substituted body is validated against the caller's rules and scope, and a

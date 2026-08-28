@@ -192,8 +192,8 @@ pub fn validate_loc_commands(
 
 /// Pick the engine `Game` whose scope table drives loc-command validation.
 ///
-/// The seven games with a scope table map to themselves; everything else
-/// (`None`, CK2, VIC2, Custom) falls back to Hoi4 (lenient).
+/// The nine games with a scope table map to themselves; everything else
+/// (`None`, Custom) falls back to Hoi4 (lenient).
 fn game_to_engine(game: Option<EngineGame>) -> EngineGame {
     static NO_MAPPING_WARNED: std::sync::Once = std::sync::Once::new();
     match game {
@@ -201,8 +201,10 @@ fn game_to_engine(game: Option<EngineGame>) -> EngineGame {
             g @ (EngineGame::Hoi4
             | EngineGame::Stellaris
             | EngineGame::Eu4
+            | EngineGame::Ck2
             | EngineGame::Ck3
             | EngineGame::Ir
+            | EngineGame::Vic2
             | EngineGame::Vic3
             | EngineGame::Eu5),
         ) => g,
@@ -1191,6 +1193,56 @@ mod tests {
         assert!(
             diags.is_empty(),
             "unknown intermediate poisons even terminal tails"
+        );
+    }
+
+    // ── game_to_engine mapping ────────────────────────────────────────────────
+
+    #[test]
+    fn game_to_engine_maps_ck2_and_vic2_to_themselves() {
+        assert_eq!(game_to_engine(Some(EngineGame::Ck2)), EngineGame::Ck2);
+        assert_eq!(game_to_engine(Some(EngineGame::Vic2)), EngineGame::Vic2);
+    }
+
+    #[test]
+    fn game_to_engine_falls_back_to_hoi4_for_custom_and_none() {
+        assert_eq!(game_to_engine(Some(EngineGame::Custom)), EngineGame::Hoi4);
+        assert_eq!(game_to_engine(None), EngineGame::Hoi4);
+    }
+
+    // ── #339: CK2 loc validation uses CK2's own hardcoded scope table ─────────
+
+    #[test]
+    fn ck2_chain_valid_from_character_scope() {
+        // Starting in CK2 Character (400): primary_title → Title (401) → GetName.
+        let entry = make_entry_with_commands(vec!["primary_title.GetName".into()]);
+        let data = LocScopeData {
+            game: Some(EngineGame::Ck2),
+            ..LocScopeData::default()
+        };
+
+        let diags = validate_loc_commands(&entry, ScopeId(400), &data);
+        assert!(
+            diags.is_empty(),
+            "primary_title.GetName from Character scope should be valid, got: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn ck2_chain_rejected_by_its_own_table_when_out_of_scope() {
+        // Starting in CK2 Title (401): `primary_title` is only valid from
+        // Character (400). Before CK2 passed through `game_to_engine`, this
+        // fell back to HOI4's empty hardcoded table and was silently lenient.
+        let entry = make_entry_with_commands(vec!["primary_title.GetName".into()]);
+        let data = LocScopeData {
+            game: Some(EngineGame::Ck2),
+            ..LocScopeData::default()
+        };
+
+        let diags = validate_loc_commands(&entry, ScopeId(401), &data);
+        assert!(
+            matches!(diags.as_slice(), [LocCommandDiagnostic::WrongScope { .. }]),
+            "primary_title from Title scope must be rejected by CK2's own table, got: {diags:?}"
         );
     }
 }
