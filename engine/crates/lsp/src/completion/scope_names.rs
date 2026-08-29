@@ -104,8 +104,9 @@ fn scope_prelude(language: &str) -> &'static [&'static str] {
     }
 }
 
-/// Derive scope completion names from the loaded registry when available, with
-/// game scope definitions and a small link fallback when no registry is loaded.
+/// Derive scope completion names from the loaded registry when available;
+/// without one, only the prelude keywords are offered (#373 — scope names
+/// come solely from the config-built registry now).
 pub(crate) fn scope_completion_names(
     language: &str,
     registry: Option<&cwtools_game::scope_registry::ScopeRegistry>,
@@ -118,44 +119,11 @@ pub(crate) fn scope_completion_names(
     if let Some(reg) = registry {
         names.extend(reg.by_id.values().map(|d| d.name.clone()));
         names.extend(reg.links.keys().cloned());
-    } else {
-        names.extend(scope_names_for_game(language));
     }
 
     let prelude_len = scope_prelude(language).len();
     names[prelude_len..].sort_unstable();
     names.dedup();
-    names
-}
-
-pub(crate) fn scope_names_for_game(language: &str) -> Vec<String> {
-    let mut names: Vec<String> = normalized_game(language)
-        .map(|game| {
-            game.scope_defs()
-                .iter()
-                .flat_map(|scope| {
-                    std::iter::once(scope.name.to_ascii_lowercase())
-                        .chain(scope.aliases.iter().map(|alias| alias.to_ascii_lowercase()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let links: &[&str] = match normalized_game(language) {
-        Some(Game::Hoi4) => &["OVERLORD", "FACTION_LEADER", "capital_scope", "owner"],
-        Some(Game::Stellaris) => &[
-            "owner",
-            "controller",
-            "space_owner",
-            "space_controller",
-            "solar_system",
-        ],
-        Some(Game::Eu4) => &["EMPEROR", "capital_scope", "owner", "controller"],
-        Some(Game::Ck2 | Game::Ck3) => &["liege", "employer", "host"],
-        Some(Game::Ir) => &["owner", "controller", "capital_scope"],
-        _ => &[],
-    };
-    names.extend(links.iter().map(|s| s.to_string()));
     names
 }
 
@@ -280,15 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn game_aliases_share_scope_fallback() {
-        assert_eq!(
-            scope_names_for_game("stellaris"),
-            scope_names_for_game("stl")
-        );
-        assert_eq!(
-            scope_names_for_game("ir"),
-            scope_names_for_game("imperator")
-        );
+    fn scope_completion_names_without_registry_keeps_prelude() {
         assert!(
             scope_completion_names("HOI4", None)
                 .iter()

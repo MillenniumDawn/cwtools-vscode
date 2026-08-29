@@ -1,14 +1,13 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use cwtools_game::constants::Game;
-use cwtools_game::scope_engine::{ScopeContext, ScopeId, ScopeResult};
+use cwtools_game::scope_engine::{ScopeContext, ScopeResult};
 use cwtools_game::scope_registry::{LinkInput, ScopeInput, ScopeRegistry};
 use std::hint::black_box;
 use std::sync::Arc;
 
-// Stellaris has a populated hardcoded link table (HOI4 links come from config),
-// so it exercises the real resolve path. Root = Country (200), matching the
-// existing unit tests. Mixed case + prev/dotted keys exercise #10 (lowercase
-// alloc), #11 (pop_n), #12 (is_subscope_or_eq).
+// A Stellaris-shaped config registry exercises the real resolve path (the
+// hardcoded tables are gone, #373). Root = Country. Mixed case + prev/dotted
+// keys exercise #10 (lowercase alloc), #11 (pop_n), #12 (is_subscope_or_eq).
 const KEYS: &[&str] = &[
     "owner",
     "Owner",
@@ -28,8 +27,49 @@ const KEYS: &[&str] = &[
     "system",
 ];
 
+fn stellaris_registry() -> Arc<ScopeRegistry> {
+    let scope = |name: &str, alias: &str| ScopeInput {
+        name: name.to_string(),
+        aliases: vec![alias.to_string()],
+        is_subscope_of: Vec::new(),
+    };
+    let link = |name: &str, output: &str, inputs: &[&str]| LinkInput {
+        name: name.to_string(),
+        output_scope: Some(output.to_string()),
+        input_scopes: inputs.iter().map(|s| s.to_string()).collect(),
+        prefix: None,
+        from_data: false,
+        data_source: Vec::new(),
+    };
+    Arc::new(ScopeRegistry::from_config(
+        &[
+            scope("Country", "country"),
+            scope("Leader", "leader"),
+            scope("Planet", "planet"),
+            scope("Ship", "ship"),
+            scope("Fleet", "fleet"),
+            scope("Star", "star"),
+            scope("System", "system"),
+        ],
+        &[
+            link("owner", "country", &["planet", "ship", "fleet"]),
+            link("controller", "country", &["planet"]),
+            link("capital_scope", "planet", &["country"]),
+            link("leader", "leader", &["country", "fleet"]),
+            link("planet", "planet", &["country"]),
+            link("star", "star", &["system"]),
+            link("fleet", "fleet", &["ship"]),
+            link("ship", "ship", &["fleet"]),
+            link("system", "system", &["planet", "ship"]),
+        ],
+        Game::Stellaris,
+    ))
+}
+
 fn bench_change_scope(c: &mut Criterion) {
-    let base = ScopeContext::new(Game::Stellaris, ScopeId(200));
+    let registry = stellaris_registry();
+    let country = registry.id_of("country").expect("country resolves");
+    let base = ScopeContext::from_registry(registry, country);
     c.bench_function("change_scope/stellaris_mixed", |b| {
         b.iter(|| {
             let mut ctx = base.clone();

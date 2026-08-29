@@ -330,11 +330,13 @@ fn validate_alias_usage_uncached(
     // CW248: an invalid scope command in a chain. Restricted to dotted lower-case
     // chains (`owner.capital`): a bare command that's missing from this config's
     // links.cwt (e.g. `overlord`) is valid-but-unlisted, not invalid, so only
-    // chains — where a segment is genuinely unresolvable — are flagged.
+    // chains — where a segment is genuinely unresolvable — are flagged. With no
+    // scopes loaded every chain is NotFound, so the check is skipped outright.
     if ctx.scope_checks
         && key.contains('.')
         && !looks_like_data_ref(key)
         && let Some(sc) = scope_context.as_mut()
+        && !sc.registry.is_empty()
     {
         // Probe on the live context and roll back: `save` snapshots into inline
         // storage, where cloning the whole context heap-allocates its two scope

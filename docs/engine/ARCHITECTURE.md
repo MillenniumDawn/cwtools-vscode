@@ -14,8 +14,8 @@ Layer 0 (leaves, no cwtools dependencies):
 - `i18n`: locale selection and translated engine messages.
 - `string_table`: the string interner. `StringTable::new()` builds a fresh sharded
   table; `Clone` shares that instance only. AST keys are `u32` ids into it.
-- `game`: the `Game` enum plus scope/link data (the `ScopeDef` tables, the scope engine
-  with `ScopeId`/`ScopeContext`/transitions, and the config-driven `ScopeRegistry`).
+- `game`: the `Game` enum plus the scope engine (`ScopeId`/`ScopeContext`/transitions)
+  and the config-driven `ScopeRegistry`.
 
 Then, roughly bottom-up:
 
@@ -160,35 +160,30 @@ CW247, CW248, CW260) work for any game that ships those files.
 
 A new `Game` variant touches these sites, in lockstep:
 
-1. `game/src/constants.rs`: add the variant, its `Display` arm, a `from_str` arm,
-   and a `scope_defs` arm (point it at a `*_SCOPES` table, or `&[]` for a
-   config-only game like HOI4).
-2. `game/src/scope_engine/links.rs`: add a `load_scope_links` arm (a hardcoded link
-   fallback, or `{}` when the config supplies everything).
-3. `game/src/scope_registry.rs`: no new arm. The registry is generic; it reads the
-   game's data through `scope_defs()` and `load_scope_links()`, so steps 1 and 2 cover it.
-4. `validation/src/per_game/mod.rs`: add a dispatch arm only if the game gets a
+1. `game/src/constants.rs`: add the variant, its `Display` arm and a `from_str`
+   arm. There are no per-game scope tables; scopes and links come only from the
+   game's config (step 7).
+2. `game/src/scope_registry.rs`: no new arm. The registry is generic and built
+   from `scopes.cwt`/`links.cwt` via `from_config`.
+3. `validation/src/per_game/mod.rs`: add a dispatch arm only if the game gets a
    dedicated validator module. Otherwise the `_ =>` default handles it.
-5. `validation/src/per_game/structural.rs`: add a CW223 message arm only if the
+4. `validation/src/per_game/structural.rs`: add a CW223 message arm only if the
    game's boolean operators differ from the default (HOI4 already overrides it).
-6. `localization/src/commands.rs`: usually nothing. The `Lang` set is one global
+5. `localization/src/commands.rs`: usually nothing. The `Lang` set is one global
    list shared by every game, not a per-game one. Add a variant (and its arms in
    `key_to_language`, `Lang::from_name`, `Display`) only if the new game ships a
    language cwtools doesn't already recognize.
-7. `localization/src/scope_validation.rs`: add the variant to `game_to_engine`'s
-   pass-through list, whether it drives its scope checks from a `*_SCOPES` table
-   (like CK2, VIC2) or from config (else loc scope checks fall back to lenient
-   HOI4).
-8. `lsp/src/paths.rs`: add the Steam install-folder name to `discover_vanilla_dir`.
-9. Ship `scopes.cwt` and `links.cwt` in the game's `.cwt` config (a separate repo).
+6. `lsp/src/paths.rs`: add the Steam install-folder name to `discover_vanilla_dir`.
+7. Ship `scopes.cwt` and `links.cwt` in the game's `.cwt` config (a separate repo).
+   Loc scope checks also resolve through that registry; without it they are
+   lenient.
 
-The compiler catches some of these for you. The `Game` matches in `constants.rs`
-(`Display`, `scope_defs`) and `scope_engine/links.rs` (`load_scope_links`) have no
-`_ =>`, so a new variant won't compile until you handle them. That is the safety
-net. Do not add a catch-all to silence it. The remaining sites (`from_str`,
-`game_to_engine`, `discover_vanilla_dir`, the per-game dispatch, the CW223
-message) have deliberate fallbacks, so a new variant compiles and behaves as the
-generic default until you add its arm.
+The compiler catches some of these for you. The `Game` match in `constants.rs`
+(`Display`) has no `_ =>`, so a new variant won't compile until you handle it.
+That is the safety net. Do not add a catch-all to silence it. The remaining
+sites (`from_str`, `discover_vanilla_dir`, the per-game dispatch, the CW223
+message) have deliberate fallbacks, so a new variant compiles and behaves as
+the generic default until you add its arm.
 
 ## Adding an error code
 
@@ -205,8 +200,8 @@ The largest areas are directory modules, each a thin `mod`/`lib` over focused fi
 
 - `validation/src/rule_core/`: the `.cwt` rule engine (`matching`, `children`,
   `leaf`, `alias`, `subtype_merge`, `suggest`, `mod`). The biggest of the set.
-- `game/src/scope_engine/`: `engine` (`ScopeId`/`ScopeContext`/transitions) vs
-  `links` (per-game hardcoded link tables), over `mod`.
+- `game/src/scope_engine/`: `engine` (`ScopeId`/`ScopeContext`/transitions)
+  over `mod`.
 - `lsp/src/completion/`: `request` (the `textDocument/completion` handler),
   `builders` (item construction), `filter` (ranking and subsequence prefilter),
   `snippets`, `scope_names`, `cwt` (completion inside the rules files

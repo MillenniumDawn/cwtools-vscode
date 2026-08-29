@@ -257,6 +257,87 @@ fn target_resolving_to_country_is_clean() {
     assert!(!c.contains(&"CW245".to_string()), "got: {:?}", c);
 }
 
+/// A config with links and triggers but NO `scopes = { … }` block — reachable
+/// because scopes.cwt and links.cwt are separate files. The registry then holds
+/// no scope knowledge, so every scope name is unresolvable and every link chain
+/// is NotFound; the checks must stand down instead of flagging everything (#373).
+const NO_SCOPES_RULES: &str = r#"
+links = {
+    capital_scope = { output_scope = state input_scopes = country }
+}
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    ## cardinality = 0..1
+    tgt = scope_field
+    alias_name[trigger] = alias_match_left[trigger]
+}
+## scope = state
+alias[trigger:state_only] = bool
+alias[trigger:scope_field] = {
+    alias_name[trigger] = alias_match_left[trigger]
+}
+"#;
+
+/// The same rules WITH scopes declared: the strict side of each gate below.
+const SCOPED_TARGET_RULES: &str = r#"
+scopes = {
+    Country = { aliases = { country } }
+    State = { aliases = { state } }
+}
+links = {
+    capital_scope = { output_scope = state input_scopes = country }
+}
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    ## cardinality = 0..1
+    tgt = scope_field
+    alias_name[trigger] = alias_match_left[trigger]
+}
+## scope = state
+alias[trigger:state_only] = bool
+alias[trigger:scope_field] = {
+    alias_name[trigger] = alias_match_left[trigger]
+}
+"#;
+
+#[test]
+fn no_scopes_config_has_no_wrong_scope_codes() {
+    let c = codes_hoi4(NO_SCOPES_RULES, "foo = { state_only = yes }");
+    for code in ["CW104", "CW105", "CW106"] {
+        assert!(!c.contains(&code.to_string()), "got: {:?}", c);
+    }
+}
+
+#[test]
+fn no_scopes_config_has_no_cw244() {
+    let c = codes_hoi4(NO_SCOPES_RULES, "foo = { tgt = capital_scope }");
+    assert!(!c.contains(&"CW244".to_string()), "got: {:?}", c);
+}
+
+#[test]
+fn no_scopes_config_has_no_cw248() {
+    let c = codes_hoi4(
+        NO_SCOPES_RULES,
+        "foo = { capital_scope.capital_scope = { state_only = yes } }",
+    );
+    assert!(!c.contains(&"CW248".to_string()), "got: {:?}", c);
+}
+
+#[test]
+fn unknown_target_with_scopes_is_still_cw244() {
+    let c = codes_hoi4(SCOPED_TARGET_RULES, "foo = { tgt = not_a_link }");
+    assert!(c.contains(&"CW244".to_string()), "got: {:?}", c);
+}
+
+#[test]
+fn unknown_chain_segment_with_scopes_is_still_cw248() {
+    let c = codes_hoi4(
+        SCOPED_TARGET_RULES,
+        "foo = { capital_scope.not_a_link = { state_only = yes } }",
+    );
+    assert!(c.contains(&"CW248".to_string()), "got: {:?}", c);
+}
+
 /// `Character is_subscope_of { country }`, so a `## scope = country` trigger is
 /// valid inside a character scope and must NOT produce CW104.
 const SUBSCOPE_RULES: &str = r#"
