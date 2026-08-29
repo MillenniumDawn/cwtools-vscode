@@ -1393,13 +1393,10 @@ impl Backend {
         *self.state.vanilla_loc.lock() = None;
         {
             let mut info = self.state.info_service.write();
-            info.type_index.var_index.clear_vanilla_names();
-            info.type_index
-                .scripted_loc_index
-                .set_vanilla_names(Vec::new());
-            info.type_index
-                .scripted_gui_index
-                .set_vanilla_names(Vec::new());
+            let type_index = Arc::make_mut(&mut info.type_index);
+            type_index.var_index.clear_vanilla_names();
+            type_index.scripted_loc_index.set_vanilla_names(Vec::new());
+            type_index.scripted_gui_index.set_vanilla_names(Vec::new());
         }
         self.bump_info_revision();
     }
