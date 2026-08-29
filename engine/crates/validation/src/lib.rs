@@ -1,5 +1,5 @@
 pub use cwtools_game::constants::Game;
-use cwtools_game::scope_engine::{SCOPE_ANY, ScopeContext, ScopeId};
+use cwtools_game::scope_engine::{SCOPE_ANY, ScopeContext};
 use cwtools_game::scope_registry::ScopeRegistry;
 use cwtools_localization::LocIndex;
 use cwtools_parser::ast::{Child, ParsedFile, Value};
@@ -267,7 +267,7 @@ pub struct Prepared<'a> {
 /// Scope-agnostic content is reused from many calling scopes (or operates on a
 /// data-dependent element scope), so it can't be pinned to one. Seed ANY so its
 /// body isn't scope-checked against an arbitrary default. Everything else starts
-/// at the game's primary scope (HOI4 country = 100).
+/// at the config's `country` scope, or ANY when the config declares none.
 ///   - scripted_effects/triggers/localisation: called from any scope.
 ///   - collections: the `limit`/`operators` run in the input element's scope
 ///     (`game:all_states` -> state, `game:all_countries` -> country); per the
@@ -285,9 +285,11 @@ pub(crate) fn initial_scope_context(
         || path_contains_segment(&clean, "scripted_localisation")
         || path_contains_segment(&clean, "collections")
         || path_contains_segment(&clean, "dynamic_modifiers");
+    // No `country` in the config (or no scopes at all) -> seed the wildcard rather
+    // than a made-up id, which would print as `scope_100` in a scope diagnostic.
     let default_root = registry
         .and_then(|r| r.id_of("country"))
-        .unwrap_or(ScopeId(100));
+        .unwrap_or(SCOPE_ANY);
     let initial_scope = if scope_agnostic {
         SCOPE_ANY
     } else {

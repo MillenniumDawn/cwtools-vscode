@@ -135,15 +135,23 @@ impl ScopeRegistry {
 
     /// Build the runtime registry from a parsed config (`scopes.cwt` +
     /// `links.cwt`). When the config carries no scope defs (e.g. a game without
-    /// a scopes.cwt, or no config loaded at all), the registry is empty and
-    /// every reader stays lenient. The `game` parameter is kept so call sites
-    /// keep saying which game they build for; nothing per-game is left here.
+    /// a scopes.cwt, or no config loaded at all), the registry is empty — any
+    /// links are dropped with it, since a link's input/output scopes cannot be
+    /// resolved — and every reader stays lenient. The `game` parameter is kept
+    /// so call sites keep saying which game they build for; nothing per-game is
+    /// left here.
     pub fn from_config(
         scope_inputs: &[ScopeInput],
         link_inputs: &[LinkInput],
         _game: Game,
     ) -> Self {
         if scope_inputs.is_empty() {
+            if !link_inputs.is_empty() {
+                tracing::warn!(
+                    "config declares {} link(s) but no scopes; dropping the links and disabling scope checks",
+                    link_inputs.len()
+                );
+            }
             return ScopeRegistry::default();
         }
         let mut reg = ScopeRegistry::default();
@@ -320,5 +328,49 @@ mod tests {
         let reg = ScopeRegistry::from_config(&[], &[], Game::Stellaris);
         assert!(reg.is_empty());
         assert!(reg.id_of("country").is_none());
+    }
+
+    /// links.cwt without scopes.cwt is reachable (separate files); the links are
+    /// dropped rather than half-resolved.
+    #[test]
+    fn links_without_scopes_yield_empty_registry() {
+        let reg = ScopeRegistry::from_config(
+            &[],
+            &[LinkInput {
+                name: "owner".to_string(),
+                output_scope: Some("country".to_string()),
+                input_scopes: vec!["state".to_string()],
+                prefix: None,
+                from_data: false,
+                data_source: Vec::new(),
+            }],
+            Game::Stellaris,
+        );
+        assert!(reg.is_empty());
+        assert!(reg.links.is_empty());
+    }
+
+    /// Every alias of a scope resolves to the one id, and the synthesized
+    /// iterators are minted per alias.
+    #[test]
+    fn every_alias_resolves_to_one_id() {
+        let reg = ScopeRegistry::from_config(
+            &[ScopeInput {
+                name: "System".to_string(),
+                aliases: vec!["system".to_string(), "galactic_object".to_string()],
+                is_subscope_of: Vec::new(),
+            }],
+            &[],
+            Game::Stellaris,
+        );
+        let id = reg.id_of("system").expect("system resolves");
+
+        assert_eq!(reg.id_of("System"), Some(id));
+        assert_eq!(reg.id_of("galactic_object"), Some(id));
+        assert_eq!(reg.name_of(id), "system", "first alias is the short name");
+        for link in ["every_system", "random_galactic_object"] {
+            let l = reg.links.get(link).expect("iterator synthesized");
+            assert_eq!(l.target, Some(id));
+        }
     }
 }

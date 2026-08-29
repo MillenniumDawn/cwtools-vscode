@@ -81,10 +81,15 @@
 * The hardcoded per-game scope tables and link loaders are gone. Every game's
   scopes and links come only from its config's `scopes.cwt`/`links.cwt`
   (`ScopeRegistry::from_config`), the way HOI4 already worked; a game with no
-  config gets an empty registry and lenient scope checks. The config-over-
+  config gets an empty registry and lenient scope checks. The scope-restriction
+  checks (CW104/105/106, CW243-245, CW247, CW248) skip outright when no scopes
+  are loaded, so a config without `scopes.cwt` no longer trips false positives
+  where the hardcoded fallback used to resolve, and a `links.cwt` with no
+  `scopes.cwt` warns that its links are dropped. The config-over-
   hardcoded backfill merge is deleted with the tables, and the vanilla guard
-  fixture now declares a minimal `scopes`/`links` block so that tier exercises
-  the config-built path. Scope-engine tests and benches run on small config
+  fixture now declares a minimal `scopes`/`links` block so the guard builds its
+  registry from config (none of that tier's codes resolve scopes, so this
+  covers construction only). Scope-engine tests and benches run on small config
   fixtures instead of the deleted tables. (#373)
 * LSP: the editor now expands `inline_script` call sites against the mod's
   `common/inline_scripts` bodies, matching `cwtools validate`. A call site's

@@ -115,15 +115,13 @@ impl Default for LocScopeData<'_> {
 }
 
 /// Build the loc scope context: from the config registry when provided (shared
-/// with the validation path), else from the game's hardcoded table.
-fn build_loc_ctx(
-    data: &LocScopeData<'_>,
-    engine_game: EngineGame,
-    initial: ScopeId,
-) -> ScopeContext {
+/// with the validation path); without one, `ScopeContext::new` builds an empty
+/// registry regardless of the `Game` passed in, so the constant here is just a
+/// placeholder to satisfy its signature.
+fn build_loc_ctx(data: &LocScopeData<'_>, initial: ScopeId) -> ScopeContext {
     match &data.registry {
         Some(reg) => ScopeContext::from_registry(reg.clone(), initial),
-        None => ScopeContext::new(engine_game, initial),
+        None => ScopeContext::new(EngineGame::Hoi4, initial),
     }
 }
 
@@ -142,20 +140,12 @@ pub fn validate_loc_commands(
     initial_scope: ScopeId,
     data: &LocScopeData<'_>,
 ) -> Vec<LocCommandDiagnostic> {
-    // Nothing to validate: skip building the terminal set / engine mapping and
-    // return the empty (non-allocating) Vec for the common no-command entry.
+    // Nothing to validate: skip building the terminal set and return the empty
+    // (non-allocating) Vec for the common no-command entry.
     if entry.commands.is_empty() && entry.jomini_commands.is_empty() {
         return Vec::new();
     }
 
-    // `build_loc_ctx` ignores `engine_game` whenever a config-driven registry
-    // is present (it takes the `from_registry` branch), so computing it — and
-    // the no-mapping warn inside it — is dead work per leaf in that case.
-    let engine_game = if data.registry.is_some() {
-        EngineGame::Hoi4 // unused: build_loc_ctx takes the registry branch
-    } else {
-        game_to_engine(data.game)
-    };
     let mut diags = Vec::new();
 
     // `terminal_commands` is already lowercased (from RuleSet). Use directly.
@@ -163,64 +153,18 @@ pub fn validate_loc_commands(
 
     // Validate legacy [command] strings (single-segment, dot-split internally)
     for cmd in &entry.commands {
-        validate_command_string(
-            cmd,
-            initial_scope,
-            engine_game,
-            data,
-            terminal_set,
-            &mut diags,
-        );
+        validate_command_string(cmd, initial_scope, data, terminal_set, &mut diags);
     }
 
     // Validate Jomini command chains — each inner Vec is one bracket's chain.
     for chain in &entry.jomini_commands {
-        validate_jomini_chain(
-            chain,
-            initial_scope,
-            engine_game,
-            data,
-            terminal_set,
-            &mut diags,
-        );
+        validate_jomini_chain(chain, initial_scope, data, terminal_set, &mut diags);
     }
 
     diags
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
-
-/// Pick the engine `Game` whose scope table drives loc-command validation.
-///
-/// The nine games with a scope table map to themselves; everything else
-/// (`None`, Custom) falls back to Hoi4 (lenient).
-fn game_to_engine(game: Option<EngineGame>) -> EngineGame {
-    static NO_MAPPING_WARNED: std::sync::Once = std::sync::Once::new();
-    match game {
-        Some(
-            g @ (EngineGame::Hoi4
-            | EngineGame::Stellaris
-            | EngineGame::Eu4
-            | EngineGame::Ck2
-            | EngineGame::Ck3
-            | EngineGame::Ir
-            | EngineGame::Vic2
-            | EngineGame::Vic3
-            | EngineGame::Eu5),
-        ) => g,
-        other => {
-            // Without a registry this can run once per loc-referencing leaf;
-            // warn only the first time per run rather than flooding the log.
-            NO_MAPPING_WARNED.call_once(|| {
-                tracing::warn!(
-                    "localization game {:?} has no engine mapping; defaulting to Hoi4",
-                    other
-                );
-            });
-            EngineGame::Hoi4 // fallback: lenient
-        }
-    }
-}
 
 /// Returns true if `lower` (an already-lowercased command/segment) is a special
 /// prefix that bypasses scope checks.
@@ -314,7 +258,6 @@ fn classify_scope_result(result: ScopeResult, is_last: bool) -> ScopeOutcome {
 fn validate_command_string(
     cmd: &str,
     initial_scope: ScopeId,
-    engine_game: EngineGame,
     data: &LocScopeData<'_>,
     terminal_set: &FxHashSet<String>,
     diags: &mut Vec<LocCommandDiagnostic>,
@@ -326,7 +269,7 @@ fn validate_command_string(
     let segments: Vec<&str> = cmd.split('.').collect();
     let last_idx = segments.len().saturating_sub(1);
 
-    let mut ctx = build_loc_ctx(data, engine_game, initial_scope);
+    let mut ctx = build_loc_ctx(data, initial_scope);
 
     for (i, seg) in segments.iter().enumerate() {
         let is_last = i == last_idx;
@@ -407,7 +350,6 @@ fn validate_command_string(
 fn validate_jomini_chain(
     chain: &[JominiCommand],
     initial_scope: ScopeId,
-    engine_game: EngineGame,
     data: &LocScopeData<'_>,
     terminal_set: &FxHashSet<String>,
     diags: &mut Vec<LocCommandDiagnostic>,
@@ -416,7 +358,7 @@ fn validate_jomini_chain(
         return;
     }
     let last_idx = chain.len() - 1;
-    let mut ctx = build_loc_ctx(data, engine_game, initial_scope);
+    let mut ctx = build_loc_ctx(data, initial_scope);
     // A `?` marks the bracket as a variable read (`[?ROOT.war_support|1]`), so the
     // final segment is a variable name the scripted-variable registry answers for.
     // A chain reading through a variable (`[?GER_crisis_id.GERGetCrisisType]`)
@@ -1196,32 +1138,53 @@ mod tests {
         );
     }
 
-    // ── game_to_engine mapping ────────────────────────────────────────────────
+    // ── #339: loc scope checks reject a chain used from the wrong scope ──────
+    // (config-registry path — CK2 no longer carries a hardcoded scope table)
 
-    #[test]
-    fn game_to_engine_maps_ck2_and_vic2_to_themselves() {
-        assert_eq!(game_to_engine(Some(EngineGame::Ck2)), EngineGame::Ck2);
-        assert_eq!(game_to_engine(Some(EngineGame::Vic2)), EngineGame::Vic2);
+    /// A minimal CK2-shaped registry: Character and Title scopes, linked by
+    /// `primary_title` (valid only from Character).
+    fn ck2_registry() -> ScopeRegistry {
+        use cwtools_game::scope_registry::{LinkInput, ScopeInput};
+        ScopeRegistry::from_config(
+            &[
+                ScopeInput {
+                    name: "Character".to_string(),
+                    aliases: vec!["character".to_string()],
+                    is_subscope_of: Vec::new(),
+                },
+                ScopeInput {
+                    name: "Title".to_string(),
+                    aliases: vec!["title".to_string()],
+                    is_subscope_of: Vec::new(),
+                },
+            ],
+            &[LinkInput {
+                name: "primary_title".to_string(),
+                output_scope: Some("title".to_string()),
+                input_scopes: vec!["character".to_string()],
+                prefix: None,
+                from_data: false,
+                data_source: Vec::new(),
+            }],
+            EngineGame::Ck2,
+        )
     }
 
     #[test]
-    fn game_to_engine_falls_back_to_hoi4_for_custom_and_none() {
-        assert_eq!(game_to_engine(Some(EngineGame::Custom)), EngineGame::Hoi4);
-        assert_eq!(game_to_engine(None), EngineGame::Hoi4);
-    }
-
-    // ── #339: CK2 loc validation uses CK2's own hardcoded scope table ─────────
-
-    #[test]
-    fn ck2_chain_valid_from_character_scope() {
-        // Starting in CK2 Character (400): primary_title → Title (401) → GetName.
+    fn ck2_config_registry_chain_valid_from_character_scope() {
+        // Starting in Character: primary_title → Title → GetName.
+        let reg = ck2_registry();
+        let character = reg
+            .id_of("character")
+            .expect("character scope in test registry");
         let entry = make_entry_with_commands(vec!["primary_title.GetName".into()]);
         let data = LocScopeData {
             game: Some(EngineGame::Ck2),
+            registry: Some(Arc::new(reg)),
             ..LocScopeData::default()
         };
 
-        let diags = validate_loc_commands(&entry, ScopeId(400), &data);
+        let diags = validate_loc_commands(&entry, character, &data);
         assert!(
             diags.is_empty(),
             "primary_title.GetName from Character scope should be valid, got: {diags:?}"
@@ -1229,20 +1192,21 @@ mod tests {
     }
 
     #[test]
-    fn ck2_chain_rejected_by_its_own_table_when_out_of_scope() {
-        // Starting in CK2 Title (401): `primary_title` is only valid from
-        // Character (400). Before CK2 passed through `game_to_engine`, this
-        // fell back to HOI4's empty hardcoded table and was silently lenient.
+    fn ck2_config_registry_chain_rejected_from_title_scope() {
+        // Starting in Title: `primary_title` is only valid from Character.
+        let reg = ck2_registry();
+        let title = reg.id_of("title").expect("title scope in test registry");
         let entry = make_entry_with_commands(vec!["primary_title.GetName".into()]);
         let data = LocScopeData {
             game: Some(EngineGame::Ck2),
+            registry: Some(Arc::new(reg)),
             ..LocScopeData::default()
         };
 
-        let diags = validate_loc_commands(&entry, ScopeId(401), &data);
+        let diags = validate_loc_commands(&entry, title, &data);
         assert!(
             matches!(diags.as_slice(), [LocCommandDiagnostic::WrongScope { .. }]),
-            "primary_title from Title scope must be rejected by CK2's own table, got: {diags:?}"
+            "primary_title from Title scope must be rejected, got: {diags:?}"
         );
     }
 }

@@ -14,8 +14,8 @@ Layer 0 (leaves, no cwtools dependencies):
 - `i18n`: locale selection and translated engine messages.
 - `string_table`: the string interner. `StringTable::new()` builds a fresh sharded
   table; `Clone` shares that instance only. AST keys are `u32` ids into it.
-- `game`: the `Game` enum plus scope/link data (the `ScopeDef` tables, the scope engine
-  with `ScopeId`/`ScopeContext`/transitions, and the config-driven `ScopeRegistry`).
+- `game`: the `Game` enum plus the scope engine (`ScopeId`/`ScopeContext`/transitions)
+  and the config-driven `ScopeRegistry`.
 
 Then, roughly bottom-up:
 
@@ -162,7 +162,7 @@ A new `Game` variant touches these sites, in lockstep:
 
 1. `game/src/constants.rs`: add the variant, its `Display` arm and a `from_str`
    arm. There are no per-game scope tables; scopes and links come only from the
-   game's config (step 8).
+   game's config (step 7).
 2. `game/src/scope_registry.rs`: no new arm. The registry is generic and built
    from `scopes.cwt`/`links.cwt` via `from_config`.
 3. `validation/src/per_game/mod.rs`: add a dispatch arm only if the game gets a
@@ -173,23 +173,17 @@ A new `Game` variant touches these sites, in lockstep:
    list shared by every game, not a per-game one. Add a variant (and its arms in
    `key_to_language`, `Lang::from_name`, `Display`) only if the new game ships a
    language cwtools doesn't already recognize.
-7. `localization/src/scope_validation.rs`: add the variant to `game_to_engine`'s
-   pass-through list, whether it drives its scope checks from a `*_SCOPES` table
-   (like CK2, VIC2) or from config (else loc scope checks fall back to lenient
-   HOI4).
-8. `lsp/src/paths.rs`: add the Steam install-folder name to `discover_vanilla_dir`.
-9. Ship `scopes.cwt` and `links.cwt` in the game's `.cwt` config (a separate repo).
-6. `localization/src/scope_validation.rs`: add the variant to `game_to_engine`'s
-   pass-through list (else loc scope checks fall back to lenient HOI4).
-7. `lsp/src/paths.rs`: add the Steam install-folder name to `discover_vanilla_dir`.
-8. Ship `scopes.cwt` and `links.cwt` in the game's `.cwt` config (a separate repo).
+6. `lsp/src/paths.rs`: add the Steam install-folder name to `discover_vanilla_dir`.
+7. Ship `scopes.cwt` and `links.cwt` in the game's `.cwt` config (a separate repo).
+   Loc scope checks also resolve through that registry; without it they are
+   lenient.
 
 The compiler catches some of these for you. The `Game` match in `constants.rs`
 (`Display`) has no `_ =>`, so a new variant won't compile until you handle it.
 That is the safety net. Do not add a catch-all to silence it. The remaining
-sites (`from_str`, `game_to_engine`, `discover_vanilla_dir`, the per-game
-dispatch, the CW223 message) have deliberate fallbacks, so a new variant
-compiles and behaves as the generic default until you add its arm.
+sites (`from_str`, `discover_vanilla_dir`, the per-game dispatch, the CW223
+message) have deliberate fallbacks, so a new variant compiles and behaves as
+the generic default until you add its arm.
 
 ## Adding an error code
 

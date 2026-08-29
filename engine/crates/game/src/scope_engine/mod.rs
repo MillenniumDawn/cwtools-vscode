@@ -14,8 +14,8 @@ mod tests {
     use std::sync::Arc;
 
     fn stl_ctx() -> ScopeContext {
-        // Every game's hardcoded scope table is gone (#373), so `from_hardcoded`
-        // returns an empty registry regardless of `Game::Stellaris` here — these
+        // Every game's hardcoded scope table is gone (#373), so `ScopeContext::new`
+        // builds an empty registry regardless of `Game::Stellaris` here — these
         // ids are opaque stack markers exercising PREV/FROM/ROOT mechanics, not
         // real scope resolution.
         ScopeContext::new(Game::Stellaris, ScopeId(200))

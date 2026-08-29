@@ -37,6 +37,11 @@ pub fn scope_matches_required(
     if current == SCOPE_ANY {
         return true;
     }
+    // No scopes loaded (no scopes.cwt) -> no scope reasoning at all, so every
+    // requirement is unresolvable and nothing could ever match. Stay lenient.
+    if registry.is_empty() {
+        return true;
+    }
     // A requirement is satisfied if the current scope is that scope or a subscope
     // of it (e.g. `character` satisfies a `country` requirement). An unresolvable
     // requirement name does NOT auto-satisfy.
@@ -68,6 +73,11 @@ pub(crate) fn validate_scope_target(
         return;
     }
     let reg = ctx.registry.as_ref();
+    // No scopes loaded -> every link chain resolves to NotFound, which would make
+    // every target a CW244. Nothing here is checkable without a scope graph.
+    if reg.is_empty() {
+        return;
+    }
     // Only validate genuine scope fields: every expected scope name must resolve
     // in the registry. A garbage entry (e.g. `country].value[variable` from a
     // mis-parsed `scope[country].value[variable]`) means this isn't really a
