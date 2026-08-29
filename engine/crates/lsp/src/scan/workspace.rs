@@ -1807,7 +1807,7 @@ mod tests {
     async fn assert_pass2_allows_write(
         lock_name: &str,
         write: impl FnOnce(&DocumentState) + Send + 'static,
-    ) {
+    ) -> Backend {
         let gate = Pass2Gate::new(Pass2HoldPoint::Before);
         let (backend, _tmp) = setup_workspace(Some(gate.clone()));
         let scan_backend = clone_backend(&backend);
@@ -1848,17 +1848,29 @@ mod tests {
             acquired_before_release,
             "pass 2 blocked concurrent {lock_name}.write()"
         );
+        backend
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_pass2_snapshot_allows_info_service_mutation() {
-        assert_pass2_allows_write("info_service", |state| {
+    async fn test_pass2_snapshot_preserves_concurrent_info_service_mutation() {
+        let backend = assert_pass2_allows_write("info_service", |state| {
             let mut info = state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .file_index
                 .insert("concurrent.txt");
         })
         .await;
+
+        assert!(
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("concurrent.txt"),
+            "pass 2 must not discard the live copy-on-write mutation"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
