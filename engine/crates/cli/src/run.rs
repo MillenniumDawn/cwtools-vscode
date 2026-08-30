@@ -36,6 +36,24 @@ pub(crate) fn load_config(
     })
 }
 
+pub(crate) fn load_ignore_hashes(path: Option<&Path>) -> std::collections::HashSet<String> {
+    let Some(path) = path else {
+        return std::collections::HashSet::new();
+    };
+    let contents = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!(
+            "error: could not read --ignore-hashes {}: {e}",
+            path.display()
+        );
+        std::process::exit(EXIT_USAGE);
+    });
+    contents
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 // ── Output style (--quiet / --no-color) ──────────────────────────────────────
 //
 // Both are global flags read once at startup rather than threaded through every
@@ -340,7 +358,10 @@ mod tests {
         assert!(msg.contains("--rules loaded 0 types"), "got: {msg}");
         assert!(msg.contains("--allow-empty"), "got: {msg}");
         // The path is absolutized, so a relative CI path is identifiable.
-        let here = std::path::absolute(".").unwrap().display().to_string();
+        let here = std::path::absolute(".")
+            .expect("resolve current directory")
+            .display()
+            .to_string();
         assert!(msg.contains(&here), "got: {msg}");
     }
 }
