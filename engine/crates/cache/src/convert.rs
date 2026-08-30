@@ -50,20 +50,23 @@ pub fn cached_errors_to_parse(cached: CachedErrors) -> Vec<ParseError> {
 }
 
 /// Rebuild an arena AST from the rkyv archived view, interning strings straight
-/// out of the mapped buffer. Two-pass: collect every string in traversal order
-/// (leaves, then leaf_values), batch-intern under a single write lock via
+/// out of the mapped buffer. After validating child indices, collect every
+/// string in traversal order (leaves, then leaf_values), batch-intern without
+/// the per-string shared-lock probe via
 /// [`StringTable::intern_batch`](cwtools_string_table::string_table::StringTable::intern_batch),
 /// then re-walk the nodes drawing the resulting tokens in the same order. The
 /// token assignment is identical to per-string interning.
 ///
-/// The rebuilt child references are bounds-checked against the arena vectors
-/// once here (see [`validate_child_bounds`]); a corrupted or truncated cache
-/// yields a [`CacheError`] so the caller's miss/re-parse fallback engages
-/// rather than a panic deep inside a downstream consumer.
+/// The archived child references are bounds-checked before any strings are
+/// collected or interned (see [`validate_archived_child_bounds`]); a corrupted
+/// or truncated cache yields a [`CacheError`] so the caller's miss/re-parse
+/// fallback engages rather than a panic deep inside a downstream consumer.
 pub fn archived_to_arena(
     cached: &ArchivedCachedFile,
     string_table: &StringTable,
 ) -> Result<(Arena, Vec<Child>), CacheError> {
+    validate_archived_child_bounds(cached)?;
+
     let mut to_intern: Vec<&str> = Vec::new();
     for l in cached.leaves.iter() {
         to_intern.push(l.key.as_str());
@@ -121,37 +124,51 @@ pub fn archived_to_arena(
     debug_assert!(tokens.next().is_none(), "interned token count mismatch");
 
     let root = children_from_archived(&cached.root_children);
-    validate_child_bounds(&arena, &root)?;
     Ok((arena, root))
 }
 
-/// Reject a cache whose child references fall outside the rebuilt arena vectors.
+/// Reject a cache whose child references fall outside the archived arena vectors.
 /// Downstream consumers index `arena.leaves[i]` (see [`Arena::keyed_clause`])
 /// with no bounds checks, so a corrupted/truncated cache would panic far from
-/// the load site. This runs once at the load boundary; every child list is
-/// visited exactly once (`root` plus each node's `Value::Clause` children).
-/// Indices are never followed, so a corrupt self-referential index can't loop.
-fn validate_child_bounds(arena: &Arena, root: &[Child]) -> Result<(), CacheError> {
-    check_child_list(arena, root)?;
-    for l in &arena.leaves {
-        if let Value::Clause(children) = &l.value {
-            check_child_list(arena, children)?;
+/// the load site. This runs once at the load boundary before string interning;
+/// every child list is visited exactly once (`root` plus each node's
+/// `ArchivedCachedValue::Clause` children). Indices are never followed, so a corrupt
+/// self-referential index can't loop.
+fn validate_archived_child_bounds(cached: &ArchivedCachedFile) -> Result<(), CacheError> {
+    let leaf_count = cached.leaves.len();
+    let leaf_value_count = cached.leaf_values.len();
+    let comment_count = cached.comments.len();
+
+    check_archived_child_list(
+        &cached.root_children,
+        leaf_count,
+        leaf_value_count,
+        comment_count,
+    )?;
+    for leaf in cached.leaves.iter() {
+        if let ArchivedCachedValue::Clause(children) = &leaf.value {
+            check_archived_child_list(children, leaf_count, leaf_value_count, comment_count)?;
         }
     }
-    for lv in &arena.leaf_values {
-        if let Value::Clause(children) = &lv.value {
-            check_child_list(arena, children)?;
+    for leaf_value in cached.leaf_values.iter() {
+        if let ArchivedCachedValue::Clause(children) = &leaf_value.value {
+            check_archived_child_list(children, leaf_count, leaf_value_count, comment_count)?;
         }
     }
     Ok(())
 }
 
-fn check_child_list(arena: &Arena, children: &[Child]) -> Result<(), CacheError> {
-    for child in children {
+fn check_archived_child_list(
+    children: &rkyv::vec::ArchivedVec<ArchivedCachedChild>,
+    leaf_count: usize,
+    leaf_value_count: usize,
+    comment_count: usize,
+) -> Result<(), CacheError> {
+    for child in children.iter() {
         let in_bounds = match child {
-            Child::Leaf(i) => (*i as usize) < arena.leaves.len(),
-            Child::LeafValue(i) => (*i as usize) < arena.leaf_values.len(),
-            Child::Comment(i) => (*i as usize) < arena.comments.len(),
+            ArchivedCachedChild::Leaf(i) => (i.to_native() as usize) < leaf_count,
+            ArchivedCachedChild::LeafValue(i) => (i.to_native() as usize) < leaf_value_count,
+            ArchivedCachedChild::Comment(i) => (i.to_native() as usize) < comment_count,
         };
         if !in_bounds {
             return Err(CacheError::Deserialize {

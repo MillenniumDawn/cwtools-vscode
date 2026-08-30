@@ -319,9 +319,19 @@ fn out_of_bounds_index_inside_a_clause_is_rejected() {
     let tmp = tempfile::NamedTempFile::with_suffix(".cwb").unwrap();
     io::serialize_to_file(&cached, tmp.path()).unwrap();
 
-    let inner = load_path(tmp.path()).expect("header and rkyv access should succeed");
+    let table = StringTable::new();
+    let initial_len = table.len();
+    let inner = io::with_archived_file(tmp.path(), |archived| {
+        convert::archived_to_arena(archived, &table)
+    })
+    .expect("header and rkyv access should succeed");
     assert!(
         inner.is_err(),
         "out-of-bounds index inside a clause must be rejected at load"
+    );
+    assert_eq!(
+        table.len(),
+        initial_len,
+        "rejected cache must not intern its archived strings"
     );
 }
