@@ -2,6 +2,8 @@
 
 #### Extension
 
+* `scripts/guard.py` has end-to-end tests for clean, drift, bless, and setup
+  failure paths using a stub validator and test-owned files. (#516)
 * `cwtools.restartServer` now gives the same EPERM/EACCES guidance as
   activation: if a restart fails because antivirus re-quarantined the server
   binary, the error dialog offers Reveal Server Binary and Antivirus Help
