@@ -62,6 +62,8 @@
 
 #### Engine
 
+* Type-instance indexing releases interned node keys before recursive skip-root
+  traversal and subtype hooks, avoiding writer-contention deadlocks. (#480)
 * `discover_vanilla_dir` now maps `eu5` to its Steam install folder, "Europa
   Universalis V", so the editor auto-discovers an installed EU5 base game the
   same way it already does for ck3/vic3/ir. This turns on the vanilla-gated
