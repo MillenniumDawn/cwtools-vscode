@@ -817,6 +817,26 @@ impl LanguageServer for Backend {
         if self.state.documents.lock().contains_key(&uri) {
             return;
         }
+        if self.is_ignored_uri(&uri) {
+            {
+                let documents = self.state.documents.lock();
+                if documents.contains_key(&uri) {
+                    return;
+                }
+                self.state.completion_generation.lock().remove(&uri);
+                let mut fresh = self.state.fresh_ast_cache.lock();
+                if fresh.as_ref().is_some_and(|(cached, _, _)| cached == &uri) {
+                    *fresh = None;
+                }
+            }
+            cwtools_profiling::log_rss("did_close");
+            if !self.state.documents.lock().contains_key(&uri) {
+                self.publish_filtered(params.text_document.uri, vec![], None, None)
+                    .await;
+            }
+            self.request_code_lens_refresh().await;
+            return;
+        }
         let Ok(_validation_permit) = self.state.validation_permits.acquire().await else {
             return;
         };

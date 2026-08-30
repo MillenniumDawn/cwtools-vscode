@@ -79,6 +79,7 @@
   5.2 ns for the snapshot instead of 84.4 ms for the deep clone. The first index
   write while pass 2 still owns its snapshot pays the copy-on-write cost instead,
   measured at 37.0 ms; later writes use the new unique copy. (#225)
+* LSP: closing an ignored file no longer deadlocks the server. (#469)
 * `discover_vanilla_dir` now maps `eu5` to its Steam install folder, "Europa
   Universalis V", so the editor auto-discovers an installed EU5 base game the
   same way it already does for ck3/vic3/ir. This turns on the vanilla-gated
