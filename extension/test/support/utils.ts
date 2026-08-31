@@ -74,6 +74,19 @@ export async function graphPanelModule(): Promise<typeof GraphPanelNamespace> {
 	return api.graphPanel();
 }
 
+export async function serverOutputChannel(): Promise<
+	Pick<vscode.OutputChannel, "appendLine">
+> {
+	const api = await activate();
+	const outputChannel = api?.serverOutputChannel();
+	if (!outputChannel) {
+		throw new Error(
+			"extension activated without a running language client output channel",
+		);
+	}
+	return outputChannel;
+}
+
 /**
  * Shared small test utilities to reduce duplication across suites
  */

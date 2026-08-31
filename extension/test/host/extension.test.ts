@@ -33,17 +33,22 @@ suite(`Debug Integration Test: `, function () {
 		assert.ok(vscode.extensions.getExtension(EXTENSION_ID));
 	});
 
-	test("should activate and expose the graphPanel API", async function () {
+	test("should activate and expose the host-test API", async function () {
 		this.timeout(1 * 60 * 1000);
 		const extension = await activate();
 		// The exports may be absent when the language server can't start in the
-		// test environment, but when present the activation API must expose
-		// graphPanel() (the host tests reach the panel through it).
+		// test environment, but when present the activation API must expose the
+		// running modules and channels that host tests cannot import directly.
 		if (extension) {
 			assert.strictEqual(
 				typeof extension.graphPanel,
 				"function",
 				"activation API should expose graphPanel()",
+			);
+			assert.strictEqual(
+				typeof extension.serverOutputChannel,
+				"function",
+				"activation API should expose serverOutputChannel()",
 			);
 		}
 	});
@@ -199,24 +204,16 @@ suite(`Debug Integration Test: `, function () {
 			console.log(`Found ${diagnostics.length} diagnostic entries`);
 		});
 
-		it("should register language configurations", async function () {
+		it("treats dotted Paradox identifiers as one word", async function () {
 			await activate();
-
-			// Test that language configurations are set
-			// This is harder to test directly, but we can verify the extension activated
-			// and the language server client should be initialized
-			const extension = vscode.extensions.getExtension(EXTENSION_ID);
-			assert.ok(extension?.isActive, "Extension should be active");
-
-			// The extension exports might be undefined due to server startup issues in test env
-			const exports: unknown = extension?.exports;
-			console.log("Extension exports type:", typeof exports, "value:", exports);
-
-			// Just verify the extension is active - that's the main indicator of success
-			assert.ok(
-				extension.isActive,
-				"Extension should be active, indicating basic setup worked",
+			const document = await vscode.workspace.openTextDocument(
+				path.join(root, "events", "irm.txt"),
 			);
+			const range = document.getWordRangeAtPosition(new vscode.Position(8, 9));
+
+			assert.strictEqual(document.languageId, "paradox");
+			assert.ok(range, "dotted identifier should have a word range");
+			assert.strictEqual(document.getText(range), "irm.1");
 		});
 	});
 });

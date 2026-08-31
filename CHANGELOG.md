@@ -2,6 +2,9 @@
 
 #### Extension
 
+* Host tests now monitor the running extension's LSP output, reject forbidden
+  completions individually, and verify dotted Paradox identifiers use one word
+  range. ESLint blocks runtime test imports from the extension entry point. (#518)
 * `cwtools.restartServer` now gives the same EPERM/EACCES guidance as
   activation: if a restart fails because antivirus re-quarantined the server
   binary, the error dialog offers Reveal Server Binary and Antivirus Help
