@@ -17,6 +17,7 @@ import type {
 	GraphReference,
 	GraphNodeDetail,
 } from "../common/graphTypes";
+import { deriveNodeLabel } from "./graphLabel";
 
 declare module "cytoscape" {
 	interface Core {
@@ -67,13 +68,10 @@ function drawExtra(
 	nodes.forEach((node) => {
 		let label: string = node.scratch("_drawLabel") as string;
 		if (label === undefined) {
-			const text: string = node.data("entityType") as string;
-			label =
-				(node.data("abbreviation") as string) ||
-				text
-					.split("_")
-					.map((f) => f[0].toUpperCase())
-					.join("");
+			label = deriveNodeLabel(
+				node.data("entityType"),
+				node.data("abbreviation"),
+			);
 			node.scratch("_drawLabel", label);
 		}
 		const pos = node.position();

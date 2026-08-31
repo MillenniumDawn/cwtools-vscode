@@ -17,6 +17,8 @@
   a pin changes. (#521)
 * `scripts/guard.py` has end-to-end tests for clean, drift, bless, and setup
   failure paths using a stub validator and test-owned files. (#516)
+* Graph overlays keep rendering for malformed entity types with empty segments
+  or no abbreviation. (#551)
 * Host tests now monitor the running extension's LSP output, reject forbidden
   completions individually, and verify dotted Paradox identifiers use one word
   range. ESLint blocks runtime test imports from the extension entry point. (#518)
