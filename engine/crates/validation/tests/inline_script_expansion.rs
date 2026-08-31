@@ -199,6 +199,9 @@ fn fan_out_expansion_hits_the_per_file_budget() {
         "got: {}",
         errors[0].message
     );
+    assert_eq!(errors[0].line, 3, "got: {errors:?}");
+    assert_eq!(errors[0].col, 4, "got: {errors:?}");
+    assert_eq!(errors[0].end, Some((3, 17)), "got: {errors:?}");
 }
 
 #[test]

@@ -84,6 +84,7 @@ pub(crate) struct InlineScriptExpansionBudgetExhaustion {
 pub(crate) struct InlineScriptExpansionBudget {
     remaining: usize,
     exhaustion: Option<InlineScriptExpansionBudgetExhaustion>,
+    origin: Option<(SourcePos, Option<SourcePos>)>,
 }
 
 impl Default for InlineScriptExpansionBudget {
@@ -91,16 +92,25 @@ impl Default for InlineScriptExpansionBudget {
         Self {
             remaining: INLINE_SCRIPT_EXPANSION_BUDGET,
             exhaustion: None,
+            origin: None,
         }
     }
 }
 
 impl InlineScriptExpansionBudget {
-    fn reserve(&mut self, pos: SourcePos, end: Option<SourcePos>) -> bool {
+    fn reserve(&mut self, pos: SourcePos, end: Option<SourcePos>, nested: bool) -> bool {
+        if !nested {
+            self.origin = Some((pos, end));
+        }
         if self.remaining > 0 {
             self.remaining -= 1;
             true
         } else {
+            let (pos, end) = if nested {
+                self.origin.unwrap_or((pos, end))
+            } else {
+                (pos, end)
+            };
             self.exhaustion
                 .get_or_insert(InlineScriptExpansionBudgetExhaustion { pos, end });
             false
@@ -378,9 +388,10 @@ impl<'a> ValidationCtx<'a> {
         pos: SourcePos,
         end: Option<SourcePos>,
     ) -> bool {
+        let nested = !self.inline_stack.borrow().is_empty();
         self.inline_script_expansion_budget
             .borrow_mut()
-            .reserve(pos, end)
+            .reserve(pos, end, nested)
     }
 
     pub(crate) fn inline_script_expansion_budget_exhaustion(
