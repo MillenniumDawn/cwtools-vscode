@@ -300,6 +300,38 @@ impl RuleSet {
     /// Build the alias lookup indexes from `aliases`. Call once after all aliases
     /// are loaded and post-processed (names/order are stable after that).
     pub fn reindex(&mut self) {
+        let mut normalized_enums = Vec::with_capacity(self.enums.len());
+        let mut enum_by_name = rustc_hash::FxHashMap::default();
+        let mut enum_values_lower = Vec::with_capacity(self.enums.len());
+        for EnumDefinition {
+            key,
+            description,
+            values,
+        } in self.enums.drain(..)
+        {
+            let idx = if let Some(&idx) = enum_by_name.get(&key) {
+                idx
+            } else {
+                let idx = normalized_enums.len();
+                enum_by_name.insert(key.clone(), idx);
+                normalized_enums.push(EnumDefinition {
+                    key,
+                    description,
+                    values: Vec::new(),
+                });
+                enum_values_lower.push(rustc_hash::FxHashSet::default());
+                idx
+            };
+            for value in values {
+                if enum_values_lower[idx].insert(value.to_ascii_lowercase()) {
+                    normalized_enums[idx].values.push(value);
+                }
+            }
+        }
+        self.enums = normalized_enums;
+        self.enum_by_name = enum_by_name;
+        self.enum_values_lower = enum_values_lower;
+
         self.alias_exact.clear();
         self.alias_categories.clear();
         self.pretriggers.clear();
@@ -417,17 +449,8 @@ impl RuleSet {
         }
         self.type_by_name.clear();
         for (i, td) in self.types.iter().enumerate() {
-            self.type_by_name.insert(td.name.clone(), i);
+            self.type_by_name.entry(td.name.clone()).or_insert(i);
         }
-        self.enum_by_name.clear();
-        for (i, e) in self.enums.iter().enumerate() {
-            self.enum_by_name.insert(e.key.clone(), i);
-        }
-        self.enum_values_lower = self
-            .enums
-            .iter()
-            .map(|e| e.values.iter().map(|v| v.to_ascii_lowercase()).collect())
-            .collect();
         self.enum_has_at = self
             .enums
             .iter()
@@ -561,6 +584,9 @@ impl RuleSet {
                 None => false,
             };
         }
+        if !base.bytes().any(|b| b.is_ascii_uppercase()) {
+            return self.builtin_variable_bases.contains(base);
+        }
         thread_local! {
             static LOWER_BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
         }
@@ -574,11 +600,17 @@ impl RuleSet {
 
     fn assert_reindexed(&self) {
         debug_assert!(
-            self.types.len() == self.type_by_name.len()
+            self.type_by_name.iter().all(|(name, &idx)| {
+                self.types
+                    .get(idx)
+                    .is_some_and(|td| td.name.as_str() == name.as_str())
+            }) && self
+                .types
+                .iter()
+                .enumerate()
+                .all(|(i, td)| { self.type_by_name.get(&td.name).is_some_and(|&idx| idx <= i) })
                 && self.enums.len() == self.enum_by_name.len()
-                && (self.aliases.is_empty()
-                    || !self.alias_exact.is_empty()
-                    || self.alias_categories.is_empty())
+                && (self.aliases.is_empty() || !self.alias_exact.is_empty())
                 && self.enums.len() == self.enum_values_lower.len()
                 && self.enums.len() == self.enum_has_at.len(),
             "RuleSet used without reindex: derived indexes are stale"
@@ -739,6 +771,22 @@ mod tests {
         );
         assert!(ruleset.is_builtin_variable_base("party_popularity"));
         assert!(!ruleset.is_builtin_variable_base("unrelated_var"));
+    }
+
+    #[test]
+    #[should_panic(expected = "RuleSet used without reindex")]
+    fn assert_reindexed_rejects_partially_built_alias_indexes() {
+        let mut ruleset = RuleSet::new();
+        ruleset.aliases.push((
+            "effect:test".to_string(),
+            (
+                RuleType::LeafValueRule {
+                    right: NewField::ScalarField,
+                },
+                Options::default(),
+            ),
+        ));
+        let _ = ruleset.alias_exact();
     }
 
     /// `base_name` drops the subtype qualifier and nothing else, for both
