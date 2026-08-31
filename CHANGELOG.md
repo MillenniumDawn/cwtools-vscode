@@ -2,6 +2,9 @@
 
 #### Extension
 
+* The shared Cargo registry cache now restores the newest same-OS cache when
+  the current `Cargo.lock` hash misses, avoiding a full dependency download.
+  (#511)
 * `npm run build -- release` now refuses untracked files and a `HEAD` that is
   not present on `origin/main`, naming the paths or commit before tagging.
   (#514)
