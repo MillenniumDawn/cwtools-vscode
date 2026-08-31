@@ -77,6 +77,27 @@ def run_or_null(
     return result.returncode
 
 
+def run_capture(
+    cmd: str,
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    result = subprocess.run(
+        [_exe(cmd), *args],
+        cwd=cwd or REPO_ROOT,
+        env=None if env is None else dict(env),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        display = " ".join([cmd, *args])
+        raise RuntimeError(f"command failed ({result.returncode}): {display}")
+    return result.stdout
+
+
 def rust_workspace() -> Path:
     from_env = os.environ.get("CWTOOLS_RUST_WORKSPACE", "").strip()
     if from_env:
@@ -363,15 +384,43 @@ def cmd_release_prebuilt() -> None:
     cmd_publish_prebuilt()
 
 
+def release_preflight() -> None:
+    tracked_status = run_or_null("git", ["diff", "--quiet", "HEAD"])
+    if tracked_status == 1:
+        raise RuntimeError(
+            "working tree has uncommitted changes; commit them before tagging a release"
+        )
+    if tracked_status != 0:
+        raise RuntimeError(f"git diff check failed ({tracked_status})")
+    untracked = run_capture(
+        "git", ["ls-files", "--others", "--exclude-standard"]
+    ).splitlines()
+    if untracked:
+        paths = "\n".join(f"  {path}" for path in untracked)
+        raise RuntimeError(
+            "working tree has untracked files; commit or remove them before tagging "
+            f"a release:\n{paths}"
+        )
+    run("git", ["fetch", "--quiet", "origin", "main"])
+    remote_status = run_or_null(
+        "git", ["merge-base", "--is-ancestor", "HEAD", "origin/main"]
+    )
+    if remote_status == 1:
+        head = run_capture("git", ["rev-parse", "--short", "HEAD"]).strip()
+        raise RuntimeError(
+            f"HEAD {head} is not present on origin/main; push it before tagging "
+            "a release"
+        )
+    if remote_status != 0:
+        raise RuntimeError(f"git merge-base check failed ({remote_status})")
+
+
 def cmd_release() -> None:
     resolved = resolve_version()
     version = resolved["version"]
     tag = resolved["tag"]
     release_notes(read_changelog(), version)
-    if run_or_null("git", ["diff", "--quiet", "HEAD"]) != 0:
-        raise RuntimeError(
-            "working tree has uncommitted changes; commit them before tagging a release"
-        )
+    release_preflight()
     if (
         run_or_null("git", ["rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"])
         == 0

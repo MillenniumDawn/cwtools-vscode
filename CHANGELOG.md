@@ -2,6 +2,9 @@
 
 #### Extension
 
+* `npm run build -- release` now refuses untracked files and a `HEAD` that is
+  not present on `origin/main`, naming the paths or commit before tagging.
+  (#514)
 * CI now runs the network-free `rules-sync` host label after staging the server;
   the weekly rules-pin gate builds that server and runs the same suite only when
   a pin changes. (#521)
