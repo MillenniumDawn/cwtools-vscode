@@ -16,27 +16,58 @@ permissions:
 jobs:
   bump:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       contents: write
       pull-requests: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup-node-npm
-      - name: Bump the pins and open a PR
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Bump the pins
+        id: pins
         run: |
           pins=(extension/src/host/games.ts rules-pins.json)
           summary=$(python3 scripts/build/rules_pins.py)
           echo "$summary"
           if git diff --quiet -- "${pins[@]}"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # A GITHUB_TOKEN PR doesn't start Test, so the gates run here rather
-          # than handing over an unchecked diff.
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          {
+            echo 'summary<<EOF'
+            echo "$summary"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      # A GITHUB_TOKEN PR doesn't start Test, so the gates run here rather
+      # than handing over an unchecked diff. These steps are skipped when the
+      # pins are already current, keeping the weekly no-change path cheap.
+      - uses: ./.github/actions/setup-node-npm
+        if: steps.pins.outputs.changed == 'true'
+        with:
+          cache-vscode: true
+      - name: Client checks
+        if: steps.pins.outputs.changed == 'true'
+        run: |
           npm run check
           npm run test:node
+      - uses: ./.github/actions/setup-rust
+        if: steps.pins.outputs.changed == 'true'
+        with:
+          cache-prefix: cargo-release-target
+      - name: Build engine and client
+        if: steps.pins.outputs.changed == 'true'
+        run: npm run build -- quick
+      - name: Rules-sync host tests
+        if: steps.pins.outputs.changed == 'true'
+        timeout-minutes: 10
+        run: npm run test:rules-sync
+      - name: Commit and open a PR
+        if: steps.pins.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RULES_SUMMARY: ${{ steps.pins.outputs.summary }}
+        run: |
+          pins=(extension/src/host/games.ts rules-pins.json)
           branch="rules-pins/$(date -u +%Y-%m-%d)"
           git config user.name 'github-actions[bot]'
           git config user.email \
@@ -46,7 +77,7 @@ jobs:
           git push origin "$branch"
           description='Weekly refresh of the reviewed rules manifest'
           description+=' by scripts/build/rules_pins.py.'
-          body=$(printf '%s\n\n%s\n\n' "$description" "$summary")
+          body=$(printf '%s\n\n%s\n\n' "$description" "$RULES_SUMMARY")
           body+=$(printf '%s %s\n' \
             'Installed extensions fetch these exact commits.' \
             'Read the upstream diffs before merging.')

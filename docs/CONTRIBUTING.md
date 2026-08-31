@@ -90,6 +90,7 @@ npm run test:node      # node-only unit tests for the pure modules (vitest, fast
 npm test               # unit label: VS Code API, no language server
 npm run test:smoke     # unit plus activation against the real server
 npm run test:host      # everything, including hover and completion
+npm run test:rules-sync  # network-free rules sync host label
 npm run test:coverage  # host label with validated V8 coverage
 npm run test:node:coverage  # vitest coverage into coverage-node/
 npm run test:native    # unit label in a visible window, on purpose
@@ -178,9 +179,9 @@ diagnostics alone has to prove it. See
 [the engine contributor guide](engine/CONTRIBUTING.md) for the flags, the
 pinned input revisions and when re-blessing a baseline is appropriate.
 
-CI gates on `test:node`, `test`, `test:smoke` and `test:host` in
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml), along with the
-engine suite, cargo-deny, and the diagnostics guards. The sample
+CI gates on `test:node`, `test`, `test:smoke`, `test:host` and
+`test:rules-sync` in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml),
+along with the engine suite, cargo-deny, and the diagnostics guards. The sample
 workspace detects as `stellaris` (its `common/species_classes` content marker),
 so the hover and completion suites fetch real rules on activation and run in CI
 like everything else.
