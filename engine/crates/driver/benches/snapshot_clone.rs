@@ -1,15 +1,15 @@
 //! Cost of the workspace-scan pass 2 index snapshot.
 //!
-//! Pass 2 clones the whole `TypeIndex` under a brief `info_service` read guard
-//! (`crates/lsp/src/scan/workspace.rs`) so rayon holds no locks. The clone is
-//! the entire lock hold, so its cost is the window a concurrent keystroke's
-//! `write()` waits on.
+//! Pass 2 clones an `Arc<TypeIndex>` under a brief `info_service` read guard
+//! (`crates/lsp/src/scan/workspace.rs`) so rayon holds no locks. The Arc clone is
+//! the entire lock hold. If a file is indexed while pass 2 still owns that
+//! snapshot, the first write instead pays the deep clone through
+//! `Arc::make_mut`.
 //!
-//! `type_index/clone_corpus` is that lock hold. The two part benches beside it
-//! say where the time goes: the type maps proper, versus the dynamic-value
-//! indexes (`complex_enum_values`, `value_set_values`) that #332 proposed to
-//! keep out of the snapshot. Their share is what that change could save, and on
-//! Millennium Dawn it is about 7% of a 41ms clone: the maps are the cost.
+//! `type_index/snapshot_arc_corpus` measures the lock hold and
+//! `type_index/first_write_cow_corpus` measures the deferred copy. The original
+//! deep-clone and dynamic-value benches remain beside them to show where that
+//! deferred cost goes.
 //!
 //! Inputs are the checkouts the corpus guard uses:
 //!
@@ -25,8 +25,9 @@
 use std::collections::HashMap;
 use std::hint::black_box;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use cwtools_driver::{RulesInput, index_game_dir, load_rules};
 use cwtools_index::{
     SourceLocation, TypeIndex, TypeInstance, dynamic_values::NamedValueIndex,
@@ -122,6 +123,20 @@ fn bench_index(c: &mut Criterion, label: &str, idx: &TypeIndex) {
         value_count(&idx.complex_enum_values),
         value_count(&idx.value_set_values),
     );
+    let shared = Arc::new(idx.clone());
+    c.bench_function(&format!("type_index/snapshot_arc_{label}"), |b| {
+        b.iter(|| black_box(Arc::clone(black_box(&shared))))
+    });
+    c.bench_function(&format!("type_index/first_write_cow_{label}"), |b| {
+        b.iter_batched(
+            || (Arc::clone(&shared), Arc::clone(&shared)),
+            |(mut live, snapshot)| {
+                let _ = black_box(Arc::make_mut(&mut live));
+                black_box((live, snapshot))
+            },
+            BatchSize::LargeInput,
+        )
+    });
     c.bench_function(&format!("type_index/clone_{label}"), |b| {
         b.iter(|| black_box(black_box(idx).clone()))
     });

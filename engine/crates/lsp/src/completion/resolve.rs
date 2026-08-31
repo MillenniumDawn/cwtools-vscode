@@ -82,6 +82,8 @@ impl Backend {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use cwtools_info::{SourceLocation, TypeInstance};
     use cwtools_rules::rules_types::{NewField, Options, RuleType};
 
@@ -155,7 +157,7 @@ mod tests {
                 required_loc_keys: Vec::new(),
             }],
         );
-        info.type_index.merge("file:///states/s.txt", per_type);
+        Arc::make_mut(&mut info.type_index).merge("file:///states/s.txt", per_type);
         // label carries the instance name — `data` doesn't repeat it.
         let item = item_with_data("STATE_123", "type:state");
         let (resolved, hit) = resolve_item(item, None, &info);
@@ -215,7 +217,7 @@ mod tests {
                 required_loc_keys: Vec::new(),
             }],
         );
-        info.type_index.merge("file:///events/e.txt", per_type);
+        Arc::make_mut(&mut info.type_index).merge("file:///events/e.txt", per_type);
         let item = item_with_data("my_event", "type:event.country");
         let (resolved, hit) = resolve_item(item, Some(&rs), &info);
         assert!(hit);
