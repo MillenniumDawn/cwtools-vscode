@@ -76,6 +76,9 @@
 
 #### Engine
 
+* Ruleset duplicate types now use the first definition consistently, duplicate
+  enums union their members, and built-in variable lookups avoid lowercasing
+  already-lowercase names. (#488)
 * Parse caches now preserve existing entries when `settings.sig` cannot be read,
   returning the read error instead of treating it as an invalidation miss. (#495)
 * Corrupt parse caches are bounds-checked before their strings are interned. (#491)

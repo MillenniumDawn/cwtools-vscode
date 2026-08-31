@@ -147,7 +147,8 @@ fn collect_cwt_files(
     }
 }
 
-/// Merge `src` into `dst`, extending all collections.
+/// Merge `src` into `dst` by extending all collections. Derived indexes are
+/// rebuilt by `RuleSet::reindex`.
 pub fn merge_ruleset(dst: &mut RuleSet, src: RuleSet) {
     dst.types.extend(src.types);
     dst.enums.extend(src.enums);
@@ -336,6 +337,74 @@ mod tests {
             a.scope_links.contains("character"),
             "scope_links lost during merge"
         );
+    }
+
+    #[test]
+    fn duplicate_types_keep_the_first_definition_and_rule() {
+        let table = StringTable::new();
+        let parsed = parse_string(
+            r#"types = {
+    type[thing] = { path = "first" }
+    type[thing] = { path = "second" }
+}
+thing = { first = any }
+thing = { second = any }
+"#,
+            &table,
+        );
+        let ruleset = ast_to_ruleset(&parsed, &table);
+
+        assert_eq!(ruleset.types.len(), 2);
+        assert_eq!(ruleset.type_by_name().get("thing"), Some(&0));
+        assert_eq!(ruleset.types[0].path_options.paths, vec!["first"]);
+        assert_eq!(ruleset.type_rules_idx().get("thing"), Some(&0));
+    }
+
+    #[test]
+    fn duplicate_enums_in_one_file_union_values_in_source_order() {
+        let table = StringTable::new();
+        let parsed = parse_string(
+            r#"enums = {
+    ### first description
+    enum[shared] = { FIRST Shared }
+    ### second description
+    enum[shared] = { shared second }
+}
+"#,
+            &table,
+        );
+        let ruleset = ast_to_ruleset(&parsed, &table);
+
+        assert_eq!(ruleset.enums.len(), 1);
+        assert_eq!(ruleset.enums[0].description, "first description");
+        assert_eq!(ruleset.enums[0].values, ["FIRST", "Shared", "second"]);
+        assert_eq!(ruleset.enum_by_name().get("shared"), Some(&0));
+    }
+
+    #[test]
+    fn duplicate_enums_union_values_in_source_order() {
+        use crate::rules_types::EnumDefinition;
+
+        let mut dst = RuleSet::new();
+        dst.enums.push(EnumDefinition {
+            key: "shared".to_string(),
+            description: "first description".to_string(),
+            values: vec!["first".to_string(), "shared".to_string()],
+        });
+        let mut src = RuleSet::new();
+        src.enums.push(EnumDefinition {
+            key: "shared".to_string(),
+            description: "second description".to_string(),
+            values: vec!["SHARED".to_string(), "second".to_string()],
+        });
+
+        merge_ruleset(&mut dst, src);
+        dst.reindex();
+
+        assert_eq!(dst.enums.len(), 1);
+        assert_eq!(dst.enums[0].description, "first description");
+        assert_eq!(dst.enums[0].values, ["first", "shared", "second"]);
+        assert_eq!(dst.enum_by_name().get("shared"), Some(&0));
     }
 
     /// The rules walk must reject symlinks: a symlink can point outside the
