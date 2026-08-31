@@ -67,6 +67,8 @@
 
 #### Engine
 
+* `validate` and `loc` now fail when an explicit `--ignore-hashes` file cannot
+  be read or an `--output-hashes` file cannot be written. (#489)
 * LSP workspace-scan pass 2 snapshots the type index with an `Arc` pointer bump
   instead of cloning the full index while holding `info_service` for reading.
   On the current 258k-instance Millennium Dawn corpus, `snapshot_clone` measures

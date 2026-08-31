@@ -16,7 +16,7 @@ use crate::diag::{
 use crate::report::ReportType;
 use crate::run::{
     EXIT_USAGE, announce_config, color_enabled, exit_code, exit_if_empty, load_config,
-    missing_required, note, report_owns_stdout, status, vanilla_notice,
+    load_ignore_hashes, missing_required, note, report_owns_stdout, status, vanilla_notice,
 };
 use crate::{codes, config, report, scope};
 
@@ -152,6 +152,7 @@ pub(super) fn run(args: ValidateArgs) {
     });
     let rules =
         rules.unwrap_or_else(|| missing_required("validate", "--rules <RULES>", "rules", fc));
+    let ignored = load_ignore_hashes(ignore_hashes.as_deref());
 
     // Resolved before the session loads: an unresolvable `--since` should fail
     // in a moment, not after a full index.
@@ -372,18 +373,6 @@ pub(super) fn run(args: ValidateArgs) {
 
     tlog!("load");
 
-    // Load the ignore-hash baseline, if given.
-    let ignored: std::collections::HashSet<String> = ignore_hashes
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| {
-            s.lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
-
     // The driver validates files in parallel, in input order, so the
     // report is byte-for-byte identical to the sequential version.
     let want_legacy_hash = !ignored.is_empty();
@@ -569,7 +558,7 @@ pub(super) fn run(args: ValidateArgs) {
         }
     }
 
-    let write_failed = match &output_file {
+    let mut write_failed = match &output_file {
         Some(p) => {
             if let Err(e) = std::fs::write(p, &out) {
                 eprintln!("Error writing report {}: {}", p.display(), e);
@@ -601,6 +590,7 @@ pub(super) fn run(args: ValidateArgs) {
         hashes.dedup();
         if let Err(e) = std::fs::write(p, hashes.join("\n")) {
             eprintln!("Error writing hashes {}: {}", p.display(), e);
+            write_failed = true;
         } else {
             status(
                 format!(

@@ -1619,6 +1619,43 @@ fn test_loc_hash_write_and_ignore_round_trip() {
 }
 
 #[test]
+fn test_loc_missing_ignore_hashes_is_usage_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("missing-hashes.txt");
+    let loc_dir = fixtures_dir().join("loc_invalid");
+
+    cwtools()
+        .args([
+            "loc",
+            loc_dir.to_str().unwrap(),
+            "--ignore-hashes",
+            missing.to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("could not read --ignore-hashes"))
+        .stderr(predicate::str::contains(missing.to_str().unwrap()));
+}
+
+#[test]
+fn test_loc_output_hashes_write_failure_exits_two() {
+    let tmp = tempfile::tempdir().unwrap();
+    let loc_dir = fixtures_dir().join("loc_invalid");
+
+    cwtools()
+        .args([
+            "loc",
+            loc_dir.to_str().unwrap(),
+            "--output-hashes",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Error writing hashes"))
+        .stderr(predicate::str::contains(tmp.path().to_str().unwrap()));
+}
+
+#[test]
 fn test_loc_ignore_hashes_filters_error_before_exit_code() {
     // CW225 (undefined loc reference) is Error-severity and normally fails
     // the run. Baselining its hash must suppress it from BOTH the report and
@@ -1835,6 +1872,29 @@ fn test_loc_language_unknown_fails() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains("invalid language 'klingon'"));
+}
+
+#[test]
+fn test_validate_missing_ignore_hashes_is_usage_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("missing-hashes.txt");
+    let mod_dir = fixtures_dir().join("discover").join("mod_a");
+
+    validate_dir(&mod_dir, &["--ignore-hashes", missing.to_str().unwrap()])
+        .code(2)
+        .stderr(predicate::str::contains("could not read --ignore-hashes"))
+        .stderr(predicate::str::contains(missing.to_str().unwrap()));
+}
+
+#[test]
+fn test_validate_output_hashes_write_failure_exits_two() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mod_dir = fixtures_dir().join("discover").join("mod_a");
+
+    validate_dir(&mod_dir, &["--output-hashes", tmp.path().to_str().unwrap()])
+        .code(2)
+        .stderr(predicate::str::contains("Error writing hashes"))
+        .stderr(predicate::str::contains(tmp.path().to_str().unwrap()));
 }
 
 #[test]
