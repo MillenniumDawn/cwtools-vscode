@@ -67,6 +67,8 @@
 
 #### Engine
 
+* Inline script validation now caps per-file expansions to prevent hostile fan-out
+  from wedging validation. (#538)
 * `validate` and `loc` now fail when an explicit `--ignore-hashes` file cannot
   be read or an `--output-hashes` file cannot be written. (#489)
 * LSP workspace-scan pass 2 snapshots the type index with an `Arc` pointer bump

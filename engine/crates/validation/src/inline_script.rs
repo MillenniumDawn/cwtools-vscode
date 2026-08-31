@@ -109,6 +109,7 @@ pub(crate) enum ExpandError {
     Unknown(String),
     Cycle(String),
     TooDeep(String),
+    BudgetExceeded,
 }
 
 impl fmt::Display for ExpandError {
@@ -129,6 +130,7 @@ impl fmt::Display for ExpandError {
                 f,
                 "Inline script '{name}' nests more than {MAX_DEPTH} levels deep"
             ),
+            Self::BudgetExceeded => write!(f, "Inline script expansion budget exceeded"),
         }
     }
 }

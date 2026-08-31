@@ -172,6 +172,39 @@ fn a_nested_call_is_expanded_too() {
 }
 
 #[test]
+fn fan_out_expansion_hits_the_per_file_budget() {
+    let fanout = 8;
+    let bodies: Vec<(String, String)> = (0..5)
+        .map(|i| {
+            let body = if i == 4 {
+                "add = 1\n".repeat(fanout)
+            } else {
+                format!("inline_script = {{ script = s{} }}\n", i + 1).repeat(fanout)
+            };
+            (format!("common/inline_scripts/s{i}.txt"), body)
+        })
+        .collect();
+    let scripts: Vec<(&str, &str)> = bodies
+        .iter()
+        .map(|(path, body)| (path.as_str(), body.as_str()))
+        .collect();
+
+    let errors = run(
+        "foo = {\n    id = x\n    inline_script = { script = s0 }\n}\n",
+        &scripts,
+    );
+    assert_eq!(codes(&errors), ["CW274"], "got: {errors:?}");
+    assert!(
+        errors[0].message.contains("expansion budget"),
+        "got: {}",
+        errors[0].message
+    );
+    assert_eq!(errors[0].line, 3, "got: {errors:?}");
+    assert_eq!(errors[0].col, 4, "got: {errors:?}");
+    assert_eq!(errors[0].end, Some((3, 17)), "got: {errors:?}");
+}
+
+#[test]
 fn a_script_that_does_not_exist_is_cw274() {
     let errors = run(
         "foo = {\n    id = x\n    inline_script = { script = nope }\n}\n",

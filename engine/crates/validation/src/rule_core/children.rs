@@ -871,6 +871,11 @@ fn expand_inline_script_call<'r>(
         return;
     };
     let end = key_token_end(leaf, key, ctx.table);
+    if ctx.inline_script_expansion_budget_exhausted()
+        || !ctx.reserve_inline_script_expansion(leaf.pos.start, Some(end))
+    {
+        return;
+    }
     let expanded = {
         let stack = ctx.inline_stack.borrow();
         inline_script::expand(leaf, &ctx.ast.arena, ctx.table, scripts, &stack)
