@@ -16,7 +16,7 @@ use crate::diag::{
 use crate::report::ReportType;
 use crate::run::{
     EXIT_DISCOVERY_FAILED, announce_config, exit_code, exit_if_empty, load_config,
-    missing_required, note, report_owns_stdout, resolved_path, status,
+    load_ignore_hashes, missing_required, note, report_owns_stdout, resolved_path, status,
 };
 use crate::{codes, config, report};
 
@@ -110,6 +110,7 @@ pub(super) fn run(args: LocArgs) {
     announce_config("loc", fc, &applied, config::LOC_KEYS);
     let directory =
         directory.unwrap_or_else(|| missing_required("loc", "<DIRECTORY>", "directory", fc));
+    let ignored = load_ignore_hashes(ignore_hashes.as_deref());
 
     // A path that doesn't resolve is never a clean run, and --allow-empty
     // doesn't excuse it (that flag covers a deliberately empty scan).
@@ -143,20 +144,6 @@ pub(super) fn run(args: LocArgs) {
     );
 
     let total_entries: usize = service.files().iter().map(|f| f.entries.len()).sum();
-
-    // Load the ignore-hash baseline, if given. Same placement as
-    // `validate`: diagnostics are dropped before the report is
-    // rendered and before they're counted for the exit code.
-    let ignored: std::collections::HashSet<String> = ignore_hashes
-        .as_ref()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|s| {
-            s.lines()
-                .map(|l| l.trim().to_string())
-                .filter(|l| !l.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
 
     // The scope-independent checks (CW225 etc.) always run. The command checks
     // follow when a ruleset supplied a scope registry; with no reference site to
@@ -257,7 +244,7 @@ pub(super) fn run(args: LocArgs) {
         }
     }
 
-    let write_failed = match &output_file {
+    let mut write_failed = match &output_file {
         Some(p) => {
             if let Err(e) = std::fs::write(p, &out) {
                 eprintln!("Error writing report {}: {}", p.display(), e);
@@ -292,6 +279,7 @@ pub(super) fn run(args: LocArgs) {
         hashes.dedup();
         if let Err(e) = std::fs::write(p, hashes.join("\n")) {
             eprintln!("Error writing hashes {}: {}", p.display(), e);
+            write_failed = true;
         } else {
             status(
                 format!(

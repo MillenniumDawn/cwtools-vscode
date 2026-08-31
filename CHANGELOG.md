@@ -2,6 +2,8 @@
 
 #### Extension
 
+* `scripts/guard.py` has end-to-end tests for clean, drift, bless, and setup
+  failure paths using a stub validator and test-owned files. (#516)
 * Host tests now monitor the running extension's LSP output, reject forbidden
   completions individually, and verify dotted Paradox identifiers use one word
   range. ESLint blocks runtime test imports from the extension entry point. (#518)
@@ -67,6 +69,8 @@
 
 * Inline script validation now caps per-file expansions to prevent hostile fan-out
   from wedging validation. (#538)
+* `validate` and `loc` now fail when an explicit `--ignore-hashes` file cannot
+  be read or an `--output-hashes` file cannot be written. (#489)
 * LSP workspace-scan pass 2 snapshots the type index with an `Arc` pointer bump
   instead of cloning the full index while holding `info_service` for reading.
   On the current 258k-instance Millennium Dawn corpus, `snapshot_clone` measures
