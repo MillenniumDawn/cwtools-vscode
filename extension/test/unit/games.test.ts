@@ -96,6 +96,16 @@ suite("games — hint ordering fix", () => {
 		);
 	});
 
+	test("an Europa Universalis V folder detects as eu5, not eu4", async () => {
+		assert.strictEqual(
+			await detectFromFolder(
+				"/x/Documents/Paradox Interactive/Europa Universalis V/mod/m",
+				noopExists,
+			),
+			"eu5",
+		);
+	});
+
 	test("ck2 and vic2 folders still detect correctly", async () => {
 		assert.strictEqual(
 			await detectFromFolder("/x/Crusader Kings II", noopExists),
