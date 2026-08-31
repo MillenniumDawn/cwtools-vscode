@@ -67,6 +67,7 @@
 
 #### Engine
 
+* Corrupt parse caches are bounds-checked before their strings are interned. (#491)
 * LSP: closing an ignored file no longer deadlocks the server. (#469)
 * Type-instance indexing releases interned node keys before recursive skip-root
   traversal and subtype hooks, avoiding writer-contention deadlocks. (#480)
