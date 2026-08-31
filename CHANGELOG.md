@@ -2,6 +2,9 @@
 
 #### Extension
 
+* `npm run build -- release` now refuses untracked files and a `HEAD` that is
+  not present on `origin/main`, naming the paths or commit before tagging.
+  (#514)
 * CI now runs the network-free `rules-sync` host label after staging the server;
   the weekly rules-pin gate builds that server and runs the same suite only when
   a pin changes. (#521)
@@ -10,9 +13,6 @@
 * Host tests now monitor the running extension's LSP output, reject forbidden
   completions individually, and verify dotted Paradox identifiers use one word
   range. ESLint blocks runtime test imports from the extension entry point. (#518)
-* `npm run build -- release` now refuses untracked files and a `HEAD` that is
-  not present on `origin/main`, naming the paths or commit before tagging.
-  (#514)
 * `cwtools.restartServer` now gives the same EPERM/EACCES guidance as
   activation: if a restart fails because antivirus re-quarantined the server
   binary, the error dialog offers Reveal Server Binary and Antivirus Help
