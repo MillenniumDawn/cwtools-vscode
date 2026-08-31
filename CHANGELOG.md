@@ -65,6 +65,8 @@
 
 #### Engine
 
+* Inline script validation now caps per-file expansions to prevent hostile fan-out
+  from wedging validation. (#538)
 * LSP workspace-scan pass 2 snapshots the type index with an `Arc` pointer bump
   instead of cloning the full index while holding `info_service` for reading.
   On the current 258k-instance Millennium Dawn corpus, `snapshot_clone` measures

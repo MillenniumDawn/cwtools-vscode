@@ -342,6 +342,27 @@ fn append_alias_branch_budget_error(ctx: &ValidationCtx, errors: &mut Vec<Valida
     errors.push(error);
 }
 
+fn append_inline_script_expansion_budget_error(
+    ctx: &ValidationCtx,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(exhaustion) = ctx.inline_script_expansion_budget_exhaustion() else {
+        return;
+    };
+    let message = inline_script::ExpandError::BudgetExceeded.to_string();
+    let mut error = ValidationError::from_code(
+        &error_codes::CW274_INLINE_SCRIPT_ERROR,
+        ctx.file_path,
+        exhaustion.pos.line,
+        exhaustion.pos.col,
+        &[message.as_str()],
+    );
+    if let Some(end) = exhaustion.end {
+        error = error.with_end(end);
+    }
+    errors.push(error);
+}
+
 /// The body behind both `validate_prepared` entry points. Returns the file's
 /// diagnostics and the number of alias branches evaluated producing them — the
 /// second is what the memo tests assert on, and no caller acts on it.
@@ -372,9 +393,11 @@ fn validate_prepared_inner(
     // candidate errors the disjunctions discard) shares it.
     let file_arc: common::FilePath = std::sync::Arc::from(file_path);
 
-    // Owned out here so an expanded inline_script body can borrow the same two
-    // and spend the file's budget rather than a fresh one.
+    // Owned out here so an expanded inline_script body can borrow the same
+    // per-file budgets rather than being handed fresh ones.
     let alias_branch_budget = std::cell::RefCell::new(AliasBranchBudget::default());
+    let inline_script_expansion_budget =
+        std::cell::RefCell::new(ctx::InlineScriptExpansionBudget::default());
     let inline_stack = std::cell::RefCell::new(Vec::new());
 
     let ctx = ValidationCtx {
@@ -392,6 +415,7 @@ fn validate_prepared_inner(
         var_checks,
         loop_vars: std::cell::RefCell::new(Vec::new()),
         alias_branch_budget: &alias_branch_budget,
+        inline_script_expansion_budget: &inline_script_expansion_budget,
         inline_stack: &inline_stack,
         alias_memo: std::cell::RefCell::new(ctx::AliasMemo::default()),
         type_uses,
@@ -430,6 +454,7 @@ fn validate_prepared_inner(
             errors.extend(per_game::run_game_validators(&ctx, g));
         }
         append_alias_branch_budget_error(&ctx, &mut errors);
+        append_inline_script_expansion_budget_error(&ctx, &mut errors);
         return (errors, ctx.alias_branches_evaluated());
     }
 
@@ -498,6 +523,7 @@ fn validate_prepared_inner(
     }
 
     append_alias_branch_budget_error(&ctx, &mut errors);
+    append_inline_script_expansion_budget_error(&ctx, &mut errors);
     let branches = ctx.alias_branches_evaluated();
     (errors, branches)
 }
