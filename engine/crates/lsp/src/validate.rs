@@ -734,7 +734,7 @@ impl Backend {
             if let Some(rel) = rel
                 && !info.type_index.file_index.is_empty()
             {
-                info.type_index.file_index.remove(&rel);
+                Arc::make_mut(&mut info.type_index).file_index.remove(&rel);
             }
             info.export_fingerprint(uri) != before
         };
@@ -3536,7 +3536,9 @@ mod ignored_tests {
         // Manually populate file_index so removal can be asserted.
         {
             let mut info = backend.state.info_service.write();
-            info.type_index.file_index.insert("common/foo.txt");
+            Arc::make_mut(&mut info.type_index)
+                .file_index
+                .insert("common/foo.txt");
             assert!(info.type_index.file_index.contains("common/foo.txt"));
         }
         backend
@@ -3816,20 +3818,12 @@ mod ignored_tests {
             .doc_tokens
             .write()
             .insert(kept_uri.clone(), collect_doc_tokens(&parsed));
-        backend
-            .state
-            .info_service
-            .write()
-            .type_index
-            .file_index
-            .insert("ignored.txt");
-        backend
-            .state
-            .info_service
-            .write()
-            .type_index
-            .file_index
-            .insert("kept.txt");
+        {
+            let mut info = backend.state.info_service.write();
+            let type_index = Arc::make_mut(&mut info.type_index);
+            type_index.file_index.insert("ignored.txt");
+            type_index.file_index.insert("kept.txt");
+        }
         // Now mark ignored.txt as ignored and revalidate all open docs.
         {
             let mut cfg = backend.state.config.write();
@@ -3962,7 +3956,9 @@ mod ignored_tests {
         // Seed file_index as non-empty so the watched insert is not gated off.
         {
             let mut info = backend.state.info_service.write();
-            info.type_index.file_index.insert("dummy.txt");
+            Arc::make_mut(&mut info.type_index)
+                .file_index
+                .insert("dummy.txt");
         }
         let mut changes = std::collections::HashSet::new();
         changes.insert(ignored_uri.clone());
@@ -4014,7 +4010,9 @@ mod ignored_tests {
         let kept_uri = Url::from_file_path(&kept_path).unwrap().to_string();
         {
             let mut info = backend.state.info_service.write();
-            info.type_index.file_index.insert("dummy.txt");
+            Arc::make_mut(&mut info.type_index)
+                .file_index
+                .insert("dummy.txt");
         }
         let mut changes = std::collections::HashSet::new();
         changes.insert(ignored_uri.clone());

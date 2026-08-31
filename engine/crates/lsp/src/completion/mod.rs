@@ -993,8 +993,7 @@ mod tests {
                 required_loc_keys: Vec::new(),
             }],
         );
-        info.type_index
-            .merge("file:///scripted_effects/se.txt", per_type);
+        Arc::make_mut(&mut info.type_index).merge("file:///scripted_effects/se.txt", per_type);
 
         let rules = vec![(
             RuleType::LeafRule {
@@ -1417,6 +1416,7 @@ mod tests {
 #[cfg(test)]
 mod perf_bench {
     use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
 
     use cwtools_rules::rules_types::{NewField, NewRule, Options, RuleSet, RuleType};
 
@@ -1528,7 +1528,7 @@ mod perf_bench {
             "state".to_string(),
             (0..STATES).map(|i| inst(format!("{}", i + 1))).collect(),
         );
-        info.type_index.merge("file:///bench/defs.txt", per_type);
+        Arc::make_mut(&mut info.type_index).merge("file:///bench/defs.txt", per_type);
         info
     }
 

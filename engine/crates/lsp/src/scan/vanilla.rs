@@ -112,10 +112,11 @@ impl Backend {
         // Keyed under one synthetic file, distinct from the per-file URIs the
         // vanilla type instances now merge under, so a re-merge replaces this
         // contribution and the instance merge's `remove_files` never touches it.
-        info.type_index
+        let type_index = Arc::make_mut(&mut info.type_index);
+        type_index
             .complex_enum_values
             .merge_file("<vanilla-dynamic>", complex_enums.into_iter().collect());
-        info.type_index
+        type_index
             .value_set_values
             .merge_file("<vanilla-dynamic>", value_sets.into_iter().collect());
         drop(info);
@@ -202,15 +203,16 @@ impl Backend {
             let mut info_guard = self.state.info_service.write();
             // Drop the previous base-game contribution (a re-merge after
             // cacheVanilla / clearAllCaches) before merging the fresh one.
-            info_guard.type_index.remove_files(&old);
-            info_guard.type_index.merge_base_game_with_uris(converted);
+            let type_index = Arc::make_mut(&mut info_guard.type_index);
+            type_index.remove_files(&old);
+            type_index.merge_base_game_with_uris(converted);
             // Vanilla data is loaded, so the index now holds every base-game
             // instance. Mark it complete so the CW500/CW222 type-reference
             // checks fire (they're gated on `complete` to avoid false
             // positives during mod-only validation). The driver's Session
             // sets this for the CLI path; the LSP merges vanilla directly and
             // must set it here too. See rule_core/leaf.rs gate on `idx.complete`.
-            info_guard.type_index.complete = true;
+            type_index.complete = true;
             // `vanilla_index` is now None — mark it merged so
             // ensure_vanilla_index does not re-run on the next scan.
             self.state.vanilla_merged.store(true, Ordering::SeqCst);
@@ -226,7 +228,9 @@ impl Backend {
         // Clone, not take — must survive across scans.
         if let Some(var_names) = self.state.vanilla_var_names.lock().clone() {
             let mut info = self.state.info_service.write();
-            info.type_index.var_index.set_vanilla_names(var_names);
+            Arc::make_mut(&mut info.type_index)
+                .var_index
+                .set_vanilla_names(var_names);
             drop(info);
             self.bump_info_revision();
         }
@@ -235,14 +239,18 @@ impl Backend {
         // naming one must resolve without the mod having to define it (#348).
         if let Some(names) = self.state.vanilla_scripted_loc_names.lock().clone() {
             let mut info = self.state.info_service.write();
-            info.type_index.scripted_loc_index.set_vanilla_names(names);
+            Arc::make_mut(&mut info.type_index)
+                .scripted_loc_index
+                .set_vanilla_names(names);
             drop(info);
             self.bump_info_revision();
         }
 
         if let Some(names) = self.state.vanilla_scripted_gui_names.lock().clone() {
             let mut info = self.state.info_service.write();
-            info.type_index.scripted_gui_index.set_vanilla_names(names);
+            Arc::make_mut(&mut info.type_index)
+                .scripted_gui_index
+                .set_vanilla_names(names);
             drop(info);
             self.bump_info_revision();
         }
@@ -280,7 +288,7 @@ impl Backend {
         );
         {
             let mut info_guard = self.state.info_service.write();
-            info_guard.type_index.file_index = file_index;
+            Arc::make_mut(&mut info_guard.type_index).file_index = file_index;
         }
         // The file index now reflects the current workspace tree. Bump so
         // CW113 and icon completions see the refreshed set. When had_pending
@@ -641,12 +649,16 @@ mod tests {
         // Simulate a mod file defining the same var.
         {
             let mut info = backend.state.info_service.write();
-            info.type_index.var_index.add_name("shared_var");
+            Arc::make_mut(&mut info.type_index)
+                .var_index
+                .add_name("shared_var");
         }
         // Simulate the LSP clearing that mod file.
         {
             let mut info = backend.state.info_service.write();
-            info.type_index.var_index.remove_name("shared_var");
+            Arc::make_mut(&mut info.type_index)
+                .var_index
+                .remove_name("shared_var");
         }
         assert!(
             backend
@@ -676,13 +688,12 @@ mod tests {
         );
         // Mimic clearAllCaches path.
         *backend.state.vanilla_var_names.lock() = None;
-        backend
-            .state
-            .info_service
-            .write()
-            .type_index
-            .var_index
-            .clear_vanilla_names();
+        {
+            let mut info = backend.state.info_service.write();
+            Arc::make_mut(&mut info.type_index)
+                .var_index
+                .clear_vanilla_names();
+        }
         assert!(
             !backend
                 .state

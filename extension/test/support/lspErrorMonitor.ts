@@ -1,5 +1,9 @@
 import * as assert from 'assert';
-import { defaultClient } from "../../src/host/extension";
+import { serverOutputChannel } from "./utils";
+
+interface OutputChannel {
+    appendLine(value: string): void;
+}
 
 interface ErrorEntry {
     timestamp: number;
@@ -9,6 +13,7 @@ interface ErrorEntry {
 // Global state for error monitoring
 let errorLog: ErrorEntry[] = [];
 let testStartTime: number = 0;
+let outputChannel: OutputChannel | undefined;
 let originalAppendLine: ((value: string) => void) | undefined;
 let isMonitoringActive = false;
 // The client's error detail arrives as the appendLine right after its frame.
@@ -18,15 +23,16 @@ let captureDetailLine = false;
  * Sets up LSP error monitoring by intercepting the output channel
  * This should be called once at the start of each test
  */
-export function setupLSPErrorMonitoring(): void {
+export async function setupLSPErrorMonitoring(): Promise<void> {
     // Mark the start time for this test
     testStartTime = Date.now();
 
     // Only setup the interceptor once
-    if (!isMonitoringActive && defaultClient && defaultClient.outputChannel) {
-        originalAppendLine = defaultClient.outputChannel.appendLine.bind(defaultClient.outputChannel);
+    if (!isMonitoringActive) {
+        outputChannel = await serverOutputChannel();
+        originalAppendLine = outputChannel.appendLine.bind(outputChannel);
 
-        defaultClient.outputChannel.appendLine = (message: string) => {
+        outputChannel.appendLine = (message: string) => {
             const timestamp = Date.now();
 
             // The client writes "[Error - <time>] <msg>" then an unprefixed
@@ -77,12 +83,13 @@ export function checkForLSPErrors(testName: string): void {
  * Completely tears down error monitoring (call this at the very end of all tests)
  */
 export function teardownLSPErrorMonitoring(): void {
-    if (isMonitoringActive && defaultClient && defaultClient.outputChannel && originalAppendLine) {
+    if (isMonitoringActive && outputChannel && originalAppendLine) {
         // Restore the original appendLine method
-        defaultClient.outputChannel.appendLine = originalAppendLine;
-        originalAppendLine = undefined;
-        isMonitoringActive = false;
+        outputChannel.appendLine = originalAppendLine;
     }
+    outputChannel = undefined;
+    originalAppendLine = undefined;
+    isMonitoringActive = false;
 
     // Clear the error log
     errorLog = [];
