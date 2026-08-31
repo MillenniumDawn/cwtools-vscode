@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use crate::dynamic_values;
 use crate::{
     DefinedVariable, NormalizedPath, SourceLocation, TypeIndex, TypeInstance, check_path_dir_norm,
-    leaf_value_string, unquote,
+    get_string_or_empty, leaf_value_string, unquote,
 };
 
 /// Does this `skip_root_key` rule match `key`? Case-insensitive (matching the
@@ -156,27 +156,28 @@ fn walk_skip_root_child<V>(
         end: (kc.pos.end.line, kc.pos.end.col),
     };
 
-    table.with_string(kc.key.normal, |key| match skip_stack {
+    let key = get_string_or_empty(table, kc.key.normal);
+    match skip_stack {
         [] => {
             // We are at the instance node.
-            if type_key_filter_matches(td, key)
-                && starts_with_matches(td, key)
-                && key_prefix_matches(td, key)
+            if type_key_filter_matches(td, &key)
+                && starts_with_matches(td, &key)
+                && key_prefix_matches(td, &key)
                 && let Some(name) =
-                    instance_name_from_children(td, key, clause_children, arena, table)
+                    instance_name_from_children(td, &key, clause_children, arena, table)
             {
-                visit(td, name, key, clause_children, location);
+                visit(td, name, &key, clause_children, location);
             }
         }
         [head, tail @ ..] => {
             // Must match the skip-root layer; then descend into children.
-            if skip_root_key_matches(head, key) {
+            if skip_root_key_matches(head, &key) {
                 for inner_child in clause_children {
                     walk_skip_root_child(td, tail, inner_child, arena, table, visit);
                 }
             }
         }
-    });
+    }
 }
 
 /// One type *instance node* as seen during the type-instance walk: the matched
