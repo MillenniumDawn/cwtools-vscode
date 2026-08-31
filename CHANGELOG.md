@@ -2,6 +2,8 @@
 
 #### Extension
 
+* Graph overlays keep rendering for malformed entity types with empty segments
+  or no abbreviation. (#551)
 * Release workflow scopes Marketplace PATs to publishing steps instead of the
   whole job. (#543)
 * Pins the `cytoscape-elk` Git dependency to a full commit SHA. (#545)
