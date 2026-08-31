@@ -90,11 +90,8 @@ jobs:
     # by default.
     permissions:
       contents: write
-    # Job-level so step `if:` and `run:` blocks can read them. Secrets aren't
-    # visible in step conditions.
     env:
-      OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
-      VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
+      HAS_OPEN_VSX: ${{ secrets.OPEN_VSX_TOKEN != '' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -121,6 +118,8 @@ jobs:
         # is missing the Marketplace PAT, instead of silently skipping the
         # publish.
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
         run: |
           if [ -z "$VSCE_TOKEN" ]; then
             message="VSCE_TOKEN secret is not set; cannot publish"
@@ -146,18 +145,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # VSCE_TOKEN is inherited from the job-level env (build.ts reads it).
+          VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
           # The version comes from the pushed tag; the build doesn't commit or
           # re-tag.
           TAG_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') }}
         run: npm run build -- publish-prebuilt
       - name: Publish to Open VSX Registry
         # Skip cleanly when no Open VSX PAT is configured (GitHub release only).
-        if: ${{ env.OPEN_VSX_TOKEN != '' }}
+        if: ${{ env.HAS_OPEN_VSX == 'true' }}
         # v2.0.0
         uses: >-
           HaaLeo/publish-vscode-extension@ca5561daa085dee804bf9f37fe0165785a9b14db
         id: publishToOpenVSX
         with:
           packagePath: "./dist/extension"
-          pat: ${{ env.OPEN_VSX_TOKEN }}
+          pat: ${{ secrets.OPEN_VSX_TOKEN }}

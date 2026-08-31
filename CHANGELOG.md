@@ -2,6 +2,8 @@
 
 #### Extension
 
+* Release workflow scopes Marketplace PATs to publishing steps instead of the
+  whole job. (#543)
 * Pins the `cytoscape-elk` Git dependency to a full commit SHA. (#545)
 * EU5 workspaces in Europa Universalis V paths now detect as eu5 instead of eu4. (#552)
 * The shared Cargo registry cache now restores the newest same-OS cache when
