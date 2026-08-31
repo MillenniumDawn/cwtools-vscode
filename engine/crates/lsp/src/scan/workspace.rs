@@ -974,11 +974,9 @@ impl Backend {
             )
         };
 
-        // Validate every file in parallel, then publish serially. The
-        // CPU-bound validation runs under a single shared `info_service` /
-        // `loc_index` read guard (both `&...` references are `Sync`), with no
-        // async and no client calls inside the rayon section. Publishing is
-        // async and stays out of the parallel block.
+        // Validate every file in parallel against shared index snapshots, then
+        // publish serially. The rayon section holds no state guards and makes no
+        // async or client calls. Publishing stays out of the parallel block.
         let (scope_checks, var_checks) = {
             let cfg = self.state.config.read();
             (cfg.scope_checks, cfg.var_checks)
@@ -1014,14 +1012,10 @@ impl Backend {
         );
         // Snapshot indexes under brief read guards so rayon holds no
         // `info_service`/`loc_index` locks; a keystroke needing `write()` no
-        // longer blocks for the whole pass (pointer-swap shape, yield between
-        // chunks for cancel/progress on large mods). Clone is O(instances) but
-        // holds the read guard only for the deep copy (~ms vs seconds): 41ms on
-        // Millennium Dawn's 249k instances, per `cargo bench -p cwtools_driver
-        // --bench snapshot_clone`. Nearly all of that is the type maps, so
-        // keeping the dynamic-value indexes out of the snapshot would save
-        // about 7% and is not the lever (#332).
-        let type_index_snap = self.state.info_service.read().type_index.clone();
+        // longer blocks for the whole pass. The type index is copy-on-write, so
+        // this is an `Arc` bump; the first concurrent index mutation takes the
+        // deep copy after the read guard is released.
+        let type_index_snap = Arc::clone(&self.state.info_service.read().type_index);
         let loc_index_snap = self.state.loc_index.read().clone();
         // Parallel vectors built lock-step in the index phase; chunks().zip()
         // truncates to shortest on mismatch — fail-fast so a length
@@ -1813,7 +1807,7 @@ mod tests {
     async fn assert_pass2_allows_write(
         lock_name: &str,
         write: impl FnOnce(&DocumentState) + Send + 'static,
-    ) {
+    ) -> Backend {
         let gate = Pass2Gate::new(Pass2HoldPoint::Before);
         let (backend, _tmp) = setup_workspace(Some(gate.clone()));
         let scan_backend = clone_backend(&backend);
@@ -1854,14 +1848,29 @@ mod tests {
             acquired_before_release,
             "pass 2 blocked concurrent {lock_name}.write()"
         );
+        backend
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_pass2_snapshot_allows_info_service_write() {
-        assert_pass2_allows_write("info_service", |state| {
-            drop(state.info_service.write());
+    async fn test_pass2_snapshot_preserves_concurrent_info_service_mutation() {
+        let backend = assert_pass2_allows_write("info_service", |state| {
+            let mut info = state.info_service.write();
+            Arc::make_mut(&mut info.type_index)
+                .file_index
+                .insert("concurrent.txt");
         })
         .await;
+
+        assert!(
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("concurrent.txt"),
+            "pass 2 must not discard the live copy-on-write mutation"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

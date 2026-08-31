@@ -58,4 +58,22 @@ export default tseslint.config(
 		files: ["extension/test/**/*.ts"],
 		rules: { "@typescript-eslint/no-unused-expressions": "off" },
 	},
+	{
+		files: ["extension/test/{host,support}/**/*.ts"],
+		rules: {
+			"no-restricted-imports": [
+				"error",
+				{
+					patterns: [
+						{
+							group: ["../../src/host/extension"],
+							allowTypeImports: true,
+							message:
+								"Use the running extension's activation API from test/support/utils.",
+						},
+					],
+				},
+			],
+		},
+	},
 );

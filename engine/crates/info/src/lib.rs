@@ -2,6 +2,7 @@ use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringTable;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 // The index half of this crate now lives in `cwtools_index`. Re-export it so
 // existing `cwtools_info::TypeIndex` / `cwtools_info::collect_type_instances`
@@ -61,8 +62,10 @@ pub struct InfoService {
     pub files: HashMap<String, FileInfo>,
     /// Union of all type definitions across files (rule-driven + heuristic).
     pub all_type_defs: HashMap<String, Vec<(String, SourceLocation)>>,
-    /// Cross-file type-instance index.
-    pub type_index: TypeIndex,
+    /// Cross-file type-instance index. Shared with workspace validation
+    /// snapshots; the first concurrent mutation takes a copy through
+    /// `Arc::make_mut`.
+    pub type_index: Arc<TypeIndex>,
     /// Refcount maps over the cross-file symbols. Each map counts how many files
     /// define the symbol; a key exists iff at least one file still defines it, so
     /// the keys double as the membership set (use [`HashMap::contains_key`] /
@@ -95,7 +98,7 @@ impl InfoService {
         Self {
             files: HashMap::new(),
             all_type_defs: HashMap::new(),
-            type_index: TypeIndex::new(),
+            type_index: Arc::new(TypeIndex::new()),
             event_target_counts: HashMap::new(),
             variable_counts: HashMap::new(),
             inline_script_counts: HashMap::new(),
@@ -182,20 +185,24 @@ impl InfoService {
             Self::index_child_heuristic(child, &ast.arena, table, type_names, &mut info);
         }
 
-        // ── Dynamic value collection (completion-only) ────────────────────────
-        self.type_index.complex_enum_values.merge_file(
-            uri,
-            cwtools_index::dynamic_values::collect_complex_enum_values(
-                ruleset,
-                ast,
-                logical_path,
-                table,
-            ),
-        );
-        self.type_index.value_set_values.merge_file(
-            uri,
-            cwtools_index::dynamic_values::collect_value_set_members(ruleset, ast, table),
-        );
+        // ── Dynamic value collection ─────────────────────────────────────────
+        Arc::make_mut(&mut self.type_index)
+            .complex_enum_values
+            .merge_file(
+                uri,
+                cwtools_index::dynamic_values::collect_complex_enum_values(
+                    ruleset,
+                    ast,
+                    logical_path,
+                    table,
+                ),
+            );
+        Arc::make_mut(&mut self.type_index)
+            .value_set_values
+            .merge_file(
+                uri,
+                cwtools_index::dynamic_values::collect_value_set_members(ruleset, ast, table),
+            );
 
         // ── Localisation-call registries (path-driven, not rule-driven) ───────
         let scripted_locs = cwtools_index::collect_scripted_loc_names(ast, logical_path, table);
@@ -211,10 +218,10 @@ impl InfoService {
                 .export_loc_registry_hash
                 .wrapping_add(mix_export_symbol(&["g", &name.to_ascii_lowercase()]));
         }
-        self.type_index
+        Arc::make_mut(&mut self.type_index)
             .scripted_loc_index
             .merge_file(uri, scripted_locs);
-        self.type_index
+        Arc::make_mut(&mut self.type_index)
             .scripted_gui_index
             .merge_file(uri, scripted_guis);
 
@@ -232,9 +239,9 @@ impl InfoService {
             .flat_map(|v| v.iter())
             .map(|inst| inst.name.to_ascii_lowercase())
             .collect();
-        self.type_index.merge(uri, instances);
+        Arc::make_mut(&mut self.type_index).merge(uri, instances);
         if !subtype_instances.is_empty() {
-            self.type_index.merge(uri, subtype_instances);
+            Arc::make_mut(&mut self.type_index).merge(uri, subtype_instances);
         }
 
         // ── Rule-driven: defined variables ────────────────────────────────────
@@ -302,7 +309,9 @@ impl InfoService {
                 // that CW246 / VariableGetField consult. @-vars are excluded:
                 // reads bypass them, and they'd pollute the unset-variable check.
                 if ns != "@" {
-                    self.type_index.var_index.add_name(&v.name);
+                    Arc::make_mut(&mut self.type_index)
+                        .var_index
+                        .add_name(&v.name);
                 }
             }
         }
@@ -397,7 +406,7 @@ impl InfoService {
                 }
             }
             // Rule-driven type instances
-            self.type_index.remove_file(uri);
+            Arc::make_mut(&mut self.type_index).remove_file(uri);
             // Reverse reference index (use sites)
             self.reference_index.remove_file(uri);
             // Event targets
@@ -419,7 +428,9 @@ impl InfoService {
                         }
                     }
                     if ns != "@" {
-                        self.type_index.var_index.remove_name(&v.name);
+                        Arc::make_mut(&mut self.type_index)
+                            .var_index
+                            .remove_name(&v.name);
                     }
                 }
             }
@@ -943,6 +954,36 @@ mod tests {
     }
 
     #[test]
+    fn info_service_type_index_snapshot_is_copy_on_write() {
+        let uri = "file://a.txt";
+        let mut service = InfoService::new();
+        service.files.insert(uri.to_string(), FileInfo::default());
+        Arc::make_mut(&mut service.type_index).merge(
+            uri,
+            HashMap::from([(
+                "event".to_string(),
+                vec![TypeInstance {
+                    name: "ev1".to_string(),
+                    location: SourceLocation {
+                        line: 1,
+                        col: 0,
+                        end: (1, 0),
+                    },
+                    primary_loc_key: None,
+                    required_loc_keys: Vec::new(),
+                }],
+            )]),
+        );
+        let snapshot = Arc::clone(&service.type_index);
+
+        service.clear_file(uri);
+
+        assert!(snapshot.contains("event", "ev1"));
+        assert!(!service.type_index.contains("event", "ev1"));
+        assert!(!Arc::ptr_eq(&snapshot, &service.type_index));
+    }
+
+    #[test]
     fn test_is_any_instance_refcount() {
         // is_any_instance is backed by a refcount so a name survives until its
         // last definition is removed (two files defining the same name).
@@ -1271,7 +1312,9 @@ alias[effect:set_temp_variable] = {
         );
         svc.files.insert(uri.to_string(), file_info);
         svc.variable_counts.insert("my_var".to_string(), 1);
-        svc.type_index.var_index.add_name("unrelated");
+        Arc::make_mut(&mut svc.type_index)
+            .var_index
+            .add_name("unrelated");
 
         assert!(svc.variable_counts.contains_key("my_var"));
         assert!(svc.type_index.var_index.contains("unrelated"));

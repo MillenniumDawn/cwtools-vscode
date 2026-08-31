@@ -1636,6 +1636,8 @@ mod resolve_data_tests {
     // helper resolve.rs calls must reproduce exactly what the OLD eager path
     // used to put there — pinned against concrete strings, not just "is some".
 
+    use std::sync::Arc;
+
     use cwtools_rules::rules_types::{EnumDefinition, Options};
 
     use super::*;
@@ -1918,7 +1920,7 @@ mod resolve_data_tests {
                 required_loc_keys: Vec::new(),
             }],
         );
-        info.type_index.merge("file:///states/s.txt", per_type);
+        Arc::make_mut(&mut info.type_index).merge("file:///states/s.txt", per_type);
 
         let mut items = Vec::new();
         push_type_instances(
@@ -2002,7 +2004,7 @@ mod resolve_data_tests {
                 required_loc_keys: Vec::new(),
             }],
         );
-        info.type_index.merge("file:///x.txt", per_type);
+        Arc::make_mut(&mut info.type_index).merge("file:///x.txt", per_type);
     }
 
     #[test]
