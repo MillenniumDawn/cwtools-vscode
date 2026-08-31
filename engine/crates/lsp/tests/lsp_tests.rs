@@ -17184,6 +17184,101 @@ fn test_loc_rename_updates_dollar_refs_in_yml() {
 }
 
 #[test]
+fn test_ignored_file_close_keeps_server_responsive() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let user_uri = write_disk_file(ws.path(), "common/decisions/user_ignored.txt", STORM_FILE);
+    let baseline_uri = write_disk_file(ws.path(), "notes.md", STORM_FILE);
+
+    let (mut child, mut reader) = storm_server_env_with_ignore(
+        ws.path(),
+        rules_dir.path(),
+        vanilla.path(),
+        &[],
+        &["user_ignored.txt"],
+    );
+    for (uri, suffix) in [(&user_uri, "user_ignored.txt"), (&baseline_uri, "notes.md")] {
+        write_frame(
+            &mut child,
+            &jsonrpc_notification(
+                "textDocument/didOpen",
+                serde_json::json!({"textDocument": {
+                    "uri": uri, "languageId": "hoi4", "version": 1, "text": STORM_FILE
+                }}),
+            ),
+        )
+        .unwrap();
+        wait_for_diagnostics(&mut reader, suffix);
+    }
+
+    let stdin = child.stdin.take().unwrap();
+    let response = run_child_with_deadline(child, stdin, reader, 10, move |stdin, reader| {
+        let ignored = [(user_uri, "user_ignored.txt"), (baseline_uri, "notes.md")];
+        for (uri, _) in &ignored {
+            write_frame_to(
+                stdin,
+                &jsonrpc_notification(
+                    "textDocument/didClose",
+                    serde_json::json!({"textDocument": {"uri": uri}}),
+                ),
+            )
+            .unwrap();
+        }
+
+        let mut closed = std::collections::HashSet::new();
+        while closed.len() < ignored.len() {
+            let Ok(raw) = read_frame(reader) else {
+                return None;
+            };
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if value["method"] == "textDocument/publishDiagnostics"
+                && value["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(Vec::is_empty)
+            {
+                let uri = value["params"]["uri"].as_str().unwrap_or_default();
+                for (_, suffix) in &ignored {
+                    if uri.ends_with(suffix) {
+                        closed.insert(*suffix);
+                    }
+                }
+            }
+        }
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                469,
+                "textDocument/hover",
+                serde_json::json!({
+                    "textDocument": {"uri": &ignored[0].0},
+                    "position": {"line": 0, "character": 0}
+                }),
+            ),
+        )
+        .unwrap();
+        loop {
+            let Ok(raw) = read_frame(reader) else {
+                return None;
+            };
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if value["id"] == 469 {
+                return Some(value);
+            }
+        }
+    })
+    .flatten()
+    .expect("ignored didClose handlers did not answer hover before the 10s deadline");
+
+    assert!(
+        response["result"].is_null(),
+        "unexpected hover response: {response}"
+    );
+}
+
+#[test]
 fn test_ignored_file_is_not_validated_on_open_and_after_config_change() {
     // Repro from #323: ignored file is clean while closed and must stay clean
     // when opened, and adding a glob while the file is open must clear its
