@@ -67,6 +67,7 @@
 
 #### Engine
 
+* LSP: closing an ignored file no longer deadlocks the server. (#469)
 * Type-instance indexing releases interned node keys before recursive skip-root
   traversal and subtype hooks, avoiding writer-contention deadlocks. (#480)
 * Inline script validation now caps per-file expansions to prevent hostile fan-out
