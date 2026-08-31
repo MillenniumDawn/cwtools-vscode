@@ -22,9 +22,9 @@ export interface GameDef {
 
 export const RULES_MANIFEST_REVISION = 1;
 
-// Order matters: folder hints are tried in order, so the 3-suffixed games sit
-// before their 2-suffixed prefixes ("crusader kings iii" contains
-// "crusader kings ii", "victoria iii" contains "victoria ii").
+// Order matters: more-specific newer game hints sit before older prefixes
+// ("crusader kings iii" contains "crusader kings ii"; EU5 runs before EU4's
+// broad "europa" hint).
 export const GAMES: GameDef[] = [
 	{
 		id: "stellaris",
@@ -54,6 +54,17 @@ export const GAMES: GameDef[] = [
 		folderHint: /(hoi4|hearts)/,
 		vanillaFolders: ["hearts of iron iv"],
 		contentHint: "common/ai_strategy",
+	},
+	{
+		id: "eu5",
+		display: "Europa Universalis V",
+		repo: "https://github.com/kaiser-chris/cwtools-eu5-config",
+		repoRef: "7f2764a9536951dc9915c0b05509d0499408381a", // 2026-08-05
+		exeName: "eu5",
+		binariesPrefix: true,
+		folderHint: /(eu5|europa universalis v)/,
+		vanillaFolders: ["europa universalis v"],
+		vanillaSubdir: "game",
 	},
 	{
 		id: "eu4",
@@ -118,17 +129,6 @@ export const GAMES: GameDef[] = [
 		binariesPrefix: true,
 		folderHint: /(imperator|rome)/,
 		vanillaFolders: ["imperatorrome", "imperator"],
-		vanillaSubdir: "game",
-	},
-	{
-		id: "eu5",
-		display: "Europa Universalis V",
-		repo: "https://github.com/kaiser-chris/cwtools-eu5-config",
-		repoRef: "7f2764a9536951dc9915c0b05509d0499408381a", // 2026-08-05
-		exeName: "eu5",
-		binariesPrefix: true,
-		folderHint: "eu5",
-		vanillaFolders: ["europa universalis v"],
 		vanillaSubdir: "game",
 	},
 ];

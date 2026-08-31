@@ -80,6 +80,19 @@ suite("engine — detectFromFolder", () => {
 		await assertDetects("/mods/eu5_mod", "eu5");
 	});
 
+	test("an Europa Universalis V install folder detects as eu5", async () => {
+		await assertDetects(
+			"/x/Documents/Paradox Interactive/Europa Universalis V/mod/m",
+			"eu5",
+		);
+	});
+
+	test("EU4 folders still detect as eu4", async () => {
+		for (const folder of ["/mods/Europa Universalis IV", "/mods/eu4"]) {
+			await assertDetects(folder, "eu4");
+		}
+	});
+
 	test("falls back to file content markers when the folder name is opaque", async () => {
 		const files: Record<string, boolean> = {
 			["/x/common/ai_strategy"]: true,

@@ -75,10 +75,11 @@ suite("games — derived maps match the pre-consolidation literals", () => {
 suite("games — hint ordering fix", () => {
 	const noopExists = () => false;
 
-	test("3-suffixed games are ordered before their 2-suffixed prefixes", () => {
+	test("newer games are ordered before their older prefixes", () => {
 		const order = GAMES.map((g) => g.id);
 		assert.ok(order.indexOf("ck3") < order.indexOf("ck2"));
 		assert.ok(order.indexOf("vic3") < order.indexOf("vic2"));
+		assert.ok(order.indexOf("eu5") < order.indexOf("eu4"));
 	});
 
 	test("a Crusader Kings III folder detects as ck3, not ck2", async () => {
@@ -92,6 +93,16 @@ suite("games — hint ordering fix", () => {
 		assert.strictEqual(
 			await detectFromFolder("/x/Victoria III", noopExists),
 			"vic3",
+		);
+	});
+
+	test("an Europa Universalis V folder detects as eu5, not eu4", async () => {
+		assert.strictEqual(
+			await detectFromFolder(
+				"/x/Documents/Paradox Interactive/Europa Universalis V/mod/m",
+				noopExists,
+			),
+			"eu5",
 		);
 	});
 
