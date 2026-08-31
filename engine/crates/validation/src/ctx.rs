@@ -19,6 +19,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 
 const ALIAS_BRANCH_BUDGET: usize = 65_536;
+const INLINE_SCRIPT_EXPANSION_BUDGET: usize = 4_096;
 
 /// Branches a file has to spend before the alias memo starts recording. Real
 /// script does not revisit a subtree (a valid usage matches its first candidate
@@ -71,6 +72,49 @@ impl AliasBranchBudget {
     /// Branches evaluated so far in this file.
     fn spent(&self) -> usize {
         ALIAS_BRANCH_BUDGET - self.remaining
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct InlineScriptExpansionBudgetExhaustion {
+    pub(crate) pos: SourcePos,
+    pub(crate) end: Option<SourcePos>,
+}
+
+pub(crate) struct InlineScriptExpansionBudget {
+    remaining: usize,
+    exhaustion: Option<InlineScriptExpansionBudgetExhaustion>,
+    origin: Option<(SourcePos, Option<SourcePos>)>,
+}
+
+impl Default for InlineScriptExpansionBudget {
+    fn default() -> Self {
+        Self {
+            remaining: INLINE_SCRIPT_EXPANSION_BUDGET,
+            exhaustion: None,
+            origin: None,
+        }
+    }
+}
+
+impl InlineScriptExpansionBudget {
+    fn reserve(&mut self, pos: SourcePos, end: Option<SourcePos>, nested: bool) -> bool {
+        if !nested {
+            self.origin = Some((pos, end));
+        }
+        if self.remaining > 0 {
+            self.remaining -= 1;
+            true
+        } else {
+            let (pos, end) = if nested {
+                self.origin.unwrap_or((pos, end))
+            } else {
+                (pos, end)
+            };
+            self.exhaustion
+                .get_or_insert(InlineScriptExpansionBudgetExhaustion { pos, end });
+            false
+        }
     }
 }
 
@@ -162,6 +206,9 @@ pub(crate) struct ValidationCtx<'a> {
     /// Borrowed rather than owned so an expanded `inline_script` body spends the
     /// calling file's budget instead of being handed a fresh one.
     pub(crate) alias_branch_budget: &'a RefCell<AliasBranchBudget>,
+    /// Per-file cap on inline_script body expansions, shared with every expanded
+    /// body's context.
+    pub(crate) inline_script_expansion_budget: &'a RefCell<InlineScriptExpansionBudget>,
     /// Lookup names of the `inline_script`s currently being expanded, outermost
     /// first. Shared with every expanded body's context, which is what makes a
     /// cycle or a runaway nesting reportable at the call site that started it.
@@ -180,8 +227,8 @@ pub(crate) struct ValidationCtx<'a> {
 
 impl<'a> ValidationCtx<'a> {
     /// The context an expanded `inline_script` body is walked in: the same rules,
-    /// indexes, file and branch budget as the call site, over the rebuilt body's
-    /// own arena.
+    /// indexes, file and per-file budgets as the call site, over the rebuilt
+    /// body's own arena.
     ///
     /// The loop-variable stack is copied rather than shared — the body reads the
     /// names in scope where it was called, and anything it pushes belongs to the
@@ -206,6 +253,7 @@ impl<'a> ValidationCtx<'a> {
             var_checks: self.var_checks,
             loop_vars: RefCell::new(self.loop_vars.borrow().clone()),
             alias_branch_budget: self.alias_branch_budget,
+            inline_script_expansion_budget: self.inline_script_expansion_budget,
             inline_stack: self.inline_stack,
             alias_memo: RefCell::new(AliasMemo::default()),
             type_uses: self.type_uses,
@@ -333,6 +381,27 @@ impl<'a> ValidationCtx<'a> {
                 errors: errors.to_vec(),
             },
         );
+    }
+
+    pub(crate) fn reserve_inline_script_expansion(
+        &self,
+        pos: SourcePos,
+        end: Option<SourcePos>,
+    ) -> bool {
+        let nested = !self.inline_stack.borrow().is_empty();
+        self.inline_script_expansion_budget
+            .borrow_mut()
+            .reserve(pos, end, nested)
+    }
+
+    pub(crate) fn inline_script_expansion_budget_exhaustion(
+        &self,
+    ) -> Option<InlineScriptExpansionBudgetExhaustion> {
+        self.inline_script_expansion_budget.borrow().exhaustion
+    }
+
+    pub(crate) fn inline_script_expansion_budget_exhausted(&self) -> bool {
+        self.inline_script_expansion_budget_exhaustion().is_some()
     }
 
     pub(crate) fn alias_branch_budget_exhaustion(&self) -> Option<AliasBranchBudgetExhaustion> {

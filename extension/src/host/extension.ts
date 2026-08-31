@@ -23,7 +23,7 @@ import { logInfo, logError, errorMessage } from "./logger";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
 import type * as GraphPanelModule from "./graphPanel";
 
-export let defaultClient: LanguageClient;
+let defaultClient: LanguageClient;
 // The dir resolveRulesCache/fetchRulesInBackground clone into, keyed by
 // language below it. Exposed via CwtoolsApi so the rules-sync host suite
 // can find what activation chose without guessing globalStorage's path.
@@ -40,6 +40,8 @@ export interface CwtoolsApi {
 	graphPanel(): Promise<typeof GraphPanelModule>;
 	/** Commands the running server advertised, empty if it never started. */
 	serverCommands(): readonly string[];
+	/** The running client's output, without exposing the client itself. */
+	serverOutputChannel(): Pick<vscode.OutputChannel, "appendLine"> | undefined;
 	/** The rules cache root dir, once activation has resolved it. */
 	rulesCacheRoot(): string | undefined;
 	/** The status bar item's current text, once activation has created it. */
@@ -179,6 +181,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverCommands: () =>
 			defaultClient?.initializeResult?.capabilities.executeCommandProvider
 				?.commands ?? [],
+		serverOutputChannel: () => defaultClient?.outputChannel,
 		rulesCacheRoot: () => rulesCacheRoot,
 		serverStatusText: () => statusText?.(),
 	};

@@ -15,7 +15,7 @@ use cwtools_parser::ast::{Child, ParsedFile, SourcePos, SourceRange, Value};
 use cwtools_rules::rules_types::*;
 
 use crate::common::{leaf_value_to_string, unquote_key};
-use crate::ctx::{AliasBranchBudget, ValidationCtx};
+use crate::ctx::{AliasBranchBudget, InlineScriptExpansionBudget, ValidationCtx};
 use crate::resolve::{
     DispatchInput, PathCandidate, ResolvedType, find_rules_by_name, find_type_from_candidates,
     grandchild_candidates_for_wrapper, path_candidates_for_file, refine_grandchild_type,
@@ -111,6 +111,8 @@ pub fn rules_at_pos(
     // still wants the run's shared path.
     let file_arc: crate::FilePath = std::sync::Arc::from(file_path);
     let alias_branch_budget = std::cell::RefCell::new(AliasBranchBudget::default());
+    let inline_script_expansion_budget =
+        std::cell::RefCell::new(InlineScriptExpansionBudget::default());
     let inline_stack = std::cell::RefCell::new(Vec::new());
     let ctx = ValidationCtx {
         ast,
@@ -127,6 +129,7 @@ pub fn rules_at_pos(
         var_checks: prepared.var_checks,
         loop_vars: std::cell::RefCell::new(Vec::new()),
         alias_branch_budget: &alias_branch_budget,
+        inline_script_expansion_budget: &inline_script_expansion_budget,
         inline_stack: &inline_stack,
         alias_memo: std::cell::RefCell::new(crate::ctx::AliasMemo::default()),
         // The resolver is a read-only navigation walk; it never contributes to
@@ -264,6 +267,7 @@ pub fn scope_transitions_with_limit(
     };
     let file_arc: crate::FilePath = Arc::from(file_path);
     let alias_branch_budget = RefCell::new(AliasBranchBudget::default());
+    let inline_script_expansion_budget = RefCell::new(InlineScriptExpansionBudget::default());
     let inline_stack = RefCell::new(Vec::new());
     let ctx = ValidationCtx {
         ast,
@@ -280,6 +284,7 @@ pub fn scope_transitions_with_limit(
         var_checks: prepared.var_checks,
         loop_vars: RefCell::new(Vec::new()),
         alias_branch_budget: &alias_branch_budget,
+        inline_script_expansion_budget: &inline_script_expansion_budget,
         inline_stack: &inline_stack,
         alias_memo: RefCell::new(crate::ctx::AliasMemo::default()),
         type_uses: None,

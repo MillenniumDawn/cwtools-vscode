@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use tower_lsp::lsp_types::*;
@@ -228,8 +229,9 @@ impl Backend {
                 if !to_insert.is_empty() {
                     let mut info = self.state.info_service.write();
                     if !info.type_index.file_index.is_empty() {
+                        let type_index = Arc::make_mut(&mut info.type_index);
                         for rel in to_insert {
-                            info.type_index.file_index.insert(&rel);
+                            type_index.file_index.insert(&rel);
                         }
                     }
                 }
@@ -379,8 +381,9 @@ impl Backend {
         {
             let mut info = self.state.info_service.write();
             if !to_remove.is_empty() && !info.type_index.file_index.is_empty() {
+                let type_index = Arc::make_mut(&mut info.type_index);
                 for rel in &to_remove {
-                    info.type_index.file_index.remove(rel);
+                    type_index.file_index.remove(rel);
                 }
             }
             for uri in deletes {

@@ -47,7 +47,7 @@ suite("LSP CodeLens Tests", function () {
 
 	setup(async function () {
 		await activate();
-		setupLSPErrorMonitoring();
+		await setupLSPErrorMonitoring();
 		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, "Extension should be active");
 		document = await openDocumentAndShow(vscode.Uri.file(testEventFile));

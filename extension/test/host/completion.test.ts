@@ -27,10 +27,10 @@ suite('LSP Completion Tests', function () {
 	this.timeout(60000);
 
 	setup(async function () {
-		// See hover.test.ts: the monitor needs defaultClient, which activation
-		// sets, so hooking before it leaves the first test of a run unmonitored.
+		// Activation exposes the running client's output channel before the
+		// monitor hooks it.
 		await activate();
-		setupLSPErrorMonitoring();
+		await setupLSPErrorMonitoring();
 		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, 'Extension should be active');
 		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
@@ -52,14 +52,18 @@ suite('LSP Completion Tests', function () {
 		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
 		const labels = await getCompletionLabels(document.uri, new vscode.Position(12, 0));
 		expect(labels).to.include.members(['is_ai', 'is_country_type']);
-		expect(labels).to.not.have.members(['country_event', 'set_country_flag']);
+		for (const label of ['country_event', 'set_country_flag']) {
+			expect(labels).to.not.include.members([label]);
+		}
 	});
 
 	test('offers effects and withholds triggers inside an immediate block', async function () {
 		const document = await openDocumentAndShow(vscode.Uri.file(testEventFile));
 		const labels = await getCompletionLabels(document.uri, new vscode.Position(36, 2));
 		expect(labels).to.include.members(['country_event', 'every_country', 'set_country_flag']);
-		expect(labels).to.not.have.members(['is_ai', 'is_country_type']);
+		for (const label of ['is_ai', 'is_country_type']) {
+			expect(labels).to.not.include.members([label]);
+		}
 	});
 
 	// MillenniumDawn/cwtools#318 diagnosed this as a per-file value set, but the

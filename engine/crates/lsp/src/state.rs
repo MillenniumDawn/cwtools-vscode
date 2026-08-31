@@ -289,10 +289,10 @@ pub(crate) struct DocumentState {
     pub(crate) rules: parking_lot::RwLock<RuleData>,
     /// shared string table
     pub(crate) string_table: StringTable,
-    /// computed info service for type/references/definitions. `RwLock` so the
-    /// full-workspace pass-2 validation can share a single read guard across
-    /// rayon threads, and the many read-only consumers (hover, completion,
-    /// document-symbol, export fingerprinting, validation) don't serialize.
+    /// Computed info service for type/references/definitions. The `RwLock`
+    /// coordinates incremental writes with read-only consumers such as hover,
+    /// completion, navigation, and validation. Pass 2 clones the type index's
+    /// `Arc` under a brief read guard, then releases it before rayon starts.
     pub(crate) info_service: parking_lot::RwLock<cwtools_info::InfoService>,
     /// pre-generated base-game type instances (from a vanilla cache OR a live
     /// index of `config.vanilla_dir`), merged into the workspace index so the
