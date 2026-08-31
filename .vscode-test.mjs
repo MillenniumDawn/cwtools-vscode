@@ -6,7 +6,7 @@
 //   live        the live-settings suite, in sample-live (its own workspace
 //               because .vscode/settings.json pins rules_folder)
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
-//               (see below; not part of test:smoke)
+//               (see below; its own CI step, not part of test:smoke)
 //   host        full suite excl. live (slower, see below)
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
@@ -21,7 +21,7 @@
 // (added for #185, unrelated to detection) is Stellaris's content marker (see
 // extension/src/host/games.ts), so it already detects as `stellaris` and fetches
 // real rules in the background on activation. `host` needs the built server
-// binary, so it is gated in pr.yml's `build` job rather than `check`; two of
+// binary, so it is gated in ci.yml's `build` job rather than `check`; two of
 // its assertions stay `test.skip` against genuine engine gaps
 // (MillenniumDawn/cwtools#317, #318).
 //
@@ -33,9 +33,9 @@
 // checked-in bare repo under extension/test/fixtures/hoi4-rules.git instead of
 // the real network. It still needs a real cwtools-server binary staged at
 // dist/extension/bin/server: activation's init() returns before it reaches the
-// rules sync when the binary is missing, same as `smoke`/`live`. Left out of
-// test:smoke for now rather than folded in unasked; wiring it into CI's smoke
-// step (pr.yml) is a separate call.
+// rules sync when the binary is missing, same as `smoke`/`live`. It stays
+// separate from test:smoke because its fixture and network-free environment
+// differ. CI runs it as its own step after the server has been staged.
 //
 // Coverage applies globally when `--coverage` is passed (test:coverage runs the
 // `host` label, since its file list is a superset of `unit`'s and `smoke`'s

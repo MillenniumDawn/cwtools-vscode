@@ -141,6 +141,11 @@ jobs:
       - name: Build engine and client
         id: build-engine
         run: npm run build -- quick
+      # Exercises activation-triggered rules sync against the checked-in local
+      # fixture, without reaching the network (see .vscode-test.mjs).
+      - name: Host tests (rules sync)
+        timeout-minutes: 10
+        run: npm run test:rules-sync
       # Boots the extension host against the freshly built server: activation,
       # command registration and the graph/file-explorer UI, plus the
       # live-settings suite in its own workspace (see .vscode-test.mjs).

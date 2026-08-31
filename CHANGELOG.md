@@ -2,6 +2,9 @@
 
 #### Extension
 
+* CI now runs the network-free `rules-sync` host label after staging the server;
+  the weekly rules-pin gate builds that server and runs the same suite only when
+  a pin changes. (#521)
 * `scripts/guard.py` has end-to-end tests for clean, drift, bless, and setup
   failure paths using a stub validator and test-owned files. (#516)
 * Host tests now monitor the running extension's LSP output, reject forbidden
@@ -81,8 +84,6 @@
   5.2 ns for the snapshot instead of 84.4 ms for the deep clone. The first index
   write while pass 2 still owns its snapshot pays the copy-on-write cost instead,
   measured at 37.0 ms; later writes use the new unique copy. (#225)
-* LSP: closing an ignored file no longer deadlocks the server. (#469)
-* Corrupt parse caches are bounds-checked before their strings are interned. (#491)
 * `discover_vanilla_dir` now maps `eu5` to its Steam install folder, "Europa
   Universalis V", so the editor auto-discovers an installed EU5 base game the
   same way it already does for ck3/vic3/ir. This turns on the vanilla-gated
