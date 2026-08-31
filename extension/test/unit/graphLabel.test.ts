@@ -10,4 +10,9 @@ suite("graph labels", () => {
 		assert.strictEqual(deriveNodeLabel(undefined, undefined), "?");
 		assert.strictEqual(deriveNodeLabel(), "?");
 	});
+
+	test("falls through empty abbreviation", () => {
+		assert.strictEqual(deriveNodeLabel("a__b", ""), "AB");
+		assert.strictEqual(deriveNodeLabel("", ""), "?");
+	});
 });
