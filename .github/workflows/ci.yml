@@ -75,7 +75,7 @@ jobs:
       # v6.3.0. Pinned to the floor pyproject.toml targets rather than the
       # newest release, so syntax past that floor fails here instead of on a
       # contributor's older interpreter.
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
           cache: pip
