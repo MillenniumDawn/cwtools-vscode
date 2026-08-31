@@ -76,6 +76,8 @@
 
 #### Engine
 
+* Parse caches now preserve existing entries when `settings.sig` cannot be read,
+  returning the read error instead of treating it as an invalidation miss. (#495)
 * Corrupt parse caches are bounds-checked before their strings are interned. (#491)
 * LSP: closing an ignored file no longer deadlocks the server. (#469)
 * Type-instance indexing releases interned node keys before recursive skip-root

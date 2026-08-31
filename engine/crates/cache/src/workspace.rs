@@ -165,16 +165,20 @@ fn error_cache_path(dir: &Path, hash: u64) -> PathBuf {
 
 // ── Settings sig ────────────────────────────────────────────────────────────
 
-/// Read the stored fingerprint from `settings.sig`. Returns `None` if the file
-/// doesn't exist or can't be parsed.
-fn read_settings_sig(dir: &Path) -> Option<u64> {
-    let bytes = fs::read(settings_sig_path(dir)).ok()?;
+/// Read the stored fingerprint from `settings.sig`. A missing or malformed
+/// signature is an ordinary cache miss; other read errors are returned.
+fn read_settings_sig(dir: &Path) -> std::io::Result<Option<u64>> {
+    let bytes = match fs::read(settings_sig_path(dir)) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     if bytes.len() != 8 {
-        return None;
+        return Ok(None);
     }
     let mut buf = [0u8; 8];
     buf.copy_from_slice(&bytes);
-    Some(u64::from_le_bytes(buf))
+    Ok(Some(u64::from_le_bytes(buf)))
 }
 
 /// Write the current fingerprint to `settings.sig`.
@@ -217,17 +221,20 @@ fn try_validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<
             "cannot use a cache directory that is a symlink or a file",
         ));
     }
+    let sig_path = settings_sig_path(&dir);
     match read_settings_sig(&dir) {
-        Some(stored) if stored == fingerprint => {
+        Ok(Some(stored)) if stored == fingerprint => {
             prune(cache_dir, fingerprint);
             Ok(true)
         }
-        _ => {
+        Ok(_) => {
+            tracing::debug!(path = %sig_path.display(), "parse cache settings signature miss; clearing");
             clear_cache_dir(&dir)?;
             write_settings_sig(&dir, fingerprint)?;
             prune_all_cache_dirs(cache_dir, &dir);
             Ok(false)
         }
+        Err(error) => Err(error),
     }
 }
 
@@ -557,11 +564,22 @@ fn load_hash(
     let dir = workspace_cache_dir(cache_dir, fingerprint);
     let path = file_cache_path(&dir, hash);
     let (arena, root_children) =
-        with_archived_file(&path, |archived| archived_to_arena(archived, table))
-            .ok()
-            .and_then(Result::ok)?;
+        match with_archived_file(&path, |archived| archived_to_arena(archived, table)) {
+            Ok(Ok(parsed)) => parsed,
+            Ok(Err(error)) | Err(error) => {
+                log_cache_read_error(&path, &error);
+                return None;
+            }
+        };
     let errors = if load_errors {
-        cached_errors_to_parse(read_errors_from_file(&error_cache_path(&dir, hash)).ok()?)
+        let error_path = error_cache_path(&dir, hash);
+        match read_errors_from_file(&error_path) {
+            Ok(errors) => cached_errors_to_parse(errors),
+            Err(error) => {
+                log_cache_read_error(&error_path, &error);
+                return None;
+            }
+        }
     } else {
         Vec::new()
     };
@@ -570,6 +588,18 @@ fn load_hash(
         root_children,
         errors,
     })
+}
+
+fn log_cache_read_error(path: &Path, error: &crate::io::CacheError) {
+    if matches!(
+        error,
+        crate::io::CacheError::Io(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+    ) {
+        tracing::debug!(path = %path.display(), "parse cache miss");
+    } else {
+        tracing::warn!(path = %path.display(), error = %error, "parse cache read failed");
+    }
 }
 
 fn store_hash(
@@ -737,6 +767,23 @@ mod tests {
         assert!(!validate_or_clear(tmp.path(), fp).unwrap());
         // Same fingerprint on the next scan -> valid.
         assert!(validate_or_clear(tmp.path(), fp).unwrap());
+    }
+
+    #[test]
+    fn validate_or_clear_preserves_entries_when_settings_sig_read_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fp = 0xfeed_face_u64;
+        assert!(!validate_or_clear(tmp.path(), fp).unwrap());
+        let dir = workspace_cache_dir(tmp.path(), fp);
+        let entry = file_cache_path(&dir, 1);
+        fs::write(&entry, b"keep me").unwrap();
+
+        // A directory at the signature path makes fs::read fail without permission bits.
+        fs::remove_file(settings_sig_path(&dir)).unwrap();
+        fs::create_dir(settings_sig_path(&dir)).unwrap();
+
+        assert!(validate_or_clear(tmp.path(), fp).is_err());
+        assert_eq!(fs::read(entry).unwrap(), b"keep me");
     }
 
     #[test]
