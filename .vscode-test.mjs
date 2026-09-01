@@ -64,11 +64,6 @@ const unitFiles = [
 	"./dist/extension/bin/client/test/host/graphTypes.test.js",
 	"./dist/extension/bin/client/test/host/fileExplorer.test.js",
 ];
-// Live-settings fixture is isolated: its .vscode/settings.json pins
-// cwtools.rules_folder to .cwtools-test-rules, which replaces the ruleset.
-// Running it in the shared sample workspace would pollute the host/unit
-// suites (they expect the generic paradox ruleset), so it lives in
-// extension/test/workspaces/live with its own workspace.
 // Stops the language client to prove deactivate() completes the LSP shutdown
 // handshake (#502), so it goes last in every label that lists it.
 const deactivateFile =
@@ -78,6 +73,11 @@ const smokeFiles = [
 	"./dist/extension/bin/client/test/host/extension.test.js",
 	deactivateFile,
 ];
+// Live-settings fixture is isolated: its .vscode/settings.json pins
+// cwtools.rules_folder to .cwtools-test-rules, which replaces the ruleset.
+// Running it in the shared sample workspace would pollute the host/unit
+// suites (they expect the generic paradox ruleset), so it lives in
+// extension/test/workspaces/live with its own workspace.
 const liveFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/liveSettings.test.js",

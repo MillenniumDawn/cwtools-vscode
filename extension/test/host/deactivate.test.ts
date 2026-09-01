@@ -19,16 +19,18 @@ suite("deactivate", function () {
 
 		await api.deactivate();
 
-		// stop() clears initializeResult once the server has answered shutdown and
-		// exit, so an empty command list is the handshake having completed.
+		// Awaiting the thenable is what proves the handshake: stop() rejects when the
+		// server does not answer shutdown and exit inside its 2s budget. It clears
+		// initializeResult on the way in, so an empty command list is the client
+		// having left Running.
 		assert.deepStrictEqual(
 			api.serverCommands(),
 			[],
 			"deactivate should have stopped the client",
 		);
 
-		// The client is disposed from context.subscriptions right after deactivate()
-		// resolves, which stops it a second time.
+		// Disposing the client from context.subscriptions stops it again right after
+		// deactivate() resolves, so a second call has to be harmless.
 		await api.deactivate();
 	});
 });

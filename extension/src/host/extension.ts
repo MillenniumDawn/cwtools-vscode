@@ -192,8 +192,8 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 
 // VS Code awaits a thenable returned from deactivate(), but it does not await
 // the disposal of context.subscriptions, so returning stop() here is what lets
-// the LSP shutdown/exit handshake finish before the host goes away and leaves
-// the server's caches half-written. (#502)
+// the LSP shutdown/exit handshake finish and the server exit on its own rather
+// than dying with the extension host. (#502)
 export function deactivate(): Thenable<void> | undefined {
 	// stop() throws unless the client is Running, same as restart()'s stop half.
 	return defaultClient?.isRunning() ? defaultClient.stop() : undefined;
