@@ -3314,7 +3314,7 @@ mod ignored_tests {
     use super::*;
     use std::sync::Arc;
 
-    use crate::state::DocumentState;
+    use crate::state::{DocumentState, ParsedDoc};
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
     use futures_util::stream::StreamExt;
@@ -3610,6 +3610,49 @@ mod ignored_tests {
                 .load(std::sync::atomic::Ordering::Acquire)
                 > rev_before,
             "type_uses_revision must bump"
+        );
+    }
+
+    #[tokio::test]
+    async fn did_close_ignored_clears_index_state() {
+        let backend = backend_with_ignore(vec!["ignored.txt".into()], Some("file:///ws"));
+        let uri = Url::parse("file:///ws/ignored.txt").unwrap();
+        let uri_string = uri.to_string();
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri_string.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from("my_type = { }"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        backend
+            .state
+            .watched_signatures
+            .lock()
+            .insert(uri_string.clone(), (123, 456));
+
+        backend
+            .did_close(tower_lsp::lsp_types::DidCloseTextDocumentParams {
+                text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri },
+            })
+            .await;
+
+        assert!(!backend.state.documents.lock().contains_key(&uri_string));
+        assert!(
+            !backend
+                .state
+                .watched_signatures
+                .lock()
+                .contains_key(&uri_string)
         );
     }
 

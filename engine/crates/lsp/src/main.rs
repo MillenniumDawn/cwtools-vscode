@@ -818,6 +818,7 @@ impl LanguageServer for Backend {
             return;
         }
         if self.is_ignored_uri(&uri) {
+            self.clear_ignored_file_state(&uri);
             {
                 let documents = self.state.documents.lock();
                 if documents.contains_key(&uri) {
