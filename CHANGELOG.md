@@ -85,6 +85,9 @@
 
 #### Engine
 
+* The per-reference localisation check now borrows the ruleset's loc-command set
+  instead of deep-cloning it for every loc-bearing field, so a full-mod run stops
+  paying ~86 allocations and a hash-set build per reference. (#548)
 * Ruleset duplicate types now use the first definition consistently, duplicate
   enums union their members, and built-in variable lookups avoid lowercasing
   already-lowercase names. (#488)

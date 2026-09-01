@@ -1,5 +1,6 @@
 //! `loc`: the standalone localisation lint over a directory of `.yml` files.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use cwtools_driver::RulesInput;
@@ -358,10 +359,11 @@ fn loc_scope_data(game: Option<&str>, rules: Option<&Path>) -> Option<LocScopeDa
             rules.display()
         );
     }
+    let registry = build_scope_registry_arc(&ruleset, Some(game));
     Some(LocScopeData {
         game: Some(game),
-        terminal_commands: ruleset.localisation_commands.iter().cloned().collect(),
-        registry: build_scope_registry_arc(&ruleset, Some(game)),
+        terminal_commands: Cow::Owned(ruleset.localisation_commands),
+        registry,
         ..Default::default()
     })
 }
