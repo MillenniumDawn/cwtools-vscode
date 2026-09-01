@@ -911,6 +911,7 @@ mod tests {
         use cwtools_game::scope_engine::ScopeId;
         use cwtools_game::scope_engine::ScopeLink;
         use cwtools_game::scope_registry::{ScopeDefOwned, ScopeRegistry};
+        use std::borrow::Cow;
         use std::sync::Arc;
 
         let mut reg = ScopeRegistry::default();
@@ -941,7 +942,7 @@ mod tests {
         let data = LocScopeData {
             game: Some(Game::Hoi4),
             registry: Some(Arc::new(reg)),
-            terminal_commands: ["getname"].into_iter().map(String::from).collect(),
+            terminal_commands: Cow::Owned(["getname"].into_iter().map(String::from).collect()),
             question_mark_variable: true,
             parameter_variables: true,
             scripted_variables: Some(&is_known_var),

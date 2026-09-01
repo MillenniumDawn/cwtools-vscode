@@ -226,7 +226,7 @@ fn check_loc_key(
         let has_scripted_gui = type_index.is_some_and(|ti| !ti.scripted_gui_index.is_empty());
         let data = cwtools_localization::LocScopeData {
             game,
-            terminal_commands: ctx.ruleset.localisation_commands.iter().cloned().collect(),
+            terminal_commands: std::borrow::Cow::Borrowed(&ctx.ruleset.localisation_commands),
             registry: scope_context.map(|c| c.registry.clone()),
             scripted_variables: var_index.is_some().then_some(lookup),
             scripted_locs: has_scripted_loc.then_some(loc_lookup),

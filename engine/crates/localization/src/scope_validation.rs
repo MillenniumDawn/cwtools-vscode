@@ -11,6 +11,7 @@ use cwtools_game::constants::Game as EngineGame;
 use cwtools_game::scope_engine::{SCOPE_ANY, ScopeContext, ScopeId, ScopeResult};
 use cwtools_game::scope_registry::ScopeRegistry;
 use rustc_hash::FxHashSet;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -75,7 +76,11 @@ pub struct LocScopeData<'a> {
     /// If this is empty every unknown command is accepted (fully lenient).
     /// If non-empty, any unknown final segment not in this list will produce
     /// a `ChainEndsInScope` diagnostic.
-    pub terminal_commands: FxHashSet<String>,
+    ///
+    /// Borrow the ruleset's own set where one is alive (the per-reference check
+    /// in `validate` builds this struct tens of thousands of times a run); own it
+    /// where the ruleset is not, as in the standalone `loc` lint.
+    pub terminal_commands: Cow<'a, FxHashSet<String>>,
     /// Whether `?variable` syntax is accepted (HOI4 / Stellaris).
     pub question_mark_variable: bool,
     /// Whether `parameter:xxx` references are accepted.
@@ -103,7 +108,7 @@ impl Default for LocScopeData<'_> {
     fn default() -> Self {
         Self {
             game: None,
-            terminal_commands: FxHashSet::default(),
+            terminal_commands: Cow::Owned(FxHashSet::default()),
             question_mark_variable: true,
             parameter_variables: true,
             registry: None,
@@ -149,7 +154,7 @@ pub fn validate_loc_commands(
     let mut diags = Vec::new();
 
     // `terminal_commands` is already lowercased (from RuleSet). Use directly.
-    let terminal_set = &data.terminal_commands;
+    let terminal_set: &FxHashSet<String> = &data.terminal_commands;
 
     // Validate legacy [command] strings (single-segment, dot-split internally)
     for cmd in &entry.commands {
@@ -571,10 +576,12 @@ mod tests {
         }
         LocScopeData {
             game: Some(EngineGame::Hoi4),
-            terminal_commands: ["GetName", "GetNameDef", "GetAdjective", "GetLeader"]
-                .into_iter()
-                .map(|s| s.to_ascii_lowercase())
-                .collect(),
+            terminal_commands: Cow::Owned(
+                ["GetName", "GetNameDef", "GetAdjective", "GetLeader"]
+                    .into_iter()
+                    .map(|s| s.to_ascii_lowercase())
+                    .collect(),
+            ),
             question_mark_variable: true,
             parameter_variables: true,
             registry: Some(Arc::new(reg)),
@@ -800,7 +807,7 @@ mod tests {
         }]]);
         let data = LocScopeData {
             game: Some(EngineGame::Hoi4),
-            terminal_commands: FxHashSet::default(),
+            terminal_commands: Cow::Owned(FxHashSet::default()),
             question_mark_variable: true,
             parameter_variables: true,
             registry: None, // no registry

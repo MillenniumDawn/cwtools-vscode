@@ -89,6 +89,9 @@
 
 #### Engine
 
+* The per-reference localisation check now borrows the ruleset's loc-command set
+  instead of deep-cloning it for every loc-bearing field, so a full-mod run stops
+  paying ~86 allocations and a hash-set build per reference. (#548)
 * LSP: document symbols, selection ranges, references, rename, inlay hints,
   document links, code actions, code lens, goto and formatting now resolve
   positions against one line index per request instead of rescanning the file
