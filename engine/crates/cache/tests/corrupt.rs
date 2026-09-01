@@ -6,11 +6,11 @@
 //! down over a cache file that a crash, a full disk, or a stale format left behind.
 
 use cwtools_cache::cache_format::{
-    CachedChild, CachedFile, CachedLeaf, CachedOperator, CachedValue,
+    CachedChild, CachedFile, CachedLeaf, CachedLeafValue, CachedOperator, CachedValue,
 };
 use cwtools_cache::convert;
 use cwtools_cache::io::{self, CacheError};
-use cwtools_parser::parser::parse_string;
+use cwtools_parser::parser::{MAX_CLAUSE_DEPTH, parse_string};
 use cwtools_string_table::string_table::StringTable;
 use std::path::Path;
 
@@ -95,6 +95,40 @@ fn is_bad_header(e: &CacheError) -> bool {
             ..
         }
     )
+}
+
+fn is_rejection(e: &CacheError, expected: &str) -> bool {
+    matches!(e, CacheError::Deserialize { msg, .. } if *msg == expected)
+}
+
+/// Serialize a hand-built archive and take it through the load path. The header
+/// and rkyv stages accept anything well-formed, so what comes back is the arena
+/// rebuild's own verdict.
+fn convert_cached(cached: &CachedFile) -> Result<(), CacheError> {
+    let tmp = tempfile::NamedTempFile::with_suffix(".cwb").unwrap();
+    io::serialize_to_file(cached, tmp.path()).unwrap();
+
+    let table = StringTable::new();
+    io::with_archived_file(tmp.path(), |archived| {
+        convert::archived_to_arena(archived, &table).map(|_| ())
+    })
+    .expect("header and rkyv access should succeed")
+}
+
+fn leaf(value: CachedValue) -> CachedLeaf {
+    CachedLeaf {
+        key: "a".to_string(),
+        value,
+        op: CachedOperator::Equals,
+        start_line: 1,
+        start_col: 0,
+        end_line: 1,
+        end_col: 5,
+        value_start_line: 1,
+        value_start_col: 0,
+        value_end_line: 1,
+        value_end_col: 5,
+    }
 }
 
 /// Sanity anchor: the unmodified bytes every other test mutates do load.
@@ -334,4 +368,129 @@ fn out_of_bounds_index_inside_a_clause_is_rejected() {
         initial_len,
         "rejected cache must not intern its archived strings"
     );
+}
+
+/// A clause that holds the very leaf it belongs to. Every index is in bounds, so
+/// only the parse-order check stands between it and the recursive walks in
+/// `cwtools_index::collect` / `cwtools_lsp::documentlink`, which would follow it
+/// until the stack ran out and aborted the process.
+#[test]
+fn a_clause_holding_its_own_leaf_is_rejected() {
+    let cached = CachedFile {
+        root_children: vec![CachedChild::Leaf(0)],
+        leaves: vec![leaf(CachedValue::Clause(vec![CachedChild::Leaf(0)]))],
+        leaf_values: vec![],
+        comments: vec![],
+    };
+
+    let err = convert_cached(&cached).unwrap_err();
+    assert!(
+        is_rejection(&err, "cache child index out of parse order"),
+        "got {err:?}"
+    );
+}
+
+/// The parser pushes a leaf only once its clause's children are in the arena, so
+/// a clause child pointing *up* the leaf vector cannot have come from it.
+#[test]
+fn a_forward_reference_inside_a_clause_is_rejected() {
+    let cached = CachedFile {
+        root_children: vec![CachedChild::Leaf(0)],
+        leaves: vec![
+            leaf(CachedValue::Clause(vec![CachedChild::Leaf(1)])),
+            leaf(CachedValue::Int(1)),
+        ],
+        leaf_values: vec![],
+        comments: vec![],
+    };
+
+    let err = convert_cached(&cached).unwrap_err();
+    assert!(
+        is_rejection(&err, "cache child index out of parse order"),
+        "got {err:?}"
+    );
+}
+
+/// Leaves and leaf-values are numbered independently, so a cycle that hops
+/// between the two vectors breaks no index ordering. The depth ceiling is what
+/// catches this one.
+#[test]
+fn a_cycle_across_the_two_vectors_is_rejected() {
+    let cached = CachedFile {
+        root_children: vec![CachedChild::Leaf(0)],
+        leaves: vec![leaf(CachedValue::Clause(vec![CachedChild::LeafValue(0)]))],
+        leaf_values: vec![CachedLeafValue {
+            value: CachedValue::Clause(vec![CachedChild::Leaf(0)]),
+            start_line: 1,
+            start_col: 0,
+            end_line: 1,
+            end_col: 5,
+        }],
+        comments: vec![],
+    };
+
+    let err = convert_cached(&cached).unwrap_err();
+    assert!(
+        is_rejection(&err, "cache clause nesting too deep"),
+        "got {err:?}"
+    );
+}
+
+/// A chain of `depth` nested clauses, the shape `a = { a = { ... } }` parses to:
+/// `leaves[0]` holds a plain value and every leaf above it holds the one below.
+fn clause_chain(depth: u32) -> CachedFile {
+    let mut leaves = vec![leaf(CachedValue::Int(1))];
+    for below in 0..depth {
+        leaves.push(leaf(CachedValue::Clause(vec![CachedChild::Leaf(below)])));
+    }
+    CachedFile {
+        root_children: vec![CachedChild::Leaf(depth)],
+        leaves,
+        leaf_values: vec![],
+        comments: vec![],
+    }
+}
+
+/// The ceiling is one deeper than the parser descends, because a clause it
+/// refuses to descend into is still written out as an empty one. Every index in
+/// a chain runs backwards, so ordering has nothing to object to: without a depth
+/// limit the walkers would recurse the whole way down.
+#[test]
+fn nesting_past_the_parser_ceiling_is_rejected() {
+    let ceiling = MAX_CLAUSE_DEPTH + 1;
+    convert_cached(&clause_chain(ceiling)).expect("the parser's own ceiling must load");
+
+    for depth in [ceiling + 1, 100_000] {
+        let err = convert_cached(&clause_chain(depth)).unwrap_err();
+        assert!(
+            is_rejection(&err, "cache clause nesting too deep"),
+            "depth {depth} gave {err:?}"
+        );
+    }
+}
+
+/// And the other side of that ceiling: whatever the parser writes for a file
+/// nested past its own limit has to load, or a legitimate cache entry starts
+/// coming back as a miss.
+#[test]
+fn the_deepest_file_the_parser_writes_still_loads() {
+    let depth = MAX_CLAUSE_DEPTH as usize + 50;
+    let mut src = String::new();
+    for _ in 0..depth {
+        src.push_str("a = { ");
+    }
+    src.push_str("x = 1");
+    for _ in 0..depth {
+        src.push_str(" }");
+    }
+
+    let table = StringTable::new();
+    let parsed = parse_string(&src, &table);
+    assert!(
+        !parsed.errors.is_empty(),
+        "the parser's depth clamp must have fired"
+    );
+
+    let cached = convert::arena_to_cached(&parsed.arena, &parsed.root_children, &table);
+    convert_cached(&cached).expect("a cache the parser itself wrote must load");
 }
