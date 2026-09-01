@@ -472,25 +472,36 @@ fn nesting_past_the_parser_ceiling_is_rejected() {
 /// And the other side of that ceiling: whatever the parser writes for a file
 /// nested past its own limit has to load, or a legitimate cache entry starts
 /// coming back as a miss.
+///
+/// Both shapes, because they exercise different halves of the check. Keyed
+/// clauses land in the leaf vector, where the parse-order rule means the depth
+/// walk settles them bottom-up one frame at a time; bare clauses land in the
+/// leaf-value vector, which the walk only reaches from the leaf that opens the
+/// chain, so it descends the whole way down and its stack comes to rest one
+/// frame under the cycle guard.
 #[test]
 fn the_deepest_file_the_parser_writes_still_loads() {
     let depth = MAX_CLAUSE_DEPTH as usize + 50;
-    let mut src = String::new();
-    for _ in 0..depth {
-        src.push_str("a = { ");
-    }
-    src.push_str("x = 1");
-    for _ in 0..depth {
-        src.push_str(" }");
-    }
+    for (prefix, open, shape) in [("", "a = { ", "keyed"), ("a = ", "{ ", "bare")] {
+        let mut src = String::from(prefix);
+        for _ in 0..depth {
+            src.push_str(open);
+        }
+        src.push_str("x = 1");
+        for _ in 0..depth {
+            src.push_str(" }");
+        }
 
-    let table = StringTable::new();
-    let parsed = parse_string(&src, &table);
-    assert!(
-        !parsed.errors.is_empty(),
-        "the parser's depth clamp must have fired"
-    );
+        let table = StringTable::new();
+        let parsed = parse_string(&src, &table);
+        assert!(
+            !parsed.errors.is_empty(),
+            "{shape}: the parser's depth clamp must have fired"
+        );
 
-    let cached = convert::arena_to_cached(&parsed.arena, &parsed.root_children, &table);
-    convert_cached(&cached).expect("a cache the parser itself wrote must load");
+        let cached = convert::arena_to_cached(&parsed.arena, &parsed.root_children, &table);
+        convert_cached(&cached).unwrap_or_else(|e| {
+            panic!("{shape}: a cache the parser itself wrote must load: {e:?}")
+        });
+    }
 }
