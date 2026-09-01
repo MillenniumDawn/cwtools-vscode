@@ -46,6 +46,8 @@ export interface CwtoolsApi {
 	rulesCacheRoot(): string | undefined;
 	/** The status bar item's current text, once activation has created it. */
 	serverStatusText(): string | undefined;
+	/** This module's deactivate(), which no VS Code API lets a test call. */
+	deactivate(): Thenable<void> | undefined;
 }
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
@@ -184,5 +186,15 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverOutputChannel: () => defaultClient?.outputChannel,
 		rulesCacheRoot: () => rulesCacheRoot,
 		serverStatusText: () => statusText?.(),
+		deactivate,
 	};
+}
+
+// VS Code awaits a thenable returned from deactivate(), but it does not await
+// the disposal of context.subscriptions, so returning stop() here is what lets
+// the LSP shutdown/exit handshake finish and the server exit on its own rather
+// than dying with the extension host. (#502)
+export function deactivate(): Thenable<void> | undefined {
+	// stop() throws unless the client is Running, same as restart()'s stop half.
+	return defaultClient?.isRunning() ? defaultClient.stop() : undefined;
 }
