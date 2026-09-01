@@ -95,6 +95,9 @@
 * Parse caches now preserve existing entries when `settings.sig` cannot be read,
   returning the read error instead of treating it as an invalidation miss. (#495)
 * Corrupt parse caches are bounds-checked before their strings are interned. (#491)
+* Parse cache loads also reject a clause that references itself or nests deeper
+  than the parser goes, so a hand-built `.cwb` can no longer send the recursive
+  AST walks into an unwinding-free stack overflow. (#540)
 * LSP: closing an ignored file no longer deadlocks the server or leaves stale
   type, localisation, and watched-file indexes behind. (#469)
 * Type-instance indexing releases interned node keys before recursive skip-root

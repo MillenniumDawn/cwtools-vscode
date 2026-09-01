@@ -3,7 +3,16 @@ use crate::io::CacheError;
 use cwtools_parser::ast::{
     Arena, Child, Comment, Leaf, LeafValue, Operator, ParseError, SourcePos, SourceRange, Value,
 };
+use cwtools_parser::parser::MAX_CLAUSE_DEPTH;
 use cwtools_string_table::string_table::{StringResolver, StringTable, StringTokens};
+
+/// Deepest clause nesting an archive the parser wrote can hold: the
+/// [`MAX_CLAUSE_DEPTH`] levels it descends into, plus the empty clause it leaves
+/// behind in place of the one it refuses.
+const MAX_CACHED_CLAUSE_DEPTH: u32 = MAX_CLAUSE_DEPTH + 1;
+
+/// Depth of a node the walk has not settled yet.
+const UNRESOLVED_DEPTH: u32 = u32::MAX;
 
 /// Convert an arena AST (with StringTable IDs) into a self-contained CachedFile.
 pub fn arena_to_cached(
@@ -57,15 +66,18 @@ pub fn cached_errors_to_parse(cached: CachedErrors) -> Vec<ParseError> {
 /// then re-walk the nodes drawing the resulting tokens in the same order. The
 /// token assignment is identical to per-string interning.
 ///
-/// The archived child references are bounds-checked before any strings are
-/// collected or interned (see [`validate_archived_child_bounds`]); a corrupted
-/// or truncated cache yields a [`CacheError`] so the caller's miss/re-parse
-/// fallback engages rather than a panic deep inside a downstream consumer.
+/// The archived child references are checked before any strings are collected
+/// or interned: in range (see [`validate_archived_child_bounds`]) and nested no
+/// deeper than the parser goes (see [`validate_archived_clause_depth`]). A
+/// corrupted or hand-built cache yields a [`CacheError`] so the caller's
+/// miss/re-parse fallback engages rather than a panic or a stack overflow deep
+/// inside a downstream consumer.
 pub fn archived_to_arena(
     cached: &ArchivedCachedFile,
     string_table: &StringTable,
 ) -> Result<(Arena, Vec<Child>), CacheError> {
     validate_archived_child_bounds(cached)?;
+    validate_archived_clause_depth(cached)?;
 
     let mut to_intern: Vec<&str> = Vec::new();
     for l in cached.leaves.iter() {
@@ -127,13 +139,21 @@ pub fn archived_to_arena(
     Ok((arena, root))
 }
 
-/// Reject a cache whose child references fall outside the archived arena vectors.
-/// Downstream consumers index `arena.leaves[i]` (see [`Arena::keyed_clause`])
-/// with no bounds checks, so a corrupted/truncated cache would panic far from
-/// the load site. This runs once at the load boundary before string interning;
-/// every child list is visited exactly once (`root` plus each node's
-/// `ArchivedCachedValue::Clause` children). Indices are never followed, so a corrupt
-/// self-referential index can't loop.
+/// Reject a cache whose child references fall outside the archived arena vectors
+/// or run backwards through them. Downstream consumers index `arena.leaves[i]`
+/// (see [`Arena::keyed_clause`]) with no bounds checks, so a corrupted/truncated
+/// cache would panic far from the load site. This runs once at the load boundary
+/// before string interning; every child list is visited exactly once (`root` plus
+/// each node's `ArchivedCachedValue::Clause` children).
+///
+/// The parser pushes a node only once the children of its clause are in the
+/// arena, so in any archive it wrote a clause child taken from the same vector as
+/// its owner has the lower index. Enforcing that rules out the clause that holds
+/// itself, which the recursive walks in `cwtools_index::collect`,
+/// `cwtools_lsp::documentlink` and `cwtools_validation::position` would follow
+/// forever. It says nothing about a cycle that crosses the two vectors (a leaf
+/// holding a leaf-value that holds the leaf again), which has no ordering to
+/// violate; [`validate_archived_clause_depth`] is what stops that one.
 fn validate_archived_child_bounds(cached: &ArchivedCachedFile) -> Result<(), CacheError> {
     let leaf_count = cached.leaves.len();
     let leaf_value_count = cached.leaf_values.len();
@@ -144,18 +164,40 @@ fn validate_archived_child_bounds(cached: &ArchivedCachedFile) -> Result<(), Cac
         leaf_count,
         leaf_value_count,
         comment_count,
+        ClauseOwner::Root,
     )?;
-    for leaf in cached.leaves.iter() {
+    for (index, leaf) in cached.leaves.iter().enumerate() {
         if let ArchivedCachedValue::Clause(children) = &leaf.value {
-            check_archived_child_list(children, leaf_count, leaf_value_count, comment_count)?;
+            check_archived_child_list(
+                children,
+                leaf_count,
+                leaf_value_count,
+                comment_count,
+                ClauseOwner::Leaf(index),
+            )?;
         }
     }
-    for leaf_value in cached.leaf_values.iter() {
+    for (index, leaf_value) in cached.leaf_values.iter().enumerate() {
         if let ArchivedCachedValue::Clause(children) = &leaf_value.value {
-            check_archived_child_list(children, leaf_count, leaf_value_count, comment_count)?;
+            check_archived_child_list(
+                children,
+                leaf_count,
+                leaf_value_count,
+                comment_count,
+                ClauseOwner::LeafValue(index),
+            )?;
         }
     }
     Ok(())
+}
+
+/// Which arena slot owns the clause a child list belongs to, so the post-order
+/// index ordering can be applied to the children drawn from the same vector.
+#[derive(Clone, Copy)]
+enum ClauseOwner {
+    Root,
+    Leaf(usize),
+    LeafValue(usize),
 }
 
 fn check_archived_child_list(
@@ -163,21 +205,177 @@ fn check_archived_child_list(
     leaf_count: usize,
     leaf_value_count: usize,
     comment_count: usize,
+    owner: ClauseOwner,
 ) -> Result<(), CacheError> {
     for child in children.iter() {
-        let in_bounds = match child {
-            ArchivedCachedChild::Leaf(i) => (i.to_native() as usize) < leaf_count,
-            ArchivedCachedChild::LeafValue(i) => (i.to_native() as usize) < leaf_value_count,
-            ArchivedCachedChild::Comment(i) => (i.to_native() as usize) < comment_count,
+        let (index, count, owner_index) = match child {
+            ArchivedCachedChild::Leaf(i) => (
+                i.to_native() as usize,
+                leaf_count,
+                match owner {
+                    ClauseOwner::Leaf(index) => Some(index),
+                    ClauseOwner::Root | ClauseOwner::LeafValue(_) => None,
+                },
+            ),
+            ArchivedCachedChild::LeafValue(i) => (
+                i.to_native() as usize,
+                leaf_value_count,
+                match owner {
+                    ClauseOwner::LeafValue(index) => Some(index),
+                    ClauseOwner::Root | ClauseOwner::Leaf(_) => None,
+                },
+            ),
+            ArchivedCachedChild::Comment(i) => (i.to_native() as usize, comment_count, None),
         };
-        if !in_bounds {
-            return Err(CacheError::Deserialize {
-                msg: "cache child index out of bounds",
-                source: None,
-            });
+        if index >= count {
+            return Err(cache_rejected("cache child index out of bounds"));
+        }
+        if owner_index.is_some_and(|slot| index >= slot) {
+            return Err(cache_rejected("cache child index out of parse order"));
         }
     }
     Ok(())
+}
+
+/// Reject a cache whose clause nesting runs deeper than the parser could have
+/// written it, and with it the reference cycles [`validate_archived_child_bounds`]
+/// cannot see. The recursive AST walks downstream carry no depth counter of their
+/// own, and a stack overflow aborts the process rather than unwinding, so a
+/// hand-built chain 100k clauses deep has to die here instead of taking the
+/// server down on a cache hit.
+///
+/// One pass over the arena: each node's depth is settled once and memoized, so a
+/// subtree referenced from several places costs a single visit. A cycle never
+/// settles, so it grows the walk stack until the limit turns it away.
+fn validate_archived_clause_depth(cached: &ArchivedCachedFile) -> Result<(), CacheError> {
+    let mut depths = ClauseDepths {
+        leaves: vec![UNRESOLVED_DEPTH; cached.leaves.len()],
+        leaf_values: vec![UNRESOLVED_DEPTH; cached.leaf_values.len()],
+    };
+    let mut stack: Vec<DepthFrame> = Vec::new();
+    let nodes = (0..cached.leaves.len())
+        .map(ArchivedNode::Leaf)
+        .chain((0..cached.leaf_values.len()).map(ArchivedNode::LeafValue));
+
+    for node in nodes {
+        if depths.get(node) != UNRESOLVED_DEPTH {
+            continue;
+        }
+        stack.push(DepthFrame::new(node));
+        while let Some(mut frame) = stack.pop() {
+            let children = archived_clause_children(cached, frame.node);
+            let Some(child) = children.and_then(|list| list.get(frame.next_child)) else {
+                let depth = match children {
+                    Some(_) => frame.deepest_child + 1,
+                    None => 0,
+                };
+                if depth > MAX_CACHED_CLAUSE_DEPTH {
+                    return Err(cache_rejected("cache clause nesting too deep"));
+                }
+                depths.set(frame.node, depth);
+                if let Some(owner) = stack.last_mut() {
+                    owner.deepest_child = owner.deepest_child.max(depth);
+                }
+                continue;
+            };
+            frame.next_child += 1;
+            let child_node = match child {
+                ArchivedCachedChild::Leaf(i) => ArchivedNode::Leaf(i.to_native() as usize),
+                ArchivedCachedChild::LeafValue(i) => {
+                    ArchivedNode::LeafValue(i.to_native() as usize)
+                }
+                ArchivedCachedChild::Comment(_) => {
+                    stack.push(frame);
+                    continue;
+                }
+            };
+            let settled = depths.get(child_node);
+            // A child with no clause of its own adds no nesting and needs no frame.
+            let descend = settled == UNRESOLVED_DEPTH
+                && archived_clause_children(cached, child_node).is_some();
+            if settled != UNRESOLVED_DEPTH {
+                frame.deepest_child = frame.deepest_child.max(settled);
+            }
+            stack.push(frame);
+            if descend {
+                stack.push(DepthFrame::new(child_node));
+                if stack.len() > MAX_CACHED_CLAUSE_DEPTH as usize {
+                    return Err(cache_rejected("cache clause nesting too deep"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A node of the archived arena that can own a clause.
+#[derive(Clone, Copy)]
+enum ArchivedNode {
+    Leaf(usize),
+    LeafValue(usize),
+}
+
+/// Settled clause depth per node, indexed the way the archive is. Every index
+/// reaching this has been through [`validate_archived_child_bounds`].
+struct ClauseDepths {
+    leaves: Vec<u32>,
+    leaf_values: Vec<u32>,
+}
+
+impl ClauseDepths {
+    fn get(&self, node: ArchivedNode) -> u32 {
+        match node {
+            ArchivedNode::Leaf(i) => self.leaves[i],
+            ArchivedNode::LeafValue(i) => self.leaf_values[i],
+        }
+    }
+
+    fn set(&mut self, node: ArchivedNode, depth: u32) {
+        match node {
+            ArchivedNode::Leaf(i) => self.leaves[i] = depth,
+            ArchivedNode::LeafValue(i) => self.leaf_values[i] = depth,
+        }
+    }
+}
+
+/// One open node of the depth walk: how far through its children it is, and the
+/// deepest child settled so far.
+struct DepthFrame {
+    node: ArchivedNode,
+    next_child: usize,
+    deepest_child: u32,
+}
+
+impl DepthFrame {
+    fn new(node: ArchivedNode) -> Self {
+        Self {
+            node,
+            next_child: 0,
+            deepest_child: 0,
+        }
+    }
+}
+
+fn archived_clause_children(
+    cached: &ArchivedCachedFile,
+    node: ArchivedNode,
+) -> Option<&rkyv::vec::ArchivedVec<ArchivedCachedChild>> {
+    let value = match node {
+        ArchivedNode::Leaf(i) => &cached.leaves[i].value,
+        ArchivedNode::LeafValue(i) => &cached.leaf_values[i].value,
+    };
+    match value {
+        ArchivedCachedValue::Clause(children) => Some(children),
+        ArchivedCachedValue::String(_)
+        | ArchivedCachedValue::QString(_)
+        | ArchivedCachedValue::Float(_)
+        | ArchivedCachedValue::Int(_)
+        | ArchivedCachedValue::Bool(_) => None,
+    }
+}
+
+fn cache_rejected(msg: &'static str) -> CacheError {
+    CacheError::Deserialize { msg, source: None }
 }
 
 fn collect_archived_value_strings<'a>(v: &'a ArchivedCachedValue, out: &mut Vec<&'a str>) {
