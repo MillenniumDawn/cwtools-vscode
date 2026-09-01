@@ -2,6 +2,10 @@
 
 #### Extension
 
+* The extension exports `deactivate()`, which stops the language client. VS Code
+  awaits that, unlike the disposal of `context.subscriptions`, so the LSP
+  shutdown/exit handshake now finishes and the server exits on its own instead
+  of being left to die with the extension host. (#502)
 * A daily and manually dispatchable nightly workflow publishes smoke-tested
   Linux, macOS, Windows, and universal VSIX prereleases from `main` without
   using Marketplace or Open VSX credentials.
@@ -88,12 +92,20 @@
 * The per-reference localisation check now borrows the ruleset's loc-command set
   instead of deep-cloning it for every loc-bearing field, so a full-mod run stops
   paying ~86 allocations and a hash-set build per reference. (#548)
+* LSP: document symbols, selection ranges, references, rename, inlay hints,
+  document links, code actions, code lens, goto and formatting now resolve
+  positions against one line index per request instead of rescanning the file
+  for every node. Opening a large file no longer wedges the server: an outline
+  over 100k clauses used to be quadratic in the file size. (#541)
 * Ruleset duplicate types now use the first definition consistently, duplicate
   enums union their members, and built-in variable lookups avoid lowercasing
   already-lowercase names. (#488)
 * Parse caches now preserve existing entries when `settings.sig` cannot be read,
   returning the read error instead of treating it as an invalidation miss. (#495)
 * Corrupt parse caches are bounds-checked before their strings are interned. (#491)
+* Parse cache loads also reject a clause that references itself or nests deeper
+  than the parser goes, so a hand-built `.cwb` can no longer send the recursive
+  AST walks into an unwinding-free stack overflow. (#540)
 * LSP: closing an ignored file no longer deadlocks the server or leaves stale
   type, localisation, and watched-file indexes behind. (#469)
 * Type-instance indexing releases interned node keys before recursive skip-root

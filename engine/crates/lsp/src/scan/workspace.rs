@@ -16,9 +16,10 @@ use crate::command_progress::{
     CancelFlag, CommandProgress, Phase, PhaseTicker, ScanOutcome, cancel_flag_of, phase_percentage,
     start_phase,
 };
+use crate::lines::DocLines;
 use crate::paths::{logical_path_from_uri, path_to_uri, uri_to_path_str};
 use crate::validate::{
-    DocLines, make_prepared, parse_error_to_diagnostic, validate_parsed_with_indexes,
+    make_prepared, parse_error_to_diagnostic, validate_parsed_with_indexes,
     validation_error_to_diagnostic,
 };
 

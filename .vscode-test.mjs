@@ -64,15 +64,20 @@ const unitFiles = [
 	"./dist/extension/bin/client/test/host/graphTypes.test.js",
 	"./dist/extension/bin/client/test/host/fileExplorer.test.js",
 ];
+// Stops the language client to prove deactivate() completes the LSP shutdown
+// handshake (#502), so it goes last in every label that lists it.
+const deactivateFile =
+	"./dist/extension/bin/client/test/host/deactivate.test.js";
+const smokeFiles = [
+	...unitFiles,
+	"./dist/extension/bin/client/test/host/extension.test.js",
+	deactivateFile,
+];
 // Live-settings fixture is isolated: its .vscode/settings.json pins
 // cwtools.rules_folder to .cwtools-test-rules, which replaces the ruleset.
 // Running it in the shared sample workspace would pollute the host/unit
 // suites (they expect the generic paradox ruleset), so it lives in
 // extension/test/workspaces/live with its own workspace.
-const smokeFiles = [
-	...unitFiles,
-	"./dist/extension/bin/client/test/host/extension.test.js",
-];
 const liveFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/liveSettings.test.js",
@@ -89,6 +94,7 @@ const hostFiles = [
 	"./dist/extension/bin/client/test/host/hover.test.js",
 	"./dist/extension/bin/client/test/host/completion.test.js",
 	"./dist/extension/bin/client/test/host/codeLens.test.js",
+	deactivateFile,
 ];
 
 // CI already renders the graph webview in software (#210's logs show the GPU

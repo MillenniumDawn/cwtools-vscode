@@ -3,6 +3,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{CodeLens, CodeLensParams, Command, Location, Url};
 
 use crate::Backend;
+use crate::lines::{DocLines, index_snapshots};
 use crate::navigation::dedup_locations;
 use crate::paths::parse_uri;
 
@@ -41,11 +42,14 @@ impl Backend {
         }
 
         let text = self.file_text_for(&uri).await;
+        let lines = text
+            .as_deref()
+            .map(|text| DocLines::new(text, self.position_encoding()));
         let lenses = instances
             .into_iter()
             .map(|(type_name, instance_name, location)| CodeLens {
-                range: self.source_range_with_text(
-                    text.as_deref(),
+                range: self.source_range_with_lines(
+                    lines.as_ref(),
                     location.line.saturating_sub(1),
                     location.col as u32,
                     "",
@@ -100,9 +104,13 @@ impl Backend {
             return Ok(lens);
         };
 
+        let encoding = self.position_encoding();
         let text = self.file_text_for(data.uri).await;
-        let range = self.source_range_with_text(
-            text.as_deref(),
+        let lines = text
+            .as_deref()
+            .map(|text| DocLines::new(text, encoding.clone()));
+        let range = self.source_range_with_lines(
+            lines.as_ref(),
             location.line.saturating_sub(1),
             location.col as u32,
             "",
@@ -113,13 +121,14 @@ impl Backend {
         }
         let site_uris: Vec<String> = sites.iter().map(|(uri, _)| uri.clone()).collect();
         let texts = self.file_text_snapshots_for(&site_uris).await;
+        let indexed = index_snapshots(&texts, &encoding);
         let locations: Vec<Location> = self
             .resolve_value_sites(&sites, data.instance_name, &texts)
             .into_iter()
             .map(|(file_uri, line, column, _)| Location {
                 uri: parse_uri(&file_uri, &uri),
-                range: self.source_range_with_text(
-                    texts.get(&file_uri).map(|snapshot| snapshot.text.as_str()),
+                range: self.source_range_with_lines(
+                    indexed.get(file_uri.as_str()),
                     line,
                     column,
                     data.instance_name,

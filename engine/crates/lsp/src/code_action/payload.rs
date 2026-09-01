@@ -5,7 +5,7 @@ use tower_lsp::lsp_types::*;
 use cwtools_parser::ast::{SourcePos, SourceRange};
 use cwtools_parser::fix::{SpanEdit, SuggestedFix, plan_file_edits};
 
-use crate::paths::source_position_to_lsp;
+use crate::lines::DocLines;
 
 /// Key under which a fix payload lives in `Diagnostic.data`. Namespaced so a
 /// codeAction request only treats data it put there as a fix (future diagnostic
@@ -121,28 +121,13 @@ pub(crate) fn fixable_span_edits(diag: &Diagnostic) -> Vec<(String, SpanEdit)> {
 }
 
 /// Convert a parser [`SourceRange`] (1-based line, 0-based char col) into an LSP
-/// `Range`, using `text` and the negotiated `encoding` — the same
-/// `source_position_to_lsp` conversion hover/rename/navigation use, and the one
-/// the diagnostic this fix hangs off went through (`validate::DocLines`), so the
-/// edit lands on exactly the columns the squiggle covers.
-pub(crate) fn source_range_to_lsp(
-    range: SourceRange,
-    text: &str,
-    encoding: &PositionEncodingKind,
-) -> Range {
+/// `Range` against the file's line index — the same conversion
+/// hover/rename/navigation use, and the one the diagnostic this fix hangs off
+/// went through, so the edit lands on exactly the columns the squiggle covers.
+pub(crate) fn source_range_to_lsp(range: SourceRange, lines: &DocLines) -> Range {
     Range {
-        start: source_position_to_lsp(
-            text,
-            range.start.line.saturating_sub(1),
-            range.start.col as u32,
-            encoding,
-        ),
-        end: source_position_to_lsp(
-            text,
-            range.end.line.saturating_sub(1),
-            range.end.col as u32,
-            encoding,
-        ),
+        start: lines.position(range.start.line.saturating_sub(1), range.start.col as u32),
+        end: lines.position(range.end.line.saturating_sub(1), range.end.col as u32),
     }
 }
 
@@ -156,6 +141,7 @@ pub(super) fn code_actions_from_diagnostics(
     text: &str,
     encoding: &PositionEncodingKind,
 ) -> Vec<CodeActionOrCommand> {
+    let lines = DocLines::new(text, encoding.clone());
     let mut actions = Vec::new();
     for diag in diagnostics {
         let Some(payload) = diag.data.as_ref().and_then(fix_from_data) else {
@@ -170,7 +156,7 @@ pub(super) fn code_actions_from_diagnostics(
             .edits
             .iter()
             .map(|e| TextEdit {
-                range: source_range_to_lsp(e.range, text, encoding),
+                range: source_range_to_lsp(e.range, &lines),
                 new_text: e.replacement.clone(),
             })
             .collect();
@@ -250,10 +236,11 @@ pub(super) fn fix_all_action(
         .filter(|(i, _)| fixable.contains(i) && !skipped.contains(i))
         .map(|(_, d)| d.clone())
         .collect();
+    let lines = DocLines::new(text, encoding.clone());
     let text_edits: Vec<TextEdit> = kept
         .iter()
         .map(|e| TextEdit {
-            range: source_range_to_lsp(e.range, text, encoding),
+            range: source_range_to_lsp(e.range, &lines),
             new_text: e.replacement.clone(),
         })
         .collect();
@@ -424,7 +411,7 @@ mod tests {
             end: Some((1, 17)),
             related: Vec::new(),
         };
-        let lines = crate::validate::DocLines::new(text, PositionEncodingKind::UTF16);
+        let lines = DocLines::new(text, PositionEncodingKind::UTF16);
         let diag = crate::validate::validation_error_to_diagnostic(&err, &lines);
         assert_eq!(
             diag.range,

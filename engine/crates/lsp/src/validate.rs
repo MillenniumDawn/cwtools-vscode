@@ -12,9 +12,8 @@ use cwtools_validation::{
     InlineScripts, Prepared, ValidationError, validate_prepared, validate_prepared_tracking_uses,
 };
 
-use crate::paths::{
-    encoded_position_len, logical_path_from_uri, source_column_to_lsp, uri_to_path_str,
-};
+use crate::lines::DocLines;
+use crate::paths::{logical_path_from_uri, uri_to_path_str};
 use crate::state::LocDocumentCache;
 use crate::{Backend, LocTextMap};
 
@@ -332,127 +331,6 @@ pub(crate) fn validate_parsed_with_indexes(
         diagnostics.push(validation_error_to_diagnostic(err, lines));
     }
     (diagnostics, used)
-}
-
-/// A document's lines plus the negotiated position encoding: everything the
-/// diagnostic builders need to place a squiggle. The parser reports 1-based
-/// lines and 0-based CHAR columns, but the client reads columns in the encoding
-/// negotiated at `initialize`, so every published position goes through
-/// [`source_column_to_lsp`] — the same conversion hover, rename, and the
-/// code-action fix edits use. Publishing the raw column instead put the
-/// diagnostic and its own quick fix on different spans of any line holding a
-/// non-BMP character.
-///
-/// Lines are resolved once per file: `source_position_to_lsp` re-scans the whole
-/// text per call, which the keystroke path can't afford at 100 diagnostics.
-pub(crate) struct DocLines<'a> {
-    lines: Vec<&'a str>,
-    encoding: PositionEncodingKind,
-}
-
-impl<'a> DocLines<'a> {
-    pub(crate) fn new(text: &'a str, encoding: PositionEncodingKind) -> Self {
-        Self {
-            lines: text.lines().collect(),
-            encoding,
-        }
-    }
-
-    /// No document text in hand (the workspace scan's non-open files, ruleset
-    /// load errors): positions keep the parser's raw char column and the
-    /// squiggle stays one character wide. The encoding is never consulted
-    /// without a line to convert against.
-    pub(crate) fn none() -> Self {
-        Self {
-            lines: Vec::new(),
-            encoding: PositionEncodingKind::UTF16,
-        }
-    }
-
-    /// LSP position for a parser position (0-based `line`, 0-based char `col`).
-    fn position(&self, line: u32, col: u32) -> Position {
-        let character = self
-            .lines
-            .get(line as usize)
-            .map_or(col, |l| source_column_to_lsp(l, col, &self.encoding));
-        Position { line, character }
-    }
-
-    /// Whether any document text is held, i.e. whether positions can be resolved
-    /// against real lines. False for the workspace scan and the ruleset load.
-    fn has_text(&self) -> bool {
-        !self.lines.is_empty()
-    }
-
-    /// LSP position for a parser range end (0-based `line`, 0-based char `col`),
-    /// walked back over whitespace to the last content character.
-    ///
-    /// The parser records a node's end as the cursor after the node *and* the
-    /// whitespace behind it, so a raw end sits on the start of the next token and
-    /// published verbatim bleeds onto the following line (#107). Floors at
-    /// `start`, so the range cannot invert.
-    fn clamped_end_position(&self, line: u32, col: u32, start: Position) -> Position {
-        let (mut line, mut col) = (line, col);
-        loop {
-            let text = self.lines.get(line as usize).copied().unwrap_or("");
-            // Chars up to and including the last non-whitespace one in the first
-            // `col`, counted in a single pass — this runs per diagnostic, so the
-            // old collect-then-trim allocated a String per squiggle.
-            let mut content_end = 0;
-            for (i, c) in text.chars().take(col as usize).enumerate() {
-                if !c.is_whitespace() {
-                    content_end = i as u32 + 1;
-                }
-            }
-            if content_end > 0 {
-                col = content_end;
-                break;
-            }
-            let Some(prev) = line.checked_sub(1) else {
-                col = 0;
-                break;
-            };
-            line = prev;
-            col = self
-                .lines
-                .get(line as usize)
-                .map_or(0, |l| l.chars().count() as u32);
-        }
-
-        let end = self.position(line, col);
-        if (end.line, end.character) < (start.line, start.character) {
-            start
-        } else {
-            end
-        }
-    }
-
-    /// Range for a secondary span, given the emit site's 1-based line, 0-based
-    /// char column and exclusive end. Applies the same whole-line fallback the
-    /// primary squiggle uses when there's no document text to walk the end back
-    /// through.
-    fn related_range(&self, line: u32, col: u16, end: (u32, u16)) -> Range {
-        let line = line.saturating_sub(1);
-        let start = self.position(line, col as u32);
-        let end = if self.has_text() {
-            self.clamped_end_position(end.0.saturating_sub(1), end.1 as u32, start)
-        } else {
-            self.end_position(line, start.character)
-        };
-        Range { start, end }
-    }
-
-    /// End position for a diagnostic whose start is at encoded column `start`:
-    /// the end of that line's content, but always at least one past `start` so
-    /// the range is never empty. With no line info, a single-character span.
-    fn end_position(&self, line: u32, start: u32) -> Position {
-        let character = self
-            .lines
-            .get(line as usize)
-            .map_or(0, |l| encoded_position_len(l.trim_end(), &self.encoding))
-            .max(start + 1);
-        Position { line, character }
-    }
 }
 
 /// Codes whose diagnostics carry an LSP tag. DEPRECATED strikes the span

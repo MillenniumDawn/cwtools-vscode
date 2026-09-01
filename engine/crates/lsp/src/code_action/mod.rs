@@ -5,9 +5,8 @@
 //! [`fix_to_data`], called from `validate.rs`) because the AST span is only in
 //! scope there — a diagnostic's start position alone can't reconstruct it. The
 //! client round-trips `data` back on a codeAction request, where the raw source
-//! range is converted into an LSP range with the document text and the
-//! negotiated position encoding (the same `source_position_to_lsp` helper
-//! hover/rename use) and wrapped into a `TextEdit`.
+//! range is converted into an LSP range against the file's line index (the same
+//! `lines::DocLines` hover/rename use) and wrapped into a `TextEdit`.
 //!
 //! The payload stores ranges in the parser convention (1-based line, 0-based
 //! char column) verbatim; the LSP conversion is deferred to the handler, the one

@@ -22,9 +22,7 @@
 //! gates each kind on its setting and returns nothing when both are off.
 
 use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::{
-    InlayHint, InlayHintLabel, InlayHintParams, Position, PositionEncodingKind, Range,
-};
+use tower_lsp::lsp_types::{InlayHint, InlayHintLabel, InlayHintParams, Position, Range};
 
 use cwtools_game::scope_engine::{SCOPE_ANY, SCOPE_INVALID, ScopeId};
 use cwtools_game::scope_registry::ScopeRegistry;
@@ -32,8 +30,8 @@ use cwtools_info::TypeIndex;
 use cwtools_parser::ast::{Arena, Child, ParsedFile, SourceRange, Value};
 use cwtools_string_table::string_table::StringTable;
 
+use crate::lines::DocLines;
 use crate::navigation::{value_col_in_line, value_start_after_eq};
-use crate::paths::source_position_to_lsp;
 use crate::{Backend, LocTextMap};
 
 /// Upper bound on hints returned for one request, so a huge visible range (or a
@@ -68,9 +66,12 @@ impl Backend {
         let Some(text) = self.file_text_for(&uri).await else {
             return Ok(None);
         };
-        let encoding = self.state.config.read().position_encoding.clone();
+        let encoding = self.position_encoding();
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
+        // One line index for both hint kinds: each hint is placed against its
+        // own leaf's line, so resolving them per hint rescans the file per leaf.
+        let lines = DocLines::new(&text, encoding);
         let loc_hints = if loc_titles {
             // Lock order: info_service -> loc_text (documents already released).
             let info = self.state.info_service.read();
@@ -78,11 +79,10 @@ impl Backend {
             loc_title_hints(
                 &ast,
                 &self.state.string_table,
-                &text,
+                &lines,
                 params.range,
                 &info.type_index,
                 &loc_text,
-                &encoding,
             )
         } else {
             Vec::new()
@@ -122,13 +122,8 @@ impl Backend {
                     end_line,
                     MAX_HINTS,
                 );
-                scope_hints = scope_hints_from_transitions(
-                    &transitions,
-                    &text,
-                    registry,
-                    &encoding,
-                    params.range,
-                );
+                scope_hints =
+                    scope_hints_from_transitions(&transitions, &lines, registry, params.range);
             }
         }
         let hints = merge_hints(loc_hints, scope_hints);
@@ -163,47 +158,38 @@ fn merge_hints(mut first: Vec<InlayHint>, mut second: Vec<InlayHint>) -> Vec<Inl
 pub(crate) fn loc_title_hints(
     file: &ParsedFile,
     table: &StringTable,
-    text: &str,
+    lines: &DocLines,
     range: Range,
     type_index: &TypeIndex,
     loc_text: &LocTextMap,
-    encoding: &PositionEncodingKind,
 ) -> Vec<InlayHint> {
     let mut hints = Vec::new();
-    // Split the source into lines ONCE per request. Positioning needs the leaf's
-    // own line; doing `text.lines().nth(line0)` per candidate leaf would be
-    // O(bytes-before-line) redone for every leaf. Index into this slice instead.
-    let lines: Vec<&str> = text.lines().collect();
     let cx = Ctx {
         arena: &file.arena,
         table,
-        text,
-        lines: &lines,
+        lines,
         range,
         type_index,
         loc_text,
-        encoding,
     };
     collect_hints(&file.root_children, &cx, &mut hints);
     hints
 }
 
 /// Immutable per-request context, so the recursive walk passes one reference
-/// instead of nine positional args.
+/// instead of seven positional args.
 struct Ctx<'a> {
     arena: &'a Arena,
     table: &'a StringTable,
-    text: &'a str,
-    lines: &'a [&'a str],
+    lines: &'a DocLines<'a>,
     range: Range,
     type_index: &'a TypeIndex,
     loc_text: &'a LocTextMap,
-    encoding: &'a PositionEncodingKind,
 }
 
 impl Ctx<'_> {
     fn line(&self, line0: u32) -> &str {
-        self.lines.get(line0 as usize).copied().unwrap_or("")
+        self.lines.line(line0)
     }
 
     fn line_in_range(&self, line0: u32) -> bool {
@@ -285,12 +271,10 @@ fn collect_hints(children: &[Child], cx: &Ctx<'_>, out: &mut Vec<InlayHint>) {
 /// Convert validator scope transitions into rendered inlay hints.
 fn scope_hints_from_transitions(
     transitions: &[cwtools_validation::position::ScopeTransition],
-    text: &str,
+    lines: &DocLines,
     registry: &ScopeRegistry,
-    encoding: &PositionEncodingKind,
     request_range: Range,
 ) -> Vec<InlayHint> {
-    let lines: Vec<&str> = text.lines().collect();
     transitions
         .iter()
         .filter_map(|transition| {
@@ -299,9 +283,7 @@ fn scope_hints_from_transitions(
                 transition.ambient,
                 transition.resolved,
                 transition.range,
-                &lines,
-                text,
-                encoding,
+                lines,
             )?;
             position_in_half_open_range(hint.position, request_range).then_some(hint)
         })
@@ -328,9 +310,7 @@ pub(crate) fn scope_hint_for_block(
     ambient_scope: ScopeId,
     resolved_scope: ScopeId,
     range: SourceRange,
-    lines: &[&str],
-    text: &str,
-    encoding: &PositionEncodingKind,
+    lines: &DocLines,
 ) -> Option<InlayHint> {
     if resolved_scope == ambient_scope {
         return None;
@@ -340,14 +320,14 @@ pub(crate) fn scope_hint_for_block(
     }
     let line0 = range.start.line.saturating_sub(1);
     let key_col = range.start.col as u32;
-    let line = lines.get(line0 as usize).copied().unwrap_or("");
+    let line = lines.line(line0);
     // Place the hint at the first non-whitespace column after the `=` — that's
     // where `{` lives when the key was `key = { … }`. Falling back to the
     // column right after `=` (e.g. an unparsable line) still anchors the hint
     // visibly near the block.
     let after_eq = value_start_after_eq(line, key_col).unwrap_or(key_col);
     let col = skip_whitespace(line, after_eq).unwrap_or(after_eq);
-    let position = source_position_to_lsp(text, line0, col, encoding);
+    let position = lines.position(line0, col);
     let label = format!("\u{2192} {}", registry.name_of(resolved_scope));
     Some(InlayHint {
         position,
@@ -422,7 +402,7 @@ fn hint_for_value(value: &Value, cx: &Ctx<'_>, line0: u32, anchor: Anchor) -> Op
             };
             let col = value_col_in_line(line, name, from)?;
             let end_col = col + name.chars().count() as u32;
-            let position = source_position_to_lsp(cx.text, line0, end_col, cx.encoding);
+            let position = cx.lines.position(line0, end_col);
 
             Some(InlayHint {
                 position,
@@ -452,6 +432,8 @@ fn truncate_title(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower_lsp::lsp_types::PositionEncodingKind;
+
     use cwtools_game::scope_registry::ScopeDefOwned;
     use cwtools_info::{SourceLocation, TypeInstance};
     use cwtools_localization::Lang;
@@ -493,15 +475,8 @@ mod tests {
         let table = StringTable::new();
         let ast = cwtools_parser::parser::parse_string(text, &table);
         let range = Range::new(Position::new(0, 0), Position::new(1000, 0));
-        loc_title_hints(
-            &ast,
-            &table,
-            text,
-            range,
-            idx,
-            loc,
-            &PositionEncodingKind::UTF16,
-        )
+        let lines = DocLines::new(text, PositionEncodingKind::UTF16);
+        loc_title_hints(&ast, &table, &lines, range, idx, loc)
     }
 
     fn label(h: &InlayHint) -> &str {
@@ -587,15 +562,8 @@ mod tests {
         let ast = cwtools_parser::parser::parse_string(text, &table);
         // Restrict the range to the middle line only.
         let range = Range::new(Position::new(1, 0), Position::new(1, 100));
-        let hints = loc_title_hints(
-            &ast,
-            &table,
-            text,
-            range,
-            &idx,
-            &loc,
-            &PositionEncodingKind::UTF16,
-        );
+        let lines = DocLines::new(text, PositionEncodingKind::UTF16);
+        let hints = loc_title_hints(&ast, &table, &lines, range, &idx, &loc);
         assert_eq!(hints.len(), 1, "only the in-range leaf is hinted");
         assert_eq!(hints[0].position.line, 1);
     }
@@ -660,14 +628,13 @@ mod tests {
             panic!("expected a keyed clause");
         };
         let (registry, country, character) = scope_registry_for_tests();
+        let lines = DocLines::new(text, PositionEncodingKind::UTF16);
         let hint = scope_hint_for_block(
             &registry,
             country,
             character,
             ast.arena.leaves[idx as usize].pos,
-            &["owner = {", "}"],
-            text,
-            &PositionEncodingKind::UTF16,
+            &lines,
         )
         .expect("different real scopes produce a hint");
         assert_eq!(label(&hint), "→ character");
@@ -688,17 +655,9 @@ mod tests {
         };
         let (registry, country, character) = scope_registry_for_tests();
         let range = ast.arena.leaves[idx as usize].pos;
-        let lines = &["owner = { }"];
-        let hint = scope_hint_for_block(
-            &registry,
-            country,
-            character,
-            range,
-            lines,
-            text,
-            &PositionEncodingKind::UTF16,
-        )
-        .expect("scope hint should render");
+        let lines = DocLines::new(text, PositionEncodingKind::UTF16);
+        let hint = scope_hint_for_block(&registry, country, character, range, &lines)
+            .expect("scope hint should render");
         assert!(position_in_half_open_range(
             hint.position,
             Range::new(Position::new(0, 0), Position::new(0, 9),)
@@ -719,42 +678,10 @@ mod tests {
         };
         let (registry, country, character) = scope_registry_for_tests();
         let leaf = &ast.arena.leaves[idx as usize];
-        assert!(
-            scope_hint_for_block(
-                &registry,
-                country,
-                country,
-                leaf.pos,
-                &[],
-                text,
-                &PositionEncodingKind::UTF16,
-            )
-            .is_none()
-        );
-        assert!(
-            scope_hint_for_block(
-                &registry,
-                country,
-                SCOPE_ANY,
-                leaf.pos,
-                &[],
-                text,
-                &PositionEncodingKind::UTF16,
-            )
-            .is_none()
-        );
-        assert!(
-            scope_hint_for_block(
-                &registry,
-                country,
-                ScopeId(999),
-                leaf.pos,
-                &[],
-                text,
-                &PositionEncodingKind::UTF16,
-            )
-            .is_none()
-        );
+        let lines = DocLines::new(text, PositionEncodingKind::UTF16);
+        assert!(scope_hint_for_block(&registry, country, country, leaf.pos, &lines).is_none());
+        assert!(scope_hint_for_block(&registry, country, SCOPE_ANY, leaf.pos, &lines).is_none());
+        assert!(scope_hint_for_block(&registry, country, ScopeId(999), leaf.pos, &lines).is_none());
         assert!(is_real_scope(&registry, character));
     }
 

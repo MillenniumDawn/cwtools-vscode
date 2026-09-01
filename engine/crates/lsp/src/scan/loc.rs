@@ -5,8 +5,9 @@ use tower_lsp::lsp_types::*;
 
 use cwtools_localization::Lang;
 
+use crate::lines::DocLines;
 use crate::paths::{loc_display_text, path_to_uri};
-use crate::validate::{DocLines, loc_diag_to_validation_error, validation_error_to_diagnostic};
+use crate::validate::{loc_diag_to_validation_error, validation_error_to_diagnostic};
 use crate::{Backend, LocLocationMap, LocTextMap};
 
 use super::{VanillaLoc, stat_signature_for};

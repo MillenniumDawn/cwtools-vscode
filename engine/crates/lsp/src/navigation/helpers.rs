@@ -4,10 +4,9 @@ use tower_lsp::lsp_types::*;
 
 use cwtools_string_table::string_table::StringTable;
 
-use crate::paths::{
-    current_token_range_with_encoding, encoded_position_len, source_position_to_lsp,
-};
-use crate::{Backend, FileTextSnapshot};
+use crate::Backend;
+use crate::lines::DocLines;
+use crate::paths::{current_token_range_with_encoding, encoded_position_len};
 
 pub(crate) async fn resolve_file_ref(
     roots: &[std::path::PathBuf],
@@ -700,8 +699,7 @@ pub(crate) fn build_doc_symbols(
     children: &[cwtools_parser::ast::Child],
     arena: &cwtools_parser::ast::Arena,
     table: &StringTable,
-    text: &str,
-    encoding: &PositionEncodingKind,
+    lines: &DocLines,
 ) -> Vec<DocumentSymbol> {
     let mut syms: Vec<DocumentSymbol> = Vec::new();
     for child in children {
@@ -712,31 +710,17 @@ pub(crate) fn build_doc_symbols(
         if key.is_empty() {
             continue;
         }
-        let child_syms = build_doc_symbols(kc.children, arena, table, text, encoding);
+        let child_syms = build_doc_symbols(kc.children, arena, table, lines);
         let (name, detail) = match identity_value(kc.children, arena, table) {
             Some(v) if v != key => (v, Some(key.clone())),
             _ => (key.clone(), None),
         };
-        let start = source_position_to_lsp(
-            text,
-            kc.pos.start.line.saturating_sub(1),
-            kc.pos.start.col as u32,
-            encoding,
-        );
-        let end = source_position_to_lsp(
-            text,
-            kc.pos.end.line.saturating_sub(1),
-            kc.pos.end.col as u32,
-            encoding,
-        );
-        let selection_end = source_range_in_text(
-            text,
-            kc.pos.start.line.saturating_sub(1),
-            kc.pos.start.col as u32,
-            &key,
-            encoding,
-        )
-        .end;
+        let start_line = kc.pos.start.line.saturating_sub(1);
+        let start = lines.position(start_line, kc.pos.start.col as u32);
+        let end = lines.position(kc.pos.end.line.saturating_sub(1), kc.pos.end.col as u32);
+        let selection_end = lines
+            .token_range(start_line, kc.pos.start.col as u32, &key)
+            .end;
         #[allow(deprecated)]
         syms.push(DocumentSymbol {
             name,
@@ -788,26 +772,27 @@ pub(crate) async fn locations_at(
     let pairs: Vec<_> = pairs.into_iter().collect();
     let uris: Vec<String> = pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
     let texts = backend.file_text_snapshots_for(&uris).await;
-    locations_at_with_texts(backend, pairs, name, fallback, &texts)
+    let indexed = crate::lines::index_snapshots(&texts, &backend.position_encoding());
+    locations_at_with_lines(backend, pairs, name, fallback, &indexed)
 }
 
-pub(crate) fn locations_at_with_texts(
+pub(crate) fn locations_at_with_lines(
     backend: &Backend,
     pairs: impl IntoIterator<Item = (String, cwtools_info::SourceLocation)>,
     name: &str,
     fallback: &Url,
-    texts: &HashMap<String, FileTextSnapshot>,
+    indexed: &HashMap<&str, DocLines>,
 ) -> Vec<Location> {
     pairs
         .into_iter()
         .map(|(file_uri, loc)| {
-            backend.source_location_with_text(
+            backend.source_location_with_lines(
                 &file_uri,
                 loc.line.saturating_sub(1),
                 loc.col as u32,
                 name,
                 fallback,
-                texts.get(&file_uri).map(|snapshot| snapshot.text.as_str()),
+                indexed.get(file_uri.as_str()),
             )
         })
         .collect()
@@ -828,19 +813,6 @@ pub(crate) fn prepare_rename_range(
             line: start.line,
             character: start.character + encoded_position_len(instance_name, encoding),
         },
-    }
-}
-
-pub(crate) fn source_range_in_text(
-    text: &str,
-    line: u32,
-    column: u32,
-    token: &str,
-    encoding: &PositionEncodingKind,
-) -> Range {
-    Range {
-        start: source_position_to_lsp(text, line, column, encoding),
-        end: source_position_to_lsp(text, line, column + token.chars().count() as u32, encoding),
     }
 }
 
@@ -1390,16 +1362,32 @@ mod tests {
         );
     }
 
+    /// The outline of every clause in a file, positioned against one line index.
+    ///
+    /// VS Code asks for `documentSymbol` the moment a file opens, so a 100k
+    /// clause file has to convert 100k starts, ends and key spans. Resolving
+    /// each of those with `text.lines().nth(line)` is O(bytes-before-line) per
+    /// node and the request never comes back (#541); the whole point of
+    /// [`DocLines`] is that this test finishes in well under a second.
     #[test]
-    fn source_ranges_use_negotiated_encoding() {
-        let text = "😀 name𐐀";
+    fn document_symbols_of_a_huge_file_stay_linear() {
+        const CLAUSES: usize = 100_000;
+        let text = "a={}\n".repeat(CLAUSES);
+        let table = StringTable::new();
+        let ast = cwtools_parser::parser::parse_string(&text, &table);
+        let lines = DocLines::new(&text, PositionEncodingKind::UTF16);
+        let syms = build_doc_symbols(&ast.root_children, &ast.arena, &table, &lines);
+        assert_eq!(syms.len(), CLAUSES);
+        // Every clause sits on its own line, named by its key, with the
+        // selection range covering just that key.
+        assert_eq!(syms[0].name, "a");
+        assert_eq!(syms[0].range.start, Position::new(0, 0));
+        assert_eq!(syms[0].selection_range.end, Position::new(0, 1));
+        let last = &syms[CLAUSES - 1];
+        assert_eq!(last.range.start, Position::new(CLAUSES as u32 - 1, 0));
         assert_eq!(
-            source_range_in_text(text, 0, 2, "name𐐀", &PositionEncodingKind::UTF16),
-            Range::new(Position::new(0, 3), Position::new(0, 9))
-        );
-        assert_eq!(
-            source_range_in_text(text, 0, 2, "name𐐀", &PositionEncodingKind::UTF32),
-            Range::new(Position::new(0, 2), Position::new(0, 7))
+            last.selection_range.end,
+            Position::new(CLAUSES as u32 - 1, 1)
         );
     }
 
