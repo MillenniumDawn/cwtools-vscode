@@ -1,0 +1,137 @@
+"on":
+  schedule:
+    - cron: "30 4 * * *"
+  workflow_dispatch:
+
+name: Nightly
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  build-server:
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            bin: cwtools-server
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            bin: cwtools-server
+          - os: windows-latest
+            platform: win-x64
+            target: x86_64-pc-windows-msvc
+            bin: cwtools-server.exe
+          - os: macos-latest
+            platform: osx-arm64
+            target: aarch64-apple-darwin
+            bin: cwtools-server
+          - os: macos-latest
+            platform: osx-x64
+            target: x86_64-apple-darwin
+            bin: cwtools-server
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      ROOT: engine/target
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Setup Rust
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache Rust build
+        # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: engine
+      - name: Build server
+        working-directory: engine
+        run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
+      - name: Upload binary
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: server-${{ matrix.platform }}
+          path: >-
+            ${{ env.ROOT }}/${{ matrix.target }}/release/${{ matrix.bin }}
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  publish:
+    if: github.ref == 'refs/heads/main'
+    needs: build-server
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download server binaries
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: server-*
+          path: artifacts/server
+      - uses: ./.github/actions/setup-node-npm
+      - name: Assemble extension
+        run: npm run compile
+      - name: Stage binaries into dist/extension
+        run: >-
+          python3 scripts/stage_release_binaries.py
+          artifacts/server dist/extension
+      - name: Resolve nightly identity
+        id: version
+        run: >-
+          python3 scripts/build/build.py nightly-identity >> "$GITHUB_OUTPUT"
+      - name: Package prerelease VSIX files
+        env:
+          CWTOOLS_BUILD_VERSION: ${{ steps.version.outputs.version }}
+          CWTOOLS_RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: npm run build -- package-prebuilt
+      - name: Smoke test VSIX files
+        run: |
+          python3 scripts/smoke_test_vsix.py artifacts/vsix \
+            linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
+      - name: Upload nightly artifact
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: cwtools-nightly-${{ steps.version.outputs.tag }}
+          path: artifacts/vsix/*.vsix
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          notes="Automated test build from commit $GITHUB_SHA.
+
+          Pick the VSIX for your platform, or use the universal VSIX.
+          This build is not published to the VS Code Marketplace or Open VSX."
+          gh release create "$TAG" artifacts/vsix/*.vsix \
+            --target "$GITHUB_SHA" \
+            --title "Nightly $VERSION" \
+            --notes "$notes" \
+            --prerelease

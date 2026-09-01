@@ -187,6 +187,8 @@ def assemble_client() -> None:
 
 def package_vsix(target: str | None = None) -> list[str]:
     args = ["--no-install", "vsce", "package", "--no-dependencies"]
+    if resolve_version()["preRelease"]:
+        args.append("--pre-release")
     if target:
         args.extend(["--target", target])
     run("npx", args, cwd=EXTENSION_DIST_ROOT)
@@ -259,16 +261,37 @@ def package_all_vsixes() -> list[str]:
 
 
 def resolve_version_from(env: Mapping[str, str], changelog: str) -> dict[str, Any]:
-    flag = env.get("TAG_RELEASE", "")
-    is_tag_release = flag.lower() in {"1", "true"}
-    tag = env.get("GITHUB_REF_NAME", "").strip() if is_tag_release else ""
-    if not tag:
-        tag = f"v{top_changelog_version(changelog)}"
-    version = tag.removeprefix("v")
+    version = env.get("CWTOOLS_BUILD_VERSION", "").strip()
+    if version:
+        tag = env.get("CWTOOLS_RELEASE_TAG", "").strip() or f"v{version}"
+    else:
+        flag = env.get("TAG_RELEASE", "")
+        is_tag_release = flag.lower() in {"1", "true"}
+        tag = env.get("GITHUB_REF_NAME", "").strip() if is_tag_release else ""
+        if not tag:
+            tag = f"v{top_changelog_version(changelog)}"
+        version = tag.removeprefix("v")
     return {
         "version": version,
         "tag": tag,
-        "preRelease": "-" in version,
+        "preRelease": "-" in tag,
+    }
+
+
+def nightly_identity_from(env: Mapping[str, str], changelog: str) -> dict[str, str]:
+    try:
+        run_number = int(env.get("GITHUB_RUN_NUMBER", "").strip())
+        run_attempt = int(env.get("GITHUB_RUN_ATTEMPT", "1").strip())
+        base = top_changelog_version(changelog).split("-", maxsplit=1)[0]
+        major, minor, patch = (int(part) for part in base.split("."))
+    except ValueError as error:
+        raise RuntimeError("nightly version inputs must be integers") from error
+    if run_number < 1 or run_attempt < 1:
+        raise RuntimeError("nightly run number and attempt must be positive")
+    version = f"{major}.{minor}.{patch + run_number}"
+    return {
+        "version": version,
+        "tag": f"v{version}-nightly.{run_attempt}",
     }
 
 
@@ -345,6 +368,12 @@ def publish_to_marketplace(vsixes: list[str]) -> None:
         "npx",
         ["--no-install", "vsce", "publish", "--pat", token, "--packagePath", *vsixes],
     )
+
+
+def cmd_nightly_identity() -> None:
+    identity = nightly_identity_from(os.environ, read_changelog())
+    print(f"version={identity['version']}")
+    print(f"tag={identity['tag']}")
 
 
 def cmd_compile() -> None:
@@ -439,6 +468,7 @@ def cmd_release() -> None:
 
 
 COMMANDS: dict[str, Callable[[], object]] = {
+    "nightly-identity": cmd_nightly_identity,
     "compile": cmd_compile,
     "quick": cmd_quick,
     "package": cmd_package,

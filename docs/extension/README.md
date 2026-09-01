@@ -11,6 +11,16 @@ This is a fork of [cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vs
 This extension is still in preview, it may not work, it may stop working at any time.
 **Make backups of your mod files.**
 
+## Nightly builds
+
+The [nightly prereleases](https://github.com/MillenniumDawn/cwtools-vscode/releases)
+contain builds from `main` for Linux, macOS, and Windows. Download the VSIX for
+that platform, then run **Extensions: Install from VSIX...** in VS Code. The
+universal VSIX carries every server binary.
+
+Nightlies do not publish to the VS Code Marketplace or Open VSX. They are test
+builds and may break.
+
 ## Supported games
 
 * Stellaris
