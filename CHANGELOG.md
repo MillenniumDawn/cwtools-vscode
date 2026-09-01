@@ -2,6 +2,10 @@
 
 #### Extension
 
+* The extension exports `deactivate()`, which stops the language client. VS Code
+  awaits that, unlike the disposal of `context.subscriptions`, so the LSP
+  shutdown handshake now finishes before the host goes away and leaves the
+  server's caches half-written. (#502)
 * A daily and manually dispatchable nightly workflow publishes smoke-tested
   Linux, macOS, Windows, and universal VSIX prereleases from `main` without
   using Marketplace or Open VSX credentials.

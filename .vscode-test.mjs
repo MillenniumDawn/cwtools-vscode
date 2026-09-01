@@ -69,9 +69,14 @@ const unitFiles = [
 // Running it in the shared sample workspace would pollute the host/unit
 // suites (they expect the generic paradox ruleset), so it lives in
 // extension/test/workspaces/live with its own workspace.
+// Stops the language client to prove deactivate() completes the LSP shutdown
+// handshake (#502), so it goes last in every label that lists it.
+const deactivateFile =
+	"./dist/extension/bin/client/test/host/deactivate.test.js";
 const smokeFiles = [
 	...unitFiles,
 	"./dist/extension/bin/client/test/host/extension.test.js",
+	deactivateFile,
 ];
 const liveFiles = [
 	abortDiagnostics,
@@ -89,6 +94,7 @@ const hostFiles = [
 	"./dist/extension/bin/client/test/host/hover.test.js",
 	"./dist/extension/bin/client/test/host/completion.test.js",
 	"./dist/extension/bin/client/test/host/codeLens.test.js",
+	deactivateFile,
 ];
 
 // CI already renders the graph webview in software (#210's logs show the GPU
