@@ -12,9 +12,8 @@ use cwtools_parser::fix::SpanEdit;
 use cwtools_parser::format::{format_edits, format_range_edits};
 
 use crate::command_progress::CommandProgress;
-use crate::paths::{
-    lsp_pos_to_source_in_text, path_to_uri, source_position_to_lsp, uri_to_path_str,
-};
+use crate::lines::DocLines;
+use crate::paths::{lsp_pos_to_source_in_text, path_to_uri, uri_to_path_str};
 use crate::{Backend, FileTextSnapshot};
 
 enum DiscoverOutcome {
@@ -233,10 +232,9 @@ impl Backend {
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
         for (uri, text, edits) in &changed {
             let Ok(url) = Url::parse(uri) else { continue };
-            let mapped: Vec<TextEdit> = edits
-                .iter()
-                .map(|e| span_to_text_edit(e, text, &encoding))
-                .collect();
+            let lines = DocLines::new(text, encoding.clone());
+            let mapped: Vec<TextEdit> =
+                edits.iter().map(|e| span_to_text_edit(e, &lines)).collect();
             changes.insert(url, mapped);
         }
         let files_changed = changes.len();
@@ -272,7 +270,10 @@ impl Backend {
         msg
     }
 
-    fn position_encoding(&self) -> PositionEncodingKind {
+    /// The encoding the client negotiated at `initialize`, which every published
+    /// column is measured in. Cloned out of the config so no handler holds the
+    /// read guard while it converts positions.
+    pub(crate) fn position_encoding(&self) -> PositionEncodingKind {
         self.state.config.read().position_encoding.clone()
     }
 }
@@ -285,29 +286,21 @@ fn text_edits_or_none(
     if edits.is_empty() {
         None
     } else {
-        Some(
-            edits
-                .iter()
-                .map(|e| span_to_text_edit(e, text, encoding))
-                .collect(),
-        )
+        let lines = DocLines::new(text, encoding.clone());
+        Some(edits.iter().map(|e| span_to_text_edit(e, &lines)).collect())
     }
 }
 
-fn span_to_text_edit(edit: &SpanEdit, text: &str, encoding: &PositionEncodingKind) -> TextEdit {
+fn span_to_text_edit(edit: &SpanEdit, lines: &DocLines) -> TextEdit {
     TextEdit {
         range: Range {
-            start: source_position_to_lsp(
-                text,
+            start: lines.position(
                 edit.range.start.line.saturating_sub(1),
                 u32::from(edit.range.start.col),
-                encoding,
             ),
-            end: source_position_to_lsp(
-                text,
+            end: lines.position(
                 edit.range.end.line.saturating_sub(1),
                 u32::from(edit.range.end.col),
-                encoding,
             ),
         },
         new_text: edit.replacement.clone(),

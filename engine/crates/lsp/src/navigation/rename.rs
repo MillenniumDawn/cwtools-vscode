@@ -3,12 +3,13 @@ use std::collections::{HashMap, HashSet};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
+use crate::lines::{DocLines, index_snapshots};
 use crate::paths::{logical_path_from_uri, lsp_pos_to_source_in_text};
 use crate::{Backend, FileTextSnapshot};
 
 use super::{
     at_var_at_cursor, code_token_cols_in_line, prepare_rename_range, rename_refused,
-    source_range_in_text, word_at_position,
+    word_at_position,
 };
 use crate::navigation::helpers::{
     code_token_cols_in_line_ignore_case, loc_ref_key_cols_in_line, loc_root,
@@ -27,9 +28,12 @@ impl Backend {
         // `@` script constant first: the sigil marks it unambiguously, and the
         // rule walk can misclassify an `@` read as a type reference.
         let text = self.file_text_for(&uri).await;
-        let position_encoding = self.state.config.read().position_encoding.clone();
-        if let Some(text) = text.as_deref()
-            && let Some((_, range)) = Self::at_var_rename_target(text, pos, &position_encoding)
+        let position_encoding = self.position_encoding();
+        let lines = text
+            .as_deref()
+            .map(|text| DocLines::new(text, position_encoding.clone()));
+        if let (Some(text), Some(lines)) = (text.as_deref(), lines.as_ref())
+            && let Some((_, range)) = Self::at_var_rename_target(text, lines, pos)
         {
             return Ok(Some(PrepareRenameResponse::Range(range)));
         }
@@ -70,19 +74,18 @@ impl Backend {
         &self,
         uri: &str,
         text: &str,
+        lines: &DocLines,
         name: &str,
         new_name: &str,
     ) -> Result<Option<WorkspaceEdit>> {
-        let encoding = self.state.config.read().position_encoding.clone();
         let edits: Vec<TextEdit> = text
             .lines()
             .enumerate()
             .flat_map(|(line0, line)| {
-                let encoding = &encoding;
                 code_token_cols_in_line(line, name)
                     .into_iter()
                     .map(move |col| TextEdit {
-                        range: source_range_in_text(text, line0 as u32, col, name, encoding),
+                        range: lines.token_range(line0 as u32, col, name),
                         new_text: new_name.to_string(),
                     })
             })
@@ -99,12 +102,12 @@ impl Backend {
 
     fn at_var_rename_target(
         text: &str,
+        lines: &DocLines,
         pos: Position,
-        encoding: &PositionEncodingKind,
     ) -> Option<(String, Range)> {
-        let (_, col) = lsp_pos_to_source_in_text(text, pos, encoding);
+        let col = lines.source_column(pos);
         let (name, start_col) = at_var_at_cursor(text, pos.line, col as u32)?;
-        let range = source_range_in_text(text, pos.line, start_col, &name, encoding);
+        let range = lines.token_range(pos.line, start_col, &name);
         Some((name, range))
     }
 
@@ -216,6 +219,7 @@ impl Backend {
             let path = crate::paths::uri_to_path_str(uri);
             let files =
                 cwtools_localization::parse_loc_files(&path, text, None).unwrap_or_default();
+            let lines = DocLines::new(text, encoding.clone());
             for file in files {
                 for entry in file.entries {
                     let lower = entry.key.to_lowercase();
@@ -223,12 +227,12 @@ impl Backend {
                         continue;
                     };
                     let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    let line_text = text.lines().nth(line0 as usize).unwrap_or("");
+                    let line_text = lines.line(line0);
                     let col = line_text
                         .find(&entry.key)
                         .map(|b| line_text[..b].chars().count() as u32)
                         .unwrap_or(0);
-                    let range = source_range_in_text(text, line0, col, &entry.key, &encoding);
+                    let range = lines.token_range(line0, col, &entry.key);
                     by_uri.entry(uri.clone()).or_default().push(TextEdit {
                         range,
                         new_text: new_text.clone(),
@@ -269,11 +273,11 @@ impl Backend {
                 continue;
             };
             let text = &snapshot.text;
+            let lines = DocLines::new(text, encoding.clone());
             for (line0, line) in text.lines().enumerate() {
                 for (key_lower, new_text) in target_to_new.iter() {
                     for col in code_token_cols_in_line_ignore_case(line, key_lower) {
-                        let range =
-                            source_range_in_text(text, line0 as u32, col, key_lower, &encoding);
+                        let range = lines.token_range(line0 as u32, col, key_lower);
                         by_uri.entry(uri.clone()).or_default().push(TextEdit {
                             range,
                             new_text: new_text.clone(),
@@ -301,11 +305,11 @@ impl Backend {
                 continue;
             };
             let text = &snapshot.text;
+            let lines = DocLines::new(text, encoding.clone());
             for (line0, line) in text.lines().enumerate() {
                 for (key_lower, new_text) in target_to_new.iter() {
                     for col in loc_ref_key_cols_in_line(line, key_lower) {
-                        let range =
-                            source_range_in_text(text, line0 as u32, col, key_lower, &encoding);
+                        let range = lines.token_range(line0 as u32, col, key_lower);
                         by_uri.entry(uri.clone()).or_default().push(TextEdit {
                             range,
                             new_text: new_text.clone(),
@@ -405,12 +409,15 @@ impl Backend {
 
         // `@` script constant first: the sigil marks it unambiguously, and the
         // rule walk can misclassify an `@` read as a type reference.
-        let position_encoding = self.state.config.read().position_encoding.clone();
+        let position_encoding = self.position_encoding();
         let source_text = self.file_text_for(&uri).await;
-        if let Some(text) = source_text.as_deref()
-            && let Some((name, _)) = Self::at_var_rename_target(text, pos, &position_encoding)
+        let source_lines = source_text
+            .as_deref()
+            .map(|text| DocLines::new(text, position_encoding));
+        if let (Some(text), Some(lines)) = (source_text.as_deref(), source_lines.as_ref())
+            && let Some((name, _)) = Self::at_var_rename_target(text, lines, pos)
         {
-            return self.rename_at_var(&uri, text, &name, &new_name);
+            return self.rename_at_var(&uri, text, lines, &name, &new_name);
         }
 
         // Loc key rename (with _desc/_tooltip siblings), before TypeRef.
@@ -480,6 +487,7 @@ impl Backend {
 
         // Group text edits by file URI, deduping so overlapping edits (a
         // definition that also classifies as a use site) aren't emitted twice.
+        let indexed = index_snapshots(&texts, &self.position_encoding());
         let mut seen: HashSet<(String, u32, u32)> = HashSet::new();
         let mut by_uri: HashMap<String, Vec<TextEdit>> = HashMap::new();
         for (file_uri, line0, col) in edits {
@@ -487,8 +495,8 @@ impl Backend {
                 continue;
             }
             let edit = TextEdit {
-                range: self.source_range_with_text(
-                    texts.get(&file_uri).map(|snapshot| snapshot.text.as_str()),
+                range: self.source_range_with_lines(
+                    indexed.get(file_uri.as_str()),
                     line0,
                     col,
                     &instance_name,

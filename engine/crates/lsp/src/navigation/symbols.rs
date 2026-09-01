@@ -88,6 +88,7 @@ impl Backend {
 
         let text_uris: Vec<String> = cands.iter().map(|c| c.file_uri.clone()).collect();
         let texts = self.file_text_snapshots_for(&text_uris).await;
+        let indexed = crate::lines::index_snapshots(&texts, &self.position_encoding());
         let mut symbols: Vec<SymbolInformation> = Vec::with_capacity(cands.len());
         // No request document to fall back to for a workspace-wide query.
         let fallback = Url::parse("file:///unknown").expect("static URI");
@@ -95,15 +96,13 @@ impl Backend {
             symbols.push(make_symbol(
                 c.name.clone(),
                 c.kind,
-                self.source_location_with_text(
+                self.source_location_with_lines(
                     &c.file_uri,
                     c.line0,
                     c.col,
                     &c.name,
                     &fallback,
-                    texts
-                        .get(&c.file_uri)
-                        .map(|snapshot| snapshot.text.as_str()),
+                    indexed.get(c.file_uri.as_str()),
                 ),
                 c.container,
             ));

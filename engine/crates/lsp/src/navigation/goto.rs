@@ -4,6 +4,7 @@ use tower_lsp::lsp_types::*;
 use cwtools_info::PositionElement;
 use cwtools_info::ReferenceHint;
 
+use crate::lines::DocLines;
 use crate::paths::{logical_path_from_uri, lsp_pos_to_source_in_text, parse_uri};
 use crate::{Backend, RuleCursorInfo};
 
@@ -42,14 +43,17 @@ impl Backend {
             map.get(key.as_str()).cloned()
         }?;
         let text = self.file_text_for(target.0.as_ref()).await;
+        let lines = text
+            .as_deref()
+            .map(|text| DocLines::new(text, self.position_encoding()));
         Some(GotoDefinitionResponse::Array(vec![
-            self.source_location_with_text(
+            self.source_location_with_lines(
                 target.0.as_ref(),
                 target.1,
                 0,
                 &key,
                 fallback,
-                text.as_deref(),
+                lines.as_ref(),
             ),
         ]))
     }
@@ -113,13 +117,16 @@ impl Backend {
                     };
                     if let Some((file_uri, line)) = target {
                         let text = self.file_text_for(file_uri.as_ref()).await;
-                        vec![self.source_location_with_text(
+                        let lines = text
+                            .as_deref()
+                            .map(|text| DocLines::new(text, self.position_encoding()));
+                        vec![self.source_location_with_lines(
                             file_uri.as_ref(),
                             line,
                             0,
                             &key,
                             fallback,
-                            text.as_deref(),
+                            lines.as_ref(),
                         )]
                     } else {
                         Vec::new()
@@ -269,13 +276,16 @@ impl Backend {
                 Some((line, col, m))
             })
             .unwrap_or((line0, def.col as u32, name));
-        Some(self.source_location_with_text(
+        let lines = text
+            .as_deref()
+            .map(|text| DocLines::new(text, self.position_encoding()));
+        Some(self.source_location_with_lines(
             &target_uri,
             line0,
             col,
             token,
             fallback,
-            text.as_deref(),
+            lines.as_ref(),
         ))
     }
 
