@@ -5,6 +5,7 @@ use tower_lsp::lsp_types::*;
 
 use cwtools_info::PositionElement;
 
+use crate::lines::{DocLines, index_snapshots};
 use crate::navigation::helpers::{code_token_cols_in_line_ignore_case, word_at_position};
 use crate::paths::{
     loc_ref_at_cursor_with_encoding, logical_path_from_uri, lsp_pos_to_source_in_text, parse_uri,
@@ -14,8 +15,8 @@ use cwtools_info::ReferenceHint;
 
 use super::scan_use_sites;
 use super::{
-    dedup_locations, locations_at_with_texts, source_range_in_text, source_range_without_text,
-    value_col_in_line, value_start_after_eq,
+    dedup_locations, locations_at_with_lines, source_range_without_text, value_col_in_line,
+    value_start_after_eq,
 };
 
 impl Backend {
@@ -182,6 +183,7 @@ impl Backend {
             let path = crate::paths::uri_to_path_str(&uri);
             let files =
                 cwtools_localization::parse_loc_files(&path, text, None).unwrap_or_default();
+            let lines = DocLines::new(text, encoding.clone());
             for file in files {
                 for entry in file.entries {
                     let lower = entry.key.to_lowercase();
@@ -189,7 +191,7 @@ impl Backend {
                         continue;
                     }
                     let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    let line_text = text.lines().nth(line0 as usize).unwrap_or("");
+                    let line_text = lines.line(line0);
                     let col = line_text
                         .find(&entry.key)
                         .map(|b| line_text[..b].chars().count() as u32)
@@ -197,9 +199,7 @@ impl Backend {
                     let fallback_url = Url::parse(&uri).unwrap_or_else(|_| fallback.clone());
                     out.push(Location {
                         uri: fallback_url,
-                        range: crate::navigation::helpers::source_range_in_text(
-                            text, line0, col, &entry.key, &encoding,
-                        ),
+                        range: lines.token_range(line0, col, &entry.key),
                     });
                 }
             }
@@ -243,18 +243,13 @@ impl Backend {
             };
             let text = &snapshot.text;
             let fallback_url = Url::parse(&uri).unwrap_or_else(|_| fallback.clone());
+            let lines = DocLines::new(text, encoding.clone());
             for (line0, line) in text.lines().enumerate() {
                 for key_lower in keys.iter() {
                     for col in code_token_cols_in_line_ignore_case(line, key_lower) {
                         out.push(Location {
                             uri: fallback_url.clone(),
-                            range: crate::navigation::helpers::source_range_in_text(
-                                text,
-                                line0 as u32,
-                                col,
-                                key_lower,
-                                &encoding,
-                            ),
+                            range: lines.token_range(line0 as u32, col, key_lower),
                         });
                     }
                 }
@@ -321,15 +316,16 @@ impl Backend {
                 .collect();
             text_uris.extend(sites.iter().map(|(file_uri, _)| file_uri.clone()));
             let texts = self.file_text_snapshots_for(&text_uris).await;
+            let indexed = index_snapshots(&texts, &self.position_encoding());
             let mut all_locs: Vec<Location> =
-                locations_at_with_texts(self, definitions, &instance_name, fallback, &texts);
+                locations_at_with_lines(self, definitions, &instance_name, fallback, &indexed);
             for (file_uri, line0, col, _) in
                 self.resolve_value_sites(&sites, &instance_name, &texts)
             {
                 all_locs.push(Location {
                     uri: parse_uri(&file_uri, fallback),
-                    range: self.source_range_with_text(
-                        texts.get(&file_uri).map(|snapshot| snapshot.text.as_str()),
+                    range: self.source_range_with_lines(
+                        indexed.get(file_uri.as_str()),
                         line0,
                         col,
                         &instance_name,
@@ -366,7 +362,8 @@ impl Backend {
             let text_uris: Vec<String> =
                 pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
             let texts = self.file_text_snapshots_for(&text_uris).await;
-            let all_locs = locations_at_with_texts(self, pairs, &symbol, fallback, &texts);
+            let indexed = index_snapshots(&texts, &self.position_encoding());
+            let all_locs = locations_at_with_lines(self, pairs, &symbol, fallback, &indexed);
             if !all_locs.is_empty() {
                 return Ok(Some(all_locs));
             }
@@ -539,32 +536,38 @@ impl Backend {
         snapshots
     }
 
-    pub(crate) fn source_range_with_text(
+    /// The span `token` covers at (`line`, `column`), resolved against the
+    /// file's line index. `None` when the file's text was never read (a closed
+    /// file the access boundary refused), where the parser's raw column is the
+    /// best answer available.
+    pub(crate) fn source_range_with_lines(
         &self,
-        text: Option<&str>,
+        lines: Option<&DocLines>,
         line: u32,
         column: u32,
         token: &str,
     ) -> Range {
-        let encoding = self.state.config.read().position_encoding.clone();
-        text.map_or_else(
-            || source_range_without_text(line, column, token, &encoding),
-            |text| source_range_in_text(text, line, column, token, &encoding),
+        lines.map_or_else(
+            || {
+                let encoding = self.position_encoding();
+                source_range_without_text(line, column, token, &encoding)
+            },
+            |lines| lines.token_range(line, column, token),
         )
     }
 
-    pub(crate) fn source_location_with_text(
+    pub(crate) fn source_location_with_lines(
         &self,
         uri: &str,
         line: u32,
         column: u32,
         token: &str,
         fallback: &Url,
-        text: Option<&str>,
+        lines: Option<&DocLines>,
     ) -> Location {
         Location {
             uri: parse_uri(uri, fallback),
-            range: self.source_range_with_text(text, line, column, token),
+            range: self.source_range_with_lines(lines, line, column, token),
         }
     }
 }

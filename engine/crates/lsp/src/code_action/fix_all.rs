@@ -60,11 +60,12 @@ fn workspace_edit_changes(
             continue;
         };
         let text = texts.get(&pf.uri).map(String::as_str).unwrap_or("");
+        let lines = crate::lines::DocLines::new(text, encoding.clone());
         let edits: Vec<TextEdit> = pf
             .kept
             .iter()
             .map(|e| TextEdit {
-                range: source_range_to_lsp(e.range, text, encoding),
+                range: source_range_to_lsp(e.range, &lines),
                 new_text: e.replacement.clone(),
             })
             .collect();

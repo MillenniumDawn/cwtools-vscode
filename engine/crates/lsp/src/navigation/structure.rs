@@ -2,12 +2,12 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
 use crate::Backend;
-use crate::paths::{logical_path_from_uri, lsp_pos_to_source_in_text, source_position_to_lsp};
+use crate::lines::DocLines;
+use crate::paths::{logical_path_from_uri, lsp_pos_to_source_in_text};
 
 use super::{
     brace_folding_ranges, brace_pairs, build_doc_symbols, code_token_cols_in_line,
-    comment_and_region_folds, highlight_kind, make_symbol, selection_spans, source_range_in_text,
-    word_at_position,
+    comment_and_region_folds, highlight_kind, make_symbol, selection_spans, word_at_position,
 };
 
 impl Backend {
@@ -39,8 +39,9 @@ impl Backend {
         let Some(text) = self.file_text_for(&uri).await else {
             return Ok(None);
         };
-        let encoding = self.state.config.read().position_encoding.clone();
+        let encoding = self.position_encoding();
         let pairs = brace_pairs(&text);
+        let lines = DocLines::new(&text, encoding.clone());
         // One chain per requested position, in request order (LSP requires the
         // result to line up with `positions`).
         let out: Vec<SelectionRange> = params
@@ -55,8 +56,8 @@ impl Backend {
                 for &((sl, sc), (el, ec)) in spans.iter().rev() {
                     node = Some(SelectionRange {
                         range: Range {
-                            start: source_position_to_lsp(&text, sl, sc, &encoding),
-                            end: source_position_to_lsp(&text, el, ec, &encoding),
+                            start: lines.position(sl, sc),
+                            end: lines.position(el, ec),
                         },
                         parent: node.map(Box::new),
                     });
@@ -105,22 +106,16 @@ impl Backend {
             return Ok(None);
         };
         let symbol = symbol.as_str();
+        let lines = DocLines::new(&text, position_encoding);
         let highlights: Vec<DocumentHighlight> = text
             .lines()
             .enumerate()
             .flat_map(|(line0, line)| {
-                let position_encoding = &position_encoding;
-                let text = &text;
+                let lines = &lines;
                 code_token_cols_in_line(line, symbol)
                     .into_iter()
                     .map(move |col| DocumentHighlight {
-                        range: source_range_in_text(
-                            text,
-                            line0 as u32,
-                            col,
-                            symbol,
-                            position_encoding,
-                        ),
+                        range: lines.token_range(line0 as u32, col, symbol),
                         kind: Some(highlight_kind(line, col, symbol)),
                     })
             })
@@ -155,13 +150,16 @@ impl Backend {
             && let Some(ast) = self.ast_for(&uri)
         {
             let text = self.file_text_for(&uri).await.unwrap_or_default();
-            let position_encoding = self.state.config.read().position_encoding.clone();
+            // The line index is built once here: every clause in the outline
+            // resolves its start, end and key span against it, and rescanning
+            // the text per clause is what made a large file's outline hang
+            // (#541).
+            let lines = DocLines::new(&text, self.position_encoding());
             let syms = build_doc_symbols(
                 &ast.root_children,
                 &ast.arena,
                 &self.state.string_table,
-                &text,
-                &position_encoding,
+                &lines,
             );
             if !syms.is_empty() {
                 return Ok(Some(DocumentSymbolResponse::Nested(syms)));
@@ -185,6 +183,9 @@ impl Backend {
         };
 
         let text = self.file_text_for(&uri).await;
+        let lines = text
+            .as_deref()
+            .map(|text| DocLines::new(text, self.position_encoding()));
 
         // Emit type instances as document symbols (one per named instance),
         // derived from the cross-file index — `FileInfo` no longer keeps a
@@ -197,8 +198,8 @@ impl Backend {
                     SymbolKind::STRUCT,
                     Location {
                         uri: params.text_document.uri.clone(),
-                        range: self.source_range_with_text(
-                            text.as_deref(),
+                        range: self.source_range_with_lines(
+                            lines.as_ref(),
                             loc.line.saturating_sub(1),
                             loc.col as u32,
                             &name,
@@ -216,8 +217,8 @@ impl Backend {
                 SymbolKind::CONSTANT,
                 Location {
                     uri: params.text_document.uri.clone(),
-                    range: self.source_range_with_text(
-                        text.as_deref(),
+                    range: self.source_range_with_lines(
+                        lines.as_ref(),
                         loc.line.saturating_sub(1),
                         loc.col as u32,
                         &name,
@@ -248,7 +249,7 @@ impl Backend {
         if files.iter().all(|f| f.entries.is_empty()) {
             return None;
         }
-        let encoding = self.state.config.read().position_encoding.clone();
+        let lines = DocLines::new(&text, self.position_encoding());
         let hierarchical = self
             .state
             .hierarchical_symbols
@@ -258,14 +259,12 @@ impl Backend {
             for file in &files {
                 for entry in &file.entries {
                     let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    let line_text = text.lines().nth(line0 as usize).unwrap_or("");
+                    let line_text = lines.line(line0);
                     let col = line_text
                         .find(&entry.key)
                         .map(|b| line_text[..b].chars().count() as u32)
                         .unwrap_or(0);
-                    let range = crate::navigation::helpers::source_range_in_text(
-                        &text, line0, col, &entry.key, &encoding,
-                    );
+                    let range = lines.token_range(line0, col, &entry.key);
                     #[allow(deprecated)]
                     syms.push(DocumentSymbol {
                         name: entry.key.clone(),
@@ -289,7 +288,7 @@ impl Backend {
             for file in &files {
                 for entry in &file.entries {
                     let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    let line_text = text.lines().nth(line0 as usize).unwrap_or("");
+                    let line_text = lines.line(line0);
                     let col = line_text
                         .find(&entry.key)
                         .map(|b| line_text[..b].chars().count() as u32)
@@ -299,7 +298,7 @@ impl Backend {
                         SymbolKind::KEY,
                         Location {
                             uri: params.text_document.uri.clone(),
-                            range: self.source_range_with_text(Some(&text), line0, col, &entry.key),
+                            range: lines.token_range(line0, col, &entry.key),
                         },
                         None,
                     ));

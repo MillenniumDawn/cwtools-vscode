@@ -15,8 +15,8 @@ use cwtools_validation::Prepared;
 use cwtools_validation::position::value_rules_for_key;
 
 use crate::Backend;
+use crate::lines::DocLines;
 use crate::navigation::{unquote, value_col_in_line, value_start_after_eq};
-use crate::paths::source_position_to_lsp;
 use crate::semantic::{block_rules_for, node_bodies, valueclause_bodies};
 
 /// Upper bound on emitted links per file, so a pathological file can't turn
@@ -103,15 +103,13 @@ impl Backend {
         // Resolve each candidate's value token span from text and probe the
         // workspace root, then vanilla, for the referenced file.
         let roots = self.search_roots();
-        let lines: Vec<&str> = text.lines().collect();
+        let lines = DocLines::new(&text, encoding);
         let fallback = &params.text_document.uri;
         let mut links = Vec::new();
         for c in candidates.into_iter().take(MAX_LINKS) {
             let value = unquote(&c.raw_value);
             let line0 = c.key_line.saturating_sub(1);
-            let Some(line) = lines.get(line0 as usize) else {
-                continue;
-            };
+            let line = lines.line(line0);
             let Some(from) = value_start_after_eq(line, c.key_col as u32) else {
                 continue;
             };
@@ -125,11 +123,8 @@ impl Backend {
             let Some(target) = crate::access::contained_search_path(&roots, rel).await else {
                 continue;
             };
-            let start = source_position_to_lsp(&text, line0, col, &encoding);
-            let end =
-                source_position_to_lsp(&text, line0, col + value.chars().count() as u32, &encoding);
             links.push(DocumentLink {
-                range: Range { start, end },
+                range: lines.token_range(line0, col, value),
                 target: Some(crate::paths::parse_uri(
                     crate::paths::path_to_uri(&target),
                     fallback,

@@ -25,6 +25,7 @@ mod format;
 mod graph;
 mod hover;
 mod inlay;
+mod lines;
 mod navigation;
 mod paths;
 mod scan;

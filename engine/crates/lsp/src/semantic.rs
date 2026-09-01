@@ -40,7 +40,7 @@
 //!
 //! Columns and lengths are in the NEGOTIATED position encoding (utf-16 by
 //! default, utf-32 where the client asked for it), the same conversion
-//! diagnostics go through in `validate::DocLines`.
+//! diagnostics go through in `lines::DocLines`.
 
 use std::cell::Cell;
 

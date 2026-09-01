@@ -879,7 +879,7 @@ impl Backend {
                 .or_default()
                 .push(crate::validate::rule_parse_error_to_diagnostic(
                     err,
-                    &crate::validate::DocLines::none(),
+                    &crate::lines::DocLines::none(),
                 ));
         }
         let mut to_publish: Vec<(String, Vec<Diagnostic>)> = diags_by_file.into_iter().collect();

@@ -85,6 +85,11 @@
 
 #### Engine
 
+* LSP: document symbols, selection ranges, references, rename, inlay hints,
+  document links, code actions, code lens, goto and formatting now resolve
+  positions against one line index per request instead of rescanning the file
+  for every node. Opening a large file no longer wedges the server: an outline
+  over 100k clauses used to be quadratic in the file size. (#541)
 * Ruleset duplicate types now use the first definition consistently, duplicate
   enums union their members, and built-in variable lookups avoid lowercasing
   already-lowercase names. (#488)

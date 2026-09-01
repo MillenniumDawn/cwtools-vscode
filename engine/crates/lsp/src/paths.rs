@@ -208,22 +208,10 @@ pub(crate) fn encoded_position_len(
     }
 }
 
-pub(crate) fn source_position_to_lsp(
-    text: &str,
-    line: u32,
-    source_column: u32,
-    encoding: &tower_lsp::lsp_types::PositionEncodingKind,
-) -> tower_lsp::lsp_types::Position {
-    let character = text.lines().nth(line as usize).map_or(source_column, |l| {
-        source_column_to_lsp(l, source_column, encoding)
-    });
-    tower_lsp::lsp_types::Position { line, character }
-}
-
-/// The column half of [`source_position_to_lsp`]: a parser column (0-based
-/// chars) rendered in the negotiated encoding, for callers that already hold the
-/// line. Diagnostics resolve their line once per file and convert from there, so
-/// they share this conversion instead of re-scanning the text per squiggle.
+/// A parser column (0-based chars) rendered in the negotiated encoding, for
+/// callers that already hold the line. Every position a handler publishes goes
+/// through here off a [`crate::lines::DocLines`], so no request re-scans the
+/// document to find the line a node sits on.
 pub(crate) fn source_column_to_lsp(
     line: &str,
     source_column: u32,
@@ -768,29 +756,6 @@ mod tests {
         ] {
             assert!(!is_script_file(uri), "{uri}");
         }
-    }
-
-    #[test]
-    fn source_positions_use_negotiated_encoding() {
-        let text = "😀 alpha";
-        assert_eq!(
-            source_position_to_lsp(
-                text,
-                0,
-                2,
-                &tower_lsp::lsp_types::PositionEncodingKind::UTF16,
-            ),
-            tower_lsp::lsp_types::Position::new(0, 3)
-        );
-        assert_eq!(
-            source_position_to_lsp(
-                text,
-                0,
-                2,
-                &tower_lsp::lsp_types::PositionEncodingKind::UTF32,
-            ),
-            tower_lsp::lsp_types::Position::new(0, 2)
-        );
     }
 
     #[test]
