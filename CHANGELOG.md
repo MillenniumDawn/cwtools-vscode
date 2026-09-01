@@ -2,6 +2,9 @@
 
 #### Extension
 
+* A daily and manually dispatchable nightly workflow publishes smoke-tested
+  Linux, macOS, Windows, and universal VSIX prereleases from `main` without
+  using Marketplace or Open VSX credentials.
 * Graph overlays keep rendering for malformed entity types with empty segments
   or no abbreviation. (#551)
 * Release workflow scopes Marketplace PATs to publishing steps instead of the
@@ -88,7 +91,8 @@
 * Parse caches now preserve existing entries when `settings.sig` cannot be read,
   returning the read error instead of treating it as an invalidation miss. (#495)
 * Corrupt parse caches are bounds-checked before their strings are interned. (#491)
-* LSP: closing an ignored file no longer deadlocks the server. (#469)
+* LSP: closing an ignored file no longer deadlocks the server or leaves stale
+  type, localisation, and watched-file indexes behind. (#469)
 * Type-instance indexing releases interned node keys before recursive skip-root
   traversal and subtype hooks, avoiding writer-contention deadlocks. (#480)
 * Inline script validation now caps per-file expansions to prevent hostile fan-out

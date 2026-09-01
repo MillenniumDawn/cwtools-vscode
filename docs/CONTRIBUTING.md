@@ -37,6 +37,12 @@ Other commands: `package` packages a vsix without publishing, `package-prebuilt`
 
 `release` cuts a release: it checks the CHANGELOG has a section for the top version, refuses a dirty tree or an existing tag, then pushes `v<x.y.z>`. Everything after that is CI. The tag push triggers `.github/workflows/release.yml`, which builds the server on every platform, packages one vsix per platform plus the universal fallback, smoke-tests them, and publishes. Nothing is built or published from your machine.
 
+The nightly workflow keeps the extension version numeric because VS Code does not
+support SemVer prerelease suffixes. It adds the Actions run number to the latest
+release's patch and marks the VSIX as prerelease; the Git tag adds
+`-nightly.<attempt>` so reruns stay unique. The next production release must bump
+the minor version so it sorts above every nightly in the previous minor line.
+
 ## Syntax highlighting
 
 The TextMate grammars under `extension/package/syntaxes/` are vendored from
