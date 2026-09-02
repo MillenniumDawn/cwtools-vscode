@@ -89,6 +89,8 @@
 
 #### Engine
 
+* CLI integration coverage now exercises `cache-vanilla` writes and
+  `validate --vanilla-cache` round trips. (#628)
 * The per-reference localisation check now borrows the ruleset's loc-command set
   instead of deep-cloning it for every loc-bearing field, so a full-mod run stops
   paying ~86 allocations and a hash-set build per reference. (#548)

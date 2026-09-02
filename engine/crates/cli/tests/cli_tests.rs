@@ -374,6 +374,79 @@ fn test_serialize_missing_input_fails() {
         .failure();
 }
 
+// ── Vanilla cache ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_cache_vanilla_unknown_game_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vanilla = fixtures_dir().join("discover").join("mod_a");
+    let rules = fixtures_dir().join("rules");
+    let output = tmp.path().join("vanilla.cwv");
+
+    cwtools()
+        .args([
+            "cache-vanilla",
+            "--game",
+            "not_a_real_game",
+            "--vanilla",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("Unknown game: not_a_real_game"));
+    assert!(!output.exists(), "an unknown game must not write a cache");
+}
+
+#[test]
+fn test_cache_vanilla_writes_instances_and_validate_loads_cache() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vanilla = fixtures_dir().join("discover").join("mod_a");
+    let rules = fixtures_dir().join("rules");
+    let output = tmp.path().join("vanilla.cwv");
+
+    cwtools()
+        .args([
+            "cache-vanilla",
+            "--game",
+            "stellaris",
+            "--vanilla",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote 1 base-game instances"));
+    assert!(
+        std::fs::metadata(&output).unwrap().len() > 0,
+        "cache-vanilla must write a non-empty cache"
+    );
+
+    cwtools()
+        .args([
+            "validate",
+            "--game",
+            "stellaris",
+            "--directory",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules.to_str().unwrap(),
+            "--vanilla-cache",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Validation complete"))
+        .stderr(predicate::str::contains("Loaded 1 base-game instances"));
+}
+
 // ── Validate ─────────────────────────────────────────────────────────────────
 
 #[test]
