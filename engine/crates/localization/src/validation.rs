@@ -68,15 +68,18 @@ fn cw268_quote_fix(entry: &LocEntry) -> Option<SuggestedFix> {
     }
     let start_col = entry.desc_column + lead;
     let end_col = start_col + trimmed.chars().count();
+    if start_col > u16::MAX as usize || end_col > u16::MAX as usize {
+        return None;
+    }
     let line = entry.position.line as u32;
     let range = SourceRange {
         start: SourcePos {
             line,
-            col: start_col as u16,
+            col: start_col.min(u16::MAX as usize) as u16,
         },
         end: SourcePos {
             line,
-            col: end_col as u16,
+            col: end_col.min(u16::MAX as usize) as u16,
         },
     };
     Some(SuggestedFix::replace(
@@ -482,6 +485,28 @@ mod tests {
                 .iter()
                 .any(|e| e.kind == LocErrorKind::LocMissingQuote),
             "CW268 must be gone after applying the fix"
+        );
+    }
+
+    #[test]
+    fn cw268_overlong_value_has_no_unsafe_fix() {
+        let value = "x".repeat(u16::MAX as usize + 1);
+        let text = format!("l_english:\n key: \"{value}\n");
+        let file = parse_loc_text(&text, "test.yml").unwrap();
+        let errors = validate_loc_file(
+            &file,
+            &LocKeySet::default(),
+            &HashSet::new(),
+            &Vec::<String>::new(),
+        );
+
+        let error = errors
+            .iter()
+            .find(|e| e.kind == LocErrorKind::LocMissingQuote)
+            .expect("CW268 emitted");
+        assert!(
+            error.fix.is_none(),
+            "CW268 must not carry a fix for an unrepresentable range"
         );
     }
 

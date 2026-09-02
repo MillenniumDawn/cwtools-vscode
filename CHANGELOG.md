@@ -89,6 +89,8 @@
 
 #### Engine
 
+* CW268 quote fixes skip unrepresentable ranges, and LSP position conversion
+  clamps columns to the parser's `u16` limit. (#630)
 * The per-reference localisation check now borrows the ruleset's loc-command set
   instead of deep-cloning it for every loc-bearing field, so a full-mod run stops
   paying ~86 allocations and a hash-set build per reference. (#548)
