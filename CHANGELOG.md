@@ -95,6 +95,8 @@
 
 #### Engine
 
+* CLI integration coverage now exercises `cache-vanilla` writes and
+  `validate --vanilla-cache` round trips. (#628)
 * CW268 quote fixes skip unrepresentable ranges, and LSP position conversion
   clamps columns to the parser's `u16` limit. (#630)
 * The per-reference localisation check now borrows the ruleset's loc-command set
