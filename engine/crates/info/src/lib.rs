@@ -1,12 +1,10 @@
+// stripped to WHY-only — see git history for full docs
 use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringTable;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-// The index half of this crate now lives in `cwtools_index`. Re-export it so
-// existing `cwtools_info::TypeIndex` / `cwtools_info::collect_type_instances`
-// (and the rest) keep resolving for the LSP/CLI callers.
 pub use cwtools_index::vanilla_cache;
 pub use cwtools_index::*;
 
@@ -17,73 +15,29 @@ pub use position::{PositionElement, ReferenceHint, element_at_position};
 pub use references::ReferenceIndex;
 use references::{TypeRefRule, build_type_ref_keys, collect_type_ref_uses};
 
-// ══════════════════════════════════════════════════════════════════════════════
-// FileInfo / InfoService
-// ══════════════════════════════════════════════════════════════════════════════
-
-/// Computed data for a single file.
 #[derive(Debug, Clone, Default)]
 pub struct FileInfo {
-    /// Keys that define types (heuristic, kept for LSP compatibility).
     pub type_definitions: HashMap<String, Vec<SourceLocation>>,
-    /// Referenced types (e.g. `<ethos>`).
     pub type_references: HashMap<String, Vec<SourceLocation>>,
-    /// Defined variables — rule-driven + @-prefix.
-    /// Maps namespace (or "@") → list of variables.
     pub defined_variables_ns: HashMap<String, Vec<DefinedVariable>>,
-    /// Classic @-var lookup (kept for LSP compatibility).
     pub defined_variables: HashMap<String, SourceLocation>,
-    /// Saved event targets with position.
     pub saved_event_targets_detailed: Vec<SavedEventTarget>,
-    /// Saved event targets (heuristic set, kept for LSP compatibility).
     pub saved_event_targets: HashSet<String>,
-    /// Inline scripts referenced.
     pub inline_scripts: HashMap<String, SourceLocation>,
-    /// Order-independent hash of this file's exported type instances
-    /// (`(type, name)` pairs), computed at index time from the per-file
-    /// instance map so the cross-file "did exports change?" check doesn't have
-    /// to scan the global type index. See [`InfoService::export_fingerprint`].
     pub export_instances_hash: u64,
-    /// Order-independent hash of scripted-localisation and scripted-GUI names.
-    /// These names affect diagnostics in files that reference a loc key rather
-    /// than the name directly, so a change deliberately triggers an unscoped
-    /// dependent sweep.
     pub export_loc_registry_hash: u64,
-    /// Lowercased names of this file's exported type instances, captured at
-    /// index time from the per-file instance map. Combined with the variable /
-    /// event-target names (already on this struct) by
-    /// [`InfoService::export_names`] to scope the dependent sweep without
-    /// scanning the global index.
     pub export_instance_names: HashSet<String>,
 }
 
-/// InfoService holds computed data for all files in a workspace.
 pub struct InfoService {
     pub files: HashMap<String, FileInfo>,
-    /// Union of all type definitions across files (rule-driven + heuristic).
     pub all_type_defs: HashMap<String, Vec<(String, SourceLocation)>>,
-    /// Cross-file type-instance index. Shared with workspace validation
-    /// snapshots; the first concurrent mutation takes a copy through
-    /// `Arc::make_mut`.
     pub type_index: Arc<TypeIndex>,
-    /// Refcount maps over the cross-file symbols. Each map counts how many files
-    /// define the symbol; a key exists iff at least one file still defines it, so
-    /// the keys double as the membership set (use [`HashMap::contains_key`] /
-    /// [`HashMap::keys`]). `clear_file` removes the key when its count hits 0.
     pub event_target_counts: HashMap<String, usize>,
     pub variable_counts: HashMap<String, usize>,
     pub inline_script_counts: HashMap<String, usize>,
-    /// Effect/trigger names that DEFINE a `value_set[variable]` (e.g.
-    /// `set_variable`). Cached so per-file indexing can scan `set_variable`
-    /// blocks for defined names (and their values) without recomputing it from
-    /// the ruleset each time. Set by [`InfoService::update_ruleset_data`] at ruleset
-    /// load; empty until then, which leaves the variable index untouched.
     var_effects: HashSet<String>,
-    /// Workspace-wide reverse index of type-instance use sites, so
-    /// `references`/`rename` reach files that aren't open. Built incrementally
-    /// during the index pass and cleared per file on reindex.
     pub reference_index: ReferenceIndex,
-    /// Cached leaf-key → referenced-type map ([`build_type_ref_keys`]).
     type_ref_keys: Option<HashMap<String, Vec<TypeRefRule>>>,
 }
 
@@ -108,13 +62,11 @@ impl InfoService {
         }
     }
 
-    /// Update data derived from the active ruleset.
     pub fn update_ruleset_data(&mut self, effects: HashSet<String>) {
         self.var_effects = effects;
         self.type_ref_keys = None;
     }
 
-    /// One-line size summary for profiling (counts only, not bytes).
     pub fn profile_summary(&self) -> String {
         let cross_file: usize = self.type_index.map.values().map(|v| v.len()).sum();
         format!(
@@ -128,7 +80,6 @@ impl InfoService {
         )
     }
 
-    /// Compute info for a single parsed file and merge into global indexes.
     pub fn index_file(
         &mut self,
         uri: &str,
@@ -139,8 +90,6 @@ impl InfoService {
         self.index_file_with_path(uri, ast, table, ruleset, uri);
     }
 
-    /// Like `index_file` but accepts a separate `logical_path` (relative to mod
-    /// root) for path-matching type definitions.
     pub fn index_file_with_path(
         &mut self,
         uri: &str,
@@ -161,9 +110,6 @@ impl InfoService {
         );
     }
 
-    /// Like [`Self::index_file_with_path`], but consumes type instances collected
-    /// before the caller takes the info-service write lock. Subtype membership is
-    /// separate so it stays out of a file's export fingerprint.
     #[allow(clippy::too_many_arguments)]
     pub fn index_file_with_precomputed_instances(
         &mut self,
@@ -177,15 +123,11 @@ impl InfoService {
     ) {
         let mut info = FileInfo::default();
 
-        // ── Heuristic type-name set (kept for back-compat) ────────────────────
-        // Use the pre-built type_by_name index from reindex() instead of
-        // rebuilding a HashSet per file.
         let type_names = ruleset.type_by_name();
         for child in &ast.root_children {
             Self::index_child_heuristic(child, &ast.arena, table, type_names, &mut info);
         }
 
-        // ── Dynamic value collection ─────────────────────────────────────────
         Arc::make_mut(&mut self.type_index)
             .complex_enum_values
             .merge_file(
@@ -204,7 +146,6 @@ impl InfoService {
                 cwtools_index::dynamic_values::collect_value_set_members(ruleset, ast, table),
             );
 
-        // ── Localisation-call registries (path-driven, not rule-driven) ───────
         let scripted_locs = cwtools_index::collect_scripted_loc_names(ast, logical_path, table);
         let scripted_guis =
             cwtools_index::collect_scripted_gui_callback_names(ast, logical_path, table);
@@ -225,14 +166,6 @@ impl InfoService {
             .scripted_gui_index
             .merge_file(uri, scripted_guis);
 
-        // ── Rule-driven: type-instance index ─────────────────────────────────
-        // Move the instances straight into the cross-file index. We don't keep a
-        // second per-file copy on `FileInfo` (that doubled ~190K instances on
-        // MD); document-symbol derives a file's instances from the index instead.
-        // Hash this file's exported instances now, while we still hold the local
-        // per-type map, so the cross-file export check never has to scan the
-        // global index. Order-independent (wrapping_add) and stable for a given
-        // set of `(type, name)` pairs.
         info.export_instances_hash = hash_instance_exports(&instances);
         info.export_instance_names = instances
             .values()
@@ -244,10 +177,6 @@ impl InfoService {
             Arc::make_mut(&mut self.type_index).merge(uri, subtype_instances);
         }
 
-        // ── Rule-driven: defined variables ────────────────────────────────────
-        // Convert the @-vars already collected by index_child_heuristic into
-        // DefinedVariable form so collect_defined_variables_from_rules can skip
-        // re-scanning the AST for them.
         let at_vars: Vec<DefinedVariable> = info
             .defined_variables
             .iter()
@@ -260,10 +189,6 @@ impl InfoService {
             .collect();
         info.defined_variables_ns =
             collect_defined_variables_from_rules(ruleset, ast, logical_path, table, Some(at_vars));
-        // value_set[variable] definitions made through `set_variable`-family
-        // effects live inside `alias[effect]` expansions the rule-tree walk above
-        // never reaches, so collect them directly (with values, for hover) and
-        // merge into the "variable" namespace.
         if !self.var_effects.is_empty() {
             let mut set_vars: Vec<DefinedVariable> = Vec::new();
             collect_set_variable_defs(ast, table, &self.var_effects, &mut set_vars);
@@ -274,25 +199,18 @@ impl InfoService {
                     .extend(set_vars);
             }
         }
-        // Flatten ALL variable entries (both @-vars and value_set names) into the
-        // legacy map so clear_file can remove them and completion stays current.
         for vars in info.defined_variables_ns.values() {
             for v in vars {
                 info.defined_variables.insert(v.name.clone(), v.location);
             }
         }
 
-        // saved_event_targets_detailed is populated by index_child_heuristic
-        // (it detects save_event_target_as / save_global_event_target_as).
-        // index_child_heuristic also inserts event_target:-prefixed keys directly
-        // into saved_event_targets; merge rather than overwrite so those survive.
         info.saved_event_targets.extend(
             info.saved_event_targets_detailed
                 .iter()
                 .map(|e| e.name.clone()),
         );
 
-        // ── Merge into global indexes ─────────────────────────────────────────
         for (type_name, locs) in &info.type_definitions {
             self.all_type_defs
                 .entry(type_name.clone())
@@ -305,9 +223,6 @@ impl InfoService {
         for (ns, vars) in &info.defined_variables_ns {
             for v in vars {
                 *self.variable_counts.entry(v.name.clone()).or_insert(0) += 1;
-                // Feed value_set[variable] names into the project-wide var index
-                // that CW246 / VariableGetField consult. @-vars are excluded:
-                // reads bypass them, and they'd pollute the unset-variable check.
                 if ns != "@" {
                     Arc::make_mut(&mut self.type_index)
                         .var_index
@@ -319,10 +234,6 @@ impl InfoService {
             *self.inline_script_counts.entry(script.clone()).or_insert(0) += 1;
         }
 
-        // ── Reverse reference index (cross-file references + rename) ──────────
-        // Rebuild the leaf-key → type map when the ruleset changed, then record
-        // this file's type-instance use sites. `clear_file` (run before every
-        // reindex) drops the file's previous sites.
         let type_ref_keys = self
             .type_ref_keys
             .get_or_insert_with(|| build_type_ref_keys(ruleset));
@@ -343,20 +254,10 @@ impl InfoService {
         self.files.insert(uri.to_string(), info);
     }
 
-    /// Order-independent hash of the cross-file-visible symbols a file exports:
-    /// type instances, defined variables, saved event targets, and names used by
-    /// localisation-call registries. If this is unchanged across an edit, no
-    /// other file's diagnostics can change, so the dependent sweep can be skipped.
-    ///
-    /// O(symbols-in-this-file): reads the precomputed instance hash plus the
-    /// file's variable/event-target lists, never scanning the global index.
-    /// Returns 0 for an unknown file (treated as "no exports").
     pub fn export_fingerprint(&self, uri: &str) -> u64 {
         let Some(fi) = self.files.get(uri) else {
             return 0;
         };
-        // wrapping_add combines symbols order-independently while preserving
-        // multiplicity (XOR would cancel a duplicated symbol to zero).
         let mut acc: u64 = fi
             .export_instances_hash
             .wrapping_add(fi.export_loc_registry_hash);
@@ -371,12 +272,6 @@ impl InfoService {
         acc
     }
 
-    /// The lowercased names of every cross-file-visible symbol a file exports:
-    /// type instances, defined variables, and saved event targets. Used to scope
-    /// the dependent sweep to the open docs that actually reference a name that
-    /// changed. O(symbols-in-file): instance names come from the global index
-    /// filtered to this file (cheap relative to a full revalidation), the rest
-    /// from the file's own `FileInfo`.
     pub fn export_names(&self, uri: &str) -> HashSet<String> {
         let mut names = HashSet::new();
         if let Some(fi) = self.files.get(uri) {
@@ -393,10 +288,8 @@ impl InfoService {
         names
     }
 
-    /// Remove a file from all indexes.
     pub fn clear_file(&mut self, uri: &str) {
         if let Some(info) = self.files.remove(uri) {
-            // Type definitions (heuristic)
             for type_name in info.type_definitions.keys() {
                 if let Some(locs) = self.all_type_defs.get_mut(type_name) {
                     locs.retain(|(u, _)| u != uri);
@@ -405,11 +298,8 @@ impl InfoService {
                     }
                 }
             }
-            // Rule-driven type instances
             Arc::make_mut(&mut self.type_index).remove_file(uri);
-            // Reverse reference index (use sites)
             self.reference_index.remove_file(uri);
-            // Event targets
             for et in &info.saved_event_targets {
                 if let Some(count) = self.event_target_counts.get_mut(et) {
                     *count -= 1;
@@ -418,7 +308,6 @@ impl InfoService {
                     }
                 }
             }
-            // Variables (refcount via variable_counts, keyed by name)
             for (ns, vars) in &info.defined_variables_ns {
                 for v in vars {
                     if let Some(count) = self.variable_counts.get_mut(&v.name) {
@@ -434,7 +323,6 @@ impl InfoService {
                     }
                 }
             }
-            // Inline scripts
             for script in info.inline_scripts.keys() {
                 if let Some(count) = self.inline_script_counts.get_mut(script) {
                     *count -= 1;
@@ -446,14 +334,10 @@ impl InfoService {
         }
     }
 
-    /// Find all heuristic definitions of a given symbol name.
     pub fn find_definitions(&self, name: &str) -> Option<&Vec<(String, SourceLocation)>> {
         self.all_type_defs.get(name)
     }
 
-    /// Find every definition site of a script variable named `name`
-    /// (case-insensitive), across all files. Used by goto-definition on a
-    /// `value[variable]` read. Returns `(file_uri, location)` pairs.
     pub fn find_variable_definitions(&self, name: &str) -> Vec<(String, SourceLocation)> {
         let mut out = Vec::new();
         for (uri, fi) in &self.files {
@@ -468,9 +352,6 @@ impl InfoService {
         out
     }
 
-    /// The distinct known values a variable named `name` is assigned across the
-    /// workspace, in first-seen order. Used to render variable hover. `limit`
-    /// caps the returned set; the returned `bool` is `true` when more existed.
     pub fn variable_values(&self, name: &str, limit: usize) -> (Vec<String>, bool) {
         let mut values: Vec<String> = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
@@ -496,7 +377,6 @@ impl InfoService {
         (values, truncated)
     }
 
-    /// Find all references to a given symbol name across all files.
     pub fn find_references(&self, name: &str) -> Option<Vec<(String, SourceLocation)>> {
         let mut result = Vec::new();
         for (uri, info) in &self.files {
@@ -512,8 +392,6 @@ impl InfoService {
             Some(result)
         }
     }
-
-    // ── Heuristic child walker (unchanged from original) ─────────────────────
 
     fn index_child_heuristic<S: std::hash::BuildHasher>(
         child: &Child,
@@ -541,15 +419,10 @@ impl InfoService {
             Self::record_saved_event_target(leaf, &key, &value_str, info);
             Self::record_inline_script(leaf, arena, table, &key, info);
 
-            // Owned consumer last so `key` moves in rather than clones. An
-            // `@`-prefixed key never matches any of the borrow-only checks above,
-            // so position is behavior-neutral.
             Self::record_defined_variable(leaf, key, info);
         }
     }
 
-    /// Record a clause leaf as a type definition when its key names a known
-    /// type.
     fn record_top_level_key<S: std::hash::BuildHasher>(
         leaf: &cwtools_parser::ast::Leaf,
         key: &str,
@@ -570,7 +443,6 @@ impl InfoService {
         }
     }
 
-    /// Record a `<type>` value as a reference to that type.
     fn record_type_reference(
         leaf: &cwtools_parser::ast::Leaf,
         value_str: &str,
@@ -589,8 +461,6 @@ impl InfoService {
         }
     }
 
-    /// Record saved event targets: the `event_target:` prefix form into the
-    /// name set, and the `save_(global_)event_target_as` form with full detail.
     fn record_saved_event_target(
         leaf: &cwtools_parser::ast::Leaf,
         key: &str,
@@ -619,7 +489,6 @@ impl InfoService {
         }
     }
 
-    /// Record the `script` referenced by an `inline_script` clause.
     fn record_inline_script(
         leaf: &cwtools_parser::ast::Leaf,
         arena: &Arena,
@@ -652,7 +521,6 @@ impl InfoService {
         }
     }
 
-    /// Record an `@`-prefixed key as a defined variable.
     fn record_defined_variable(leaf: &cwtools_parser::ast::Leaf, key: String, info: &mut FileInfo) {
         if key.starts_with('@') {
             info.defined_variables.insert(
@@ -667,17 +535,11 @@ impl InfoService {
     }
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Tests
-// ══════════════════════════════════════════════════════════════════════════════
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use cwtools_parser::parser::parse_string;
     use cwtools_rules::rules_types::{PathOptions, SkipRootKey, TypeDefinition};
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     fn empty_type_def(name: &str, paths: Vec<&str>) -> TypeDefinition {
         TypeDefinition {
@@ -729,8 +591,6 @@ mod tests {
         (info, table)
     }
 
-    // ── original heuristic tests ──────────────────────────────────────────────
-
     #[test]
     fn test_defined_variables() {
         let source = "@my_var = 5\nfoo = { bar = @my_var }";
@@ -759,9 +619,6 @@ mod tests {
         assert!(info.inline_scripts.contains_key("my_inline_script"));
     }
 
-    // ── Item 1 — type-instance index ─────────────────────────────────────────
-
-    /// Simple case: top-level key = type instance, no skip_root_key.
     #[test]
     fn test_type_instance_simple() {
         let source = "my_ethos = { tradition = foo }";
@@ -777,7 +634,6 @@ mod tests {
         assert_eq!(instances[0].name, "my_ethos");
     }
 
-    /// Path that does NOT match: no instances returned.
     #[test]
     fn test_type_instance_path_mismatch() {
         let source = "my_ethos = { tradition = foo }";
@@ -791,7 +647,6 @@ mod tests {
         assert!(result.get("ethoses").is_none_or(|v| v.is_empty()));
     }
 
-    /// skip_root_key = AnyKey: grandchildren are the instances.
     #[test]
     fn test_type_instance_skip_root_key() {
         let source = "technologies = { my_tech = { } another_tech = { } }";
@@ -818,7 +673,6 @@ mod tests {
         );
     }
 
-    /// name_field: the instance name comes from child leaf value.
     #[test]
     fn test_type_instance_name_field() {
         let source = "some_event = { id = my_event_001 }";
@@ -835,8 +689,6 @@ mod tests {
         assert_eq!(instances[0].name, "my_event_001");
     }
 
-    /// A quoted name_field value (e.g. spriteType `name = "GFX_x"`) must be
-    /// indexed without its quotes so unquoted references (`icon = GFX_x`) resolve.
     #[test]
     fn test_type_instance_name_field_quoted() {
         let source = "spriteTypes = { spriteType = { name = \"GFX_test_icon\" } }";
@@ -854,10 +706,6 @@ mod tests {
         assert_eq!(instances[0].name, "GFX_test_icon");
     }
 
-    /// type_per_file: the instance name is the file stem. On Windows the LSP can
-    /// derive logical paths with backslash separators; the name extraction must
-    /// normalise them, else `load_oob = "MY_OOB"` is a false positive because the
-    /// indexed name becomes the whole path rather than the stem.
     #[test]
     fn test_type_per_file_backslash_path() {
         let source = "MY_OOB = { y = yes }\n";
@@ -868,7 +716,6 @@ mod tests {
         td.type_per_file = true;
         let rs = make_ruleset_with_type(td);
 
-        // Backslash separators, as produced by logical_path_from_uri on Windows.
         let result = collect_type_instances(&rs, &parsed, "history\\units\\MY_OOB.txt", &table);
         let instances = result.get("oob").expect("should find oob");
         assert_eq!(instances.len(), 1);
@@ -879,7 +726,6 @@ mod tests {
         );
     }
 
-    /// type_key_filter: only nodes with a matching key qualify.
     #[test]
     fn test_type_instance_key_filter() {
         let source = "country_event = { id = foo }\nsome_other = { id = bar }";
@@ -887,7 +733,6 @@ mod tests {
         let parsed = parse_string(source, &table);
 
         let mut td = empty_type_def("event", vec!["events"]);
-        // Only accept nodes whose key is "country_event"
         td.type_key_filter = Some((vec!["country_event".to_string()], false));
         td.name_field = Some("id".to_string());
         let rs = make_ruleset_with_type(td);
@@ -899,7 +744,6 @@ mod tests {
         assert!(!names.contains(&"bar"), "should not have bar: {:?}", names);
     }
 
-    /// TypeIndex.contains works after merging.
     #[test]
     fn test_type_index_contains() {
         let mut idx = TypeIndex::new();
@@ -924,7 +768,6 @@ mod tests {
         assert!(!idx.contains("other_type", "my_event"));
     }
 
-    /// TypeIndex.remove_file cleans up properly.
     #[test]
     fn test_type_index_remove_file() {
         let mut idx = TypeIndex::new();
@@ -946,7 +789,6 @@ mod tests {
         idx.merge("file://b.txt", map);
 
         idx.remove_file("file://a.txt");
-        // ev1 still exists from b.txt
         assert!(idx.contains("event", "ev1"));
 
         idx.remove_file("file://b.txt");
@@ -985,8 +827,6 @@ mod tests {
 
     #[test]
     fn test_is_any_instance_refcount() {
-        // is_any_instance is backed by a refcount so a name survives until its
-        // last definition is removed (two files defining the same name).
         let mut idx = TypeIndex::new();
         let mut map = HashMap::new();
         map.insert(
@@ -1008,7 +848,6 @@ mod tests {
         assert!(!idx.is_any_instance("unknown_name"));
 
         idx.remove_file("file://a.txt");
-        // still present via b.txt
         assert!(idx.is_any_instance("GER_some_char"));
 
         idx.remove_file("file://b.txt");
@@ -1017,9 +856,6 @@ mod tests {
 
     #[test]
     fn test_contains_case_insensitive() {
-        // Paradox identifiers are case-insensitive: a reference in any case must
-        // resolve to a definition in any case (both `contains` and the
-        // `is_any_instance` refcount index agree on lowercase normalization).
         let mut idx = TypeIndex::new();
         let mut map = HashMap::new();
         map.insert(
@@ -1039,13 +875,10 @@ mod tests {
         assert!(idx.contains("ai_behavior", "LBA_AI_BEHAVIOR"));
         assert!(idx.contains("ai_behavior", "lba_ai_behavior"));
         assert!(idx.is_any_instance("LBA_AI_BEHAVIOR"));
-        // Removing the only definition clears both indexes regardless of case.
         idx.remove_file("file://a.txt");
         assert!(!idx.contains("ai_behavior", "LBA_ai_behavior"));
         assert!(!idx.is_any_instance("lba_ai_behavior"));
     }
-
-    // ── Item 2 — defined variables ────────────────────────────────────────────
 
     #[test]
     fn test_at_vars_collected() {
@@ -1054,16 +887,12 @@ mod tests {
         let parsed = parse_string(source, &table);
 
         let rs = RuleSet::new();
-        // collect_defined_variables was deleted (no production callers); use the
-        // rule-aware entry point which also covers the @-var path.
         let vars = collect_defined_variables_from_rules(&rs, &parsed, "", &table, None);
         let at_vars = vars.get("@").expect("should have @-namespace vars");
         let names: Vec<&str> = at_vars.iter().map(|v| v.name.as_str()).collect();
         assert!(names.contains(&"@min_manpower"));
         assert!(names.contains(&"@max_tech"));
     }
-
-    // ── Item 3 — saved event targets ─────────────────────────────────────────
 
     #[test]
     fn test_saved_event_targets() {
@@ -1074,8 +903,6 @@ effect = {
 }";
         let table = StringTable::new();
         let parsed = parse_string(source, &table);
-        // collect_saved_event_targets was deleted (no production callers); use
-        // the InfoService to exercise the same code path that production uses.
         let mut service = InfoService::new();
         let rs = RuleSet::new();
         service.index_file_with_path("test.txt", &parsed, &table, &rs, "");
@@ -1100,8 +927,6 @@ effect = {
         assert!(!local.is_global);
     }
 
-    // ── Item 4 — position query ───────────────────────────────────────────────
-
     #[test]
     fn test_element_at_position_leaf() {
         let source = "foo = bar\n";
@@ -1118,10 +943,6 @@ effect = {
         }
     }
 
-    /// `variable_defining_effects` picks out aliases whose body declares a
-    /// `value_set[variable]`, and `collect_set_variable_names` then extracts the
-    /// defined names from both the explicit (`var = X`) and shorthand
-    /// (`X = value`) forms.
     #[test]
     fn test_collect_set_variable_names() {
         const RULES: &str = r#"
@@ -1158,14 +979,9 @@ alias[effect:set_temp_variable] = {
             "got: {:?}",
             names
         );
-        // The reserved `value` key must not be collected as a variable name.
         assert!(!names.contains(&"value".to_string()), "got: {:?}", names);
     }
 
-    /// HOI4 arrays are variables too: an effect that declares a `value_set[array]`
-    /// defines names, and the name lives in the block's `array` child, not `var`.
-    /// Without this, every array read (`array = my_arr` in a scripted GUI's
-    /// `dynamic_lists`) flags CW246.
     #[test]
     fn test_collect_array_variable_names() {
         const RULES: &str = r#"
@@ -1194,12 +1010,9 @@ alias[effect:resize_array] = {
         collect_set_variable_names(&parsed, &table, &effects, &mut names);
         assert!(names.contains(&"my_arr".to_string()), "got: {:?}", names);
         assert!(names.contains(&"other_arr".to_string()), "got: {:?}", names);
-        // The `array` key names the array; it is not itself a variable.
         assert!(!names.contains(&"array".to_string()), "got: {:?}", names);
     }
 
-    /// `collect_set_variable_defs` captures the assigned value for both the
-    /// explicit (`var = X value = N`) and shorthand (`X = N`) forms.
     #[test]
     fn test_collect_set_variable_defs_values() {
         use cwtools_rules::rules_converter::ast_to_ruleset;
@@ -1279,12 +1092,8 @@ alias[effect:set_temp_variable] = {
         assert_eq!(service.reference_index.references("focus", "NEW").len(), 1);
     }
 
-    // ── Item 2.7 — value_set var removed from variable_counts on clear_file ──
-
     #[test]
     fn value_set_var_cleared_on_file_clear() {
-        // Injected @-namespace entry: clear_file must drop variable_counts and
-        // must not touch var_index (the CW246 path skips `@`).
         let mut svc = InfoService::new();
         let uri = "file://test.txt";
 
@@ -1455,11 +1264,6 @@ alias[effect:set_variable] = {
         );
     }
 
-    // ── ReferenceIndex narrowed removal (via clear_file) ─────────────────────
-
-    /// `clear_file` must drop only the cleared file's reference sites, across
-    /// merge → clear → re-merge → clear cycles, and a clear of an unknown file
-    /// must be a no-op.
     #[test]
     fn reference_index_clear_file_removes_only_that_files_sites() {
         use cwtools_rules::rules_converter::ast_to_ruleset;
@@ -1496,7 +1300,6 @@ alias[effect:set_variable] = {
         assert_eq!(refs.len(), 1, "only b's site should remain");
         assert_eq!(refs[0].0.as_ref(), "b.txt");
 
-        // Re-index a, then clear both → fully empty.
         svc.index_file_with_path(
             "a.txt",
             &script(&table),
@@ -1505,14 +1308,12 @@ alias[effect:set_variable] = {
             "common/decisions/a.txt",
         );
         assert_eq!(svc.reference_index.references("focus", "SHARED").len(), 2);
-        svc.clear_file("never.txt"); // unknown file: no-op
+        svc.clear_file("never.txt");
         svc.clear_file("b.txt");
         svc.clear_file("a.txt");
         assert!(svc.reference_index.references("focus", "SHARED").is_empty());
     }
 
-    /// The completion-only dynamic-value indexes (`value_set_values`) drop a
-    /// file's members on `clear_file`, keeping them consistent through reindex.
     #[test]
     fn dynamic_values_consistent_through_clear_file() {
         use cwtools_rules::rules_converter::ast_to_ruleset;
@@ -1550,8 +1351,6 @@ alias[effect:set_variable] = {
         );
     }
 
-    /// The editor learns scripted localisations from the folder, not from a
-    /// ruleset type, and must drop a file's names when it re-indexes it (#348).
     #[test]
     fn scripted_locs_tracked_across_index_and_clear() {
         use cwtools_rules::rules_converter::ast_to_ruleset;
