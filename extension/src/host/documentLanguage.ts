@@ -58,6 +58,7 @@ export async function registerDocumentLanguage(
 	async function didChangeActiveTextEditor(
 		editor: vscode.TextEditor | undefined,
 	): Promise<void> {
+		latestType = "";
 		try {
 			if (!editor) return;
 			const editorPath = editor.document.uri.toString();
@@ -142,6 +143,7 @@ export async function registerDocumentLanguage(
 	let debounceTimer: NodeJS.Timeout | undefined;
 	context.subscriptions.push(
 		window.onDidChangeActiveTextEditor((editor) => {
+			latestType = "";
 			if (debounceTimer) clearTimeout(debounceTimer);
 			debounceTimer = setTimeout(
 				() => void didChangeActiveTextEditor(editor),

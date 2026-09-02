@@ -13,6 +13,7 @@
 * A daily and manually dispatchable nightly workflow publishes smoke-tested
   Linux, macOS, Windows, and universal VSIX prereleases from `main` without
   using Marketplace or Open VSX credentials.
+* Show graph reports when the active file has no graph. (#568)
 * Graph overlays keep rendering for malformed entity types with empty segments
   or no abbreviation. (#551)
 * Release workflow scopes Marketplace PATs to publishing steps instead of the
