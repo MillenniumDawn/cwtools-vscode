@@ -149,7 +149,7 @@ fn normalize_separators(path: String) -> String {
 /// One place for the `line + 1` / `as u16` conversion the position resolvers all
 /// need — see the `position_encoding` note in `initialize_impl`.
 pub(crate) fn lsp_pos_to_source(pos: tower_lsp::lsp_types::Position) -> (u32, u16) {
-    (pos.line + 1, pos.character as u16)
+    (pos.line + 1, pos.character.min(u16::MAX as u32) as u16)
 }
 
 pub(crate) fn lsp_pos_to_source_in_text(
@@ -756,6 +756,14 @@ mod tests {
         ] {
             assert!(!is_script_file(uri), "{uri}");
         }
+    }
+
+    #[test]
+    fn lsp_pos_to_source_clamps_oversized_character() {
+        assert_eq!(
+            lsp_pos_to_source(tower_lsp::lsp_types::Position::new(2, u16::MAX as u32 + 1,)),
+            (3, u16::MAX)
+        );
     }
 
     #[test]
