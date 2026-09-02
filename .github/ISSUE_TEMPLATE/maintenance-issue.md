@@ -4,13 +4,12 @@ about: Use this template to create something that is not a feature or enhancemen
 title: ''
 labels: enhancement
 assignees: ''
-type: Type
+type: Task
 
 ---
 
 **Describe the task**
-A clear and concise description of what the bug is.
+A clear and concise description of the maintenance task.
 
 **Acceptance Criteria**
-A clear and concise description of what you expected to happen.
-
+List the conditions that define completion.

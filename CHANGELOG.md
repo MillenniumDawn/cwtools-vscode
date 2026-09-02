@@ -2,6 +2,9 @@
 
 #### Extension
 
+* Issue templates now request reproduction steps, environment details, rules
+  revision, and server logs for extension bugs, while maintenance issues use
+  the `Task` type. (#629)
 * Game detection no longer exposes an unused vanilla-folder flag. (#631)
 * The extension exports `deactivate()`, which stops the language client. VS Code
   awaits that, unlike the disposal of `context.subscriptions`, so the LSP
