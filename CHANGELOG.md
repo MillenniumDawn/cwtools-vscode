@@ -30,6 +30,9 @@
   a pin changes. (#521)
 * The workspace manifest CI gate now has focused tests for its checks and
   setup failure paths using test-owned files and mocked tools. (#632)
+* VS Code cache keys now use the stable version only when the upstream response
+  has a numeric semver; malformed responses use the existing unknown fallback.
+  (#601)
 * `scripts/guard.py` has end-to-end tests for clean, drift, bless, and setup
   failure paths using a stub validator and test-owned files. (#516)
 * Host tests now monitor the running extension's LSP output, reject forbidden
