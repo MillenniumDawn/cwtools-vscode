@@ -67,7 +67,10 @@ def main() -> int:
             note(f"{crate}: missing repository.workspace = true")
         if not has_lints_workspace(text):
             note(f"{crate}: missing [lints] workspace = true")
-        if DEP_LINE.search(text) and not DEP_WORKSPACE.search(text):
+        if any(
+            DEP_LINE.match(line) and not DEP_WORKSPACE.match(line)
+            for line in text.splitlines()
+        ):
             note(
                 f"{crate}: tempfile/assert_cmd/predicates must use "
                 "{ workspace = true }"
