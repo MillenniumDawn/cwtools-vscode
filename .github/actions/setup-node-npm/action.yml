@@ -31,6 +31,9 @@ runs:
       run: |
         url=https://update.code.visualstudio.com/api/releases/stable
         version="$(curl -fsSL "$url" | jq -r '.[0]' || true)"
+        if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          version=unknown
+        fi
         echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
     - name: Cache VS Code download
       if: inputs.cache-vscode == 'true'

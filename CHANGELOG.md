@@ -2,6 +2,8 @@
 
 #### Extension
 
+* Development webview bundles now expose a development `process.env.NODE_ENV`.
+  (#583)
 * Issue templates now request reproduction steps, environment details, rules
   revision, and server logs for extension bugs, while maintenance issues use
   the `Task` type. (#629)
@@ -13,6 +15,7 @@
 * A daily and manually dispatchable nightly workflow publishes smoke-tested
   Linux, macOS, Windows, and universal VSIX prereleases from `main` without
   using Marketplace or Open VSX credentials.
+* Show graph reports when the active file has no graph. (#568)
 * Graph overlays keep rendering for malformed entity types with empty segments
   or no abbreviation. (#551)
 * Release workflow scopes Marketplace PATs to publishing steps instead of the
@@ -30,6 +33,9 @@
   a pin changes. (#521)
 * The workspace manifest CI gate now has focused tests for its checks and
   setup failure paths using test-owned files and mocked tools. (#632)
+* VS Code cache keys now use the stable version only when the upstream response
+  has a numeric semver; malformed responses use the existing unknown fallback.
+  (#601)
 * `scripts/guard.py` has end-to-end tests for clean, drift, bless, and setup
   failure paths using a stub validator and test-owned files. (#516)
 * Host tests now monitor the running extension's LSP output, reject forbidden
@@ -95,6 +101,8 @@
 
 #### Engine
 
+* LSP color ranges clamp columns beyond the parser limit instead of wrapping.
+  (#593)
 * CLI integration coverage now exercises `cache-vanilla` writes and
   `validate --vanilla-cache` round trips. (#628)
 * CW268 quote fixes skip unrepresentable ranges, and LSP position conversion

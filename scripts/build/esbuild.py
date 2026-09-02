@@ -56,7 +56,7 @@ def webview_args(*, watch: bool, dev: bool) -> list[str]:
         "--format=iife",
         "--global-name=cwtoolsgraph",
         f'--define:process.env.NODE_ENV="{node_env}"',
-        '--banner:js=window.process = { env: { NODE_ENV: "production" } };',
+        f'--banner:js=window.process = {{ env: {{ NODE_ENV: "{node_env}" }} }};',
         "--sourcemap",
         "--log-level=info",
     ]

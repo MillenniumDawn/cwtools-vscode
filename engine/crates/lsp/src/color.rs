@@ -1,3 +1,42 @@
+//! `textDocument/documentColor` + `textDocument/colorPresentation`: an inline
+//! swatch and the editor's native picker on colour literals.
+//!
+//! "Is this leaf a colour" is a rule lookup, not new analysis. `Marker::ColourField`
+//! is expanded by `rules::post_process::replace_colour_field` into a `NodeRule`
+//! whose body is a single numeric `LeafValueRule` at cardinality 3, and both the
+//! `colour[rgb]` / `colour[hsv]` RHS syntax and the hand-written form real
+//! rulesets use
+//!
+//! ```cwt
+//! color = {
+//!     ## cardinality = 3..3
+//!     int
+//! }
+//! ```
+//!
+//! land on that same shape. [`is_colour_rule`] matches the shape, so all three
+//! spellings are covered by one predicate.
+//!
+//! ## Conventions
+//!
+//! The format writes the same concept several ways:
+//!
+//! | source                         | meaning                   |
+//! |--------------------------------|---------------------------|
+//! | `color = { 0.2 0.4 0.6 }`      | RGB floats 0-1            |
+//! | `color = { 51 102 153 }`       | RGB ints 0-255            |
+//! | `color = rgb { 51 102 153 }`   | RGB ints, explicit keyword|
+//! | `color = hsv { 0.5 1 1 }`      | HSV floats 0-1            |
+//! | `color = hsv360 { 340 60 55 }` | HSV degrees + percentages |
+//!
+//! The parser SWALLOWS the `rgb`/`hsv` keyword — `color = rgb { 51 102 153 }`
+//! and `color = { 51 102 153 }` produce identical ASTs — so the convention is
+//! recovered by re-reading the source span, not from the tree. That is also what
+//! makes `colorPresentation` stateless: it is handed the range it produced, reads
+//! the convention back out of the document, and writes the same one. Emitting the
+//! other convention there is the failure mode that matters — the picker would
+//! silently rewrite `{ 0.2 0.4 0.6 }` into `{ 51 102 153 }` on first use.
+
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
@@ -10,17 +49,27 @@ use cwtools_validation::position::value_rules_for_key;
 use crate::Backend;
 use crate::paths::{position_byte_index, source_column_to_lsp};
 
+/// What the three channels mean numerically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Space {
+    /// `{ 0.2 0.4 0.6 }` — RGB, each channel 0-1.
     RgbFloat,
+    /// `{ 51 102 153 }` — RGB, each channel 0-255.
     RgbInt,
+    /// `hsv { 0.5 1.0 1.0 }` — HSV, each channel 0-1.
     HsvFloat,
+    /// `hsv360 { 340 60 55 }` — hue in degrees, saturation/value in percent.
     Hsv360,
 }
 
+/// How a colour literal is written in the source, so a rewrite reproduces it
+/// exactly: the numeric space plus whether the source spelled the optional `rgb`
+/// keyword. Re-emitting `rgb { … }` as `{ … }` is valid but is still an edit the
+/// user did not ask for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Convention {
     pub(crate) space: Space,
+    /// Only meaningful for the RGB spaces; HSV always writes its keyword.
     rgb_prefix: bool,
 }
 
@@ -32,6 +81,7 @@ impl Convention {
         }
     }
 
+    /// The keyword the literal opens with, `""` when it writes none.
     fn prefix(self) -> &'static str {
         match self.space {
             Space::RgbFloat | Space::RgbInt if self.rgb_prefix => "rgb ",
@@ -42,12 +92,25 @@ impl Convention {
     }
 }
 
+/// The source text of one colour literal, split into what a rewrite needs: the
+/// convention and the three channel values as written.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ColourLiteral {
     pub(crate) convention: Convention,
     pub(crate) channels: [f32; 3],
 }
 
+/// Read a colour literal out of its source text — everything from the prefix (or
+/// `{`) through the closing `}`. `None` when the span isn't a three-channel
+/// literal, so a malformed or edited range yields no presentation rather than a
+/// wrong rewrite.
+///
+/// Convention detection, in order:
+/// 1. An explicit `hsv360` / `hsv` / `rgb` prefix wins.
+/// 2. Otherwise a decimal point anywhere means floats.
+/// 3. Otherwise all-integer values that are all `<= 1` are still floats —
+///    `{ 1 0 0 }` is pure red, and nobody writes near-black as `{ 1 1 1 }`.
+/// 4. Otherwise ints 0-255.
 pub(crate) fn parse_literal(text: &str) -> Option<ColourLiteral> {
     let trimmed = text.trim();
     let brace = trimmed.find('{')?;
@@ -56,6 +119,7 @@ pub(crate) fn parse_literal(text: &str) -> Option<ColourLiteral> {
         &trimmed[brace..],
     );
     let body = rest.strip_prefix('{')?.strip_suffix('}')?;
+    // Strip comments so `{ 1 2 3 # note }` doesn't parse the note.
     let body: String = body
         .lines()
         .map(|l| l.split('#').next().unwrap_or(""))
@@ -70,6 +134,8 @@ pub(crate) fn parse_literal(text: &str) -> Option<ColourLiteral> {
         *slot = part.parse::<f32>().ok()?;
     }
     let has_decimal = parts.iter().any(|p| p.contains('.'));
+    // Bare integers that all fit in 0-1 are the float spelling of a saturated
+    // colour, not a near-black 0-255 triple.
     let looks_float = has_decimal || channels.iter().all(|c| *c <= 1.0);
     let convention = match prefix.as_str() {
         "hsv360" => Convention::new(Space::Hsv360),
@@ -84,6 +150,8 @@ pub(crate) fn parse_literal(text: &str) -> Option<ColourLiteral> {
         },
         "" if looks_float => Convention::new(Space::RgbFloat),
         "" => Convention::new(Space::RgbInt),
+        // An unrecognised keyword is not a colour we know how to rewrite;
+        // dropping it would be a silent edit.
         _ => return None,
     };
     Some(ColourLiteral {
@@ -92,6 +160,8 @@ pub(crate) fn parse_literal(text: &str) -> Option<ColourLiteral> {
     })
 }
 
+/// The swatch for a literal: channels normalised to RGB 0-1, alpha always 1
+/// (the format has no alpha channel here).
 pub(crate) fn to_color(lit: &ColourLiteral) -> Color {
     let [a, b, c] = lit.channels;
     let (red, green, blue) = match lit.convention.space {
@@ -108,6 +178,8 @@ pub(crate) fn to_color(lit: &ColourLiteral) -> Color {
     }
 }
 
+/// Render `color` back into `convention`'s spelling, including the prefix and
+/// the braces — the exact text that replaces the literal's range.
 pub(crate) fn format_literal(color: &Color, convention: Convention) -> String {
     let (r, g, b) = (
         color.red.clamp(0.0, 1.0),
@@ -139,6 +211,7 @@ pub(crate) fn format_literal(color: &Color, convention: Convention) -> String {
     format!("{}{{ {} }}", convention.prefix(), body)
 }
 
+/// HSV (all 0-1) to RGB (all 0-1).
 fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
     let h = h.rem_euclid(1.0) * 6.0;
     let s = s.clamp(0.0, 1.0);
@@ -156,6 +229,7 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
     }
 }
 
+/// RGB (all 0-1) to HSV (all 0-1). Hue of a greyscale colour is 0.
 fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
@@ -173,6 +247,9 @@ fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     (h.rem_euclid(1.0), s, max)
 }
 
+/// Does this matched rule describe a colour block? The post-processed shape is a
+/// `NodeRule` whose body is numeric `LeafValueRule`s at cardinality 3 (or 3..4,
+/// which `colour[rgb]` uses for an optional alpha).
 fn is_colour_rule(rule: &RuleType) -> bool {
     let RuleType::NodeRule { rules, .. } = rule else {
         return false;
@@ -191,12 +268,22 @@ fn is_colour_rule(rule: &RuleType) -> bool {
         })
 }
 
+/// One colour found in a document: its full source span (prefix through `}`) and
+/// the literal read from it.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FoundColour {
     pub(crate) range: SourceRange,
     pub(crate) literal: ColourLiteral,
 }
 
+/// Find every colour literal in `file`. Pure (no locks / IO) so the handler and
+/// its tests share the walk. `rules` is `None` when no ruleset is loaded, which
+/// finds nothing — a colour here is a rule fact, never a guess from the key name.
+///
+/// The descent mirrors `semantic`'s: one [`crate::semantic::block_rules_for`]
+/// call per block that can't inherit its rules from its parent (in practice one
+/// per top-level entity), then the parent's matched `NodeRule` bodies all the way
+/// down.
 pub(crate) fn document_colours(
     file: &ParsedFile,
     table: &StringTable,
@@ -215,6 +302,8 @@ pub(crate) fn document_colours(
         prepared,
         logical_path,
     };
+    // `Some` only in a `type_per_file` file; elsewhere each root child
+    // bootstraps its own body.
     let root_rules =
         crate::semantic::block_rules_for(file, prepared, logical_path, &file.root_children);
     collect(&file.root_children, &cx, root_rules.as_deref(), &mut out);
@@ -255,8 +344,12 @@ fn collect(
             && let Some(found) = read_colour(leaf.pos, &raw_key, &cx.lines)
         {
             out.push(found);
+            // A colour block's children are bare numbers; nothing to recurse for.
             continue;
         }
+        // Bootstrap only where there are no rules to inherit (the root level of a
+        // non-`type_per_file` file, once per entity). Then stop: a subtree with
+        // no rules can never contain a colour, since a colour is a rule fact.
         let inner_rules: Vec<(RuleType, Options)> = match block_rules {
             None => crate::semantic::block_rules_for(cx.ast, cx.prepared, cx.logical_path, inner)
                 .unwrap_or_default(),
@@ -275,6 +368,10 @@ fn collect(
     }
 }
 
+/// The literal's source span and parsed value for a leaf known to be a colour.
+/// The span starts after the leaf's `=` (so the picker replaces the value, not
+/// the key) and ends at the matching `}`. Scanning from the source is required:
+/// the parser drops the `rgb`/`hsv` prefix and its leaf range over-runs the `}`.
 fn read_colour(pos: SourceRange, raw_key: &str, lines: &[&str]) -> Option<FoundColour> {
     let start_line = pos.start.line.saturating_sub(1) as usize;
     let key_end = pos.start.col as usize + raw_key.chars().count();
@@ -286,6 +383,7 @@ fn read_colour(pos: SourceRange, raw_key: &str, lines: &[&str]) -> Option<FoundC
         .find(|(_, c)| *c == '=')
         .map(|(i, _)| i + 1)?;
 
+    // Walk from just past the `=` to the matching `}`, collecting the text.
     let mut text = String::new();
     let mut value_start: Option<(usize, usize)> = None;
     let mut depth = 0usize;
@@ -296,6 +394,7 @@ fn read_colour(pos: SourceRange, raw_key: &str, lines: &[&str]) -> Option<FoundC
                 if ch.is_whitespace() {
                     continue;
                 }
+                // A comment before the value means the literal isn't here.
                 if ch == '#' {
                     break;
                 }
@@ -304,6 +403,7 @@ fn read_colour(pos: SourceRange, raw_key: &str, lines: &[&str]) -> Option<FoundC
             text.push(ch);
             match ch {
                 '{' => depth += 1,
+                // A `}` before any `{` is malformed source, not a literal.
                 '}' if depth == 0 => return None,
                 '}' => {
                     depth -= 1;
@@ -313,11 +413,11 @@ fn read_colour(pos: SourceRange, raw_key: &str, lines: &[&str]) -> Option<FoundC
                             range: SourceRange {
                                 start: cwtools_parser::ast::SourcePos {
                                     line: sl as u32 + 1,
-                                    col: sc as u16,
+                                    col: sc.min(u16::MAX as usize) as u16,
                                 },
                                 end: cwtools_parser::ast::SourcePos {
                                     line: line_no as u32 + 1,
-                                    col: col as u16 + 1,
+                                    col: col.saturating_add(1).min(u16::MAX as usize) as u16,
                                 },
                             },
                             literal,
@@ -334,6 +434,7 @@ fn read_colour(pos: SourceRange, raw_key: &str, lines: &[&str]) -> Option<FoundC
     None
 }
 
+/// Parser range (1-based line, 0-based char col) to an LSP range in the
 /// negotiated encoding, against the already-split lines.
 fn to_lsp_range(range: SourceRange, lines: &[&str], encoding: &PositionEncodingKind) -> Range {
     let conv = |line: u32, col: u16| {
@@ -347,6 +448,9 @@ fn to_lsp_range(range: SourceRange, lines: &[&str], encoding: &PositionEncodingK
     }
 }
 
+/// The source text an LSP `range` covers, used by `colorPresentation` to recover
+/// the convention the document actually uses. `None` when the range spans lines
+/// the document doesn't have.
 pub(crate) fn text_in_range(text: &str, range: Range, encoding: &PositionEncodingKind) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let mut out = String::new();
@@ -455,6 +559,9 @@ impl Backend {
             return Ok(Vec::new());
         };
         let encoding = self.state.config.read().position_encoding.clone();
+        // Re-read the span the picker is editing so the rewrite keeps the
+        // convention the file already uses. No convention, no presentation —
+        // better than guessing and rewriting the file into the other one.
         let source = text_in_range(&text, params.range, &encoding);
         let Some(literal) = parse_literal(&source) else {
             return Ok(Vec::new());
@@ -479,6 +586,8 @@ mod tests {
         parse_literal(text).unwrap_or_else(|| panic!("{text:?} should parse as a colour"))
     }
 
+    // ── Convention detection ─────────────────────────────────────────────────
+
     #[test]
     fn floats_with_a_decimal_point_are_rgb_floats() {
         let l = lit("{ 0.2 0.4 0.6 }");
@@ -495,6 +604,7 @@ mod tests {
 
     #[test]
     fn bare_integers_within_zero_to_one_read_as_floats() {
+        // `{ 1 0 0 }` is pure red, not a 1/255 near-black.
         assert_eq!(lit("{ 1 0 0 }").convention.space, Space::RgbFloat);
         assert_eq!(lit("{ 1 1 1 }").convention.space, Space::RgbFloat);
     }
@@ -510,6 +620,7 @@ mod tests {
 
     #[test]
     fn the_rgb_keyword_is_remembered_separately_from_the_space() {
+        // `rgb { … }` and `{ … }` mean the same thing but are not the same text.
         assert_ne!(
             lit("rgb { 51 102 153 }").convention,
             lit("{ 51 102 153 }").convention
@@ -539,6 +650,8 @@ mod tests {
         assert_eq!(l.channels, [51.0, 102.0, 153.0]);
     }
 
+    // ── Swatches ─────────────────────────────────────────────────────────────
+
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 0.005
     }
@@ -555,10 +668,13 @@ mod tests {
 
     #[test]
     fn hsv_converts_to_the_expected_rgb() {
+        // hue 0, full saturation and value -> pure red.
         let red = to_color(&lit("hsv { 0.0 1.0 1.0 }"));
         assert_eq!((red.red, red.green, red.blue), (1.0, 0.0, 0.0));
+        // 120 degrees -> pure green.
         let green = to_color(&lit("hsv360 { 120 100 100 }"));
         assert!(approx(green.red, 0.0) && approx(green.green, 1.0) && approx(green.blue, 0.0));
+        // zero saturation -> grey at the value level.
         let grey = to_color(&lit("hsv { 0.3 0.0 0.5 }"));
         assert!(approx(grey.red, 0.5) && approx(grey.green, 0.5) && approx(grey.blue, 0.5));
     }
@@ -570,6 +686,8 @@ mod tests {
         assert_eq!(over.green, 0.0);
         assert!(approx(over.blue, 128.0 / 255.0));
     }
+
+    // ── Round trip: read -> swatch -> write -> read ───────────────────────────
 
     fn round_trip(source: &str) -> (Convention, String, ColourLiteral) {
         let original = lit(source);
@@ -599,6 +717,8 @@ mod tests {
 
     #[test]
     fn prefixed_conventions_keep_their_prefix() {
+        // Including the optional `rgb`: valid to drop, but still an unrequested
+        // edit to the user's file.
         assert_eq!(round_trip("rgb { 51 102 153 }").1, "rgb { 51 102 153 }");
         assert_eq!(
             round_trip("rgb { 0.2 0.4 0.6 }").1,
@@ -619,6 +739,8 @@ mod tests {
 
     #[test]
     fn the_swatch_survives_a_round_trip_in_every_convention() {
+        // The end-to-end guarantee: whatever the picker reads back must render
+        // as the colour it was handed, in the convention it started from.
         for source in [
             "{ 0.2 0.4 0.6 }",
             "{ 51 102 153 }",
@@ -664,10 +786,13 @@ mod tests {
         );
     }
 
+    // ── Locating the literal in a document ───────────────────────────────────
+
     fn find(text: &str, key: &str) -> FoundColour {
         let table = StringTable::new();
         let ast = cwtools_parser::parser::parse_string(text, &table);
         let lines: Vec<&str> = text.lines().collect();
+        // The colour leaf is the first nested leaf of the first root child.
         let Child::Leaf(root) = ast.root_children[0] else {
             panic!("expected a root clause")
         };
@@ -693,6 +818,7 @@ mod tests {
         assert_eq!(found.range.start.col, 12, "just past `color = `");
         assert_eq!(found.range.end.col, 27, "one past the closing brace");
         assert_eq!(found.literal.convention.space, Space::RgbFloat);
+        // Slice the source with the span and confirm it is exactly the literal.
         let line: Vec<char> = text.lines().nth(1).unwrap().chars().collect();
         let slice: String = line[12..27].iter().collect();
         assert_eq!(slice, "{ 0.2 0.4 0.6 }");
@@ -720,6 +846,39 @@ mod tests {
     }
 
     #[test]
+    fn a_literal_beyond_the_parser_column_limit_has_a_valid_range() {
+        let text = format!(
+            "c = {{\ncolor ={}{{ 1 0 0 }}\n}}\n",
+            " ".repeat(u16::MAX as usize)
+        );
+        let found = find(&text, "color");
+        assert_eq!(found.range.start.col, u16::MAX);
+        assert_eq!(found.range.end.col, u16::MAX);
+        assert!(found.range.start.col <= found.range.end.col);
+    }
+
+    #[test]
+    fn an_end_column_exactly_at_the_u16_limit_clamps_instead_of_overflowing() {
+        // Puts the closing brace at char 65,535, where `col as u16 + 1` overflowed.
+        let text = format!(
+            "c = {{\ncolor ={}{{ 1 0 0 }}\n}}\n",
+            " ".repeat(u16::MAX as usize - "color = { 1 0 0".len())
+        );
+        let found = find(&text, "color");
+        assert_eq!(found.range.start.col, 65_527, "just past `color = `");
+        assert_eq!(found.range.end.col, u16::MAX);
+        let lines: Vec<&str> = text.lines().collect();
+        let range = to_lsp_range(found.range, &lines, &PositionEncodingKind::UTF16);
+        assert_eq!(range.end.character, u16::MAX as u32);
+        assert!(
+            parse_literal(&text_in_range(&text, range, &PositionEncodingKind::UTF16)).is_none(),
+            "truncated range reads back as no literal, so the picker rewrites nothing"
+        );
+    }
+
+    // ── Reading a range back out of the document ─────────────────────────────
+
+    #[test]
     fn range_text_extracts_the_literal_for_the_presentation_step() {
         let text = "c = {\n    color = { 0.2 0.4 0.6 }\n}\n";
         let range = Range::new(Position::new(1, 12), Position::new(1, 27));
@@ -742,6 +901,7 @@ mod tests {
     #[test]
     fn range_text_uses_the_negotiated_encoding() {
         // 😀 is two UTF-16 code units, so the literal starts at UTF-16 column 14
+        // but char column 13.
         let text = "c = {\n    😀 = { 1 0 0 }\n}\n";
         let utf16 = Range::new(Position::new(1, 9), Position::new(1, 20));
         assert_eq!(
@@ -754,6 +914,8 @@ mod tests {
             "{ 1 0 0 }"
         );
     }
+
+    // ── The rule predicate ───────────────────────────────────────────────────
 
     fn colour_node(value: ValueType, min: i32) -> RuleType {
         RuleType::NodeRule {
@@ -775,6 +937,7 @@ mod tests {
 
     #[test]
     fn the_post_processed_colour_shape_is_recognised() {
+        // What `replace_colour_field` produces for `colour_field`.
         assert!(is_colour_rule(&colour_node(
             ValueType::Float {
                 min: -256.0,
@@ -782,6 +945,8 @@ mod tests {
             },
             3
         )));
+        // What `colour[rgb]` and the hand-written `## cardinality = 3..3 int`
+        // form produce.
         assert!(is_colour_rule(&colour_node(
             ValueType::Int { min: 0, max: 255 },
             3
@@ -790,10 +955,12 @@ mod tests {
 
     #[test]
     fn a_plain_numeric_list_is_not_a_colour() {
+        // Same body, different cardinality: a coordinate list, not a colour.
         assert!(!is_colour_rule(&colour_node(
             ValueType::Int { min: 0, max: 255 },
             2
         )));
+        // A block of named fields is never a colour.
         assert!(!is_colour_rule(&RuleType::NodeRule {
             left: cwtools_rules::rules_types::NewField::SpecificField("color".into()),
             rules: [(
