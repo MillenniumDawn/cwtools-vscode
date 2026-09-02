@@ -8,34 +8,20 @@ use cwtools_file_manager::{
 };
 use std::path::{Path, PathBuf};
 
-/// A multi-file localization service for a single game.
-///
-/// Loc entries are owned exactly once, in `files`. Per-language and per-key
-/// views are derived on demand (or by [`crate::loc_index::LocIndex`]) rather
-/// than stored as a second copy — for large projects (Millennium Dawn ships
-/// ~2M loc entries) a second owned copy dominated the heap.
 pub struct LocService {
-    /// Every successfully parsed loc file, in load order.
     files: Vec<LocFile>,
-    /// (path, parse error) for files that failed to parse.
     errors: Vec<(String, String)>,
 }
 
 impl LocService {
-    /// Create from a list of (file_path, file_text) pairs. Encoding is unknown
-    /// (no CW254 check) — use [`LocService::from_folder`] when bytes are on disk.
     pub fn from_files(files: Vec<(String, String)>) -> Self {
         Self::from_files_with_encoding(files.into_iter().map(|(p, t)| (p, t, None)).collect())
     }
 
-    /// As [`from_files`], but each file carries its detected on-disk encoding so
     /// the UTF-8-BOM rule (CW254) can be enforced.
     pub fn from_files_with_encoding(files: Vec<(String, String, Option<FileEncoding>)>) -> Self {
         use rayon::prelude::*;
 
-        // Parsing is independent per file; run it in parallel, preserving input
-        // order (`par_iter` over the indexed Vec) so first-seen-wins semantics
-        // and diagnostics order are unchanged.
         let results: Vec<Result<Vec<LocFile>, (String, String)>> = files
             .into_par_iter()
             .map(|(path, text, encoding)| parse_loc_file_entry(path, text, encoding))
@@ -43,8 +29,6 @@ impl LocService {
         Self::from_results(results)
     }
 
-    /// Collect the parallel per-file parse results into the service, preserving
-    /// input order for first-seen-wins semantics and diagnostics order.
     fn from_results(results: Vec<Result<Vec<LocFile>, (String, String)>>) -> Self {
         let mut parsed: Vec<LocFile> = Vec::new();
         let mut errors: Vec<(String, String)> = Vec::new();
@@ -60,20 +44,14 @@ impl LocService {
         }
     }
 
-    /// Load from a directory tree (recursively).
     pub fn from_folder(folder: &Path, budget: ScanBudget) -> Self {
         Self::from_folders_filtered(&[folder], budget, None, &[], &[])
     }
 
-    /// Load from several directory trees (e.g. a mod dir plus the vanilla
-    /// install). Later folders' keys join the union; duplicate keys keep the
-    /// first-seen entry per language.
     pub fn from_folders(folders: &[&Path], budget: ScanBudget) -> Self {
         Self::from_folders_filtered(folders, budget, None, &[], &[])
     }
 
-    /// Load loc files while pruning user-excluded paths during discovery and
-    /// unselected YAML languages before the full parse.
     pub fn from_folders_filtered(
         folders: &[&Path],
         budget: ScanBudget,
@@ -85,15 +63,10 @@ impl LocService {
         Self::from_paths(paths, budget, langs)
     }
 
-    /// Discover the on-disk loc file paths `from_folders` would parse,
-    /// without reading or parsing them. For callers that only need a cheap
-    /// stat-based signature over the loc tree (e.g. the LSP's quiet
-    /// background rescan deciding whether to skip a full loc rebuild).
     pub fn discover_files(folders: &[&Path], budget: ScanBudget) -> Vec<PathBuf> {
         Self::discover_files_filtered(folders, budget, &[], &[])
     }
 
-    /// Discover loc files with user globs applied before ignored paths consume
     /// the file budget.
     pub fn discover_files_filtered(
         folders: &[&Path],
@@ -108,10 +81,6 @@ impl LocService {
         paths
     }
 
-    /// Read and parse a set of loc files in parallel. Reading (disk I/O) happens
-    /// inside the parallel map alongside parsing — mirroring the CLI's
-    /// `discover_and_parse` — so a large loc tree isn't read sequentially before
-    /// the parse fans out.
     pub fn from_paths(paths: Vec<PathBuf>, budget: ScanBudget, langs: Option<&[Lang]>) -> Self {
         use rayon::prelude::*;
         let bytes = ScanBytes::new();
@@ -143,23 +112,19 @@ impl LocService {
         Self::from_results(results)
     }
 
-    /// Append another service's parsed files and errors in discovery order.
     pub fn merge_from(&mut self, mut other: Self) {
         self.files.append(&mut other.files);
         self.errors.append(&mut other.errors);
     }
 
-    /// All successfully parsed loc files (the single owner of loc entries).
     pub fn files(&self) -> &[LocFile] {
         &self.files
     }
 
-    /// Files that failed to parse, as `(path, error)`.
     pub fn errors(&self) -> &[(String, String)] {
         &self.errors
     }
 
-    /// Languages that actually have loc data loaded.
     pub fn languages(&self) -> Vec<Lang> {
         let mut langs: Vec<Lang> = Vec::new();
         for f in &self.files {
@@ -173,9 +138,6 @@ impl LocService {
     }
 }
 
-/// Parse one loc file's text. CSV files (CK2/VIC2) are routed through
-/// `csv_parser` (one `LocFile` per language present); everything else goes
-/// through `parse_loc_text` (YAML).
 fn parse_loc_file_entry(
     path: String,
     text: String,
@@ -184,12 +146,6 @@ fn parse_loc_file_entry(
     parse_loc_files(&path, &text, encoding).map_err(|e| (path, e.to_string()))
 }
 
-/// Parse one loc file's text into its [`LocFile`]s: a `.csv` yields one per
-/// language present in it, a `.yml` exactly one.
-///
-/// Borrows its inputs, so a caller that needs the keys, the diagnostics and the
-/// display text of the same buffer can parse it once and share the result
-/// instead of handing an owned copy to a fresh [`LocService`] per use (#87).
 pub fn parse_loc_files(
     path: &str,
     text: &str,
@@ -199,7 +155,6 @@ pub fn parse_loc_files(
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("csv"));
     if is_csv {
-        // CSV: produce one LocFile per language present in the file.
         let entries_by_lang = parse_csv_loc_per_lang(text, path, None);
         let mut by_lang: std::collections::HashMap<Lang, Vec<crate::commands::LocEntry>> =
             std::collections::HashMap::new();
@@ -230,18 +185,11 @@ pub fn parse_loc_files(
     }
 }
 
-/// True for a directory name the game treats as a localisation root.
 fn is_loc_dir_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower == "localisation" || lower == "localisation_synced" || lower == "localization"
 }
 
-/// Tooling / VCS / build directories that never hold game loc. Skipped during the
-/// walk so a mirror of the mod tree (e.g. a `.claude/worktrees/<wt>/localisation`,
-/// a `.git` checkout, or `node_modules`) isn't loaded and double-counted. Shares
-/// `FileManager`'s exclusion set so the two walkers stay consistent; any
-/// dot-directory is additionally skipped, and the root-anchored `resources/`
-/// exclusion applies only to a direct child of the walk root.
 fn is_excluded_loc_dir(name: &str, at_root: bool) -> bool {
     name.starts_with('.') || is_excluded_dir(name) || (at_root && is_excluded_root_dir(name))
 }
@@ -252,10 +200,6 @@ fn walk_folder(
     ignore_files: &[String],
     ignore_dirs: &[String],
 ) -> Vec<PathBuf> {
-    // Only files under a `localisation` (or `localization`) directory are loc —
-    // that's what the game and F# load. Scanning every `.yml` in the tree pulls
-    // in CI workflows, editor caches, and staging copies as bogus loc files
-    // (false CW254/CW268) and wastes memory on data the game never reads.
     let mut remaining = budget.max_files;
     walk_folder_inner(
         folder,
@@ -294,7 +238,6 @@ fn walk_folder_inner(
         }
         // Reject symlinks and non-regular files outright (see
         // `file_manager::walk_dir_generic`): a symlink can point outside the
-        // root or into a cycle, and a special file can report length 0.
         if ft.is_symlink() || !(ft.is_dir() || ft.is_file()) {
             continue;
         }
@@ -372,7 +315,6 @@ mod tests {
         for keep in ["localisation", "localization", "common", "english"] {
             assert!(!is_excluded_loc_dir(keep, false), "{keep} should be walked");
         }
-        // `resources` is excluded only at the walk root.
         assert!(is_excluded_loc_dir("resources", true));
         assert!(!is_excluded_loc_dir("resources", false));
     }
@@ -504,7 +446,6 @@ mod tests {
 
         let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
         assert_eq!(svc.files().len(), 1);
-        // Windows walks yield `\`-separated paths; compare normalised.
         assert!(
             svc.files()[0]
                 .path
@@ -513,8 +454,6 @@ mod tests {
         );
     }
 
-    // Skipping this directory left every key defined there out of the index, so
-    // script referencing them read as missing.
     #[test]
     fn from_folder_loads_the_synced_localisation_directory() {
         let tmp = tempfile::tempdir().unwrap();
@@ -835,7 +774,6 @@ mod tests {
         );
     }
 
-    /// A loc file over the per-file read cap must be skipped, not read to EOF.
     #[test]
     fn from_folder_skips_over_limit_file() {
         let tmp = tempfile::tempdir().unwrap();
@@ -847,7 +785,6 @@ mod tests {
 "#,
         )
         .unwrap();
-        // A file over the per-file cap must be skipped, not read to EOF.
         std::fs::write(
             tmp.path().join("localisation").join("huge_l_english.yml"),
             "l_english:\n".to_string() + &"x".repeat(200),
