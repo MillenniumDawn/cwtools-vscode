@@ -20,15 +20,22 @@ const {
 	showWarningMessage,
 	showInformationMessage,
 	showOpenDialog,
+	registeredCommands,
 	readFile,
 	registerWebviewPanelSerializer,
 	serializers,
 	logError,
 } = vi.hoisted(() => {
 	const serializers: SerializerShape[] = [];
+	const registeredCommands = new Map<string, (...args: never[]) => unknown>();
 	return {
 		executeCommand: vi.fn(),
-		registerCommand: vi.fn(() => ({ dispose: () => {} })),
+		registerCommand: vi.fn(
+			(id: string, handler: (...args: never[]) => unknown) => {
+				registeredCommands.set(id, handler);
+				return { dispose: () => {} };
+			},
+		),
 		showWarningMessage: vi.fn(),
 		showInformationMessage: vi.fn(),
 		showOpenDialog: vi.fn(),
@@ -40,6 +47,7 @@ const {
 			},
 		),
 		serializers,
+		registeredCommands,
 		logError: vi.fn(),
 	};
 });
@@ -92,7 +100,10 @@ suite("graph panel restore", () => {
 			},
 		},
 	};
-	const tracker = { getLatestType: () => "idea" } as unknown as EditorTracker;
+	let latestType = "idea";
+	const tracker = {
+		getLatestType: () => latestType,
+	} as unknown as EditorTracker;
 
 	const graphData: GraphData = [
 		{
@@ -166,10 +177,37 @@ suite("graph panel restore", () => {
 				executeCommandProvider: { commands: [GRAPH_DATA_COMMAND] },
 			},
 		};
+		latestType = "idea";
 	});
 
 	afterEach(() => {
 		GraphPanel.currentPanel?.dispose();
+	});
+
+	test("reports when the active file has no graph", async () => {
+		latestType = "";
+		const showGraph = registeredCommands.get("cwtools.showGraph");
+		assert.ok(showGraph);
+
+		await showGraph();
+
+		assert.deepStrictEqual(graphRequests(), []);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			["CWTools: no graph for this file."],
+		]);
+	});
+
+	test("reports when no persisted graph has no active file type", async () => {
+		latestType = "";
+		const panel = fakePanel();
+
+		await deserialize(panel.panel, undefined);
+
+		assert.deepStrictEqual(graphRequests(), []);
+		assert.strictEqual(panel.postMessage.mock.calls.length, 0);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			["CWTools: no graph for this file."],
+		]);
 	});
 
 	test("re-requests the server graph for the persisted entity type and depth", async () => {

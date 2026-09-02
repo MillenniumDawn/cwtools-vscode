@@ -164,10 +164,7 @@ export function registerCommands(
 				}
 				const msg = errorMessage(err);
 				window.showErrorMessage(
-					l10n.t(
-						"CWTools: failed to restart the language server: {0}",
-						msg,
-					),
+					l10n.t("CWTools: failed to restart the language server: {0}", msg),
 				);
 			} finally {
 				restartInFlight = false;
@@ -177,6 +174,9 @@ export function registerCommands(
 	let currentGraphDepth = 3;
 	const wheelSensitivity = (): number =>
 		workspace.getConfiguration("cwtools.graph").get("zoomSensitivity") ?? 1;
+	const reportNoGraph = (): void => {
+		window.showInformationMessage(l10n.t("CWTools: no graph for this file."));
+	};
 	const showGraph = async function () {
 		if (!serverProvidesGraphData(client)) {
 			window.showWarningMessage(
@@ -187,6 +187,10 @@ export function registerCommands(
 			return;
 		}
 		const entityType = tracker.getLatestType();
+		if (!entityType) {
+			reportNoGraph();
+			return;
+		}
 		let loaded: [GraphPanelModule, GraphData];
 		try {
 			loaded = await Promise.all([
@@ -310,6 +314,10 @@ export function registerCommands(
 								// No persisted state (e.g. a reload before the first render):
 								// fall back to the last active entity type.
 								const entityType = tracker.getLatestType();
+								if (!entityType) {
+									reportNoGraph();
+									return;
+								}
 								const data = await getGraphData(entityType, currentGraphDepth);
 								panel.initialiseGraph(data, wheelSensitivity(), {
 									source: "server",
