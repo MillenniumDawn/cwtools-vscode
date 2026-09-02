@@ -19,9 +19,6 @@ impl Backend {
         let Some(text) = self.file_text_for(&uri).await else {
             return Ok(None);
         };
-        // Brace-matched folding over the text: the parser drops the exact `}`
-        // line (it consumes trailing whitespace after a clause), so a direct
-        // scan is more accurate than the AST for the closing-brace line.
         let mut ranges = brace_folding_ranges(&text);
         ranges.extend(comment_and_region_folds(&text));
         if ranges.is_empty() {
@@ -42,14 +39,10 @@ impl Backend {
         let encoding = self.position_encoding();
         let pairs = brace_pairs(&text);
         let lines = DocLines::new(&text, encoding.clone());
-        // One chain per requested position, in request order (LSP requires the
-        // result to line up with `positions`).
         let out: Vec<SelectionRange> = params
             .positions
             .iter()
             .map(|pos| {
-                // The conversion returns a 1-based line; only the char column
-                // is needed (the request's 0-based line is used directly).
                 let (_, col) = lsp_pos_to_source_in_text(&text, *pos, &encoding);
                 let spans = selection_spans(&text, &pairs, pos.line, col as u32);
                 let mut node: Option<SelectionRange> = None;
@@ -62,8 +55,6 @@ impl Backend {
                         parent: node.map(Box::new),
                     });
                 }
-                // Outside any token or block: an empty chain is not allowed,
-                // so anchor at the cursor itself.
                 node.unwrap_or(SelectionRange {
                     range: Range {
                         start: *pos,
@@ -89,8 +80,6 @@ impl Backend {
         let Some(text) = self.file_text_for(&uri).await else {
             return Ok(None);
         };
-        // The identifier under the cursor: prefer the rule-resolved type-ref
-        // instance name, falling back to the raw token in the text.
         let (ws_prefix, position_encoding) = {
             let cfg = self.state.config.read();
             (cfg.workspace_prefix.clone(), cfg.position_encoding.clone())
@@ -133,16 +122,12 @@ impl Backend {
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri.to_string();
 
-        // Localisation file: per-file key outline from the loc entries.
         if crate::paths::is_loc_file(&uri)
             && let Some(resp) = self.loc_document_symbols(&params).await
         {
             return Ok(Some(resp));
         }
 
-        // Hierarchical outline walked straight from the retained AST, when the
-        // client advertises `hierarchicalDocumentSymbolSupport`. Falls through to
-        // the flat instance/variable list otherwise (or when the AST is empty).
         if self
             .state
             .hierarchical_symbols
@@ -150,9 +135,6 @@ impl Backend {
             && let Some(ast) = self.ast_for(&uri)
         {
             let text = self.file_text_for(&uri).await.unwrap_or_default();
-            // The line index is built once here: every clause in the outline
-            // resolves its start, end and key span against it, and rescanning
-            // the text per clause is what made a large file's outline hang
             // (#541).
             let lines = DocLines::new(&text, self.position_encoding());
             let syms = build_doc_symbols(
@@ -187,9 +169,6 @@ impl Backend {
             .as_deref()
             .map(|text| DocLines::new(text, self.position_encoding()));
 
-        // Emit type instances as document symbols (one per named instance),
-        // derived from the cross-file index — `FileInfo` no longer keeps a
-        // per-file copy of these.
         let mut symbols: Vec<SymbolInformation> = instances
             .into_iter()
             .map(|(type_name, name, loc)| {
@@ -210,7 +189,6 @@ impl Backend {
             })
             .collect();
 
-        // Also include @-variables as symbols (still tracked per-file).
         for (name, loc) in variables {
             symbols.push(make_symbol(
                 name.clone(),

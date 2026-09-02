@@ -1,12 +1,3 @@
-//! `inline_script` expansion.
-//!
-//! A HOI4 call site writes `inline_script = { script = folder/name PARAM = v }`
-//! and the engine splices `common/inline_scripts/folder/name.txt` in with every
-//! `$PARAM$` replaced by the argument. Nothing in the calling file says what the
-//! spliced body has to look like, so the body is only checkable against the rules
-//! that were in force where it was called. [`expand`] rebuilds it, and the
-//! validator walks the result against the caller's own rule list and scope.
-
 use std::collections::HashMap;
 use std::fmt;
 
@@ -15,34 +6,21 @@ use cwtools_string_table::string_table::StringTable;
 
 use crate::common::leaf_value_to_string;
 
-/// Directory (under the mod root) inline scripts are looked up in.
 const SCRIPT_DIR: &str = "common/inline_scripts/";
 
-/// How many nested `inline_script` calls are expanded before the chain is
-/// reported instead of followed. Mirrors F# `updateInlineScripts`.
 const MAX_DEPTH: usize = 5;
 
-/// The `common/inline_scripts` files a run may expand, keyed by the name a call
-/// site writes after `script =`. Build one per run and hand it to
-/// [`crate::Prepared`]; without it every `inline_script` call is accepted
-/// unexpanded.
 #[derive(Default)]
 pub struct InlineScripts {
     scripts: HashMap<String, InlineScript>,
 }
 
-/// One loaded script: the body to splice in, and the mod-relative path it came
-/// from so a diagnostic can say where the offending line really is.
 struct InlineScript {
     logical_path: String,
     ast: ParsedFile,
 }
 
 impl InlineScripts {
-    /// Register `ast` under the name a call site would reference it by.
-    /// Returns the name it was registered under (replacing any existing entry
-    /// for it), or `None` when `logical_path` doesn't sit under
-    /// `common/inline_scripts` — the registry is left unchanged in that case.
     pub fn insert(&mut self, logical_path: &str, ast: ParsedFile) -> Option<String> {
         let name = script_name(logical_path)?;
         self.scripts.insert(
@@ -55,22 +33,15 @@ impl InlineScripts {
         Some(name)
     }
 
-    /// Drop the entry `logical_path` maps to, if any. Returns the name that
-    /// was removed, or `None` when the path isn't a script path or nothing was
-    /// registered under it — a caller sweeping the callers of a deleted script
-    /// only has work to do in the `Some` case.
     pub fn remove(&mut self, logical_path: &str) -> Option<String> {
         let name = script_name(logical_path)?;
         self.scripts.remove(&name).map(|_| name)
     }
 
-    /// Whether `logical_path` names a file the registry would hold, so a loader
-    /// can skip reading everything else.
     pub fn is_script_path(logical_path: &str) -> bool {
         script_name(logical_path).is_some()
     }
 
-    /// Number of registered scripts, for the load-time profile line.
     pub fn len(&self) -> usize {
         self.scripts.len()
     }
@@ -84,9 +55,6 @@ impl InlineScripts {
     }
 }
 
-/// The name `logical_path` is callable by: its path below
-/// `common/inline_scripts`, without the extension. `None` for anything outside
-/// that directory.
 fn script_name(logical_path: &str) -> Option<String> {
     let normalized = normalize(logical_path);
     let rest = normalized.split_once(SCRIPT_DIR).map(|(_, rest)| rest)?;
@@ -94,14 +62,10 @@ fn script_name(logical_path: &str) -> Option<String> {
     (!stem.is_empty()).then(|| stem.to_string())
 }
 
-/// Paradox paths and script names are case-insensitive and mix separators.
 fn normalize(s: &str) -> String {
     s.replace('\\', "/").to_ascii_lowercase()
 }
 
-/// Why a call site could not be expanded. Every variant is a CW274 at the call
-/// site: the body it names never reaches the validator, so nothing else can be
-/// said about it.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ExpandError {
     NotAClause,
@@ -135,24 +99,12 @@ impl fmt::Display for ExpandError {
     }
 }
 
-/// A call site's body, rebuilt with its arguments substituted in.
 pub(crate) struct Expanded {
-    /// Lookup name of the script, pushed onto the call stack while its body is
-    /// validated so a cycle is caught rather than followed.
     pub(crate) name: String,
-    /// Mod-relative path of the file the body came from.
     pub(crate) logical_path: String,
     pub(crate) ast: ParsedFile,
 }
 
-/// Rebuild the body `call` pulls in, with `$PARAM$` replaced by the arguments the
-/// call passes.
-///
-/// `stack` is the chain of scripts already being expanded above this one, which
-/// is what makes a cycle or a runaway nesting reportable instead of fatal. Only
-/// the named script's own body is rebuilt: a nested call inside it is expanded
-/// when the validator reaches it, so its diagnostics name the file it is really
-/// written in.
 pub(crate) fn expand(
     call: &Leaf,
     arena: &Arena,
@@ -213,9 +165,6 @@ pub(crate) fn expand(
     })
 }
 
-/// Copy `children` into `out`, substituting arguments as they go. Source
-/// positions are carried over verbatim: they are what tells the reader which
-/// line of the script file a diagnostic is really about.
 fn clone_children(
     children: &[Child],
     src: &Arena,
@@ -271,9 +220,6 @@ fn clone_value(
     }
 }
 
-/// Substituted form of an interned token, re-interned into the run's table. The
-/// overwhelmingly common token holds no `$` marker at all and keeps its existing
-/// ids, so expansion doesn't touch the table for it.
 fn substitute_tokens(
     tokens: cwtools_string_table::string_table::StringTokens,
     table: &StringTable,
@@ -288,10 +234,6 @@ fn substitute_tokens(
     }
 }
 
-/// `text` with each `$NAME$` replaced by the matching argument, or `None` when
-/// nothing was replaced. A marker the call site passes no argument for is left
-/// as written: the reader needs to see which parameter went missing, and blanking
-/// it would silently turn a broken call into a differently-broken one.
 fn substitute(text: &str, args: &HashMap<String, String>) -> Option<String> {
     if !text.contains('$') {
         return None;
@@ -373,7 +315,6 @@ mod tests {
             substitute("add_$WHAT$_bonus", &args(&[("WHAT", "air")])).as_deref(),
             Some("add_air_bonus")
         );
-        // Case-insensitive, like every other Paradox key.
         assert_eq!(
             substitute("$what$", &args(&[("WHAT", "air")])).as_deref(),
             Some("air")
@@ -383,9 +324,7 @@ mod tests {
     #[test]
     fn substitute_leaves_untouched_text_alone() {
         assert_eq!(substitute("plain_key", &args(&[("A", "b")])), None);
-        // Nothing matched, so nothing is rebuilt.
         assert_eq!(substitute("$MISSING$", &args(&[("A", "b")])), None);
-        // An unterminated marker is not a parameter.
         assert_eq!(substitute("cost_$", &args(&[("A", "b")])), None);
     }
 

@@ -1,15 +1,3 @@
-//! Position-targeted rule resolution for editor features (completion, hover,
-//! goto-definition).
-//!
-//! [`rules_at_pos`] mirrors the validator's descent (`validate_prepared` →
-//! `validate_with_type` → `validate_children`) but follows only the branch that
-//! contains the cursor and returns the applicable rules instead of emitting
-//! errors. It shares the validator's matching machinery (`matching_candidates`,
-//! `alias_overloads`, `merged_rules_for_type`, `flatten_nested_subtype_rules`)
-//! so the two can't disagree about what a key resolves to. The entry walk over
-//! root children intentionally mirrors `validate_prepared` (lib.rs) — keep the
-//! two in step when changing either.
-
 use cwtools_game::scope_engine::{ScopeContext, ScopeId};
 use cwtools_parser::ast::{Child, ParsedFile, SourcePos, SourceRange, Value};
 use cwtools_rules::rules_types::*;
@@ -30,8 +18,6 @@ use crate::{Prepared, initial_scope_context};
 use std::cell::RefCell;
 use std::sync::Arc;
 
-/// A scope-changing block discovered by [`scope_transitions`]. Positions use
-/// parser coordinates: lines are 1-based and columns are 0-based.
 #[derive(Debug, Clone, Copy)]
 pub struct ScopeTransition {
     pub range: SourceRange,
@@ -39,33 +25,20 @@ pub struct ScopeTransition {
     pub resolved: ScopeId,
 }
 
-/// The leaf under the cursor, when the cursor sits on a `key = value` line
-/// rather than at a block insert position.
 #[derive(Debug, Clone)]
 pub struct LeafAtPos {
     pub key: String,
-    /// Raw value text; empty for clause values.
     pub value: String,
-    /// True when the cursor is on the value side of the `=`.
     pub in_value: bool,
     pub line: u32,
     pub col: u16,
 }
 
-/// The rules applicable at a cursor position.
 #[derive(Debug, Clone, Default)]
 pub struct RuleContext {
-    /// Rules for NEW keys in the innermost block containing the cursor
-    /// (subtype-merged and nested-subtype-flattened; `AliasField` lefts are NOT
-    /// pre-expanded — completion enumerates the category's aliases itself).
     pub child_rules: Vec<(RuleType, Options)>,
-    /// When the cursor is on a leaf: every matched rule for that leaf.
-    /// `AliasField` matches are expanded to their alias-body overloads, so
-    /// `has_completed_focus = X` yields the `LeafRule` whose right side is
-    /// `TypeField("focus")`.
     pub value_rules: Vec<(RuleType, Options)>,
     pub leaf: Option<LeafAtPos>,
-    /// Scope context at the cursor (None when no game/registry).
     pub scope: Option<ScopeContext>,
 }
 
@@ -84,17 +57,6 @@ fn pos_in_range(line: u32, col: u16, range: &SourceRange) -> bool {
     true
 }
 
-/// Resolve the rules applicable at `(line, col)` (parser coordinates: `line` is
-/// 1-based, `col` is 0-based).
-///
-/// Returns `None` when the position is outside any known entity — at the file
-/// top level, in a file no type covers, or under an index-only type with no
-/// rule body. Callers fall back to their generic behavior (e.g. root-type
-/// snippets) in that case.
-///
-/// `for_completion` opts into the subtype union in `merged_rules_for_type`:
-/// completion offers every subtype's fields, while hover/goto pass `false` to
-/// mirror validation exactly.
 #[tracing::instrument(skip_all, fields(line, col))]
 pub fn rules_at_pos(
     ast: &ParsedFile,
@@ -107,8 +69,6 @@ pub fn rules_at_pos(
     let ruleset = prepared.ruleset;
     let table = prepared.table;
     let mut scope_context = initial_scope_context(file_path, prepared.registry);
-    // The resolver discards the diagnostics it produces, but the shared context
-    // still wants the run's shared path.
     let file_arc: crate::FilePath = std::sync::Arc::from(file_path);
     let alias_branch_budget = std::cell::RefCell::new(AliasBranchBudget::default());
     let inline_script_expansion_budget =
@@ -132,18 +92,12 @@ pub fn rules_at_pos(
         inline_script_expansion_budget: &inline_script_expansion_budget,
         inline_stack: &inline_stack,
         alias_memo: std::cell::RefCell::new(crate::ctx::AliasMemo::default()),
-        // The resolver is a read-only navigation walk; it never contributes to
-        // the project-wide unused check.
         type_uses: None,
     };
 
-    // Path candidates depend only on the file path, so compute them once and
-    // reuse below for both the type_per_file check and the root-child dispatch,
-    // rather than rescanning `ruleset.types` twice.
     let file_path_lower = file_path.to_lowercase();
     let path_candidates = path_candidates_for_file(&file_path_lower, ruleset);
 
-    // type_per_file: the whole file is one instance; root children are its body.
     let path_type = find_type_from_candidates(&path_candidates, None);
     if let Some(td) = path_type
         && td.type_per_file
@@ -165,7 +119,6 @@ pub fn rules_at_pos(
         ));
     }
 
-    // Find the root child containing the position.
     let child = ast.root_children.iter().find(|c| match c {
         Child::Leaf(idx) => pos_in_range(line, col, &ast.arena.leaves[*idx as usize].pos),
         Child::LeafValue(idx) => pos_in_range(line, col, &ast.arena.leaf_values[*idx as usize].pos),
@@ -180,20 +133,12 @@ pub fn rules_at_pos(
         return None;
     };
     let root_key = table.get_string(leaf.key.normal).unwrap_or_default();
-    // Cursor on the root key itself (`my_focus| = { ... }`): top-level context,
-    // not inside the entity. Columns are char counts (see parser), so measure the
-    // key in chars, not bytes.
     if line == leaf.pos.start.line
         && (col as usize) <= leaf.pos.start.col as usize + root_key.chars().count()
     {
         return None;
     }
 
-    // Resolve which type owns this root node (exact root-key match, then path
-    // fallback) via the shared dispatch, then descend toward the cursor.
-    // Navigation opts into the content-bearing fallback (`allow_content_fallback`)
-    // so the cursor can still descend through a rule-less skip wrapper whose body
-    // lives in a sibling base type (e.g. `on_actions` -> `on_action`).
     let dispatch = DispatchInput {
         ruleset,
         file_path,
@@ -236,10 +181,6 @@ pub fn rules_at_pos(
     }
 }
 
-/// Collect scope transitions in one validator-shaped downward walk. Unlike
-/// `rules_at_pos`, this visits each block once and threads one mutable
-/// `ScopeContext` through the tree, so a range request does not rebuild a
-/// `Prepared` context for every candidate leaf.
 #[allow(clippy::too_many_arguments)]
 pub fn scope_transitions(
     ast: &ParsedFile,
@@ -703,8 +644,6 @@ fn collect_scope_children(
     }
 }
 
-/// Descend through a skip_root_key wrapper to the grandchild containing the
-/// position — mirrors `validate_wrapper_grandchildren`.
 #[allow(clippy::too_many_arguments)]
 fn descend_wrapper(
     ctx: &ValidationCtx,
@@ -732,7 +671,6 @@ fn descend_wrapper(
             return None;
         };
         let gc_key = ctx.table.get_string(gc_leaf.key.normal).unwrap_or_default();
-        // Cursor on the instance key itself: treat as outside the entity.
         if line == gc_leaf.pos.start.line
             && (col as usize) <= gc_leaf.pos.start.col as usize + gc_key.chars().count()
         {
@@ -758,8 +696,6 @@ fn descend_wrapper(
             return None;
         }
 
-        // At the instance level: refine the type per grandchild key, as the
-        // validator does.
         let (gc_type_def, gc_rules) =
             refine_grandchild_type(&candidates, &gc_key, type_def, inner_rules, ctx.ruleset)?;
         return Some(enter_entity(
@@ -777,8 +713,6 @@ fn descend_wrapper(
     None
 }
 
-/// Resolve subtypes + seed the root scope for an entity, then descend to the
-/// innermost block containing the position — mirrors `validate_with_type`.
 #[allow(clippy::too_many_arguments)]
 fn enter_entity(
     ctx: &ValidationCtx,
@@ -805,9 +739,6 @@ fn enter_entity(
     descend(ctx, children, merged.as_ref(), scope_context, line, col)
 }
 
-/// Walk one block level: find the child containing the position and either
-/// recurse into the matched rule bodies or report the leaf/insert context.
-/// Mirrors `validate_children`'s matching (without cardinality or errors).
 fn descend(
     ctx: &ValidationCtx,
     children: &[Child],
@@ -816,8 +747,6 @@ fn descend(
     line: u32,
     col: u16,
 ) -> RuleContext {
-    // Nested `subtype[x] = { ... }` blocks carry their fields inside SubtypeRule
-    // entries; union all branches like the validator does at depth.
     let flattened;
     let rules: &[(RuleType, Options)] = if rules
         .iter()
@@ -838,14 +767,11 @@ fn descend(
                 }
                 let raw_key = ctx.table.get_string(leaf.key.normal).unwrap_or_default();
                 let key = unquote_key(&raw_key).to_string();
-                // on_key spans the source key (quotes included), measured in chars
-                // since columns are char counts; `key` is unquoted and may be shorter.
                 let on_key = line == leaf.pos.start.line
                     && (col as usize) <= leaf.pos.start.col as usize + raw_key.chars().count();
 
                 if let Value::Clause(clause_children) = &leaf.value {
                     if on_key {
-                        // Editing the key of an existing block: sibling context.
                         return leaf_context(
                             ctx,
                             rules,
@@ -856,11 +782,6 @@ fn descend(
                             false,
                         );
                     }
-                    // The parser extends a clause leaf's range past `}` to absorb
-                    // trailing whitespace. If the cursor is past all children's end
-                    // lines, we're in that trailing whitespace — not inside the block.
-                    // Skip and let the parent's insert-position handler supply the
-                    // correct context instead of leaking this block's rules.
                     if !clause_children.is_empty() {
                         let max_child_end = clause_children
                             .iter()
@@ -878,7 +799,6 @@ fn descend(
                             continue;
                         }
                     }
-                    // Descend into every matching rule body (disjunction → union).
                     let candidates = matching_candidates(
                         rules,
                         &key,
@@ -888,11 +808,6 @@ fn descend(
                     );
                     let mut next: Vec<(RuleType, Options)> = Vec::new();
                     let mut entered: Option<&Options> = None;
-                    // Whether `entered` was first set via an effect/trigger alias
-                    // (a real scope block) vs an explicit field rule (`int = {}`
-                    // weight). Mirrors the validator's two enter_block_scope sites
-                    // so a numeric key resolves to state only for genuine scope
-                    // blocks (`129 = {}`), not random_list weights.
                     let mut entered_via_alias = false;
                     for (rule_type, opts) in &candidates {
                         match rule_type {
@@ -920,11 +835,6 @@ fn descend(
                                 next.extend(body.iter().cloned());
                                 entered.get_or_insert(opts);
                             }
-                            // `value_set[variable] = math_expr` (and `value =
-                            // math_expr`): a `{block}` math expression. Descend
-                            // into the synthesized math-clause rules so completion
-                            // offers `value`, the `mathexpr` operators, and
-                            // variable operands inside the block.
                             rt if crate::rule_core::rule_right_is_math_expr(rt) => {
                                 next.extend(crate::rule_core::math_clause_rules().iter().cloned());
                                 entered.get_or_insert(opts);
@@ -933,9 +843,6 @@ fn descend(
                         }
                     }
                     if next.is_empty() {
-                        // Unknown block or leaf-only matches: no rule context below
-                        // here. Empty child_rules (not the parent's) — suggestions
-                        // from the parent level would be wrong inside this block.
                         return RuleContext {
                             scope: scope_context.clone(),
                             ..Default::default()
@@ -954,16 +861,9 @@ fn descend(
                     return descend(ctx, clause_children, &next, scope_context, line, col);
                 }
 
-                // A scalar `key = value` is single-line, but the parser's leaf
-                // range absorbs trailing whitespace up to the next token (see
-                // parse_value). So a cursor on a later, blank line falls inside
-                // this leaf's range while actually being a new-field insert
-                // position — fall through to the block's child rules instead of
-                // offering this leaf's (usually empty) value completions.
                 if line != leaf.pos.start.line {
                     continue;
                 }
-                // Scalar leaf: cursor on a `key = value` line.
                 let value = leaf_value_to_string(&leaf.value, ctx.table);
                 return leaf_context(ctx, rules, scope_context, leaf, &key, value, !on_key);
             }
@@ -973,7 +873,6 @@ fn descend(
                     continue;
                 }
                 if let Value::Clause(ch) = &lv.value {
-                    // Anonymous `{ ... }` block → ValueClauseRule bodies.
                     let next = valueclause_bodies(rules);
                     if next.is_empty() {
                         return RuleContext {
@@ -983,7 +882,6 @@ fn descend(
                     }
                     return descend(ctx, ch, &next, scope_context, line, col);
                 }
-                // Bare value: complete against the block's LeafValueRules.
                 let value = leaf_value_to_string(&lv.value, ctx.table);
                 let value_rules: Vec<(RuleType, Options)> = rules
                     .iter()
@@ -1007,8 +905,6 @@ fn descend(
         }
     }
 
-    // No child contains the position: the cursor is at an insert position in
-    // this block.
     RuleContext {
         child_rules: rules.to_vec(),
         value_rules: Vec::new(),
@@ -1027,9 +923,6 @@ fn valueclause_bodies(rules: &[(RuleType, Options)]) -> Vec<(RuleType, Options)>
     next
 }
 
-/// Build the context for a cursor on a leaf: the matched rules become
-/// `value_rules` (alias matches expanded to their leaf overloads), the current
-/// block's rules stay available as `child_rules` for key edits.
 fn leaf_context(
     ctx: &ValidationCtx,
     rules: &[(RuleType, Options)],
@@ -1056,9 +949,6 @@ fn leaf_context(
     }
 }
 
-/// The alias category (`trigger`, `effect`, `modifier`, …) that `key` resolves
-/// through within `child_rules`, if any. Editor hovers use it as the header
-/// ("trigger" vs "effect") for a usage like `has_completed_focus`.
 pub fn alias_category_for_key(
     ruleset: &RuleSet,
     type_index: Option<&cwtools_index::TypeIndex>,
@@ -1080,15 +970,6 @@ pub fn alias_category_for_key(
     })
 }
 
-/// The matched rules for `key` within a block whose rules are `child_rules`.
-/// Alias-keyed matches are expanded to their alias overloads (so
-/// `has_completed_focus` resolves through `alias[trigger:...]` to its
-/// `<focus>` right side). Includes matched NodeRules too — completion only
-/// reads LeafRule/LeafValueRule rights, while hover wants any matched rule's
-/// description. Public so the LSP can resolve a mid-edit `key = |` line where
-/// no leaf exists in the last good parse yet.
-/// Borrows: the matches all live in `child_rules` or in the ruleset's alias
-/// table, so the per-leaf semantic-token sweep copies nothing.
 pub fn value_rules_for_key<'a>(
     ruleset: &'a RuleSet,
     type_index: Option<&cwtools_index::TypeIndex>,
@@ -1287,9 +1168,6 @@ mod tests {
 
     #[test]
     fn rules_at_pos_distinguishes_on_key_from_in_value() {
-        // Exercises the `on_key` vs `in_value` branch without needing a full
-        // HOI4 corpus. Uses a minimal focus type so the instance block is
-        // recognised via `path = "common/national_focus"`.
         use cwtools_file_manager::file_manager::ScanBudget;
         use cwtools_parser::parser::parse_string;
         use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
@@ -1335,7 +1213,6 @@ mod tests {
         assert!(b.leaf.as_ref().unwrap().in_value, "cursor on value");
         assert_eq!(a.leaf.as_ref().unwrap().key, "id");
         assert_eq!(b.leaf.as_ref().unwrap().key, "id");
-        // Cursor on the root instance key itself must be outside any entity.
         let root_key = rules_at_pos(&ast, file_path, &prepared, 1, 0, false);
         assert!(
             root_key.is_none(),

@@ -14,7 +14,6 @@ pub(crate) use builders::{
 pub(crate) use loc_keys::LocKeyIndex;
 pub(crate) use scope_names::loc_completions;
 
-// Siblings and this module's tests import these via `super::`.
 pub(crate) use filter::{
     CONTEXT_CAP, CONTEXT_COMPLETE_THRESHOLD, anchor_items, filter_by_token, prepare_context_items,
     sort_by_token, sort_for_kind, subsequence_match, token_matches,
@@ -35,8 +34,6 @@ mod tests {
 
     use super::filter::filter_and_cap;
     use super::*;
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     fn make_leaf_rule(key: &str, right: NewField) -> NewRule {
         (
@@ -61,14 +58,12 @@ mod tests {
     fn bool_enum_ruleset() -> RuleSet {
         let mut rs = RuleSet::new();
 
-        // enum: my_enum = { alpha beta gamma }
         rs.enums.push(EnumDefinition {
             key: "my_enum".to_string(),
             description: String::new(),
             values: vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
         });
 
-        // type: my_type paths = { events }
         rs.types.push(TypeDefinition {
             name: "my_type".to_string(),
             name_field: Some("id".to_string()),
@@ -94,7 +89,6 @@ mod tests {
             modifiers: Vec::new(),
         });
 
-        // TypeRule for my_type with child fields
         rs.root_rules.push(RootRule::TypeRule(
             "my_type".to_string(),
             make_node_rule(
@@ -114,14 +108,11 @@ mod tests {
         rs
     }
 
-    // ── completion context tests ─────────────────────────────────────────────
-
     #[test]
     fn test_completions_from_rules_enum() {
         let rs = bool_enum_ruleset();
         let info = cwtools_info::InfoService::new();
 
-        // Grab the inner rules from the TypeRule
         let rules = if let Some(RootRule::TypeRule(_, (RuleType::NodeRule { rules, .. }, _))) =
             rs.root_rules.first()
         {
@@ -143,7 +134,6 @@ mod tests {
         )
         .0;
 
-        // "kind" should appear with a snippet containing enum values
         let kind_item = items.iter().find(|i| i.label == "kind");
         assert!(
             kind_item.is_some(),
@@ -155,7 +145,6 @@ mod tests {
         let snippet = kind.insert_text.as_deref().unwrap_or("");
         assert!(snippet.contains("alpha"), "snippet: {}", snippet);
 
-        // "active" should have yes/no snippet
         let active_item = items.iter().find(|i| i.label == "active");
         assert!(active_item.is_some(), "expected 'active' completion");
         let active = active_item.unwrap();
@@ -165,7 +154,6 @@ mod tests {
 
     #[test]
     fn test_completion_scalar_key_inserts_equals() {
-        // A plain field (scalar/int/type value) must autocomplete to `name = `,
         // not a bare `name` (cwtools-vscode#16).
         let rs = bool_enum_ruleset();
         let info = cwtools_info::InfoService::new();
@@ -200,13 +188,6 @@ mod tests {
 
     #[test]
     fn test_completion_items_have_kind_aware_sort_text() {
-        // Every item in a key-context list must carry a sortText so VS Code
-        // orders them by usefulness as the user types. Concrete leaf fields
-        // sort ahead of node blocks, which sort ahead of aliases, which sort
-        // ahead of type instances, which sort ahead of enum values, which sort
-        // ahead of scope names. The user-visible "iteration" feel depends on
-        // this — without it, the popup sorts purely alphabetically and a
-        // common prefix keeps many similarly-named items in the same row.
         let rs = bool_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let first_root = rs.root_rules.first().expect("expected root rule");
@@ -236,8 +217,6 @@ mod tests {
                 item.label
             );
         }
-        // The first item by sortText should be a concrete leaf field (the
-        // bool `active` from the fixture), not an enum value or alias.
         let mut sorted = items.clone();
         sorted.sort_by(|a, b| {
             a.sort_text
@@ -256,10 +235,6 @@ mod tests {
 
     #[test]
     fn test_completion_sort_key_buckets() {
-        // The bucket prefix is fixed-width (single digit 0-9) so the secondary
-        // sort by label stays stable when the same item kind appears in two
-        // different rule lists. The scope-aware bucket for `required_scopes`
-        // is `0_` and must always lead the list.
         assert_eq!(
             sort_for_kind(Some(CompletionItemKind::FIELD), "x"),
             Some("1_x".to_string())
@@ -299,12 +274,9 @@ mod tests {
         assert_eq!(sort_for_kind(None, "x"), None);
     }
 
-    // ── snippet generation tests ─────────────────────────────────────────────
-
     #[test]
     fn test_generate_node_snippet_no_required_fields() {
         let rs = bool_enum_ruleset();
-        // Build a rule with no required children (min=0)
         let snippet = generate_node_snippet("my_block", &[], &rs);
         assert!(snippet.contains("my_block = {"), "got: {}", snippet);
         assert!(
@@ -317,7 +289,6 @@ mod tests {
     #[test]
     fn test_generate_node_snippet_with_required_bool() {
         let rs = bool_enum_ruleset();
-        // Build rules with min=1
         let required_rules = vec![(
             RuleType::LeafRule {
                 left: NewField::SpecificField("active".to_string()),
@@ -356,7 +327,6 @@ mod tests {
             },
         )];
         let snippet = generate_node_snippet("my_type", &required_rules, &rs);
-        // The enum values alpha, beta, gamma should appear as choices
         assert!(
             snippet.contains("alpha"),
             "expected enum choices in snippet: {}",
@@ -367,7 +337,6 @@ mod tests {
     #[test]
     fn test_generate_node_snippet_ignores_optional_fields() {
         let rs = bool_enum_ruleset();
-        // Only the min=1 field should appear; min=0 should not.
         let rules = vec![
             (
                 RuleType::LeafRule {
@@ -403,20 +372,14 @@ mod tests {
         );
     }
 
-    // ── alias (effect/trigger) snippet tests ─────────────────────────────────
-
-    /// A ruleset with two effect aliases: `if` (a block effect with a required
-    /// `limit` child) and `add_political_power` (a value effect).
     fn alias_effect_ruleset() -> RuleSet {
         let mut rs = RuleSet::new();
-        // alias[effect:if] = { limit = { } alias_name[effect] = ... }
         rs.aliases.push((
             "effect:if".to_string(),
             (
                 RuleType::NodeRule {
                     left: NewField::SpecificField("alias[effect:if]".to_string()),
                     rules: [
-                        // `limit` has no ## cardinality -> required (1..1).
                         (
                             RuleType::NodeRule {
                                 left: NewField::SpecificField("limit".to_string()),
@@ -427,8 +390,6 @@ mod tests {
                                 ..Options::default()
                             },
                         ),
-                        // The effect-recursion alias child is not a SpecificField,
-                        // so it must not appear in the snippet.
                         (
                             RuleType::LeafRule {
                                 left: NewField::AliasField("effect".to_string()),
@@ -442,7 +403,6 @@ mod tests {
                 Options::default(),
             ),
         ));
-        // alias[effect:add_political_power] = variable_field
         rs.aliases.push((
             "effect:add_political_power".to_string(),
             (
@@ -457,8 +417,6 @@ mod tests {
         rs
     }
 
-    /// The rule context inside an effect block: a single `alias_name[effect]`
-    /// usage, which drives the alias-expansion arm for category `effect`.
     fn effect_alias_usage() -> Vec<NewRule> {
         vec![(
             RuleType::LeafRule {
@@ -471,8 +429,6 @@ mod tests {
 
     #[test]
     fn alias_block_effect_completes_to_block_with_required_child() {
-        // `if` should tab-complete to a block that pre-fills its required
-        // `limit = { }` with proper tab stops (cwtools-vscode autocomplete ask).
         let rs = alias_effect_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = effect_alias_usage();
@@ -505,8 +461,6 @@ mod tests {
 
     #[test]
     fn alias_value_effect_completes_with_equals() {
-        // `add_political_power` should tab-complete to `add_political_power = `
-        // with the cursor after the `=`, ready for the value.
         let rs = alias_effect_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = effect_alias_usage();
@@ -534,17 +488,12 @@ mod tests {
             "value-effect snippet: {}",
             snip
         );
-        // A value effect is a single line, not a `{ … }` block.
         assert!(!snip.contains('\n'), "should not be a block: {}", snip);
         assert!(!snip.contains("= {"), "should not open a clause: {}", snip);
     }
 
     // ── #94: control-flow keys must not sink below scope-matched effects ─────
 
-    /// Effect ruleset mirroring the real hoi4 config shape: a plain effect
-    /// carrying `## scope = country`, `if` carrying `## scope = any`, and
-    /// `else` with no scope annotation at all. Both `if` and `else` recurse
-    /// into `alias_name[effect]`.
     fn scoped_effect_ruleset() -> RuleSet {
         let mut rs = RuleSet::new();
         let recursive_body = || {
@@ -596,8 +545,6 @@ mod tests {
         rs
     }
 
-    /// Minimal config-built registry with just a `country` scope, for tests
-    /// that only need one resolvable scope id.
     pub(crate) fn country_registry() -> cwtools_game::scope_registry::ScopeRegistry {
         cwtools_game::scope_registry::ScopeRegistry::from_config(
             &[cwtools_game::scope_registry::ScopeInput {
@@ -612,8 +559,6 @@ mod tests {
 
     #[test]
     fn control_flow_effects_rank_with_scope_matched_effects() {
-        // In a country-scope effect block every `## scope = country` effect
-        // ranks in the top bucket, and `if`/`else` (valid in ANY scope) must
         // not sink below them (#94).
         let rs = scoped_effect_ruleset();
         let info = cwtools_info::InfoService::new();
@@ -655,8 +600,6 @@ mod tests {
 
     #[test]
     fn typed_token_ranks_exact_match_first_and_survives_cap() {
-        // A capped list must keep and lead with the exact match for the typed
-        // token, even when >cap better-bucketed items subsequence-match it —
         // otherwise typing `if` in a big effect block buries or drops `if` (#94).
         let mut items: Vec<CompletionItem> = (0..1500)
             .map(|i| {
@@ -688,12 +631,9 @@ mod tests {
         );
     }
 
-    // ── root-type snippets tests ─────────────────────────────────────────────
-
     #[test]
     fn test_root_type_snippets_path_match() {
         let rs = bool_enum_ruleset();
-        // The type "my_type" is in path "events"
         let items = root_type_snippets(&rs, "events/test.txt");
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert!(
@@ -706,7 +646,6 @@ mod tests {
     #[test]
     fn test_root_type_snippets_path_mismatch() {
         let rs = bool_enum_ruleset();
-        // The type "my_type" is in path "events", not "common"
         let items = root_type_snippets(&rs, "common/foo.txt");
         assert!(
             items.is_empty(),
@@ -736,7 +675,6 @@ mod tests {
     #[test]
     fn alias_bool_trigger_completes_with_equals_and_yesno() {
         // #67: `alias[trigger:always] = bool` must complete to
-        // `always = ${1|yes,no|}$0`, not a bare `${1|yes,no|}` with no `=`.
         let rs = bool_trigger_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = vec![(
@@ -770,8 +708,6 @@ mod tests {
             always.insert_text
         );
         // #77: pin the corrected shape `always = ${1|yes,no|}$0`. A choice on the
-        // final `$0` tab stop (`${0|…|}`) is inserted literally by VS Code, so the
-        // choice must sit on tab stop 1 with a trailing `$0`.
         assert!(
             snip.contains("${1|") && snip.ends_with("$0") && !snip.contains("${0|"),
             "bool trigger must use a non-zero choice tab stop ending in $0, got: {:?}",
@@ -786,9 +722,6 @@ mod tests {
 
     // ── #77: has_dlc enum snippet — tab stops, escaping, quoting ──────────────
 
-    /// A ruleset with `alias[trigger:has_dlc] = enum[dlc]` whose enum mixes a
-    /// multi-word value, a value with an embedded comma, a colon value, and a
-    /// bare identifier — the shapes that exercise all three snippet defects.
     fn dlc_enum_ruleset() -> RuleSet {
         let mut rs = RuleSet::new();
         rs.enums.push(EnumDefinition {
@@ -818,8 +751,6 @@ mod tests {
     #[test]
     fn alias_dlc_enum_snippet_escapes_and_quotes_choices() {
         // #77: an enum alias must complete to `has_dlc = ${1|...|}$0` — a choice
-        // on tab stop 1 (not the unsupported `$0`), with each choice value quoted
-        // when it has whitespace and its delimiters escaped.
         let rs = dlc_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = vec![(
@@ -858,20 +789,16 @@ mod tests {
             "must end with a trailing $0, got: {:?}",
             has_dlc.insert_text
         );
-        // Multi-word values are quoted.
         assert!(
             snip.contains("\"Together for Victory\""),
             "multi-word value must be quoted, got: {:?}",
             has_dlc.insert_text
         );
-        // The comma inside a value is escaped so it can't split the choice, and
-        // the quotes are kept around the whitespace-bearing value.
         assert!(
             snip.contains("\"No Compromise\\, No Surrender\""),
             "embedded comma must be escaped and value quoted, got: {:?}",
             has_dlc.insert_text
         );
-        // A bare identifier stays unquoted.
         assert!(
             snip.contains("base_game") && !snip.contains("\"base_game\""),
             "bare identifier must stay unquoted, got: {:?}",
@@ -882,7 +809,6 @@ mod tests {
     #[test]
     fn value_completions_enum_quotes_spaced_values() {
         // #77: at a value position, an enum member with whitespace inserts quoted
-        // (so it parses as one token); a bare identifier inserts as its label.
         let rs = dlc_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let value_rules = vec![(
@@ -956,7 +882,6 @@ mod tests {
             graph_related_types: Vec::new(),
             modifiers: Vec::new(),
         });
-        // alias[effect:<scripted_effect>] = yes
         rs.aliases.push((
             "effect:<scripted_effect>".to_string(),
             (
@@ -974,8 +899,6 @@ mod tests {
     #[test]
     fn alias_type_pattern_expands_to_instances() {
         // #64: type-pattern aliases like `alias[effect:<scripted_effect>] = yes`
-        // must emit one KEYWORD item per known instance, NOT the raw placeholder
-        // label `<scripted_effect>`.
         let rs = scripted_effect_alias_ruleset();
         let mut info = cwtools_info::InfoService::new();
         let mut per_type: std::collections::HashMap<String, Vec<cwtools_info::TypeInstance>> =
@@ -1025,8 +948,6 @@ mod tests {
             "raw pattern placeholder must not appear in labels, got: {:?}",
             items.iter().map(|i| &i.label).collect::<Vec<_>>()
         );
-        // The instance's snippet should be `my_special_effect = yes` because the
-        // alias rule has `right = SpecificField("yes")`.
         let item = items
             .iter()
             .find(|i| i.label == "my_special_effect")
@@ -1044,7 +965,6 @@ mod tests {
     #[test]
     fn alias_keys_field_emits_modifier_keys() {
         // #65: a rule with `alias_keys_field[modifier]` on its left side (as in
-        // `dynamic_modifier` blocks) must offer modifier keys as completions.
         let rs = bool_enum_ruleset(); // arbitrary ruleset with reindex() called
         let info = cwtools_info::InfoService::new();
         let modifier_keys: HashSet<String> = ["my_modifier".to_string(), "other_mod".to_string()]
@@ -1090,10 +1010,8 @@ mod tests {
     #[test]
     fn completions_from_rules_deduplicates() {
         // #66: when the same concrete field appears in multiple rule entries
-        // (e.g. from subtype-flattening), the label must appear only once.
         let rs = bool_enum_ruleset();
         let info = cwtools_info::InfoService::new();
-        // Two identical `active = bool` rules.
         let rules = vec![
             make_leaf_rule("active", NewField::ValueField(ValueType::Bool)),
             make_leaf_rule("active", NewField::ValueField(ValueType::Bool)),
@@ -1120,10 +1038,6 @@ mod tests {
 
     // ── snippet grammar validity (cwtools-vscode#89 snippet hardening) ───────
 
-    /// A focused check mirroring VS Code's `snippetParser.ts`: rejects constructs
-    /// the editor inserts literally or mishandles. Stricter than the (lenient)
-    /// real parser about a literal `{`/`}` inside a placeholder default, which is
-    /// where the node-required prefill used to leak an unescaped `}`.
     fn snippet_defect(s: &str) -> std::result::Result<(), String> {
         let c: Vec<char> = s.chars().collect();
         let mut i = 0;
@@ -1137,8 +1051,6 @@ mod tests {
         Ok(())
     }
 
-    /// Consume a `$` construct at `i` (`c[i] == '$'`), returning the next index.
-    /// A bare `$` (or a `$name` variable) is literal text to the parser.
     fn scan_dollar(c: &[char], i: usize) -> std::result::Result<usize, String> {
         match c.get(i + 1) {
             Some(d) if d.is_ascii_digit() => {
@@ -1153,7 +1065,6 @@ mod tests {
         }
     }
 
-    /// Consume a `${ … }` construct starting at `i` (`c[i..i+2] == "${"`).
     fn scan_brace(c: &[char], i: usize) -> std::result::Result<usize, String> {
         let digits_start = i + 2;
         let mut j = digits_start;
@@ -1172,7 +1083,6 @@ mod tests {
         }
     }
 
-    /// Consume a choice body from its opening `|` (`c[j] == '|'`) to the `|}` close.
     fn scan_choice(c: &[char], j: usize, is_zero: bool) -> std::result::Result<usize, String> {
         if is_zero {
             return Err("choice on tab stop $0 is inserted literally".into());
@@ -1189,8 +1099,6 @@ mod tests {
         Err("unterminated choice".into())
     }
 
-    /// Consume a placeholder default from the first default char to the matching
-    /// unescaped `}`. A bare `{` here is the `${1:{ }}` defect (the `}` closes early).
     fn scan_default(c: &[char], mut k: usize) -> std::result::Result<usize, String> {
         while k < c.len() {
             match c[k] {
@@ -1233,7 +1141,6 @@ mod tests {
         }
     }
 
-    /// The SNIPPET-format `insert_text` of every item, for the sweep below.
     fn snippet_texts(items: &[CompletionItem]) -> Vec<String> {
         items
             .iter()
@@ -1248,7 +1155,6 @@ mod tests {
         let empty = HashSet::new();
         let mut snips: Vec<String> = Vec::new();
 
-        // Key-context snippets across the leaf/node/enum builder arms.
         let rs = bool_enum_ruleset();
         let rules = match rs.root_rules.first() {
             Some(RootRule::TypeRule(_, (RuleType::NodeRule { rules, .. }, _))) => rules.as_ref(),
@@ -1270,7 +1176,6 @@ mod tests {
         ));
         snips.extend(snippet_texts(&root_type_snippets(&rs, "events/x.txt")));
 
-        // Alias block (required child prefill) + value alias.
         let rs = alias_effect_ruleset();
         snips.extend(snippet_texts(
             &completions_from_rules(
@@ -1287,7 +1192,6 @@ mod tests {
             .0,
         ));
 
-        // Enum choice with spaced / comma / colon values.
         let rs = dlc_enum_ruleset();
         let trigger_usage = vec![(
             RuleType::LeafRule {
@@ -1311,7 +1215,6 @@ mod tests {
             .0,
         ));
 
-        // A required NODE child — the case that used to emit `${1:{ }}`.
         let node_required = vec![(
             RuleType::NodeRule {
                 left: NewField::SpecificField("child".to_string()),
@@ -1348,8 +1251,6 @@ mod tests {
 
     #[test]
     fn specific_field_literal_is_snippet_escaped() {
-        // A concrete alias value carrying `$`/`}` must be escaped so VS Code
-        // doesn't read it as a variable/tab stop or truncate the snippet.
         let mut rs = RuleSet::new();
         rs.aliases.push((
             "effect:danger".to_string(),
@@ -1399,20 +1300,11 @@ mod tests {
         );
     }
 
-    // keep Arc in scope to avoid unused-import warning when no test uses it
     const _: fn() = || {
         let _ = Arc::new(());
     };
 }
 
-// ── MD-scale completion micro-benchmark (ignored, manual) ────────────────────
-//
-// Synthetic ruleset + type index sized like Millennium Dawn (thousands of
-// pattern-expanded scripted effects, thousands of modifiers, high-cardinality
-// type refs). Run with:
-//
-//   cargo test --release -p cwtools_lsp --bin cwtools-server -- \
-//     --ignored --nocapture perf_completion_synthetic
 #[cfg(test)]
 mod perf_bench {
     use std::collections::{HashMap, HashSet};
@@ -1472,7 +1364,6 @@ mod perf_bench {
                 ),
             ));
         }
-        // Pattern alias expanded against the type index (scripted effects).
         rs.aliases.push((
             "effect:<scripted_effect>".to_string(),
             (
@@ -1610,8 +1501,6 @@ mod perf_bench {
             });
         }
 
-        // Duplicated alias rule (subtype flattening can repeat one): the
-        // seen-categories guard should make the repeat free.
         let effect_rules_dup: Vec<NewRule> = effect_rules
             .iter()
             .cloned()
@@ -1702,10 +1591,6 @@ mod perf_bench {
         });
     }
 
-    /// The loc-key selection exactly as it stood before this pass: a linear
-    /// sweep of the whole union with a matcher that kept walking the haystack
-    /// after the needle was exhausted. Kept as the measurement baseline and as
-    /// the oracle the current implementation is checked against.
     mod reference {
         use std::collections::{BTreeSet, HashSet};
 
@@ -1777,11 +1662,6 @@ mod perf_bench {
         }
     }
 
-    /// Loc-key selection at Millennium-Dawn scale (mod + vanilla loc merged,
-    /// 399,781 unique keys). `reference` is the sweep every keystroke used to
-    /// pay, `linear` the same sweep with the early-exit matcher, `indexed` the
-    /// selection served from the scan-built [`LocKeyIndex`]. All three are
-    /// asserted to return identical key sets.
     #[test]
     #[ignore]
     fn perf_loc_completion_keys() {
@@ -1837,10 +1717,6 @@ mod perf_bench {
             index.len()
         );
 
-        // "f"/"" are the first-keystroke cases; "mdsfoc" is subsequence-only;
-        // "zqxv" matches nothing. "lltt" is the adversarial one: common enough
-        // characters to clear the index's per-key character filter, rare enough
-        // as a subsequence that the sweep can't fill the cap and stop early.
         for token in ["", "f", "mds_f", "mdsfoc", "zqxv", "lltt"] {
             let linear = loc_keys::select_loc_keys(
                 keys.iter()

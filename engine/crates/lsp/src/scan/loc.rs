@@ -41,15 +41,6 @@ fn localisation_paths(
     }
 }
 
-/// Extract the per-key hover text and a representative definition site from a
-/// loaded [`LocService`], keyed by `index`'s interned keys so the maps share
-/// their allocations with the loc index.
-///
-/// `text` accumulates every included language's display string per key, in file
-/// order. `locations` keeps one site per key, preferring `primary_lang` so
-/// Ctrl+Click lands on the canonical entry rather than whichever language was
-/// scanned first. Shared by the workspace walk and the base-game memo so the
-/// two can't drift.
 pub(crate) fn collect_loc_display(
     service: &cwtools_localization::LocService,
     index: &cwtools_localization::LocIndex,
@@ -59,11 +50,8 @@ pub(crate) fn collect_loc_display(
     locations: &mut LocLocationMap,
 ) {
     for file in service.files() {
-        // A file whose header language the parser didn't recognise is absent
-        // from the key index; hover and goto still show it, under English.
         let lang = file.lang.unwrap_or(Lang::English);
         let lang_included = hover_all || lang == primary_lang;
-        // Every entry in a file shares the same source path.
         let file_uri: Arc<str> = path_to_uri(std::path::Path::new(&file.path)).into();
         for entry in &file.entries {
             let key = index
@@ -94,16 +82,6 @@ pub(crate) fn collect_loc_display(
 }
 
 impl Backend {
-    /// Stat-only signature (path, size, mtime) over the loc files
-    /// `rebuild_and_publish_loc` re-reads on every scan. Lets a quiet background
-    /// pass detect "nothing loc-related changed" and skip the full rebuild
-    /// without reading or parsing a single file. Uses the shared workspace
-    /// discovery entry point, which is also used for the rebuild.
-    /// The base-game install is deliberately absent: it can't change while the
-    /// editor is running and its contribution is memoized by
-    /// [`Backend::vanilla_loc`], so stat'ing its ~2000 loc files every pass
-    /// would only cost time. Blocking (stats every discovered file); call from
-    /// within `block_in_place`.
     pub(crate) fn compute_loc_signature(&self, root_path: &std::path::Path) -> u64 {
         let (ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
@@ -121,22 +99,7 @@ impl Backend {
         stat_signature_for(&files)
     }
 
-    /// The base-game install's contribution to the loc maps, built on first use
-    /// and kept for the rest of the session.
-    ///
-    /// Vanilla loc is ~2000 files / 150 MB on HOI4 and it cannot change while
-    /// the editor is running, yet every foreground scan used to re-read and
-    /// re-parse all of it just to rebuild the same hover text, the same
     /// definition sites and the same keys (#89).
-    ///
-    /// Keyed by the inputs that shape the maps: the install dir, selected
-    /// languages, primary language and hover-all-languages toggle.
-    ///
-    /// `None` when no base-game dir is configured, and also when the configured
-    /// one yielded no loc at all (an install on a drive that isn't mounted):
-    /// nothing is memoized then, so the next scan tries again, and the caller
-    /// keeps falling back to the vanilla cache's keys meanwhile. Blocking; call
-    /// from within `block_in_place`.
     fn vanilla_loc(
         &self,
         loc_languages: Option<&[Lang]>,
@@ -183,14 +146,9 @@ impl Backend {
         Some(built)
     }
 
-    /// Build the loc-key index from the workspace root plus the vanilla install,
-    /// store it in state (for CW100/CW122 on config files), and publish loc-file
-    /// diagnostics (CW225/CW234/CW259/CW268/CW275) for the workspace loc files.
     #[tracing::instrument(skip_all)]
     pub(crate) async fn rebuild_and_publish_loc(&self, root_path: &std::path::Path) {
-        // The base game's loc files are read whenever the install dir is known,
         // so hover shows translations for keys that exist only there (#51). The
-        // vanilla cache's key lists stand in when it isn't. Either way it costs
         // one read per session, not one per scan (#89).
         let (loc_languages, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
@@ -201,9 +159,6 @@ impl Backend {
             )
         };
 
-        // Hover language scope: unless the user opted into all translations, keep
-        // only the primary language (first configured loc language, else English)
-        // in the hover map so it stays small.
         let hover_all = self
             .state
             .hover_show_all_languages
@@ -218,16 +173,6 @@ impl Backend {
             loc_languages.as_deref()
         };
 
-        // Build the index and collect per-file diagnostics in one block, then
-        // drop the LocService before the index is published. The service holds
-        // the full per-file loc ASTs (~2M entries on Millennium Dawn); keeping
-        // it alive while we also hold the lowercased key set in LocIndex
-        // pushes peak RSS by hundreds of MiB for no reason. After the block
-        // closes only LocIndex (keys) and the diagnostic map survive.
-        // Names a `$ref$` may resolve to besides loc keys: `$modifier$` / `$idea$`
-        // embeds resolve against those registries (mirrors the CLI/driver path).
-        // Cached vanilla keys are resolved via the loc-index union passed to
-        // `validate_loc_project_with_union`, so they aren't duplicated here.
         let extra_valid_refs: HashSet<String> = {
             // Lock order: rules -> info_service.
             let modifier_keys = self.state.rules.read().modifier_keys.clone();
@@ -235,18 +180,10 @@ impl Backend {
             crate::validate::loc_extra_valid_refs(&modifier_keys, &info.type_index)
         };
 
-        // block_in_place: the loc service reads and parses hundreds of loc files
-        // from disk — synchronous I/O that must not starve the async executor.
         let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) =
             tokio::task::block_in_place(|| {
-                // The base game is read once per session and reused; only the
                 // workspace is walked again (#89).
                 let vanilla = self.vanilla_loc(parsed_languages, primary_lang, hover_all);
-                // The install dir is the source of truth for its own loc: the
-                // memo walked exactly the tree the vanilla cache's key lists
-                // were extracted from, so keeping those around is a second copy
-                // of 1.3M keys (as owned strings) that every rebuild would
-                // re-intern. Hand them over. Without a dir they're all we have.
                 let cached_vanilla_loc = if vanilla.is_some() {
                     self.state.vanilla_loc_keys.lock().take()
                 } else {
@@ -279,11 +216,6 @@ impl Backend {
                     idx.merge_cached_keys(typed, loc_languages.as_deref());
                 }
                 let mut by_file: HashMap<String, Vec<Diagnostic>> = HashMap::new();
-                // Reuse the merged loc-index union (with the base game's keys)
-                // instead of rebuilding the ~2M-key set inside the validate pass.
-                // Every file the service holds is under the workspace root, so
-                // there is nothing to filter out — the base game is never
-                // validated, only indexed.
                 for d in cwtools_localization::validate_loc_project_with_union(
                     &service,
                     loc_languages.as_deref(),
@@ -291,16 +223,11 @@ impl Backend {
                     &extra_valid_refs,
                 ) {
                     let ve = loc_diag_to_validation_error(&d);
-                    // Project-wide loc scan feeds the Problems panel; open files
-                    // get whole-line squiggles and encoded columns when
-                    // re-validated on open.
                     by_file
                         .entry(d.file.clone())
                         .or_default()
                         .push(validation_error_to_diagnostic(&ve, &DocLines::none()));
                 }
-                // Extract per-key display text for hover and a representative
-                // definition site (for goto) before dropping the service.
                 let mut lt = LocTextMap::default();
                 let mut ll = LocLocationMap::default();
                 for file in service.files() {
@@ -324,9 +251,6 @@ impl Backend {
                         Some((file.clone(), cwtools_cache::workspace::content_hash(&text)))
                     })
                     .collect::<HashMap<_, _>>();
-                // Fold the base game in under the workspace: a key the mod
-                // redefines keeps the mod's definition site, and its hover shows
-                // the mod's text first.
                 if let Some(vanilla) = &vanilla {
                     for (key, translations) in &vanilla.text {
                         lt.entry(Arc::clone(key))
@@ -339,9 +263,6 @@ impl Backend {
                 }
                 (idx, by_file, lt, ll, source_hashes)
             });
-        // Prefix-searchable companion for loc completion, built here so the
-        // per-keystroke path never pays for it. block_in_place: sorting ~400K
-        // keys is CPU-bound and must not sit on the async executor.
         let loc_key_index = tokio::task::block_in_place(|| {
             Arc::new(crate::completion::LocKeyIndex::build(
                 loc_index.union().iter().map(AsRef::as_ref),
@@ -352,10 +273,6 @@ impl Backend {
         *self.state.loc_text.write() = loc_text_map;
         *self.state.loc_locations.write() = loc_loc_map;
 
-        // Publish per-file loc diagnostics, but only for workspace loc files
-        // (not vanilla). Open loc documents are revalidated from their live
-        // buffers after the index is installed, so disk diagnostics must not
-        // overwrite them here.
         let open_uris: HashSet<String> = self.state.documents.lock().keys().cloned().collect();
         let current_uris: HashSet<String> = by_file
             .keys()
@@ -382,10 +299,6 @@ impl Backend {
                 continue;
             }
             if let Ok(uri_obj) = Url::parse(&uri) {
-                // Inline `# cwtools-ignore` directives: the index build drops
-                // each loc file's text, so read it back just for the files that
-                // reported something (the rare ones), not the whole tree. On a
-                // blocking thread, like every other capped disk read here.
                 let file_path = std::path::PathBuf::from(&file);
                 let inline_ignored = tokio::task::spawn_blocking(move || {
                     cwtools_file_manager::file_manager::read_text_capped(
@@ -418,7 +331,6 @@ mod tests {
 
     #[test]
     fn collect_loc_display_respects_primary_and_hover_all() {
-        // Two files: English and French, same key different text.
         let tmp = tempfile::tempdir().unwrap();
         let loc_dir = tmp.path().join("localisation");
         std::fs::create_dir_all(&loc_dir).unwrap();
@@ -435,7 +347,6 @@ mod tests {
         let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
         assert_eq!(svc.files().len(), 2);
         let idx = LocIndex::build(&svc);
-        // Hover only primary (English) -> one translation.
         let mut text = LocTextMap::default();
         let mut locs = LocLocationMap::default();
         collect_loc_display(&svc, &idx, Lang::English, false, &mut text, &mut locs);
@@ -444,7 +355,6 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, Lang::English);
         assert_eq!(entries[0].1, "Hello");
-        // Hover all -> both languages.
         let mut text_all = LocTextMap::default();
         let mut locs_all = LocLocationMap::default();
         collect_loc_display(
@@ -457,7 +367,6 @@ mod tests {
         );
         let entries_all = text_all.get(&key).unwrap();
         assert_eq!(entries_all.len(), 2);
-        // Locations: primary definition is preferred.
         assert!(locs.contains_key(&key));
         assert!(locs_all.contains_key(&key));
     }
@@ -467,7 +376,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let loc_dir = tmp.path().join("localisation");
         std::fs::create_dir_all(&loc_dir).unwrap();
-        // Write French first (lexicographically earlier) but primary is English.
         std::fs::write(
             loc_dir.join("a_l_french.yml"),
             "l_french:\n dup_key:0 \"Bonjour\"\n",

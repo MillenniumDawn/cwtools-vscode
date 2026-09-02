@@ -1,13 +1,3 @@
-//! Project-level loc-file validation.
-//!
-//! Runs the scope-independent loc-entry checks (`validate_loc_file`) over every
-//! loaded loc file and normalizes the results to the F# numeric error codes
-//! (CW001/CW225/CW234/CW259/CW268/CW275/CW276), plus the per-file name/header checks
-//! (CW254/CW255/CW256/CW257). The scope-dependent command checks
-//! (CW226/CW260/CW266) run at the config reference site, where the scope of the
-//! referencing field is known; [`validate_loc_project_commands`] is the
-//! standalone counterpart for a caller that has a ruleset but no game files.
-
 use crate::commands::{Lang, LocFile};
 use crate::loc_index::LocKeySet;
 use crate::scope_validation::{LocCommandDiagnostic, LocScopeData, validate_loc_commands};
@@ -440,9 +430,7 @@ fn lang_selected(file: &LocFile, langs: Option<&[Lang]>) -> bool {
     }
 }
 
-/// Validate a single loc file's text against a precomputed key union. Used by
-/// the LSP to lint a `.yml`/`.csv` file on open/change without rebuilding the
-/// whole service. Returns an empty vec if the text can't be parsed as loc.
+
 pub fn validate_loc_file_text(
     text: &str,
     path: &str,
@@ -452,8 +440,7 @@ pub fn validate_loc_file_text(
     let Ok(file) = parse_loc_text(text, path) else {
         return Vec::new();
     };
-    // Text-only path: no on-disk bytes to inspect, so CW254 never fires here.
-    // This is the deliberate divergence from the project path — do not change it.
+
     build_diagnostics(
         &file,
         path,
@@ -465,13 +452,7 @@ pub fn validate_loc_file_text(
     )
 }
 
-/// As [`validate_loc_file_text`], but for a caller that already parsed the text
-/// (see [`crate::parse_loc_files`]), so one edited buffer isn't parsed once per
-/// consumer (#87).
-///
-/// `.csv` files produce nothing here, matching what the text entry point has
-/// always done — its `parse_loc_text` rejects them. The project path
-/// ([`validate_loc_project`]) is the one that lints CSV loc.
+
 pub fn validate_parsed_loc_files(
     files: &[LocFile],
     path: &str,

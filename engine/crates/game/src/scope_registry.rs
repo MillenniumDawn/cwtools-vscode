@@ -1,4 +1,3 @@
-// stripped to WHY-only — see git history for full docs
 use crate::constants::Game;
 use crate::scope_engine::{SCOPE_ANY, SCOPE_INVALID, ScopeId, ScopeLink};
 use rustc_hash::FxHashMap;

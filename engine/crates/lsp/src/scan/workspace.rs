@@ -28,27 +28,16 @@ use super::{
     hold_scan_for_tests, quiet_pass_can_skip, spawn_logging_panics, stat_signature_for,
 };
 
-/// ~one rayon work unit; 256 balances per-chunk rayon parallelism vs UI
-/// cancel/progress yield cadence on a 7k-file corpus.
-/// 2 in tests so three files cover before / mid / between without 257 files.
 #[cfg(not(test))]
 const PASS2_CHUNK_SIZE: usize = 256;
 #[cfg(test)]
 const PASS2_CHUNK_SIZE: usize = 2;
 
-/// Maximum number of closed workspace files the scan publishes diagnostics
-/// for in one pass. Above this, new closed-file diagnostics are held back and
-/// only files that already have published diagnostics are cleared, so a
-/// 10k-file mod cannot flood the client with per-file notifications. Open
-/// documents are unaffected.
 #[cfg(not(test))]
 const WORKSPACE_DIAGNOSTICS_BUDGET: usize = 2_000;
 #[cfg(test)]
 const WORKSPACE_DIAGNOSTICS_BUDGET: usize = 2;
 
-/// Maximum number of previously-published closed files the scan clears in one
-/// pass. Capping this prevents a settings toggle or a mass deletion from
-/// flooding the client with empty `publishDiagnostics` notifications.
 #[cfg(not(test))]
 const WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET: usize = 2_000;
 #[cfg(test)]
@@ -107,21 +96,7 @@ const DEFAULT_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
 const DEFAULT_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
     WorkspacePublishThrottle::new(std::time::Duration::ZERO);
 
-/// Map four lock-step slices in parallel, `chunk` elements at a time, yielding
-/// to the runtime between chunks so a long scan stays cancellable and the
-/// progress bar keeps moving.
-///
-/// The result is the concatenation of the per-chunk results in input order, so
-/// it is identical for every `chunk` size. Chunking is a scheduling knob, not
 /// behavioral, which the parity tests below pin (#328).
-///
-/// `None` means `cancel` latched. A cancelled walk must not hand back the
-/// partial `Vec` it had built: pass 2's callers read a short result as "these
-/// files have nothing in them" and would publish empty diagnostics over files
-/// that were never validated.
-///
-/// The four slices have to be the same length. `chunks().zip()` truncates to
-/// the shortest, so a lock-step bug would silently drop the tail; assert
 /// instead, and let the invariant fail loudly at the boundary it belongs to.
 struct ChunkMapper<F, Before, After> {
     map: F,
@@ -187,33 +162,6 @@ where
 }
 
 impl Backend {
-    /// Public entry to the workspace scan. Runs the scan and ALWAYS clears the
-    /// status-bar loading indicator on return, regardless of which internal path
-    /// exited — including the early returns for an absent/empty workspace, which
-    /// previously left the bar spinning on "Indexing workspace…" forever, a
-    /// panic inside the scan, and a client cancelling the command that started
-    /// it. See [`ScanGuard`].
-    ///
-    /// Re-entrancy guarded: the startup scan, `clearAllCaches`, `reindexWorkspace`,
-    /// and the periodic background pass can all land here, and two overlapping
-    /// scans would race each other's serial `info_service` writes. A losing
-    /// caller skips the scan entirely rather than blocking behind the running
-    /// one — returns `false` so a caller like the `reindexWorkspace` command
-    /// can report that back instead of the scan silently no-oping.
-    ///
-    /// `quiet` suppresses every `loadingBar` notification and the server's own
-    /// `$/progress` stream, so the periodic background pass doesn't flash the
-    /// status bar while the user is working. It does not suppress a command
-    /// `workDoneToken` passed via [`validate_entire_workspace_tracked`]'s
-    /// `progress` — a client that explicitly asked for progress on a quiet
-    /// call still gets it, straight through its own token; see
-    /// [`Backend::enter_phase`]. `send_update_file_list` still fires either
-    /// way — it's cheap and keeps the file explorer honest — except when the
-    /// quiet short-circuit returns early: the file set is unchanged by
-    /// definition, so the list it would send is identical.
-    ///
-    /// [`validate_entire_workspace_tracked`]: Backend::validate_entire_workspace_tracked
-    /// [`Backend::enter_phase`]: Backend::enter_phase
     pub(crate) async fn validate_entire_workspace(&self, quiet: bool) -> bool {
         matches!(
             self.validate_entire_workspace_tracked(quiet, None).await,
@@ -221,20 +169,6 @@ impl Backend {
         )
     }
 
-    /// [`validate_entire_workspace`] under a client-cancellable command.
-    ///
-    /// `progress` supplies the cancel flag the scan polls and the sink its
-    /// phase samplers report to; `None` is the startup scan and the periodic
-    /// background pass, which nobody can cancel and which report over the
-    /// server's own indicator.
-    ///
-    /// Cancellation is best-effort in one direction only: the scan stops
-    /// promptly, but indexing it already did is kept rather than rolled back.
-    /// What it must not do is *record* a partial pass — the walk fingerprint
-    /// and loc signature are written at the end, past every cancel check, so a
-    /// later quiet pass can't short-circuit on work that never finished.
-    ///
-    /// [`validate_entire_workspace`]: Backend::validate_entire_workspace
     pub(crate) async fn validate_entire_workspace_tracked(
         &self,
         quiet: bool,
@@ -254,11 +188,6 @@ impl Backend {
             .validate_entire_workspace_inner(quiet, progress, DEFAULT_WORKSPACE_PUBLISH_THROTTLE)
             .await;
         guard.finish().await;
-        // Drain any watched events an over-cap batch requeued after losing the
-        // CAS to this scan — the loser suppresses its own re-arm so it doesn't
-        // retry against the flag every window for the scan's whole duration.
-        // Each guard scoped to its own `let` so the two queue locks are never
-        // held at once.
         let requeued_pending = !self.state.watched_pending.lock().is_empty();
         let requeued_deleted = !self.state.watched_deleted.lock().is_empty();
         if requeued_pending || requeued_deleted {
@@ -271,18 +200,6 @@ impl Backend {
         }
     }
 
-    /// Close the running phase and open `phase`: log how long the old one took,
-    /// put the new one's label and starting percentage on the bar, and start a
-    /// sampler for it.
-    ///
-    /// `total` is the phase's item count, or 0 when it has none — see
-    /// [`start_phase`]. `quiet` means "do not touch the server's own
-    /// indicator" — the `loadingBar` notification and the server's own
-    /// `$/progress` stream — not "say nothing at all": a quiet pass carrying a
-    /// command `workDoneToken` (a client explicitly asked for progress on this
-    /// call) still reports its phases against that token, straight through
-    /// `progress`'s own stream. Only a quiet pass with no token gets an inert
-    /// ticker and says nothing.
     async fn enter_phase(
         &self,
         ticker: &mut PhaseTicker,
@@ -312,27 +229,12 @@ impl Backend {
         *ticker = start_phase(self, progress, quiet, phase, total);
     }
 
-    /// Stop the running phase's sampler and log how long it ran. A scan that
-    /// exits early on cancel skips this and lets `Drop` stop the sampler — a
-    /// phase nobody waited out has no duration worth reporting.
     async fn end_phase(&self, ticker: &mut PhaseTicker) {
         if let Some(summary) = std::mem::replace(ticker, PhaseTicker::inert()).stop() {
             self.client.log_message(MessageType::INFO, summary).await;
         }
     }
 
-    /// Retry a revalidation in the background, bounded, for a caller that gave
-    /// up on landing one itself.
-    ///
-    /// Two callers, both leaving the index in a state that has to be repaired
-    /// even though the command is over: `reloadrulesconfig` when a scan holds
-    /// the guard past its response bound (the rules are live, so only the
-    /// re-validation is outstanding), and `clearAllCaches` when the user
-    /// cancels after the purge already dropped the base-game index.
-    ///
-    /// `context` names the caller in the give-up log line. Bounded at 180s; if
-    /// a scan still holds the guard that long, the retry stops and says so in
-    /// the output channel instead of spinning forever.
     pub(crate) fn spawn_deferred_revalidation(&self, context: &'static str) {
         let client = self.client.clone();
         let state = self.state.clone();
@@ -362,11 +264,6 @@ impl Backend {
         });
     }
 
-    /// Scan the entire workspace for relevant game files and validate them all.
-    ///
-    /// Returns `false` when the user cancelled partway. Every `return false`
-    /// below sits before the fingerprint/signature writes at the end, so a
-    /// cancelled pass records nothing and the next scan redoes it in full.
     #[tracing::instrument(skip_all)]
     async fn validate_entire_workspace_inner(
         &self,
@@ -376,10 +273,6 @@ impl Backend {
     ) -> bool {
         let cancel = cancel_flag_of(progress);
         cwtools_profiling::log_rss("workspace_scan_start");
-        // One ticker at a time, handed from phase to phase. It owns the bar
-        // between the boundary reports, so the percentage keeps moving inside a
-        // phase and a phase that overruns says so in the output channel — on the
-        // startup scan too, which used to show only the six boundary values and
         // sit on "Validating workspace… 70%" for the whole of pass 2 (#221).
         let mut phase = PhaseTicker::inert();
         self.enter_phase(&mut phase, progress, quiet, Phase::Discover, 0)
@@ -397,7 +290,6 @@ impl Backend {
                         "No workspace folder; skipping full-workspace validation.",
                     )
                     .await;
-                // Nothing to index — let single-file diagnostics publish normally.
                 self.state
                     .index_ready
                     .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -405,10 +297,6 @@ impl Backend {
             }
         };
 
-        // Snapshot the user-configured ignore globs once for the whole walk.
-        // The engine's hard-coded baseline (Changelog.txt, README.*, *.md)
-        // is layered on top inside the driver config so it can't be
-        // accidentally cleared by a user who sets an empty list.
         let (extra_file_globs, extra_dir_globs) = {
             let cfg = self.state.config.read();
             (
@@ -418,9 +306,6 @@ impl Backend {
         };
         let ruleset = self.state.rules.read().ruleset.clone();
 
-        // Workspace discovery goes through the shared driver primitive so
-        // `cwtools validate` and the editor see the same file set. The config
-        // is narrowed to the ruleset's `folders` and handles multi-mod
         // layering in one place (#284).
         let discovery = tokio::task::block_in_place(|| {
             let mut fm_config =
@@ -451,10 +336,6 @@ impl Backend {
             }
         };
 
-        // Quiet-pass short-circuit: skip reindex + revalidate + re-publish when
-        // the walked-files fingerprint and settings generation both match the
-        // last full pass. Empty walk (transiently-unreadable root) never
-        // short-circuits or records — see the store guard below.
         let scan_fingerprint =
             tokio::task::block_in_place(|| stat_signature_for(&files_to_validate));
         let scan_generation = self
@@ -474,9 +355,6 @@ impl Backend {
             return true;
         }
 
-        // First cancel check: the walk is one uninterruptible `block_in_place`,
-        // so this is the earliest point the flag can be observed. Nothing has
-        // been mutated yet, so bailing here is a true no-op.
         if cancel.is_cancelled() {
             return false;
         }
@@ -500,10 +378,6 @@ impl Backend {
             )
             .await;
 
-        // Resolve the parse-cache directory and settings fingerprint. The
-        // fingerprint encodes the game, workspace root, and cache format so
-        // stale caches are cleared automatically when any of those change.
-        // A rules edit is not one of those: a `.cwb` is a parsed AST.
         let (cache_info, cache_status) = {
             let (cache_dir, language) = {
                 let cfg = self.state.config.read();
@@ -528,26 +402,9 @@ impl Backend {
             .log_message(MessageType::INFO, cache_status)
             .await;
 
-        // Pass 1: parse + index every file (types, scripted triggers/effects,
-        // modifiers) so cross-file references resolve before any file is
-        // validated. The parsed ASTs are kept resident in `parsed_files` and
-        // handed to pass 2 — re-parsing 7413 files in pass 2 cost ~4-6s on MD
-        // and produced no observable benefit, just CPU and allocator churn.
-        // The total resident set between the two passes is bounded by what the
-        // loc service allocates next, so peak RSS doesn't grow meaningfully.
-        //
-        // On a cache hit the AST is deserialized from disk (.cwb) instead of
-        // parsed, then kept resident like any other; on a miss we parse and
-        // persist for the next scan. The disk cache speeds the cold→warm scan
-        // across restarts; keeping the AST resident avoids a pass-2 re-parse
-        // within a single scan.
         self.enter_phase(&mut phase, progress, quiet, Phase::Parse, scan_files.len())
             .await;
         hold_parse_for_tests().await;
-        // Snapshot the set of currently-open document URIs so both passes can
-        // skip them: open docs were already indexed by did_open/did_change and
-        // their fresher in-memory diagnostics must not be clobbered by stale
-        // disk-text validation with version=None.
         let open_uris: HashSet<String> = {
             let docs = self.state.documents.lock();
             docs.keys().cloned().collect()
@@ -555,36 +412,14 @@ impl Backend {
 
         let mut cache_hits = 0u64;
         let mut cache_misses = 0u64;
-        // Pass 1 splits into a parallel parse/cache-load phase and a serial
-        // index phase. Reading + parsing (or deserializing from the parse
-        // cache) and persisting the cache are pure functions over the
-        // lock-guarded string-table interner, so they run in parallel across
-        // files exactly as the driver parallelizes the same work. Indexing
-        // mutates the shared info index, so it stays serial and in the
-        // original file order — the merge order is observable (goto-def "first
-        // match", duplicate-name refcounts), and the cache-hit/miss tally must
-        // match the sequential version.
-        //
-        // `par_iter().collect()` preserves file order, so `outcomes[i]`
-        // corresponds to `scan_files[i]`.
         use rayon::prelude::*;
-        // (cache_hit, parsed, source_hash, inline_ignored) per file; None = open
-        // doc, parse failure, or read error.
         type ParseOutcome = (
             bool,
             cwtools_parser::ast::ParsedFile,
             Option<u64>,
             InlineIgnoreMap,
         );
-        // block_in_place tells tokio this thread is about to do synchronous
-        // blocking I/O; the runtime shifts its remaining tasks to other workers
-        // so the LSP request loop is not starved while rayon parses.
         let scan_bytes = cwtools_file_manager::file_manager::ScanBytes::new();
-        // The rayon section can neither await nor reach the client, so progress
-        // rides an atomic the closure bumps and the phase's sampler task turns
-        // into bar traffic. The cancel check is the same shape: a latch the
-        // closure polls, so a cancelled pass drains through the remaining files
-        // at one atomic load each instead of parsing them.
         let outcomes: Vec<Option<ParseOutcome>> = tokio::task::block_in_place(|| {
             scan_files
                 .par_iter()
@@ -593,9 +428,6 @@ impl Backend {
                         return None;
                     }
                     phase.tick();
-                    // Open docs are already indexed from their in-memory text;
-                    // skip so we don't re-index stale disk content on top of the
-                    // live version.
                     if open_uris.contains(&file.uri) {
                         return None;
                     }
@@ -607,8 +439,6 @@ impl Backend {
                             &self.state.string_table,
                         )
                     {
-                        // The text is read to re-check the metadata key; the
-                        // inline-ignore directives come from that same read.
                         let (source_hash, inline_ignored) =
                             match cwtools_file_manager::file_manager::read_text_capped(
                                 &file.path,
@@ -629,9 +459,6 @@ impl Backend {
                         .flatten();
                     let use_content_cache =
                         !workspace_cache::PATH_METADATA_CACHE_SUPPORTED || source_key.is_none();
-                    // Read via the file manager so cp1252-encoded script files
-                    // (pre-Jomini mods) are indexed instead of silently dropped.
-                    // The read is capped and counted against the scan byte budget.
                     let text = match cwtools_file_manager::file_manager::read_text_capped(
                         &file.path,
                         crate::access::MAX_URI_READ_BYTES,
@@ -700,9 +527,6 @@ impl Backend {
                 })
                 .collect()
         });
-        // A cancelled parse pass produced a hole-ridden `outcomes`, and every
-        // later phase (the index merge, the prune, validation) would read it as
-        // "these files have nothing in them". Stop before any of that lands.
         if cancel.is_cancelled() {
             return false;
         }
@@ -713,7 +537,6 @@ impl Backend {
             workspace_cache::prune(cache_dir, *fingerprint);
         }
 
-        // Serial index phase, in file order.
         let mut parsed_files: Vec<Option<cwtools_parser::ast::ParsedFile>> =
             Vec::with_capacity(scan_files.len());
         let mut source_hashes: Vec<Option<u64>> = Vec::with_capacity(scan_files.len());
@@ -738,16 +561,9 @@ impl Backend {
                 }
             };
             parsed_files.push(parsed);
-            // A quiet background pass shares the runtime with live requests
-            // (hover, completion, did_change); yield periodically through this
-            // serial loop so it doesn't hog a worker thread for the whole
-            // index phase. Mirrors pass 2's yield-every-50 below.
             if quiet && i % 64 == 63 {
                 tokio::task::yield_now().await;
             }
-            // Same cadence for the cancel check. The merge is cheap next to
-            // parsing, so this rarely fires — but on a mod big enough that the
-            // user reached for Cancel, "cheap" is still seconds.
             if i % 64 == 63 && cancel.is_cancelled() {
                 return false;
             }
@@ -763,23 +579,8 @@ impl Backend {
             )
             .await;
 
-        // Prune index entries for files that vanished since the last scan —
-        // deleted while the server had no watcher event (e.g. while closed),
-        // or newly excluded by an ignore glob (pruning that one is correct
-        // too: it matches what a restart would index). Without this, a stale
-        // definition keeps "resolving" against a file that no longer exists
-        // until a window reload.
-        //
-        // Key off what the walk FOUND on disk, not what parsed: a file with a
-        // syntax error is still there and keeps its last-good index entry, so
-        // cross-file goto/references don't drop out while it's mid-edit.
         let discovered_uris: HashSet<String> =
             scan_files.iter().map(|file| file.uri.clone()).collect();
-        // An empty walk almost always means the root was transiently
-        // unreadable — walk_workspace_files swallows I/O errors and returns an
-        // empty Vec — not that the user deleted every file. Pruning against an
-        // empty set would wipe the whole index on a hiccup, so skip it; real
-        // deletions still arrive as per-file DELETE watched events.
         let removed_uris: Vec<String> = if scan_files.is_empty() {
             Vec::new()
         } else {
@@ -787,10 +588,6 @@ impl Backend {
             let stale: Vec<String> = info
                 .files
                 .keys()
-                // Only real per-file entries. Vanilla instances (and the
-                // "<vanilla-dynamic>" bucket) are merged straight into
-                // `type_index`, never `files`, so this workspace-scoped prune
-                // never sees them; the `file://` guard is belt-and-braces.
                 .filter(|&uri| {
                     uri.starts_with("file://")
                         && !discovered_uris.contains(uri)
@@ -804,10 +601,6 @@ impl Backend {
             stale
         };
         if !removed_uris.is_empty() {
-            // Mirrors the DELETE branch of `did_change_watched_files_impl`:
-            // both loc overlays are keyed per-file too and must forget the
-            // same URIs, or loc checks keep serving stale entries for a file
-            // `info_service` just dropped.
             {
                 let mut overlay = self.loc_live_overlay_mut();
                 for uri in &removed_uris {
@@ -841,14 +634,6 @@ impl Backend {
             return false;
         }
 
-        // Build the base-game index from a `vanilla` dir (or auto-discovery) if
-        // we have one and haven't indexed it yet. Populates `vanilla_index`.
-        //
-        // This phase is the one that can't be interrupted mid-flight: the base
-        // game is indexed by a single `spawn_blocking` call into the engine, so
-        // there is no per-file seam to poll the flag at. Cancelling during it
-        // takes effect when it returns.
-        // Same reason it has no item count for the bar, and it sets its own text.
         self.enter_phase(&mut phase, progress, quiet, Phase::Vanilla, 0)
             .await;
         self.ensure_vanilla_index(progress, false, quiet).await;
@@ -856,26 +641,10 @@ impl Backend {
             return false;
         }
 
-        // Merge the pre-generated vanilla index (if loaded) so base-game
-        // references resolve. Walks the workspace root for the file index, so
-        // it runs off the executor.
         tokio::task::block_in_place(|| self.merge_pending_vanilla_index());
 
-        // Rebuild the cached modifier-key set now that the type index is
-        // complete (templated modifiers like production_speed_<building>_factor
-        // expand against the full instance list).
         self.rebuild_modifier_keys();
 
-        // Build the loc-key index (workspace + vanilla) so pass 2's config
-        // validation can check LocalisationField references (CW100/CW122), and
-        // publish loc-file diagnostics (CW225 etc.) for the workspace loc files.
-        // On a quiet background pass, skip this ~2M-entry rebuild (the biggest
-        // transient cost of a scan) when a stat-only signature over the same
-        // files says nothing loc-related changed since the last scan. A
-        // foreground scan (startup, clearAllCaches, reindexWorkspace) always
-        // rebuilds, so a user-triggered rescan never serves stale loc
-        // diagnostics — it just also records the signature for the next
-        // quiet pass to compare against.
         self.enter_phase(&mut phase, progress, quiet, Phase::Localisation, 0)
             .await;
         let loc_signature = tokio::task::block_in_place(|| self.compute_loc_signature(&root_path));
@@ -885,32 +654,12 @@ impl Backend {
         } else {
             self.rebuild_and_publish_loc(&root_path).await;
         }
-        // Recorded only on a pass that got this far. A cancel between the
-        // rebuild and here would otherwise pin a signature for an index the
-        // scan never finished assembling, and the next quiet pass would trust
-        // it and skip the rebuild.
         if cancel.is_cancelled() {
             return false;
         }
         *self.state.last_loc_signature.lock() = Some(loc_signature);
 
-        // Rebuild the inline-script registry from what this scan discovered
         // (#259), so a script created, deleted or edited outside a watched
-        // event (server restart, a periodic reindex) is still picked up. A
-        // full rebuild rather than a patch: it's the only way a deleted
-        // script drops out, and a mod holds a handful of these against
-        // thousands of script files, so re-reading them is cheap (mirrors
-        // `cwtools_driver`'s own `load_inline_scripts`). Skipped for an empty
-        // walk, same as the on-disk prune above — a transient read failure
-        // must not wipe every previously known script.
-        //
-        // Built as a local value rather than written straight into
-        // `state.inline_scripts`: pass 2 below borrows it for the whole
-        // parallel section, and doing that against the shared lock directly
-        // would block a concurrent edit's `write()` for the whole scan (the
-        // same reason `type_index`/`loc_index` are snapshotted instead of
-        // read-locked there). It's installed into state after pass 2 reads
-        // from it.
         let fresh_inline_scripts = if scan_files.is_empty() {
             None
         } else {
@@ -919,24 +668,10 @@ impl Backend {
             }))
         };
 
-        // The index (types + loc + vanilla + inline scripts) is now complete.
-        // Allow per-file handlers to publish real diagnostics again: anything
-        // opened/edited during indexing was held back to avoid transient
-        // cross-file "not found" errors, and pass 2 + the open-doc refresh
-        // below publish the real set.
         self.state
             .index_ready
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
-        // Pass 2: validate each file against the now-complete index using
-        // the ASTs we already parsed in pass 1. Diagnostics are published to
-        // the editor; the file is intentionally NOT stored in
-        // `self.state.documents`. That map holds only files the editor has
-        // open (populated by did_open) — the scan used to insert every
-        // workspace file there, pinning all texts+ASTs in memory for the
-        // whole session.
-        // Opened here rather than at the rayon call below so the snapshot clones
-        // between the two are inside the phase the heartbeat is timing.
         self.enter_phase(
             &mut phase,
             progress,
@@ -951,17 +686,7 @@ impl Backend {
         let mut total_hints = 0usize;
         let mut files_with_errors = 0usize;
         let total_files = scan_files.len();
-        // Build the scope registry + enum_map ONCE for the whole scan instead of
-        // once per file: they depend only on (ruleset, game) and are the
-        // expensive part of per-file setup (many inserts + lowercasing +
-        // per-iterator `format!`). All are reused across the rayon section.
         let scan_game = self.state.config.read().game();
-        // Snapshot the ruleset-family state once before the loop; none of it
-        // changes during validation and we can't hold the guard across the await
-        // points below. One `rules` read guard clones all three: the shared
-        // `Arc<RuleSet>` (so the `enum_map` borrow stays valid across the
-        // parallel section), the cached scope-registry `Arc`, and the
-        // modifier-key set.
         let (scan_ruleset, scan_registry, modifier_keys_snap): (
             Option<Arc<RuleSet>>,
             _,
@@ -975,27 +700,14 @@ impl Backend {
             )
         };
 
-        // Validate every file in parallel against shared index snapshots, then
-        // publish serially. The rayon section holds no state guards and makes no
-        // async or client calls. Publishing stays out of the parallel block.
         let (scope_checks, var_checks) = {
             let cfg = self.state.config.read();
             (cfg.scope_checks, cfg.var_checks)
         };
-        // Whether this config tracks `<type>` uses at all (a `should_be_used`
-        // type, or Stellaris technologies). When it does, pass 2 doubles as the
-        // batch driver's two-phase unused-instance pass: every file's uses are
-        // recorded, merged into the store the per-edit path keeps current, and
-        // CW239/CW231 appended per file against the merged view.
         let track_uses = scan_ruleset
             .as_ref()
             .is_some_and(|rs| needs_use_tracking(rs, scan_game));
-        // Cached ASTs of the open docs, snapshotted BEFORE the info guard below
-        // (request handlers lock `documents` before the info service; taking
         // them in the other order here would be an ABBA deadlock). Both scan
-        // passes skip open docs, but their `<type>` uses still count: without
-        // them a definition referenced only from an open buffer would scan up
-        // as unused.
         let open_doc_asts: Vec<(String, Arc<cwtools_parser::ast::ParsedFile>)> = if track_uses {
             let docs = self.state.documents.lock();
             docs.iter()
@@ -1011,15 +723,8 @@ impl Backend {
             Option<u64>,
             InlineIgnoreMap,
         );
-        // Snapshot indexes under brief read guards so rayon holds no
-        // `info_service`/`loc_index` locks; a keystroke needing `write()` no
-        // longer blocks for the whole pass. The type index is copy-on-write, so
-        // this is an `Arc` bump; the first concurrent index mutation takes the
-        // deep copy after the read guard is released.
         let type_index_snap = Arc::clone(&self.state.info_service.read().type_index);
         let loc_index_snap = self.state.loc_index.read().clone();
-        // Parallel vectors built lock-step in the index phase; chunks().zip()
-        // truncates to shortest on mismatch — fail-fast so a length
         // invariant bug surfaces instead of silently dropping diagnostics.
         assert_eq!(scan_files.len(), parsed_files.len());
         assert_eq!(scan_files.len(), source_hashes.len());
@@ -1040,7 +745,6 @@ impl Backend {
                 var_checks,
             )
         });
-        // Parallel vectors built lock-step in the index phase.
         let Some(mut results): Option<Vec<ValidationOutcome>> = chunked_par_filter_map(
             &scan_files,
             &parsed_files,
@@ -1059,15 +763,10 @@ impl Backend {
                         return None;
                     }
                     phase.tick();
-                    // Skip files that failed to parse in pass 1, and open docs
-                    // whose fresher in-memory diagnostics must not be overwritten.
                     let parsed = parsed_opt.as_ref()?;
                     if open_uris.contains(&file.uri) {
                         return None;
                     }
-                    // Workspace scan covers files not open in an editor, so
-                    // no line info — cheap single-char range at parser column;
-                    // did_open republishes the precise range.
                     let no_lines = DocLines::none();
                     let (diagnostics, used) = match &prepared {
                         Some(prepared) => validate_parsed_with_indexes(
@@ -1104,9 +803,6 @@ impl Backend {
         else {
             return false;
         };
-        // Unused-instance second phase: same global merge as before, but against
-        // the snapshot's `type_index_snap` so it doesn't re-acquire the lock.
-        // Skipped on cancel: a partial `results` would prune unscanned files.
         if track_uses
             && !cancel.is_cancelled()
             && let Some(prepared) = &prepared
@@ -1158,10 +854,6 @@ impl Backend {
                 }
             }
         }
-        // Pass 2 (including the unused-instance phase above) was the last
-        // reader of `prepared`, which borrowed `fresh_inline_scripts` — `prepared`
-        // is `Copy` and unused from here, so NLL already ends that borrow.
-        // Install the rebuilt registry into state now that nothing borrows it.
         if let Some(inline_scripts) = fresh_inline_scripts {
             *self.state.inline_scripts.write() = inline_scripts;
         }
@@ -1176,8 +868,6 @@ impl Backend {
         }
         let publish_total = results.len();
 
-        // Snapshot the publish policy once: the loop is async and config may
-        // change mid-pass, but a single scan won't chase live toggles.
         let workspace_wide = {
             let cfg = self.state.config.read();
             cfg.workspace_wide_diagnostics
@@ -1195,13 +885,8 @@ impl Backend {
             results.into_iter().enumerate()
         {
             phase.tick();
-            // Inline `# cwtools-ignore` directives, before the error count and
-            // the publish so both see the same set the editor's Problems panel
-            // gets.
             crate::validate::drop_inline_suppressed(&mut diagnostics, &inline_ignored);
 
-            // Update summary counts from the full validation result, whether or
-            // not this file's diagnostics are published this pass.
             let mut file_has_error = false;
             for d in &diagnostics {
                 match d.severity {
@@ -1235,21 +920,13 @@ impl Backend {
                         .lock()
                         .insert(uri.clone());
                     published_this_scan.insert(uri);
-                } else if previously_published {
-                    // Setting disabled or budget exhausted: clear stale
-                    // diagnostics for files we published before, but leave files
-                    // that were never published untouched.
-                    if let Ok(uri_obj) = Url::parse(&uri) {
-                        self.publish_filtered(uri_obj, Vec::new(), None, source_hash)
-                            .await;
-                    }
-                    // Not re-inserted; the post-loop cleanup removes it.
+                } else if previously_published && let Ok(uri_obj) = Url::parse(&uri) {
+                    self.publish_filtered(uri_obj, Vec::new(), None, source_hash)
+                        .await;
                 }
             }
 
             if publish_throttle.should_wait_after(i) {
-                // Throttle the notification stream slightly so a large workspace
-                // does not saturate the client with publishDiagnostics traffic.
                 publish_throttle.wait().await;
                 tokio::task::yield_now().await;
                 if cancel.is_cancelled() {
@@ -1258,10 +935,6 @@ impl Backend {
             }
         }
 
-        // Clear any closed-file URIs that were published previously but are no
-        // longer part of this scan (deleted, ignored, or renamed). The clear
-        // budget prevents a settings toggle or a mass deletion from flooding the
-        // client with empty notifications.
         let mut clear_budget_remaining = WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET;
         let stale_uris: Vec<String> = {
             let set = self.state.published_workspace_uris.lock();
@@ -1282,7 +955,6 @@ impl Backend {
             }
         }
 
-        // Record the summary of this completed pass.
         *self.state.last_scan_summary.lock() = Some(ScanSummary {
             total_files,
             validated_files: publish_total,
@@ -1315,10 +987,6 @@ impl Backend {
                 .await;
         }
 
-        // Pass 2 is done. Drop the per-file ASTs before the file-list / profile
-        // summary so the RSS we report reflects the steady-state working set
-        // (loc index + type index + open documents), not the in-flight
-        // validation peak.
         drop(parsed_files);
 
         self.end_phase(&mut phase).await;
@@ -1332,7 +1000,6 @@ impl Backend {
             )
             .await;
 
-        // Build and send the file list for the extension's file explorer.
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let file_list: Vec<serde_json::Value> = scan_files
             .iter()
@@ -1352,8 +1019,6 @@ impl Backend {
             .collect();
         self.send_update_file_list(file_list).await;
 
-        // Never record for an empty walk: a transiently-unreadable root would
-        // otherwise pin a bogus fingerprint and suppress the recovery pass.
         if !scan_files.is_empty() {
             *self.state.last_scan_fingerprint.lock() = Some((scan_fingerprint, scan_generation));
         }
@@ -1381,41 +1046,19 @@ impl Backend {
                 st.total_bytes() / (1024 * 1024), st.entries, vanilla, loc_keys);
         }
         cwtools_profiling::log_rss("workspace_scan_done");
-        // The scan dropped large transients (the whole base-game parse, ~2M loc
-        // entries, every file's AST). Hand the freed heap back to the OS so RSS
-        // reflects the real working set, not the scan peak.
         cwtools_profiling::trim_memory();
         cwtools_profiling::log_rss("after_trim");
 
-        // Re-validate documents that were already open before the index finished.
-        // Both scan passes skip open docs, so a file opened during startup keeps
-        // the diagnostics did_open produced against a then-incomplete index — a
-        // cross-file reference (e.g. a scripted_effect defined in a not-yet-indexed
-        // file) shows as "not found" until a manual re-save. Now that the index is
-        // complete, re-run them so those stale diagnostics clear on their own.
         self.revalidate_all_open_docs(crate::ValidateTrigger::Reindex)
             .await;
-        // Type index changed globally; semantic tokens cached under the old
-        // ruleset are stale and would patch incorrectly via delta. Invalidate
         // and ask the client to re-request visible files (#184).
         self.invalidate_all_semantic_tokens();
         self.request_semantic_refresh().await;
         self.request_code_lens_refresh().await;
-        // The status bar is cleared by the `validate_entire_workspace` wrapper on
-        // return, so every exit path (this one and the early returns above) clears
-        // it uniformly.
         true
     }
 
-    /// Read+parse every `common/inline_scripts` file this scan discovered into
     /// a fresh registry (#259). Re-reads rather than reuses pass 1's ASTs —
-    /// those are comment-stripped already but consumed indexing, and a mod
-    /// holds a handful of these against thousands of script files — same
-    /// tradeoff as `cwtools_driver::load_inline_scripts`. Unlike the rest of
-    /// the scan (which skips an open file entirely, trusting the keystroke
-    /// path to have indexed it), an open script's live buffer is read here —
-    /// nothing else feeds this registry for one that's open but unsaved.
-    /// Synchronous (file I/O): call inside `tokio::task::block_in_place`.
     fn rebuild_inline_scripts(
         &self,
         scan_files: &[ScannedFile],
@@ -1464,33 +1107,10 @@ impl Backend {
         }
     }
 
-    /// Re-validate every currently-open document against the current (complete)
-    /// index and re-publish, skipping any whose version changed meanwhile. Called
-    /// once after the workspace scan so open docs validated against a partial
-    /// index don't keep stale cross-file diagnostics, and on a live
-    /// `didChangeConfiguration` so a changed suppression list re-filters at once.
     pub(crate) async fn revalidate_all_open_docs(&self, trigger: crate::ValidateTrigger) {
         let Ok(_validation_permit) = self.state.validation_permits.acquire().await else {
             return;
         };
-        // Snapshot each open doc's uri/text/version, plus its cached AST *only
-        // when that AST matches the current version*. A current AST lets us
-        // re-validate against the now-complete index via the prebuilt path — no
-        // re-parse, no re-index — the same route the dependent sweep takes.
-        //
-        // Skipping the re-index is sound because the scan never touches open
-        // docs: pass 1 skips `open_uris`, and the on-disk prune excludes them
-        // too, so an open doc's index entry still reflects exactly the content
-        // its cached AST was parsed from (written by did_open / did_change via
-        // index_parsed_file, kept in lock-step with `ast_version`). Only the
-        // *global* index grew — the other workspace files the scan indexed —
-        // which is precisely what we want the open doc re-validated against.
-        //
-        // A stale AST (a mid-edit fatal parse, or an edit whose debounce hasn't
-        // run so `ast_version` < `version`) or none at all (loc/.cwt files, or a
-        // never-parsed doc) falls back to the full parse path, which re-parses
-        // the current text and re-indexes — so its parse-error diagnostics and
-        // loc/.cwt handling stay identical to the prior behavior.
         let open_docs: Vec<OpenDocSnapshot> = {
             let docs = self.state.documents.lock();
             docs.iter()
@@ -1503,9 +1123,6 @@ impl Backend {
                 })
                 .collect()
         };
-        // Ruleset family snapshotted once for the whole pass (none of it changes
-        // while we run); mirrors the workspace scan's pass-2 snapshot so the
-        // prebuilt validations share one clone instead of re-locking per doc.
         let (game, encoding) = {
             let cfg = self.state.config.read();
             (cfg.game(), cfg.position_encoding.clone())
@@ -1544,13 +1161,6 @@ impl Backend {
             }
             let diagnostics = match current_ast {
                 Some(ast) => {
-                    // Prebuilt path: validate the stored AST against the complete
-                    // index. `validate_parsed_prebuilt` prepends the AST's own
-                    // parse errors and applies the same MAX_FILE_ERRORS truncation
-                    // and loc-overlay handling the full path uses. Emit the
-                    // `[validate] (trigger)` profiling line the full path would
-                    // (so per-doc revalidation stays observable in the log),
-                    // tagged `prebuilt` to make the no-reparse route legible.
                     let lines = DocLines::new(&text, encoding.clone());
                     let diags = match ruleset_snap.as_ref() {
                         Some(ruleset) => self.validate_parsed_prebuilt(
@@ -1576,17 +1186,12 @@ impl Backend {
                     );
                     diags
                 }
-                // No current AST — re-parse + re-index via the full path,
-                // preserving prior behavior for loc/.cwt files and mid-edit
-                // fatal parses (which must re-parse to surface the live error).
                 None => {
                     self.parse_and_validate(&uri, &text, trigger, Some(version))
                         .await
                         .0
                 }
             };
-            // Skip if the doc changed or closed while we were validating; its own
-            // did_change/did_close handler owns the fresher result.
             let still_current = {
                 let docs = self.state.documents.lock();
                 docs.get(&uri)
@@ -1928,11 +1533,6 @@ mod tests {
     type Row = (usize, usize, u64, u32);
     type Inputs = (Vec<usize>, Vec<Option<usize>>, Vec<Option<u64>>, Vec<u32>);
 
-    /// Four lock-step slices shaped like pass 2's, each carrying a different
-    /// multiple of the index so a walk that misaligned them by even one element
-    /// produces rows that don't match. Every seventh element is a hole, standing
-    /// in for the files pass 2 drops (a failed parse, an open document): the
-    /// walk has to skip them without shifting the rows around them.
     fn inputs(n: usize) -> Inputs {
         (
             (0..n).collect(),
@@ -1946,7 +1546,6 @@ mod tests {
         Some((*a, (*b)?, (*c)?, *d))
     }
 
-    /// What the walk would produce with no chunking and no parallelism at all.
     fn sequential(a: &[usize], b: &[Option<usize>], c: &[Option<u64>], d: &[u32]) -> Vec<Row> {
         a.iter()
             .zip(b)
@@ -1974,8 +1573,6 @@ mod tests {
         .await
     }
 
-    /// Empty, single, one short of a chunk, exactly a chunk, one past it, the
-    /// 300 the issue asked for, and two full chunks.
     const SIZES: [usize; 7] = [0, 1, 255, 256, 257, 300, 512];
 
     #[tokio::test]
@@ -1996,8 +1593,6 @@ mod tests {
         }
     }
 
-    /// The chunk size is a scheduling knob: the result is the same sequence at
-    /// any of them, including sizes that split the input unevenly.
     #[tokio::test]
     async fn chunked_walk_is_independent_of_chunk_size() {
         let unchunked = walk(300, usize::MAX).await;
@@ -2010,9 +1605,6 @@ mod tests {
         }
     }
 
-    /// A cancelled walk hands back nothing, not the chunks it had finished:
-    /// pass 2 publishes what it returns, and a short result would clear
-    /// diagnostics on every file past the cancel.
     #[tokio::test]
     async fn cancelled_walk_returns_none_not_a_partial_result() {
         let (a, b, c, d) = inputs(300);
@@ -2039,9 +1631,6 @@ mod tests {
         let things = tmp.path().join("common/things");
         std::fs::create_dir_all(&things).unwrap();
         for i in 0..n {
-            // A missing closing brace gives a parse error diagnostic for every
-            // file, so we can exercise the budget and summary without needing
-            // a full ruleset.
             std::fs::write(things.join(format!("{i}.txt")), "thing = {\n").unwrap();
         }
         let ws_uri = Url::from_file_path(tmp.path()).unwrap();
@@ -2100,8 +1689,6 @@ mod tests {
             "closed files should be published when workspace-wide is on"
         );
 
-        // Turn off closed-file diagnostics and re-scan. The previous publishes
-        // must be cleared and no new closed files added.
         backend.state.config.write().workspace_wide_diagnostics = false;
         let progress2 =
             CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
@@ -2125,7 +1712,6 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_workspace_diagnostics_budget_caps_closed_files() {
-        // The test build lowers WORKSPACE_DIAGNOSTICS_BUDGET to 2.
         let (backend, _tmp) = setup_error_workspace(4);
         let progress =
             CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
@@ -2208,9 +1794,6 @@ mod tests {
     }
 
     /// #221: a scan with no client token behind it — the startup scan — used to
-    /// get an inert ticker, so its percentage moved only at the six phase
-    /// boundaries and sat on "Validating workspace… 70%" for the whole of pass
-    /// 2. Only a tokenless quiet pass may go unsampled now.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_tokenless_phase_is_still_sampled() {
         let backend = test_backend();
@@ -2226,10 +1809,6 @@ mod tests {
     }
 
     /// #435: `enter_phase`'s `quiet` short-circuit used to drop phase
-    /// reporting entirely, even when the scan carried a command
-    /// `workDoneToken` — a client that explicitly asked for progress on a
-    /// quiet call got none. `quiet` must suppress only the server's own
-    /// `loadingBar`/`$/progress` indicator, not a caller's own token.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_quiet_phase_with_a_token_still_reports_against_it() {
         let backend = test_backend();
@@ -2249,8 +1828,6 @@ mod tests {
             "the phase boundary must reach the command token"
         );
         ticker.tick();
-        // The sampler runs on a timer, so wait for its first report to land
-        // on the token rather than only proving the task exists.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while progress.reports_sent() < 2 && std::time::Instant::now() < deadline {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -2273,7 +1850,6 @@ mod tests {
         progress.finish(None).await;
     }
 
-    /// The mirror case: a quiet pass with no token behind it stays fully
     /// silent, unchanged from before #435.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_quiet_phase_with_no_token_stays_inert() {
@@ -2290,15 +1866,6 @@ mod tests {
         assert!(!backend.state.loading_bar_active.load(Ordering::SeqCst));
     }
 
-    /// The heartbeat is the only thing that reaches the user while a phase is
-    /// running, so the sampler task has to actually run: asserting on the string
-    /// [`heartbeat_message`] formats proves nothing about whether anything ever
-    /// calls it.
-    ///
-    /// `window/logMessage` is the one client call `tower-lsp` sends before the
-    /// handshake completes, so it is what a unit-level backend can observe —
-    /// `loadingBar` and `$/progress` are gated on `State::Initialized` and need
-    /// the real server the integration suite spawns.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_running_phase_reports_a_heartbeat() {
         use futures_util::stream::StreamExt;
@@ -2343,9 +1910,7 @@ mod tests {
         let _ = collector.await;
     }
 
-    /// Slices out of lock-step must fail loudly. `chunks().zip()` truncates to
     /// the shortest, so without the assert a length-invariant bug upstream would
-    /// silently drop the tail's diagnostics.
     #[tokio::test]
     #[should_panic]
     async fn mismatched_lengths_panic_rather_than_truncate() {

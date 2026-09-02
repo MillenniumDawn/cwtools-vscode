@@ -1,13 +1,4 @@
-//! The CW diagnostic catalog, as the CLI sees it.
-//!
-//! The code list itself is `cwtools_error_codes::CATALOG`; `--ignore-code` /
-//! `--only-code` validate against it (a typo is an error, not a silent no-op).
-//! Not every listed code is currently emitted; pending codes are marked in
-//! `PENDING_CODES`. The SARIF report only turns emitted codes into
-//! `tool.driver.rules`.
-//!
-//! The long form of what a code means lives in `docs/engine/ERROR_CODES.md` and is
-//! read from there rather than copied: [`doc_row`] parses the row `explain`
+//! CLI view of the CW diagnostic catalog; validates --ignore/only codes.
 //! prints, so the reference stays the one place the prose is written.
 
 use cwtools_error_codes::{CATALOG, ErrorCode};

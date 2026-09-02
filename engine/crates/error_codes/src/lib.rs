@@ -59,17 +59,10 @@ pub fn cw223_hoi4_message() -> &'static str {
 }
 
 impl ErrorCode {
-    /// This code's template in the active locale, falling back to the English
-    /// `message_template` for a code that locale hasn't translated. Use it
-    /// wherever a template is read directly rather than through
-    /// [`format`](Self::format); `message_template` itself stays English, which
-    /// is what the reference doc and the CLI's `--explain` want.
     pub fn message(&self) -> &'static str {
         translations::template(self.id).unwrap_or(self.message_template)
     }
 
-    /// Substitute each `{}` placeholder in the template with the next param,
-    /// in order (positional, like `format!`). Extra `{}` are left as-is.
     pub fn format(&self, params: &[impl AsRef<str>]) -> String {
         let template = self.message();
         let mut result = String::with_capacity(template.len());
@@ -90,74 +83,48 @@ impl ErrorCode {
     }
 }
 
-// ── Error Code Catalog ─────────────────────────────────
-
-/// Localisation file parse error.
-///
-/// F# emits this from `validateLocalisationSyntax` when `YAMLLocalisationParser`
-/// returns `Failure(msg, pos, _)`. The Rust parser is lenient (recovers
-/// line-by-line), so this fires at the recovery point for each malformed line.
 pub const CW001_PARSE_ERROR: ErrorCode = ErrorCode {
     id: "CW001",
     severity: ErrorSeverity::Error,
     message_template: "Localisation file parse error: {}",
 };
 
-/// Missing localisation key.
 pub const CW100_MISSING_LOCALISATION: ErrorCode = ErrorCode {
     id: "CW100",
     severity: ErrorSeverity::Warning,
     message_template: "Localisation key {} is not defined for {}",
 };
 
-/// Trigger used in wrong scope. F# `IncorrectTriggerScope`.
 pub const CW104_INCORRECT_TRIGGER_SCOPE: ErrorCode = ErrorCode {
     id: "CW104",
     severity: ErrorSeverity::Error,
     message_template: "{} trigger used in incorrect scope. In {} but expected {}",
 };
 
-/// Localisation key quoted when used inline.
 pub const CW122_LOC_KEY_IN_INLINE: ErrorCode = ErrorCode {
     id: "CW122",
     severity: ErrorSeverity::Information,
     message_template: "Localisation key {} should not be quoted when used inline, this can cause unexpected behaviour",
 };
 
-// ── Rules-engine dynamic codes (F# CWTools/Rules/*) ─────
-//
-// These replace the Rust-invented CW200-205. F# emits a node-kind-specific code
-// for a structural mismatch (CW262/263/264/265), one code for any cardinality
-// violation (CW242, covering both under- and over-count), and one for a wrong
-// value (CW240). The severity/message are computed at the emission site (F#
-// threads them from the rule's `## severity` option), so the const severity
-// here is the documented default, not a hard rule.
-
-/// A value didn't match its rule's field type (int/float/enum/bool/date/…).
-/// F# `ConfigRulesUnexpectedValue`. Replaces the Rust-invented CW202/CW205.
 pub const CW240_UNEXPECTED_VALUE: ErrorCode = ErrorCode {
     id: "CW240",
     severity: ErrorSeverity::Error,
     message_template: "{}",
 };
 
-/// Cardinality violation — a field appears too few or too many times.
-/// F# `ConfigRulesWrongNumber`. Replaces the Rust-invented CW203/CW204.
 pub const CW242_WRONG_NUMBER: ErrorCode = ErrorCode {
     id: "CW242",
     severity: ErrorSeverity::Warning,
     message_template: "{}",
 };
 
-/// A target's scope doesn't match the expected scope.
-/// F# `ConfigRulesTargetWrongScope`.
 pub const CW243_TARGET_WRONG_SCOPE: ErrorCode = ErrorCode {
     id: "CW243",
     severity: ErrorSeverity::Error,
     message_template: "Target \"{}\" has incorrect scope. Is {} but expect {}",
 };
 
-/// A value isn't a valid target. F# `ConfigRulesInvalidTarget`.
 pub const CW244_INVALID_TARGET: ErrorCode = ErrorCode {
     id: "CW244",
     severity: ErrorSeverity::Error,

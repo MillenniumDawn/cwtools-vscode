@@ -45,7 +45,6 @@ pub struct SourceRange {
     pub end: SourcePos,
 }
 
-// Arena indices
 pub type LeafIdx = u32;
 pub type LeafValueIdx = u32;
 pub type CommentIdx = u32;
@@ -60,9 +59,6 @@ pub enum Value {
     Clause(Vec<Child>),
 }
 
-/// AST child reference. A keyed clause (`key = { ... }`) is a [`Leaf`] whose
-/// value is [`Value::Clause`] — there is ONE clause representation (see
-/// [`Arena::keyed_clause`]); the parser produces nothing else.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Child {
     Leaf(LeafIdx),
@@ -128,8 +124,6 @@ impl Arena {
     }
 }
 
-/// View of a keyed clause (`key = { ... }`): a [`Leaf`] whose value is
-/// [`Value::Clause`]. Prefer [`Arena::keyed_clause`] over matching by hand.
 pub struct KeyedClause<'a> {
     pub key: StringTokens,
     pub children: &'a [Child],
@@ -137,8 +131,6 @@ pub struct KeyedClause<'a> {
 }
 
 impl Arena {
-    /// The keyed-clause view of `child`; `None` for anything that isn't a
-    /// `Leaf` with a `Value::Clause` value.
     pub fn keyed_clause<'a>(&'a self, child: &Child) -> Option<KeyedClause<'a>> {
         match child {
             Child::Leaf(i) => {

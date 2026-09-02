@@ -52,8 +52,6 @@ pub(crate) fn loc_completion_range(
     )
 }
 
-/// Build best-effort localisation completions for the syntax at the cursor.
-/// Scope tracking within localisation remains intentionally best-effort.
 pub(crate) fn loc_completions(
     loc_keys: &std::collections::HashSet<String>,
     language: &str,
@@ -95,8 +93,6 @@ fn normalized_game(language: &str) -> Option<Game> {
     Game::from_str(language)
 }
 
-/// Chain-keyword prelude for scope completions. HOI4 and EU4 configs conventionally
-/// spell these uppercase; other supported games use lowercase.
 fn scope_prelude(language: &str) -> &'static [&'static str] {
     match normalized_game(language) {
         Some(Game::Hoi4 | Game::Eu4) => &["THIS", "ROOT", "PREV", "FROM"],
@@ -104,9 +100,7 @@ fn scope_prelude(language: &str) -> &'static [&'static str] {
     }
 }
 
-/// Derive scope completion names from the loaded registry when available;
 /// without one, only the prelude keywords are offered (#373 — scope names
-/// come solely from the config-built registry now).
 pub(crate) fn scope_completion_names(
     language: &str,
     registry: Option<&cwtools_game::scope_registry::ScopeRegistry>,

@@ -2,7 +2,6 @@ use crate::ast::*;
 use cwtools_string_table::string_table::{StringTable, StringTokens};
 use std::str::Chars;
 
-/// Whether parsed comments are retained in the AST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentMode {
     Preserve,
@@ -22,7 +21,6 @@ struct Parser<'a> {
     depth: u32,
 }
 
-/// Saved cursor for backtracking: the remaining-input iterator plus line/col.
 #[derive(Clone)]
 struct Cursor<'a> {
     chars: Chars<'a>,
@@ -52,7 +50,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Byte offset of the cursor into the original input.
     fn byte_pos(&self) -> usize {
         self.input.len() - self.chars.as_str().len()
     }
@@ -87,15 +84,12 @@ impl<'a> Parser<'a> {
         self.chars.clone().next()
     }
 
-    /// Peek at the second character without consuming anything.
     fn peek2(&self) -> Option<char> {
         let mut it = self.chars.clone();
         it.next();
         it.next()
     }
 
-    /// Collect up to `N` upcoming chars into a stack-allocated buffer without
-    /// advancing the iterator. Returns the actual number of chars written.
     fn peek_n<const N: usize>(&self) -> ([char; N], usize) {
         let mut buf = ['\0'; N];
         let mut count = 0;
@@ -120,8 +114,6 @@ impl<'a> Parser<'a> {
         if self.peek() == Some('#') {
             let start = self.pos();
             let start_byte = self.byte_pos();
-            // Do NOT consume the '#'; keep it in the comment text so that
-            // directive comments like '## cardinality = ...' remain intact.
             while let Some(c) = self.peek() {
                 if c == '\n' {
                     break;
@@ -137,9 +129,6 @@ impl<'a> Parser<'a> {
         None
     }
 
-    /// Consume a comment without materializing its text. For the discard paths
-    /// (comments before a value) where `consume_comment`'s String would be
-    /// thrown away.
     fn skip_comment(&mut self) -> bool {
         if self.peek() == Some('#') {
             while let Some(c) = self.peek() {
@@ -153,9 +142,6 @@ impl<'a> Parser<'a> {
         false
     }
 
-    /// Consume a quoted string without materializing it, using the same
-    /// termination rules as [`Parser::scan_quoted`]: it ends at the first
-    /// unescaped `"` or at the end of the line.
     fn skip_quoted(&mut self) {
         self.advance(); // opening '"'
         while let Some(c) = self.peek() {
@@ -199,19 +185,12 @@ impl<'a> Parser<'a> {
 
     fn parse_key(&mut self) -> Option<StringTokens> {
         if self.peek() == Some('"') {
-            // Quoted key — same escape/termination rules as a quoted value: it
-            // never spans a line, and an unclosed one is an error (a quoted key
-            // is never a bare clause entry, so always report).
             let key = self.scan_quoted(true);
             self.skip_whitespace();
             Some(key)
         } else {
             let start = self.byte_pos();
             while let Some(c) = self.peek() {
-                // A `?` belongs to the key when it is a `?<default>` null-coalescing
-                // selector (`my_var?150 = ...`, the TAOG form), but NOT when it is
-                // the `?=` QuestionEqual operator — stop before `?=` so the operator
-                // still lexes. `^` carries no such ambiguity (no `^=` operator).
                 if c == '?' && self.peek2() == Some('=') {
                     break;
                 }
@@ -230,16 +209,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parse a value. `leafvalue` is true when the value is a bare value in a
-    /// clause (e.g. a namelist name), false when it is the RHS of `key = value`.
-    /// A quoted string closes strictly at the first unescaped `"` in both cases,
-    /// so one-line `a = "x" b = "y"` pairs and namelists mixing quoted and bare
-    /// entries (`{ "Sunshine" Demon }`) parse as separate values (matches the
-    /// game, which splits a name at its first interior quote).
     fn parse_value(&mut self, leafvalue: bool) -> Option<(Value, SourceRange)> {
         self.skip_whitespace();
-        // Skip any comments that appear before the actual value (e.g. value on next line).
-        // The AST has no place for comments inside Leaf values, so just discard them.
         while self.skip_comment() {
             self.skip_whitespace();
         }
@@ -256,17 +227,6 @@ impl<'a> Parser<'a> {
             return Some(self.finish_value(start, value));
         }
 
-        // Peek ahead for numbers / booleans / rgb / hsv / metaprogramming
-        // rgb / hsv detection.
-        // Determine the candidate keyword ("rgb", "rgb360", "hsv", "hsv360") and
-        // only proceed when the char after the keyword is absent or non-alphanumeric,
-        // so that identifiers like `rgbx` or `rgb3foo` are excluded.
-        // We save state and restore it if parse_rgb/parse_hsv returns None, so a
-        // bare `rgb` token that isn't followed by `{` doesn't get consumed and lost.
-        // Peek 7 chars (max needed: "rgb360" + one char after) without allocating.
-        // Only the keywords rgb/hsv/yes/no and the metaprogramming prefix start
-        // with one of these chars, so plain numbers/identifiers skip the multi-char
-        // peek entirely.
         let (peek7, peek7_len) = match self.peek() {
             Some('r' | 'R' | 'h' | 'H' | 'y' | 'n' | '@') => self.peek_n::<7>(),
             _ => (['\0'; 7], 0),
@@ -322,8 +282,6 @@ impl<'a> Parser<'a> {
         if let Some(b) = self.parse_bool_keyword(&peek7, peek7_len) {
             return Some(self.finish_value(start, b));
         }
-        // F# metaprogramming prefix is "@\[" (at, backslash, open-bracket): the
-        // 3-char literal @\[.
         if peek7_len >= 3 && peek7[0] == '@' && peek7[1] == '\\' && peek7[2] == '[' {
             return self
                 .parse_metaprogramming()
@@ -340,43 +298,14 @@ impl<'a> Parser<'a> {
         (value, SourceRange { start, end })
     }
 
-    /// Parse a `"`-delimited string value (cursor is positioned at the opening
-    /// quote). `leafvalue` mirrors [`Parser::parse_value`]: it suppresses the
-    /// "unclosed quoted string" error for bare clause entries. A quoted string
-    /// closes strictly at the first unescaped `"` and never spans lines, in both
-    /// modes (see [`Parser::parse_value`] for why).
     fn parse_quoted_value(&mut self, leafvalue: bool) -> Value {
-        // A bare clause entry suppresses the unclosed-string error; a key's RHS
-        // reports it.
         Value::QString(self.scan_quoted(!leafvalue))
     }
 
-    /// Scan a `"`-delimited string (cursor at the opening quote) and intern it
-    /// WITH its surrounding quotes. Shared by quoted keys and quoted values so
-    /// their escape/termination rules cannot drift apart.
-    ///
-    /// A quoted string never spans a line: a raw newline terminates it (quoted
-    /// keys and values are single-line in Clausewitz). It closes at the first
-    /// unescaped `"`; only `\"` and `\\` are unescaped, any other `\X` keeps the
-    /// backslash (matches F# behaviour). When the string is left unclosed and
-    /// `report_unclosed` is set, an "unclosed quoted string" error is pushed —
-    /// keys and key-RHS values report; bare clause entries (leafvalues) suppress
-    /// it.
-    ///
-    /// Closing at the first interior quote (rather than trying to keep an
-    /// embedded-quote name whole) is deliberate: `"X" Y` is ambiguous —
-    /// `"Granada" II` (one name, interior quote) is indistinguishable from
-    /// `"Sunshine" Demon` (two values). An older "keep interior quotes as one
-    /// value" heuristic consumed past the close and swallowed the clause's `}`,
-    /// dropping a whole HOI4 names file with a bogus "unclosed clause"
-    /// (cwtools-vscode#42).
     fn scan_quoted(&mut self, report_unclosed: bool) -> StringTokens {
         let quote_start = self.pos();
         let start_byte = self.byte_pos();
         self.advance(); // opening '"'
-        // Stay on the borrowed input: only a *collapsed* escape forces an owned
-        // copy (already carrying the opening quote), and then only for the
-        // segments around it.
         let mut owned: Option<String> = None;
         let mut seg_start = self.byte_pos();
         let mut closed = false;
@@ -387,8 +316,6 @@ impl<'a> Parser<'a> {
             if c == '\\' {
                 let esc_start = self.byte_pos();
                 self.advance(); // consume '\'
-                // Only \" -> " and \\ -> \ unescape. Any other \X keeps the
-                // backslash and the loop picks up the next char naturally.
                 if let Some(e @ ('"' | '\\')) = self.peek() {
                     let buf = owned.get_or_insert_with(|| String::from('"'));
                     buf.push_str(&self.input[seg_start..esc_start]);
@@ -414,7 +341,6 @@ impl<'a> Parser<'a> {
                 ),
             ));
         }
-        // An unclosed string still gets a synthesized closing quote.
         let end_byte = self.byte_pos();
         let body_end = if closed { end_byte - 1 } else { end_byte };
         match owned {
@@ -433,10 +359,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Recognize a standalone `yes`/`no` boolean keyword from the pre-peeked
-    /// buffer. Returns `None` (leaving the cursor untouched) when the token is
-    /// not a bare `yes`/`no`, so the caller falls through to the number/string
-    /// paths.
     fn parse_bool_keyword(&mut self, peek7: &[char; 7], peek7_len: usize) -> Option<Value> {
         if peek7_len >= 3 && peek7[0] == 'y' && peek7[1] == 'e' && peek7[2] == 's' {
             let saved = self.save();
@@ -450,7 +372,6 @@ impl<'a> Parser<'a> {
             } else {
                 return Some(Value::Bool(true));
             }
-            // Not a standalone "yes" — backtrack
             self.restore(saved);
         }
         if peek7_len >= 2 && peek7[0] == 'n' && peek7[1] == 'o' {
@@ -465,28 +386,12 @@ impl<'a> Parser<'a> {
             } else {
                 return Some(Value::Bool(false));
             }
-            // Not a standalone "no" — backtrack
             self.restore(saved);
         }
         None
     }
 
-    /// Parse a numeric literal (int then float) and fall back to a plain string
-    /// when the token isn't a clean number. Returns `None` only when no value
-    /// chars are available (empty token).
     fn parse_number_or_string(&mut self) -> Option<Value> {
-        // Try integer then float.
-        //
-        // F# uses `attempt valueInt` then `attempt valueFloat` with backtracking.
-        // If parsing a numeric literal fails (e.g. "1444.11.11", "1e5", "0x1A"),
-        // FParsec backtracks to the start and valueStr consumes the whole token.
-        //
-        // We replicate this: save position, scan digits+optional-dot, then check
-        // that the NEXT char is NOT a value-char (i.e. the token ends here).  If
-        // it is still a value-char we must backtrack and let the fallback string
-        // path consume the entire token.
-        //
-        // Leading '+' is accepted by F#'s pint64/pfloat (issue #2).
         let num_saved = self.save();
 
         let num_start = self.byte_pos();
@@ -507,15 +412,12 @@ impl<'a> Parser<'a> {
         }
         let num_str = &self.input[num_start..self.byte_pos()];
 
-        // Only commit a numeric result when the token ends here (next char is not
-        // a value-char).  Otherwise backtrack so the whole token becomes a String.
         let num_token_ends = match self.peek() {
             None => true,
             Some(c) => !is_value_char(c),
         };
 
         if num_token_ends && !num_str.is_empty() && num_str != "-" && num_str != "+" {
-            // Try int first (strips leading '+' via parse::<i64>)
             if let Ok(i) = num_str.parse::<i64>() {
                 return Some(Value::Int(i));
             }
@@ -524,11 +426,8 @@ impl<'a> Parser<'a> {
             }
         }
 
-        // Numeric parse didn't commit — backtrack fully so the string path gets the
-        // whole token (e.g. "1444.11.11", "1e5", "0x1A", lone "-").
         self.restore(num_saved);
 
-        // Fallback: plain string
         let start = self.byte_pos();
         while let Some(c) = self.peek() {
             if is_value_char(c) {
@@ -573,7 +472,6 @@ impl<'a> Parser<'a> {
                 break;
             }
             if self.peek().is_none() {
-                // Unclosed brace — record error and break to avoid infinite loop
                 self.errors.push(ParseError::Pos(
                     self.pos().line,
                     self.pos().col,
@@ -589,9 +487,6 @@ impl<'a> Parser<'a> {
     }
 
     /// Consume a `{ ... }` that [`MAX_CLAUSE_DEPTH`] refused to descend into,
-    /// iteratively so the skip itself cannot overflow. Comments and quoted
-    /// strings are lexed rather than scanned for braces, so a `}` hidden in one
-    /// does not end the skip early and derail the rest of the file.
     fn skip_clause(&mut self) {
         self.advance(); // '{'
         let mut open = 1u32;
@@ -639,7 +534,6 @@ impl<'a> Parser<'a> {
             return;
         }
 
-        // Try key=value (or key { ... } shorthand)
         let saved = self.pos();
         let saved_cursor = self.save();
         if let Some(key) = self.parse_key() {
@@ -657,7 +551,6 @@ impl<'a> Parser<'a> {
                     out.push(Child::Leaf(idx));
                     return;
                 }
-                // key = EOF  — commit as error instead of backtracking
                 let end = self.pos();
                 let leaf = Leaf {
                     key,
@@ -678,7 +571,6 @@ impl<'a> Parser<'a> {
                 ));
                 return;
             }
-            // No operator — check for shorthand `key { ... }`
             self.skip_whitespace();
             if let Some('{') = self.peek() {
                 let value_start = self.pos();
@@ -701,11 +593,9 @@ impl<'a> Parser<'a> {
                     return;
                 }
             }
-            // Not a key=value or shorthand; restore and try leaf-value
             self.restore(saved_cursor);
         }
 
-        // Leaf value (bare value)
         if let Some((value, _)) = self.parse_value(true) {
             let end = self.pos();
             let lv = LeafValue {
@@ -717,13 +607,9 @@ impl<'a> Parser<'a> {
             return;
         }
 
-        // Nothing matched — consume one char to avoid infinite loop on malformed input
         self.advance();
     }
 
-    /// Parse a color clause after its keyword (`rgb`/`hsv`, already peeked and
-    /// matched in `parse_value`). Consumes the 3-char keyword, an optional `360`
-    /// suffix, an optional `=`, then the `{ ... }` clause.
     fn parse_color_clause(&mut self) -> Option<Value> {
         for _ in 0..3 {
             self.advance();
@@ -738,7 +624,6 @@ impl<'a> Parser<'a> {
                 self.skip_whitespace();
             }
         }
-        // Support `rgb = { ... }` / `hsv = { ... }` by skipping optional '='.
         if self.peek() == Some('=') {
             self.advance();
             self.skip_whitespace();
@@ -747,10 +632,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_metaprogramming(&mut self) -> Option<Value> {
-        // F# prefix is "@\[" (at, backslash, open-bracket).
-        // metaprogrammingCharSnippet accepts everything except ']' and '\'.
-        // The closing char is ']' (consumed by `ch ']'`).
-        // Result token includes the prefix "@\[" and the closing ']'.
         if self.peek() != Some('@') {
             return None;
         }
@@ -772,7 +653,6 @@ impl<'a> Parser<'a> {
                 found_close = true;
                 break;
             }
-            // F# metaprogrammingCharSnippet stops at '\' too — just collect content.
             self.advance();
         }
         if !found_close {
@@ -802,8 +682,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// Build a `[bool; 128]` ASCII class table at compile time: every ASCII
-/// alphanumeric plus the explicit punctuation in `extra` is `true`.
 const fn ascii_class(extra: &[u8]) -> [bool; 128] {
     let mut table = [false; 128];
     let mut i = 0u8;
@@ -822,14 +700,8 @@ const fn ascii_class(extra: &[u8]) -> [bool; 128] {
     table
 }
 
-/// ASCII members of the bare-value (leafvalue / value-string) char class.
-/// Non-ASCII chars are handled separately in [`is_value_char`].
 static VALUE_CHAR: [bool; 128] = ascii_class(b"_.-:;'[]@+`%/!,<>?$\\|^*&()");
 
-/// ASCII members of the unquoted-key char class. Non-ASCII alphanumerics are
-/// handled separately in [`is_key_char`]. A `?` is included for the
-/// `my_var?<default>` null-coalescing selector; `parse_key` separately stops
-/// before a `?=` so the QuestionEqual operator still lexes.
 static KEY_CHAR: [bool; 128] = ascii_class(b"_:@.\"-'[]!<>$^&|()?");
 
 fn is_value_char(c: char) -> bool {
@@ -840,9 +712,6 @@ fn is_value_char(c: char) -> bool {
     }
 }
 
-/// Whether `value` parses as a bare string rather than a boolean or number.
-/// This is deliberately conservative: a value that starts numerically may be
-/// string-shaped in some cases, but quoting it is always safe.
 pub fn is_bare_string_value(value: &str) -> bool {
     !value.is_empty()
         && value != "yes"
@@ -862,16 +731,7 @@ fn is_key_char(c: char) -> bool {
     }
 }
 
-/// Maximum clause nesting the parser descends into. A deeper clause is consumed
-/// without recursing and a [`ParseError`] naming this limit is recorded.
-///
 /// A stack overflow aborts the process rather than unwinding, so an unbounded
-/// parser takes the whole language server down with it on a 48 KB file. The
-/// deepest nesting measured across HOI4 vanilla, the Kaiserreich mod and the
-/// .cwt ruleset is 24; a release `validate` — whose AST walks recurse far
-/// deeper per level than the parser — survives 704 on the 2 MB stack the LSP's
-/// worker threads get. 256 clears real content by an order of magnitude and
-/// leaves the downstream walkers most of the stack.
 pub const MAX_CLAUSE_DEPTH: u32 = 256;
 
 /// Strip UTF-8 BOM if present, then parse with comments preserved.
@@ -926,13 +786,6 @@ mod tests {
 
     #[test]
     fn names_file_has_no_false_unclosed_clause() {
-        // Regression for cwtools-vscode#42: a HOI4 common/names file (quoted
-        // names with apostrophes and non-ASCII, nested name_list clauses) must
-        // parse with no errors — it was flagged "unclosed clause: expected '}'
-        // before end of file" despite balanced braces on older builds. The real
-        // trigger is a callsigns clause mixing quoted and BARE values
-        // (`"Adler" Demon`): the bare value after a quoted one made the parser
-        // swallow the clause's `}` and cascade to EOF.
         let src = "\
 GER = {
     male = {
@@ -994,11 +847,6 @@ ENG = {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Issue 1: Numeric token corruption — tokens like "1444.11.11" must not
-    // be split; the whole thing should become a String.
-    // -----------------------------------------------------------------------
-
     fn value_of(result: &ParsedFile, _table: &StringTable, idx: usize) -> Value {
         match &result.root_children[idx] {
             Child::Leaf(i) => result.arena.leaves[*i as usize].value.clone(),
@@ -1009,7 +857,6 @@ ENG = {
 
     #[test]
     fn date_token_is_string() {
-        // "1444.11.11" must parse as one String, not be split at the first dot.
         let table = StringTable::new();
         let result = parse_string("start = 1444.11.11", &table);
         match value_of(&result, &table, 0) {
@@ -1032,7 +879,6 @@ ENG = {
 
     #[test]
     fn hex_like_token_is_string() {
-        // "0x1A" — after "0" the 'x' is a value-char so the whole thing is a String.
         let table = StringTable::new();
         let result = parse_string("x = 0x1A", &table);
         match value_of(&result, &table, 0) {
@@ -1045,7 +891,6 @@ ENG = {
 
     #[test]
     fn scientific_like_token_is_string() {
-        // "1e5" — after "1" the 'e' is a value-char so the whole token is a String.
         let table = StringTable::new();
         let result = parse_string("x = 1e5", &table);
         match value_of(&result, &table, 0) {
@@ -1055,10 +900,6 @@ ENG = {
             v => panic!("expected String, got {:?}", v),
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Issue 2: Leading '+' — "+5" should parse as Int(5).
-    // -----------------------------------------------------------------------
 
     #[test]
     fn leading_plus_parses_as_int() {
@@ -1080,21 +921,13 @@ ENG = {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Issue 3: Quoted-string escapes — only \" and \\ are unescaped.
-    // \n in source stays as backslash + 'n', not a newline char.
-    // Applies equally to quoted keys and quoted values.
-    // -----------------------------------------------------------------------
-
     #[test]
     fn qstr_backslash_n_stays_literal() {
-        // Input: x = "hello\nworld"  — \n must NOT become newline
         let table = StringTable::new();
         let result = parse_string(r#"x = "hello\nworld""#, &table);
         match value_of(&result, &table, 0) {
             Value::QString(t) => {
                 let raw = table.get_string(t.normal).unwrap_or_default();
-                // The stored string is wrapped in quotes; strip them
                 let inner = raw.trim_matches('"');
                 assert!(
                     !inner.contains('\n'),
@@ -1109,9 +942,6 @@ ENG = {
 
     #[test]
     fn qstr_escaped_quote_is_unescaped() {
-        // Input: x = "say \"hi\""  — \" becomes "
-        // Stored token is wrapped in outer quotes: "say "hi""
-        // Use strip_prefix/suffix to remove exactly the outermost quotes.
         let table = StringTable::new();
         let result = parse_string(r#"x = "say \"hi\"""#, &table);
         match value_of(&result, &table, 0) {
@@ -1129,7 +959,6 @@ ENG = {
 
     #[test]
     fn qstr_double_backslash_collapses() {
-        // Input: x = "a\\b"  — \\ becomes single \
         let table = StringTable::new();
         let result = parse_string(r#"x = "a\\b""#, &table);
         match value_of(&result, &table, 0) {
@@ -1142,7 +971,6 @@ ENG = {
         }
     }
 
-    // Helper: the leafvalues (bare values) of `n = { ... }`.
     fn clause_leafvalues(result: &ParsedFile, table: &StringTable) -> Vec<String> {
         let leaf = match &result.root_children[0] {
             Child::Leaf(i) => &result.arena.leaves[*i as usize],
@@ -1174,17 +1002,9 @@ ENG = {
             .collect()
     }
 
-    // A quoted string closes at the first interior quote, like the game. A name
-    // that embeds quotes therefore splits into several values — but critically it
-    // never swallows the clause's `}`. `"X" Y` (a quoted value then a bare value)
-    // is the common namelist/callsign shape and MUST parse cleanly; an earlier
-    // "keep interior quotes as one value" heuristic ate the `}` and corrupted the
-    // rest of the file (cwtools-vscode#42).
     #[test]
     fn qstr_interior_quotes_split_and_never_swallow_brace() {
         let table = StringTable::new();
-        // The real trigger: a quoted value followed by a bare value. Two values,
-        // one clause, no parse error.
         let result = parse_string(r#"callsigns = { "Sunshine" Demon }"#, &table);
         assert!(
             result.errors.is_empty(),
@@ -1196,8 +1016,6 @@ ENG = {
             vec!["Sunshine", "Demon"],
             "quoted value then bare value are two separate entries"
         );
-        // A name embedding quotes splits at the first interior quote (game
-        // behaviour) rather than being kept whole — and still no error.
         let result = parse_string(r#"n = { "Division "Castillejos"" }"#, &table);
         assert!(
             result.errors.is_empty(),
@@ -1210,8 +1028,6 @@ ENG = {
         );
     }
 
-    // Whitespace-separated quoted strings must STILL split into separate values
-    // (e.g. `division_types = { "light_armor" "medium_armor" }`).
     #[test]
     fn qstr_space_separated_strings_still_split() {
         let table = StringTable::new();
@@ -1229,13 +1045,11 @@ ENG = {
 
     #[test]
     fn quoted_key_escape_rules_match_value() {
-        // "\"key\"" = value — the key's \" should unescape to just "key" without outer quotes
         let table = StringTable::new();
         let result = parse_string(r#""my\"key" = 1"#, &table);
         if let Child::Leaf(i) = &result.root_children[0] {
             let leaf = &result.arena.leaves[*i as usize];
             let key_raw = table.get_string(leaf.key.normal).unwrap_or_default();
-            // The key is stored as "my"key" (quoted form), inner part is my"key
             assert!(key_raw.contains('"'), "key should contain unescaped quote");
         } else {
             panic!("expected leaf");
@@ -1244,10 +1058,6 @@ ENG = {
 
     #[test]
     fn well_formed_quoted_key_position_unchanged() {
-        // The newline-termination hardening must not shift a *well-formed*
-        // quoted key's recorded position: a single-line quoted key advances the
-        // cursor exactly as before (open quote, body, close quote), so its leaf
-        // start col is still the column of the opening quote and no error fires.
         let table = StringTable::new();
         let result = parse_string("  \"k\" = 5", &table);
         assert!(result.errors.is_empty(), "{:?}", result.errors);
@@ -1342,14 +1152,11 @@ shorthand { nested = value }
         assert!(!is_bare_string_value("foo=bar"));
     }
 
-    // -----------------------------------------------------------------------
     // Issue 4: CRLF column tracking — '\r' must not advance col.
-    // -----------------------------------------------------------------------
 
     #[test]
     fn crlf_does_not_double_count_column() {
         // Two identical assignments, one with CRLF line ending, one with LF.
-        // The column of the second key should be the same in both cases.
         let table = StringTable::new();
         let crlf = parse_string("a = 1\r\nb = 2", &table);
         let lf = parse_string("a = 1\nb = 2", &table);
@@ -1368,13 +1175,8 @@ shorthand { nested = value }
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Issue 5: Metaprogramming prefix is "@\[" (at, backslash, bracket).
-    // -----------------------------------------------------------------------
-
     #[test]
     fn metaprogramming_prefix() {
-        // "@\[expr]" should parse as a String containing "@\[expr]".
         let table = StringTable::new();
         let input = r"x = @\[expr]";
         let result = parse_string(input, &table);
@@ -1387,16 +1189,9 @@ shorthand { nested = value }
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Phase 3: Unclosed key-RHS quoted string must push a parse error and
-    // stop at the newline rather than swallowing subsequent statements.
-    // -----------------------------------------------------------------------
-
     #[test]
     fn unclosed_key_rhs_quote_produces_error() {
         let table = StringTable::new();
-        // a = "oops has no closing " before the newline.
-        // b = 1 must still parse as a separate statement.
         let result = parse_string("a = \"oops\nb = 1", &table);
         assert!(
             !result.errors.is_empty(),
@@ -1419,28 +1214,14 @@ shorthand { nested = value }
         );
     }
 
-    // -----------------------------------------------------------------------
-    // PP1: an unclosed *quoted key* must terminate at end-of-line and push an
-    // "unclosed quoted string" error, exactly like an unclosed key-RHS quoted
-    // value — instead of silently swallowing the following statement. The
-    // key-side was missed when parse_quoted_value was hardened for
-    // cwtools-vscode#42; both now share one escape-scanning helper.
-    // -----------------------------------------------------------------------
-
     #[test]
     fn unclosed_quoted_key_terminates_at_newline_with_error() {
         let table = StringTable::new();
-        // `"foo\nbar = 1\n" = 5\n`: the unclosed quoted key used to span three
-        // lines, swallowing the well-formed `bar = 1`. It must now stop at the
-        // first newline, flag the unclosed string, and leave `bar = 1` intact.
         let result = parse_string("\"foo\nbar = 1\n\" = 5\n", &table);
-        // (b) an unclosed-quoted-string error is recorded.
         assert!(
             !result.errors.is_empty(),
             "expected an unclosed quoted string error, got none"
         );
-        // (a) the key terminated at the newline, so (c) `bar = 1` survives as
-        // its own leaf rather than being absorbed into a multi-line key.
         let bar = result
             .root_children
             .iter()
@@ -1459,19 +1240,12 @@ shorthand { nested = value }
     #[test]
     fn unclosed_quoted_key_at_eof_produces_error() {
         let table = StringTable::new();
-        // A quoted key with no closing quote at EOF must error, not be accepted
-        // silently.
         let result = parse_string("\"unterminated = 5", &table);
         assert!(
             !result.errors.is_empty(),
             "expected a parse error for an unclosed quoted key at EOF"
         );
     }
-
-    // A `?<default>` (and `^`) null-coalescing selector on a variable-defining
-    // key (`my_var?150 = { ... }`, the TAOG form) must lex as ONE key, not split
-    // at the `?` into a bare value + orphaned clause. `^` was already a key char;
-    // `?` was not, so the selector form was mis-parsed.
 
     fn keyed_clause_key(result: &ParsedFile, table: &StringTable, idx: usize) -> String {
         match &result.root_children[idx] {
@@ -1506,8 +1280,6 @@ shorthand { nested = value }
 
     #[test]
     fn question_selector_key_pretaog_leaf_form() {
-        // The pre-TAOG `my_var?150 = 100` form: one key=value leaf, not a bare
-        // value plus an orphan `= 100`.
         let table = StringTable::new();
         let result = parse_string("war_propaganda_decision_cost?150 = 100", &table);
         assert_eq!(result.root_children.len(), 1, "{:?}", result.root_children);
@@ -1525,7 +1297,6 @@ shorthand { nested = value }
 
     #[test]
     fn caret_selector_key_is_one_keyed_clause() {
-        // The `^` variant was already a key char; lock it in as a sibling case.
         let table = StringTable::new();
         let result = parse_string("war_propaganda_decision_cost^foo = { value = 150 }", &table);
         assert_eq!(result.root_children.len(), 1, "{:?}", result.root_children);
@@ -1537,10 +1308,6 @@ shorthand { nested = value }
 
     #[test]
     fn question_equal_operator_still_parses() {
-        // `?=` is the QuestionEqual operator. Folding `?` into the key char set
-        // must NOT break it: `key ?= value` and the no-space `key?= value` both
-        // stay a single key=value leaf whose op is QuestionEqual, not a key with
-        // a trailing `?`.
         for src in ["foo ?= bar", "foo?= bar"] {
             let table = StringTable::new();
             let result = parse_string(src, &table);
@@ -1572,14 +1339,8 @@ shorthand { nested = value }
         }
     }
 
-    // -----------------------------------------------------------------------
     // Clause nesting is bounded. A stack overflow aborts the process instead of
-    // unwinding, so an unbounded parser lets a 48 KB file kill the language
-    // server on every scan — and the file stays on disk, so it kills it again
-    // on every restart.
-    // -----------------------------------------------------------------------
 
-    /// `root = { a = { a = ... 1 ... } }` nested exactly `depth` clauses deep.
     fn nested_clauses(depth: usize) -> String {
         let mut s = String::with_capacity(depth * 8 + 16);
         s.push_str("root = ");
@@ -1621,7 +1382,6 @@ shorthand { nested = value }
     #[test]
     fn nesting_at_the_depth_cap_is_unaffected() {
         let table = StringTable::new();
-        // 24 is the deepest nesting in HOI4 vanilla / Kaiserreich / the ruleset.
         for depth in [1, 24, MAX_CLAUSE_DEPTH as usize] {
             let result = parse_string(&nested_clauses(depth), &table);
             assert!(
@@ -1646,9 +1406,6 @@ shorthand { nested = value }
 
     #[test]
     fn depth_cap_skips_only_the_over_deep_clause() {
-        // The skipped subtree must not cascade: braces hidden in a comment or a
-        // quoted string inside it are not counted, so the skip lands on the
-        // matching `}` and the next statement still parses.
         let table = StringTable::new();
         let deep = nested_clauses(MAX_CLAUSE_DEPTH as usize + 1);
         let src = format!("{deep}\n# trailing }} brace\nafter = \"}}{{\"\nlast = 2\n");
@@ -1671,9 +1428,6 @@ shorthand { nested = value }
 
     #[test]
     fn single_line_over_u16_max_chars_does_not_panic() {
-        // col is a u16; a single line past 65,535 chars must saturate instead
-        // of overflowing (debug builds panic on overflow, release wraps and
-        // corrupts positions). Regression for the col += 1 add in advance().
         let table = StringTable::new();
         let src = format!("foo = {}", "a".repeat(70_000));
         let result = parse_string(&src, &table);

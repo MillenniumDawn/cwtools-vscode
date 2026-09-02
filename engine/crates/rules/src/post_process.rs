@@ -1,28 +1,13 @@
-/// Post-processing passes over a fully merged RuleSet.
-///
-/// Mirrors the F# pipeline in RulesParser.fs:1326-1493:
-///   replaceValueMarkerFields -> replaceSingleAliases -> replaceColourField -> replaceIgnoreMarkerFields
-///
-/// Run after all .cwt files have been parsed and merged so that single_alias
-/// definitions referenced in one file but defined in another are all present.
 use crate::rules_types::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
-/// A `single_alias` reference expansion refused to inline, left in place as an
-/// opaque `SingleAliasField`. The loader turns each into a rules diagnostic on
-/// the referenced definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AliasExpansionError {
-    /// The referenced `single_alias` name.
     pub name: String,
     pub message: String,
 }
 
-/// Apply `f` to every root rule in a RuleSet, in the order each pass relies on:
-/// `root_rules` (Type/Alias/SingleAlias arms, each carrying a `NewRule`), then
-/// `aliases`, then `single_aliases`. Centralises the 3-way traversal shared by
-/// the marker/colour/single-alias passes so they can't drift apart.
 fn for_each_root_rule_mut(ruleset: &mut RuleSet, mut f: impl FnMut(&mut NewRule)) {
     for root in ruleset.root_rules.iter_mut() {
         match root {
@@ -39,7 +24,6 @@ fn for_each_root_rule_mut(ruleset: &mut RuleSet, mut f: impl FnMut(&mut NewRule)
     }
 }
 
-/// The child rules of a clause-shaped rule, if it has any.
 fn body_of(rt: &RuleType) -> Option<&RuleBody> {
     match rt {
         RuleType::NodeRule { rules, .. }
@@ -58,18 +42,6 @@ fn body_mut(rt: &mut RuleType) -> Option<&mut RuleBody> {
     }
 }
 
-/// Bodies one pass has already proved free of the marker it looks for, keyed by
-/// allocation rather than contents.
-///
-/// Single-alias inlining substitutes the same `Arc` body at every reference
-/// site, so a body reached `n` ways would otherwise be walked `n` times by each
-/// later pass, once per site.
-///
-/// Only clean answers are cached, which is what keeps it sound. A pass never
-/// introduces its own marker, so a body without one stays without one for the
-/// rest of that pass; a body that does hold one gets rewritten, which would
-/// invalidate the entry. Retaining the `Arc` keeps the allocation alive, so a
-/// dropped body cannot be mistaken for a cached one at a reused address.
 #[derive(Default)]
 struct CleanCache {
     seen: FxHashSet<*const NewRule>,
@@ -77,13 +49,6 @@ struct CleanCache {
 }
 
 impl CleanCache {
-    /// Whether `rule` or anything below it matches `pred`.
-    ///
-    /// Every pass below checks this before taking a mutable body, because
-    /// `Arc::make_mut` on a shared body copies it: a pass that descended
-    /// unconditionally would un-share every tree the previous pass had just
-    /// shared. The markers these passes look for are rare, so the check answers
-    /// "no" for nearly every subtree and the body is left alone.
     fn any_rule(&mut self, rule: &NewRule, pred: &dyn Fn(&RuleType) -> bool) -> bool {
         pred(&rule.0) || body_of(&rule.0).is_some_and(|b| self.any_in_body(b, pred))
     }
@@ -105,17 +70,11 @@ impl CleanCache {
     }
 }
 
-/// Run all four post-processing passes over `ruleset` in the same order as F#.
-///
-/// Returns the `single_alias` references expansion refused to inline, empty for
-/// any config that resolves within the budget.
 #[tracing::instrument(skip_all)]
 pub fn post_process(ruleset: &mut RuleSet) -> Vec<AliasExpansionError> {
     post_process_with_budget(ruleset, MAX_EXPANDED_NODES)
 }
 
-/// [`post_process`] with the expansion budget spelled out, so the tests can
-/// reach the limit without a million-node fixture.
 fn post_process_with_budget(ruleset: &mut RuleSet, max_nodes: usize) -> Vec<AliasExpansionError> {
     replace_value_marker_fields(ruleset);
     let errors = replace_single_aliases(ruleset, max_nodes);
@@ -124,20 +83,8 @@ fn post_process_with_budget(ruleset: &mut RuleSet, max_nodes: usize) -> Vec<Alia
     errors
 }
 
-// ---------------------------------------------------------------------------
-// Pass 1: replaceSingleAliases
-// ---------------------------------------------------------------------------
-
-/// Ceiling on the rule nodes single_alias inlining may add to one ruleset.
-/// Charged against the expanded size of a body *before* it is cloned in, so a
-/// chain of aliases that each fan out into the next cannot multiply the tree
-/// past it. The HOI4 config spends 2737 nodes, so this leaves room for a config
-/// two orders of magnitude larger before anything is refused.
 const MAX_EXPANDED_NODES: usize = 1_000_000;
 
-/// Longest single_alias -> single_alias chain resolved, and so the recursion
-/// depth of the resolver. Matches the depth the previous 10-round fixpoint
-/// could reach; the HOI4 config nests two deep.
 const MAX_ALIAS_DEPTH: usize = 10;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -147,8 +94,6 @@ enum Resolution {
     Done,
 }
 
-/// Why a reference was left alone. One diagnostic per (alias, reason), however
-/// many sites hit it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Refusal {
     Cycle,
@@ -156,23 +101,10 @@ enum Refusal {
     Budget,
 }
 
-/// Resolves the `single_alias` definitions bottom-up, then inlines them.
-///
-/// Each definition is expanded exactly once, after everything it references, so
-/// a reference site substitutes a body that is already final and is never
-/// descended into again. The fixpoint this replaced expanded one level per
-/// round instead, which copied every shared body once per reference site: with
-/// `n` references at each of three levels that is `n²` rules materialized and
-/// `n³` nodes walked per round. Expanded sizes are memoized per definition and
-/// charged against [`MAX_EXPANDED_NODES`] before any body is cloned.
 struct Expander {
-    /// Name -> definition index. On duplicate names the first wins, matching
-    /// the linear scan this replaced (the HOI4 config defines
-    /// `single_alias[array]` twice).
     by_name: FxHashMap<String, usize>,
     bodies: Vec<Option<NewRule>>,
     state: Vec<Resolution>,
-    /// Expanded node count per definition, valid once its state is `Done`.
     size: Vec<usize>,
     limit: usize,
     remaining: usize,
@@ -180,8 +112,6 @@ struct Expander {
     clean: CleanCache,
 }
 
-/// Inline `SingleAliasField(name)` references by substituting the body of the
-/// matching `single_aliases` entry, which is itself fully expanded first.
 fn replace_single_aliases(ruleset: &mut RuleSet, max_nodes: usize) -> Vec<AliasExpansionError> {
     let defs = std::mem::take(&mut ruleset.single_aliases);
     let mut expander = Expander::new(&defs, max_nodes);
@@ -224,13 +154,10 @@ impl Expander {
         }
     }
 
-    /// Expand definition `idx`, and everything it references, in place.
     fn resolve(&mut self, idx: usize, depth: usize) {
         if self.state[idx] != Resolution::Pending {
             return;
         }
-        // Past the depth limit the definition stays pending: references to it
-        // are refused, and the top-level loop still expands it on its own turn.
         if depth >= MAX_ALIAS_DEPTH {
             return;
         }
@@ -249,13 +176,10 @@ impl Expander {
         self.state[idx] = Resolution::Done;
     }
 
-    /// The expanded body for `name`, charged against the node budget. `None`
-    /// leaves the reference as it is, with the reason recorded.
     fn take_alias(&mut self, name: &str) -> Option<NewRule> {
         let idx = *self.by_name.get(name)?;
         match self.state[idx] {
             Resolution::Done => {}
-            // A back edge: this definition is already on the resolver stack.
             Resolution::InProgress => {
                 self.refuse(name, Refusal::Cycle);
                 return None;
@@ -278,14 +202,7 @@ impl Expander {
         *self.refused.entry((name.to_string(), reason)).or_default() += 1;
     }
 
-    /// Recursively walk `rule` and replace any `SingleAliasField` reference with
-    /// the expanded body it names.
     fn inline_rule(&mut self, rule: &mut NewRule) {
-        // A body that is *itself* a single_alias reference, e.g.
-        // `alias[effect:every_country] = single_alias_right[every_effect_clause]`.
-        // Resolve it in place so the alias body becomes the referenced rules and is
-        // deep-validated like an inline body, instead of staying an opaque
-        // SingleAliasField that validates permissively.
         if let RuleType::LeafRule {
             right: NewField::SingleAliasField(name),
             ..
@@ -311,8 +228,6 @@ impl Expander {
         }
     }
 
-    /// Walk a rule body in place, replacing SingleAliasField entries by
-    /// substituting the expanded body and recursing into nested rules.
     fn inline_list(&mut self, rules: &mut RuleBody) {
         if !self.clean.any_in_body(rules, &is_single_alias_ref) {
             return;
@@ -327,7 +242,6 @@ impl Expander {
         for rule in rules.iter() {
             let mut rule = rule.clone();
             match &rule.0 {
-                // LeafRule whose right-hand side is a SingleAliasField
                 RuleType::LeafRule {
                     left: _,
                     right: NewField::SingleAliasField(name),
@@ -353,13 +267,10 @@ impl Expander {
                                 opts,
                             ));
                         }
-                        // Fallback: keep the alias body's own shape
                         Some(other) => out.push((other, opts)),
-                        // Unknown, cyclic or over budget — keep the reference
                         None => out.push(rule),
                     }
                 }
-                // Recurse into nested rule containers
                 RuleType::NodeRule { .. }
                 | RuleType::ValueClauseRule { .. }
                 | RuleType::SubtypeRule { .. } => {
@@ -412,7 +323,6 @@ fn is_single_alias_ref(rt: &RuleType) -> bool {
     )
 }
 
-/// Every `single_alias` name `rule` references, at any depth.
 fn collect_refs(rule: &NewRule, out: &mut Vec<String>) {
     match &rule.0 {
         RuleType::LeafRule {
@@ -426,15 +336,10 @@ fn collect_refs(rule: &NewRule, out: &mut Vec<String>) {
     }
 }
 
-/// Rules in `rule` counted as the tree they describe, so a body shared by ten
-/// reference sites counts ten times. That is what the budget bounds: the walks
-/// every later pass and the validator pay are per occurrence, not per
-/// allocation.
 fn logical_size(rule: &NewRule) -> usize {
     1 + body_of(&rule.0).map_or(0, |b| b.iter().map(logical_size).sum::<usize>())
 }
 
-/// Extract the `left` field from a `LeafRule` variant.
 fn extract_leaf_left(rt: &RuleType) -> NewField {
     match rt {
         RuleType::LeafRule { left, .. } => left.clone(),
@@ -442,17 +347,6 @@ fn extract_leaf_left(rt: &RuleType) -> NewField {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pass 2: replaceColourField
-// ---------------------------------------------------------------------------
-
-/// Expand `LeafRule(l, MarkerField(ColourField))` into a `NodeRule` with a
-/// single `LeafValueRule(Float(-256..256))` at cardinality 3..3.
-/// Also expand `IrCountryTag` into parallel enum + variable rules.
-/// Expand `colour_field` markers into a colour block rule (float -256..256,
-/// exactly 3 values). Distinct from the inline `colour[rgb]`/`colour[hsv]` RHS
-/// syntax handled at conversion time in `rules_converter::build_colour_rules`
-/// (different ranges by design, not a duplicate).
 fn replace_colour_field(ruleset: &mut RuleSet) {
     let mut clean = CleanCache::default();
     for_each_root_rule_mut(ruleset, |rule| expand_colour_in_rule(rule, &mut clean));
@@ -502,7 +396,6 @@ fn expand_colour_in_list(rules: &mut RuleBody, clean: &mut CleanCache) {
 
 fn expand_colour_rule(mut rule: NewRule, clean: &mut CleanCache) -> Vec<NewRule> {
     match &rule.0 {
-        // LeafRule(l, MarkerField(ColourField)) -> NodeRule(l, [LeafValue(Float(-256..256)) @ 3..3])
         RuleType::LeafRule {
             right: NewField::MarkerField(Marker::ColourField),
             ..
@@ -532,7 +425,6 @@ fn expand_colour_rule(mut rule: NewRule, clean: &mut CleanCache) -> Vec<NewRule>
                 opts,
             )]
         }
-        // LeafRule(l, MarkerField(IrCountryTag)) -> two parallel LeafRules
         RuleType::LeafRule {
             right: NewField::MarkerField(Marker::IrCountryTag),
             ..
@@ -556,7 +448,6 @@ fn expand_colour_rule(mut rule: NewRule, clean: &mut CleanCache) -> Vec<NewRule>
                 ),
             ]
         }
-        // LeafRule(MarkerField(IrCountryTag), r) -> two parallel LeafRules
         RuleType::LeafRule {
             left: NewField::MarkerField(Marker::IrCountryTag),
             ..
@@ -580,7 +471,6 @@ fn expand_colour_rule(mut rule: NewRule, clean: &mut CleanCache) -> Vec<NewRule>
                 ),
             ]
         }
-        // NodeRule(MarkerField(IrCountryTag), r) -> two parallel NodeRules
         RuleType::NodeRule {
             left: NewField::MarkerField(Marker::IrCountryTag),
             ..
@@ -611,7 +501,6 @@ fn expand_colour_rule(mut rule: NewRule, clean: &mut CleanCache) -> Vec<NewRule>
                 vec![rule]
             }
         }
-        // Recurse into nested containers
         RuleType::NodeRule { .. }
         | RuleType::ValueClauseRule { .. }
         | RuleType::SubtypeRule { .. } => {
@@ -629,13 +518,6 @@ fn extract_leaf_right(rt: &RuleType) -> NewField {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pass 3: replaceValueMarkerFields
-// ---------------------------------------------------------------------------
-
-/// Rewrite `ValueScopeMarkerField { is_int, min, max }` to
-/// `ValueScopeField { is_int, min, max }` everywhere it appears.
-/// This is the base rewrite without the optional formula/range expansion.
 fn replace_value_marker_fields(ruleset: &mut RuleSet) {
     let mut clean = CleanCache::default();
     for_each_root_rule_mut(ruleset, |rule| rewrite_vsm_in_rule(rule, &mut clean));
@@ -693,12 +575,6 @@ fn rewrite_vsm_field(field: &mut NewField) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pass 4: replaceIgnoreMarkerFields
-// ---------------------------------------------------------------------------
-
-/// Replace `LeafRule(field, IgnoreMarkerField)` with
-/// `NodeRule(IgnoreField(Box::new(field)), [])`.
 fn replace_ignore_marker_fields(ruleset: &mut RuleSet) {
     let mut clean = CleanCache::default();
     for_each_root_rule_mut(ruleset, |rule| expand_ignore_in_rule(rule, &mut clean));
@@ -774,9 +650,6 @@ mod tests {
             .unwrap_or_else(|| panic!("no alias[{name}]"))
     }
 
-    /// Node count over distinct allocations: a body reached by ten reference
-    /// sites counts once. The fixpoint this pass replaced copied such a body per
-    /// site, so this is what used to grow with the square of the fan-out.
     fn distinct_nodes(rule: &NewRule, seen: &mut FxHashSet<*const NewRule>) -> usize {
         1 + body_of(&rule.0).map_or(0, |body| {
             if body.is_empty() || !seen.insert(body.as_ptr()) {
@@ -786,8 +659,6 @@ mod tests {
         })
     }
 
-    /// `alias[effect:top]` -> `level_b` -> `level_c`, `fan_out` references at
-    /// each level over `fan_out` scalar leaves.
     fn fan_out_config(fan_out: usize) -> String {
         let mut config = String::from("single_alias[level_c] = {\n");
         for i in 0..fan_out {
@@ -805,8 +676,6 @@ mod tests {
         config
     }
 
-    /// The body reached by following `path` down `rule`'s nested `key = { … }`
-    /// blocks.
     fn body_at<'a>(rule: &'a NewRule, path: &[&str]) -> &'a [NewRule] {
         let mut rules: &[NewRule] = match &rule.0 {
             RuleType::NodeRule { rules, .. } => rules,
@@ -844,14 +713,6 @@ mod tests {
             .unwrap_or_else(|| panic!("no `{key}` rule in {rules:?}"))
     }
 
-    // -----------------------------------------------------------------------
-    // Every pass, below the top level
-    // -----------------------------------------------------------------------
-
-    /// Each pass skips a body whose subtree holds none of its markers, so that a
-    /// tree shared by single-alias inlining is not copied to rewrite nothing.
-    /// A marker two blocks down is what catches a check that only looks at the
-    /// rules directly in front of it.
     #[test]
     fn a_marker_nested_below_the_top_level_still_expands() {
         let input = r#"
@@ -879,7 +740,6 @@ alias[effect:nested] = {
             .unwrap();
         let inner = body_at(rule, &["outer", "inner"]);
 
-        // Pass 1: value_field -> ValueScopeField.
         match &rule_named(inner, "amount").0 {
             RuleType::LeafRule { right, .. } => assert!(
                 matches!(right, NewField::ValueScopeField { .. }),
@@ -888,7 +748,6 @@ alias[effect:nested] = {
             other => panic!("expected a LeafRule for `amount`, got {other:?}"),
         }
 
-        // Pass 2: single_alias_right -> the referenced body.
         let aliased = body_at(rule_named(inner, "aliased"), &[]);
         assert!(
             aliased
@@ -897,7 +756,6 @@ alias[effect:nested] = {
             "single_alias not inlined: {aliased:?}"
         );
 
-        // Pass 3: colour_field -> a 3x float block.
         let colour = body_at(rule_named(inner, "colour"), &[]);
         assert_eq!(colour.len(), 1, "colour body: {colour:?}");
         assert!(
@@ -910,8 +768,6 @@ alias[effect:nested] = {
             "colour_field not expanded: {colour:?}"
         );
 
-        // Pass 4: ignore_field -> an IgnoreField NodeRule, which no longer
-        // carries its own key, so it is found by shape.
         assert!(
             inner.iter().any(|(rt, _)| matches!(
                 rt,
@@ -924,15 +780,8 @@ alias[effect:nested] = {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Pass 1: single_alias inlining
-    // -----------------------------------------------------------------------
-
     #[test]
     fn test_single_alias_inline_leaf() {
-        // A single_alias whose body is a simple leaf rule (scalar right).
-        // Any rule that references single_alias_right[my_sa] should have its
-        // right-hand side replaced with the body's right-hand side (scalar).
         let input = r#"
 single_alias[my_sa] = scalar
 
@@ -962,9 +811,6 @@ alias[effect:test] = {
 
     #[test]
     fn test_single_alias_inline_node() {
-        // A single_alias whose body is a node (block).
-        // Referencing it via single_alias_right[my_node_sa] should yield a NodeRule
-        // with the body's inner rules.
         let input = r#"
 single_alias[my_node_sa] = {
     ## cardinality = 0..1
@@ -984,7 +830,6 @@ alias[effect:node_test] = {
             .unwrap();
         if let RuleType::NodeRule { rules, .. } = rule {
             let (inner_rule, _) = &rules[0];
-            // Should have been promoted to a NodeRule whose rules contain inner_key=scalar
             match inner_rule {
                 RuleType::NodeRule {
                     rules: inner_rules, ..
@@ -1003,10 +848,6 @@ alias[effect:node_test] = {
 
     #[test]
     fn test_single_alias_inline_whole_body() {
-        // An alias whose ENTIRE body is a single_alias_right reference, e.g.
-        // `alias[effect:every_country] = single_alias_right[every_effect_clause]`.
-        // Must inline to the referenced node's rules so the body deep-validates
-        // (otherwise every_*/random_* scope-effect bodies validate permissively).
         let input = r#"
 single_alias[every_clause] = {
     ## cardinality = 0..1
@@ -1036,12 +877,6 @@ alias[effect:every_country] = single_alias_right[every_clause]
         }
     }
 
-    /// Fan-out has to cost what it describes, not what it copies. A three-level
-    /// chain multiplies the tree the validator walks by the fan-out at each
-    /// level, but every reference site substitutes the same expanded body, so
-    /// what is materialized grows with the fan-out itself. The fixpoint this
-    /// replaced re-expanded one level per round, copying each shared body once
-    /// per site, which put the squared term in memory as well.
     #[test]
     fn fan_out_expands_by_sharing_not_copying() {
         let measure = |fan_out: usize| {
@@ -1063,9 +898,6 @@ alias[effect:every_country] = single_alias_right[every_clause]
         );
     }
 
-    /// Past the budget a reference stays a `SingleAliasField`, which validates
-    /// permissively, and the caller is told which definition ran out and how
-    /// many sites it left behind.
     #[test]
     fn expansion_past_the_budget_keeps_the_reference_and_reports_it() {
         let input = r#"
@@ -1082,7 +914,6 @@ alias[effect:uses_block] = {
     four = single_alias_right[block]
 }
 "#;
-        // `block` expands to 4 nodes, so a 9-node budget buys two sites.
         let (ruleset, errors) = parse_and_post_with_budget(input, 9);
 
         assert_eq!(errors.len(), 1, "one diagnostic per definition: {errors:?}");
@@ -1102,9 +933,6 @@ alias[effect:uses_block] = {
         assert_eq!(unexpanded, 2, "over-budget references must stay: {body:?}");
     }
 
-    /// A cycle is a back edge in the definition graph, caught while resolving
-    /// rather than by watching a reference count fail to fall. The reference
-    /// that closes the loop stays put and the tree stays small.
     #[test]
     fn a_reference_cycle_is_reported_and_stops_expanding() {
         let input = r#"
@@ -1134,10 +962,6 @@ alias[effect:uses_loop] = {
             "a cycle must not grow the tree it is in"
         );
     }
-
-    // -----------------------------------------------------------------------
-    // Pass 2: colour field expansion
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_colour_field_expands_to_node_rule() {
@@ -1188,10 +1012,6 @@ alias[effect:colour_test] = {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Pass 3: ValueScopeMarkerField -> ValueScopeField
-    // -----------------------------------------------------------------------
-
     #[test]
     fn test_value_scope_marker_rewrite() {
         let input = r#"
@@ -1222,10 +1042,6 @@ alias[trigger:val_test] = {
             panic!("expected outer NodeRule");
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Pass 4: IgnoreMarkerField expansion
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_ignore_marker_expands() {

@@ -1,25 +1,4 @@
-//! `textDocument/inlayHint`: annotate id references with their localised title
-//! and scope-changing keys with the scope their block evaluates in.
-//!
-//! Two hint kinds are scoped for this feature:
-//!
-//! - **Loc titles** (`cwtools.inlayHints.locTitles`, default ON): after a leaf
-//!   whose value is a known type-instance id that has a localised title, render
-//!   the title. Purely a pair of O(1) map hits per leaf — `is_any_instance` on
-//!   the type index and a `loc_text` lookup — so it stays cheap over a viewport
-//!   range without any new index.
-//! - **Resolved scopes** (`cwtools.inlayHints.scopes`, default OFF): after a
-//!   `key = { ... }` block whose key changes the ambient scope, render the
-//!   target scope. A single validator-owned downward pass threads the full
-//!   ambient scope context through the requested file, including rule
-//!   `## push_scope`, `replace_scope`, alias overloads, and anonymous value
-//!   clauses. It emits only visible transitions and stays within the existing
-//!   [`MAX_HINTS`] response cap. Hints that resolve to the same scope as the
-//!   ambient scope, or to a `scope_N` / `any` / `invalid` placeholder, are
 //!   suppressed. This avoids the rejected per-leaf resolver path from issue #99.
-//!
-//! The capability is declared statically (loc titles default on); the handler
-//! gates each kind on its setting and returns nothing when both are off.
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{InlayHint, InlayHintLabel, InlayHintParams, Position, Range};
@@ -34,12 +13,8 @@ use crate::lines::DocLines;
 use crate::navigation::{value_col_in_line, value_start_after_eq};
 use crate::{Backend, LocTextMap};
 
-/// Upper bound on hints returned for one request, so a huge visible range (or a
-/// file that is one giant list of ids) can't produce an unbounded response.
 const MAX_HINTS: usize = 200;
 
-/// Longest localised title rendered inline before it is truncated with an
-/// ellipsis. Titles can be full sentences; a hint that long stops being a hint.
 const MAX_TITLE_CHARS: usize = 60;
 
 impl Backend {
@@ -54,12 +29,9 @@ impl Backend {
             return Ok(None);
         }
         let uri = params.text_document.uri.to_string();
-        // Loc / rule files aren't game ASTs — no id references to annotate.
         if crate::paths::has_loc_ext(&uri) || crate::paths::is_cwt_file(&uri) {
             return Ok(None);
         }
-        // Snapshot document AST + text first (locks `documents` briefly, then
-        // releases) so neither is held while the index / loc guards are taken.
         let Some(ast) = self.ast_for(&uri) else {
             return Ok(None);
         };
@@ -69,8 +41,6 @@ impl Backend {
         let encoding = self.position_encoding();
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
-        // One line index for both hint kinds: each hint is placed against its
-        // own leaf's line, so resolving them per hint rescans the file per leaf.
         let lines = DocLines::new(&text, encoding);
         let loc_hints = if loc_titles {
             // Lock order: info_service -> loc_text (documents already released).
@@ -149,12 +119,6 @@ fn merge_hints(mut first: Vec<InlayHint>, mut second: Vec<InlayHint>) -> Vec<Inl
     first
 }
 
-/// Compute the localised-title inlay hints for the leaves of `file` whose lines
-/// fall inside `range`. Pure (no locks / IO) so the handler and its tests share
-/// the exact mapping. A hint is produced for a leaf (or bare leaf-value) whose
-/// string value is BOTH a known type-instance id (`is_any_instance`, O(1)) and a
-/// key present in `loc_text` (O(1)); the title text is placed just after the
-/// value token, using the same source→LSP conversion the other handlers use.
 pub(crate) fn loc_title_hints(
     file: &ParsedFile,
     table: &StringTable,
@@ -176,8 +140,6 @@ pub(crate) fn loc_title_hints(
     hints
 }
 
-/// Immutable per-request context, so the recursive walk passes one reference
-/// instead of seven positional args.
 struct Ctx<'a> {
     arena: &'a Arena,
     table: &'a StringTable,
@@ -219,9 +181,6 @@ fn collect_hints(children: &[Child], cx: &Ctx<'_>, out: &mut Vec<InlayHint>) {
             Child::Leaf(idx) => {
                 let leaf = &cx.arena.leaves[*idx as usize];
                 if let Value::Clause(inner) = &leaf.value {
-                    // Recurse only when the clause's line span overlaps the range;
-                    // `pos.end` may overshoot past `}` (harmless — it only widens
-                    // the guard), so a non-overlapping subtree is still skipped.
                     let start0 = leaf.pos.start.line.saturating_sub(1);
                     let end0 = leaf.pos.end.line.saturating_sub(1);
                     if end0 >= cx.range.start.line && start0 <= cx.range.end.line {
@@ -233,7 +192,6 @@ fn collect_hints(children: &[Child], cx: &Ctx<'_>, out: &mut Vec<InlayHint>) {
                 if !cx.line_in_range(line0) {
                     continue;
                 }
-                // `key = value`: skip the key, start the token scan after the `=`.
                 if let Some(hint) = hint_for_value(
                     &leaf.value,
                     cx,
@@ -250,12 +208,6 @@ fn collect_hints(children: &[Child], cx: &Ctx<'_>, out: &mut Vec<InlayHint>) {
                 if !cx.line_in_range(line0) {
                     continue;
                 }
-                // A bare value token: annotate it (scan from its own start). An
-                // anonymous nested block (`{ ... }` with no key) is also a
-                // LeafValue but its value is a `Value::Clause`, which
-                // `hint_for_value` rejects — we intentionally don't descend into
-                // anonymous blocks (rare in game script; keyed clauses cover the
-                // normal case via the Leaf branch above).
                 if let Some(hint) =
                     hint_for_value(&lv.value, cx, line0, Anchor::Bare(lv.pos.start.col as u32))
                     && cx.position_in_range(hint.position)
@@ -268,7 +220,6 @@ fn collect_hints(children: &[Child], cx: &Ctx<'_>, out: &mut Vec<InlayHint>) {
     }
 }
 
-/// Convert validator scope transitions into rendered inlay hints.
 fn scope_hints_from_transitions(
     transitions: &[cwtools_validation::position::ScopeTransition],
     lines: &DocLines,
@@ -290,21 +241,6 @@ fn scope_hints_from_transitions(
         .collect()
 }
 
-/// Build the scope inlay hint for a `key = { ... }` block whose `enter_block_scope`
-/// resolved to `resolved_scope`, given the ambient `ambient_scope` that was in
-/// effect before the block was entered. `lines` is the source split into lines.
-/// `None` when:
-/// - the block didn't actually change scope (`resolved == ambient`),
-/// - the resolved scope is a placeholder (`scope_N` for an id the registry
-///   doesn't know, `SCOPE_ANY`, `SCOPE_INVALID`),
-/// - the range's line has no parseable `key = …` header.
-///
-/// The hint is placed just past the `=` so a typical `key = ↦scope { ... }` reads
-/// as "this block evaluates in `scope`". `padding_left = true` inserts the
-/// leading space; `padding_right = None` keeps the `{` tight against the hint
-/// so it doesn't read as part of the scope name.
-///
-/// Pure (no LSP state, no IO) so the handler and its tests share the mapping.
 pub(crate) fn scope_hint_for_block(
     registry: &ScopeRegistry,
     ambient_scope: ScopeId,
@@ -321,10 +257,6 @@ pub(crate) fn scope_hint_for_block(
     let line0 = range.start.line.saturating_sub(1);
     let key_col = range.start.col as u32;
     let line = lines.line(line0);
-    // Place the hint at the first non-whitespace column after the `=` — that's
-    // where `{` lives when the key was `key = { … }`. Falling back to the
-    // column right after `=` (e.g. an unparsable line) still anchors the hint
-    // visibly near the block.
     let after_eq = value_start_after_eq(line, key_col).unwrap_or(key_col);
     let col = skip_whitespace(line, after_eq).unwrap_or(after_eq);
     let position = lines.position(line0, col);
@@ -341,17 +273,10 @@ pub(crate) fn scope_hint_for_block(
     })
 }
 
-/// Whether `scope` names a real scope in `registry` — anything except the
-/// sentinels and the `scope_N` placeholder for an id the registry doesn't
-/// know. Mirrors the hover-side filter that suppresses placeholder names from
-/// the scope table so the hint label never reads as `↦ scope_42`.
 fn is_real_scope(registry: &ScopeRegistry, scope: ScopeId) -> bool {
     scope != SCOPE_ANY && scope != SCOPE_INVALID && registry.by_id.contains_key(&scope)
 }
 
-/// The first non-whitespace char column at or after `from` on `line`. Used to
-/// anchor the scope hint at the `{` of `key = { ... }` instead of the space that
-/// follows `=`.
 fn skip_whitespace(line: &str, from: u32) -> Option<u32> {
     let from = from as usize;
     line.chars()
@@ -361,24 +286,12 @@ fn skip_whitespace(line: &str, from: u32) -> Option<u32> {
         .map(|(i, _)| i as u32)
 }
 
-/// Where to begin scanning for the value token on the leaf's line. `Keyed` skips
-/// past the `=` (a `key = value` leaf); `Bare` starts at the value's own column
-/// (a keyless leaf-value). Both carry the relevant source column.
 enum Anchor {
     Keyed(u32),
     Bare(u32),
 }
 
-/// Build the title hint for a scalar `value` on `line0`. `None` when the value
-/// isn't a string, is not a known id with a localised title, or its token can't
-/// be located on the line (e.g. a value that spans lines).
-///
-/// The value text is BORROWED from the string table (`with_string`, no
-/// allocation) to run both gates; the only per-hint allocations — the lowercased
-/// lookup key and the title `String` — happen after the `is_any_instance` gate
-/// passes, so a non-id leaf costs a borrow + one hash lookup and nothing more.
 fn hint_for_value(value: &Value, cx: &Ctx<'_>, line0: u32, anchor: Anchor) -> Option<InlayHint> {
-    // Only real identifiers carry ids; numbers / bools / clauses never do.
     let id = match value {
         Value::String(t) | Value::QString(t) => t.normal,
         _ => return None,
@@ -386,12 +299,9 @@ fn hint_for_value(value: &Value, cx: &Ctx<'_>, line0: u32, anchor: Anchor) -> Op
     cx.table
         .with_string(id, |s| {
             let name = s.trim_matches('"');
-            // Both gates are O(1): a known instance of some type AND a key with a
-            // localised title. `is_any_instance` lowercases internally.
             if name.is_empty() || !cx.type_index.is_any_instance(name) {
                 return None;
             }
-            // Past the gate: now allocate the lowercased lookup key + the title.
             let name_lc = name.to_ascii_lowercase();
             let title = truncate_title(cx.loc_text.get(name_lc.as_str())?.first()?.1.as_str());
 
@@ -418,8 +328,6 @@ fn hint_for_value(value: &Value, cx: &Ctx<'_>, line0: u32, anchor: Anchor) -> Op
         .flatten()
 }
 
-/// Truncate a title to [`MAX_TITLE_CHARS`] scalar values, appending `…` when cut.
-/// Counts chars (not bytes) so multi-byte titles aren't split mid-codepoint.
 fn truncate_title(title: &str) -> String {
     if title.chars().count() <= MAX_TITLE_CHARS {
         return title.to_string();
@@ -488,7 +396,6 @@ mod tests {
 
     #[test]
     fn value_with_title_gets_a_hint_after_the_value() {
-        // `add_ideas = my_idea`, `my_idea` is a known idea with a title.
         let text = "c = {\n    add_ideas = my_idea\n}\n";
         let idx = idx_with("idea", &["my_idea"]);
         let loc = loc(&[("my_idea", "My Idea")]);
@@ -496,14 +403,11 @@ mod tests {
         assert_eq!(hints.len(), 1, "one titled id -> one hint");
         assert_eq!(label(&hints[0]), "My Idea");
         assert_eq!(hints[0].padding_left, Some(true));
-        // Positioned just past `my_idea` on line 1 (0-based): "    add_ideas = my_idea"
-        //                                                       col 16 ..= 23
         assert_eq!(hints[0].position, Position::new(1, 23));
     }
 
     #[test]
     fn bare_leaf_value_in_a_list_gets_a_hint() {
-        // A bare id inside a clause (no key), e.g. a list of ideas.
         let text = "list = {\n    my_idea\n}\n";
         let idx = idx_with("idea", &["my_idea"]);
         let loc = loc(&[("my_idea", "My Idea")]);
@@ -515,7 +419,6 @@ mod tests {
 
     #[test]
     fn known_id_without_a_title_gets_no_hint() {
-        // The id is indexed but has no loc entry — nothing to render.
         let text = "c = {\n    add_ideas = my_idea\n}\n";
         let idx = idx_with("idea", &["my_idea"]);
         let loc = loc(&[]);
@@ -524,8 +427,6 @@ mod tests {
 
     #[test]
     fn loc_key_that_is_not_a_known_instance_gets_no_hint() {
-        // A value with a matching loc key but no type definition (a flag, a raw
-        // string) must not be annotated — the gate is "known id", not "any key".
         let text = "c = {\n    set_country_flag = my_idea\n}\n";
         let idx = TypeIndex::new();
         let loc = loc(&[("my_idea", "My Idea")]);
@@ -544,7 +445,6 @@ mod tests {
 
     #[test]
     fn case_insensitive_id_and_key() {
-        // Paradox ids are case-insensitive; the index + loc map are lowercased.
         let text = "c = {\n    add_ideas = MY_IDEA\n}\n";
         let idx = idx_with("idea", &["my_idea"]);
         let loc = loc(&[("my_idea", "My Idea")]);
@@ -560,7 +460,6 @@ mod tests {
         let loc = loc(&[("my_idea", "My Idea")]);
         let table = StringTable::new();
         let ast = cwtools_parser::parser::parse_string(text, &table);
-        // Restrict the range to the middle line only.
         let range = Range::new(Position::new(1, 0), Position::new(1, 100));
         let lines = DocLines::new(text, PositionEncodingKind::UTF16);
         let hints = loc_title_hints(&ast, &table, &lines, range, &idx, &loc);
@@ -570,7 +469,6 @@ mod tests {
 
     #[test]
     fn hint_count_is_capped() {
-        // More than MAX_HINTS titled ids in range -> exactly MAX_HINTS returned.
         let n = MAX_HINTS + 50;
         let mut text = String::from("list = {\n");
         for _ in 0..n {
@@ -688,7 +586,6 @@ mod tests {
     #[test]
     fn numeric_and_bool_values_are_ignored() {
         let text = "c = {\n    cost = 5\n    flag = yes\n}\n";
-        // Even if "5"/"true" were somehow indexed, non-string values are skipped.
         let mut idx = idx_with("idea", &["5"]);
         {
             let mut pt = HashMap::new();

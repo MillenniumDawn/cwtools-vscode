@@ -18,15 +18,10 @@ impl Backend {
             .to_string();
         let pos = params.text_document_position_params.position;
 
-        // Localisation file: a `$KEY$` under the cursor is a nested loc-key
-        // reference. .yml isn't a game AST, so resolve it directly to the
-        // referenced entry's text instead of the rule walk below.
         if crate::paths::is_loc_file(&uri) {
             return Ok(self.loc_ref_hover(&uri, pos));
         }
 
-        // `.cwt` rule file: describe the type/enum/single_alias the construct
-        // under the cursor references (no game rule walk).
         if crate::paths::is_cwt_file(&uri) {
             return Ok(self.cwt_hover(&uri, pos).await);
         }
@@ -53,8 +48,6 @@ impl Backend {
                 .load(std::sync::atomic::Ordering::Relaxed);
             // Lock order: rules -> info_service -> loc_text.
             let rules_guard = self.state.rules.read();
-            // `resolved_scope` is already `None` unless the resolved setting
-            // is on (computed in rule_info_at_cursor).
             let mut md = build_hover_markdown(
                 &element,
                 &hint,
@@ -71,8 +64,6 @@ impl Backend {
                 debug,
                 rules_guard.ruleset.as_deref(),
             );
-            // For a variable read, append the known assigned value(s) so the
-            // user sees what it resolves to without chasing the definition.
             if let ReferenceHint::Variable { name, .. } = &hint {
                 let info_guard = self.state.info_service.read();
                 let (values, more) = info_guard.variable_values(name, 5);
@@ -86,11 +77,7 @@ impl Backend {
                     md.push_str(&format!("\n\nSet to: {}{}", joined, suffix));
                 }
             }
-            // Append localisation translations. A reference resolves by leaf
-            // value; a definition key (idea/decision) resolves by its key.
             append_localisation(&mut md, &element, &self.state.loc_text.read());
-            // A reference to a type with a primary localisation (an event id,
-            // …) shows the localised title, resolved from the captured
             // explicit-field key or a name-derived key. (#40)
             if let ReferenceHint::TypeRef { type_name, value } = &hint {
                 let info_guard = self.state.info_service.read();
@@ -115,9 +102,6 @@ impl Backend {
             }));
         }
 
-        // Fallback: no-rule position finder. With debug off this shows only
-        // localisation (the raw `Field`/`Value` line is developer detail); if
-        // there's nothing to show, return no hover rather than an empty box.
         if let Some(element) = self.element_at_cursor(&uri, pos) {
             let debug = self
                 .state
@@ -135,7 +119,6 @@ impl Backend {
             } else {
                 String::new()
             };
-            // Append localisation translations for the hovered element.
             append_localisation(&mut contents, &element, &self.state.loc_text.read());
             if !contents.trim().is_empty() {
                 return Ok(Some(Hover {
@@ -150,8 +133,6 @@ impl Backend {
         Ok(None)
     }
 
-    /// Hover inside a `.cwt` rule file: describe the type/enum/single_alias
-    /// the construct under the cursor references, plus where it is defined.
     async fn cwt_hover(&self, uri: &str, pos: Position) -> Option<Hover> {
         use cwtools_rules::rules_types::CwtDefKind;
         let (kind, name) = self.cwt_ref_at_cursor(uri, pos).await?;
@@ -201,14 +182,9 @@ impl Backend {
         })
     }
 
-    /// Hover for a `$KEY$` reference in a `.yml` loc file: show the referenced
-    /// entry's translations. `None` when the cursor isn't on a known loc-key
-    /// reference (e.g. a bare runtime variable with no loc entry).
     fn loc_ref_hover(&self, uri: &str, pos: Position) -> Option<Hover> {
         let (key, start, end) = self.loc_ref_at_cursor_doc(uri, pos)?;
         let loc_text = self.state.loc_text.read();
-        // The map is keyed by ASCII-lowercased loc keys. Avoid the temp String
-        // when the key is already lowercase (the common case).
         let translations = if key.bytes().any(|b| b.is_ascii_uppercase()) {
             let lower = key.to_lowercase();
             loc_text.get(lower.as_str())?
@@ -238,29 +214,16 @@ impl Backend {
     }
 }
 
-/// The scope context at the cursor, rendered as the hover scope table. Mirrors
-/// the small ROOT/PREV/FROM table the F# build showed. Names are already
-/// resolved and placeholder-filtered by `rule_info_at_cursor`.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct ScopeTable<'a> {
-    /// The scope the containing block evaluates in (current scope).
     pub current: Option<&'a str>,
-    /// The outermost block's scope.
     pub root: Option<&'a str>,
-    /// The enclosing scope, one level out from current.
     pub prev: Option<&'a str>,
-    /// The FROM chain: `[0]` = FROM, `[1]` = FROM.FROM, ….
     pub from: &'a [String],
-    /// The scope the hovered key resolves to (`hover.scopeDisplay = "resolved"`).
     /// Shown as a `Resolves to` line when set and different from `current`. (#37)
     pub resolved: Option<&'a str>,
 }
 
-/// If `type_name` is a subtype-qualified reference (`"type.subtype"`, from a
-/// `<type.subtype>` back-reference) and the ruleset's subtype declares a
-/// `## display_name`, swap it in for the raw subtype name. Otherwise returns
-/// `type_name` unchanged. Mirrors `completion::builders::find_subtype`, kept
-/// local since hover isn't a descendant of the completion module.
 fn display_type_name(
     ruleset: Option<&cwtools_rules::rules_types::RuleSet>,
     type_name: &str,
@@ -283,15 +246,6 @@ fn display_type_name(
     }
 }
 
-/// Build a Markdown hover string from the classified element + the matched
-/// rule's category, description, and required scopes (from
-/// `rule_info_at_cursor`).
-///
-/// By default this shows only the information a modder needs: the alias category
-/// header (Trigger/Effect/Modifier), the rule description, and the required
-/// scopes (plus localisation, appended by the caller). When `debug` is set the
-/// raw rule classification (`Type reference` / `Field` / `Scope` / …) is added —
-/// useful for extension developers, noise for everyone else.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_hover_markdown(
     element: &PositionElement,
@@ -303,9 +257,6 @@ pub(crate) fn build_hover_markdown(
     debug: bool,
     ruleset: Option<&cwtools_rules::rules_types::RuleSet>,
 ) -> String {
-    // Section 1 — identity + documentation ("what it is"): the alias-category
-    // header (so a trigger reads as a trigger), the raw classification when
-    // debug is on, and the rule description.
     let mut info: Vec<String> = Vec::new();
     if let (Some(cat), PositionElement::Leaf { key, .. }) = (category, element) {
         let label = match cat {
@@ -347,7 +298,6 @@ pub(crate) fn build_hover_markdown(
         info.push(desc.to_string());
     }
 
-    // Section 2 — required scopes ("where it's allowed").
     let required = (!rule_scopes.is_empty()).then(|| {
         format!(
             "**{}**: {}",
@@ -356,18 +306,12 @@ pub(crate) fn build_hover_markdown(
         )
     });
 
-    // Section 3 — the current scope at the cursor ("where you are"), independent
-    // of the rule's required scope. Related scopes (ROOT/PREV and the FROM chain)
-    // follow on consecutive hard-break lines, restoring the small scope table the
-    // F# build showed. Root/Prev are suppressed when identical to the current
-    // scope (noise); FROM/FROM.FROM are always shown when present.
     let scope_table = scopes.current.map(|scope| {
         let mut scope_lines = vec![format!(
             "**{}**: {}",
             cwtools_i18n::t(cwtools_i18n::Key::HoverScope),
             scope
         )];
-        // The scope the hovered link/keyword resolves to, when the setting asks
         // for it and it actually differs from the ambient scope. (#37)
         if let Some(resolved) = scopes.resolved.filter(|r| Some(*r) != scopes.current) {
             scope_lines.push(format!(
@@ -388,12 +332,9 @@ pub(crate) fn build_hover_markdown(
         if let Some(fromfrom) = scopes.from.get(1) {
             scope_lines.push(format!("**From.From**: {}", fromfrom));
         }
-        // Markdown collapses single newlines, so join the rows with a hard break.
         scope_lines.join("  \n")
     });
 
-    // Join the logical sections with a horizontal rule so documentation, required
-    // scope, and current scope read as distinct blocks instead of one run-on
     // paragraph (matches the F#/Tboby hover layout). (#38)
     let mut sections: Vec<String> = Vec::new();
     if !info.is_empty() {
@@ -404,18 +345,6 @@ pub(crate) fn build_hover_markdown(
     sections.join("\n\n---\n\n")
 }
 
-/// Append localisation translations for the hovered element to `md`.
-///
-/// A reference (`add_ideas = DEN_Maersk1`) looks up the leaf value. A definition
-/// key (`DEN_Maersk1 = { ... }`, value empty) looks up the key itself: for ideas,
-/// decisions and similar entities the token IS the loc key, and the `<key>_desc`
-/// entry holds the description tooltip. The cwt config doesn't model this, so it
-/// can't be resolved through the rule walk.
-///
-/// Quoted leaf values (`"DEN_Maersk1"`) carry the surrounding `"…"` through
-/// `leaf_value_to_string`; the loc index stores bare keys, so strip the quotes
-/// before lookup. Without this a `value[...]` reference like
-/// `has_country_flag = "my_war_flag"` fails to preview its localisation, since
 /// `"my_war_flag"` is not a key in the loc map (#317).
 pub(crate) fn append_localisation(
     md: &mut String,
@@ -466,12 +395,6 @@ pub(crate) fn append_localisation(
     }
 }
 
-/// Append the localised primary text (e.g. an event's title) for a reference to
-/// a type that declares a primary localisation. Two resolution paths, matching
-/// how the config models loc keys: an explicit-field binding (`title = title`)
-/// uses the key captured from the instance's field at index time, while a
-/// name-derived binding (`title = "$.t"`) builds `prefix + id + suffix`. The
-/// first key that resolves to loc text is shown. Fixes the missing event title
 /// the F# build showed (#40).
 pub(crate) fn append_type_localisation(
     md: &mut String,
@@ -483,11 +406,9 @@ pub(crate) fn append_type_localisation(
 ) {
     let value = value.trim_matches('"');
     let mut keys: Vec<String> = Vec::new();
-    // Explicit-field key captured per instance (events: the `title` value).
     if let Some(k) = type_index.primary_loc_key(type_name, value) {
         keys.push(k.to_ascii_lowercase());
     }
-    // Name-derived primary/required keys from the type's localisation config.
     if let Some(&i) = ruleset.type_by_name().get(type_name) {
         for loc in &ruleset.types[i].localisation {
             if loc.explicit_field.is_none() && (loc.primary || loc.required) {
@@ -533,8 +454,6 @@ mod tests {
         assert!(md.contains("ethoses"), "got: {}", md);
     }
 
-    /// A `RuleSet` with one type declaring one subtype, matching the
-    /// `"type.subtype"` shape a `<type.subtype>` back-reference resolves to.
     fn ruleset_with_subtype(display_name: Option<&str>) -> cwtools_rules::rules_types::RuleSet {
         use cwtools_rules::rules_types::{PathOptions, RuleSet, SubTypeDefinition, TypeDefinition};
 
@@ -597,8 +516,6 @@ mod tests {
 
     #[test]
     fn test_hover_type_ref_unchanged_without_display_name() {
-        // No `## display_name` declared: the raw "type.subtype" string shows,
-        // same as before this field was wired in.
         let rs = ruleset_with_subtype(None);
         let md = build_hover_markdown(
             &PositionElement::Leaf {
@@ -621,8 +538,6 @@ mod tests {
 
     #[test]
     fn test_hover_default_hides_classification() {
-        // Default (debug off): the raw "Type reference" line is suppressed, but
-        // the description and required scopes still show.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "ethos".to_string(),
@@ -709,8 +624,6 @@ mod tests {
 
     #[test]
     fn test_hover_shows_current_scope() {
-        // The current scope at the cursor renders even when the rule declares no
-        // required scope, so a hover always shows where you are.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "set_country_flag".to_string(),
@@ -732,8 +645,6 @@ mod tests {
 
     #[test]
     fn test_hover_shows_related_scopes() {
-        // Root, Prev and the FROM chain render after the current scope so the
-        // modder sees the whole scope table the F# build used to show.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "set_country_flag".to_string(),
@@ -763,7 +674,6 @@ mod tests {
     #[test]
     fn test_hover_separates_sections() {
         // #38: a horizontal rule divides description, required scope, and the
-        // current-scope table so they don't read as one run-on block.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "set_country_flag".to_string(),
@@ -793,7 +703,6 @@ mod tests {
     #[test]
     fn test_hover_resolved_scope_line() {
         // #37: when a resolved/target scope is supplied and differs from the
-        // current scope, a `Resolves to` line is shown.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "owner".to_string(),
@@ -818,8 +727,6 @@ mod tests {
 
     #[test]
     fn test_hover_omits_absent_and_duplicate_scopes() {
-        // Root/Prev are suppressed when missing or identical to the current scope
-        // (noise), but FROM is always shown when the chain has it.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "set_country_flag".to_string(),
@@ -860,10 +767,6 @@ mod tests {
     #[test]
     fn test_append_localisation_strips_quoted_value() {
         // #317: a quoted leaf value (`"my_war_flag"`) carries the surrounding
-        // quotes through `leaf_value_to_string`. The loc index stores bare
-        // keys, so the lookup must strip them; otherwise `value[...]`-shaped
-        // references like `has_country_flag = "my_war_flag"` never preview
-        // their loc.
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -879,9 +782,6 @@ mod tests {
 
     #[test]
     fn test_append_localisation_unquoted_still_works() {
-        // The unquoted path keeps working: `name = my_idea` (LocalisationField
-        // cases already passed, but assert the bare-key path explicitly so the
-        // quote-stripping fix doesn't regress it).
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -896,8 +796,6 @@ mod tests {
 
     #[test]
     fn test_append_localisation_strips_quoted_definition_key() {
-        // A quoted key on a definition-side leaf (the key IS the loc key for
-        // ideas/decisions) must also be unquoted before lookup.
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -916,8 +814,6 @@ mod tests {
 
     #[test]
     fn test_append_localisation_strips_quoted_leaf_value_variant() {
-        // Bare values (`LeafValue`) take the same path. A quoted leaf value
-        // there must also be unquoted before the loc lookup.
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -931,7 +827,6 @@ mod tests {
 
     #[test]
     fn test_append_localisation_quoted_case_insensitive() {
-        // Loc keys are lowercased. Quoted upper-case must still resolve.
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -946,8 +841,6 @@ mod tests {
 
     #[test]
     fn test_append_localisation_outer_whitespace_with_quotes() {
-        // Parser-adjacent whitespace is trimmed before quote detection. A value
-        // that arrives as ` "my_war_flag" ` should still preview.
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -962,9 +855,6 @@ mod tests {
 
     #[test]
     fn test_append_localisation_inner_whitespace_with_quotes() {
-        // Inner whitespace inside the quotes is also trimmed. Defensive:
-        // a value that arrives as `" my_war_flag "` (e.g. from a forgiving
-        // formatter) should still preview, and `"   "` collapses to empty.
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -979,9 +869,7 @@ mod tests {
 
     #[test]
     fn test_append_localisation_mismatched_quote_not_stripped() {
-        // Only a balanced pair of surrounding double-quotes is stripped. A
         // single leading or trailing quote stays verbatim and must not
-        // spuriously match the bare loc key.
         let loc = loc_map_with(&[("my_war_flag", "War Flag")]);
         for bad in [
             "\"my_war_flag",
@@ -1008,8 +896,6 @@ mod tests {
 
     #[test]
     fn test_append_localisation_empty_quoted_no_panic() {
-        // `""` strips to "" and looks up the empty key. Must not panic and
-        // must not produce a localisation section.
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -1025,8 +911,6 @@ mod tests {
 
     #[test]
     fn test_append_localisation_missing_key_no_section() {
-        // Unknown loc key leaves md untouched. Guards against false positives
-        // where any non-empty hover would be mistaken for a localisation preview.
         let mut md = String::from("prefix");
         append_localisation(
             &mut md,

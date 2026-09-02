@@ -12,12 +12,6 @@ impl Backend {
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
         let query = params.query.to_lowercase();
-        // Bounded top-k on the deterministic (rank, name, uri, line, col)
-        // order: a max-heap whose root is the worst kept candidate, so a
-        // non-improving match is rejected by one borrowed comparison before
-        // any string is cloned. The old collect-then-sort materialized every
-        // matching symbol — the whole workspace for an empty query (the
-        // picker's initial list) — just to keep 500.
         let mut top = TopSymbols::new(WORKSPACE_SYMBOL_LIMIT);
         {
             let info = self.state.info_service.read();
@@ -41,7 +35,6 @@ impl Backend {
                     }
                 }
             }
-            // `@`-constants, still tracked per-file (as in the document outline).
             for (file_uri, fi) in &info.files {
                 for (name, loc) in &fi.defined_variables {
                     let Some(rank) = symbol_rank(name, &query) else {
@@ -63,8 +56,6 @@ impl Backend {
                 }
             }
         }
-        // Localisation keys (stored lowercased; loc keys are conventionally
-        // lowercase, so the display form matches the file).
         {
             let ll = self.state.loc_locations.read();
             for (key, (file_uri, line0)) in ll.iter() {
@@ -90,7 +81,6 @@ impl Backend {
         let texts = self.file_text_snapshots_for(&text_uris).await;
         let indexed = crate::lines::index_snapshots(&texts, &self.position_encoding());
         let mut symbols: Vec<SymbolInformation> = Vec::with_capacity(cands.len());
-        // No request document to fall back to for a workspace-wide query.
         let fallback = Url::parse("file:///unknown").expect("static URI");
         for c in cands {
             symbols.push(make_symbol(

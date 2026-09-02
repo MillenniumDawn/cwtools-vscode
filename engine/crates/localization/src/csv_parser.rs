@@ -1,15 +1,3 @@
-//! CSV localisation parser (CK2/VIC2-style).
-//!
-//! CK2 and VIC2 use `;`-delimited rows with multiple languages per row:
-//!   CODE;English;French;German;;Spanish;...
-//!
-//! `#` rows are comments except `#CODE` header lines (which are skipped).
-//! Columns map to languages in the order defined by the game's schema.
-//!
-//! This module produces per-language `LocEntry` values instead of
-//! concatenating all columns, matching F# `CK2Localisation.fs` and
-//! `VIC2Localisation.fs`.
-
 use crate::commands::{Lang, LocEntry, Position};
 use std::sync::Arc;
 

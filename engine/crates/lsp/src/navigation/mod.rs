@@ -1,4 +1,3 @@
-//! Navigation: goto, references, rename, symbols, folding/selection.
 mod goto;
 mod helpers;
 mod references;

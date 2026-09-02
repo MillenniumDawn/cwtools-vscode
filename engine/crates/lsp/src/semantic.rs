@@ -1,46 +1,4 @@
-//! `textDocument/semanticTokens/{full,range}`: rule-aware highlighting for game
-//! script.
-//!
-//! A TextMate grammar can only see `key = value`, which describes every line in
-//! the language and therefore distinguishes nothing. The classification that
-//! matters is already computed elsewhere — [`ReferenceHint`] resolves a value to
-//! a TypeRef / EnumRef / LocRef / FileRef / Variable / ScopeName — so this module
-//! is a mapping plus an encoder, not new analysis.
-//!
-//! Two layers:
-//!
-//! - **Structural** (always): comments, keys, operators, numbers, booleans,
-//!   strings. Derived from the AST alone, so it works with no ruleset loaded and
-//!   in a file no type covers.
-//! - **Rule-driven** (when a ruleset is loaded): the value token is upgraded to
-//!   `type` / `enumMember` / `variable` / `namespace` from its matched rule's
-//!   right-hand field, a key that resolves through an alias category
-//!   (trigger/effect/modifier) becomes `function`, and a key whose LEFT field is
-//!   a `<type>` becomes `type` + `declaration`.
-//!
-//! Rules are resolved with ONE [`rules_at_pos`] call per block that can't
-//! inherit its rules from its parent — in practice one per top-level entity —
-//! and the descent from there reuses the parent's matched `NodeRule` bodies the
-//! way `position::descend` does. Per-leaf resolution would be a full root
-//! descent per token and is what makes the naive version unusable on a real file.
-//!
-//! The `range` request runs the same walk with a line span: a child whose source
-//! range misses the span is skipped whole, so an off-screen entity costs neither
-//! its bootstrap nor its descent.
-//!
-//! ## Wire format
-//!
-//! The protocol wants a flat `u32` quintuple stream, delta-encoded against the
-//! previous token and sorted by position:
-//! `(deltaLine, deltaStart, length, tokenType, tokenModifiers)`. `deltaStart` is
-//! relative to the previous token only when both are on the same line, absolute
-//! otherwise. Getting that wrong doesn't fail loudly — it shifts every later
-//! token, so the highlighting slides down the file. [`encode`] is therefore a
-//! pure function over absolute tokens with its own tests.
-//!
 //! Columns and lengths are in the NEGOTIATED position encoding (utf-16 by
-//! default, utf-32 where the client asked for it), the same conversion
-//! diagnostics go through in `lines::DocLines`.
 
 use std::cell::Cell;
 
@@ -56,11 +14,6 @@ use cwtools_validation::position::{rules_at_pos, value_rules_for_key};
 
 use crate::Backend;
 
-/// Token types, in legend order. The index into this slice IS the `tokenType`
-/// field on the wire, so entries may be appended but never reordered.
-///
-/// `LocRef` and `FileRef` deliberately map to `string`: they are strings, and
-/// what they point at is already surfaced by hover and goto-definition.
 const TOKEN_TYPES: [SemanticTokenType; 11] = [
     SemanticTokenType::COMMENT,     // 0
     SemanticTokenType::PROPERTY,    // 1 — a leaf/block key
@@ -75,8 +28,6 @@ const TOKEN_TYPES: [SemanticTokenType; 11] = [
     SemanticTokenType::FUNCTION,    // 10 — key resolved through an alias category
 ];
 
-/// Token modifiers, in legend order. The index is the BIT position in the
-/// `tokenModifiers` bitset, so entries may be appended but never reordered.
 const TOKEN_MODIFIERS: [SemanticTokenModifier; 1] = [
     SemanticTokenModifier::DECLARATION, // bit 0 — the key names a type instance
 ];
@@ -96,14 +47,8 @@ const TY_FUNCTION: u32 = 10;
 const MOD_NONE: u32 = 0;
 const MOD_DECLARATION: u32 = 1 << 0;
 
-/// Upper bound on `rules_at_pos` bootstraps for one request. Each is a root
-/// descent with subtype merging, i.e. what the validator spends on one entity.
-/// A file with more top-level entities than this keeps full structural
-/// highlighting; only the rule-driven upgrade stops.
 const MAX_RULE_BOOTSTRAPS: u32 = 2000;
 
-/// The legend the `initialize` response advertises. Must stay in lockstep with
-/// [`TOKEN_TYPES`] / [`TOKEN_MODIFIERS`] — the client resolves indices through it.
 pub(crate) fn legend() -> SemanticTokensLegend {
     SemanticTokensLegend {
         token_types: TOKEN_TYPES.to_vec(),
@@ -112,7 +57,6 @@ pub(crate) fn legend() -> SemanticTokensLegend {
 }
 
 /// One token at its absolute position, before delta encoding. `line` is 0-based;
-/// `start` and `length` are already in the negotiated encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AbsToken {
     pub(crate) line: u32,
@@ -122,13 +66,7 @@ pub(crate) struct AbsToken {
     pub(crate) modifiers: u32,
 }
 
-/// Delta-encode absolute tokens into the protocol's quintuple stream.
-///
-/// Sorts by (line, start) first: the walk emits a leaf's own tokens before
 /// descending into its clause, which is already source order, but the encoding
-/// is only meaningful on a sorted stream and a single out-of-order token would
-/// silently shift everything after it. Zero-length tokens are dropped — they
-/// carry no highlighting and some clients treat them as malformed.
 pub(crate) fn encode(mut tokens: Vec<AbsToken>) -> Vec<SemanticToken> {
     tokens.retain(|t| t.length > 0);
     tokens.sort_by_key(|t| (t.line, t.start));
@@ -155,11 +93,8 @@ pub(crate) fn encode(mut tokens: Vec<AbsToken>) -> Vec<SemanticToken> {
     out
 }
 
-/// Parser lines (1-based, inclusive) a request is limited to. `None` = the whole
-/// document.
 type LineSpan = (u32, u32);
 
-/// Per-request immutable context for the walk.
 struct Ctx<'a> {
     arena: &'a Arena,
     table: &'a StringTable,
@@ -169,7 +104,6 @@ struct Ctx<'a> {
     span: Option<LineSpan>,
 }
 
-/// Everything needed to resolve rules during the walk, plus the bootstrap budget.
 struct RuleCtx<'a> {
     ast: &'a ParsedFile,
     logical_path: &'a str,
@@ -179,7 +113,6 @@ struct RuleCtx<'a> {
 }
 
 impl RuleCtx<'_> {
-    /// [`block_rules_for`], under the per-request bootstrap budget.
     fn bootstrap(&self, children: &[Child]) -> Option<Vec<(RuleType, Options)>> {
         let left = self.bootstraps_left.get();
         if left == 0 {
@@ -191,14 +124,6 @@ impl RuleCtx<'_> {
 }
 
 impl Ctx<'_> {
-    /// Whether the walk needs to enter `child`. A clause leaf's range spans its
-    /// whole block, so a child that misses the span misses with its entire
-    /// subtree, which is what makes `range` cheaper than `full`: a skipped
-    /// top-level entity costs no rule bootstrap.
-    ///
-    /// Deliberately generous. The parser extends a leaf's range over the trailing
-    /// whitespace up to the next token (see `parse_value`), so this says yes to
-    /// the entity before the span too; [`Self::token`] does the exact clipping.
     fn worth_entering(&self, child: &Child) -> bool {
         let Some((first, last)) = self.span else {
             return true;
@@ -215,10 +140,7 @@ impl Ctx<'_> {
         self.lines.get(line0 as usize).map_or(&[], |l| l.as_slice())
     }
 
-    /// Absolute token covering `[start_col, end_col)` of `line0`, converted from
     /// parser char columns into the negotiated encoding. `None` outside the
-    /// request's span, so a `range` result holds only the lines that were asked
-    /// for even where the walk entered a block that starts before them.
     fn token(
         &self,
         line0: u32,
@@ -247,8 +169,6 @@ impl Ctx<'_> {
 }
 
 /// Length of `chars` in the negotiated encoding — the same conversion
-/// `paths::source_column_to_lsp` does, over an already-split line so a token
-/// costs no allocation.
 fn encoded_len(chars: &[char], encoding: &PositionEncodingKind) -> u32 {
     if encoding == &PositionEncodingKind::UTF32 {
         chars.len() as u32
@@ -257,10 +177,6 @@ fn encoded_len(chars: &[char], encoding: &PositionEncodingKind) -> u32 {
     }
 }
 
-/// Compute the semantic tokens for `file`. Pure (no locks, no IO) so the handler
-/// and the tests exercise the same mapping. `rules` is `None` when no ruleset is
-/// loaded, which downgrades the result to structural tokens only. `span` limits
-/// the walk to those parser lines (the `range` request); `None` walks the file.
 pub(crate) fn semantic_tokens(
     file: &ParsedFile,
     table: &StringTable,
@@ -272,8 +188,6 @@ pub(crate) fn semantic_tokens(
     let cx = Ctx {
         arena: &file.arena,
         table,
-        // Split once: every token needs random access to its own line, and
-        // `text.lines().nth(n)` per token is O(bytes-before-line) each time.
         lines: text.lines().map(|l| l.chars().collect()).collect(),
         encoding,
         rules: rules.map(|(prepared, logical_path)| RuleCtx {
@@ -286,9 +200,6 @@ pub(crate) fn semantic_tokens(
         span,
     };
     let mut out = Vec::new();
-    // The root level only carries rules in a `type_per_file` file, where the file
-    // itself is the entity; elsewhere this resolves to None and each root child
-    // bootstraps its own body below.
     let root_rules = cx
         .rules
         .as_ref()
@@ -297,12 +208,6 @@ pub(crate) fn semantic_tokens(
     out
 }
 
-/// The rules that apply to `children`, resolved from the root by placing the
-/// cursor on the block's first key (a cursor on a key resolves to the CONTAINING
-/// block's rules). `None` when no type covers the file or the block is empty.
-///
-/// This is the one full descent — every deeper block reuses its parent's matched
-/// `NodeRule` bodies instead. Shared with `color::document_colours`.
 pub(crate) fn block_rules_for(
     ast: &ParsedFile,
     prepared: &Prepared<'_>,
@@ -313,9 +218,6 @@ pub(crate) fn block_rules_for(
     rules_at_pos(ast, logical_path, prepared, line, col, false).map(|rctx| rctx.child_rules)
 }
 
-/// Position of the first keyed child in `children`, used to bootstrap that
-/// block's rules. Falls back to the first bare value for a block that is a plain
-/// list.
 fn first_leaf_key_pos(children: &[Child], arena: &Arena) -> Option<(u32, u16)> {
     children
         .iter()
@@ -351,8 +253,6 @@ fn collect(
             Child::Comment(idx) => {
                 let c = &cx.arena.comments[*idx as usize];
                 let line0 = c.pos.start.line.saturating_sub(1);
-                // Comment ranges are exact (the parser does not extend them over
-                // trailing whitespace the way it does leaf ranges).
                 if let Some(t) = cx.token(
                     line0,
                     c.pos.start.col as usize,
@@ -368,8 +268,6 @@ fn collect(
                 let lv = &cx.arena.leaf_values[*idx as usize];
                 let line0 = lv.pos.start.line.saturating_sub(1);
                 if let Value::Clause(inner) = &lv.value {
-                    // An anonymous `{ … }` block: its body rules are the block's
-                    // ValueClauseRule bodies, mirroring `position::descend`.
                     let inner_rules = block_rules.map(valueclause_bodies);
                     collect(inner, cx, inner_rules.as_deref(), out);
                     continue;
@@ -401,8 +299,6 @@ fn collect_leaf(
     let key_len = raw_key.chars().count();
     let key = raw_key.trim_matches('"');
 
-    // Matched rules for this key, from the block's rules. One map lookup plus
-    // alias expansion — no root descent.
     let matched = match (cx.rules.as_ref(), block_rules) {
         (Some(r), Some(rules)) => value_rules_for_key(r.ruleset, r.prepared.type_index, rules, key),
         _ => Vec::new(),
@@ -413,7 +309,6 @@ fn collect_leaf(
         out.push(t);
     }
 
-    // Operator, located on the key's line just past the key.
     let op = leaf.op.as_str();
     if let Some(op_col) = find_token_col(line, op, key_col + key_len)
         && let Some(t) = cx.token(
@@ -428,11 +323,6 @@ fn collect_leaf(
     }
 
     if let Value::Clause(inner) = &leaf.value {
-        // The child block's rules are the matched NodeRule bodies. Bootstrap
-        // only when THIS block had no rules at all — that is the once-per-entity
-        // call. A key that matched nothing inside a block that DOES have rules
-        // has no rules deeper either, so a bootstrap there would burn a root
-        // descent to learn the same thing.
         let inner_rules = match block_rules {
             None => cx.rules.as_ref().and_then(|r| r.bootstrap(inner)),
             Some(_) => Some(node_bodies(&matched)),
@@ -441,8 +331,6 @@ fn collect_leaf(
         return;
     }
 
-    // Scalar value token, located after the operator on the same line. A leaf
-    // whose value sits on a later line (rare) simply gets no value token.
     let from = find_token_col(line, op, key_col + key_len)
         .map(|c| c + op.chars().count())
         .unwrap_or(key_col + key_len);
@@ -455,10 +343,6 @@ fn collect_leaf(
     }
 }
 
-/// How a key is highlighted: `function` when it resolves through an alias
-/// category (a trigger/effect/modifier reads like a call), `type` +
-/// `declaration` when the matched rule's LEFT field names a type (the key
-/// declares an instance), `property` otherwise.
 fn key_token_class(
     cx: &Ctx<'_>,
     block_rules: Option<&[(RuleType, Options)]>,
@@ -497,8 +381,6 @@ fn key_token_class(
     }
 }
 
-/// The token type for a `key = value` right-hand side: literal kind first, then
-/// the [`ReferenceHint`] upgrade from the matched rule's right field.
 fn value_token_type(value: &Value, matched: &[&(RuleType, Options)], cx: &Ctx<'_>) -> u32 {
     match value {
         Value::Int(_) | Value::Float(_) => TY_NUMBER,
@@ -520,8 +402,6 @@ fn value_token_type(value: &Value, matched: &[&(RuleType, Options)], cx: &Ctx<'_
     }
 }
 
-/// The token type for a bare value in a list. The block's `LeafValueRule`s are
-/// what such a value matches against (mirroring `position::descend`).
 fn leaf_value_token_type(
     value: &Value,
     cx: &Ctx<'_>,
@@ -549,17 +429,11 @@ fn hint_token_type(hint: &ReferenceHint) -> Option<u32> {
         ReferenceHint::EnumRef { .. } => Some(TY_ENUM_MEMBER),
         ReferenceHint::Variable { .. } => Some(TY_VARIABLE),
         ReferenceHint::ScopeName { .. } => Some(TY_NAMESPACE),
-        // Loc keys and file paths ARE strings; hover/goto already say what they
-        // point at, so they keep the default rather than inventing a token type
-        // no theme colors.
         ReferenceHint::LocRef { .. } | ReferenceHint::FileRef { .. } => None,
         ReferenceHint::Unknown => None,
     }
 }
 
-/// Bodies of the matched `NodeRule`s — the rules that apply inside the clause
-/// this key opens. `SubtypeRule` branches are unioned in, the way
-/// `position::descend` flattens nested subtype blocks.
 pub(crate) fn node_bodies(matched: &[&(RuleType, Options)]) -> Vec<(RuleType, Options)> {
     let mut out = Vec::new();
     for (rt, _) in matched.iter().copied() {
@@ -586,8 +460,6 @@ pub(crate) fn valueclause_bodies(rules: &[(RuleType, Options)]) -> Vec<(RuleType
         .collect()
 }
 
-/// Char column of `needle` at/after `from` on `line`. Used to locate the
-/// operator, whose column the AST does not record.
 fn find_token_col(line: &[char], needle: &str, from: usize) -> Option<usize> {
     let needle: Vec<char> = needle.chars().collect();
     if needle.is_empty() || line.len() < needle.len() {
@@ -596,10 +468,6 @@ fn find_token_col(line: &[char], needle: &str, from: usize) -> Option<usize> {
     (from..=line.len() - needle.len()).find(|&i| line[i..i + needle.len()] == needle[..])
 }
 
-/// Char span `[start, end)` of the value token at/after `from`, skipping leading
-/// whitespace. Quoted values include their quotes. Returns `None` at a comment,
-/// at a clause opener, or at end of line — the AST does not record the value's
-/// own column, so this re-lexes the one line it lives on.
 fn value_token_span(line: &[char], from: usize) -> Option<(usize, usize)> {
     let mut i = from.min(line.len());
     while i < line.len() && line[i].is_whitespace() {
@@ -632,8 +500,6 @@ fn compute_semantic_delta(
     if prev == next {
         return Vec::new();
     }
-    // Flat u32 length: 5 per token. Find common prefix/suffix on token level,
-    // then express the edit in integer offsets.
     let mut prefix = 0usize;
     while prefix < prev.len() && prefix < next.len() && prev[prefix] == next[prefix] {
         prefix += 1;
@@ -663,11 +529,8 @@ impl Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri.to_string();
-        // Fast path: if content hash matches cache, reuse tokens without walking.
         if let Some(text) = self.file_text_for(&uri).await {
             let hash = cwtools_cache::workspace::content_hash(&text);
-            // Bound to a `let` so the probe's guard drops here: the insert below
-            // takes the same non-reentrant mutex, and a guard in the `if let`
             // scrutinee would still be alive inside the block (#334).
             let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
             if let Some(entry) = cached
@@ -726,18 +589,13 @@ impl Backend {
         params: SemanticTokensDeltaParams,
     ) -> Result<Option<SemanticTokensFullDeltaResult>> {
         let uri = params.text_document.uri.to_string();
-        // If content hash unchanged and previous_id matches cache, we can answer
-        // without walking at all (hash memoization makes repeated range/full
-        // polls during idle ~free).
         if let Some(text) = self.file_text_for(&uri).await {
             let hash = cwtools_cache::workspace::content_hash(&text);
-            // Same reason as the full request: the insert below re-locks.
             let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
             if let Some(entry) = cached
                 && entry.hash == hash
                 && entry.result_id == params.previous_result_id
             {
-                // Content unchanged: delta is empty, just bump result_id.
                 let result_id = self
                     .state
                     .semantic_tokens_seq
@@ -793,7 +651,6 @@ impl Backend {
                 },
             )));
         }
-        // No matching previous result: fall back to full.
         let result_id = self
             .state
             .semantic_tokens_seq
@@ -815,16 +672,12 @@ impl Backend {
         )))
     }
 
-    /// `textDocument/semanticTokens/range`: the same walk bounded to the
-    /// viewport. Line-granular, since a token never spans lines.
     #[tracing::instrument(skip_all)]
     pub(crate) async fn semantic_tokens_range_impl(
         &self,
         params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>> {
         let uri = params.text_document.uri.to_string();
-        // An LSP range end is exclusive, so one landing on column 0 stops on the
-        // line before. Both ends are 0-based; parser lines are 1-based.
         let end = params.range.end;
         let last = if end.character == 0 {
             end.line.saturating_sub(1)
@@ -840,12 +693,7 @@ impl Backend {
         }))
     }
 
-    /// Shared body of both semantic-token requests: resolve the document, build
-    /// `Prepared` if a ruleset is loaded, and encode the walk's tokens.
     async fn tokens_for(&self, uri: &str, span: Option<LineSpan>) -> Option<Vec<SemanticToken>> {
-        // Loc (`.yml`) and rule (`.cwt`) files aren't game ASTs; the parser's
-        // script grammar doesn't describe them, so highlighting them here would
-        // be worse than the client's own grammar.
         if crate::paths::has_loc_ext(uri) || crate::paths::is_cwt_file(uri) {
             return None;
         }
@@ -871,8 +719,6 @@ impl Backend {
             )
         };
 
-        // `Prepared` borrows the index guard, so the walk happens inside this
-        // scope. Structural tokens still come out when no ruleset is loaded.
         let tokens = match ruleset {
             Some(ruleset) => {
                 let info = self.state.info_service.read();
@@ -936,8 +782,6 @@ mod tests {
             .unwrap_or_else(|| panic!("no token at {line}:{start} in {tokens:#?}"))
     }
 
-    // ── The delta encoder ────────────────────────────────────────────────────
-
     fn abs(line: u32, start: u32, length: u32, token_type: u32) -> AbsToken {
         AbsToken {
             line,
@@ -960,7 +804,6 @@ mod tests {
 
     #[test]
     fn encode_same_line_deltas_start_relative_to_previous() {
-        // "aaa = bbb" -> key@0 len3, op@4 len1, value@6 len3, all on line 0.
         let out = encode(vec![
             abs(0, 0, 3, TY_PROPERTY),
             abs(0, 4, 1, TY_OPERATOR),
@@ -975,16 +818,12 @@ mod tests {
 
     #[test]
     fn encode_new_line_resets_start_to_absolute() {
-        // The classic drift bug: carrying the previous line's start across a
-        // line break shifts every later token.
         let out = encode(vec![abs(0, 10, 2, TY_PROPERTY), abs(2, 4, 2, TY_PROPERTY)]);
         assert_eq!((out[1].delta_line, out[1].delta_start), (2, 4));
     }
 
     #[test]
     fn encode_sorts_out_of_order_input() {
-        // Emission order must not matter; an unsorted stream would decode into
-        // negative offsets and slide the whole file.
         let sorted = encode(vec![
             abs(0, 0, 1, TY_PROPERTY),
             abs(1, 0, 1, TY_PROPERTY),
@@ -1000,7 +839,6 @@ mod tests {
 
     #[test]
     fn encode_round_trips_back_to_absolute_positions() {
-        // Decode the stream the way a client does and compare with the input.
         let input = vec![
             abs(0, 0, 3, TY_PROPERTY),
             abs(0, 4, 1, TY_OPERATOR),
@@ -1056,8 +894,6 @@ mod tests {
         assert!(encode(Vec::new()).is_empty());
     }
 
-    // ── The structural walk ──────────────────────────────────────────────────
-
     #[test]
     fn key_operator_and_value_are_separate_tokens() {
         let tokens = tokens_for("cost = 5\n");
@@ -1071,7 +907,6 @@ mod tests {
 
     #[test]
     fn comparison_operators_are_located_whole() {
-        // `>=` must be one two-char operator token, not the `=` inside it.
         let tokens = tokens_for("threat >= 0.5\n");
         let op = at(&tokens, 0, 7);
         assert_eq!(op.token_type, TY_OPERATOR);
@@ -1096,7 +931,6 @@ mod tests {
         let trail = at(&tokens, 1, 6);
         assert_eq!(trail.token_type, TY_COMMENT);
         assert_eq!(trail.length, 7);
-        // The value token stops at the comment.
         assert_eq!(at(&tokens, 1, 4).length, 1);
     }
 
@@ -1113,7 +947,6 @@ mod tests {
 
     #[test]
     fn a_clause_key_emits_no_value_token() {
-        // `{` must not be lexed as the value of `focus = {`.
         let tokens = tokens_for("focus = {\n    x = 1\n}\n");
         assert!(
             !tokens.iter().any(|t| t.line == 0 && t.start > 7),
@@ -1123,8 +956,6 @@ mod tests {
 
     #[test]
     fn encoded_stream_of_a_real_file_decodes_to_the_source_columns() {
-        // End-to-end: walk + encode, decoded back, must land on the exact
-        // columns of the source tokens.
         let text = "a = 1\nbb = 22\n";
         let encoded = encode(tokens_for(text));
         let mut line = 0u32;
@@ -1152,21 +983,15 @@ mod tests {
         );
     }
 
-    // ── The range span ───────────────────────────────────────────────────────
-
-    // Three entities, one per pair of lines. A span over the middle one must
-    // produce exactly its tokens.
     const THREE_ENTITIES: &str = "a = {\n  x = 1\n}\nb = {\n  y = 2\n}\nc = {\n  z = 3\n}\n";
 
     #[test]
     fn a_span_keeps_only_the_entities_it_covers() {
-        // Parser lines 4..6 are the `b` block.
         let tokens = tokens_in_span(THREE_ENTITIES, (4, 6));
         assert!(
             tokens.iter().all(|t| (3..=5).contains(&t.line)),
             "tokens outside the span leaked: {tokens:#?}"
         );
-        // `b`, `=`, `y`, `=`, `2`. The block braces carry no token.
         assert_eq!(tokens.len(), 5, "{tokens:#?}");
     }
 
@@ -1183,8 +1008,6 @@ mod tests {
 
     #[test]
     fn a_span_inside_an_entity_still_gets_its_lines() {
-        // Parser line 5 is `y = 2`, inside `b`. The walk has to enter a block
-        // that starts before the span to reach it.
         let tokens = tokens_in_span(THREE_ENTITIES, (5, 5));
         assert!(
             tokens.iter().all(|t| t.line == 4),
@@ -1198,7 +1021,6 @@ mod tests {
     #[test]
     fn utf16_columns_and_lengths_count_code_units() {
         // 😀 is one char to the parser but two UTF-16 code units, so every
-        // column after it shifts by one and the token itself is length 2.
         let text = "a = 😀\n";
         let table = StringTable::new();
         let ast = cwtools_parser::parser::parse_string(text, &table);
@@ -1227,10 +1049,6 @@ mod tests {
         assert_eq!(number.start, 5, "char col 4 is UTF-16 col 5");
     }
 
-    // ── The lexers the AST can't supply ──────────────────────────────────────
-
-    // The caller always scans from just past the operator, i.e. column 3 in
-    // `a = …`.
     const PAST_EQ: usize = 3;
 
     #[test]
@@ -1257,13 +1075,10 @@ mod tests {
 
     #[test]
     fn operator_lookup_starts_after_the_key() {
-        // A key containing `=` would otherwise swallow the operator search.
         let line: Vec<char> = "a = b".chars().collect();
         assert_eq!(find_token_col(&line, "=", 1), Some(2));
         assert_eq!(find_token_col(&line, "!=", 1), None);
     }
-
-    // ── The cache fast paths ─────────────────────────────────────────────────
 
     const DOC_URI: &str = if cfg!(windows) {
         "file:///C:/ws/common/ideas/00_ideas.txt"
@@ -1312,12 +1127,7 @@ mod tests {
         }
     }
 
-    /// Run `f` on its own thread and fail if it hasn't returned in 30s.
-    ///
     /// A self-deadlock wedges the thread that hit it, so the check cannot ride
-    /// the same one — and `tokio::time::timeout` is no help either, since the
-    /// block happens inside `poll` and the timer never gets to run. The stuck
-    /// thread is left behind; the harness tears it down with the process.
     fn must_finish(name: &str, f: impl FnOnce() + Send + 'static) {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -1330,15 +1140,10 @@ mod tests {
         );
     }
 
-    // The fast path probed the cache in the `if let` scrutinee and re-locked it
-    // in the body. `parking_lot::Mutex` is not reentrant and the scrutinee's
-    // guard outlives the block, so the second identical request wedged the
-    // thread that drives tower-lsp's whole read/dispatch/write loop: the server
     // went silent mid-scan with no error and no further output (#334).
     #[test]
     fn repeat_full_request_does_not_deadlock_on_the_cache() {
         must_finish("semantic_tokens_full", || {
-            // Multi-thread: the AST snapshot reparses under `block_in_place`.
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
@@ -1361,7 +1166,6 @@ mod tests {
     #[test]
     fn repeat_delta_request_does_not_deadlock_on_the_cache() {
         must_finish("semantic_tokens_full_delta", || {
-            // Multi-thread: the AST snapshot reparses under `block_in_place`.
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()

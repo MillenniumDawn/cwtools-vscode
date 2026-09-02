@@ -78,13 +78,8 @@ pub(crate) fn make_prepared<'a>(
     }
 }
 
-/// Per-file diagnostic cap. Beyond this, a file's errors are truncated with a
-/// summary marker so one broken file can't flood the editor.
 pub(crate) const MAX_FILE_ERRORS: usize = 100;
 
-/// Convert a loc-file diagnostic into a `ValidationError` so it shares the
-/// `validation_error_to_diagnostic` rendering path. Loc positions are 1-based;
-/// `ValidationError.col` is 0-based (used directly by the renderer).
 pub(crate) fn loc_diag_to_validation_error(
     d: &cwtools_localization::LocDiagnostic,
 ) -> ValidationError {
@@ -95,17 +90,12 @@ pub(crate) fn loc_diag_to_validation_error(
         col: d.col.saturating_sub(1) as u16,
         file: d.file.as_str().into(),
         code: Some(d.code),
-        // Carry the loc fix (CW268 quote-wrap) so it reaches the code-action
-        // path through the shared `validation_error_to_diagnostic` renderer.
         fix: d.fix.clone(),
-        // Loc diagnostics expose only a single (line, col) point, so they keep the
-        // whole-line squiggle (no cheap end to derive — see task-18 loc decision).
         end: None,
         related: Vec::new(),
     }
 }
 
-/// Parse one loc buffer while preserving fatal errors as cache misses.
 fn try_parse_loc_buffer(
     text: &str,
     path: &str,
@@ -117,13 +107,11 @@ fn parse_loc_buffer(text: &str, path: &str) -> Vec<cwtools_localization::LocFile
     try_parse_loc_buffer(text, path).unwrap_or_default()
 }
 
-/// Lowercased loc keys defined in a single loc file's text. A cheap single-file
 /// parse used to keep the live overlay current on edit (#36).
 fn loc_keys_of(text: &str, path: &str) -> HashSet<String> {
     loc_keys_from(&parse_loc_buffer(text, path))
 }
 
-/// [`loc_keys_of`] over an already-parsed buffer.
 fn loc_keys_from(files: &[cwtools_localization::LocFile]) -> HashSet<String> {
     let mut keys = HashSet::new();
     for file in files {
@@ -175,13 +163,6 @@ struct OpenLocTarget {
     cache: Option<Arc<LocDocumentCache>>,
 }
 
-/// Names whose dependents a loc-key change may affect: the changed keys
-/// themselves (literal loc references, CW122) plus, for every name-derived
-/// `localisation = { … }` rule in the ruleset, the definition name a changed
-/// key would be derived from (`prefix$suffix` stripped — CW100 flags
-/// `<name>_desc`-style keys, and a game file's token set contains `<name>`,
-/// not the derived key). Everything is compared lowercased, matching both the
-/// loc index and the doc token sets.
 fn loc_change_candidate_names(
     ruleset: Option<&RuleSet>,
     changed_keys: &HashSet<String>,
@@ -217,14 +198,6 @@ fn loc_change_candidate_names(
     names
 }
 
-/// Cap a file's validation errors at [`MAX_FILE_ERRORS`], appending a summary
-/// marker for the remainder. Returns the pre-truncation total (for logging).
-/// Shared by the batch and single-file paths so the cap stays consistent.
-///
-/// CW277 is held out of the cap. It is emitted last (validation stopped, so the
-/// rest of the file was never looked at) and says the diagnostics that ARE here
-/// are incomplete — dropping it with the tail turns a truncated file into one
-/// that merely flooded.
 pub(crate) fn truncate_validation_errors(
     errs: &mut Vec<cwtools_validation::ValidationError>,
     uri: &str,
@@ -256,13 +229,6 @@ pub(crate) fn truncate_validation_errors(
     total
 }
 
-/// Names a loc `$ref$` may resolve to besides loc keys: modifier keys plus every
-/// loc-bindable index name (type instances, dynamic modifiers, ideas, and
-/// defined variables). Mirrors `cwtools_driver::Session::loc_extra_valid_refs`
-/// so CI, the workspace scan, and the per-edit path accept the same references —
-/// the keystroke path used to take idea instances alone, so a `$my_variable$`
-/// reference grew a CW225 the moment its file was opened and lost it again on
-/// the next rescan.
 pub(crate) fn loc_extra_valid_refs(
     modifier_keys: &HashSet<String>,
     type_index: &cwtools_info::TypeIndex,
@@ -272,12 +238,6 @@ pub(crate) fn loc_extra_valid_refs(
     extra
 }
 
-/// CW100: objects defined here whose `## required` localisation keys aren't
-/// provided by any loc file. Gated on the loc index being built — before the
-/// initial scan finishes it's empty and everything would falsely report
-/// missing. Shared by the batch/scan path and the single-file keystroke path
-/// so both apply the same gate (a prior drift left the keystroke path without
-/// this check, so CW100 would flicker off on every edit until the next scan).
 pub(crate) fn append_missing_loc_errors(
     uri: &str,
     prepared: &Prepared,
@@ -298,15 +258,6 @@ pub(crate) fn append_missing_loc_errors(
     }
 }
 
-/// Validate one already-parsed file against a caller-supplied [`Prepared`],
-/// returning LSP diagnostics. The prebuilt state is passed in (not re-locked
-/// here) so the full-workspace pass can take its read guards once and share the
-/// `Prepared` across rayon threads — it is `Copy` and all-borrows, so `Sync`.
-///
-/// With `track_uses`, the file's `<type>` references to tracked
-/// (`should_be_used`) types are recorded and returned alongside the
-/// diagnostics; the caller folds them into the workspace-wide store the
-/// unused-instance check (CW239/CW231) reads. `false` keeps the plain path.
 pub(crate) fn validate_parsed_with_indexes(
     uri: &str,
     parsed: &ParsedFile,
@@ -333,11 +284,6 @@ pub(crate) fn validate_parsed_with_indexes(
     (diagnostics, used)
 }
 
-/// Codes whose diagnostics carry an LSP tag. DEPRECATED strikes the span
-/// through, UNNECESSARY fades it: both say "this line has no business being
-/// here" at a glance, before the message is read. Kept to the codes that mean
-/// exactly that — a tag on a code the reader still has to act on would fade
-/// script that works.
 const CODE_TAGS: &[(&str, DiagnosticTag)] = &[
     ("CW121", DiagnosticTag::UNNECESSARY),
     ("CW231", DiagnosticTag::UNNECESSARY),
@@ -345,7 +291,6 @@ const CODE_TAGS: &[(&str, DiagnosticTag)] = &[
     ("CW239", DiagnosticTag::UNNECESSARY),
 ];
 
-/// The tag list for a diagnostic's code, if it has one.
 fn code_tags(code: &NumberOrString) -> Option<Vec<DiagnosticTag>> {
     let NumberOrString::String(id) = code else {
         return None;
@@ -356,8 +301,6 @@ fn code_tags(code: &NumberOrString) -> Option<Vec<DiagnosticTag>> {
         .map(|(_, tag)| vec![tag.clone()])
 }
 
-/// The error-code reference entry for a diagnostic's code, so the editor can
-/// offer "open documentation" on a `CWxxx` the reader hasn't met before.
 fn code_description(code: &NumberOrString) -> Option<CodeDescription> {
     let NumberOrString::String(id) = code else {
         return None;
@@ -366,9 +309,6 @@ fn code_description(code: &NumberOrString) -> Option<CodeDescription> {
     Some(CodeDescription { href })
 }
 
-/// Build a whole-statement-line diagnostic at `(line, col)` — 0-based line,
-/// 0-based parser char column. The squiggle spans from `col` to the line's
-/// content end. Shared skeleton behind the `*_to_diagnostic` builders.
 fn diagnostic_at(
     line: u32,
     col: u32,
@@ -397,7 +337,6 @@ fn diagnostic_at(
     }
 }
 
-/// The LSP severity for an engine severity.
 fn severity_to_lsp(severity: cwtools_validation::ErrorSeverity) -> DiagnosticSeverity {
     match severity {
         cwtools_validation::ErrorSeverity::Error => DiagnosticSeverity::ERROR,
@@ -420,11 +359,6 @@ pub(crate) fn parse_error_to_diagnostic(e: &ParseError, lines: &DocLines) -> Dia
     )
 }
 
-/// Convert a `.cwt` rule-config error (parse or structural reference) into an LSP
-/// diagnostic. `RuleParseError.line` is 1-based; `col` is a 0-based character.
-/// Shared by the load-time path (`config.rs`) and the live per-file CWT lint.
-/// A directory-targeted error (an unreadable rules folder) keeps the directory
-/// as its file, so it lands in Problems under the folder rather than vanishing.
 pub(crate) fn rule_parse_error_to_diagnostic(
     err: &cwtools_rules::ruleset_loader::RuleParseError,
     lines: &DocLines,
@@ -442,10 +376,6 @@ pub(crate) fn rule_parse_error_to_diagnostic(
     )
 }
 
-/// Whether a diagnostic carrying `code` should be dropped given the user's
-/// lowercased suppression list (`errors.ignore` → `ignoredErrorCodes`). Only the
-/// string codes the validator emits (e.g. `CW100`) can be suppressed; compared
-/// case-insensitively. Numeric/absent codes are never suppressed.
 pub(crate) fn code_is_suppressed(code: Option<&NumberOrString>, ignored: &[String]) -> bool {
     match code {
         Some(NumberOrString::String(c)) => ignored.contains(&c.to_ascii_lowercase()),
@@ -453,10 +383,6 @@ pub(crate) fn code_is_suppressed(code: Option<&NumberOrString>, ignored: &[Strin
     }
 }
 
-/// Drop diagnostics whose code an inline `# cwtools-ignore` directive
-/// suppresses on the diagnostic's line or the lines beside it. A no-op when
-/// the file carries no directive, which is the common case and keeps this off
-/// the keystroke hot path's cost.
 pub(crate) fn drop_inline_suppressed(
     diagnostics: &mut Vec<Diagnostic>,
     map: &cwtools_validation::inline_ignore::InlineIgnoreMap,
@@ -492,16 +418,6 @@ pub(crate) fn validation_error_to_diagnostic(
         err.code.map(|c| NumberOrString::String(c.to_string())),
         err.message.clone(),
     );
-    // Precise span: when the emit site carried the node's end position, publish
-    // the real range instead of diagnostic_at's whole-line squiggle. The end uses
-    // the same 1-based-line / 0-based-char convention as the start (and as
-    // code_action's fix-edit conversion), so only the whole-line end is overridden.
-    // Fix edits are unaffected: they read `SuggestedFix.range`, which still needs
-    // the untrimmed span to delete a line cleanly.
-    // With `end` absent, the whole-line fallback stands byte-for-byte.
-    // Without text the end cannot be walked back off the following token, and
-    // publishing it raw bleeds onto the next line, so the whole-line fallback
-    // stands instead.
     if let Some((end_line, end_col)) = err.end
         && lines.has_text()
     {
@@ -511,10 +427,6 @@ pub(crate) fn validation_error_to_diagnostic(
             diag.range.start,
         );
     }
-    // Secondary spans (the `if` a stray `else` is missing, the case a path is
-    // indexed under) are all in the file being validated, so they hang off its
-    // own URI. `err.file` is the document URI on this path; a ruleset-load
-    // error whose "file" is not a URI simply publishes no related information.
     if !err.related.is_empty()
         && let Ok(uri) = Url::parse(&err.file)
     {
@@ -531,28 +443,14 @@ pub(crate) fn validation_error_to_diagnostic(
                 .collect(),
         );
     }
-    // Carry any machine-applicable fix into `data` so the code-action handler
-    // can round-trip it back into a QUICKFIX WorkspaceEdit. Covers both the
-    // validation and loc paths (loc diagnostics flow through here too).
     if let Some(fix) = &err.fix {
         diag.data = Some(crate::code_action::fix_to_data(fix));
     }
     diag
 }
 
-/// Collect the identifier-like tokens a parsed file mentions — every key and
-/// every (quoted or unquoted) string value — as interned `.lower` [`StringId`]s
-/// straight from the arena, so no string-table locks or allocations are paid.
-/// Used by the dependent sweep to decide which open docs reference a changed
-/// export (the sweep interns the changed names once at the comparison site).
-/// Deliberately broad (an over-approximation): including a token that isn't
-/// really a cross-file reference only costs an extra revalidation, while
-/// missing one would silently skip a file that should be revalidated.
 pub(crate) fn collect_doc_tokens(ast: &ParsedFile) -> HashSet<StringId> {
     use cwtools_parser::ast::Value;
-    // The arena holds every element flatly, so iterating the per-kind vectors
-    // covers the whole tree without a recursive walk. `.lower` is the canonical
-    // lowercased form, so the resulting set is already case-folded.
     let arena = &ast.arena;
     let mut tokens = HashSet::new();
     for leaf in &arena.leaves {
@@ -566,19 +464,12 @@ pub(crate) fn collect_doc_tokens(ast: &ParsedFile) -> HashSet<StringId> {
             tokens.insert(t.lower);
         }
     }
-    // Reserved slot 0 is the empty string; changed names are never empty.
     tokens.remove(&StringId(0));
     tokens
 }
 
 impl Backend {
-    /// Refresh the per-document token set used to scope the dependent sweep.
-    /// `ast = None` (e.g. a file that failed to parse) clears the set, so the
-    /// sweep treats the doc as "unknown" and always includes it.
     pub(crate) fn update_doc_tokens(&self, uri: &str, ast: Option<&Arc<ParsedFile>>) {
-        // Build the token set BEFORE taking the write lock. collect_doc_tokens
-        // walks the whole arena; holding doc_tokens.write() across it blocks the
-        // dependent sweep's readers (doc_tokens.read()) for the whole walk.
         match ast {
             Some(ast) => {
                 let toks = collect_doc_tokens(ast);
@@ -590,7 +481,6 @@ impl Backend {
         }
     }
 
-    /// Workspace scan would exclude `uri`.
     pub(crate) fn is_ignored_uri(&self, uri: &str) -> bool {
         let cfg = self.state.config.read();
         let logical = logical_path_from_uri(uri, &cfg.workspace_prefix);
@@ -601,9 +491,7 @@ impl Backend {
         )
     }
 
-    /// Drop all index state for `uri`.
     pub(crate) fn clear_ignored_file_state(&self, uri: &str) {
-        // Compute file_index path before locking info.
         let rel = self.workspace_rel_for_file_index(uri);
         let bump_info = {
             let mut info = self.state.info_service.write();
@@ -646,16 +534,6 @@ impl Backend {
         }
     }
 
-    /// Index an already-parsed AST into the info index, so the workspace scan
-    /// can index cache-hit ASTs without re-parsing.
-    ///
-    /// `parsed_version` is the document version `parsed` came from, when it came
-    /// from an open document. Callers indexing from disk (the workspace scan,
-    /// the did_close restore) pass `None`.
-    ///
-    /// The info revision is bumped only when the file's export fingerprint
-    /// moved, the same condition `debounced_validate` gates the dependent sweep
-    /// on. See the comment at the bump for why that covers every consumer.
     #[tracing::instrument(skip_all, fields(uri = %uri))]
     pub(crate) fn index_parsed_file(
         &self,
@@ -663,20 +541,13 @@ impl Backend {
         parsed: &ParsedFile,
         parsed_version: Option<i32>,
     ) {
-        // Ignored files must not enter the index.
         if self.is_ignored_uri(uri) {
             self.clear_ignored_file_state(uri);
             return;
         }
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(uri, &ws_prefix);
-        // Snapshot the ruleset instead of holding `rules` across the write: the
-        // guard would otherwise outrank the `documents` check below, and the
-        // `Arc` makes the snapshot free.
         let ruleset = self.state.rules.read().ruleset.clone();
-        // Base instances and subtype-qualified membership share one walk before
-        // the write guard. Completion takes a read guard on the same lock, so
-        // every microsecond kept outside it is a keystroke the UI path avoids.
         let collected = ruleset.as_ref().map(|ruleset| {
             cwtools_info::collect_type_instances_with_subtypes(
                 ruleset,
@@ -686,10 +557,6 @@ impl Backend {
                 cwtools_validation::subtype_membership_for_instance,
             )
         });
-        // Stale-write guard, the same version check debounced_validate publishes
-        // behind: a newer edit's validate may have raced ahead and indexed this
-        // file already, and installing the older parse would silently roll the
-        // index back to it until the next keystroke.
         if let Some(version) = parsed_version
             && self
                 .state
@@ -716,30 +583,12 @@ impl Backend {
         }
         let exports_changed = info.export_fingerprint(uri) != exports_before;
         drop(info);
-        // Both caches keyed on the info revision are built from exactly the
-        // symbols this fingerprint covers: `fallback_cache` from
-        // `variable_counts` + `event_target_counts`, `loc_ref_names_cache` from
-        // the type index's instance names + `var_index` (plus the ruleset's
-        // modifier keys, which this path never touches). An edit inside a rule
-        // body leaves all of them identical, so bumping unconditionally threw
-        // both away on every keystroke and paid a full rebuild for nothing.
         if exports_changed {
             self.bump_info_revision();
         }
     }
 
-    /// Re-register `uri`'s text in the inline-script registry when it names a
-    /// `common/inline_scripts` body, so an edit to the script is visible to
-    /// the next validate of anything that calls it — without waiting for a
     /// workspace scan (#259). Cheap to call unconditionally: the path check
-    /// rejects everything outside `common/inline_scripts` before the (fresh,
-    /// comment-free) reparse `InlineScripts::insert` wants.
-    ///
-    /// Returns the script's call name when the registry actually changed, so
-    /// the caller can queue it for the dependent sweep (`pending_changed_names`)
-    /// the same way a changed export already is — a call site names the script
-    /// as a plain string token, which `doc_tokens` already captures, so no new
-    /// sweep mechanism is needed.
     pub(crate) fn refresh_inline_script(&self, uri: &str, text: &str) -> Option<String> {
         if self.is_ignored_uri(uri) {
             return None;
@@ -756,20 +605,12 @@ impl Backend {
             .insert(&logical_path, parsed)
     }
 
-    /// Drop `uri`'s entry from the inline-script registry (a deletion, or a
-    /// close that restores a since-vanished file). Returns the removed
-    /// script's call name, for the same dependent-sweep queueing
-    /// [`Backend::refresh_inline_script`] does.
     pub(crate) fn remove_inline_script(&self, uri: &str) -> Option<String> {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(uri, &ws_prefix);
         self.state.inline_scripts.write().remove(&logical_path)
     }
 
-    /// Validate an already-parsed document against the (already-built) workspace
-    /// index, with the ruleset already locked and the per-run scope registry
-    /// prebuilt by the caller. Multi-file callers (the workspace scan, the
-    /// dependent sweep) build those ONCE outside their loop and reuse them.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn validate_parsed_prebuilt(
         &self,
@@ -784,8 +625,6 @@ impl Backend {
         if self.is_ignored_uri(uri) {
             return Vec::new();
         }
-        // Overlay computed before the other guards (its lock is independent and
-        // never nested inside info/loc — see validate_loc_text).
         let overlay = self.loc_overlay_keys();
         let info_guard = self.state.info_service.read();
         let loc_guard = self.state.loc_index.read();
@@ -820,11 +659,6 @@ impl Backend {
         diagnostics
     }
 
-    /// Replace `uri`'s recorded `<type>` uses and return the instance names
-    /// whose "is it used?" answer may have changed (empty when nothing moved).
-    /// The merge revision is only bumped on a real change, so the common
-    /// keystroke — uses identical to last time — keeps [`Self::merged_type_uses`]
-    /// hitting its cache.
     fn refresh_type_uses(&self, uri: &str, uses: UsedInstances) -> HashSet<String> {
         let mut store = self.state.type_uses.write();
         let changed: HashSet<String> = match store.get(uri) {
@@ -846,16 +680,7 @@ impl Backend {
         changed
     }
 
-    /// Re-record `uri`'s `<type>` uses from an AST the caller holds, queueing the
-    /// names whose used-status moved for the dependent sweep. For a path that
-    /// replaces a file's content without validating it (`did_close` restoring the
-    /// disk AST over a discarded buffer), where the stored entry would otherwise
     /// keep describing text that never reached disk (#133).
-    ///
-    /// The diagnostics this pass produces are dropped: the file isn't open, so
-    /// nothing publishes them, and only the uses are wanted. The unsaved-loc-key
-    /// overlay is left out for the same reason. It steers the loc checks alone,
-    /// not which instances a file references.
     pub(crate) fn refresh_type_uses_from_parsed(&self, uri: &str, parsed: &ParsedFile) {
         let game = self.state.config.read().game();
         let rules_guard = self.state.rules.read();
@@ -896,9 +721,6 @@ impl Backend {
         }
     }
 
-    /// The union of every file's recorded uses — what the batch driver folds
-    /// per run, kept as a cache keyed on `type_uses_revision` here because the
-    /// LSP needs it per validated file rather than once.
     pub(crate) fn merged_type_uses(&self) -> Arc<UsedInstances> {
         let revision = self
             .state
@@ -923,15 +745,6 @@ impl Backend {
         merged
     }
 
-    /// Fold one file's freshly-recorded uses into the store, queue the names
-    /// whose used-status changed for the dependent sweep, and return the
-    /// CW239/CW231 errors for the definitions in `uri` nothing in the
-    /// workspace references.
-    ///
-    /// Gated on `index_ready`: before the first scan the store only covers the
-    /// files validated so far, so "nothing uses this" would be answered from a
-    /// fragment and flag almost everything. The scan itself runs the check
-    /// against its own complete pass instead (see `validate_entire_workspace`).
     pub(crate) fn unused_instance_errors(
         &self,
         uri: &str,
@@ -956,11 +769,6 @@ impl Backend {
         check_unused_instances(ruleset, game, &instances, &merged, &uri.into())
     }
 
-    /// Publish diagnostics after dropping any whose code the user suppressed via
-    /// `errors.ignore` (`ignoredErrorCodes`). Every publish path funnels through
-    /// here so a suppressed code can't slip out from whichever validation route
-    /// produced it. A no-op (and off the hot path's cost) when nothing is
-    /// suppressed, which is the common case.
     pub(crate) async fn publish_filtered(
         &self,
         uri: tower_lsp::lsp_types::Url,
@@ -975,12 +783,6 @@ impl Backend {
                     .retain(|d| !code_is_suppressed(d.code.as_ref(), &cfg.ignored_error_codes));
             }
         }
-        // Keep the `fixAllWorkspace` store in lockstep with what's about to be
-        // published, so a snapshot of it always matches the Problems panel.
-        // Open documents are guarded by their version; closed-file entries use
-        // the source hash captured by the validation path.
-        // CW100's create-key fix has no span edit (`fixable_span_edits`
-        // returns nothing for it), so it never lands here.
         let entries: Vec<(String, cwtools_parser::fix::SpanEdit)> = diagnostics
             .iter()
             .flat_map(crate::code_action::fixable_span_edits)
@@ -1010,10 +812,6 @@ impl Backend {
             .await;
     }
 
-    /// Publish diagnostics, but suppress them (publish an empty set) until the
-    /// initial workspace index is ready. Before the index is built, a cross-file
-    /// reference whose defining file isn't indexed yet would be flagged as
-    /// undefined; the scan publishes the real diagnostics once it completes.
     pub(crate) async fn publish_gated(
         &self,
         uri: tower_lsp::lsp_types::Url,
@@ -1030,11 +828,6 @@ impl Backend {
             .await;
     }
 
-    /// Parse and validate a single document.
-    /// Validate `uri` at `expected_version` after the debounce, but only if it is
-    /// still the latest edit (a newer change supersedes it). Publishes the
-    /// changed file's diagnostics, then refreshes the other open documents so
-    /// cross-file references reflect the edit instead of showing stale results.
     #[tracing::instrument(skip_all, fields(uri = %uri, version = expected_version))]
     pub(crate) async fn debounced_validate(
         &self,
@@ -1046,8 +839,6 @@ impl Backend {
         let Ok(_permit) = self.state.validation_permits.acquire().await else {
             return;
         };
-        // A newer change landed during the debounce or permit wait — let that
-        // one validate without retaining a stale text snapshot in the queue.
         let text = {
             let docs = self.state.documents.lock();
             match docs.get(&uri) {
@@ -1056,10 +847,6 @@ impl Backend {
             }
         };
 
-        // Snapshot the file's cross-file exports before re-indexing, so we can
-        // tell whether this edit can affect any other file (see below). The
-        // name set lets the dependent sweep target only docs that reference a
-        // name that changed.
         let (exports_before, names_before) = {
             let info = self.state.info_service.read();
             (info.export_fingerprint(&uri), info.export_names(&uri))
@@ -1071,34 +858,20 @@ impl Backend {
         let code_lenses_changed = parsed.is_some();
         {
             let ast = parsed.map(Arc::new);
-            // Update tokens before taking documents lock (doc_tokens must be
             // acquired before documents everywhere to avoid ABBA deadlock with
-            // revalidate_open_dependents, which takes doc_tokens then documents).
             self.update_doc_tokens(&uri, ast.as_ref());
             let mut docs = self.state.documents.lock();
-            // TOCTOU guard: did_close may have arrived while parse_and_validate
-            // was running. Only store the AST if the document is still open at
-            // the same version; if it closed, the index was already cleaned up by
-            // did_close and we must not re-populate or re-publish it.
             let still_current = docs
                 .get(&uri)
                 .is_some_and(|document| document.version == expected_version);
             if !still_current {
                 return;
             }
-            // Preserve the last good AST on a transient parse failure (None):
-            // a fatal mid-edit syntax error shouldn't wipe the tree that
-            // completion/hover/goto resolve context from, or they collapse to
-            // a generic word list until the next clean parse. The parse error
             // is still published. (#41) Loc/.cwt files always parse to None
-            // here, so their (absent) AST is unaffected.
             if let Some(ast) = ast {
                 docs.set_ast(&uri, expected_version, ast);
             }
         }
-        // Re-check the doc is still open right before publishing: did_close may
-        // have landed after the TOCTOU guard above, and publishing here would
-        // race its empty publish and leave a stale diagnostic behind.
         let still_open = self.state.documents.lock().contains_key(&uri);
         if still_open && let Ok(uri_obj) = Url::parse(&uri) {
             self.publish_gated(
@@ -1110,34 +883,15 @@ impl Backend {
             .await;
         }
 
-        // Only sweep the other open files if this edit actually changed what the
-        // file exports (a definition added/renamed/removed). Editing inside a
-        // rule body leaves the exports identical, so no dependent can change and
-        // the sweep is skipped entirely — the common case stays cheap.
         let (exports_after, names_after) = {
             let info = self.state.info_service.read();
             (info.export_fingerprint(&uri), info.export_names(&uri))
         };
         let exports_changed = exports_before != exports_after;
-        // Only the names that were added or removed can change another
-        // file's diagnostics. Revalidate the open docs that reference any of
-        // them (symmetric difference of the before/after name sets).
-        //
-        // The fingerprint also tracks multiplicity, so it can differ while
-        // the name SET is unchanged (e.g. a duplicate definition added, or a
-        // type changed under the same name) — a case that can still flip a
-        // dependent's diagnostic. When that happens `changed_names` is empty;
-        // fall back to `None` (revalidate every dependent) so we never miss
-        // one. Soundness beats scoping here.
         let mut changed_names: HashSet<String> = names_before
             .symmetric_difference(&names_after)
             .cloned()
             .collect();
-        // Drain any names accumulated from preempted prior sweeps so this
-        // sweep covers their dependents too — plus the names this edit's own
-        // validate queued when the file's `<type>` use set changed, which is
-        // how an added or removed reference reaches the file DEFINING the
-        // instance and flips its CW239/CW231 without its exports moving.
         {
             let mut pending = self.state.pending_changed_names.lock();
             changed_names.extend(pending.drain());
@@ -1148,7 +902,6 @@ impl Backend {
             } else {
                 Some(&changed_names)
             };
-            // Tagged with this edit's generation so a newer edit preempts it.
             self.revalidate_open_dependents(&uri, generation, scope)
                 .await;
         } else {
@@ -1159,29 +912,6 @@ impl Backend {
         }
     }
 
-    /// Re-validate and republish every open document except `changed_uri`, using
-    /// the freshly updated indexes. Bounded by the number of open files, so a
-    /// definition edit propagates to the gui/event/etc. files that reference it.
-    ///
-    /// `generation` is the edit counter at the time the triggering change landed.
-    /// If a newer edit bumps the counter while the sweep is running, the sweep
-    /// stops: the newer edit's own sweep will revalidate everything against the
-    /// fully-updated index, so finishing this one is wasted work (and would
-    /// double-validate). Each dependent's diagnostics are published with that
-    /// doc's current version, and skipped if the doc changed mid-sweep, so the
-    /// sweep never clobbers a fresher in-flight result for a file being edited.
-    ///
-    /// `changed_names`, when `Some`, scopes the sweep to the open docs whose
-    /// token set mentions one of the (lowercased) names that were added or
-    /// removed. A doc with no recorded token set is always included (sound
-    /// over-approximation: never skip a file that might depend on the change).
-    ///
-    /// `None` revalidates every open dependent (used when the exact set of
-    /// changed names can't be pinned down, e.g. a multiplicity-only change).
-    ///
-    /// On preemption (newer edit arrives mid-sweep), the `changed_names` are
-    /// saved to `state.pending_changed_names` so the next sweep drains and
-    /// includes them, preventing stale dependents from falling through the gap.
     pub(crate) async fn revalidate_open_dependents(
         &self,
         changed_uri: &str,
@@ -1190,22 +920,12 @@ impl Backend {
     ) {
         use std::sync::atomic::Ordering;
 
-        // Doc token sets store interned `.lower` ids, so intern each changed
-        // name once here instead of resolving every doc token to a fresh String.
         let changed_ids: Option<Vec<StringId>> = changed_names.map(|names| {
             names
                 .iter()
                 .map(|n| self.state.string_table.intern(n).lower)
                 .collect()
         });
-        // Snapshot each open dependent's cached AST (a cheap `Arc` clone) with
-        // its version. The dependents' own text didn't change, so they don't
-        // need re-parsing or re-indexing — only re-validation against the
-        // now-updated global index. When `changed_names` is `Some`, skip docs
-        // whose token set references none of the changed names.
-        // Capture each dependent's text (an `Arc` bump) while the docs lock is
-        // held so the republished diagnostics get whole-line squiggles and
-        // encoded columns, same as the edited file.
         let mut others: Vec<(String, i32, Arc<ParsedFile>, Arc<str>)> = {
             let tokens = self.state.doc_tokens.read();
             let docs = self.state.documents.lock();
@@ -1214,8 +934,6 @@ impl Backend {
                 .filter(|(u, _)| match &changed_ids {
                     None => true,
                     Some(ids) => match tokens.get(u.as_str()) {
-                        // No token set recorded for this doc — include it rather
-                        // than risk missing a real dependent.
                         None => true,
                         Some(doc_set) => ids.iter().any(|id| doc_set.contains(id)),
                     },
@@ -1227,7 +945,6 @@ impl Backend {
                 })
                 .collect()
         };
-        // Skip ignored.
         others.retain(|(uri, _, _, _)| !self.is_ignored_uri(uri));
         if others.is_empty() {
             return;
@@ -1241,29 +958,16 @@ impl Backend {
             let cfg = self.state.config.read();
             (cfg.game(), cfg.position_encoding.clone())
         };
-        // Validate every dependent synchronously, then publish. No await is held
-        // across the rules lock. The single `rules` read guard covers the ruleset,
-        // the cached scope registry, and the modifier-key set (none change during
-        // the sweep). Do NOT lock documents inside this block (ABBA: request
-        // handlers take documents then rules; we must take rules then
-        // nothing-or-documents-after).
         let validated: Vec<(String, i32, Vec<Diagnostic>, u64)> = {
             let rules_guard = self.state.rules.read();
             let mut out = Vec::with_capacity(others.len());
             for (uri, snapshot_version, ast, text) in others {
-                // Preempt: a newer edit arrived. Save our changed_names into the
-                // shared pending set so the newer sweep drains and covers them;
-                // without this, dependents of the preempted edit stay stale.
                 if self.state.edit_generation.load(Ordering::Relaxed) != generation {
                     tracing::debug!(generation, "revalidate_open_dependents superseded");
                     if let Some(names) = changed_names {
                         let mut pending = self.state.pending_changed_names.lock();
                         pending.extend(names.iter().cloned());
                     }
-                    // Stop computing further dependents, but fall through to
-                    // publish the ones already validated this sweep instead of
-                    // discarding them. The newer sweep (draining
-                    // pending_changed_names) covers the rest.
                     break;
                 }
                 let lines = DocLines::new(&text, encoding.clone());
@@ -1292,13 +996,9 @@ impl Backend {
             }
             out
         };
-        // Now check still_current without holding ruleset (documents first is
-        // the order used by request handlers, so this is safe).
         let to_publish: Vec<(String, i32, Vec<Diagnostic>, u64)> = validated
             .into_iter()
             .filter(|(uri, snapshot_version, _, _)| {
-                // Skip if this dependent was itself edited while we validated it —
-                // its own debounced pass owns the fresher result.
                 let docs = self.state.documents.lock();
                 docs.get(uri.as_str())
                     .map(|d| d.version == *snapshot_version)
@@ -1318,17 +1018,8 @@ impl Backend {
         }
     }
 
-    /// Flatten both loc overlays (per-open-`.yml` key sets plus the watched-file
-    /// sets) into one set of lowercased keys, for the game-file loc-existence
-    /// checks (CW100/CW122) so a key just typed into an open `.yml` — or saved
     /// to a watched one — resolves without a full rescan (#36). Bounded by the
-    /// open loc files plus the distinct watched ones.
-    ///
-    /// Cached by `loc_overlay_revision` and handed out by `Arc`: this ran per
-    /// validated file, so a watched batch cloned every overlay key once per file
     /// in the batch even though nothing between them changed (#87). The revision
-    /// is read before the overlay locks, so a writer that lands in between only
-    /// costs a rebuild the next call, never a stale hit.
     pub(crate) fn loc_overlay_keys(&self) -> Arc<HashSet<String>> {
         let revision = self
             .state
@@ -1356,9 +1047,6 @@ impl Backend {
         keys
     }
 
-    /// Update the hover loc_text map with entries from a single loc file,
-    /// replacing any previous entries for the same file. Called on every loc
-    /// file edit so tooltips reflect the latest changes without a full
     /// workspace rescan (#53). Takes the shared parse of the edited buffer.
     fn update_loc_text_for_file(&self, files: &[cwtools_localization::LocFile]) {
         let hover_all = self
@@ -1371,7 +1059,6 @@ impl Backend {
             .and_then(|l| l.first().copied())
             .unwrap_or(cwtools_localization::Lang::English);
 
-        // Collect the new entries for this file.
         let new_entries = {
             let loc_index = self.state.loc_index.read();
             let mut new_entries = LocTextMap::default();
@@ -1398,16 +1085,8 @@ impl Backend {
             new_entries
         };
 
-        // Merge into the global loc_text map: remove old entries for this
-        // file's keys, then insert the new ones. A simple remove-and-replace
-        // per key would lose entries from OTHER files that share the same key.
-        // Instead, rebuild the affected keys from all sources.
         let mut loc_text = self.state.loc_text.write();
         for key in new_entries.keys() {
-            // Remove any existing entry for this key that came from this file.
-            // We can't track per-file contributions in loc_text (it's a flat
-            // map), so just overwrite — the full rescan will correct any
-            // cross-file ordering issues.
             loc_text.remove(key);
         }
         for (key, translations) in new_entries {
@@ -1415,7 +1094,6 @@ impl Backend {
         }
     }
 
-    /// Cached modifier and type names that a localisation `$ref$` may resolve to.
     fn loc_ref_names(&self) -> Arc<HashSet<String>> {
         let revision = self
             .state
@@ -1448,8 +1126,6 @@ impl Backend {
         additional_loc_keys: &HashSet<String>,
         extra: &HashSet<String>,
     ) -> Vec<Diagnostic> {
-        // Hold the read guard across the validate call to avoid cloning the full
-        // loc-key union (~2M Strings on Millennium Dawn).
         let loc_guard = self.state.loc_index.read();
         let empty_union = cwtools_localization::LocKeySet::default();
         let union: &cwtools_localization::LocKeySet = loc_guard
@@ -1468,7 +1144,6 @@ impl Backend {
         .collect()
     }
 
-    /// Revalidate open loc files whose current cache references a changed key.
     async fn revalidate_other_open_loc_files(
         &self,
         except_uri: &str,
@@ -1498,8 +1173,6 @@ impl Backend {
                 })
                 .collect()
         };
-        // Match the regular validation path: ignored documents must not be
-        // reintroduced into the Problems panel by a cross-file refresh.
         targets.retain(|target| !self.is_ignored_uri(&target.uri));
         let encoding = self.state.config.read().position_encoding.clone();
         for target in targets {
@@ -1555,13 +1228,6 @@ impl Backend {
         }
     }
 
-    /// Record a watched (non-open) loc file's keys in the watched-files overlay
-    /// (per-file replace, like the open-doc overlay) so cross-file `$ref$` and
-    /// missing-loc checks resolve them without a rescan — and keep resolving
-    /// them across scans, whose index installs are built from disk reads that
-    /// may predate this change. Returns the keys added or removed relative to
-    /// the previous entry (first sight is every key), for the batch's coalesced
-    /// sweep.
     pub(crate) fn record_watched_loc_keys(
         &self,
         uri: &str,
@@ -1581,7 +1247,6 @@ impl Backend {
         changed
     }
 
-    /// Whether the overlay already has this file's exact key set.
     fn loc_overlay_entry_matches(
         &self,
         overlay: &parking_lot::RwLock<std::collections::HashMap<String, HashSet<String>>>,
@@ -1591,9 +1256,7 @@ impl Backend {
         overlay.read().get(uri).is_some_and(|prev| prev == new_keys)
     }
 
-    /// The cross-file refresh an open loc edit runs per file, done ONCE for a
     /// whole watched batch whose loc key sets changed (#90). `changed_keys` is
-    /// the batch-wide union of additions and removals.
     pub(crate) async fn refresh_after_watched_loc_changes(&self, changed_keys: &HashSet<String>) {
         let additional_loc_keys = self.loc_overlay_keys();
         let extra = self.loc_ref_names();
@@ -1611,9 +1274,6 @@ impl Backend {
             .await;
     }
 
-    /// `parsed_version` is the open-document version `text` was taken at, so the
-    /// index install can tell a newer edit's validate has overtaken this one.
-    /// `None` when the text came from disk (the scan's non-open pass).
     #[tracing::instrument(skip_all, fields(uri = %uri, bytes = text.len(), trigger = trigger.as_str()))]
     pub(crate) async fn parse_and_validate(
         &self,
@@ -1629,32 +1289,15 @@ impl Backend {
         }
         let mut diagnostics = Vec::new();
         // Per-line text + negotiated encoding, so every squiggle spans the whole
-        // statement line and lands on the columns the client reads.
         let lines = DocLines::new(text, self.state.config.read().position_encoding.clone());
-        // Inline `# cwtools-ignore` directives, line → lowercased codes. Empty
-        // for files without one; the filter below is then a no-op.
         let inline_ignored = cwtools_validation::inline_ignore::extract_inline_ignored_codes(text);
 
-        // Localisation files are parsed and validated as loc, not config.
         if crate::paths::is_loc_file(uri) {
             let path = uri_to_path_str(uri);
-            // Keep the live overlay current so this file's own keys (and any just
-            // added) resolve immediately in `$ref$` checks, without waiting for a
             // full rescan. Record which keys were added or removed. (#36)
-            //
-            // Open docs only: the overlay is "unsaved keys in open .yml files".
-            // The watched path reaches here for files that are NOT open; letting
-            // them in grew the map a stale entry per watched file and made every
             // first sight fire the whole-file cross-file sweep (#90). Watched
-            // files record into `loc_watched_overlay` instead
-            // (`record_watched_loc_keys`) with one coalesced sweep per batch.
-            // block_in_place: parsing and linting a loc buffer is sync CPU work
-            // that would otherwise hold a runtime worker for its whole duration,
-            // and MD ships loc files in the hundreds of KB. Matches how the scan
             // paths already fence their sync work. (#87)
             let (changed_keys, diagnostics, cache) = tokio::task::block_in_place(|| {
-                // One parse of the edited buffer, shared by the key set, the
-                // diagnostics and the hover text below — each used to parse the
                 // whole file itself, and two of them copied it first (#87).
                 let parsed_loc = try_parse_loc_buffer(text, &path);
                 let cache_version = parsed_version.filter(|_| parsed_loc.is_ok());
@@ -1662,7 +1305,6 @@ impl Backend {
                 let is_open = self.state.documents.lock().contains_key(uri);
                 let changed_keys: HashSet<String> = if is_open {
                     let new_keys = loc_keys_from(&parsed_loc);
-                    // A value-only edit keeps the cached overlay union.
                     if self.loc_overlay_entry_matches(&self.state.loc_live_overlay, uri, &new_keys)
                     {
                         HashSet::new()
@@ -1687,7 +1329,6 @@ impl Backend {
                     &additional_loc_keys,
                     &extra,
                 );
-                // Update the hover loc_text map so tooltips reflect the latest
                 // edits without waiting for a full workspace rescan (#53).
                 self.update_loc_text_for_file(&parsed_loc);
                 let cache = cache_version.map(|version| loc_cache(version, text.len(), parsed_loc));
@@ -1706,16 +1347,7 @@ impl Backend {
                     "localisation cache not retained"
                 );
             }
-            // A change to this file's key set can fix or break `$ref$` checks in
-            // other open loc files, so refresh them — that's the cross-file part
-            // of the index that previously only updated on a window reload.
-            // It can also fix or break a missing-localisation (CW100/CW122)
-            // diagnostic on open GAME files that reference the added/removed key
-            // (e.g. a new event option's loc), so re-validate those too — the
-            // overlay now feeds the game-file loc checks, so they resolve the new
             // key without a full rescan. (#36) The sweep is scoped to the docs
-            // whose tokens mention a changed key or a definition name it derives
-            // from, instead of every open game file.
             if !changed_keys.is_empty() {
                 let additional_loc_keys = self.loc_overlay_keys();
                 let extra = self.loc_ref_names();
@@ -1742,27 +1374,16 @@ impl Backend {
             return (diagnostics, None);
         }
 
-        // A loc-extension file outside any `localisation` dir (a CI workflow, an
-        // editor config) is neither loc nor game script: publish nothing rather
-        // than parsing YAML as Paradox script.
         if crate::paths::has_loc_ext(uri) {
             return (diagnostics, None);
         }
 
-        // `.cwt` rule-config files are the schema the engine is built from, not
-        // game content. Lint them structurally — parse errors plus references to
-        // undefined types/enums/single_aliases — against the loaded merged
-        // ruleset, rather than running the game-script validator (which would
         // flag every rule field as unknown). See #43.
         if crate::paths::is_cwt_file(uri) {
             let parsed = parse_string(text, &self.state.string_table);
             for parse_err in &parsed.errors {
                 diagnostics.push(parse_error_to_diagnostic(parse_err, &lines));
             }
-            // Structural reference check against the merged ruleset. Only runs
-            // once rules are loaded; before then there's nothing to resolve
-            // references against (and everything would falsely report
-            // undefined).
             let rules_guard = self.state.rules.read();
             if let Some(ruleset) = rules_guard.ruleset.as_ref() {
                 let path = std::path::PathBuf::from(uri_to_path_str(uri));
@@ -1781,9 +1402,6 @@ impl Backend {
 
         tracing::debug!(%uri, "[validate] parsing");
 
-        // block_in_place: everything from here down is sync CPU work (parse,
-        // index, validate) with no await in it. Without the fence a 1 MB script
-        // file holds a tokio worker for the whole validate, while the scan paths
         // that do the same work already fence theirs. (#87)
         tokio::task::block_in_place(|| {
             let parsed = parse_string(text, &self.state.string_table);
@@ -1791,40 +1409,25 @@ impl Backend {
                 diagnostics.push(parse_error_to_diagnostic(parse_err, &lines));
             }
 
-            // Index this file the same way the workspace scan and did_close
-            // disk-restore do (previously an inlined, drifted subset that
-            // skipped subtype-membership indexing — an open file could lose
-            // its `<type.subtype>` membership while being edited).
             self.index_parsed_file(uri, &parsed, parsed_version);
 
-            // Keep the inline-script registry current: if this file is a
-            // `common/inline_scripts` body, re-register it under its call
-            // name so the NEXT validate of any caller sees the new content.
-            // Queued for the dependent sweep below so callers already open
             // see it on THIS pass too (#259).
             if let Some(name) = self.refresh_inline_script(uri, text) {
                 self.state.pending_changed_names.lock().insert(name);
             }
 
             // Validation. Lock order: rules -> info_service -> loc_index ->
-            // inline_scripts.
             let (errors, log_msg) = {
                 let game = self.state.config.read().game();
-                // Live overlay of unsaved loc keys in open `.yml` files, so a
-                // key just added there resolves in this file's loc checks
                 // (CW100/CW122) without a full rescan (#36). Computed before
-                // the other guards (independent lock).
                 let overlay = self.loc_overlay_keys();
                 let rules_guard = self.state.rules.read();
                 if let Some(ruleset) = rules_guard.ruleset.as_ref() {
                     let start = std::time::Instant::now();
-                    // Pass the workspace TypeIndex for cross-file type reference checking.
                     let info_guard = self.state.info_service.read();
                     let type_index = &info_guard.type_index;
                     let loc_guard = self.state.loc_index.read();
                     let inline_guard = self.state.inline_scripts.read();
-                    // Single-file path: the scope registry is cached (built
-                    // once at ruleset load).
                     let (scope_checks, var_checks) = {
                         let cfg = self.state.config.read();
                         (cfg.scope_checks, cfg.var_checks)
@@ -1875,9 +1478,6 @@ impl Backend {
             };
 
             if let Some(msg) = log_msg {
-                // tracing, not a client log_message, so a per-keystroke/
-                // per-watched-file line doesn't flood the output channel.
-                // Still captured by exportProfilingLog and stderr (RUST_LOG).
                 tracing::info!(target: "cwtools::profile", "{}", msg);
             }
 
@@ -1890,15 +1490,6 @@ impl Backend {
     }
 }
 
-// ── Keystroke-validate micro-benchmark (ignored, manual) ─────────────────────
-//
-// Per-edit costs on a large real fixture (cc_colony_events.txt, ~165KB,
-// concatenated 8x to match MD's largest script file ~1.3MB): the doc-token
-// rebuild that runs after every debounced validate, and the per-request
-// logical-path derivation. Run with:
-//
-//   cargo test --release -p cwtools_lsp --bin cwtools-server -- \
-//     --ignored --nocapture perf_keystroke_validate
 #[cfg(test)]
 mod perf_bench {
     use super::*;
@@ -1958,10 +1549,6 @@ mod perf_bench {
     }
 
     /// The parse a loc keystroke pays, before and after #87. The edited buffer
-    /// used to be parsed three times — once for the live overlay's key set, once
-    /// for the diagnostics, once for the hover text — and copied into an owned
-    /// `String` twice on the way, because `LocService::from_files` takes
-    /// ownership. Both sides exclude the diagnostics build, which is unchanged.
     #[test]
     #[ignore]
     fn perf_loc_edit_parse() {
@@ -1988,7 +1575,6 @@ mod perf_bench {
         });
     }
 
-    /// Millennium-Dawn-scale `$ref$` cache build and overlay invalidation costs.
     #[test]
     #[ignore]
     fn perf_loc_ref_names() {
@@ -2040,10 +1626,6 @@ mod perf_bench {
         });
     }
 
-    /// Where the per-edit single-file index spends its time, split into the part
-    /// that now runs before `info_service.write()` is taken and the part that
-    /// still runs under it (completion blocks on that lock). Needs a real
-    /// ruleset and a real game file; skips when neither is on this machine.
     #[test]
     #[ignore]
     fn perf_index_parsed_file() {
@@ -2083,9 +1665,6 @@ mod perf_bench {
             rules_dir.display()
         );
 
-        // A focus file (no subtypes), an events file, and an equipment file
-        // (`<type.subtype>` archetypes) — the three shapes of hot single-file
-        // reindex, so the split isn't read off one unrepresentative case.
         for logical_path in [
             "common/national_focus/germany.txt",
             "events/WUW_Germany.txt",
@@ -2110,9 +1689,6 @@ mod perf_bench {
                 );
                 collected.instances.len() + collected.subtype_instances.len()
             });
-            // One InfoService across iterations, as in the server: `clear_file`
-            // then has real entries to drop, and the ruleset-derived reference
-            // map is reused instead of rebuilt per iteration.
             let mut info = cwtools_info::InfoService::new();
             bench("collect + clear_file + index_file", 20, || {
                 let collected = cwtools_info::collect_type_instances_with_subtypes(
@@ -2175,10 +1751,7 @@ mod perf_bench {
     }
 }
 
-/// `index_parsed_file` bumps `info_revision` only when the reindexed file's
 /// export fingerprint moved (#289). These pin both halves: an edit that changes
-/// no export must leave the derived caches valid, and any edit that adds,
-/// renames or removes one must invalidate them.
 #[cfg(test)]
 mod info_revision_tests {
     use super::*;
@@ -2187,21 +1760,16 @@ mod info_revision_tests {
     use std::sync::atomic::Ordering;
 
     /// Workspace URI for the fixtures. Drive-lettered on Windows so the derived
-    /// path is absolute there too (see the `abs()` helpers elsewhere).
     const WORKSPACE_URI: &str = if cfg!(windows) {
         "file:///C:/ws"
     } else {
         "file:///ws"
     };
 
-    /// A file under the one path the fixture ruleset indexes.
     fn ideas_uri() -> String {
         format!("{WORKSPACE_URI}/common/ideas/00_ideas.txt")
     }
 
-    /// A `Backend` over a real (never-initialized) `Client`, carrying a
-    /// one-type ruleset and the workspace prefix the logical path is derived
-    /// from. Same construction as `scan`'s `test_backend`.
     fn test_backend() -> Backend {
         let state = Arc::new(DocumentState::new());
         let captured = Arc::new(parking_lot::Mutex::new(None));
@@ -2252,9 +1820,6 @@ mod info_revision_tests {
         backend.state.info_revision.load(Ordering::Relaxed)
     }
 
-    /// Seed `fallback_cache` the way the completion handler does, so the tests
-    /// assert against the real hit condition (`request.rs`: revision match plus
-    /// a non-empty list) rather than a paraphrase of it.
     fn seed_fallback_cache(backend: &Backend) {
         *backend.state.fallback_cache.lock() = Some(CompletionCacheEntry {
             revision: revision(backend),
@@ -2429,7 +1994,6 @@ mod info_revision_tests {
         let names_before = backend.loc_ref_names();
         seed_fallback_cache(&backend);
 
-        // Same definition, different body, the shape of nearly every keystroke.
         index(&backend, &uri, "my_idea = {\n\tcost = 7\n}\n");
 
         assert_eq!(
@@ -2499,8 +2063,6 @@ mod info_revision_tests {
         let settled = revision(&backend);
         seed_fallback_cache(&backend);
 
-        // What a deleted definition (or a file emptied on disk before a
-        // watched revalidate) leaves behind.
         index(&backend, &uri, "\n");
 
         assert_ne!(revision(&backend), settled);
@@ -2511,9 +2073,6 @@ mod info_revision_tests {
         );
     }
 
-    /// The completion fallback list is built from `variable_counts` and
-    /// `event_target_counts`, so those two families have to move the revision
-    /// on their own. They are exports the type index never sees.
     #[tokio::test]
     async fn defined_variables_and_event_targets_bump_the_revision() {
         let backend = test_backend();
@@ -2553,9 +2112,6 @@ mod info_revision_tests {
         );
     }
 
-    /// A file that exports nothing on either side is the one case where a
-    /// first index does not bump, and it is correct: neither cache reads
-    /// anything it contributes.
     #[tokio::test]
     async fn a_file_with_no_exports_never_bumps() {
         let backend = test_backend();
@@ -2587,8 +2143,6 @@ mod truncation_tests {
         }
     }
 
-    /// The last few codes, which is where the marker and CW277 land. Printing
-    /// all 100+ on a failure buries the interesting end of the list.
     fn tail_codes(errs: &[ValidationError]) -> Vec<Option<&'static str>> {
         errs.iter().rev().take(3).rev().map(|e| e.code).collect()
     }
@@ -2620,9 +2174,6 @@ mod truncation_tests {
         );
     }
 
-    /// CW277 says the file's remaining diagnostics were never produced. It is
-    /// emitted last, so a plain `truncate` to the cap dropped exactly the
-    /// diagnostic that explains the truncation.
     #[test]
     fn the_branch_limit_survives_a_flood() {
         let mut errs: Vec<_> = (0..MAX_FILE_ERRORS + 5)
@@ -2646,8 +2197,6 @@ mod truncation_tests {
         );
     }
 
-    /// The held-back CW277 must not create a summary marker of its own when the
-    /// rest of the file fits under the cap exactly.
     #[test]
     fn the_branch_limit_alone_does_not_trip_the_cap() {
         let mut errs: Vec<_> = (0..MAX_FILE_ERRORS).map(|_| error(Some("CW240"))).collect();
@@ -2672,7 +2221,6 @@ mod whole_line_range_tests {
     #[test]
     fn loc_keys_of_extracts_lowercased_keys() {
         // Live-overlay key extraction for #36: keys are lowercased to match the
-        // case-insensitive union the `$ref$` check resolves against.
         let keys = loc_keys_of(
             "l_english:\n MY_Key: \"hi\"\n other_key: \"x\"\n",
             "a_l_english.yml",
@@ -2701,9 +2249,6 @@ mod whole_line_range_tests {
 
     #[test]
     fn loc_change_candidates_cover_derived_cw100_keys() {
-        // CW100 keys are derived (`prefix + name + suffix`), so a changed key
-        // `my_focus_desc` must scope the sweep to docs mentioning `my_focus`
-        // (the definition name), not just the literal key.
         use cwtools_rules::rules_types::{TypeDefinition, TypeLocalisation};
         let mut rs = RuleSet::new();
         let loc = |prefix: &str, suffix: &str, required: bool, optional: bool| TypeLocalisation {
@@ -2732,7 +2277,6 @@ mod whole_line_range_tests {
             localisation: vec![
                 loc("", "_desc", true, false),
                 loc("mod_", "", true, false),
-                // Optional / explicit-field entries are not CW100-flagged.
                 loc("", "_opt", true, true),
             ],
             graph_related_types: Vec::new(),
@@ -2742,7 +2286,6 @@ mod whole_line_range_tests {
             .into_iter()
             .collect();
         let names = loc_change_candidate_names(Some(&rs), &changed);
-        // Literal keys always included (CW122); derived names stripped per affix.
         assert!(names.contains("my_focus_desc"));
         assert!(names.contains("plainkey"));
         assert!(names.contains("my_focus"), "got: {:?}", names);
@@ -2751,17 +2294,11 @@ mod whole_line_range_tests {
             "optional affixes must not expand: {:?}",
             names
         );
-        // No ruleset: literal keys only.
         assert_eq!(loc_change_candidate_names(None, &changed), changed);
     }
 
     #[test]
     fn loc_extra_valid_refs_covers_every_bindable_name() {
-        // The per-edit path used to collect `instances("idea")` alone, so a
-        // `$my_variable$` (or any non-idea definition) validated clean in CI and
-        // after a workspace scan, then grew a CW225 the moment the file was
-        // opened and lost it again on the next rescan. All three paths build the
-        // set from the same source now.
         use cwtools_info::{SourceLocation, TypeIndex, TypeInstance};
         let instance = |name: &str| TypeInstance {
             name: name.to_string(),
@@ -2817,9 +2354,6 @@ mod whole_line_range_tests {
 
     #[test]
     fn diagnostic_range_uses_negotiated_encoding() {
-        // The published range must use the SAME conversion the code-action fix
-        // edits use, or a quick fix on a line holding a non-BMP character
-        // rewrites a different span than the one highlighted. `😀` is 1 char /
         // 2 UTF-16 units, so the whole-line end moves with the encoding.
         let text = "😀 custom_cost_text = a\n";
         let err = ValidationError {
@@ -2845,8 +2379,6 @@ mod whole_line_range_tests {
 
     #[test]
     fn diagnostic_spans_from_field_to_end_of_line() {
-        // Whole-line fallback: with `end: None` the squiggle still runs from the
-        // field to the line's content end (unchanged pre-Task-18 behavior).
         let text = "decision = {\n    custom_cost_text = a\n}\n";
         let ends = utf16_lines(text);
         let err = ValidationError {
@@ -2864,15 +2396,11 @@ mod whole_line_range_tests {
         assert_eq!(diag.range.start.line, 1);
         assert_eq!(diag.range.start.character, 4);
         assert_eq!(diag.range.end.line, 1);
-        // "    custom_cost_text = a" is 24 chars.
         assert_eq!(diag.range.end.character, 24);
     }
 
     #[test]
     fn diagnostic_uses_precise_range_when_end_present() {
-        // Task 18: when the emit site carried the node's end position, the LSP
-        // publishes the exact token span instead of the whole-line squiggle. The
-        // end uses the same 1-based-line / 0-based-char convention as the start.
         let text = "decision = {\n    custom_cost_text = a\n}\n";
         let ends = utf16_lines(text);
         let err = ValidationError {
@@ -2883,22 +2411,18 @@ mod whole_line_range_tests {
             file: "f".into(),
             code: Some("CW240"),
             fix: None,
-            // The leaf's own SourceRange end (1-based line 2, exclusive char 24).
             end: Some((2, 24)),
             related: Vec::new(),
         };
         let diag = validation_error_to_diagnostic(&err, &ends);
         assert_eq!(diag.range.start.line, 1);
         assert_eq!(diag.range.start.character, 4);
-        // Precise end from the carried range, not diag_end_col.
         assert_eq!(diag.range.end.line, 1);
         assert_eq!(diag.range.end.character, 24);
     }
 
     #[test]
     fn diagnostic_precise_range_can_span_lines() {
-        // A block's range legitimately spans lines; only the trailing whitespace
-        // the parser folded into the end has to come back off.
         let text = "root = {\n    foo = {\n        a = 1\n    }\n}\n";
         let ends = utf16_lines(text);
         let err = ValidationError {
@@ -2946,8 +2470,6 @@ mod whole_line_range_tests {
 
     #[test]
     fn diagnostic_end_does_not_bleed_onto_the_next_indent() {
-        // The CW500 shape: an indented next line puts the raw end mid-whitespace
-        // rather than at column 0.
         let text = "c = {\n    picture = generic_economy\n    allowed = {\n    }\n}\n";
         let ends = utf16_lines(text);
         let err = ValidationError {
@@ -2968,7 +2490,6 @@ mod whole_line_range_tests {
 
     #[test]
     fn diagnostic_end_never_precedes_its_start() {
-        // A whitespace-only statement line: the walk-back would run past the start.
         let text = "a = {\n    \n}\n";
         let ends = utf16_lines(text);
         let err = ValidationError {
@@ -2993,7 +2514,6 @@ mod whole_line_range_tests {
 
     #[test]
     fn diagnostic_end_clamps_before_utf16_conversion() {
-        // Clamping after the conversion instead would land inside the surrogate pair.
         let text = "a = {\n    x = \"\u{1F600}\"\n}\n";
         let ends = utf16_lines(text);
         let err = ValidationError {
@@ -3031,9 +2551,6 @@ mod whole_line_range_tests {
         assert_eq!(diag.range.end.character, 3);
     }
 
-    // The workspace scan holds no file text, so there is nothing to walk the
-    // parser's end back over. Publishing it raw would bleed onto the next line
-    // for every file that is not open, which is most of the Problems panel.
     #[test]
     fn diagnostic_without_line_info_ignores_a_carried_end() {
         let err = ValidationError {
@@ -3059,7 +2576,6 @@ mod whole_line_range_tests {
     #[test]
     fn suppression_matches_codes_case_insensitively() {
         let ignored = vec!["cw100".to_string()];
-        // Suppression list is stored lowercased; the diagnostic code can be any case.
         assert!(code_is_suppressed(
             Some(&NumberOrString::String("CW100".into())),
             &ignored
@@ -3072,13 +2588,11 @@ mod whole_line_range_tests {
             Some(&NumberOrString::String("CW246".into())),
             &ignored
         ));
-        // Absent and numeric codes are never suppressed.
         assert!(!code_is_suppressed(None, &ignored));
         assert!(!code_is_suppressed(
             Some(&NumberOrString::Number(100)),
             &ignored
         ));
-        // Empty list suppresses nothing.
         assert!(!code_is_suppressed(
             Some(&NumberOrString::String("CW100".into())),
             &[]
@@ -3109,7 +2623,6 @@ mod whole_line_range_tests {
 
     #[test]
     fn uncoded_diagnostics_have_no_doc_link_or_tag() {
-        // Parse errors carry no CW code, so there is no row to point at.
         let diag = parse_error_to_diagnostic(
             &cwtools_parser::ast::ParseError::Pos(1, 0, "bad".into()),
             &DocLines::none(),
@@ -3125,7 +2638,6 @@ mod whole_line_range_tests {
         assert_eq!(tags("cw121"), Some(vec![DiagnosticTag::UNNECESSARY]));
         assert_eq!(tags("CW239"), Some(vec![DiagnosticTag::UNNECESSARY]));
         assert_eq!(tags("CW231"), Some(vec![DiagnosticTag::UNNECESSARY]));
-        // A code the reader still has to act on must not be faded.
         assert_eq!(tags("CW240"), None);
         assert_eq!(code_tags(&NumberOrString::Number(121)), None);
     }
@@ -3164,8 +2676,6 @@ mod whole_line_range_tests {
 
     #[test]
     fn related_spans_are_dropped_when_the_file_is_not_a_uri() {
-        // Ruleset-load diagnostics name a plain path; there is no document to
-        // hang a location off, and a bogus URI would be worse than none.
         let err = ValidationError {
             message: "x".into(),
             severity: ErrorSeverity::Error,
@@ -3357,12 +2867,9 @@ mod ignored_tests {
 
     #[test]
     fn is_ignored_uri_handles_percent_encoding_and_no_workspace() {
-        // No workspace_prefix -> logical path is the raw decoded path; bare-name still matches.
         let backend = backend_with_ignore(vec!["ignored.txt".into()], None);
         assert!(backend.is_ignored_uri("file:///tmp/ignored.txt"));
-        // Percent-encoded workspace and file.
         let backend2 = backend_with_ignore(vec![], Some("file:///tmp/My%20Mod"));
-        // README baseline under encoded workspace.
         assert!(backend2.is_ignored_uri("file:///tmp/My%20Mod/README.txt"));
         assert!(backend2.is_ignored_uri("file:///tmp/My%20Mod/sub/README.txt"));
     }
@@ -3394,7 +2901,6 @@ mod ignored_tests {
             .unwrap()
             .to_string();
         let backend = backend_with_ignore(vec![], Some(&ws_uri));
-        // Ensure the workspace root is the temp dir (canonicalized).
         {
             let mut cfg = backend.state.config.write();
             let canon = std::fs::canonicalize(tmp.path()).unwrap();
@@ -3408,10 +2914,8 @@ mod ignored_tests {
         let uri = tower_lsp::lsp_types::Url::from_file_path(&file_path)
             .unwrap()
             .to_string();
-        // Seed indexes: info, doc_tokens, type_uses, file_index, loc overlays.
         let table = StringTable::new();
         let parsed = parse_string("my_type = { }", &table);
-        // Manually populate file_index so removal can be asserted.
         {
             let mut info = backend.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
@@ -3437,8 +2941,6 @@ mod ignored_tests {
             .watched_signatures
             .lock()
             .insert(uri.clone(), (123, 456));
-        // Index the file (even without a ruleset the doc_tokens/type_uses/file_index
-        // and overlay state are what this test cares about; fingerprint may stay 0).
         backend.index_parsed_file(&uri, &parsed, None);
         let rev_before = backend
             .state
@@ -3539,26 +3041,16 @@ mod ignored_tests {
         let backend = backend_with_ignore(vec!["ignored.txt".into()], Some("file:///ws"));
         let uri = "file:///ws/ignored.txt";
         let text = "my_type = { broken }";
-        // Seed an index entry that must be cleared.
         let table = StringTable::new();
         let seed = parse_string("my_type = { }", &table);
         backend.index_parsed_file("file:///ws/common/keep.txt", &seed, None);
-        // Put something for the ignored URI so we can see it disappear.
         backend.index_parsed_file(uri, &seed, None);
-        // Now park an ignored parse: the defensive guard should have cleared it,
-        // but we ensure parse_and_validate also clears and returns empty.
-        // First make the ignored file look indexed again (guard would have cleared it,
-        // so re-seed via direct info write).
         {
             let mut info = backend.state.info_service.write();
             info.clear_file(uri);
-            // Re-seed via direct index to simulate stale state before config change.
             drop(info);
             backend.index_parsed_file(uri, &seed, None);
-            // Force ignore by setting pattern after indexing: re-create backend with ignore
-            // (already is) and ensure clear happens on next validate.
         }
-        // The uri is ignored, so parse_and_validate must return empty diagnostics.
         let (diags, ast) = backend
             .parse_and_validate(uri, text, crate::ValidateTrigger::DidOpen, None)
             .await;
@@ -3624,7 +3116,6 @@ mod ignored_tests {
                 },
             })
             .await;
-        // Document is retained (so revalidate_all_open_docs can find it) but index is clear.
         assert!(backend.state.documents.lock().contains_key(uri.as_str()));
         assert_eq!(
             backend
@@ -3646,7 +3137,6 @@ mod ignored_tests {
         std::fs::create_dir_all(file_path.parent().unwrap()).unwrap();
         std::fs::write(&file_path, "").unwrap();
         let uri = Url::from_file_path(&file_path).unwrap();
-        // Open as kept first.
         backend
             .did_open(tower_lsp::lsp_types::DidOpenTextDocumentParams {
                 text_document: tower_lsp::lsp_types::TextDocumentItem {
@@ -3657,7 +3147,6 @@ mod ignored_tests {
                 },
             })
             .await;
-        // Reconfigure to ignore it (simulates adding glob while open).
         {
             let mut cfg = backend.state.config.write();
             cfg.ignore_file_patterns = vec!["kept.txt".into()];
@@ -3675,8 +3164,6 @@ mod ignored_tests {
                 }],
             })
             .await;
-        // After an edit to an ignored open doc, the index must be cleared, not repopulated.
-        // Allow the async publish to settle.
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(
             backend
@@ -3699,7 +3186,6 @@ mod ignored_tests {
         std::fs::write(&kept_path, "").unwrap();
         let ignored_uri = Url::from_file_path(&ignored_path).unwrap().to_string();
         let kept_uri = Url::from_file_path(&kept_path).unwrap().to_string();
-        // Open both directly so we can seed state before the ignore takes effect.
         {
             let mut docs = backend.state.documents.lock();
             docs.open(
@@ -3745,7 +3231,6 @@ mod ignored_tests {
             type_index.file_index.insert("ignored.txt");
             type_index.file_index.insert("kept.txt");
         }
-        // Now mark ignored.txt as ignored and revalidate all open docs.
         {
             let mut cfg = backend.state.config.write();
             cfg.ignore_file_patterns = vec!["ignored.txt".into()];
@@ -3832,7 +3317,6 @@ mod ignored_tests {
             )
             .unwrap();
         }
-        // Both get token sets; the ignored one's tokens must be ignored by the sweep.
         backend
             .state
             .doc_tokens
@@ -3843,10 +3327,7 @@ mod ignored_tests {
             .doc_tokens
             .write()
             .insert(ignored_uri.clone(), collect_doc_tokens(&ignored_parsed));
-        // Trigger a dependent sweep from kept; the ignored doc mentions the changed name,
-        // but must be skipped because it is ignored.
         let mut changed = std::collections::HashSet::new();
-        // Use a token that the ignored doc actually contains so it would be selected without the filter.
         let token = ignored_parsed
             .arena
             .leaves
@@ -3858,7 +3339,6 @@ mod ignored_tests {
         backend
             .revalidate_open_dependents(&kept_uri, 1, Some(&changed))
             .await;
-        // No panic and ignored doc still not indexed (defensive).
         assert!(!backend.is_ignored_uri(&kept_uri));
         assert!(backend.is_ignored_uri(&ignored_uri));
     }
@@ -3874,7 +3354,6 @@ mod ignored_tests {
         std::fs::write(&kept_path, "kept = { }").unwrap();
         let ignored_uri = Url::from_file_path(&ignored_path).unwrap().to_string();
         let kept_uri = Url::from_file_path(&kept_path).unwrap().to_string();
-        // Seed file_index as non-empty so the watched insert is not gated off.
         {
             let mut info = backend.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
@@ -3885,7 +3364,6 @@ mod ignored_tests {
         changes.insert(ignored_uri.clone());
         changes.insert(kept_uri.clone());
         backend.process_watched_batch(changes, vec![]).await;
-        // Ignored must not have been inserted; kept must have been.
         assert!(
             !backend
                 .state
@@ -3906,7 +3384,6 @@ mod ignored_tests {
                 .contains("kept.txt"),
             "watched batch must index kept file"
         );
-        // Ignored must have been cleared and not left with a watched signature.
         assert!(
             !backend
                 .state

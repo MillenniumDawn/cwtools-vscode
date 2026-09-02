@@ -1,10 +1,3 @@
-//! Localization service.
-//!
-//! Aggregates loc files across multiple directories. Entries are owned once in
-//! `files`; per-language / per-key views are derived on demand.
-//!
-//! Mirrors F# `LocalisationManager.fs`.
-
 use crate::commands::{Lang, LocFile};
 use crate::csv_parser::parse_csv_loc_per_lang;
 use crate::yaml_parser::{LocFileParseError, parse_loc_text};

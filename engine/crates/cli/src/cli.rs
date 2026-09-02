@@ -1,6 +1,3 @@
-//! The clap surface: every subcommand, flag and value parser the binary
-//! accepts. Execution lives in `commands`.
-
 use clap::{Args, Parser, Subcommand};
 use cwtools_localization::Lang;
 use cwtools_validation::ErrorSeverity;

@@ -1,29 +1,9 @@
-//! YAML localisation file parser.
-//!
-//! Parses `l_xxx.yml` files into `LocFile` structures.
-//!
-//! Handles HOI4's "cursed quotes" semantics:
-//! * Quotes inside loc strings are DATA, not delimiters
-//! * The VALIDATOR (not the parser) checks balancing via `LastIndexOf('"')`
-//! * `desc` = raw text after colon (and optional version) to end of line
-//! * Comments (`#`) are NOT stripped at parse time — they are part of desc
-//!
-//! Examples:
-//! * `key: "value"` → desc = `"value"` (stored raw, quotes included)
-//! * `key: "this is "also" valid"` → desc = `"this is "also" valid"`
-//! * `key: "a" #comment` → desc = `"a" #comment`
+//! Loc YAML parser: comments are part of desc.
 
 use crate::commands::{Lang, LocEntry, LocFile, LocParseError, Position, key_to_language};
 use crate::loc_string::parse_loc_elements;
 use std::sync::Arc;
 
-/// Longest loc value the `$ref$` / `[command]` scanner looks at, in bytes.
-///
-/// The longest value in the HOI4 base game, Millennium Dawn and Kaiserreich is
-/// under 8 KiB, so nothing real comes near this. Past it the entry still defines
-/// its key with its text and position intact; only the refs and commands it
-/// would have contributed are skipped, which is the work that scales with the
-/// value's length.
 pub const MAX_LOC_VALUE_BYTES: usize = 64 * 1024;
 
 // ---- UTF-8 BOM check -------------------------------------------------------

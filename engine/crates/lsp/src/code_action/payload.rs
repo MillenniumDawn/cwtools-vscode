@@ -7,32 +7,19 @@ use cwtools_parser::fix::{SpanEdit, SuggestedFix, plan_file_edits};
 
 use crate::lines::DocLines;
 
-/// Key under which a fix payload lives in `Diagnostic.data`. Namespaced so a
-/// codeAction request only treats data it put there as a fix (future diagnostic
-/// data of other shapes is ignored).
 pub(super) const FIX_DATA_KEY: &str = "cwtoolsFix";
 
-/// A single span replacement round-tripped through `Diagnostic.data`. Ranges use
-/// the parser convention: 1-based line, 0-based char column.
 pub(super) struct FixEdit {
     pub(super) range: SourceRange,
     pub(super) replacement: String,
 }
 
-/// A named set of edits resolving one diagnostic. `edits` is empty for a
-/// "create missing localisation key" fix (CW100): it has no in-file span to
-/// replace, and carries `create_loc_key` for the dedicated code action in
-/// this module instead. Every other consumer here (`code_actions_from_diagnostics`,
-/// `fix_all_action`) treats an empty `edits` as nothing to do.
 pub(super) struct FixPayload {
     pub(super) title: String,
     pub(super) edits: Vec<FixEdit>,
     pub(super) create_loc_key: Option<String>,
 }
 
-/// Serialize a [`SuggestedFix`] into a `Diagnostic.data` value, namespaced under
-/// [`FIX_DATA_KEY`]. Ranges are stored in the parser convention (1-based line,
-/// 0-based char col); the LSP conversion happens in the handler where the
 /// document text and the negotiated encoding are available.
 pub(crate) fn fix_to_data(fix: &SuggestedFix) -> serde_json::Value {
     let edits: Vec<serde_json::Value> = fix
@@ -58,9 +45,6 @@ pub(crate) fn fix_to_data(fix: &SuggestedFix) -> serde_json::Value {
     serde_json::json!({ FIX_DATA_KEY: payload })
 }
 
-/// Parse a fix payload out of a diagnostic's `data` value. `None` when the value
-/// isn't a cwtools fix payload (any other diagnostic-data shape, or a
-/// malformed/partial entry).
 pub(super) fn fix_from_data(data: &serde_json::Value) -> Option<FixPayload> {
     let obj = data.get(FIX_DATA_KEY)?;
     let title = obj.get("title")?.as_str()?.to_string();
@@ -92,12 +76,6 @@ pub(super) fn fix_from_data(data: &serde_json::Value) -> Option<FixPayload> {
     })
 }
 
-/// The span edits `diag`'s fix payload carries, tagged with the diagnostic's
-/// code — empty when the diagnostic has no payload, its code isn't a string,
-/// or (like CW100's create-key fix) it carries no span edits. Shared by the
-/// `fixAllWorkspace` store (`validate::publish_filtered`) and available for
-/// any future consumer that needs "what would a fix-all apply here" without
-/// going through `fix_all_action`'s per-request diagnostic bookkeeping.
 pub(crate) fn fixable_span_edits(diag: &Diagnostic) -> Vec<(String, SpanEdit)> {
     let Some(payload) = diag.data.as_ref().and_then(fix_from_data) else {
         return Vec::new();
@@ -120,10 +98,6 @@ pub(crate) fn fixable_span_edits(diag: &Diagnostic) -> Vec<(String, SpanEdit)> {
         .collect()
 }
 
-/// Convert a parser [`SourceRange`] (1-based line, 0-based char col) into an LSP
-/// `Range` against the file's line index — the same conversion
-/// hover/rename/navigation use, and the one the diagnostic this fix hangs off
-/// went through, so the edit lands on exactly the columns the squiggle covers.
 pub(crate) fn source_range_to_lsp(range: SourceRange, lines: &DocLines) -> Range {
     Range {
         start: lines.position(range.start.line.saturating_sub(1), range.start.col as u32),
@@ -131,10 +105,7 @@ pub(crate) fn source_range_to_lsp(range: SourceRange, lines: &DocLines) -> Range
     }
 }
 
-/// Build QUICKFIX code actions from the request's context diagnostics: one per
-/// diagnostic carrying a cwtools fix payload. Pure (no locks / IO) so the
 /// handler and its test exercise the same mapping. `text`/`encoding` drive the
-/// range conversion.
 pub(super) fn code_actions_from_diagnostics(
     uri: &Url,
     diagnostics: &[Diagnostic],
@@ -147,8 +118,6 @@ pub(super) fn code_actions_from_diagnostics(
         let Some(payload) = diag.data.as_ref().and_then(fix_from_data) else {
             continue;
         };
-        // A create-loc-key fix (CW100) has no span edit to offer here — it
-        // gets its own cross-file action from `create_loc_key_actions`.
         if payload.edits.is_empty() {
             continue;
         }
@@ -177,28 +146,12 @@ pub(super) fn code_actions_from_diagnostics(
     actions
 }
 
-/// Build the single `source.fixAll` action: every fixable diagnostic in the
-/// document, applied at once. `None` when fewer than one edit survives.
-///
-/// Overlap resolution is [`cwtools_parser::fix::plan_file_edits`] — the same
-/// function the CLI `fix` subcommand uses, so "fix all" in the editor and
-/// `cwtools fix --apply` produce the same file. An edit dropped for overlapping
-/// keeps its own quick fix, which is the right outcome: applying it needs the
-/// first edit to land and the document to be re-validated.
-///
-/// The diagnostics come from `context.diagnostics`, which the client scopes to
-/// the requested range. `editor.codeActionsOnSave` requests the whole document,
-/// so that is what "all" means here.
 pub(super) fn fix_all_action(
     uri: &Url,
     diagnostics: &[Diagnostic],
     text: &str,
     encoding: &PositionEncodingKind,
 ) -> Option<CodeActionOrCommand> {
-    // A create-loc-key payload (CW100) parses fine but carries no span edit —
-    // it must not count as "fixable" here (nothing for `plan_file_edits` to
-    // apply) or be claimed by the action below (its own dedicated action
-    // resolves it instead).
     let payloads_with_edits: Vec<(usize, FixPayload)> = diagnostics
         .iter()
         .enumerate()
@@ -228,8 +181,6 @@ pub(super) fn fix_all_action(
     if kept.is_empty() {
         return None;
     }
-    // Attribute the action to the diagnostics it actually resolves, so the
-    // client can clear them optimistically.
     let resolved: Vec<Diagnostic> = diagnostics
         .iter()
         .enumerate()
@@ -259,8 +210,6 @@ pub(super) fn fix_all_action(
     }))
 }
 
-/// Whether the request asks for `kind`. An absent `only` means "everything";
-/// LSP kinds are hierarchical, so `source` selects `source.fixAll`.
 pub(super) fn wants(only: Option<&Vec<CodeActionKind>>, kind: &CodeActionKind) -> bool {
     match only {
         None => true,
@@ -299,8 +248,6 @@ mod tests {
 
     #[test]
     fn payload_round_trips_through_data() {
-        // A fix serialized into `Diagnostic.data` and read back must reproduce
-        // the title, ranges, and replacement exactly (the client hands `data`
         // back verbatim on the codeAction request).
         let fix = SuggestedFix::replace("Wrap the value in quotes", range(5, 3, 5, 8), "\"hi\"");
         let data = fix_to_data(&fix);
@@ -314,9 +261,6 @@ mod tests {
 
     #[test]
     fn create_loc_key_payload_round_trips_through_data() {
-        // CW100's fix has no span edit, only the key; both the empty `edits`
-        // and the `createLocKey` field must survive the `Diagnostic.data`
-        // round trip so `create_loc_key_actions` can build its action.
         let fix =
             SuggestedFix::create_loc_key("Create localisation key my_thing_desc", "my_thing_desc");
         let data = fix_to_data(&fix);
@@ -328,10 +272,8 @@ mod tests {
 
     #[test]
     fn non_fix_data_is_ignored() {
-        // Diagnostic data that isn't a cwtools fix payload must not parse as one.
         assert!(fix_from_data(&serde_json::json!({ "other": 1 })).is_none());
         assert!(fix_from_data(&serde_json::json!(null)).is_none());
-        // Missing the replacement field → not a usable edit → whole payload None.
         let bad = serde_json::json!({
             FIX_DATA_KEY: { "title": "x", "edits": [{ "startLine": 1, "startCol": 0, "endLine": 1, "endCol": 1 }] }
         });
@@ -340,9 +282,6 @@ mod tests {
 
     #[test]
     fn diagnostic_with_fix_maps_to_quickfix_action() {
-        // The handler mapping: a diagnostic carrying a fix payload becomes one
-        // QUICKFIX CodeAction whose edit, applied to the source, yields the fixed
-        // text. Mirrors the CW253 `set_empire_name` -> `set_name` key rename.
         let text = "set_empire_name = { }\n";
         let fix = SuggestedFix::replace("Rename to set_name", range(1, 0, 1, 15), "set_name");
         let uri: Url = "file:///mod/common/x.txt".parse().unwrap();
@@ -370,7 +309,6 @@ mod tests {
         assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
         assert_eq!(action.diagnostics.as_ref().unwrap()[0].code, diag.code);
 
-        // The edit's range + new_text must reproduce the CLI `fix` result.
         let edits = action
             .edit
             .as_ref()
@@ -384,7 +322,6 @@ mod tests {
         );
         assert_eq!(edits[0].new_text, "set_name");
 
-        // Apply via the engine's own applier to confirm the span is right.
         let span = SpanEdit {
             range: range(1, 0, 1, 15),
             replacement: "set_name".into(),
@@ -394,10 +331,7 @@ mod tests {
 
     #[test]
     fn diagnostic_range_and_fix_edit_agree_on_non_bmp_line() {
-        // A non-BMP char before the token makes the parser's char column (2) and
         // the client's UTF-16 column (3) differ. The published diagnostic and the
-        // quick fix it carries must land on the same range, or applying the fix
-        // rewrites a different span than the one highlighted.
         let text = "😀 set_empire_name = { }\n";
         let fix = SuggestedFix::replace("Rename to set_name", range(1, 2, 1, 17), "set_name");
         let err = cwtools_validation::ValidationError {
@@ -439,7 +373,6 @@ mod tests {
             edits[0].range, diag.range,
             "quick fix must edit exactly the highlighted span"
         );
-        // The parser-space span the payload carries is the right one.
         let span = SpanEdit {
             range: range(1, 2, 1, 17),
             replacement: "set_name".into(),
@@ -465,9 +398,6 @@ mod tests {
 
     #[test]
     fn zero_edit_payload_yields_no_plain_quickfix() {
-        // CW100's fix has no span edit — `code_actions_from_diagnostics` must
-        // not offer a quickfix with an empty `TextEdit` list for it; the
-        // dedicated create-loc-key action (built elsewhere) covers it.
         let uri: Url = "file:///mod/common/x.txt".parse().unwrap();
         let diag = create_loc_key_diag();
         let actions = code_actions_from_diagnostics(
@@ -505,9 +435,6 @@ mod tests {
 
     #[test]
     fn fixable_span_edits_numeric_code_yields_empty() {
-        // `fix_from_data` parses fine, but a numeric `code` can't be stored as a
-        // key in the fixAllWorkspace store, so the pair is dropped rather than
-        // stringified.
         let fix = SuggestedFix::replace("Rename to set_name", range(1, 0, 1, 15), "set_name");
         let diag = Diagnostic {
             code: Some(NumberOrString::Number(253)),
@@ -520,17 +447,12 @@ mod tests {
     #[test]
     fn fixable_span_edits_create_loc_key_payload_yields_empty() {
         // The invariant that keeps CW100 out of the fixAllWorkspace store
-        // (`publish_filtered`'s doc comment): a create-loc-key payload parses
-        // fine but carries no span edits, so this must report nothing for it.
         let diag = create_loc_key_diag();
         assert!(fixable_span_edits(&diag).is_empty());
     }
 
     #[test]
     fn fix_all_action_does_not_claim_create_loc_key_diagnostics() {
-        // Mix a normal span-edit fix with a CW100 create-loc-key fix.
-        // `source.fixAll` must apply only the real edit and must not list the
-        // CW100 diagnostic among the ones it resolves.
         let text = "set_empire_name = { }\nmy_thing = { x = yes }\n";
         let real_fix = SuggestedFix::replace("Rename to set_name", range(1, 0, 1, 15), "set_name");
         let real_diag = Diagnostic {

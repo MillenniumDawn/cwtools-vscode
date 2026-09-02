@@ -1,13 +1,3 @@
-//! Localisation validation.
-//!
-//! Validates parsed loc entries:
-//! * Undefined loc references
-//! * Recursive references
-//! * Invalid loc characters
-//! * Missing/computed loc commands
-//!
-//! Mirrors F# `LocalisationString.fs`.
-
 use crate::commands::{LocEntry, LocFile};
 use crate::loc_index::LocKeySet;
 use cwtools_parser::ast::{SourcePos, SourceRange};

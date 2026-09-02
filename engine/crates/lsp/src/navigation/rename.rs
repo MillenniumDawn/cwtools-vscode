@@ -25,8 +25,6 @@ impl Backend {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(&uri, &ws_prefix);
 
-        // `@` script constant first: the sigil marks it unambiguously, and the
-        // rule walk can misclassify an `@` read as a type reference.
         let text = self.file_text_for(&uri).await;
         let position_encoding = self.position_encoding();
         let lines = text
@@ -38,12 +36,7 @@ impl Backend {
             return Ok(Some(PrepareRenameResponse::Range(range)));
         }
 
-        // Loc key next, before TypeRef: a loc key in either a .yml or a script
-        // file is a valid rename target.
         if let Some(key_lower) = self.loc_key_at_cursor(&uri, pos, &logical_path).await {
-            // Show the range of the actual token under the cursor (preserve
-            // original case length). Use the word at cursor if available, else
-            // the lowercased key.
             let token = if let Some(t) = text.as_deref() {
                 let (_, col) = lsp_pos_to_source_in_text(t, pos, &position_encoding);
                 word_at_position(t, pos.line, col as u32).unwrap_or_else(|| key_lower.clone())
@@ -57,9 +50,6 @@ impl Backend {
         let type_ref = self.type_ref_at_cursor(&uri, pos, &logical_path);
 
         if let Some((_, instance_name)) = type_ref {
-            // Return a range covering the whole instance-name token. Anchor the
-            // start at the token's beginning (so a mid-token cursor doesn't
-            // rename a shifted span) and extend by the name's length.
             let range =
                 prepare_rename_range(text.as_deref(), pos, &instance_name, &position_encoding);
             return Ok(Some(PrepareRenameResponse::Range(range)));
@@ -67,9 +57,6 @@ impl Backend {
         Ok(None)
     }
 
-    /// File-local rename of an `@name` script constant: every comment-aware
-    /// whole-token occurrence in this one document. `@` constants are
-    /// per-file in the game's scripting, so no cross-file work is needed.
     fn rename_at_var(
         &self,
         uri: &str,
@@ -117,8 +104,6 @@ impl Backend {
         key_lower: &str,
         new_name: &str,
     ) -> Result<Option<WorkspaceEdit>> {
-        // Sibling family: base + _desc/_tooltip variants. Only touch keys that
-        // exist (is_known), plus the triggered key itself.
         let root = loc_root(key_lower);
         let trigger_suffix = key_lower.strip_prefix(&root).unwrap_or("");
         let new_lower = new_name.to_lowercase();
@@ -146,27 +131,21 @@ impl Backend {
             if cand == key_lower || self.is_known_loc_key(&cand) {
                 let suffix = cand.strip_prefix(&root).unwrap_or("");
                 let new_sib = format!("{}{}", new_root_original, suffix);
-                // Also handle the triggered suffix variant even if not in
-                // candidates (e.g. _tooltip_desc) — ensure original maps.
                 target_to_new.entry(cand).or_insert(new_sib);
             }
         }
-        // Ensure the triggered key maps even when it wasn't in the static list
-        // (e.g. _tooltip_desc or arbitrary suffix).
         if !target_to_new.contains_key(key_lower) {
             target_to_new.insert(key_lower.to_string(), new_name.to_string());
         }
         if uri.parse::<Url>().is_err() {
             return Ok(None);
         }
-        // Fetch loc files once and reuse.
         let loc_uris = self.loc_file_uris().await;
         let loc_texts = if loc_uris.is_empty() {
             HashMap::new()
         } else {
             self.file_text_snapshots_for(&loc_uris).await
         };
-        // Reuse loc files for definitions and yml refs.
         let loc_edits = self
             .collect_loc_rename_definitions(&target_to_new, &loc_uris, &loc_texts)
             .await;
@@ -185,7 +164,6 @@ impl Backend {
         if by_uri.is_empty() {
             return Ok(None);
         }
-        // Dedup within each file (a key that appears multiple times on same line)
         let mut deduped: HashMap<String, Vec<TextEdit>> = HashMap::new();
         for (file_uri, mut edits) in by_uri {
             edits.sort_by_key(|a| a.range.start);
@@ -193,7 +171,6 @@ impl Backend {
             deduped.insert(file_uri, edits);
         }
         let by_uri: Vec<(String, Vec<TextEdit>)> = deduped.into_iter().collect();
-        // Reject edits outside workspace.
         if let Some(err) = self.first_refused_edit_target(&by_uri, uri) {
             return Err(err);
         }
@@ -321,24 +298,7 @@ impl Backend {
         by_uri.into_iter().collect()
     }
 
-    /// The refusal for the first URI in `by_uri` a generated edit may not write
-    /// to, if any. `own_uri` is the document the request named.
-    ///
-    /// Rename's edit sites come from the type index, which has the base game's
-    /// instances merged into it, so a rename can reach a definition inside the
     /// install (#160). Dropping those quietly would apply a rename the user
-    /// only saw half of and leave the other half dangling, so one refused
-    /// target cancels the whole rename — the same stance `rename_impl` already
-    /// takes for a reference it can't locate in text.
-    ///
-    /// An edit set that touches nothing but the request's own document is
-    /// exempt, which is the rule the per-diagnostic quick fixes and
-    /// `source.fixAll` already run on: the URI is the client's own, echoed
-    /// back, so there is no server-derived path to contain. Without the
-    /// exemption a file-local `@const` rename would break in exactly the
-    /// sessions where the boundary has nothing to check against — an
-    /// `untitled:` buffer that has never been on disk, or a window opened on a
-    /// single file with no workspace folder at all.
     fn first_refused_edit_target(
         &self,
         by_uri: &[(String, Vec<TextEdit>)],
@@ -356,10 +316,6 @@ impl Backend {
         })
     }
 
-    /// Assemble the `WorkspaceEdit` shape the client negotiated: versioned
-    /// `documentChanges` when it advertised support (open docs carry their
-    /// version so a stale buffer rejects the edit, closed files `None`), the
-    /// legacy `changes` map otherwise.
     fn build_workspace_edit(&self, by_uri: Vec<(String, Vec<TextEdit>)>) -> WorkspaceEdit {
         if self
             .state
@@ -407,8 +363,6 @@ impl Backend {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(&uri, &ws_prefix);
 
-        // `@` script constant first: the sigil marks it unambiguously, and the
-        // rule walk can misclassify an `@` read as a type reference.
         let position_encoding = self.position_encoding();
         let source_text = self.file_text_for(&uri).await;
         let source_lines = source_text
@@ -420,7 +374,6 @@ impl Backend {
             return self.rename_at_var(&uri, text, lines, &name, &new_name);
         }
 
-        // Loc key rename (with _desc/_tooltip siblings), before TypeRef.
         if let Some(key_lower) = self.loc_key_at_cursor(&uri, pos, &logical_path).await {
             match self.rename_loc(&uri, &key_lower, &new_name).await {
                 Ok(Some(edit)) => return Ok(Some(edit)),
@@ -429,7 +382,6 @@ impl Backend {
             }
         }
 
-        // Identify what's under the cursor
         let type_ref = self.type_ref_at_cursor(&uri, pos, &logical_path);
 
         let (type_name, instance_name) = match type_ref {
@@ -437,11 +389,6 @@ impl Backend {
             None => return Ok(None),
         };
 
-        // Edit positions as (file_uri, line0, col). Definition sites are the
-        // instance name itself (the node key), so their key position IS the name
-        // and needs no text lookup. Use-site value columns are resolved from
-        // text — this also reaches closed files via the reverse index, so rename
-        // no longer refuses when a reference lives in a file that isn't open.
         let mut edits: Vec<(String, u32, u32)> = Vec::new();
 
         {
@@ -456,8 +403,6 @@ impl Backend {
             }
         }
 
-        // Use sites: resolve each value column from text. Refuse (rather than
-        // corrupt) if any recorded reference can't be located in text.
         let sites = self.collect_use_sites(&type_name, &instance_name);
         let mut text_uris: Vec<String> = edits.iter().map(|(uri, _, _)| uri.clone()).collect();
         text_uris.extend(sites.iter().map(|(uri, _)| uri.clone()));
@@ -466,7 +411,6 @@ impl Backend {
         let unresolved = resolved.iter().filter(|(_, _, _, ok)| !ok).count();
         if unresolved > 0 {
             return Err(tower_lsp::jsonrpc::Error {
-                // -32002 = RequestFailed (LSP extension to JSON-RPC)
                 code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
                 message: format!(
                     "Rename cancelled: {} reference(s) to '{}' could not be located in text; \
@@ -485,8 +429,6 @@ impl Backend {
             return Ok(None);
         }
 
-        // Group text edits by file URI, deduping so overlapping edits (a
-        // definition that also classifies as a use site) aren't emitted twice.
         let indexed = index_snapshots(&texts, &self.position_encoding());
         let mut seen: HashSet<(String, u32, u32)> = HashSet::new();
         let mut by_uri: HashMap<String, Vec<TextEdit>> = HashMap::new();

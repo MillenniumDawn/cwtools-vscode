@@ -1,22 +1,9 @@
-//! HOI4-specific cleanup hints.
-//!
-//! Currently: CW280, flagging a field whose body is exactly `{ always = <bool> }`
-//! where that bool matches the field's game default, so the whole field is a
-//! no-op and can be removed (e.g. `allowed_civil_war = { always = no }`).
-//!
-//! The table is deliberately explicit, not "any `{ always = no }` is redundant":
-//! `always = no` is a recommended guard in other contexts (an event's
-//! `trigger = { always = no }`, see CW107), so only fields whose default is
-//! known are listed.
-
 use super::common::walk_blocks;
 use crate::{ValidationError, error_codes};
 use cwtools_parser::ast::{Child, ParsedFile, Value};
 use cwtools_parser::fix::SuggestedFix;
 use cwtools_string_table::string_table::StringTable;
 
-/// If the block's only non-comment child is `always = <bool>`, return that bool;
-/// otherwise `None` (anything else means the block does real work).
 fn sole_always_value(children: &[Child], ast: &ParsedFile, table: &StringTable) -> Option<bool> {
     let mut found: Option<bool> = None;
     for child in children {
@@ -41,7 +28,6 @@ fn sole_always_value(children: &[Child], ast: &ParsedFile, table: &StringTable) 
     found
 }
 
-/// Run the HOI4-specific cleanup hints over a whole file.
 pub fn validate_hoi4(
     ast: &ParsedFile,
     _ruleset: &cwtools_rules::rules_types::RuleSet,
@@ -49,11 +35,6 @@ pub fn validate_hoi4(
     file_path: &crate::FilePath,
     errors: &mut Vec<ValidationError>,
 ) {
-    // Fields whose body `{ always = <bool> }` matches the game default (so the
-    // field is a no-op) -> the default the `always` value must equal. Listed
-    // explicitly: an idea/spirit's allowed_civil_war defaults to "no". Interned
-    // once, so the walk compares token ids instead of pulling every block's key
-    // out of the string table.
     let defaults = [(table.intern("allowed_civil_war").lower, false)];
 
     walk_blocks(&ast.root_children, ast, &mut |block| {
@@ -62,9 +43,6 @@ pub fn validate_hoi4(
         };
         if sole_always_value(block.children, ast, table) == Some(default) {
             let key = block.key_string_lower(table);
-            // Fix: delete the whole redundant `key = { always = <default> }`
-            // field. `block.range` spans the leaf; its end lands at the start of
-            // the next token, so the line (and its newline) go with it.
             let fix = SuggestedFix::delete(
                 cwtools_i18n::format(cwtools_i18n::Key::ActionRemoveRedundant, &[&key]),
                 block.range,
@@ -107,14 +85,12 @@ mod tests {
 
     #[test]
     fn ignores_non_default_value() {
-        // always = yes is not the default for allowed_civil_war, so not redundant.
         let errors = run("my_idea = {\n allowed_civil_war = { always = yes }\n}\n");
         assert!(errors.is_empty());
     }
 
     #[test]
     fn ignores_real_trigger_body() {
-        // A real trigger (not a bare always) does work — leave it alone.
         let errors = run("my_idea = {\n allowed_civil_war = { has_war = no }\n}\n");
         assert!(errors.is_empty());
     }
@@ -128,7 +104,6 @@ mod tests {
 
     #[test]
     fn ignores_unlisted_fields() {
-        // always = no on an unlisted field is not flagged (e.g. event guard).
         let errors = run("country_event = {\n trigger = { always = no }\n}\n");
         assert!(errors.is_empty());
     }

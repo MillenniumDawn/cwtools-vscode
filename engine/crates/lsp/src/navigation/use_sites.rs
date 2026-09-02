@@ -8,18 +8,6 @@ use crate::paths::logical_path_from_uri;
 
 use super::unquote;
 
-/// Scan all documents indexed in `info` (whose text is in `docs`) for leaves
-/// whose value equals `instance_name` and whose rule context is a TypeField
-/// for `type_name`.
-///
-/// Returns a list of (file_uri, SourceLocation) use-sites.
-///
-/// Implementation: walks every leaf in every indexed file's AST.  For each
-/// leaf whose value equals the target name, `is_type_ref_leaf` classifies the
-/// key against the ruleset; matches are recorded as use-sites.
-///
-/// This is O(files × leaves) but runs only on demand (find-references / rename)
-/// so is acceptable for mod-sized workspaces.
 pub(crate) fn scan_use_sites(
     type_name: &str,
     instance_name: &str,
@@ -55,11 +43,7 @@ pub(crate) fn scan_use_sites(
     results
 }
 
-/// Recursively walk children and record leaves whose value classifies as a
-/// TypeRef for the specified type+name.
-/// What [`scan_ast_for_type_ref`] is looking for: the reference target plus the
 /// rules/table/path needed to classify a candidate. Invariant across the walk of
-/// one file, so it is threaded by reference through the recursion.
 struct TypeRefSearch<'a> {
     type_name: &'a str,
     instance_name: &'a str,
@@ -85,8 +69,6 @@ fn scan_ast_for_type_ref(
         table,
     } = search;
 
-    // Only keyed leaves are classified; LeafValue type refs would need
-    // parent-context classification, which this shallow walk doesn't do.
     for child in children {
         let Child::Leaf(idx) = child else { continue };
         let leaf = &arena.leaves[*idx as usize];
@@ -106,16 +88,12 @@ fn scan_ast_for_type_ref(
                 },
             ));
         }
-        // Recurse into clause values
         if let Value::Clause(ch) = &leaf.value {
             scan_ast_for_type_ref(ch, arena, search, out);
         }
     }
 }
 
-/// Check if a leaf with key `leaf_key` is a TypeField reference to `type_name`.
-/// Uses the ruleset's depth-one leaf-key lookup when available. Hand-built
-/// rulesets that have not been reindexed retain the direct root-rule scan.
 pub(crate) fn is_type_ref_leaf(
     ruleset: &RuleSet,
     leaf_key: &str,
@@ -141,8 +119,6 @@ pub(crate) fn is_type_ref_leaf(
                                     logical_path,
                                 )
                             })
-                            // Preserve the legacy scan: a TypeRule without a
-                            // matching TypeDefinition has no path gate.
                             .unwrap_or(true),
                     }
                 })
@@ -156,7 +132,6 @@ pub(crate) fn is_type_ref_leaf(
             RootRule::SingleAliasRule(n, r) => (Some(n.as_str()), r),
         };
 
-        // For TypeRules, check path filter
         if let RootRule::TypeRule(..) = root_rule
             && let Some(name) = rule_type_name
             && let Some(&idx) = ruleset.type_by_name().get(name)
@@ -277,7 +252,6 @@ mod tests {
     #[test]
     fn test_is_type_ref_leaf() {
         let mut rs = bool_enum_ruleset();
-        // Add a TypeRule with a leaf that references type "my_type"
         rs.root_rules.push(RootRule::TypeRule(
             "owner_type".to_string(),
             (
@@ -299,16 +273,13 @@ mod tests {
         ));
         rs.reindex();
 
-        // "base" field referencing "my_type" should be recognized
         assert!(is_type_ref_leaf(&rs, "base", "my_type", "events/test.txt"));
-        // "base" field referencing a different type should not match
         assert!(!is_type_ref_leaf(
             &rs,
             "base",
             "other_type",
             "events/test.txt"
         ));
-        // unrelated field should not match
         assert!(!is_type_ref_leaf(
             &rs,
             "unrelated",
@@ -320,12 +291,10 @@ mod tests {
     #[test]
     fn test_scan_use_sites() {
         let table = StringTable::new();
-        // Nested: foo node containing a leaf "base = my_instance"
         let source = "foo = { base = my_instance }\n";
         let parsed = parse_string(source, &table);
 
         let mut rs = bool_enum_ruleset();
-        // Use an AliasRule (not path-filtered) that contains base -> TypeField(my_type)
         rs.root_rules.push(RootRule::AliasRule(
             "effect:use_type".to_string(),
             (

@@ -1,10 +1,3 @@
-//! `textDocument/documentLink`: filepath/icon leaves render as clickable
-//! links. Leaves are found by the same rule-matched walk semantic tokens use
-//! (`block_rules_for` + matched-rule descent), so only fields the ruleset
-//! types as `filepath[..]` / `icon[..]` produce links; targets are probed
-//! against the workspace root then the vanilla install, and only a file that
-//! exists inside one of them links.
-
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
@@ -19,12 +12,8 @@ use crate::lines::DocLines;
 use crate::navigation::{unquote, value_col_in_line, value_start_after_eq};
 use crate::semantic::{block_rules_for, node_bodies, valueclause_bodies};
 
-/// Upper bound on emitted links per file, so a pathological file can't turn
-/// one request into thousands of filesystem stats.
 const MAX_LINKS: usize = 200;
 
-/// One filepath/icon leaf found by the walk: where its key sits (1-based
-/// line, char col), the raw leaf value, and the game-relative path it names.
 struct LinkCandidate {
     key_line: u32,
     key_col: u16,
@@ -70,8 +59,6 @@ impl Backend {
             return Ok(None);
         };
 
-        // `Prepared` borrows the index guard, so the walk happens inside this
-        // scope; probing runs after the guards drop.
         let candidates = {
             let info = self.state.info_service.read();
             let inline_guard = self.state.inline_scripts.read();
@@ -100,8 +87,6 @@ impl Backend {
             out
         };
 
-        // Resolve each candidate's value token span from text and probe the
-        // workspace root, then vanilla, for the referenced file.
         let roots = self.search_roots();
         let lines = DocLines::new(&text, encoding);
         let fallback = &params.text_document.uri;
@@ -117,8 +102,6 @@ impl Backend {
                 continue;
             };
             let rel = std::path::Path::new(c.rel_path.trim_start_matches(['/', '\\']));
-            // Async, and contained before it is probed: a link request must not
-            // block the runtime on a sync filesystem syscall, and a leaf value
             // is mod content that must not reach outside the roots (#176).
             let Some(target) = crate::access::contained_search_path(&roots, rel).await else {
                 continue;
@@ -142,7 +125,6 @@ impl Backend {
 }
 
 /// The invariants of one file's walk, threaded by reference through the
-/// recursion (mirrors semantic.rs's `Ctx`/`RuleCtx`, minus token state).
 struct LinkWalk<'a> {
     ast: &'a ParsedFile,
     table: &'a StringTable,
@@ -152,10 +134,6 @@ struct LinkWalk<'a> {
 }
 
 impl LinkWalk<'_> {
-    /// Walk `children`, recording every String-valued leaf whose matched rule
-    /// right-hand side is a filepath or icon field. Rule descent mirrors
-    /// semantic tokens: one bootstrap per top-level entity, matched `NodeRule`
-    /// bodies below.
     fn collect(
         &self,
         children: &[Child],
@@ -229,17 +207,12 @@ impl LinkWalk<'_> {
     }
 }
 
-/// The game-relative path a `filepath[prefix,ext]` field's `value` references:
-/// the configured extension is appended unless already present, the prefix
-/// prepended unless the value already starts with it (mirrors the CW113
-/// existence check).
 fn filepath_link_candidate(
     prefix: Option<&str>,
     extension: Option<&str>,
     value: &str,
 ) -> Option<String> {
     let value = value.trim();
-    // Dynamic / templated paths can't resolve statically.
     if value.is_empty() || value.contains('$') || value.contains('[') || value.contains('<') {
         return None;
     }
@@ -264,8 +237,6 @@ fn filepath_link_candidate(
     }
 }
 
-/// The game-relative path an `icon[folder]` field's `value` references:
-/// `folder/value.dds`.
 fn icon_link_candidate(folder: &str, value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() || value.contains('$') || value.contains('[') || value.contains('<') {
@@ -284,29 +255,22 @@ mod tests {
             filepath_link_candidate(Some("gfx/"), Some(".dds"), "pic"),
             Some("gfx/pic.dds".to_string())
         );
-        // Extension already present: not doubled.
         assert_eq!(
             filepath_link_candidate(Some("gfx/"), Some(".dds"), "pic.dds"),
             Some("gfx/pic.dds".to_string())
         );
-        // Value already carries the prefix: not doubled.
         assert_eq!(
             filepath_link_candidate(Some("gfx/"), Some(".dds"), "gfx/pic.dds"),
             Some("gfx/pic.dds".to_string())
         );
-        // Bare filepath field: the value is the path.
         assert_eq!(
             filepath_link_candidate(None, None, "gfx/pic.dds"),
             Some("gfx/pic.dds".to_string())
         );
-        // Dynamic/templated paths can't resolve statically.
         assert_eq!(filepath_link_candidate(None, None, "gfx/$NAME$.dds"), None);
         assert_eq!(filepath_link_candidate(None, None, ""), None);
     }
 
-    /// The probe the request runs on each candidate: the same trim and
-    /// containment call `document_link_impl` makes, so a leaf value that climbs
-    /// out of the roots links to nothing instead of reporting the file exists
     /// (#176).
     #[tokio::test]
     async fn a_candidate_that_climbs_out_of_the_roots_links_to_nothing() {

@@ -1,13 +1,3 @@
-//! Read-only loc-key index consumed by config validation.
-//!
-//! Built once per validation run from a [`LocService`], it answers the
-//! questions the config-side `LocalisationField` check needs:
-//! * does this key exist in any language? (synced=false)
-//! * which languages-with-data are missing this key? (synced=true)
-//! * what is the parsed loc entry for this key? (scope-aware command checks)
-//!
-//! All keys are stored lowercased to match F#'s case-insensitive comparison.
-
 use crate::commands::{Lang, LocEntry};
 use crate::service::LocService;
 use rustc_hash::{FxHashMap, FxHashSet};

@@ -1,10 +1,3 @@
-//! Reprint Paradox script from a parsed AST.
-//!
-//! Whitespace (indent, trailing spaces, the final newline) is produced here, not
-//! by a second pass. Scalar tokens are copied from the original source so dates,
-//! floats, quotes and `rgb`/`hsv` prefixes survive. A file with parse errors
-//! yields no edits.
-
 use crate::ast::{Arena, Child, ParsedFile, SourcePos, SourceRange, Value};
 use crate::fix::{SpanEdit, line_start_bytes, plan_file_edits, pos_to_byte};
 use crate::parser::parse_string;
@@ -36,7 +29,6 @@ impl Default for FormatOptions {
 }
 
 impl FormatOptions {
-    /// Overlay the editor's `FormattingOptions` on workspace/CLI defaults.
     pub fn with_editor(mut self, tab_size: u32, insert_spaces: bool) -> Self {
         self.indent_style = if insert_spaces {
             IndentStyle::Space
@@ -55,7 +47,6 @@ impl FormatOptions {
     }
 }
 
-/// Reprint `input`. `None` when the parser recorded an error.
 pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Option<String> {
     let bom = input.starts_with('\u{FEFF}');
     let body = input.strip_prefix('\u{FEFF}').unwrap_or(input);
@@ -77,7 +68,6 @@ pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Op
     Some(printed)
 }
 
-/// Whole-file `SpanEdit`s, empty when the file is already formatted or broken.
 pub fn format_edits(input: &str, table: &StringTable, opts: &FormatOptions) -> Vec<SpanEdit> {
     let Some(formatted) = format_text(input, table, opts) else {
         return Vec::new();
@@ -89,8 +79,6 @@ pub fn format_edits(input: &str, table: &StringTable, opts: &FormatOptions) -> V
     kept
 }
 
-/// Reprint the statements that overlap `range`. Empty when nothing overlaps,
-/// the file is already formatted in that span, or the parser recorded an error.
 pub fn format_range_edits(
     input: &str,
     table: &StringTable,
@@ -141,7 +129,6 @@ pub fn format_range_edits(
         return Vec::new();
     }
     // Positions were measured on the BOM-stripped body. A leading U+FEFF is
-    // one column on line 1 of `input`, so line-1 cols shift by one.
     let (kept, _) = plan_file_edits(
         input,
         vec![(
@@ -732,8 +719,6 @@ mod tests {
 
     #[test]
     fn glued_greater_equal_is_tokenized_as_key_then_equals() {
-        // `>` is a key char, so `a>=1` is key `a>` plus `=`. Reprinting must
-        // follow that AST rather than invent a `>=` the parser did not see.
         assert_eq!(fmt("a>=1\n"), "a> = 1\n");
     }
 

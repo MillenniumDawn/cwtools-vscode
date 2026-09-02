@@ -1,10 +1,3 @@
-//! Scope-aware localisation command validation.
-//!
-//! Validates chains like `[THIS.Owner.GetName]` by folding through the game's
-//! `ScopeContext`.  Emits `LocCommandWrongScope` or `LocCommandChainEndsInScope`
-//! when a chain is invalid.  Unknown commands are accepted leniently so missing
-//! entries don't produce false positives.
-
 use crate::commands::LocEntry;
 use crate::loc_string::JominiCommand;
 use cwtools_game::constants::Game as EngineGame;
@@ -14,93 +7,37 @@ use rustc_hash::FxHashSet;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-// ── Public types ──────────────────────────────────────────────────────────────
-
-/// A diagnostic produced by `validate_loc_commands`.
+/// Diagnostic from loc command validation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LocCommandDiagnostic {
-    /// A scope-change link was used from an incompatible scope.
-    ///
-    /// Mirrors F# `LocContextResult.WrongScope`.
     WrongScope {
-        /// The command segment that triggered the error.
         command: String,
-        /// Numeric ID of the current scope at the point of failure.
         current_scope: u32,
-        /// Numeric IDs of the scopes the command is valid in.
         expected_scopes: Vec<u32>,
     },
-    /// The chain ended without reaching a terminal getter command.
-    ///
-    /// Mirrors F#'s "chain ends in scope rather than terminal command" check.
     ChainEndsInScope {
-        /// Full command string that ended without a getter.
         command: String,
     },
-    /// The command was not found in the scope registry at all.
-    ///
-    /// Mirrors F# `LocNotFound` / CW226 `InvalidLocCommand`.
-    /// Only emitted when a scope registry is present (config-driven mode);
-    /// without one the validator remains fully lenient to avoid false positives.
     NotFound {
-        /// The unrecognised command segment.
         command: String,
     },
-    /// A `[!name]` call names no indexed scripted-GUI callback.
     ScriptedGuiNotFound {
-        /// The callback name without the `!` marker.
         callback: String,
     },
 }
 
-/// Whether a chain segment names a variable the project defines.
-///
-/// The variable index sits above this crate, so the caller supplies the probe.
-/// It is handed the segment with its `|format` suffix already stripped; the
-/// caller's own normalization (`@` concatenation, `?`/`^` selectors, case)
-/// applies on top. `Sync` because both the per-file validation pass and the
-/// standalone loc lint fan out over rayon holding a `&LocScopeData`.
-// The variable, scripted-loc, and scripted-GUI registries share one lookup shape.
+// Sync because loc validation fans out over rayon holding &LocScopeData.
 pub type ScriptedVariables<'a> = &'a (dyn Fn(&str) -> bool + Sync);
 
-/// Per-game static data needed for loc-command validation.
-///
-/// The caller constructs this from their game configuration and passes it to
-/// `validate_loc_commands`.  Using a struct keeps the function signature
-/// stable while the data grows.
 pub struct LocScopeData<'a> {
-    /// Game variant (controls which scope links are loaded).
     pub game: Option<EngineGame>,
-    /// Terminal getter commands accepted for this game. Lowercased.
-    ///
-    /// If this is empty every unknown command is accepted (fully lenient).
-    /// If non-empty, any unknown final segment not in this list will produce
-    /// a `ChainEndsInScope` diagnostic.
-    ///
-    /// Borrow the ruleset's own set where one is alive (the per-reference check
-    /// in `validate` builds this struct tens of thousands of times a run); own it
-    /// where the ruleset is not, as in the standalone `loc` lint.
     pub terminal_commands: Cow<'a, FxHashSet<String>>,
-    /// Whether `?variable` syntax is accepted (HOI4 / Stellaris).
     pub question_mark_variable: bool,
-    /// Whether `parameter:xxx` references are accepted.
     pub parameter_variables: bool,
-    /// Config-driven scope/link registry. When set, the loc scope engine uses it
-    /// (shared with the validation path) instead of the hardcoded per-game table.
     pub registry: Option<Arc<ScopeRegistry>>,
-    /// Scripted-variable registry, consulted before CW226 fires on an unknown
-    /// final segment. `None` keeps every multi-segment chain lenient, which is
-    /// what a run with no variable index gets.
+    // None keeps chains lenient (#348): no data cannot judge typo.
     pub scripted_variables: Option<ScriptedVariables<'a>>,
-    /// Scripted-localisation registry, consulted alongside terminal commands
-    /// before CW226 fires. Mirrors `scripted_variables` but for the final
-    /// tail of a command chain (`AST_GetNavyName` etc). `None` means the run
-    /// has no scripted-localisation data at all, which leaves every unknown
-    /// tail lenient: nothing can tell a scripted localisation from a typo, and
-    /// calling them all typos is what #348 was.
     pub scripted_locs: Option<ScriptedVariables<'a>>,
-    /// Scripted-GUI callback registry for `[!name]` calls. `None` leaves those
-    /// calls lenient until workspace or vanilla callback data is available.
     pub scripted_guis: Option<ScriptedVariables<'a>>,
 }
 
