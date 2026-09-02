@@ -55,3 +55,8 @@ def stage_release_binaries() -> ModuleType:
 @pytest.fixture(scope="session")
 def sync_paradox_syntax() -> ModuleType:
     return _load("sync_paradox_syntax")
+
+
+@pytest.fixture(scope="session")
+def workspace_manifest() -> ModuleType:
+    return _load("workspace_manifest")

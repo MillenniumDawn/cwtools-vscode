@@ -5,6 +5,7 @@
 * Issue templates now request reproduction steps, environment details, rules
   revision, and server logs for extension bugs, while maintenance issues use
   the `Task` type. (#629)
+* Game detection no longer exposes an unused vanilla-folder flag. (#631)
 * The extension exports `deactivate()`, which stops the language client. VS Code
   awaits that, unlike the disposal of `context.subscriptions`, so the LSP
   shutdown/exit handshake now finishes and the server exits on its own instead
@@ -27,6 +28,8 @@
 * CI now runs the network-free `rules-sync` host label after staging the server;
   the weekly rules-pin gate builds that server and runs the same suite only when
   a pin changes. (#521)
+* The workspace manifest CI gate now has focused tests for its checks and
+  setup failure paths using test-owned files and mocked tools. (#632)
 * `scripts/guard.py` has end-to-end tests for clean, drift, bless, and setup
   failure paths using a stub validator and test-owned files. (#516)
 * Host tests now monitor the running extension's LSP output, reject forbidden
@@ -92,6 +95,8 @@
 
 #### Engine
 
+* CW268 quote fixes skip unrepresentable ranges, and LSP position conversion
+  clamps columns to the parser's `u16` limit. (#630)
 * The per-reference localisation check now borrows the ruleset's loc-command set
   instead of deep-cloning it for every loc-bearing field, so a full-mod run stops
   paying ~86 allocations and a hash-set build per reference. (#548)
