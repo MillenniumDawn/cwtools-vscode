@@ -42,6 +42,7 @@ def test_webview_bundle_is_browser_iife() -> None:
 def test_dev_and_watch_flags() -> None:
     webview = " ".join(esbuild.webview_args(watch=True, dev=True))
     assert 'process.env.NODE_ENV="development"' in webview
+    assert 'window.process = { env: { NODE_ENV: "development" } };' in webview
     assert "--watch" in webview
     assert "--watch" in " ".join(esbuild.extension_args(watch=True))
 
