@@ -1,5 +1,4 @@
 import * as os from 'os';
-import * as path from 'path';
 import type { Uri } from 'vscode';
 import { workspace, RelativePattern } from 'vscode';
 import { access } from 'fs/promises';
@@ -40,15 +39,13 @@ async function detectLanguageId(): Promise<string | null> {
 
 export interface GameDetection {
 	languageId: string;
-	isVanillaFolder: boolean;
 }
 
 export async function detectGameAndVanilla(): Promise<GameDetection> {
 	let languageId = (await detectLanguageId()) ?? "paradox";
 
-	// Only the detected game's exe matters for the vanilla check. Once folder
-	// hints pin a specific game we don't need to scan the workspace for the
-	// other eight exes; the generic "paradox" case still checks all of them.
+	// Once folder hints pin a specific game we don't need to scan the workspace
+	// for the other exes; the generic "paradox" case still checks all of them.
 	const gamesToCheck = languageId === 'paradox'
 		? GAMES
 		: GAMES.filter((g) => g.id === languageId);
@@ -57,22 +54,12 @@ export async function detectGameAndVanilla(): Promise<GameDetection> {
 	);
 	const results = await Promise.all(promises);
 
-	let isVanillaFolder = false;
 	for (let i = 0; i < results.length; i++) {
 		const { id } = gamesToCheck[i];
 		if (results[i].length > 0 && (languageId === "paradox" || languageId === id)) {
-			isVanillaFolder = true;
 			languageId = id;
 		}
 	}
 
-	if (
-		workspace.workspaceFolders &&
-		workspace.workspaceFolders.length > 0 &&
-		path.basename(workspace.workspaceFolders[0].uri.fsPath) === "game"
-	) {
-		isVanillaFolder = true;
-	}
-
-	return { languageId, isVanillaFolder };
+	return { languageId };
 }

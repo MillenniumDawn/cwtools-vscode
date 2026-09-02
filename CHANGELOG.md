@@ -2,6 +2,7 @@
 
 #### Extension
 
+* Game detection no longer exposes an unused vanilla-folder flag. (#631)
 * The extension exports `deactivate()`, which stops the language client. VS Code
   awaits that, unlike the disposal of `context.subscriptions`, so the LSP
   shutdown/exit handshake now finishes and the server exits on its own instead
