@@ -2,6 +2,8 @@
 
 #### Extension
 
+* Development webview bundles now expose a development `process.env.NODE_ENV`.
+  (#583)
 * Issue templates now request reproduction steps, environment details, rules
   revision, and server logs for extension bugs, while maintenance issues use
   the `Task` type. (#629)
