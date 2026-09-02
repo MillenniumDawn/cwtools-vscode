@@ -2,6 +2,9 @@
 
 #### Extension
 
+* Issue templates now request reproduction steps, environment details, rules
+  revision, and server logs for extension bugs, while maintenance issues use
+  the `Task` type. (#629)
 * The extension exports `deactivate()`, which stops the language client. VS Code
   awaits that, unlike the disposal of `context.subscriptions`, so the LSP
   shutdown/exit handshake now finishes and the server exits on its own instead
