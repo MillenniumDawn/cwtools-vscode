@@ -413,11 +413,11 @@ fn read_colour(pos: SourceRange, raw_key: &str, lines: &[&str]) -> Option<FoundC
                             range: SourceRange {
                                 start: cwtools_parser::ast::SourcePos {
                                     line: sl as u32 + 1,
-                                    col: sc as u16,
+                                    col: sc.min(u16::MAX as usize) as u16,
                                 },
                                 end: cwtools_parser::ast::SourcePos {
                                     line: line_no as u32 + 1,
-                                    col: col as u16 + 1,
+                                    col: col.saturating_add(1).min(u16::MAX as usize) as u16,
                                 },
                             },
                             literal,
@@ -843,6 +843,37 @@ mod tests {
         assert_eq!(found.range.start.line, 2);
         assert_eq!(found.range.end.line, 4);
         assert_eq!(found.literal.channels, [51.0, 102.0, 153.0]);
+    }
+
+    #[test]
+    fn a_literal_beyond_the_parser_column_limit_has_a_valid_range() {
+        let text = format!(
+            "c = {{\ncolor ={}{{ 1 0 0 }}\n}}\n",
+            " ".repeat(u16::MAX as usize)
+        );
+        let found = find(&text, "color");
+        assert_eq!(found.range.start.col, u16::MAX);
+        assert_eq!(found.range.end.col, u16::MAX);
+        assert!(found.range.start.col <= found.range.end.col);
+    }
+
+    #[test]
+    fn an_end_column_exactly_at_the_u16_limit_clamps_instead_of_overflowing() {
+        // Puts the closing brace at char 65,535, where `col as u16 + 1` overflowed.
+        let text = format!(
+            "c = {{\ncolor ={}{{ 1 0 0 }}\n}}\n",
+            " ".repeat(u16::MAX as usize - "color = { 1 0 0".len())
+        );
+        let found = find(&text, "color");
+        assert_eq!(found.range.start.col, 65_527, "just past `color = `");
+        assert_eq!(found.range.end.col, u16::MAX);
+        let lines: Vec<&str> = text.lines().collect();
+        let range = to_lsp_range(found.range, &lines, &PositionEncodingKind::UTF16);
+        assert_eq!(range.end.character, u16::MAX as u32);
+        assert!(
+            parse_literal(&text_in_range(&text, range, &PositionEncodingKind::UTF16)).is_none(),
+            "truncated range reads back as no literal, so the picker rewrites nothing"
+        );
     }
 
     // ── Reading a range back out of the document ─────────────────────────────
