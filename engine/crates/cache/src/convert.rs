@@ -6,15 +6,11 @@ use cwtools_parser::ast::{
 use cwtools_parser::parser::MAX_CLAUSE_DEPTH;
 use cwtools_string_table::string_table::{StringResolver, StringTable, StringTokens};
 
-/// Deepest clause nesting an archive the parser wrote can hold: the
 /// [`MAX_CLAUSE_DEPTH`] levels it descends into, plus the empty clause it leaves
-/// behind in place of the one it refuses.
 const MAX_CACHED_CLAUSE_DEPTH: u32 = MAX_CLAUSE_DEPTH + 1;
 
-/// Depth of a node the walk has not settled yet.
 const UNRESOLVED_DEPTH: u32 = u32::MAX;
 
-/// Convert an arena AST (with StringTable IDs) into a self-contained CachedFile.
 pub fn arena_to_cached(
     arena: &Arena,
     root_children: &[Child],
@@ -37,7 +33,6 @@ pub fn arena_to_cached(
     })
 }
 
-/// Convert recovered parse errors into their self-contained cache form.
 pub fn errors_to_cached(errors: &[ParseError]) -> CachedErrors {
     CachedErrors {
         errors: errors
@@ -49,7 +44,6 @@ pub fn errors_to_cached(errors: &[ParseError]) -> CachedErrors {
     }
 }
 
-/// Rebuild recovered parse errors from their cache form.
 pub fn cached_errors_to_parse(cached: CachedErrors) -> Vec<ParseError> {
     cached
         .errors
@@ -59,19 +53,7 @@ pub fn cached_errors_to_parse(cached: CachedErrors) -> Vec<ParseError> {
 }
 
 /// Rebuild an arena AST from the rkyv archived view, interning strings straight
-/// out of the mapped buffer. After validating child indices, collect every
-/// string in traversal order (leaves, then leaf_values), batch-intern without
 /// the per-string shared-lock probe via
-/// [`StringTable::intern_batch`](cwtools_string_table::string_table::StringTable::intern_batch),
-/// then re-walk the nodes drawing the resulting tokens in the same order. The
-/// token assignment is identical to per-string interning.
-///
-/// The archived child references are checked before any strings are collected
-/// or interned: in range (see [`validate_archived_child_bounds`]) and nested no
-/// deeper than the parser goes (see [`validate_archived_clause_depth`]). A
-/// corrupted or hand-built cache yields a [`CacheError`] so the caller's
-/// miss/re-parse fallback engages rather than a panic or a stack overflow deep
-/// inside a downstream consumer.
 pub fn archived_to_arena(
     cached: &ArchivedCachedFile,
     string_table: &StringTable,
@@ -139,21 +121,6 @@ pub fn archived_to_arena(
     Ok((arena, root))
 }
 
-/// Reject a cache whose child references fall outside the archived arena vectors
-/// or run backwards through them. Downstream consumers index `arena.leaves[i]`
-/// (see [`Arena::keyed_clause`]) with no bounds checks, so a corrupted/truncated
-/// cache would panic far from the load site. This runs once at the load boundary
-/// before string interning; every child list is visited exactly once (`root` plus
-/// each node's `ArchivedCachedValue::Clause` children).
-///
-/// The parser pushes a node only once the children of its clause are in the
-/// arena, so in any archive it wrote a clause child taken from the same vector as
-/// its owner has the lower index. Enforcing that rules out the clause that holds
-/// itself, which the recursive walks in `cwtools_index::collect`,
-/// `cwtools_lsp::documentlink` and `cwtools_validation::position` would follow
-/// forever. It says nothing about a cycle that crosses the two vectors (a leaf
-/// holding a leaf-value that holds the leaf again), which has no ordering to
-/// violate; [`validate_archived_clause_depth`] is what stops that one.
 fn validate_archived_child_bounds(cached: &ArchivedCachedFile) -> Result<(), CacheError> {
     let leaf_count = cached.leaves.len();
     let leaf_value_count = cached.leaf_values.len();
@@ -191,8 +158,6 @@ fn validate_archived_child_bounds(cached: &ArchivedCachedFile) -> Result<(), Cac
     Ok(())
 }
 
-/// Which arena slot owns the clause a child list belongs to, so the post-order
-/// index ordering can be applied to the children drawn from the same vector.
 #[derive(Clone, Copy)]
 enum ClauseOwner {
     Root,
@@ -237,16 +202,6 @@ fn check_archived_child_list(
     Ok(())
 }
 
-/// Reject a cache whose clause nesting runs deeper than the parser could have
-/// written it, and with it the reference cycles [`validate_archived_child_bounds`]
-/// cannot see. The recursive AST walks downstream carry no depth counter of their
-/// own, and a stack overflow aborts the process rather than unwinding, so a
-/// hand-built chain 100k clauses deep has to die here instead of taking the
-/// server down on a cache hit.
-///
-/// One pass over the arena: each node's depth is settled once and memoized, so a
-/// subtree referenced from several places costs a single visit. A cycle never
-/// settles, so it grows the walk stack until the limit turns it away.
 fn validate_archived_clause_depth(cached: &ArchivedCachedFile) -> Result<(), CacheError> {
     let mut depths = ClauseDepths {
         leaves: vec![UNRESOLVED_DEPTH; cached.leaves.len()],
@@ -290,7 +245,6 @@ fn validate_archived_clause_depth(cached: &ArchivedCachedFile) -> Result<(), Cac
                 }
             };
             let settled = depths.get(child_node);
-            // A child with no clause of its own adds no nesting and needs no frame.
             let descend = settled == UNRESOLVED_DEPTH
                 && archived_clause_children(cached, child_node).is_some();
             if settled != UNRESOLVED_DEPTH {
@@ -308,15 +262,12 @@ fn validate_archived_clause_depth(cached: &ArchivedCachedFile) -> Result<(), Cac
     Ok(())
 }
 
-/// A node of the archived arena that can own a clause.
 #[derive(Clone, Copy)]
 enum ArchivedNode {
     Leaf(usize),
     LeafValue(usize),
 }
 
-/// Settled clause depth per node, indexed the way the archive is. Every index
-/// reaching this has been through [`validate_archived_child_bounds`].
 struct ClauseDepths {
     leaves: Vec<u32>,
     leaf_values: Vec<u32>,
@@ -338,8 +289,6 @@ impl ClauseDepths {
     }
 }
 
-/// One open node of the depth walk: how far through its children it is, and the
-/// deepest child settled so far.
 struct DepthFrame {
     node: ArchivedNode,
     next_child: usize,
@@ -426,15 +375,10 @@ fn archived_op_to_op(op: &ArchivedCachedOperator) -> Operator {
     }
 }
 
-// ---- helpers ----
-
 fn string_token_to_owned(token: &StringTokens, table: &StringResolver<'_>) -> String {
     table.get(token.normal).unwrap_or_default().to_string()
 }
 
-/// Draw the next pre-interned token from the batch. The batch was collected in
-/// the exact order these are consumed, so each call yields the token for the
-/// string that would have been re-interned at this point.
 fn next_token(tokens: &mut impl Iterator<Item = StringTokens>) -> StringTokens {
     tokens.next().expect("interned token underrun")
 }

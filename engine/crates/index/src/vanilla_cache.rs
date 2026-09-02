@@ -1,21 +1,4 @@
-//! Pre-generated cache of base-game ("vanilla") data.
-//!
-//! Parsing and indexing a full game install on every run is slow, so the
-//! vanilla data is built once and serialized here. Loading it resolves
-//! references into base-game content (sprites, operation_tokens, equipment, …)
-//! without re-parsing, and without validating vanilla files (which carry known
-//! base-game errors we never want to report). Shared by the CLI
-//! (`cache-vanilla` / `validate --vanilla-cache`) and the LSP server.
-//!
-//! Besides the type instances the cache also carries the vanilla loc-key sets
-//! (per language), the vanilla file-path set (for CW113 `filepath` checks) and
-//! the vanilla script-variable names, so a cache hit skips walking the install
-//! for loc and file indexing too. Vanilla loc *entries* (command chains) are
-//! NOT cached: the only consumer is the scope-aware command check on vanilla's
-//! own content, which we never validate.
-
 // zstd level, the atomic write and the bounded read/decode used by the `.cwb`
-// parse cache too.
 use cwtools_cache::io::{ZSTD_LEVEL, decode_capped, read_capped, write_atomically};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -26,83 +9,37 @@ use cwtools_rules::rules_types::{RuleSet, SkipRootKey};
 
 use crate::{SourceLocation, TypeIndex, TypeInstance};
 
-/// Magic bytes at the start of every vanilla cache file. Distinct from the
-/// `.cwb` parse cache magic (`CWB\0`) so the two can never be confused.
 const MAGIC: &[u8; 4] = b"CWV\x00";
 
-/// Filename prefix and extension of a cache file, as [`cache_file_name`] builds
-/// it and [`is_cache_file`] recognises it.
 const FILE_PREFIX: &str = "vanilla-";
 const FILE_EXT: &str = ".cwv";
 
 // v2 adds `fingerprint` (game version) so a cache can be validated against the
-// installed game and shared between users on the same version. v1 files fail the
-// version check and are treated as a cache miss (rebuilt).
 // v3 folds the ruleset shape into the fingerprint (see `combined_fingerprint`):
-// the cached instances are extracted *by the .cwt rules*, so a rules change makes
-// a same-game-version cache stale. v2 files fail the version check (rebuilt).
 // v4 switches the on-disk format from JSON to magic+version-framed zstd(rkyv)
-// and adds loc keys, file paths, and variable names. Older JSON files fail the
-// magic check and are treated as a cache miss (rebuilt).
-// v5 adds complex-enum members and value_set members (completion data).
-// v6 adds subtype-qualified membership keys (`type.subtype`) to the cached
-// instances so `<type.subtype>` references into base-game content resolve. v5
-// caches lack them, so they must rebuild (else e.g. naval equipment variants
-// referencing a vanilla archetype lose their subtype).
-// v7 carries the per-instance source file (`CachedInstance.f`) through `load`
-// into `per_type` so goto-definition / find-references into base-game content
-// land in the real vanilla file. The LSP's own writer (`save_per_type`) left
-// `f` blank in v6, so those caches must rebuild to gain the source paths.
-// v8 adds the definition's end position (`CachedInstance.el`/`ec`) so a cached
-// vanilla instance carries its full extent (`SourceLocation.end`), matching
 // live-scanned instances. v7 files lack the end fields, so the rkyv layout
-// differs and they must rebuild.
-// v9 folds `value_set[array]` names into the cached variable names (arrays are
-// variables to the engine, so `add_to_array` defines a name CW246 must accept).
-// v8 caches were written without them and would flag every vanilla array read.
-// v10 stores the cached `file_paths` in their original on-disk case (was
 // lowercased), so a case-sensitive run (--case-sensitive-files) can enforce
-// exact case against base-game files too. v9 caches, whose paths were
 // lowercased, must rebuild or a case-sensitive run would flag every vanilla
-// reference.
-// v11 adds `CachedInstance.p`, the explicit-field primary loc key (e.g. an
-// event's `title`), so cached-path hover shows the same localised title as a
-// live vanilla scan instead of falling back to a name-derived key. v10 caches
 // lack it and restore it as `None` (#141).
-// v12 adds `scripted_loc_names`, the base game's scripted-localisation names, so
-// a cached run can tell a loc command naming one from a typo. v11 caches lack
-// them, and a mod using a vanilla scripted localisation would flag CW226/CW266
 // on every use (#348).
-// v13 adds `scripted_gui_names`, the base game's scripted-GUI callback names,
 // so `[!name]` calls can resolve callbacks supplied by vanilla (#350).
 const CACHE_VERSION: u8 = 13;
 
 /// Hard caps on a `.cwv` read and on what its body may decompress to. The path
 /// comes from `--vanilla-cache` or an LSP client's `vanillaCache` (#162), so a
 /// few kilobytes of `CWV`-prefixed zstd must not be able to expand until the
-/// process dies. A cache of a full HOI4 install is 20 MiB compressed / 81 MiB
-/// decoded, so these leave several times that; going over reads as a miss and
-/// the install is re-indexed.
 const MAX_CACHE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_CACHE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 struct CachedInstance {
-    /// type name
     t: String,
-    /// instance name
     n: String,
-    /// source file (the instance's real path, so goto-into-vanilla resolves)
     f: String,
-    /// start line
     l: u32,
-    /// start column
     c: u16,
-    /// end line
     el: u32,
-    /// end column
     ec: u16,
-    /// explicit-field primary loc key (e.g. an event's `title`), if any
     p: Option<String>,
 }
 
@@ -113,63 +50,34 @@ struct VanillaCacheFile {
     /// the install that produced this fingerprint.
     fingerprint: String,
     instances: Vec<CachedInstance>,
-    /// language name (`english`, `simp_chinese`, …) -> lowercased loc keys.
     loc_keys: Vec<(String, Vec<String>)>,
-    /// Relative paths of every file under the install, in original on-disk
-    /// case (forward slashes). Lowercased into the file index on restore.
     file_paths: Vec<String>,
-    /// Script-variable names defined in vanilla (`VarIndex` form).
     var_names: Vec<String>,
-    /// Complex-enum members extracted from vanilla files (enum name -> values).
     complex_enum_values: Vec<(String, Vec<String>)>,
-    /// `value_set[...]` members written by vanilla files (namespace -> values).
     value_set_values: Vec<(String, Vec<String>)>,
-    /// Scripted-localisation names defined in vanilla (`ScriptedLocIndex` form).
     scripted_loc_names: Vec<String>,
-    /// Scripted-GUI callback names defined in vanilla (`ScriptedGuiIndex` form).
     scripted_gui_names: Vec<String>,
 }
 
-/// The non-instance half of the cache payload. Built by whoever walks the
-/// install (CLI `cache-vanilla`, the stale-rebuild paths) and stored alongside
-/// the type instances.
-///
-/// The same type comes back out of [`load`] (as [`VanillaCacheData::aux`]), so
-/// a field one side packs is a field the other side has to route somewhere: the
 /// editor cannot quietly restore a subset of what the CLI wrote (#283).
 #[derive(Clone, Debug, Default)]
 pub struct VanillaCacheAux {
-    /// language name -> lowercased loc keys
     pub loc_keys: Vec<(String, Vec<String>)>,
-    /// relative paths in original on-disk case (forward slashes)
     pub file_paths: Vec<String>,
-    /// script-variable names
     pub var_names: Vec<String>,
-    /// complex-enum members (enum name -> values)
     pub complex_enum_values: Vec<(String, Vec<String>)>,
-    /// `value_set[...]` members (namespace -> values)
     pub value_set_values: Vec<(String, Vec<String>)>,
-    /// scripted-localisation names
     pub scripted_loc_names: Vec<String>,
-    /// scripted-GUI callback names
     pub scripted_gui_names: Vec<String>,
 }
 
-/// Everything a loaded cache provides, ready to merge into a session.
 #[derive(Debug)]
 pub struct VanillaCacheData {
-    /// type name -> instances, each paired with its real source file (raw path,
-    /// the driver / `TypeIndex.map` form). Consumers that navigate convert the
-    /// path to a `file://` URI when merging into the live index.
     pub per_type: HashMap<String, Vec<(Arc<str>, TypeInstance)>>,
-    /// Everything else the writer packed, in the type it packed it as.
     pub aux: VanillaCacheAux,
 }
 
 /// A stable fingerprint of a base-game install, used to invalidate the cache
-/// when the game updates. Prefers the Paradox launcher's `rawVersion` (portable:
-/// the same across every user on that version, so a built cache can be shared),
-/// and falls back to the install directory's mtime when no version file exists.
 pub fn fingerprint(dir: &Path) -> String {
     let launcher = dir.join("launcher-settings.json");
     if let Ok(text) = std::fs::read_to_string(&launcher)
@@ -188,14 +96,11 @@ pub fn fingerprint(dir: &Path) -> String {
     {
         return format!("mtime-{}", dur.as_secs());
     }
-    // No version file and no readable mtime: hash the install path so two
-    // different unreadable installs don't collide on one "unknown" cache key.
     let h = fnv1a(dir.to_string_lossy().as_bytes(), 0xcbf2_9ce4_8422_2325u64);
     format!("unknown-{h:016x}")
 }
 
 /// FNV-1a over `bytes`, continuing from `hash`. A stable, dependency-free hash
-/// (unlike `std::hash::DefaultHasher`, whose output isn't guaranteed across Rust
 /// versions) so a cache fingerprint stays comparable across restarts/toolchains.
 fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
     const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -206,11 +111,6 @@ fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
     hash
 }
 
-/// A stable hash of the parts of the ruleset that decide *which* vanilla type
-/// instances get extracted and under *what name* (`collect_type_instances`):
-/// type name, paths, `name_field`, `skip_root_key`, `starts_with`,
-/// `type_per_file`, `key_prefix`, `type_key_filter`, `unique`, and subtype
-/// key fields. When these change, a cache built from the old rules is stale even
 /// if the game version is identical, so this is folded into the fingerprint.
 pub(crate) fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
     let skip_str = |s: &SkipRootKey| match s {
@@ -255,8 +155,6 @@ pub(crate) fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
         })
         .collect();
     parts.sort();
-    // The config's folders.cwt scopes which subdirectories get indexed, so a
-    // folder-list change must invalidate the cache like any type-shape change.
     if !ruleset.folders.is_empty() {
         let mut folders = ruleset.folders.clone();
         folders.sort();
@@ -272,18 +170,12 @@ pub(crate) fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
 
 /// The fingerprint a cache should be keyed by: the game-version fingerprint
 /// ([`fingerprint`]) combined with the ruleset-shape hash ([`ruleset_shape_hash`]).
-/// Use this for both [`save`] and the freshness comparison on [`load`].
 pub fn combined_fingerprint(dir: &Path, ruleset: &RuleSet) -> String {
     format!("{}|rs:{}", fingerprint(dir), ruleset_shape_hash(ruleset))
 }
 
 /// Filename of the cache for `game` at `fingerprint`, versioned in the name so
-/// several game versions coexist in one directory.
-///
-/// One builder, so a writer (the CLI's or the LSP's) and [`is_cache_file`] can
-/// never disagree about what a cache file is called. Both halves are sanitised:
 /// a fingerprint carries the game version verbatim, and a separator in it would
-/// otherwise write the cache somewhere else entirely.
 pub fn cache_file_name(game: &str, fingerprint: &str) -> String {
     let safe = |s: &str| -> String {
         s.chars()
@@ -303,15 +195,8 @@ pub fn cache_file_name(game: &str, fingerprint: &str) -> String {
     )
 }
 
-/// Whether `path` is one of the cache files this module writes: the
 /// [`cache_file_name`] shape, a regular file rather than a symlink or a
-/// directory, carrying the [`MAGIC`] header.
-///
-/// Reach for this before deleting one. `clearAllCaches` clears caches out of a
 /// directory an LSP client chose (#159), so it has to recognise a cache by what
-/// is in it and not by its name. A `.cwv.tmp…` left behind by a killed writer
-/// matches too — same name, same header — but one truncated before its header
-/// was written does not, and is left for its owner.
 pub fn is_cache_file(path: &Path) -> bool {
     let named_like_a_cache = path
         .file_name()
@@ -352,10 +237,7 @@ fn write_cache(
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&cache).map_err(std::io::Error::other)?;
 
     // Frame checksum on, as `.cwb` does. rkyv validates structure, not content,
-    // so a flipped byte can decompress into a different-but-valid archive and be
     // served as a cache hit. The checksum turns that into a decode error, which
-    // every consumer already degrades to a re-index. Readers need no change: a
-    // frame without one still decodes, so old `.cwv` files stay loadable and
     // CACHE_VERSION doesn't move.
     let compressed = {
         let mut encoder = zstd::stream::Encoder::new(Vec::new(), ZSTD_LEVEL)?;
@@ -366,10 +248,7 @@ fn write_cache(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // Temp-and-rename, as `.cwb` does. Writing onto the destination meant a
-    // crash, a full disk or a second writer on the same path (the LSP and the
     // CLI share a cache dir and key the file by game + fingerprint) destroyed
-    // the cache that was already there, costing a full re-index.
     write_atomically(path, |file| {
         file.write_all(MAGIC)?;
         file.write_all(&[CACHE_VERSION])?;
@@ -378,7 +257,6 @@ fn write_cache(
     Ok(count)
 }
 
-/// Serialize a vanilla type index (plus aux data) to `path`. Returns the
 /// instance count written. `fingerprint` ties the cache to a specific game
 /// version (see [`fingerprint`]).
 pub fn save(
@@ -407,9 +285,6 @@ pub fn save(
     write_cache(instances, game, fingerprint, path, aux)
 }
 
-/// As [`save`], but from a per-type instance map (the form the LSP keeps its
-/// vanilla index in). Each instance's source file is preserved so a cache round
-/// trip keeps goto-into-vanilla working.
 pub fn save_per_type(
     per_type: &HashMap<String, Vec<(Arc<str>, TypeInstance)>>,
     game: &str,
@@ -437,7 +312,6 @@ pub fn save_per_type(
 
 /// Load a vanilla cache file. Returns `(game, fingerprint, data)`; the caller
 /// compares `fingerprint` against the live install to decide whether it is
-/// fresh. Old JSON caches (pre-v4) fail the magic check and read as a miss.
 #[tracing::instrument(skip_all, fields(path = %path.display()))]
 pub fn load(path: &Path) -> std::io::Result<(String, String, VanillaCacheData)> {
     let data = read_capped(path, MAX_CACHE_FILE_BYTES)?;
@@ -515,7 +389,6 @@ mod tests {
 
     #[test]
     fn is_cache_file_rejects_a_lookalike_name() {
-        // `clearAllCaches` deletes what this says yes to, out of a directory an
         // LSP client chose (#159), so the name alone is never enough.
         let tmp = tempfile::tempdir().unwrap();
         let named_right = tmp.path().join("vanilla-holiday.cwv");
@@ -548,11 +421,6 @@ mod tests {
 
     #[test]
     fn a_save_that_cannot_land_leaves_no_temp_behind() {
-        // `save` writes through a temp file and renames (so a killed writer
-        // cannot destroy the cache that was there). The temp has to be cleaned
-        // up when the rename cannot happen, or a cache dir accumulates one
-        // `.cwv.tmp…` per failed run — which `is_cache_file` matches and
-        // `clearAllCaches` would then be responsible for.
         let tmp = tempfile::tempdir().unwrap();
         let occupied = tmp.path().join(cache_file_name("hoi4", "v1.16.4"));
         std::fs::create_dir(&occupied).unwrap();
@@ -586,7 +454,6 @@ mod tests {
 
     #[test]
     fn fingerprint_distinguishes_unreadable_installs() {
-        // Two installs with no launcher file and no readable mtime must not
         // collide on a single "unknown" cache key (#9).
         let a = fingerprint(Path::new("/nonexistent/install/alpha"));
         let b = fingerprint(Path::new("/nonexistent/install/beta"));
@@ -645,13 +512,11 @@ mod tests {
         assert_eq!(game, "hoi4");
         assert_eq!(fp, "v1.16.4");
         assert_eq!(loaded.per_type.get("spriteType").map(|v| v.len()), Some(2));
-        // The per-instance source file survives the round trip (goto-into-vanilla).
         for (uri, _) in loaded.per_type.get("spriteType").unwrap() {
             assert_eq!(uri.as_ref(), "vanilla/x.gfx");
         }
         let sprite = loaded.per_type.get("spriteType").unwrap();
         assert!(Arc::ptr_eq(&sprite[0].0, &sprite[1].0));
-        // Start AND end positions survive the round trip (v8 end plumbing).
         let by_name = |n: &str| {
             sprite
                 .iter()
@@ -664,7 +529,6 @@ mod tests {
         let b = by_name("GFX_b");
         assert_eq!((b.line, b.col, b.end), (5, 3, (9, 4)));
         // Explicit-field primary loc key survives the round trip (#141); an
-        // instance with none stays None rather than picking up a stray value.
         let primary_loc_key = |n: &str| {
             sprite
                 .iter()
@@ -692,8 +556,6 @@ mod tests {
 
     #[test]
     fn save_per_type_preserves_source_file() {
-        // The LSP writes its vanilla cache via `save_per_type`; the per-instance
-        // source path must survive save + load so a vanilla goto lands in the
         // real base-game file (the "<vanilla-cache>" sentinel bug, #62).
         let mut per: HashMap<String, Vec<(Arc<str>, TypeInstance)>> = HashMap::new();
         per.insert(
@@ -746,9 +608,7 @@ mod tests {
 
     #[test]
     fn oversized_cache_is_refused_without_reading_it() {
-        // The path comes from `--vanilla-cache` or an LSP client's
         // `vanillaCache` (#162), so an over-cap file has to read as a miss
-        // rather than as an unbounded read. Sparse, so the test costs no disk.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(cache_file_name("hoi4", "huge"));
         let mut file = std::fs::File::create(&path).unwrap();
@@ -765,9 +625,7 @@ mod tests {
     fn cache_declaring_an_over_cap_body_is_refused() {
         // Proves `load` hands `decode_capped` its own cap rather than letting
         // anything through. zstd will not close a frame that lies about its
-        // size, so the body is the prefix the encoder already emitted: enough
         // for the header check, and a truncated-frame error if the cap were not
-        // applied.
         let mut encoder = zstd::stream::Encoder::new(Vec::new(), ZSTD_LEVEL).unwrap();
         encoder
             .set_pledged_src_size(Some(MAX_CACHE_DECODED_BYTES + 1))
@@ -789,16 +647,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn character_device_is_refused() {
-        // `/dev/zero` reports length 0, so a size check alone waves it through
-        // and then reads to EOF.
         let err = load(Path::new("/dev/zero")).unwrap_err();
         assert!(err.to_string().contains("not a regular file"), "{err}");
     }
 
     #[test]
     fn stale_version_cache_is_rejected() {
-        // A cache written with the current framing but a prior version byte must
-        // fail the version check (rebuilt), never be misread under the new layout.
         let idx = TypeIndex::new();
         let path = std::env::temp_dir().join("cwtools_vanilla_cache_stale_version.cwv");
         save(&idx, "hoi4", "vfp", &path, VanillaCacheAux::default()).unwrap();
@@ -810,18 +664,6 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    // ── Corruption handling ──────────────────────────────────────────────────
-    // Everything below has to come back as an `Err`, because that is what every
-    // consumer relies on: `driver::load_fresh_vanilla_cache`, the LSP's scan and
-    // config paths and the CLI all collapse an error to a miss and re-index the
-    // install. A panic instead would take the server or CLI down over a file a
-    // crash, a full disk or a stale format left behind. The `.cwb` parse cache
-    // has the same suite (`cwtools_cache/tests/corrupt.rs`); this is the `.cwv`
-    // half, which had none.
-
-    /// A small but complete cache: two types, per-instance source files, and
-    /// every aux list populated so the body is a real payload rather than a
-    /// header and a stub.
     fn sample_cache_bytes() -> Vec<u8> {
         let mut per: HashMap<String, Vec<(Arc<str>, TypeInstance)>> = HashMap::new();
         per.insert(
@@ -872,9 +714,7 @@ mod tests {
         std::fs::read(&path).unwrap()
     }
 
-    /// Write `bytes` to a temp `.cwv` and take them through the whole load path
     /// the consumers use: the read cap, the header, the version, zstd, rkyv and
-    /// the restore into `VanillaCacheData`.
     fn load_bytes(bytes: &[u8]) -> std::io::Result<(String, String, VanillaCacheData)> {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(cache_file_name("hoi4", "corrupt"));
@@ -882,10 +722,6 @@ mod tests {
         load(&path)
     }
 
-    /// Load and reduce the restored cache to a comparable string, so a
-    /// corruption that decodes into *different* data is distinguishable from one
-    /// that reproduces the original. `per_type` is a `HashMap`, so it is sorted
-    /// here rather than trusted to iterate in a fixed order.
     fn fingerprint_bytes(bytes: &[u8]) -> Option<String> {
         use std::fmt::Write;
         let (game, fp, data) = load_bytes(bytes).ok()?;
@@ -914,7 +750,6 @@ mod tests {
         Some(out)
     }
 
-    /// Sanity anchor: the unmodified bytes every test below mutates do load.
     #[test]
     fn sample_cache_bytes_load_clean() {
         let bytes = sample_cache_bytes();
@@ -925,7 +760,6 @@ mod tests {
         assert_eq!(data.per_type.len(), 2);
     }
 
-    /// A zero-byte file is what a crash mid-write leaves behind. It must not
     /// reach zstd or rkyv at all.
     #[test]
     fn zero_byte_cache_is_a_clean_miss() {
@@ -936,7 +770,6 @@ mod tests {
         );
     }
 
-    /// Any prefix shorter than magic+version is the same crash-mid-write case.
     #[test]
     fn cache_shorter_than_magic_plus_version_is_a_clean_miss() {
         let bytes = sample_cache_bytes();
@@ -949,8 +782,6 @@ mod tests {
         }
     }
 
-    /// A single wrong magic byte is enough, and so is a body with the header
-    /// sliced off (what a pre-v4 raw file would look like).
     #[test]
     fn a_corrupted_magic_is_a_clean_miss() {
         let bytes = sample_cache_bytes();
@@ -972,8 +803,6 @@ mod tests {
     }
 
     /// The point of `CACHE_VERSION`: a cache from any other layout is refused
-    /// rather than reinterpreted under the current one. Eleven format bumps
-    /// have happened and only the immediately-previous one was covered.
     #[test]
     fn every_other_version_byte_is_a_clean_miss() {
         let bytes = sample_cache_bytes();
@@ -988,10 +817,7 @@ mod tests {
         }
     }
 
-    /// A valid header over a body that stops early: the write was interrupted
     /// after the header landed, or the disk filled up. zstd and rkyv have to
-    /// reject it — a partial cache served as a hit is a base-game index missing
-    /// whatever the truncation cut off.
     #[test]
     fn a_truncated_body_is_a_clean_miss() {
         let bytes = sample_cache_bytes();
@@ -1009,12 +835,7 @@ mod tests {
         }
     }
 
-    /// Bit rot in the compressed body. Every single-bit flip must either fail to
-    /// load or restore the cache exactly. Silently decoding into *different* data
     /// is the bad case: rkyv validates structure, not content, so a flipped
-    /// instance name or line number sails through and the editor resolves
-    /// base-game references against an index that never existed.
-    ///
     /// The zstd frame checksum is what closes that. With it off, 191 of 846 flips
     /// here restored an altered cache and were served as hits (#245).
     #[test]
@@ -1029,8 +850,6 @@ mod tests {
             for bit in [0u8, 3, 7] {
                 let mut corrupt = bytes.clone();
                 corrupt[i] ^= 1 << bit;
-                // Reaching the next line at all is the test: a panic inside the
-                // load path fails here instead of degrading to a cache miss.
                 if let Some(got) = fingerprint_bytes(&corrupt) {
                     if got == clean {
                         same += 1;
@@ -1047,9 +866,7 @@ mod tests {
             "{altered} of {attempts} bit flips restored different cache data and \
              were accepted as a cache hit"
         );
-        // A handful land in frame bits the decoder ignores and reproduce the
         // original exactly. Harmless, but if it were most of them the checksum
-        // would not be doing anything.
         assert!(
             same * 4 < attempts,
             "{same} of {attempts} bit flips round-tripped unchanged"
@@ -1080,7 +897,6 @@ mod tests {
     }
 
     /// A body that is not zstd at all: something else ended up in the cache dir
-    /// under a `.cwv` name and happened to carry the header.
     #[test]
     fn a_non_zstd_body_is_a_clean_miss() {
         let mut bytes = MAGIC.to_vec();
@@ -1089,8 +905,6 @@ mod tests {
         assert!(load_bytes(&bytes).is_err());
     }
 
-    /// A missing cache file is the ordinary cold-start miss, and has to surface
-    /// as an error the caller already handles rather than anything special.
     #[test]
     fn a_missing_cache_file_is_a_clean_miss() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1130,11 +944,9 @@ mod tests {
         let mut a = RuleSet::new();
         a.types = vec![mk("event", None), mk("tech", Some("id"))];
         let mut b = RuleSet::new();
-        // Same content, different declaration order → same hash (order-independent).
         b.types = vec![mk("tech", Some("id")), mk("event", None)];
         assert_eq!(ruleset_shape_hash(&a), ruleset_shape_hash(&b));
 
-        // A meaningful shape change (name_field) flips the hash.
         let mut c = RuleSet::new();
         c.types = vec![mk("event", Some("id")), mk("tech", Some("id"))];
         assert_ne!(ruleset_shape_hash(&a), ruleset_shape_hash(&c));

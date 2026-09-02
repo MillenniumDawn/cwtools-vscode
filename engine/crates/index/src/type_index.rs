@@ -1,6 +1,3 @@
-//! The index data structures: cross-file type-instance index plus the file-path
-//! and variable-name indexes it owns.
-
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -8,49 +5,24 @@ use std::sync::Arc;
 use crate::dynamic_values;
 use crate::{SourceLocation, dec_ref, is_subtype_key};
 
-/// A single defined instance of a CW type (e.g. one event, one technology …).
 #[derive(Debug, Clone)]
 pub struct TypeInstance {
-    /// The instance name (node key, or the value of `name_field` child).
     pub name: String,
-    /// Where the definition starts in the source file.
     pub location: SourceLocation,
     /// The loc key for the type's `## primary` localisation when it is taken from
     /// an explicit field (e.g. an event's `title = <key>`), captured here so hover
-    /// can show the localised title for a reference in another file without
-    /// re-reading the definition. `None` when the type has no primary
-    /// explicit-field localisation (name-derived keys are computed on demand).
     pub primary_loc_key: Option<String>,
     /// Loc keys this instance must provide that a `## required` localisation
     /// entry takes from a child field's value (`## required title = title`)
-    /// rather than from the instance name. Resolved here because the node body
-    /// is gone by the time CW100 runs off the index. Empty for the common case:
-    /// a type with no required explicit-field loc entry, or an instance that
-    /// omits the field.
     pub required_loc_keys: Vec<String>,
 }
 
-/// Holds all known instances for every type, aggregated across files.
-/// An index of every file path under the game roots (mod + vanilla), used to
-/// check that `filepath` references resolve (CW113). Paths are stored
-/// forward-slashed, relative to their root. Lookups are case-insensitive by
 /// default (Windows-authored mods); after [`FileIndex::set_case_sensitive`] the
-/// files are matched by exact on-disk case, so a reference that only differs
 /// from the on-disk path by case is caught for the case-sensitive filesystems
-/// (Linux/Mac). The on-disk case is collected only while `case_sensitive` is
-/// set, so the default run stores nothing extra. Cache-restored paths carry
-/// their on-disk case (the cache stores it), so they are case-checked too.
 #[derive(Debug, Clone, Default)]
 pub struct FileIndex {
-    /// Lowercased relative paths; the case-insensitive membership set.
     files: FxHashSet<String>,
-    /// Lowercased relative path -> on-disk (original) case. Populated only
-    /// while [`FileIndex::set_case_sensitive`] is true, so the default
-    /// (case-insensitive) run pays nothing extra.
     files_exact: FxHashMap<String, String>,
-    /// When true, [`FileIndex::contains`] enforces exact on-disk case for every
-    /// indexed path, and [`FileIndex::add_root`]/[`FileIndex::add_paths`] record
-    /// the original case needed to do so.
     case_sensitive: bool,
 }
 
@@ -59,7 +31,6 @@ impl FileIndex {
         Self::default()
     }
 
-    /// Walk `root` recursively and add every file's path relative to `root`.
     pub fn add_root(&mut self, root: &std::path::Path) {
         Self::walk(
             root,
@@ -106,7 +77,6 @@ impl FileIndex {
         self.files.len()
     }
 
-    /// Whether a game-relative path exists. Case-insensitive by default;
     /// case-sensitive for live-walked files after [`FileIndex::set_case_sensitive`].
     pub fn contains(&self, path: &str) -> bool {
         if self.case_sensitive {
@@ -124,8 +94,6 @@ impl FileIndex {
         NORM_BUF.with(|buf| {
             let mut norm = buf.borrow_mut();
             norm.clear();
-            // Single pass: split on both separators, drop empty segments
-            // (collapsing repeated/leading slashes), join with '/', lowercase ASCII.
             let mut first = true;
             for seg in path.trim().split(['/', '\\']).filter(|s| !s.is_empty()) {
                 if !first {
@@ -138,12 +106,7 @@ impl FileIndex {
         })
     }
 
-    /// Exact-case membership. A reference that matches a known path only
-    /// case-insensitively is treated as absent (it would fail to load on a
     /// case-sensitive filesystem). Falls back to case-insensitive membership
-    /// for a path whose on-disk case was never recorded (possible only when the
-    /// flag was turned on after the paths were added), so it isn't spuriously
-    /// flagged.
     fn contains_exact(&self, path: &str) -> bool {
         thread_local! {
             static NORM_BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
@@ -151,8 +114,6 @@ impl FileIndex {
         NORM_BUF.with(|buf| {
             let mut norm = buf.borrow_mut();
             norm.clear();
-            // Single pass: split on both separators, drop empty segments
-            // (collapsing repeated/leading slashes), join with '/'. Case kept.
             let mut first = true;
             for seg in path.trim().split(['/', '\\']).filter(|s| !s.is_empty()) {
                 if !first {
@@ -163,19 +124,12 @@ impl FileIndex {
             }
             let norm_ci = norm.to_ascii_lowercase();
             match self.files_exact.get(&norm_ci) {
-                // We know this file's true case: require an exact match.
                 Some(orig) => orig.as_str() == norm.as_str(),
-                // On-disk case never recorded: case-insensitive membership.
                 None => self.files.contains(norm_ci.as_str()),
             }
         })
     }
 
-    /// The on-disk spelling of `path`, for a reference that names an indexed
-    /// file but writes its case differently. `None` when the reference already
-    /// matches, when nothing of that name is indexed, or on a case-insensitive
-    /// run (which records no original case). Answers "then what is it called?"
-    /// for a case-mismatch CW113.
     pub fn on_disk_case(&self, path: &str) -> Option<&str> {
         let norm: String = path
             .trim()
@@ -187,8 +141,6 @@ impl FileIndex {
         (orig.as_str() != norm).then_some(orig.as_str())
     }
 
-    /// Insert a single workspace-relative path (forward slashes). Normalizes
-    /// separators and case the same way as [`add_root`] and [`add_paths`].
     pub fn insert(&mut self, path: &str) {
         let norm = path.replace('\\', "/");
         let ci = norm.to_ascii_lowercase();
@@ -198,8 +150,6 @@ impl FileIndex {
         }
     }
 
-    /// Remove a single workspace-relative path. Normalizes the same way as
-    /// [`insert`] so a watched DELETE can drop the entry `insert` added.
     pub fn remove(&mut self, path: &str) {
         let norm = path.replace('\\', "/").to_ascii_lowercase();
         self.files.remove(&norm);
@@ -208,10 +158,6 @@ impl FileIndex {
         }
     }
 
-    /// Add relative paths (the vanilla-cache restore path), each carrying its
-    /// on-disk case. Lowercased into the case-insensitive set always; recorded
-    /// into the exact-case map only while `case_sensitive` is set, so the
-    /// default run pays nothing extra.
     pub fn add_paths<I: IntoIterator<Item = String>>(&mut self, paths: I) {
         if self.case_sensitive {
             for p in paths {
@@ -228,31 +174,19 @@ impl FileIndex {
 
     /// Toggle exact-case matching. Off by default (Windows-authored mods);
     /// enable for mods that also target case-sensitive filesystems (Linux/Mac),
-    /// so a reference that only differs from the file by case is flagged. While
-    /// on, every path added records its on-disk case. Call before building the
-    /// index.
     pub fn set_case_sensitive(&mut self, case_sensitive: bool) {
         self.case_sensitive = case_sensitive;
     }
 
-    /// The lowercased relative paths, for the case-insensitive membership set.
     pub fn paths(&self) -> impl Iterator<Item = &String> {
         self.files.iter()
     }
 
-    /// The on-disk-case relative paths, for persisting to the vanilla cache so a
     /// later case-sensitive run can restore exact case. Empty unless
-    /// [`FileIndex::set_case_sensitive`] was set before the paths were added.
     pub fn paths_exact(&self) -> impl Iterator<Item = &String> {
         self.files_exact.values()
     }
 
-    /// Resolve `value` as a reference made relative to `referencing_file`'s own
-    /// directory (the engine resolves a `.asset` `file =` beside the .asset, not
-    /// under a fixed root prefix). `referencing_file` is the absolute on-disk
-    /// path; its root-relative directory is recovered as the longest path-suffix
-    /// that is itself an indexed file. Returns true when the directory-relative
-    /// `value` resolves to an indexed path.
     pub fn resolve_relative(&self, referencing_file: &str, value: &str) -> bool {
         let segs: Vec<String> = referencing_file
             .split(['/', '\\'])
@@ -262,9 +196,6 @@ impl FileIndex {
         if segs.len() < 2 {
             return false;
         }
-        // Longest suffix first: the first suffix that is an indexed file is the
-        // referencing file's own root-relative path. Everything before its
-        // directory is the (un-indexed) root prefix.
         for start in 0..segs.len() - 1 {
             let self_path = segs[start..].join("/");
             if self.files.contains(&self_path) {
@@ -274,10 +205,7 @@ impl FileIndex {
                 } else {
                     format!("{}/{}", dir.join("/"), value)
                 };
-                // `.asset`-relative resolution stays case-insensitive even in
                 // case-sensitive mode: the directory segments are recovered from
-                // the referencing file's lowercased path and can't be trusted
-                // for an exact compare.
                 return self.contains_ci(&sibling);
             }
         }
@@ -285,21 +213,9 @@ impl FileIndex {
     }
 }
 
-/// Project-wide set of defined script-variable names (every `value_set[...]`
-/// definition collected across the mod + base game), used to check that a
-/// `variable_field` reference resolves (CW246). Names are normalised to a
-/// canonical key so a definition like `morale@ROOT` and a read like
-/// `morale@GER` both resolve to `morale`. The CLI fills it during the batch
-/// index; the LSP fills it incrementally as files are indexed.
 #[derive(Debug, Clone, Default)]
 pub struct VarIndex {
-    /// Normalized variable name → how many definitions carry it. A refcount so the
-    /// LSP can drop a name on `clear_file` only when its last definition goes,
-    /// while the bulk CLI path (which never removes) just keeps incrementing.
     names: HashMap<String, usize>,
-    /// Base-game variables staged from the vanilla cache or a live walk of the
-    /// install. Distinct from `names` so a `clear_file` on a mod file that
-    /// shares a name does not strip the base-game definition, and a re-merge
     /// replaces the previous contribution instead of double-counting (#306).
     vanilla_names: FxHashSet<String>,
 }
@@ -313,7 +229,6 @@ impl VarIndex {
         self.names.is_empty() && self.vanilla_names.is_empty()
     }
 
-    /// Distinct union size; shared names counted once.
     pub fn len(&self) -> usize {
         let mut len = self.names.len();
         for v in &self.vanilla_names {
@@ -324,20 +239,13 @@ impl VarIndex {
         len
     }
 
-    /// Canonical lookup key for a raw variable token: lowercased, unquoted, the
-    /// base before any `@`-concatenation, the last `.`-segment of that base, and
     /// before any `?`/`^` selector. Mirrors F# `getVariableFromString` plus the
-    /// read-side dot-split in `changeScope`.
     pub fn normalize(raw: &str) -> String {
         let mut buf = String::new();
         Self::normalize_into(raw, &mut buf);
         buf
     }
 
-    /// Like [`normalize`](Self::normalize) but writes the canonical key into a
-    /// reusable buffer (cleared first), avoiding a per-call allocation on the hot
-    /// `contains` path (and the validation crate's loop-var check). Identifiers
-    /// are ASCII, so the lowercase fold is ASCII.
     pub fn normalize_into(raw: &str, buf: &mut String) {
         let s = raw.trim().trim_matches('"');
         let before_amp = s.split('@').next().unwrap_or(s);
@@ -354,15 +262,11 @@ impl VarIndex {
         }
     }
 
-    /// Drop one definition of a name; removes the entry when its refcount hits 0.
-    /// Used by the LSP's per-file `clear_file` so re-indexing a file refreshes its
-    /// variables instead of leaking the old set.
     pub fn remove_name(&mut self, raw: &str) {
         let n = Self::normalize(raw);
         dec_ref(&mut self.names, n.as_str());
     }
 
-    /// Whether a raw reference resolves to a known defined variable.
     pub fn contains(&self, raw: &str) -> bool {
         thread_local! {
             static NORM_BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
@@ -374,9 +278,6 @@ impl VarIndex {
         })
     }
 
-    /// Replace the base-game contribution with `names` (normalized). A re-merge
-    /// drops the previous set before inserting the fresh one, so the count does
-    /// not inflate, and a name the mod also defines survives a `clear_file` on
     /// that mod file (#306).
     pub fn set_vanilla_names(&mut self, names: Vec<String>) {
         self.vanilla_names.clear();
@@ -388,31 +289,25 @@ impl VarIndex {
         }
     }
 
-    /// Drop the base-game contribution (e.g. on `clearAllCaches`).
     pub fn clear_vanilla_names(&mut self) {
         self.vanilla_names.clear();
     }
 
-    /// Folds only `names` (workspace provenance); vanilla stays separate —
-    /// use `set_vanilla_names` for base-game.
     pub fn merge(&mut self, other: &VarIndex) {
         for (name, count) in &other.names {
             *self.names.entry(name.clone()).or_insert(0) += count;
         }
     }
 
-    /// The normalized defined names, for persisting to the vanilla cache.
     pub fn names(&self) -> impl Iterator<Item = &String> {
         self.names.keys()
     }
 
-    /// Base-game names staged via [`set_vanilla_names`](Self::set_vanilla_names).
     #[cfg(test)]
     pub(crate) fn vanilla_names_iter(&self) -> impl Iterator<Item = &String> {
         self.vanilla_names.iter()
     }
 
-    /// Distinct union of workspace + base-game names (shared filtered).
     pub(crate) fn all_names(&self) -> impl Iterator<Item = &String> {
         self.names.keys().chain(
             self.vanilla_names
@@ -422,32 +317,15 @@ impl VarIndex {
     }
 }
 
-/// Scripted-localisation names (`defined_text = { name = X }`) read straight off
-/// the files in a scripted-loc folder, not through a ruleset type.
-///
-/// The loc-command check needs to tell a scripted localisation apart from a
-/// typo, and asking the ruleset for it does not work: the HOI4 config declares
-/// `type[scripted_loc]` at Stellaris's `game/common/scripted_loc`, so nothing
-/// under HOI4's `common/scripted_localisation` is ever typed and every use of
 /// one read as an unknown command (#348). The engine already fixes that folder
-/// name elsewhere (`cwtools_validation::initial_scope_context`), so collecting
-/// by path here keeps the two agreeing.
-///
-/// Names are stored lowercased; Paradox identifiers are case-insensitive.
-/// Refcounted per file so the LSP's re-index of one file refreshes its names
-/// instead of leaking the old set, same as [`VarIndex`].
 #[derive(Debug, Clone, Default)]
 pub struct ScriptedLocIndex {
     names: FxHashMap<Arc<str>, usize>,
     per_file: FxHashMap<Arc<str>, Vec<Arc<str>>>,
-    /// Base-game names staged from the vanilla cache or a live walk. Kept apart
-    /// from `names` so a `remove_file` on a mod file sharing a name does not
-    /// strip the base-game definition (same split as [`VarIndex`]).
     vanilla_names: FxHashSet<Arc<str>>,
 }
 
 impl ScriptedLocIndex {
-    /// Replace `file_uri`'s contribution with `names`.
     pub fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
         self.remove_file(file_uri);
         if names.is_empty() {
@@ -462,7 +340,6 @@ impl ScriptedLocIndex {
         self.per_file.insert(Arc::from(file_uri), flat);
     }
 
-    /// Drop `file_uri`'s contribution (refcounted).
     pub fn remove_file(&mut self, file_uri: &str) {
         let Some(flat) = self.per_file.remove(file_uri) else {
             return;
@@ -472,8 +349,6 @@ impl ScriptedLocIndex {
         }
     }
 
-    /// Replace the base-game contribution with `names`. A re-merge drops the
-    /// previous set rather than accumulating.
     pub fn set_vanilla_names(&mut self, names: Vec<String>) {
         self.vanilla_names = names
             .into_iter()
@@ -482,8 +357,6 @@ impl ScriptedLocIndex {
             .collect();
     }
 
-    /// Whether any scripted localisation is known. `true` means the check has no
-    /// data and must stay lenient rather than call every command a typo.
     pub fn is_empty(&self) -> bool {
         self.names.is_empty() && self.vanilla_names.is_empty()
     }
@@ -493,14 +366,11 @@ impl ScriptedLocIndex {
         self.names.contains_key(lower.as_str()) || self.vanilla_names.contains(lower.as_str())
     }
 
-    /// The workspace names, for persisting to the vanilla cache.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.names.keys().map(Arc::as_ref)
     }
 }
 
-/// Scripted-GUI callback names read from direct keys in each GUI's `effects`
-/// and `triggers` containers.
 #[derive(Debug, Clone, Default)]
 pub struct ScriptedGuiIndex {
     names: FxHashMap<Arc<str>, usize>,
@@ -509,7 +379,6 @@ pub struct ScriptedGuiIndex {
 }
 
 impl ScriptedGuiIndex {
-    /// Replace `file_uri`'s contribution with `names`.
     pub fn merge_file(&mut self, file_uri: &str, names: Vec<String>) {
         self.remove_file(file_uri);
         if names.is_empty() {
@@ -524,7 +393,6 @@ impl ScriptedGuiIndex {
         self.per_file.insert(Arc::from(file_uri), flat);
     }
 
-    /// Drop `file_uri`'s contribution.
     pub fn remove_file(&mut self, file_uri: &str) {
         let Some(flat) = self.per_file.remove(file_uri) else {
             return;
@@ -534,7 +402,6 @@ impl ScriptedGuiIndex {
         }
     }
 
-    /// Replace the base-game contribution with `names`.
     pub fn set_vanilla_names(&mut self, names: Vec<String>) {
         self.vanilla_names = names
             .into_iter()
@@ -552,24 +419,17 @@ impl ScriptedGuiIndex {
         self.names.contains_key(lower.as_str()) || self.vanilla_names.contains(lower.as_str())
     }
 
-    /// The workspace names, for persisting to the vanilla cache.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.names.keys().map(Arc::as_ref)
     }
 }
 
-/// How many definitions of one instance name a type holds, split by where they
-/// came from. `total` answers "does this name exist" (`contains`); `workspace`
-/// answers "did the project define it more than once" (CW261), which a
-/// base-game definition the mod is overriding must not contribute to.
 #[derive(Debug, Default, Clone, Copy)]
 struct NameRefs {
     total: usize,
     workspace: usize,
 }
 
-/// Drop one definition of `name` from a type's name set, removing the entry
-/// once its last definition goes. The [`NameRefs`] counterpart of `dec_ref`.
 fn release_name(set: &mut FxHashMap<Arc<str>, NameRefs>, name: &str, base_game: bool) {
     if let Some(refs) = set.get_mut(name)
         && refs.release(base_game)
@@ -586,7 +446,6 @@ impl NameRefs {
         }
     }
 
-    /// Drop one definition, reporting whether the name is now gone entirely.
     fn release(&mut self, base_game: bool) -> bool {
         self.total = self.total.saturating_sub(1);
         if !base_game {
@@ -598,64 +457,17 @@ impl NameRefs {
 
 #[derive(Debug, Clone, Default)]
 pub struct TypeIndex {
-    /// type_name → Vec<(file_uri, instance)>
     pub map: FxHashMap<String, Vec<(Arc<str>, TypeInstance)>>,
-    /// lowercased instance name → how many definitions carry that name (across all
-    /// types and files). Lets `is_any_instance` be O(1) instead of scanning every
-    /// instance. A refcount so `remove_file` can drop a name only when its last
-    /// definition goes. Keyed lowercase because Paradox identifiers are
-    /// case-insensitive (same normalization as `contains`/`instance_sets`).
     name_counts: FxHashMap<Arc<str>, usize>,
-    /// type_name → (lowercased instance name → refcount). Makes `contains` an O(1)
-    /// hash lookup instead of a linear scan over every instance of the type, which
-    /// was quadratic over the corpus for high-cardinality types (state, character,
-    /// country_event). The refcount lets `remove_file` drop a name only when its
-    /// last definition in that type goes.
     instance_sets: FxHashMap<String, FxHashMap<Arc<str>, NameRefs>>,
-    /// The URIs a base-game merge contributed. Keeps the removal paths able to
-    /// tell which half of a [`NameRefs`] an instance belongs to, and stays empty
-    /// on a mod-only run.
     base_game_uris: FxHashSet<Arc<str>>,
-    /// file_uri → type_name → this file's own positions within `map[type_name]`.
-    /// Lets [`instances_in_file`](Self::instances_in_file) and
-    /// [`remove_file`](Self::remove_file) both cost O(the file's own entries)
-    /// instead of scanning a type's whole instance vec looking for this file's
-    /// matches. `remove_file` drops entries via `swap_remove`, which relocates
-    /// the vec's last element into the freed slot, so every swap repairs the
-    /// position recorded for whichever other file owned that relocated entry
-    /// (see `swap_remove_instance`). Kept in sync by every insertion (`merge`,
-    /// `merge_base_game_with_uris`) and removal (`remove_file`, `remove_files`)
-    /// path. Not serialized: the vanilla cache reloads through
-    /// `merge_base_game_with_uris`, which
-    /// rebuilds this map (same as `name_counts` / `instance_sets`).
     file_positions: FxHashMap<Arc<str>, FxHashMap<String, Vec<usize>>>,
-    /// Index of every asset/file path under the game roots, for `filepath`
-    /// reference checks (CW113). Empty unless the CLI populated it.
     pub file_index: FileIndex,
-    /// Project-wide set of defined variable names, for `variable_field`
-    /// reference checks (CW246). The CLI fills it during the batch index;
-    /// the LSP fills it incrementally via `InfoService`.
     pub var_index: VarIndex,
-    /// Project-wide set of scripted-localisation names, for the loc-command
-    /// checks (CW226/CW266). Filled by path rather than by ruleset type; see
-    /// [`ScriptedLocIndex`].
     pub scripted_loc_index: ScriptedLocIndex,
-    /// Project-wide scripted-GUI callbacks used by `[!name]` localisation calls.
     pub scripted_gui_index: ScriptedGuiIndex,
-    /// Whether this index includes vanilla (base-game) definitions. When
-    /// `false`, CW500 type-reference checks are skipped to avoid false
-    /// positives on valid vanilla cross-references. The driver sets this
-    /// to `true` after merging vanilla data.
     pub complete: bool,
-    /// Complex-enum members collected from indexed files (enum name -> values),
-    /// e.g. `equipment_stat`, `country_tags`, `idea_name`. Completion-only.
     pub complex_enum_values: dynamic_values::NamedValueIndex,
-    /// `value_set[...]` members collected from indexed files (namespace ->
-    /// values), e.g. `country_flag`, `global_flag`. Feeds completion, and also
-    /// validation: a `from_data` scope link with `data_source = value[<set>]`
-    /// makes any member of that set a scope-opening key, so dropping this from
-    /// an index the rule engine reads moves diagnostics
-    /// (`validation::rule_core::matching::is_from_data_value_set_member`).
     pub value_set_values: dynamic_values::NamedValueIndex,
 }
 
@@ -664,15 +476,10 @@ impl TypeIndex {
         Self::default()
     }
 
-    /// Return true if `type_name` has a known instance called `instance`.
-    /// Paradox script identifiers are case-insensitive, so a reference like
-    /// `LBA_AI_BEHAVIOR` resolves to the `LBA_ai_behavior` definition.
     pub fn contains(&self, type_name: &str, instance: &str) -> bool {
         let Some(names) = self.instance_sets.get(type_name) else {
             return false;
         };
-        // Borrow the key directly when it's already lowercase (the common case),
-        // only allocating a lowercase copy when it actually has uppercase bytes.
         if instance.bytes().any(|b| b.is_ascii_uppercase()) {
             let lower = instance.to_ascii_lowercase();
             names.contains_key(lower.as_str())
@@ -681,10 +488,6 @@ impl TypeIndex {
         }
     }
 
-    /// How many times the workspace defines `instance` as a `type_name`
-    /// (case-insensitive). Base-game definitions are excluded, so a mod that
-    /// redefines a base-game instance reads as an override, not a duplicate.
-    /// More than one is CW261's whole question.
     pub fn workspace_definition_count(&self, type_name: &str, instance: &str) -> usize {
         let Some(names) = self.instance_sets.get(type_name) else {
             return 0;
@@ -697,10 +500,6 @@ impl TypeIndex {
         refs.map(|r| r.workspace).unwrap_or(0)
     }
 
-    /// Return true if `name` is a known instance of ANY type. Used to recognise
-    /// scope-opening keys: HOI4 from-data scope links (links.cwt) let an instance
-    /// of a referenced type (character, state, ideology, ...) open its own scope,
-    /// e.g. `LBA_some_character = { ... }`.
     pub fn is_any_instance(&self, name: &str) -> bool {
         if name.bytes().any(|b| b.is_ascii_uppercase()) {
             let lower = name.to_ascii_lowercase();
@@ -710,15 +509,10 @@ impl TypeIndex {
         }
     }
 
-    /// All instances for a type (across all files).
     pub fn instances(&self, type_name: &str) -> &[(Arc<str>, TypeInstance)] {
         self.map.get(type_name).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
-    /// Every definition site of an instance named `name` (case-insensitive),
-    /// across all types. Used by goto-definition's fallback for dotted ids
-    /// (events, decisions) that the heuristic def index keys by node-key rather
-    /// than by the instance id. Scans the index (rare interactive path).
     pub fn instance_locations(&self, name: &str) -> Vec<(Arc<str>, SourceLocation)> {
         self.map
             .values()
@@ -729,8 +523,6 @@ impl TypeIndex {
     }
 
     /// The explicit-field primary loc key captured for `name`'s instance of
-    /// `type_name` (e.g. an event's `title` loc key), if any. Lets hover show the
-    /// localised title for a reference. Case-insensitive on the instance name.
     pub fn primary_loc_key(&self, type_name: &str, name: &str) -> Option<&str> {
         self.map
             .get(type_name)?
@@ -739,19 +531,10 @@ impl TypeIndex {
             .find_map(|(_, inst)| inst.primary_loc_key.as_deref())
     }
 
-    /// Names a loc `$ref$` may bind to besides loc keys: every type-instance
-    /// name (dynamic modifiers, ideas, buildings, …) and every defined variable,
-    /// lowercased. The caller unions modifiers / vanilla loc keys on top. Lets
-    /// loc validation accept `$education_dynamic_modifier$` / `$some_variable$`
-    /// embeds without a CW225 while genuine typos (matching nothing) still flag.
     pub fn loc_bindable_names(&self) -> impl Iterator<Item = String> + '_ {
-        // `name_counts` keys and `var_index` names are already lowercased /
-        // normalised, matching the loc validator's case-insensitive lookup.
         self.loc_bindable_names_iter().map(str::to_string)
     }
 
-    /// Borrowing form of [`loc_bindable_names`](Self::loc_bindable_names): yields
-    /// each bindable name by reference, no per-name allocation.
     pub(crate) fn loc_bindable_names_iter(&self) -> impl Iterator<Item = &str> + '_ {
         self.name_counts
             .keys()
@@ -759,22 +542,12 @@ impl TypeIndex {
             .chain(self.var_index.all_names().map(String::as_str))
     }
 
-    /// Every `(type_name, instance)` defined in `file_uri`. Used by
-    /// document-symbol/outline, which is on-demand and infrequent, and by the
-    /// per-file CW100/unused-instance validation passes, which run on every
-    /// file every time. Reads straight off the reverse map (`file_positions`),
-    /// so the cost is proportional to the file's own entries rather than the
-    /// whole index, even for a type with thousands of instances spread across
-    /// many other files (same narrowing as `remove_file`).
     pub fn instances_in_file<'a>(&'a self, file_uri: &str) -> Vec<(&'a str, &'a TypeInstance)> {
         let Some(type_positions) = self.file_positions.get(file_uri) else {
             return Vec::new();
         };
         let mut out = Vec::with_capacity(type_positions.values().map(Vec::len).sum());
         for (type_name, positions) in type_positions {
-            // Skip subtype-qualified membership keys: the instance already
-            // appears under its base `type`, so listing it again would duplicate
-            // the outline / document-symbol entry.
             if is_subtype_key(type_name) {
                 continue;
             }
@@ -789,11 +562,6 @@ impl TypeIndex {
         out
     }
 
-    /// Every type name under `base_type_name` that indexes a definition in
-    /// `file_uri`, including its subtype-qualified membership names.
-    /// `instances_in_file` deliberately omits those membership entries for
-    /// outline consumers, but reference lookups need them to find uses written
-    /// as `<type.subtype>`.
     pub fn instance_type_names_in_file<'a>(
         &'a self,
         file_uri: &str,
@@ -828,24 +596,11 @@ impl TypeIndex {
         type_names
     }
 
-    /// Merge per-file results into the index.
-    ///
-    /// A subtype-qualified key (`"type.subtype"`, recognised by the `.`) is a
-    /// membership entry produced by [`SubtypeCollector`]. Such entries feed
-    /// `contains` (so `<type.subtype>` references resolve) but are deliberately
-    /// kept out of `name_counts` — they share the instance's name with the base
-    /// `type` entry, and double-counting would skew `is_any_instance` refcounts
-    /// and document-symbol output without adding a distinct definition.
     #[tracing::instrument(skip_all, fields(types = per_type.len()))]
     pub fn merge(&mut self, file_uri: &str, per_type: HashMap<String, Vec<TypeInstance>>) {
         self.merge_from(file_uri, per_type, false);
     }
 
-    /// As [`merge`](Self::merge), but for base-game content. The instances are
-    /// indexed exactly the same way; they just don't count toward
-    /// [`workspace_definition_count`](Self::workspace_definition_count), so a
-    /// mod redefining a base-game instance reads as an override rather than a
-    /// duplicate.
     pub fn merge_base_game(
         &mut self,
         file_uri: &str,
@@ -898,12 +653,6 @@ impl TypeIndex {
         }
     }
 
-    /// Merge base-game instances that each carry their own source URI. Like
-    /// [`merge_base_game`](Self::merge_base_game), but the per-instance URI is
-    /// stored as-is instead of a single shared key, so a batch spanning many
-    /// files (the vanilla index, where every base-game file contributes a few
-    /// instances) keeps each instance pointing at its real source file.
-    /// `remove_files` drops such a batch by URI.
     pub fn merge_base_game_with_uris(
         &mut self,
         per_type: impl IntoIterator<Item = (String, Vec<(Arc<str>, TypeInstance)>)>,
@@ -930,8 +679,6 @@ impl TypeIndex {
                     }
                 };
                 set.entry(lower).or_default().add(true);
-                // Each instance can come from a different file, so key on its own
-                // uri; clone the type name only the first time it's seen per uri.
                 let pos = entry.len();
                 self.base_game_uris.insert(Arc::clone(&uri));
                 let type_positions = self.file_positions.entry(Arc::clone(&uri)).or_default();
@@ -946,13 +693,6 @@ impl TypeIndex {
         }
     }
 
-    /// Remove every instance contributed by any file in `file_uris`, in a single
-    /// pass over the index. Use this to drop a large multi-file contribution (the
-    /// whole vanilla index) at once: a plain linear pass over every bucket beats
-    /// calling [`remove_file`](Self::remove_file) once per file, whose per-file
-    /// bookkeeping overhead adds up across thousands of files even though each
-    /// individual call is cheap. Only touches the type instances; the
-    /// dynamic-value indexes are keyed separately and untouched.
     pub fn remove_files(&mut self, file_uris: &HashSet<Arc<str>>) {
         if file_uris.is_empty() {
             return;
@@ -979,10 +719,6 @@ impl TypeIndex {
         }
         self.map.retain(|_, v| !v.is_empty());
         self.instance_sets.retain(|_, names| !names.is_empty());
-        // `retain` shifted every surviving entry's position within its type's
-        // vec, so `file_positions` (which records those positions) can't be
-        // patched incrementally; rebuild it wholesale. Still O(total surviving
-        // instances), matching the rest of this bulk pass.
         self.file_positions.clear();
         for (type_name, entries) in &self.map {
             for (i, (uri, _)) in entries.iter().enumerate() {
@@ -996,34 +732,17 @@ impl TypeIndex {
         }
     }
 
-    /// Remove all instances contributed by `file_uri`.
-    ///
-    /// Drops each of the file's own entries from `map` via `swap_remove`
-    /// (constant time), guided by the positions the reverse map
-    /// (`file_positions`) recorded for this file, so the cost is proportional to
-    /// the file's own entries rather than the type's whole instance vec. A
-    /// bucket empties only when its last contributor is removed, and that
-    /// contributor always has the bucket in its `file_positions` entry, so every
-    /// emptied bucket is still visited and pruned here.
     pub fn remove_file(&mut self, file_uri: &str) {
         self.complex_enum_values.remove_file(file_uri);
         self.value_set_values.remove_file(file_uri);
         self.scripted_loc_index.remove_file(file_uri);
         self.scripted_gui_index.remove_file(file_uri);
-        // No entry means the file contributed no type instances.
         let Some(type_positions) = self.file_positions.remove(file_uri) else {
             return;
         };
         let base_game = self.base_game_uris.remove(file_uri);
         for (type_name, mut positions) in type_positions {
-            // Subtype-qualified keys never contributed to `name_counts` (see
-            // `merge`), so they must not decrement it here.
             let subtype_key = is_subtype_key(&type_name);
-            // Largest index first: each `swap_remove` only ever displaces the
-            // vec's current last element, whose index is always >= every
-            // position still queued for this file (they're all distinct indices
-            // into the same original vec), so earlier removals never invalidate
-            // a later one in this loop.
             positions.sort_unstable_by(|a, b| b.cmp(a));
             for index in positions {
                 let Some(v) = self.map.get(type_name.as_str()) else {
@@ -1045,14 +764,6 @@ impl TypeIndex {
         }
     }
 
-    /// Drop `map[type_name][index]` via `swap_remove`. When the removed slot
-    /// wasn't already the vec's last element, the element that used to be last
-    /// now lives at `index`; repair the position [`remove_file`](Self::remove_file)
-    /// recorded for whichever other file owns it so `file_positions` stays a
-    /// faithful inverse of `map`. `remove_file` only ever calls this with an
-    /// `index` at or before the current last element (see its own ordering
-    /// invariant), so the relocated entry is never one of that same file's
-    /// still-pending positions.
     fn swap_remove_instance(&mut self, type_name: &str, index: usize) {
         let Some(v) = self.map.get_mut(type_name) else {
             return;
@@ -1080,9 +791,6 @@ mod tests {
 
     #[test]
     fn file_index_collapses_double_slashes() {
-        // The engine collapses repeated slashes, so a `gfx//interface/x.dds`
-        // reference (as some MD .gfx files write) must resolve to the indexed
-        // `gfx/interface/x.dds`, not flag CW113.
         let mut idx = FileIndex::new();
         idx.add_paths(vec!["gfx/interface/x.dds".to_string()]);
         assert!(
@@ -1094,7 +802,6 @@ mod tests {
 
     #[test]
     fn file_index_exact_case_flag_enforces_original_case() {
-        // Live-walked paths record on-disk case when the flag is on.
         let mut idx = FileIndex::new();
         idx.set_case_sensitive(true);
         idx.add_paths(vec!["gfx/interface/x.dds".to_string()]);
@@ -1124,8 +831,6 @@ mod tests {
 
     #[test]
     fn file_index_flag_off_skips_exact_case_collection() {
-        // With the flag off, no on-disk case is recorded (no memory overhead),
-        // and lookup stays case-insensitive.
         let mut idx = FileIndex::new();
         idx.add_paths(vec!["gfx/interface/x.dds".to_string()]);
         assert!(idx.files_exact.is_empty());
@@ -1134,7 +839,6 @@ mod tests {
 
     #[test]
     fn file_index_exact_case_applies_to_cache_restored_paths() {
-        // Cache-restored paths carry on-disk case, so they are case-checked too.
         let mut idx = FileIndex::new();
         idx.set_case_sensitive(true);
         idx.add_paths(vec!["gfx/interface/y.dds".to_string()]);
@@ -1148,7 +852,6 @@ mod tests {
     #[test]
     fn instance_locations_finds_dotted_id_case_insensitive() {
         // goto-definition (#39): an event/decision reference resolves by its
-        // dotted id (the instance name), case-insensitively.
         let mut idx = TypeIndex::new();
         let mut map = HashMap::new();
         map.insert(
@@ -1252,8 +955,6 @@ mod tests {
         );
     }
 
-    // ── removal parity (reverse-map narrowed removal) ────────────────────────
-
     fn inst(name: &str, line: u32) -> TypeInstance {
         TypeInstance {
             name: name.to_string(),
@@ -1286,9 +987,6 @@ mod tests {
         assert!(Arc::ptr_eq(name, set_name));
     }
 
-    /// Comparable projection of every observable index structure. Sorted so the
-    /// comparison is order-independent (removal preserves order, a from-scratch
-    /// rebuild reproduces it, but sorting keeps the assertion robust either way).
     type Snap = (
         std::collections::BTreeMap<String, Vec<(String, String, u32)>>,
         std::collections::BTreeMap<String, usize>,
@@ -1326,8 +1024,6 @@ mod tests {
         (map, name_counts, instance_sets)
     }
 
-    /// Removing a `merge`-contributed file must leave exactly the state of a
-    /// rebuild that never saw it. Exercises the single-uri insertion path.
     #[test]
     fn remove_file_parity_removing_merge_file() {
         let build = |include_b: bool| -> TypeIndex {
@@ -1371,9 +1067,6 @@ mod tests {
         assert!(full.is_any_instance("shared_ev"));
     }
 
-    /// Removing a `merge_base_game_with_uris`-contributed file must likewise match a
-    /// rebuild without it. Exercises the per-instance-uri insertion path, whose
-    /// reverse-map bookkeeping differs from the single-uri path.
     #[test]
     fn remove_file_parity_removing_merge_base_game_with_uris_file() {
         let build = |include_c: bool| -> TypeIndex {
@@ -1403,13 +1096,10 @@ mod tests {
         let mut full = build(true);
         full.remove_file("file://c.txt");
         assert_eq!(snapshot(&full), snapshot(&build(false)));
-        // c was the only source of the subtype membership.
         assert!(!full.contains("event.subt", "shared_ev"));
         assert!(full.contains("event", "shared_ev")); // still via a
     }
 
-    /// merge → remove → re-merge → remove cycles leave the index bit-empty each
-    /// time, including the reverse map, with empty buckets pruned.
     #[test]
     fn merge_remove_remerge_cycles_stay_clean() {
         let mut idx = TypeIndex::new();
@@ -1431,8 +1121,6 @@ mod tests {
         assert!(idx.instance_sets.is_empty());
     }
 
-    /// Bulk `remove_files` followed by a singular `remove_file`: the vanilla
-    /// batch drops in one pass, then the last mod file drops, leaving nothing.
     #[test]
     fn remove_files_bulk_then_remove_file_singular() {
         let mut idx = TypeIndex::new();
@@ -1463,7 +1151,6 @@ mod tests {
         assert!(idx.instance_sets.is_empty());
     }
 
-    /// Removing a URI that never contributed anything is a no-op.
     #[test]
     fn remove_file_with_no_entries_is_noop() {
         let mut idx = TypeIndex::new();
@@ -1477,23 +1164,6 @@ mod tests {
         assert!(idx.contains("event", "ev"));
     }
 
-    /// Removing a file merged early in a shared type's vec relocates a later
-    /// file's entries into the freed slots, exercising the repair
-    /// `swap_remove_instance` does for whichever other file owns the entry a
-    /// swap displaces: 20 files each contribute 3 `state` instances in merge
-    /// order f0..f19, so removing f5 (positions 15..18 of 60) drains the vec's
-    /// tail (f19's 3 entries) into f5's freed slots. `instances_in_file`
-    /// checked right after proves those relocations produced the right
-    /// answer for every survivor, including f19 whose positions just got
-    /// rewritten. That alone doesn't prove the rewritten position values
-    /// themselves are right, only that reading through them still lands on
-    /// the correct instances (a read is order-agnostic; `instances_in_file`
-    /// doesn't care which position a name is filed under, just that it maps
-    /// to the right one), so the test then removes f19, which consumes its
-    /// just-repaired positions as indices into `map`. A wrong repair there
-    /// would make this second removal panic (an out-of-bounds index) or
-    /// silently remove the wrong instances, either of which the final
-    /// snapshot-parity and survivor checks catch.
     #[test]
     fn removing_early_file_relocates_and_repairs_a_later_files_positions() {
         let build = |skip: &[usize]| -> TypeIndex {
@@ -1537,16 +1207,11 @@ mod tests {
         assert_eq!(snapshot(&idx), snapshot(&build(&[5])));
         assert_survivors_intact(&idx, &[5]);
 
-        // f19's positions were just rewritten by the relocations above; if the
-        // rewrite were wrong, consuming them as indices here would panic or
-        // remove the wrong entries instead of f19's own.
         idx.remove_file("file://f19.txt");
         assert_eq!(snapshot(&idx), snapshot(&build(&[5, 19])));
         assert_survivors_intact(&idx, &[5, 19]);
     }
 
-    /// A subtype-qualified membership key never feeds `name_counts`, so removing
-    /// the file must drive the base name's count to zero exactly once.
     #[test]
     fn subtype_key_removal_preserves_name_counts_exemption() {
         let mut idx = TypeIndex::new();
@@ -1570,9 +1235,6 @@ mod tests {
 
     #[test]
     fn file_index_resolves_reference_relative_to_asset_dir() {
-        // A sound `.asset` `file =` resolves beside the .asset, not under the
-        // field's `sound/` root prefix. The referencing file's path is absolute;
-        // its root-relative dir is recovered as the longest indexed path-suffix.
         let mut fi = FileIndex::new();
         fi.add_paths([
             "sound/zom/zom_vo.asset".to_string(),
@@ -1890,7 +1552,6 @@ mod tests {
         ]);
         vi.add_name("my_var");
         vi.add_name("bar");
-        // SHARED_VAR/shared_var and My_Var@GER/my_var and foo.bar/bar all collapse
         assert_eq!(vi.all_names().count(), vi.len());
         assert_eq!(vi.len(), 3);
     }
@@ -1933,7 +1594,6 @@ mod tests {
         vi.add_name("\"My_Var\"");
         vi.add_name("My_Var@GER");
         vi.add_name("foo.bar?100");
-        // My_Var and My_Var@GER collapse, so 3 adds -> 2 distinct (my_var, bar)
         assert_eq!(vi.len(), 2);
         vi.add_name("   ");
         assert_eq!(vi.len(), 2);
@@ -1960,7 +1620,6 @@ mod tests {
         mutated.file_index.insert("gfx/B.dds");
         assert!(!idx.file_index.contains("gfx/B.dds"));
         assert!(mutated.file_index.contains("gfx/B.dds"));
-        // exact-case map must not alias
         assert_eq!(idx.file_index.on_disk_case("gfx/a.dds"), None);
         assert!(snap.file_index.contains("gfx/a.dds"));
     }
@@ -2017,12 +1676,7 @@ mod tests {
         assert!(snap2.contains("event", "ev_a"));
     }
 
-    /// Workspace scan pass 2 validates against a *clone* of the live index, and
-    /// the rule engine reads `value_set_values` for `from_data` scope links. A
-    /// clone that dropped the dynamic-value indexes would leave every unit test
-    /// green (they build their index directly) while silently moving scan
     /// diagnostics, which is the trap #332's "keep them out of the snapshot"
-    /// plan sets. Pin that the snapshot still answers membership.
     #[test]
     fn clone_carries_dynamic_value_indexes() {
         let mut idx = TypeIndex::new();
@@ -2068,15 +1722,6 @@ mod tests {
         assert!(snap.value_set_values.contains("character_token", "tok_a"));
     }
 
-    /// Workspace scan pass 2 validates against a *clone* of the live index and
-    /// reads `instances_in_file` off that clone for the unused-instance pass,
-    /// long after an edit may have merged or removed files in the live one. The
-    /// clone has to keep answering with the view it was taken from.
-    ///
-    /// `remove_file` is the sharp case, because it compacts the shared type vec
-    /// by swapping tail entries into the freed slots and rewriting the displaced
-    /// file's positions. A clone that aliased `map` or `file_positions` would
-    /// not merely lose an instance: it would read a surviving file's positions
     /// against a compacted vec and hand back somebody else's (#328).
     #[test]
     fn clone_instances_in_file_is_a_snapshot_of_the_live_index() {
@@ -2099,7 +1744,6 @@ mod tests {
             got
         };
 
-        // Removing f0 drains the vec's tail (f3's entries) into the freed slots.
         idx.remove_file("file://f0.txt");
         idx.merge(
             "file://f9.txt",
