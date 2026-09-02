@@ -857,6 +857,25 @@ mod tests {
         assert!(found.range.start.col <= found.range.end.col);
     }
 
+    #[test]
+    fn an_end_column_exactly_at_the_u16_limit_clamps_instead_of_overflowing() {
+        // Puts the closing brace at char 65,535, where `col as u16 + 1` overflowed.
+        let text = format!(
+            "c = {{\ncolor ={}{{ 1 0 0 }}\n}}\n",
+            " ".repeat(u16::MAX as usize - "color = { 1 0 0".len())
+        );
+        let found = find(&text, "color");
+        assert_eq!(found.range.start.col, 65_527, "just past `color = `");
+        assert_eq!(found.range.end.col, u16::MAX);
+        let lines: Vec<&str> = text.lines().collect();
+        let range = to_lsp_range(found.range, &lines, &PositionEncodingKind::UTF16);
+        assert_eq!(range.end.character, u16::MAX as u32);
+        assert!(
+            parse_literal(&text_in_range(&text, range, &PositionEncodingKind::UTF16)).is_none(),
+            "truncated range reads back as no literal, so the picker rewrites nothing"
+        );
+    }
+
     // ── Reading a range back out of the document ─────────────────────────────
 
     #[test]
