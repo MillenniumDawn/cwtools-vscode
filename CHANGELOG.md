@@ -95,6 +95,8 @@
 
 #### Engine
 
+* LSP color ranges clamp columns beyond the parser limit instead of wrapping.
+  (#593)
 * CLI integration coverage now exercises `cache-vanilla` writes and
   `validate --vanilla-cache` round trips. (#628)
 * CW268 quote fixes skip unrepresentable ranges, and LSP position conversion
