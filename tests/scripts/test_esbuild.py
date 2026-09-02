@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from typing import cast
+from pathlib import Path
+from typing import Self, cast
+
+import pytest
 
 import esbuild
 
@@ -36,6 +39,7 @@ def test_webview_bundle_is_browser_iife() -> None:
     assert "--format=iife" in args
     assert "--global-name=cwtoolsgraph" in args
     assert 'process.env.NODE_ENV="production"' in args
+    assert 'window.process = { env: { NODE_ENV: "production" } };' in args
     assert "graph.ts" in args
 
 
@@ -45,6 +49,51 @@ def test_dev_and_watch_flags() -> None:
     assert 'window.process = { env: { NODE_ENV: "development" } };' in webview
     assert "--watch" in webview
     assert "--watch" in " ".join(esbuild.extension_args(watch=True))
+
+
+def test_watch_implies_dev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_bin = tmp_path / "esbuild"
+    stub_bin.touch()
+    monkeypatch.setattr(esbuild, "esbuild_bin", lambda: stub_bin)
+    commands: list[list[str]] = []
+
+    class StubProcess:
+        def __init__(self, cmd: list[str], **_kwargs: object) -> None:
+            commands.append(cmd)
+
+        def poll(self) -> int:
+            return 0
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def terminate(self) -> None:
+            return None
+
+    monkeypatch.setattr(subprocess, "Popen", StubProcess)
+    assert esbuild.main(["--watch"]) == 0
+    webview = " ".join(commands[1])
+    assert "--watch" in webview
+    assert 'window.process = { env: { NODE_ENV: "development" } };' in webview
+
+
+def test_dev_flag_sets_development_without_watch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub_bin = tmp_path / "esbuild"
+    stub_bin.touch()
+    monkeypatch.setattr(esbuild, "esbuild_bin", lambda: stub_bin)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(esbuild, "_run", commands.append)
+    assert esbuild.main(["--dev"]) == 0
+    assert 'window.process = { env: { NODE_ENV: "development" } };' in " ".join(
+        commands[1]
+    )
+    assert "--watch" not in " ".join(commands[0])
+    assert "--watch" not in " ".join(commands[1])
 
 
 def test_bundle_commands_use_the_platform_esbuild_entrypoint() -> None:
