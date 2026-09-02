@@ -1,6 +1,3 @@
-//! `textDocument/formatting`, `textDocument/rangeFormatting`, and the
-//! `formatWorkspace` execute-command.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -22,8 +19,6 @@ enum DiscoverOutcome {
     Files(Vec<cwtools_file_manager::file_manager::DiscoveredFile>),
 }
 
-/// `CWTOOLS_FORMAT_HOLD_MS` parks after progress begins so a cancel test can
-/// land before discovery. Unset on every real run.
 async fn hold_format_for_tests(progress: &CommandProgress) {
     let Some(ms) = std::env::var("CWTOOLS_FORMAT_HOLD_MS")
         .ok()
@@ -271,8 +266,6 @@ impl Backend {
     }
 
     /// The encoding the client negotiated at `initialize`, which every published
-    /// column is measured in. Cloned out of the config so no handler holds the
-    /// read guard while it converts positions.
     pub(crate) fn position_encoding(&self) -> PositionEncodingKind {
         self.state.config.read().position_encoding.clone()
     }

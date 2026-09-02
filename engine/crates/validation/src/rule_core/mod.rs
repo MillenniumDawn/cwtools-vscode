@@ -1,6 +1,3 @@
-//! The rule-vs-AST core: matching children against rules, cardinality,
-//! alias-usage resolution, and per-field value checks.
-
 mod alias;
 mod children;
 mod leaf;
@@ -38,9 +35,6 @@ mod tests {
         }
     }
 
-    /// Interest is computed from the *global* dispatcher. A thread-local
-    /// collector never turns TRACE callsites on after another test registered
-    /// them as disabled, so this no-op subscriber has to sit on the process.
     struct EnableSpans;
 
     impl Subscriber for EnableSpans {

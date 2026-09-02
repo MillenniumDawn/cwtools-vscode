@@ -1,6 +1,3 @@
-//! Collecting type instances from parsed files, and building a [`TypeIndex`]
-//! from discovered files.
-
 use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
 use cwtools_rules::rules_types::{RuleSet, SkipRootKey, TypeDefinition};
 use cwtools_string_table::string_table::StringTable;
@@ -12,10 +9,6 @@ use crate::{
     get_string_or_empty, leaf_value_string, unquote,
 };
 
-/// Does this `skip_root_key` rule match `key`? Case-insensitive (matching the
-/// engine), and honours the `should_match` negation flag on `MultipleKeys`.
-/// Shared with the validator (cwtools_validation::resolve) so indexing and
-/// validation agree on which root keys to skip.
 pub fn skip_root_key_matches(srk: &SkipRootKey, key: &str) -> bool {
     match srk {
         SkipRootKey::SpecificKey(k) => k.eq_ignore_ascii_case(key),
@@ -39,9 +32,6 @@ fn type_key_filter_matches(td: &TypeDefinition, key: &str) -> bool {
 fn starts_with_matches(td: &TypeDefinition, key: &str) -> bool {
     match &td.starts_with {
         None => true,
-        // Paradox keys/prefixes are ASCII identifiers; an ASCII case-insensitive
-        // prefix test matches `to_lowercase().starts_with(to_lowercase())` without
-        // allocating a lowercased copy of either string per call.
         Some(prefix) => {
             key.len() >= prefix.len()
                 && key.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
@@ -50,9 +40,6 @@ fn starts_with_matches(td: &TypeDefinition, key: &str) -> bool {
 }
 
 // F# `type_key_prefix` compares the type's prefix against a node's own KeyPrefix
-// token from Imperator-style prefixed nodes (`prefix key = { .. }`), which this
-// AST doesn't model. We take the conservative reading: the key must carry the
-// declared prefix (ASCII case-insensitive, like `starts_with`), name unchanged.
 fn key_prefix_matches(td: &TypeDefinition, key: &str) -> bool {
     match &td.key_prefix {
         None => true,
@@ -64,8 +51,6 @@ fn key_prefix_matches(td: &TypeDefinition, key: &str) -> bool {
 }
 
 /// The field name an instance's `## primary` localisation is taken from, when it
-/// is an explicit field (e.g. an event's `title = title` → `Some("title")`).
-/// `None` for name-derived (`$`-pattern) primary keys or types with no primary
 /// localisation — those need nothing captured at index time.
 fn primary_explicit_loc_field(td: &TypeDefinition) -> Option<&str> {
     td.localisation
@@ -76,16 +61,12 @@ fn primary_explicit_loc_field(td: &TypeDefinition) -> Option<&str> {
 
 /// The child fields a type's `## required` localisation entries read their key
 /// from (`## required title = title`). Empty for the usual `$`-pattern types, so
-/// the per-instance resolution below costs nothing for them.
 fn required_explicit_loc_fields(td: &TypeDefinition) -> impl Iterator<Item = &str> {
     td.localisation
         .iter()
         .filter_map(|l| l.required_explicit_field())
 }
 
-/// Read the value of the child leaf whose key equals `field_name` (case-
-/// insensitive), unquoted. The shared lookup behind `name_field` and primary
-/// explicit-field localisation.
 fn field_value_from_children(
     field_name: &str,
     children: &[Child],
@@ -110,8 +91,6 @@ fn field_value_from_children(
     None
 }
 
-/// Extract the instance name from a clause-typed element (honours `name_field`).
-/// `children` is the list of children inside the clause.
 fn instance_name_from_children(
     td: &TypeDefinition,
     node_key: &str,
@@ -121,21 +100,10 @@ fn instance_name_from_children(
 ) -> Option<String> {
     match &td.name_field {
         None => Some(unquote(node_key).to_string()),
-        // The instance name comes from a child leaf whose key equals `name_field`.
-        // Quoted values (e.g. spriteType `name = "GFX_x"`) are stored with their
-        // quotes, so strip them to match unquoted references like `icon = GFX_x`.
         Some(field_name) => field_value_from_children(field_name, children, arena, table),
     }
 }
 
-/// Recurse through skip_root_key layers, then visit each matching instance node.
-/// `child` is a single top-level child (must be a keyed clause); at the instance
-/// node the key must pass the `type_key_filter` + `starts_with` gates and yield a
-/// name, then `visit` is invoked with the resolved name (owned), the node's own
-/// key, its clause children, and its location. The single skip-root-key navigator
-/// behind both [`collect_type_instances`] (builds `TypeInstance`s) and
-/// [`for_each_instance_node`] (invokes a caller callback); they differ only in
-/// what `visit` does at the leaf.
 fn walk_skip_root_child<V>(
     td: &TypeDefinition,
     skip_stack: &[SkipRootKey],
@@ -159,7 +127,6 @@ fn walk_skip_root_child<V>(
     let key = get_string_or_empty(table, kc.key.normal);
     match skip_stack {
         [] => {
-            // We are at the instance node.
             if type_key_filter_matches(td, &key)
                 && starts_with_matches(td, &key)
                 && key_prefix_matches(td, &key)
@@ -170,7 +137,6 @@ fn walk_skip_root_child<V>(
             }
         }
         [head, tail @ ..] => {
-            // Must match the skip-root layer; then descend into children.
             if skip_root_key_matches(head, &key) {
                 for inner_child in clause_children {
                     walk_skip_root_child(td, tail, inner_child, arena, table, visit);
@@ -180,10 +146,6 @@ fn walk_skip_root_child<V>(
     }
 }
 
-/// One type *instance node* as seen during the type-instance walk: the matched
-/// type, the resolved instance name, the node's own key, its clause children, and
-/// its source location. Passed to a [`SubtypeCollector`] so the injected subtype
-/// matcher can compute per-instance facts without re-navigating the file.
 pub struct InstanceNode<'a> {
     pub td: &'a TypeDefinition,
     pub name: &'a str,
@@ -192,40 +154,15 @@ pub struct InstanceNode<'a> {
     pub location: SourceLocation,
 }
 
-/// A per-instance-node hook that appends a node's subtype-qualified membership
-/// (`"type.subtype" -> instances`) into `out`. Implemented in the `validation`
-/// crate (it needs the subtype matcher) and injected into
-/// [`index_discovered_files`] so the index crate stays free of a validation
-/// dependency. Called once per instance node of a subtype-declaring type during
-/// [`collect_type_instances`]' own walk, so type-instance and subtype-membership
-/// collection share a single navigation instead of two.
 pub type SubtypeCollector =
     fn(&RuleSet, &ParsedFile, &InstanceNode, &StringTable, &mut HashMap<String, Vec<TypeInstance>>);
 
-/// Per-file type instances collected from one AST navigation. Base instances
-/// and subtype-qualified membership stay separate so callers that track exports
-/// do not treat subtype membership as an additional exported symbol.
 #[derive(Default)]
 pub struct CollectedTypeInstances {
     pub instances: HashMap<String, Vec<TypeInstance>>,
     pub subtype_instances: HashMap<String, Vec<TypeInstance>>,
 }
 
-/// Visit every type *instance node* in `file` whose type declares subtypes,
-/// invoking `f` with the matched type, the resolved instance name, the node's own
-/// key, and the node's clause children. Mirrors [`collect_type_instances`]'s
-/// navigation (path filter + skip_root_key + type_key_filter + name_field) but
-/// exposes the node body so a caller can compute per-instance facts (e.g. which
-/// subtypes are active).
-///
-/// Types with no subtypes are skipped: the sole purpose here is computing
-/// subtype membership, so walking (and resolving the name of) instances that can
-/// have no subtype facts is wasted work — and most types declare no subtypes, so
-/// the skip avoids a second full instance navigation across the corpus on top of
-/// [`collect_type_instances`].
-///
-/// `type_per_file` types are also skipped — the file *is* the instance, so there
-/// is no node body to inspect for subtypes.
 pub fn for_each_instance_node<F>(
     ruleset: &RuleSet,
     file: &ParsedFile,
@@ -251,8 +188,6 @@ pub fn for_each_instance_node<F>(
     }
 }
 
-/// Hash one exported symbol's identity, with separators so distinct parts can't
-/// run together (`a|bc` vs `ab|c`).
 pub fn mix_export_symbol(parts: &[&str]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -263,9 +198,6 @@ pub fn mix_export_symbol(parts: &[&str]) -> u64 {
     h.finish()
 }
 
-/// Order-independent hash of a file's exported type instances, computed from the
-/// per-file `type -> instances` map produced at index time. Mirrors the symbol
-/// mixing used for variables/event targets in
 /// [`InfoService::export_fingerprint`].
 pub fn hash_instance_exports(per_type: &HashMap<String, Vec<TypeInstance>>) -> u64 {
     let mut acc: u64 = 0;
@@ -277,9 +209,6 @@ pub fn hash_instance_exports(per_type: &HashMap<String, Vec<TypeInstance>>) -> u
     acc
 }
 
-/// Collect all type instances defined in `file` for the given `logical_path`,
-/// applying skip_root_key navigation. Returns a map from type name to the list
-/// of instances found in this file.
 pub fn collect_type_instances(
     ruleset: &RuleSet,
     file: &ParsedFile,
@@ -289,9 +218,6 @@ pub fn collect_type_instances(
     collect_type_instances_inner(ruleset, file, logical_path, table, None, None)
 }
 
-/// Collect base type instances and subtype-qualified membership in one walk.
-/// The maps stay separate because subtype entries are not additional exported
-/// symbols, even though both are merged into [`TypeIndex`] for reference lookup.
 pub fn collect_type_instances_with_subtypes(
     ruleset: &RuleSet,
     file: &ParsedFile,
@@ -314,24 +240,13 @@ pub fn collect_type_instances_with_subtypes(
     }
 }
 
-/// Directory segments a game keeps its scripted localisations in: HOI4 spells it
-/// `scripted_localisation` (and tolerates the American spelling), the Jomini
-/// games `scripted_loc`.
 const SCRIPTED_LOC_DIRS: [&str; 3] = [
     "scripted_localisation",
     "scripted_localization",
     "scripted_loc",
 ];
 
-/// The scripted-localisation names (`defined_text = { name = X }`) defined in
-/// `file`, or an empty vec when its path is not a scripted-loc folder.
-///
-/// Read straight off the file rather than through a ruleset type: the HOI4
-/// config points `type[scripted_loc]` at Stellaris's `game/common/scripted_loc`,
-/// so nothing under `common/scripted_localisation` is ever typed and every use
 /// of one read as an unknown command (#348). The node key is not checked — HOI4
-/// uses `defined_text`, and a game that spells it differently still names the
-/// definition in a `name` field.
 pub fn collect_scripted_loc_names(
     file: &ParsedFile,
     logical_path: &str,
@@ -357,8 +272,6 @@ pub fn collect_scripted_loc_names(
     names
 }
 
-/// The direct callback keys under each scripted GUI's `effects` and `triggers`
-/// containers, or an empty vec outside `common/scripted_guis`.
 pub fn collect_scripted_gui_callback_names(
     file: &ParsedFile,
     logical_path: &str,
@@ -416,10 +329,6 @@ pub fn collect_scripted_gui_callback_names(
     names
 }
 
-/// Shared implementation for base collection and the fused subtype path.
-/// When `subtype_hook` is present, each instance node of a subtype-declaring
-/// type invokes it during the same skip-root navigation. Per-key instance order
-/// remains identical to the separate walks.
 #[tracing::instrument(skip_all, name = "collect_type_instances")]
 fn collect_type_instances_inner(
     ruleset: &RuleSet,
@@ -433,7 +342,6 @@ fn collect_type_instances_inner(
 
     let np = NormalizedPath::new(logical_path);
     for td in &ruleset.types {
-        // Path filter (mirrors CheckPathDir)
         if !check_path_dir_norm(&td.path_options, &np) {
             continue;
         }
@@ -441,11 +349,7 @@ fn collect_type_instances_inner(
         let mut instances: Vec<TypeInstance> = Vec::new();
 
         if td.type_per_file {
-            // The file itself is the instance; the name is the file stem.
             // Normalise separators first: the LSP on Windows derives logical
-            // paths with backslashes (`check_path_dir` already normalises, this
-            // must too), else the stem becomes the whole path and references
-            // like `load_oob = "MY_OOB"` flag as false positives.
             let norm = logical_path.replace('\\', "/");
             let name = norm
                 .rsplit('/')
@@ -457,25 +361,15 @@ fn collect_type_instances_inner(
                 .to_string();
             instances.push(TypeInstance {
                 name,
-                // The file itself is the instance: no single node span is the
-                // definition, so a deliberately degenerate span marks it rather
-                // than borrowing some root child's range (root_children IS in
-                // scope, but any node's range would be a fabrication here).
                 location: SourceLocation {
                     line: 1,
                     col: 0,
                     end: (1, 0),
                 },
-                // type_per_file types have no node body to read a field from.
                 primary_loc_key: None,
                 required_loc_keys: Vec::new(),
             });
-            // `type_per_file` types carry no node body, so they contribute no
-            // subtype membership (`for_each_instance_node` skips them too).
         } else {
-            // Walk the file's top-level keyed clauses. A subtype-declaring type
-            // additionally computes membership at each instance node via the
-            // injected hook, sharing this one navigation.
             let arena = &file.arena;
             let node_hook = if td.subtypes.is_empty() {
                 None
@@ -488,12 +382,10 @@ fn collect_type_instances_inner(
                              clause_children: &[Child],
                              location| {
                 // Capture the explicit-field primary loc key (e.g. an event's
-                // `title`) so hover can resolve the localised title cross-file.
                 let primary_loc_key = primary_explicit_loc_field(td).and_then(|field| {
                     field_value_from_children(field, clause_children, arena, table)
                 });
                 // Same read for the `## required` explicit-field entries, whose
-                // keys CW100 checks for existence.
                 let required_loc_keys: Vec<String> = required_explicit_loc_fields(td)
                     .filter_map(|field| {
                         field_value_from_children(field, clause_children, arena, table)
@@ -529,26 +421,7 @@ fn collect_type_instances_inner(
     result
 }
 
-/// Collect both set-variable names and `value_set[...]` members from one file in
-/// a single pre-order walk, replacing the two separate whole-tree traversals
-/// ([`crate::collect_set_variable_names`] +
-/// [`dynamic_values::collect_value_set_members`]) that `index_discovered_files`
-/// used to run back-to-back over the same arena.
-///
-/// The two collectors visit the identical set of nodes (every `Child::Leaf`,
-/// descending into every clause value) and key off different rule structures, so
-/// each node dispatches to both, writing to its own output. They differ in one
-/// descent rule: the value-set walk does not look inside a `variable`-namespace
 /// block (`set_variable = { .. }`), whose members are collected on the dedicated
-/// variable path, whereas the set-variable walk does descend there. The fused
-/// walk descends into every clause when the set-variable collector is active
-/// (suppressing the value-set logic for that subtree via `vs_active`), and
-/// otherwise descends exactly where the value-set walk would — reproducing both
-/// walks' output byte-for-byte.
-///
-/// `var_effects` mirrors `collect_set_variable_names`' gate: `Some(non_empty)`
-/// enables the set-variable collector, `None` disables it (the caller has already
-/// filtered out an empty set).
 fn collect_variables_and_value_sets(
     file: &ParsedFile,
     ruleset: &RuleSet,
@@ -591,8 +464,6 @@ fn walk_variables_and_value_sets(
         let Child::Leaf(li) = child else { continue };
         let leaf = &arena.leaves[*li as usize];
 
-        // Set-variable collector: a clause whose key is a variable-defining effect
-        // defines names in its body (mirrors `collect_set_variable_defs`' walk).
         if let Some(effects) = var_effects
             && let Value::Clause(ch) = &leaf.value
         {
@@ -608,7 +479,6 @@ fn walk_variables_and_value_sets(
 
         // Value-set collector: per-leaf member capture. A `variable`-namespace
         // block returns `ns == "variable"`, marking a subtree the value-set walk
-        // must not descend into.
         let ns = if vs_active {
             dynamic_values::value_set_leaf(leaf, file, ruleset, table, value_sets)
         } else {
@@ -617,7 +487,6 @@ fn walk_variables_and_value_sets(
 
         if let Value::Clause(ch) = &leaf.value {
             let is_var_ns = ns.as_deref() == Some("variable");
-            // The set-variable walk descends into every clause; the value-set walk
             // descends into every clause but a `variable`-namespace block.
             let descend = var_effects.is_some() || (vs_active && !is_var_ns);
             let vs_child = vs_active && !is_var_ns;
@@ -637,19 +506,6 @@ fn walk_variables_and_value_sets(
     }
 }
 
-/// Build a [`TypeIndex`] from already-discovered+parsed files. Shared by the CLI
-/// (`index_game_dir`) and LSP (`index_vanilla_dir`) base-game indexing paths so
-/// the per-file merge loop lives in one place. Each file's AST is consumed in
-/// place (no re-parse) and its type instances are stream-merged.
-///
-/// When `var_effects` is `Some(non_empty)`, base-game variable definitions are
-/// also folded into `index.var_index` (so a mod referencing a vanilla variable
-/// isn't flagged as unset, CW246). Pass `None` to skip variable collection.
-///
-/// When `subtype_collector` is `Some`, each file's subtype-qualified membership
-/// (`"type.subtype" -> instances`) is also merged, so `<type.subtype>` references
-/// into base-game content resolve. The collector lives in the `validation` crate
-/// (it needs the subtype matcher); see [`SubtypeCollector`].
 pub fn index_discovered_files(
     files: impl IntoIterator<Item = cwtools_file_manager::file_manager::ParsedFile>,
     ruleset: &RuleSet,
@@ -661,13 +517,8 @@ pub fn index_discovered_files(
 
     let var_effects = var_effects.filter(|e| !e.is_empty());
 
-    // Collect into a Vec so rayon can split it across threads. The Vec is then
-    // consumed by into_par_iter() so we don't need Clone on the AST types.
     let files: Vec<cwtools_file_manager::file_manager::ParsedFile> = files.into_iter().collect();
 
-    // Parallel collection: all collector functions take only &-borrows of the
-    // shared ruleset/table, so each file's work is independent. into_par_iter()
-    // on a Vec preserves input order in the output Vec after collect().
     type PerFileData = (
         String,                             // path
         HashMap<String, Vec<TypeInstance>>, // base type instances
@@ -687,9 +538,6 @@ pub fn index_discovered_files(
                 root_children: file.root_children,
                 errors: vec![],
             };
-            // Fused: type instances and subtype-qualified membership share one
-            // skip-root walk. Keep the maps separate until merge so subtype
-            // membership never affects base-instance bookkeeping.
             let (instances, subtype_instances) = match subtype_collector {
                 Some(hook) => {
                     let collected = collect_type_instances_with_subtypes(
@@ -706,8 +554,6 @@ pub fn index_discovered_files(
                     HashMap::new(),
                 ),
             };
-            // Fused: set-variable names and value-set members share one pre-order
-            // walk over the arena instead of two back-to-back traversals.
             let mut var_names: Vec<String> = Vec::new();
             let mut value_sets: HashMap<String, Vec<String>> = HashMap::new();
             collect_variables_and_value_sets(
@@ -739,8 +585,6 @@ pub fn index_discovered_files(
         })
         .collect();
 
-    // Sequential merge in original file order — preserves TypeIndex.merge call
-    // order so goto-def "first match" and refcount semantics are unchanged.
     let mut index = TypeIndex::new();
     for (
         path,
@@ -812,8 +656,6 @@ mod tests {
         v
     }
 
-    // A type declaring `type_key_prefix` collects only prefixed keys (case-
-    // insensitive), and the instance name keeps the prefix intact.
     #[test]
     fn key_prefix_filters_and_keeps_name_intact() {
         let source = "MY_thing = { } my_other = { } NOPE_thing = { }";
@@ -828,7 +670,6 @@ mod tests {
         assert_eq!(names(&result, "thing"), vec!["MY_thing", "my_other"]);
     }
 
-    // A type with no `type_key_prefix` is unaffected — every key is collected.
     #[test]
     fn no_key_prefix_collects_all() {
         let source = "MY_thing = { } NOPE_thing = { }";
@@ -841,13 +682,10 @@ mod tests {
         assert_eq!(names(&result, "thing"), vec!["MY_thing", "NOPE_thing"]);
     }
 
-    // An instance's location spans its whole definition: the start is the key,
     // the end is the spot just past the closing brace (the parser's
-    // `SourceRange.end`). Cleanup features (rename/delete a definition) need the
     // full extent, so a multi-line clause must record an end on the brace's line.
     #[test]
     fn instance_location_end_is_closing_brace() {
-        // `}` is the last char, on line 3 col 0; the range end lands one past it.
         let source = "thing_a = {\n    x = 1\n}";
         let table = StringTable::new();
         let parsed = parse_string(source, &table);
@@ -915,8 +753,6 @@ defined_text = {
 
     #[test]
     fn scripted_loc_matches_whole_segments_only() {
-        // A filename carrying the word is not the folder, and neither is a
-        // longer directory that merely starts with it.
         for path in [
             "common/ideas/99_TUR_scripted_localization.txt",
             "common/scripted_localisations/defs.txt",
@@ -931,8 +767,6 @@ defined_text = {
 
     #[test]
     fn scripted_loc_folder_nested_under_dlc_matches() {
-        // Same reason `path_contains_segment` exists: base-game content sits
-        // under `dlc/<id>/…` and must still be found.
         assert_eq!(
             scripted_locs_at("dlc/dlc042/common/scripted_localisation/defs.txt").len(),
             2

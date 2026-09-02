@@ -1,6 +1,3 @@
-//! Plumbing every subcommand shares: exit codes, `cwtools.toml` resolution and
-//! reporting, and the status lines that have to keep out of a redirected report.
-
 use clap::CommandFactory;
 use cwtools_game::constants::Game;
 use cwtools_validation::ErrorSeverity;

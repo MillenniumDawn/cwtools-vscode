@@ -1,6 +1,3 @@
-//! Rule-driven variable / value_set collection: gathering defined variable names
-//! (and their values) from parsed files.
-
 use cwtools_parser::ast::{Arena, Child, ParsedFile, SourceRange, Value};
 use cwtools_rules::rules_types::{NewField, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
@@ -11,25 +8,14 @@ use crate::{
     with_leaf_value_str,
 };
 
-/// A defined variable entry (either @-style or rule-driven value_set).
 #[derive(Debug, Clone)]
 pub struct DefinedVariable {
     pub name: String,
     pub namespace: Option<String>, // value_set namespace, if any
     pub location: SourceLocation,
-    /// The value assigned at this definition site, when the rule shape provides
-    /// one (`set_variable = { var = x value = 5 }` or shorthand
-    /// `set_variable = { x = 5 }`). `None` when no value is statically known.
     pub value: Option<String>,
 }
 
-/// Collect variables using full rule-tree walking.
-/// For each leaf where the rule field is `VariableSetField(ns)`, record the
-/// variable name under namespace `ns`.
-///
-/// When `at_vars` is `Some`, those entries are used as the "@" namespace
-/// instead of re-scanning the AST for `@`-prefix leaves (avoids a redundant
-/// walk when the caller already collected them via the heuristic pass).
 pub fn collect_defined_variables_from_rules(
     ruleset: &RuleSet,
     file: &ParsedFile,
@@ -48,10 +34,6 @@ pub fn collect_defined_variables_from_rules(
         }
     }
 
-    // Index the root TypeRules by name once so the per-type lookup is O(1) instead
-    // of an O(types × root_rules) linear scan. A type name can carry more than one
-    // TypeRule, so group them (each matching rule is still scanned, preserving the
-    // original multiplicity).
     let mut type_rules: HashMap<&str, Vec<&RuleType>> = HashMap::new();
     for root_rule in &ruleset.root_rules {
         if let cwtools_rules::rules_types::RootRule::TypeRule(name, (rule_type, _opts)) = root_rule
@@ -60,7 +42,6 @@ pub fn collect_defined_variables_from_rules(
         }
     }
 
-    // Walk type instances (path-filtered) and scan their rules for VariableSetField
     let np = NormalizedPath::new(logical_path);
     for td in &ruleset.types {
         if !check_path_dir_norm(&td.path_options, &np) {
@@ -71,7 +52,6 @@ pub fn collect_defined_variables_from_rules(
         };
         for rule_type in rules_for_type {
             if let RuleType::NodeRule { rules, .. } = rule_type {
-                // Scan each root instance's children against these rules.
                 for child in &file.root_children {
                     if let Some(kc) = file.arena.keyed_clause(child) {
                         scan_children_for_varset(
@@ -99,8 +79,6 @@ fn collect_at_vars(
     for child in children {
         if let Child::Leaf(idx) = child {
             let leaf = &arena.leaves[*idx as usize];
-            // Gate on the cheap `@` prefix test inside `with_string` so the vast
-            // majority of (non-`@`) leaves never allocate a key String.
             let is_at_var = table
                 .with_string(leaf.key.normal, |k| k.starts_with('@'))
                 .unwrap_or(false);
@@ -127,8 +105,6 @@ fn collect_at_vars(
     }
 }
 
-/// The value of a `value`/`amount`/`add` child leaf in `children`, used to
-/// recover the assigned value for the explicit `var = X / value = Y` form.
 fn sibling_value_in_children(
     children: &[Child],
     arena: &Arena,
@@ -165,21 +141,15 @@ fn scan_children_for_varset(
     )],
     out: &mut HashMap<String, Vec<DefinedVariable>>,
 ) {
-    // For the explicit `var = value_set[variable] / value = variable_field` form
     // the assigned value lives in a sibling `value` leaf of the same block.
     // Computed lazily: most blocks never hit the arm that needs it.
     let sibling_value = std::cell::OnceCell::new();
     for child in children {
-        // A keyed clause (`key = { ... }`) takes the NodeRule path.
         if let Some(kc) = arena.keyed_clause(child) {
-            // Resolve the clause key with `get_string` (which releases the table
             // lock) rather than holding `with_string` across the recursive
-            // `scan_children_for_varset` calls below — those re-acquire the table
             // lock, which would risk a re-entrant read-lock deadlock under writer
-            // contention during parallel indexing.
             let child_key = get_string_or_empty(table, kc.key.normal);
             for (rule_type, _) in rules {
-                // NodeRule(VariableSetField): the clause's key IS the defined
                 // variable name (F# InfoService fNode).
                 if let RuleType::NodeRule {
                     left: NewField::VariableSetField(ns),
@@ -204,15 +174,10 @@ fn scan_children_for_varset(
                     ..
                 } = rule_type
                 {
-                    // Only recurse when the child's key matches the rule's
-                    // expected key. Previously ALL NodeRules were applied to
-                    // every child node, recording junk variable names.
                     if child_key.eq_ignore_ascii_case(expected_key) {
                         scan_children_for_varset(kc.children, arena, table, inner, out);
                     }
                 } else if let RuleType::NodeRule { rules: inner, .. } = rule_type {
-                    // Non-SpecificField node rule (e.g. alias or scalar key):
-                    // recurse unconditionally as before.
                     scan_children_for_varset(kc.children, arena, table, inner, out);
                 }
             }
@@ -221,19 +186,12 @@ fn scan_children_for_varset(
         match child {
             Child::Leaf(li) => {
                 let leaf = &arena.leaves[*li as usize];
-                // Resolve key and value lazily and only on a matching rule (each
                 // resolution releases the table lock, avoiding the re-entrant
                 // read-lock hazard of nesting `with_string` borrows). Most leaves
-                // match neither variable-set arm, so they allocate nothing.
                 let key = std::cell::OnceCell::new();
                 let val = std::cell::OnceCell::new();
                 for (rule_type, _opts) in rules {
                     match rule_type {
-                        // left = VariableSetField: the leaf's key IS the defined
-                        // variable name, and its RHS is the assigned value
-                        // (shorthand `set_variable = { my_var = 5 }`). Only applies
-                        // when the rule's left is a pure variable-set field (no
-                        // specific key to match against).
                         RuleType::LeafRule {
                             left: NewField::VariableSetField(ns),
                             ..
@@ -252,10 +210,6 @@ fn scan_children_for_varset(
                                 value: (!val.is_empty()).then(|| val.clone()),
                             });
                         }
-                        // right = VariableSetField: the leaf's VALUE is the defined
-                        // variable name (explicit `var = my_var`), but only when the
-                        // leaf's key matches the rule's expected key (SpecificField).
-                        // The assigned value comes from the sibling `value` leaf.
                         RuleType::LeafRule {
                             left: NewField::SpecificField(expected_key),
                             right: NewField::VariableSetField(ns),
@@ -315,15 +269,6 @@ fn scan_children_for_varset(
     }
 }
 
-/// The set of effect/trigger names that DEFINE a `value_set[variable]` (e.g.
-/// `set_variable`, `set_temp_variable`, `add_to_variable`) or a
-/// `value_set[array]` (`add_to_array`, `resize_array`, …). An alias qualifies
-/// when its rule body contains a matching `VariableSetField`. Config-driven, so
-/// it tracks whatever the game's `.cwt` declares rather than a hardcoded list.
-///
-/// Arrays are folded in with variables because the engine stores them the same
-/// way — `my_arr^num` is a variable read — so a name defined by `add_to_array`
-/// is "set" for CW246.
 pub fn variable_defining_effects(ruleset: &RuleSet) -> HashSet<String> {
     fn is_var_set(f: &NewField) -> bool {
         matches!(f, NewField::VariableSetField(ns) if ns == "variable" || ns == "array")
@@ -352,13 +297,7 @@ pub fn variable_defining_effects(ruleset: &RuleSet) -> HashSet<String> {
     out
 }
 
-/// Scan a file's AST for variable definitions and push each raw name into `out`.
 /// For every block whose key is a variable-defining effect, the defined name is
-/// the value of an explicit `var`/`variable` child, or — in the shorthand form
-/// `set_variable = { my_var = 3 }` — the inner assignment's key. The rule-driven
-/// [`collect_defined_variables_from_rules`] misses these because they live inside
-/// `alias[effect]` expansions the type-rule walk never reaches; this direct scan
-/// does not depend on rule matching.
 pub fn collect_set_variable_names(
     file: &ParsedFile,
     table: &StringTable,
@@ -370,10 +309,7 @@ pub fn collect_set_variable_names(
     out.extend(defs.into_iter().map(|d| d.name));
 }
 
-/// Like [`collect_set_variable_names`] but keeps each definition's source
 /// location and, where the block provides one, its assigned value (the `value`
-/// child for the explicit form, or the RHS for the shorthand form). Used by the
-/// LSP so hover/goto can point at a variable's definition and show its value.
 pub fn collect_set_variable_defs(
     file: &ParsedFile,
     table: &StringTable,
@@ -421,12 +357,7 @@ fn variable_def(name: String, value: Option<String>, pos: SourceRange) -> Define
     }
 }
 
-/// Extract variable definitions from the direct children of one variable-defining
 /// effect block (`set_variable = { ... }` and friends): the explicit
-/// `var`/`variable = NAME` form (value from a sibling `value`/`amount`/`add`), or
-/// the shorthand `{ my_var = 5 }` form. Non-recursive — this is one effect
-/// invocation's body. The per-node core shared by [`collect_set_variable_defs`]
-/// and the fused index walk (`crate::collect`); the walk that finds the effect
 /// blocks stays with the caller.
 pub(crate) fn extract_set_variable_defs_block(
     children: &[Child],
@@ -434,9 +365,6 @@ pub(crate) fn extract_set_variable_defs_block(
     table: &StringTable,
     out: &mut Vec<DefinedVariable>,
 ) {
-    // Explicit form: a `var`/`variable`/`array` child holds the name as its
-    // value; the assigned value (if any) is the sibling `value`/`amount`/`add`
-    // leaf.
     let mut explicit = false;
     let sibling_value = sibling_value_in_children(children, arena, table);
     for child in children {
@@ -461,8 +389,6 @@ pub(crate) fn extract_set_variable_defs_block(
     if explicit {
         return;
     }
-    // Shorthand form: the inner assignment key is the variable name and its
-    // RHS (if a leaf) is the assigned value.
     for child in children {
         let (key, value, pos) = match child {
             Child::Leaf(li) => {
@@ -474,8 +400,6 @@ pub(crate) fn extract_set_variable_defs_block(
             _ => continue,
         };
         const SKIP_KEYS: &[&str] = &["value", "tooltip", "var", "variable", "amount", "which"];
-        // Case-insensitive compare without allocating a lowercased copy of the
-        // key just to probe the skip-list (paradox keys are ASCII).
         if !SKIP_KEYS.iter().any(|k| key.eq_ignore_ascii_case(k)) {
             out.push(variable_def(key, value, pos));
         }

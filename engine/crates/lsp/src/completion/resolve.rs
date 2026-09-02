@@ -9,20 +9,6 @@ use crate::Backend;
 
 use super::builders::{ResolveData, alias_documentation, enum_member_detail, type_instance_detail};
 
-/// Recompute the `documentation`/`detail` that `completions_from_rules` /
-/// `value_completions` deferred onto `item.data` (see `builders::ResolveData`).
-/// Returns the item (touched or not) plus whether the recompute produced
-/// anything — a "miss" is any of: no `data` (most items — nothing was
-/// deferred), unparseable `data`, or the referenced alias/type-instance/
-/// enum-member no longer existing in the current ruleset/index (the ruleset
-/// reloaded or the file that defined it closed between the completion
-/// request and this one). All of those are best-effort no-ops, never an
-/// error — resolve only adds detail, it's never load-bearing for accepting
-/// the item.
-///
-/// `type`/`enum` data doesn't carry the instance name/enum value — it's
-/// already `item.label` (see `ResolveData`'s doc comment for why), so both
-/// arms read it back from there instead.
 fn resolve_item(
     mut item: CompletionItem,
     ruleset: Option<&RuleSet>,
@@ -51,11 +37,6 @@ fn resolve_item(
     (item, hit)
 }
 
-/// One line per `completionItem/resolve` call, on the same
-/// `"cwtools_completion"` target `log_completion_summary` uses. `hit` is
-/// `false` for the common case (an item with no deferred `data` at all —
-/// concrete fields, static one-word details) as well as a genuine miss
-/// (the referenced entity is gone).
 fn log_resolve_summary(resolve_us: u64, hit: bool) {
     tracing::info!(
         target: "cwtools_completion",
@@ -65,11 +46,6 @@ fn log_resolve_summary(resolve_us: u64, hit: bool) {
 }
 
 impl Backend {
-    /// `completionItem/resolve`: fill in the `documentation`/`detail` this
-    /// item's `data` describes, using the current ruleset + type index
-    /// (never the snapshot from when the item was built — the two are
-    /// usually the same request-to-resolve, but resolve always reads live
-    /// state rather than caching anything keyed to the completion request).
     pub(crate) fn completion_resolve_impl(&self, item: CompletionItem) -> CompletionItem {
         let t_start = Instant::now();
         let ruleset = self.state.rules.read().ruleset.clone();
@@ -158,7 +134,6 @@ mod tests {
             }],
         );
         Arc::make_mut(&mut info.type_index).merge("file:///states/s.txt", per_type);
-        // label carries the instance name — `data` doesn't repeat it.
         let item = item_with_data("STATE_123", "type:state");
         let (resolved, hit) = resolve_item(item, None, &info);
         assert!(hit);

@@ -1,27 +1,10 @@
-//! "Ignore CWxxx in this workspace" code action: add a diagnostic's code to
-//! the workspace setting `cwtools.errors.ignore` (the VS Code client maps that
-//! to the server's `ignoredErrorCodes`). The edit lands in the workspace's
-//! `.vscode/settings.json`, so the client's settings watcher re-sends
-//! `workspace/didChangeConfiguration` and the live-update path applies it —
-//! the same round trip as editing the setting by hand. The edit is built by a
-//! pure function over the settings file's current text, so the handler and the
-//! unit tests exercise the same mapping.
-
 use std::collections::HashSet;
 use std::path::Path;
 
 use tower_lsp::lsp_types::*;
 
-/// The settings section the VS Code client reads (`cwtools.errors.ignore`),
-/// spelled as the JSON path from the settings root.
 const SETTINGS_KEY: [&str; 3] = ["cwtools", "errors", "ignore"];
 
-/// New text for the workspace's settings JSON after adding `code` to the
-/// ignore list. `existing` is the file's current text (`None` when the file
-/// does not exist yet, or is empty). `None` when the existing text is not
-/// JSON, not an object, or already holds the key as something other than an
-/// array — rewriting any of those would destroy the user's settings, so the
-/// action declines instead.
 pub(super) fn updated_settings_json(code: &str, existing: Option<&str>) -> Option<String> {
     let mut root: serde_json::Value = match existing {
         None => serde_json::json!({}),
@@ -52,11 +35,6 @@ pub(super) fn updated_settings_json(code: &str, existing: Option<&str>) -> Optio
     Some(out)
 }
 
-/// One action per distinct string code in `diagnostics`, each editing the
-/// workspace settings file under `workspace_root` to ignore that code. Codes
-/// already in `ignored` are skipped (a live diagnostic can't be suppressed
-/// already, but a stale client-side one could arrive). Actions whose edit
-/// would corrupt the settings file are skipped via [`updated_settings_json`].
 pub(super) fn ignore_code_actions(
     diagnostics: &[Diagnostic],
     ignored: &[String],
@@ -89,8 +67,6 @@ pub(super) fn ignore_code_actions(
             .filter(|d| d.code.as_ref() == Some(&NumberOrString::String(code.clone())))
             .cloned()
             .collect();
-        // Whole-document replace, the LSP idiom for an edit that rewrites a
-        // file end to end.
         let whole_file = TextEdit {
             range: Range::new(Position::new(0, 0), Position::new(u32::MAX, u32::MAX)),
             new_text: updated,
@@ -176,8 +152,6 @@ mod tests {
 }"#;
         let updated = updated_settings_json("CW100", Some(existing)).expect("builds");
         let parsed: serde_json::Value = serde_json::from_str(&updated).expect("valid json");
-        // The existing file used a flat dotted key; the action must leave it
-        // exactly as written, not restructure it into a nested object.
         assert_eq!(parsed["editor.formatOnSave"], true);
         assert_eq!(parsed["cwtools"]["errors"]["ignore"][0], "CW100");
     }

@@ -1,12 +1,3 @@
-//! `--file` / `--since`: which files a `validate` run reports on.
-//!
-//! Both are report filters, not a smaller run. The cross-file checks need every
-//! file indexed regardless — CW100 resolves against the whole loc union, CW113
-//! against the whole file index — so a scoped run buys a report and an exit code
-//! about the files you touched, plus, where the ruleset has no cross-file use
-//! pass to run, skipping the per-file validation of everything else
-//! (`SessionWithFiles::validate_selected`).
-
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;

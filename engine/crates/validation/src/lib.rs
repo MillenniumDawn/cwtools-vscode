@@ -40,12 +40,6 @@ use resolve::{
 use rule_core::validate_with_type;
 use scope::build_scope_registry;
 
-/// Iterate grandchildren of a skip_root_key wrapper and validate each one uniformly.
-///
-/// `skip_tail` is the remaining skip-stack after the level that led here was
-/// consumed.  When non-empty each grandchild that matches the next level is
-/// itself a skip wrapper and we recurse rather than validate directly (mirrors
-/// the indexer's `[head, tail..]` descent in `walk_skip_root_child`).
 #[allow(clippy::too_many_arguments)]
 fn validate_wrapper_grandchildren(
     ctx: &ValidationCtx,
@@ -80,15 +74,10 @@ fn validate_wrapper_grandchildren(
                         gc_children.as_slice(),
                         pos,
                     ),
-                    // Non-clause scalar leaf inside wrapper: leave as-is (no error).
                     _ => continue,
                 }
             }
             Child::LeafValue(idx) => {
-                // Only emit a bare-value error when we are at the instance level
-                // (no more skip levels to consume).  Inside a multi-level skip
-                // wrapper (e.g. `ideas = { country_ideas = { ... } }`) the
-                // grandchildren here are the next skip layer, not bare values.
                 if skip_tail.is_empty() {
                     let lv = &ast.arena.leaf_values[*idx as usize];
                     let value = leaf_value_to_string(&lv.value, table);
@@ -108,8 +97,6 @@ fn validate_wrapper_grandchildren(
             _ => continue,
         };
 
-        // If there are more skip levels to consume, check whether this grandchild
-        // matches the next level and recurse rather than validate.
         if let [next_level, deeper_tail @ ..] = skip_tail {
             if cwtools_index::skip_root_key_matches(next_level, &gc_key) {
                 validate_wrapper_grandchildren(
@@ -124,18 +111,9 @@ fn validate_wrapper_grandchildren(
                     errors,
                 );
             }
-            // grandchildren that don't match the next level are silently skipped
-            // (they are in a sibling wrapper that doesn't lead to instances of
-            // this type).
             continue;
         }
 
-        // At the instance level (skip_tail is empty): validate normally.
-
-        // A wrapper like `objectTypes` can hold instances of several types
-        // (pdxmesh, pdxparticle, entity, …) that share a path; pick the type that
-        // `## type_key_filter` assigns to THIS grandchild's key rather than
-        // validating every grandchild against whichever type won the path lookup.
         let Some((gc_type_def, gc_rules)) =
             refine_grandchild_type(&candidates, &gc_key, type_def, inner_rules, ruleset)
         else {
@@ -155,8 +133,6 @@ fn validate_wrapper_grandchildren(
     }
 }
 
-/// Validate a parsed file against the ruleset. Localisation-key checks
-/// (CW100/CW122) are skipped; use [`validate_ast_with_loc`] to enable them.
 pub fn validate_ast(
     ast: &ParsedFile,
     ruleset: &RuleSet,
@@ -178,8 +154,6 @@ pub fn validate_ast(
     )
 }
 
-/// As [`validate_ast`], but with a loaded [`LocIndex`] so `LocalisationField`
-/// references are checked for existence and scope-correct loc commands.
 #[tracing::instrument(skip_all)]
 #[allow(clippy::too_many_arguments)]
 pub fn validate_ast_with_loc(
@@ -192,9 +166,6 @@ pub fn validate_ast_with_loc(
     modifier_keys: Option<&HashSet<String>>,
     loc_index: Option<&LocIndex>,
 ) -> Vec<ValidationError> {
-    // Single-file/test entry point: build the per-run shared state (scope
-    // registry) here and delegate. Hot multi-file callers should instead
-    // build a `Prepared` ONCE outside their loop and call `validate_prepared`.
     let registry = build_scope_registry_arc(ruleset, game);
     let (scope_checks, var_checks) = checks_from_env();
     validate_prepared(
@@ -216,9 +187,6 @@ pub fn validate_ast_with_loc(
     )
 }
 
-/// Build the config-driven scope/link registry once, wrapped in an `Arc` so it
-/// can be shared (cheaply cloned) across every file in a validation run. Returns
-/// `None` when no game is set (no scope checks).
 pub fn build_scope_registry_arc(
     ruleset: &RuleSet,
     game: Option<Game>,
@@ -226,10 +194,6 @@ pub fn build_scope_registry_arc(
     game.map(|g| std::sync::Arc::new(build_scope_registry(ruleset, g)))
 }
 
-/// Whether the scope checks (CW104/105/106/243/244/245/248) and the "variable has
-/// not been set" check (CW246) are on. Both are ON by default; set
-/// `CWTOOLS_NO_SCOPE_CHECKS=1` / `CWTOOLS_NO_VAR_CHECKS=1` as escape hatches.
-/// Read once at context-construction time.
 pub fn checks_from_env() -> (bool, bool) {
     (
         std::env::var("CWTOOLS_NO_SCOPE_CHECKS").is_err(),
@@ -237,10 +201,6 @@ pub fn checks_from_env() -> (bool, bool) {
     )
 }
 
-/// The per-run shared validation state, built once and reused across every file
-/// in a run. Bundles everything [`validate_prepared`] needs beyond the per-file
-/// `ast` and `file_path`, so callers pass one value instead of a ten-argument
-/// call. All fields are borrows, so it is cheap to copy.
 #[derive(Clone, Copy)]
 pub struct Prepared<'a> {
     pub ruleset: &'a RuleSet,
@@ -249,32 +209,13 @@ pub struct Prepared<'a> {
     pub type_index: Option<&'a cwtools_index::TypeIndex>,
     pub modifier_keys: Option<&'a HashSet<String>>,
     pub loc_index: Option<&'a LocIndex>,
-    /// Extra loc keys to treat as existing (the LSP live overlay of unsaved keys
-    /// in open `.yml` files). Lowercased. `None` outside the LSP single-file path.
     pub extra_loc_keys: Option<&'a HashSet<String>>,
-    /// The mod's `common/inline_scripts` bodies, so a call site can be checked
-    /// against what it actually pulls in. `None` leaves every `inline_script`
-    /// call accepted unexpanded.
     pub inline_scripts: Option<&'a inline_script::InlineScripts>,
     pub registry: Option<&'a std::sync::Arc<ScopeRegistry>>,
     pub scope_checks: bool,
     pub var_checks: bool,
 }
 
-/// Build the per-file starting scope context — shared by `validate_prepared`
-/// and the position resolver so both seed the same root scope.
-///
-/// Scope-agnostic content is reused from many calling scopes (or operates on a
-/// data-dependent element scope), so it can't be pinned to one. Seed ANY so its
-/// body isn't scope-checked against an arbitrary default. Everything else starts
-/// at the config's `country` scope, or ANY when the config declares none.
-///   - scripted_effects/triggers/localisation: called from any scope.
-///   - collections: the `limit`/`operators` run in the input element's scope
-///     (`game:all_states` -> state, `game:all_countries` -> country); per the
-///     HOI4 collections docs the element scope is data-dependent.
-///   - dynamic_modifiers: the `enable`/`remove_trigger` run in the scope the
-///     modifier is applied to (country, state, or unit leader; "root is the
-///     effect scope" per the HOI4 docs).
 pub(crate) fn initial_scope_context(
     file_path: &str,
     registry: Option<&std::sync::Arc<ScopeRegistry>>,
@@ -285,8 +226,6 @@ pub(crate) fn initial_scope_context(
         || path_contains_segment(&clean, "scripted_localisation")
         || path_contains_segment(&clean, "collections")
         || path_contains_segment(&clean, "dynamic_modifiers");
-    // No `country` in the config (or no scopes at all) -> seed the wildcard rather
-    // than a made-up id, which would print as `scope_100` in a scope diagnostic.
     let default_root = registry
         .and_then(|r| r.id_of("country"))
         .unwrap_or(SCOPE_ANY);
@@ -298,9 +237,6 @@ pub(crate) fn initial_scope_context(
     registry.map(|r| ScopeContext::from_registry(std::sync::Arc::clone(r), initial_scope))
 }
 
-/// Validate one parsed file against prebuilt per-run state. The hot path: build
-/// [`Prepared`] once (scope registry + enum map + indexes) and call this per file
-/// instead of rebuilding that state for every file.
 #[tracing::instrument(skip_all)]
 pub fn validate_prepared(
     ast: &ParsedFile,
@@ -310,11 +246,6 @@ pub fn validate_prepared(
     validate_prepared_inner(ast, file_path, prepared, None).0
 }
 
-/// As [`validate_prepared`], but also reporting which instances of the
-/// reference-tracked types this file uses, for the project-wide unused check
-/// (CW239/CW231). The batch driver calls this once per file, merges the sets,
-/// and then runs [`references::check_unused_instances`] over each file's own
-/// definitions. See [`references`] for why it can't be decided per file.
 pub fn validate_prepared_tracking_uses(
     ast: &ParsedFile,
     file_path: &str,
@@ -363,9 +294,6 @@ fn append_inline_script_expansion_budget_error(
     errors.push(error);
 }
 
-/// The body behind both `validate_prepared` entry points. Returns the file's
-/// diagnostics and the number of alias branches evaluated producing them — the
-/// second is what the memo tests assert on, and no caller acts on it.
 fn validate_prepared_inner(
     ast: &ParsedFile,
     file_path: &str,
@@ -389,12 +317,8 @@ fn validate_prepared_inner(
 
     let mut scope_context = initial_scope_context(file_path, registry);
 
-    // Interned once per file; every diagnostic this run emits (including the
-    // candidate errors the disjunctions discard) shares it.
     let file_arc: common::FilePath = std::sync::Arc::from(file_path);
 
-    // Owned out here so an expanded inline_script body can borrow the same
-    // per-file budgets rather than being handed fresh ones.
     let alias_branch_budget = std::cell::RefCell::new(AliasBranchBudget::default());
     let inline_script_expansion_budget =
         std::cell::RefCell::new(ctx::InlineScriptExpansionBudget::default());
@@ -421,17 +345,10 @@ fn validate_prepared_inner(
         type_uses,
     };
 
-    // Pre-compute path-based type match (most specific wins).
-    // Lowercase once and filter path-matching type candidates once per file so
-    // the per-child loop only runs key-dependent scoring over the small candidate
-    // set rather than scanning all types N_children times.
     let file_path_lower = file_path.to_lowercase();
     let path_candidates = path_candidates_for_file(&file_path_lower, ruleset);
     let path_type = find_type_from_candidates(&path_candidates, None);
 
-    // type_per_file: the WHOLE file is a single instance of this type (e.g. an
-    // OOB file). Its root children ARE the instance body — there is no per-entry
-    // wrapper key — so validate them once against the type's rules and stop.
     if let Some(td) = path_type
         && td.type_per_file
     {
@@ -458,11 +375,6 @@ fn validate_prepared_inner(
         return (errors, ctx.alias_branches_evaluated());
     }
 
-    // Resolve each root child's owning type (exact root-key match, then path
-    // fallback) via the shared dispatch, then validate accordingly. The navigator
-    // (`rules_at_pos`) runs the identical resolution; `allow_content_fallback` is
-    // the one place they differ — the validator never content-validates an
-    // index-only path match (it skips), so it passes false.
     let dispatch = DispatchInput {
         ruleset,
         file_path,
@@ -514,7 +426,6 @@ fn validate_prepared_inner(
         }
     }
 
-    // Run game-specific validators if game is provided.
     if !ctx.alias_branch_budget_exhausted()
         && let Some(g) = game
     {

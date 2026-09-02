@@ -1,44 +1,3 @@
-//! `cwtools.toml` — the settings a CI job would otherwise repeat on every
-//! command line.
-//!
-//! Discovered by walking up from the target directory (or the process CWD when
-//! the command line didn't name one); `--config <path>` skips discovery and
-//! uses exactly that file. Command-line flags always win over file values.
-//! Relative paths in the file resolve against the file's own directory, so the
-//! same config works from any working directory.
-//!
-//! ```toml
-//! game = "hoi4"
-//! rules = "../cwtools-hoi4-config/Config"
-//! vanilla = "/games/Hearts of Iron IV"
-//! vanilla-cache = "ci/vanilla.cwb"
-//! no-vanilla-cache = false
-//! refresh-vanilla-cache = false
-//! directory = "."
-//! report-type = "github"
-//! min-severity = "warning"
-//! fail-on = "error"
-//! ignore-files = ["*.notes"]
-//! ignore-dirs = ["build", "temp*"]
-//! loc-languages = ["english"]
-//! ignore-codes = ["CW100", "CW113"]
-//! only-codes = []
-//! allow-empty = false
-//! ```
-//!
-//! `validate` reads every key. `fix` reads all but `report-type`,
-//! `min-severity` and `fail-on` (it writes edits, not a report), and takes
-//! `only-codes` as the config spelling of its `--code`. `format` reads
-//! `directory`, the ignore lists and `allow-empty`. `loc` reads the keys
-//! that shape a localisation scan: `game` and `rules` (which turn on the scope
-//! checks), `directory`, `report-type`, `min-severity`, `fail-on`,
-//! `ignore-files`, `ignore-dirs`, `loc-languages`, the two code lists and
-//! `allow-empty`.
-//!
-//! The parser accepts the TOML this schema needs — comments, bare keys, basic
-//! and literal strings, booleans, and (multi-line) string arrays — and rejects
-//! everything else by name and line rather than guessing.
-
 use crate::report::ReportType;
 use crate::run::FailOn;
 use cwtools_localization::Lang;
@@ -46,10 +5,8 @@ use cwtools_validation::ErrorSeverity;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// The file name searched for when `--config` isn't given.
 pub(crate) const FILE_NAME: &str = "cwtools.toml";
 
-/// Every key the schema defines, in the order the error message lists them.
 const KEYS: &[&str] = &[
     "game",
     "directory",
@@ -70,12 +27,8 @@ const KEYS: &[&str] = &[
     "allow-empty",
 ];
 
-/// The keys each subcommand consumes. A file may hold settings for all three, so
-/// a key outside the running command's set is reported rather than left to look
-/// like it did nothing.
 pub(crate) const VALIDATE_KEYS: &[&str] = KEYS;
 
-/// `fix` writes edits, not a report, so the report-shaping keys don't apply.
 pub(crate) const FIX_KEYS: &[&str] = &[
     "game",
     "directory",
@@ -93,12 +46,9 @@ pub(crate) const FIX_KEYS: &[&str] = &[
     "allow-empty",
 ];
 
-/// `format` reprints script files; it does not load rules or the base game.
 pub(crate) const FORMAT_KEYS: &[&str] =
     &["directory", "ignore-files", "ignore-dirs", "allow-empty"];
 
-/// `loc` lints a directory of loc files. It reads the ruleset for its scopes and
-/// links, but never indexes the base game, so the vanilla keys don't apply.
 pub(crate) const LOC_KEYS: &[&str] = &[
     "game",
     "directory",
@@ -114,8 +64,6 @@ pub(crate) const LOC_KEYS: &[&str] = &[
     "allow-empty",
 ];
 
-/// A config file that can't be used. Always names the file (and the line, for a
-/// syntax problem) so a broken config in CI is diagnosable from the log alone.
 #[derive(Debug, thiserror::Error)]
 #[error("{location}: {message}")]
 pub(crate) struct ConfigError {
@@ -139,8 +87,6 @@ impl ConfigError {
     }
 }
 
-/// A parsed `cwtools.toml`. Values are validated at load, so a bad game id or
-/// severity fails naming the file rather than surfacing as a confusing run.
 #[derive(Debug, Default)]
 pub(crate) struct FileConfig {
     /// Absolute path of the file the values came from.
@@ -167,10 +113,6 @@ pub(crate) struct FileConfig {
     pub(crate) allow_empty: bool,
 }
 
-/// Resolve the config governing a run. `explicit` is `--config` and must exist;
-/// otherwise walk up from `anchor` (the target directory, or the CWD when the
-/// command line didn't name one). `Ok(None)` means no config file was found,
-/// i.e. the run is flags-only.
 pub(crate) fn resolve(
     explicit: Option<&Path>,
     anchor: Option<&Path>,
@@ -199,14 +141,12 @@ pub(crate) fn resolve(
     load(&path).map(Some)
 }
 
-/// The first `cwtools.toml` at or above `dir`.
 fn discover(dir: &Path) -> Option<PathBuf> {
     dir.ancestors()
         .map(|d| d.join(FILE_NAME))
         .find(|p| p.is_file())
 }
 
-/// Read and validate one config file.
 pub(crate) fn load(path: &Path) -> Result<FileConfig, ConfigError> {
     let path = absolute(path);
     let text = std::fs::read_to_string(&path)
@@ -216,24 +156,15 @@ pub(crate) fn load(path: &Path) -> Result<FileConfig, ConfigError> {
     from_entries(path.clone(), &dir, entries)
 }
 
-/// `path` made absolute where that can be computed, so every message names a
-/// location the reader can act on.
 fn absolute(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-// ── Merge helpers ────────────────────────────────────────────────────────────
-
-/// Record `key` as taken from the file. The key is what the "Using config …"
-/// line prints, so a call site that misspells one would report a setting the
-/// schema doesn't have.
 fn note(key: &'static str, applied: &mut Vec<&'static str>) {
     debug_assert!(KEYS.contains(&key), "`{key}` is not a cwtools.toml key");
     applied.push(key);
 }
 
-/// Resolve one optional setting: the flag wins, and a value taken from the file
-/// is recorded under `key` for the "Using config …" line.
 pub(crate) fn pick<T>(
     flag: Option<T>,
     file: Option<T>,
@@ -250,8 +181,6 @@ pub(crate) fn pick<T>(
     }
 }
 
-/// Repeatable list settings: any occurrence of the flag replaces the file's
-/// list outright, so a command line never half-merges with a config.
 pub(crate) fn pick_list<T>(
     flag: Vec<T>,
     file: Vec<T>,
@@ -265,8 +194,6 @@ pub(crate) fn pick_list<T>(
     file
 }
 
-/// Switch settings. A flag can only turn one on, so a file `true` and the flag
-/// OR together; there is no command-line way back to `false`.
 pub(crate) fn pick_flag(
     flag: bool,
     file: bool,
@@ -279,9 +206,6 @@ pub(crate) fn pick_flag(
     flag || file
 }
 
-/// Resolve a default-true boolean (CW113 case-sensitivity): an explicit CLI
-/// value wins, then an explicit config-file value, then `true`. `flag` is `None`
-/// when the flag wasn't passed; `file` is `None` when the key wasn't set.
 pub(crate) fn pick_flag_default(
     flag: Option<bool>,
     file: Option<bool>,

@@ -30,9 +30,6 @@ fn completion_request_is_current(
     generations.get(uri).copied() == Some(request_id)
 }
 
-/// Snapshotted ruleset-derived state for one completion request. The `Arc`s
-/// carry the lifetime across the request so the helpers can take borrows
-/// without holding the rules read guard.
 type RulesSnapshot = (
     Option<Arc<RuleSet>>,
     Arc<HashSet<String>>,
@@ -40,13 +37,6 @@ type RulesSnapshot = (
     Option<Arc<cwtools_game::scope_registry::ScopeRegistry>>,
 );
 
-/// One line per completion request on `target: "cwtools_completion"`, emitted
-/// before every return path. Cheap when the level is disabled — tracing
-/// checks that before formatting the fields — so it stays on unconditionally.
-/// `strategy` is one of `"complete"` (small unfiltered list), `"filtered"`
-/// (subsequence-prefiltered and capped), or `"none"` (nothing to offer);
-/// `incomplete` — whether the response is flagged `is_incomplete` — follows
-/// directly from it, so it isn't a separate parameter.
 #[allow(clippy::too_many_arguments)]
 fn log_completion_summary(
     total: Duration,
@@ -74,19 +64,9 @@ fn log_completion_summary(
 }
 
 impl Backend {
-    /// The best-ranked loc keys for the typed token, capped at [`CONTEXT_CAP`].
-    /// Served from the scan-built [`LocKeyIndex`] when there is one — a linear
-    /// sweep of the ~400K-key union per keystroke is the single biggest cost on
-    /// the loc completion path. Same result either way (see the equivalence
-    /// test in `loc_keys`).
     fn completion_loc_keys(&self, token: &str) -> HashSet<String> {
         let index = self.state.loc_key_index.read().clone();
         if let Some(index) = index {
-            // The overlays are read directly rather than snapshotted: they are
-            // only the open `.yml` files' keys plus the watched files' keys, and
-            // cloning them per keystroke was itself thousands of allocations.
-            // No other lock is held here; live before watched, matching the
-            // documented order.
             let overlay = self.state.loc_live_overlay.read();
             let watched = self.state.loc_watched_overlay.read();
             return index.select(
@@ -98,8 +78,6 @@ impl Backend {
                 CONTEXT_CAP,
             );
         }
-        // Before the first scan builds the index (and in tests that never
-        // scan): sweep whatever the union holds.
         let overlay_keys = self.loc_overlay_keys();
         let index_guard = self.state.loc_index.read();
         let keys = index_guard
@@ -176,8 +154,6 @@ impl Backend {
             );
         }
 
-        // Resource and unsupported files never enter the game-script fallback.
-        // Localisation has a separate path below.
         if !crate::paths::is_loc_file(&uri) && !crate::paths::is_script_file(&uri) {
             log_completion_summary(
                 t_start.elapsed(),
@@ -191,12 +167,6 @@ impl Backend {
             );
             return Ok(None);
         }
-        // Fast-typing cancel: each new request stores a unique per-URI id.
-        // The request captures the value at entry and
-        // re-checks it before doing any heavy work; if a newer request has
-        // already started, this one returns `None` so the runtime can drop
-        // the work. Stops a burst of N keystrokes from stacking N parallel
-        // AST walks when only the latest one matters.
         let my_generation = {
             let documents = self.state.documents.lock();
             if !documents.contains_key(&uri) {
@@ -233,9 +203,6 @@ impl Backend {
             return Ok(None);
         }
 
-        // Try context-aware completions first: resolve the rules at the cursor
-        // with the validation engine's own descent (aliases, typed keys,
-        // subtypes, skip_root_key — see cwtools_validation::position).
         let (ws_prefix, language, scope_checks, var_checks) = {
             let cfg = self.state.config.read();
             (
@@ -247,36 +214,17 @@ impl Backend {
         };
         let logical_path = logical_path_from_uri(&uri, &ws_prefix);
 
-        // Snapshot the doc text + AST into owned data, then drop the
-        // `documents` guard before any heavy work. `documents.lock()` is the
-        // only exclusive lock in the LSP state, so holding it across the whole
-        // completion blocks `did_open`/`did_change`/`did_close` and the
-        // debounced validate's AST update for the duration — the worst case
-        // being the user typing into a file whose previous validate is still
-        // running. The same pattern for the rules guard: clone the Arcs and
-        // drop the guard. The helpers below take borrows, so the Arcs carry
-        // the lifetime across the work without holding the lock. `text` is an
-        // `Arc<str>`, so this clone is a refcount bump, not a copy of the
-        // whole document.
         let doc_text: Arc<str> = {
             let docs = self.state.documents.lock();
             docs.get(&uri).map(|d| d.text.clone()).unwrap_or_default()
         };
         let (lsp_line, lsp_col) = lsp_pos_to_source_in_text(&doc_text, pos, &position_encoding);
-        // Replace-range for every item the script paths return: the identifier
-        // token under the cursor. Loc completion keeps its own behavior (the
-        // cached items are shared and the token shape differs), so it is not
-        // anchored here.
         let replace_range = current_token_range_with_encoding(
             &doc_text,
             pos.line,
             pos.character,
             &position_encoding,
         );
-        // The typed token so far (up to the cursor, not the whole replace
-        // range): the subsequence prefilter below matches candidates against
-        // this, not the range end, since the range may extend past the cursor
-        // mid-word.
         let token = current_token_text_with_encoding(
             &doc_text,
             pos.line,
@@ -293,9 +241,6 @@ impl Backend {
                 rules_guard.scope_registry.clone(),
             )
         };
-        // Drop the read guard before the heavy work. Bump the generation
-        // check here too — the rule-snapshot block is cheap, but we want the
-        // staleness gate to cover the full body of the function from here.
         if is_stale() {
             log_completion_summary(
                 t_start.elapsed(),
@@ -310,8 +255,6 @@ impl Backend {
             return Ok(None);
         }
 
-        // Localisation completion is syntax-sensitive: ordinary text and `$...$`
-        // references offer loc keys, while an open `[...]` offers data functions.
         if crate::paths::is_loc_file(&uri) {
             let context = scope_names::loc_completion_context(&doc_text, pos, &position_encoding);
             let loc_range =
@@ -352,20 +295,7 @@ impl Backend {
             );
         }
 
-        // `Some(items)` = the rule context resolved (items may still be empty:
-        // an unknown block where suggestions from any other level would be
-        // wrong). `None` = no doc/ruleset/AST — fall through to the flat list.
-        //
-        // `ast_for` returns the last good parse, or (when the last parse failed)
-        // a fresh parse of the live text for this request only, so a half-typed
-        // buffer still resolves a context.
-        //
-        // The bool paired with the item list is `resolved_value_pos`: true when
-        // the cursor sat at a leaf VALUE position whose rule set was concretely
-        // matched (non-empty value rules). When such a position yields no items,
-        // the flat variable dump below must NOT stand in for it — that dump is
         // the #74/#75/#79 bug. Key positions and unresolved contexts keep the
-        // bool false so the fallback still fires for them.
         let t_ast = Instant::now();
         let mut ast_source = AstSource::None;
         let effective_ast: Option<Arc<ParsedFile>> = self.ast_snapshot_for(&uri).map(|snapshot| {
@@ -373,11 +303,6 @@ impl Backend {
             snapshot.ast
         });
         ast_dur = t_ast.elapsed();
-        // Whether the AST the context resolved against parsed with no errors.
-        // A buffer with an unclosed clause elsewhere is still in flux — the
-        // resolved context can flip on the very next keystroke — so a small
-        // list from a dirty parse must stay `is_incomplete: true` even though
-        // its size alone would otherwise qualify it as `"complete"` below.
         let mut context_is_clean = false;
         let context_items: Option<(Vec<CompletionItem>, usize, bool)> =
             match (effective_ast, ruleset_arc.as_ref()) {
@@ -418,7 +343,6 @@ impl Backend {
                     rules_dur = t_rules.elapsed();
                     let t_build = Instant::now();
                     let items = match rctx_opt {
-                        // Outside any known entity — offer root-type snippets.
                         None => Some((root_type_snippets(rs, &logical_path), 0, false)),
                         Some(rctx) => {
                             let ((items, built_dropped), resolved_value_pos) =
@@ -427,7 +351,6 @@ impl Backend {
                                         l.key.is_empty() && rctx.value_rules.is_empty()
                                     });
                                     if is_bare_key {
-                                        // Bare token (no `=`): treat as a key being typed, not a value.
                                         (
                                             completions_from_rules(
                                                 &rctx.child_rules,
@@ -473,8 +396,6 @@ impl Backend {
                                     pos.character,
                                     &position_encoding,
                                 ) {
-                                    // Mid-edit `key = |`: the last good parse has no such
-                                    // leaf yet; resolve the value rules from the live line.
                                     let vr: Vec<cwtools_rules::rules_types::NewRule> =
                                         value_rules_for_key(
                                             rs,
@@ -534,9 +455,6 @@ impl Backend {
             };
 
         if let Some((items, built_dropped, resolved_value_pos)) = context_items {
-            // `built_dropped > 0` with an empty list still means the context
-            // resolved (every candidate was prefiltered out) — return the empty
-            // incomplete list rather than falling into the flat fallback dump.
             if !items.is_empty() || built_dropped > 0 {
                 let (mut items, is_incomplete, strategy) = prepare_context_items(
                     items,
@@ -563,9 +481,6 @@ impl Backend {
                     items,
                 })));
             }
-            // Value position matched a concrete rule but had nothing to offer
-            // (empty dynamic set, or a value type with no enumerable members):
-            // return no completions rather than the flat variable dump.
             if resolved_value_pos {
                 log_completion_summary(
                     t_start.elapsed(),
@@ -581,31 +496,11 @@ impl Backend {
             }
         }
 
-        // Fallback: flat global list (original behavior) when context-aware
-        // matching produced nothing (no rules loaded, unrecognised path, or a
-        // context `rules_at_pos` can't reach, e.g. inside an alias-driven block
-        // like `check_variable = { … }`). On a large mod the workspace has tens
-        // of thousands of variables/targets/keys, so cap the dump and flag the
-        // result `is_incomplete` — the client re-requests as the user narrows.
-        //
-        // Cached by info revision: a hit skips the `info.files` walk that
-        // dominates the build time on a 7k-file mod. This is the case that
-        // fires on every keystroke in the half-typed state — the user is in a
-        // position the AST doesn't know about, context-aware returns None,
-        // and the fallback is the only thing returned. Without the cache,
-        // every keystroke re-walks every file's top-level keys.
-        // Only the dynamic value sets — variables and event targets — are
-        // capped this low; see the comment below on why the old fallback's
-        // full type/enum/key dump was cut down to just these.
         const FALLBACK_CAP: usize = 2000;
         let revision = self
             .state
             .info_revision
             .load(std::sync::atomic::Ordering::Relaxed);
-        // Filter under the lock and clone only the survivors. The cache never
-        // sees the token (it is shared across every request), and cloning the
-        // whole capped list per keystroke just to throw most of it away in the
-        // filter was the bulk of a cache-hit request.
         let hit = {
             let guard = self.state.fallback_cache.lock();
             match guard.as_ref() {
@@ -639,15 +534,6 @@ impl Backend {
                 items,
             })));
         }
-        // Narrowed fallback: only the dynamic value sets — variables and event
-        // targets. The old fallback also dumped every type, enum, and top-level
-        // key in the workspace; that flood is exactly the "irrelevant context"
-        // that appears the moment a backspace drops the cursor into a position
-        // the AST can't resolve (most often a math / `check_variable` block,
-        // where variables and event targets are the only things you'd type
-        // anyway). Types/enums/keys are still offered wherever the context-aware
-        // path resolves a real rule. The `text_edit` anchor below filters this
-        // set to the typed token client-side.
         let mut items = Vec::new();
 
         let t_fallback_build = Instant::now();
@@ -692,17 +578,7 @@ impl Backend {
             );
             Ok(None)
         } else {
-            // Always flag the fallback `is_incomplete` so the client re-requests
-            // on each keystroke. Otherwise VS Code caches this generic dump and
-            // keeps filtering it client-side even after the parse recovers and a
-            // real rule context becomes available — the "stuck on abc suggestions"
-            // symptom. With is_incomplete, the next keystroke re-queries and the
             // context-aware list replaces it. (#41)
-            // Cache the un-anchored, un-filtered items: the replace-range is
-            // per-request and the token narrows on every keystroke, so filter
-            // and anchor only what is returned, not the cached copy. Clone the
-            // survivors out first, then hand the full list to the cache — the
-            // reverse cloned every item whether or not it matched.
             let mut returned: Vec<CompletionItem> = items
                 .iter()
                 .filter(|it| token_matches(it, &token))

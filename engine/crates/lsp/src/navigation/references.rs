@@ -60,7 +60,6 @@ impl Backend {
             if self.is_known_loc_key(&lower) {
                 return Some(lower);
             }
-            // Fallback for unsaved keys: only treat word before `:` as key.
             if let Some(colon) = line.find(':')
                 && let Some(word_col) = line.find(&word)
                 && word_col < colon
@@ -69,7 +68,6 @@ impl Backend {
             }
             return None;
         }
-        // Script file: prefer rule-classified LocRef
         if let Some(info) = self.rule_info_at_cursor(uri, pos, logical_path)
             && let ReferenceHint::LocRef { key } = info.hint
         {
@@ -89,13 +87,11 @@ impl Backend {
 
     pub(crate) async fn loc_file_uris(&self) -> Vec<String> {
         let mut uris: std::collections::HashSet<String> = std::collections::HashSet::new();
-        // Open loc docs
         for uri in self.state.documents.lock().keys() {
             if crate::paths::is_loc_file(uri) {
                 uris.insert(uri.clone());
             }
         }
-        // Discovered loc files under workspace roots
         let (roots, ignore_files, ignore_dirs): (
             Vec<std::path::PathBuf>,
             Vec<String>,
@@ -156,7 +152,6 @@ impl Backend {
                 uris.insert(crate::paths::path_to_uri(&path));
             }
         }
-        // Vanilla not under workspace roots; discovered set is complete.
         uris.into_iter().collect()
     }
 
@@ -215,7 +210,6 @@ impl Backend {
         if keys.is_empty() {
             return Vec::new();
         }
-        // Gather candidate script files: indexed files + open docs
         let mut script_uris: std::collections::HashSet<String> = std::collections::HashSet::new();
         {
             let info = self.state.info_service.read();
@@ -268,7 +262,6 @@ impl Backend {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(&uri, &ws_prefix);
 
-        // Loc key: find definitions in .yml plus script usages.
         if let Some(key_lower) = self.loc_key_at_cursor(&uri, pos, &logical_path).await {
             let include_declaration = params.context.include_declaration;
             let fallback = &params.text_document_position.text_document.uri;
@@ -285,11 +278,6 @@ impl Backend {
             }
         }
 
-        // Rule-aware: identify a TypeRef at cursor, then gather every location
-        // where that instance is defined or used. Definitions come from the
-        // TypeIndex; use sites from the live AST of open docs plus the workspace
-        // reverse index for closed files. Use-site columns are resolved from
-        // text (the parser records the leaf key, not the value, precisely).
         let type_ref = self.type_ref_at_cursor(&uri, pos, &logical_path);
 
         let include_declaration = params.context.include_declaration;
@@ -308,7 +296,6 @@ impl Backend {
                 Vec::new()
             };
 
-            // 2. Use-sites (open docs via live AST + closed files via index).
             let sites = self.collect_use_sites(&type_name, &instance_name);
             let mut text_uris: Vec<String> = definitions
                 .iter()
@@ -339,7 +326,6 @@ impl Backend {
             }
         }
 
-        // Fallback: heuristic-based approach
         if let Some(element) = self.element_at_cursor(&uri, pos) {
             let symbol = match &element {
                 PositionElement::Leaf { key, .. } => key.clone(),
@@ -371,11 +357,6 @@ impl Backend {
         Ok(None)
     }
 
-    /// Gather all use sites `(file_uri, key location)` of `instance_name` as a
-    /// `type_name` reference: open docs from their live AST, closed files from
-    /// the workspace reverse index. Open docs are taken only from the live scan
-    /// (their index entry can lag a keystroke), so the reverse-index half skips
-    /// them.
     pub(crate) fn collect_use_sites(
         &self,
         type_name: &str,
@@ -409,11 +390,6 @@ impl Backend {
         sites
     }
 
-    /// Resolve each `(file_uri, key_loc)` use site to `(file_uri, value_line0,
-    /// value_col, resolved)`. Reads each file once (open-doc text or disk) and
-    /// locates `name` as a whole token on the key line (falling back to the next
-    /// line). When the value can't be located, `resolved` is false and the key
-    /// position is returned unchanged.
     pub(crate) fn resolve_value_sites(
         &self,
         sites: &[(String, cwtools_info::SourceLocation)],
@@ -434,14 +410,12 @@ impl Backend {
                 let key_col = loc.col as u32;
                 let mut resolved = None;
                 if let Some(lines) = &lines {
-                    // Value on the key line, after the `=` that follows the key.
                     if let Some(line) = lines.get(key_line0 as usize)
                         && let Some(from) = value_start_after_eq(line, key_col)
                         && let Some(col) = value_col_in_line(line, name, from)
                     {
                         resolved = Some((key_line0, col));
                     }
-                    // Fallback: `key =` with the value on the next line.
                     if resolved.is_none()
                         && let Some(line) = lines.get(key_line0 as usize + 1)
                         && let Some(col) = value_col_in_line(line, name, 0)
@@ -458,8 +432,6 @@ impl Backend {
         out
     }
 
-    /// The current text of `uri`: the open-doc buffer if open, else read from
-    /// disk through the access boundary on Tokio's blocking pool.
     pub(crate) async fn file_text_for(&self, uri: &str) -> Option<String> {
         {
             let docs = self.state.documents.lock();
@@ -506,8 +478,6 @@ impl Backend {
             return snapshots;
         }
         let roots = self.state.config.read().authorized_roots.clone();
-        // Parallel because rename and references batch one read per file naming
-        // the symbol, which is hundreds of files for a widely-used one.
         use rayon::prelude::*;
         if let Ok(read) = tokio::task::spawn_blocking(move || {
             closed
@@ -536,10 +506,6 @@ impl Backend {
         snapshots
     }
 
-    /// The span `token` covers at (`line`, `column`), resolved against the
-    /// file's line index. `None` when the file's text was never read (a closed
-    /// file the access boundary refused), where the parser's raw column is the
-    /// best answer available.
     pub(crate) fn source_range_with_lines(
         &self,
         lines: Option<&DocLines>,

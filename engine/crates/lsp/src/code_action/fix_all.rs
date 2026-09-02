@@ -8,21 +8,12 @@ use crate::Backend;
 
 use super::payload::source_range_to_lsp;
 
-/// One URI's resolved fix-all-workspace edits: the survivors after overlap
-/// resolution (`plan_file_edits`), and how many were dropped for overlapping
-/// another kept edit.
 struct PlannedFileFixes {
     uri: String,
     kept: Vec<SpanEdit>,
     skipped: usize,
 }
 
-/// Resolve every URI's stored fixable edits against its current text via
-/// `plan_file_edits` — the same overlap resolution `source.fixAll` and the
-/// CLI `fix` subcommand use, so all three agree on what a fixed workspace
-/// looks like. `texts` maps URI -> current text; a URI missing from it (the
-/// file couldn't be read when the command ran) is dropped. Pure: the caller
-/// does the reads and hands the results in.
 fn plan_workspace_fixes(
     snapshot: &HashMap<String, Vec<(String, SpanEdit)>>,
     texts: &HashMap<String, String>,
@@ -41,11 +32,7 @@ fn plan_workspace_fixes(
         .collect()
 }
 
-/// The `workspace/applyEdit` `changes` map for every file with at least one
 /// surviving edit, converted to LSP `TextEdit`s with the negotiated encoding
-/// against each file's own text. A URI that fails to parse (never observed —
-/// it round-tripped through `publish_filtered` as a valid URI) is dropped
-/// rather than panicking.
 fn workspace_edit_changes(
     planned: &[PlannedFileFixes],
     texts: &HashMap<String, String>,
@@ -74,9 +61,6 @@ fn workspace_edit_changes(
     changes
 }
 
-/// Build the negotiated workspace edit from the exact snapshots used to
-/// calculate its ranges. Versioned document changes prevent a supported client
-/// from applying edits to a newer open-document version.
 fn workspace_edit_for_snapshots(
     changes: HashMap<Url, Vec<TextEdit>>,
     snapshots: &HashMap<String, crate::FileTextSnapshot>,
@@ -107,10 +91,6 @@ fn workspace_edit_for_snapshots(
     }
 }
 
-/// The command's result message when every fixable file was refused by the
-/// edit boundary. Distinct from the empty-store message: the problems are real
-/// and the user can see them in the panel, they just aren't in a file cwtools
-/// will write to.
 fn outside_workspace_summary(refused: usize) -> String {
     format!("Skipped {refused} file(s) with auto-fixable problems: they are outside the workspace.")
 }
@@ -132,8 +112,6 @@ fn fixable_edits_match(
     )
 }
 
-/// The command's result message on success. Stale and overlapping edits are
-/// reported separately from files refused by the workspace edit boundary.
 fn fix_all_workspace_summary(
     edits_applied: usize,
     files_changed: usize,
@@ -161,20 +139,12 @@ fn fix_all_workspace_summary(
 }
 
 impl Backend {
-    /// `fixAllWorkspace` execute-command handler. Returns the message shown to
-    /// the user (no result payload otherwise): a "nothing to do" message when
-    /// the store is empty or every entry resolved to zero edits, a "skipped"
-    /// message when the only fixable files were outside the workspace, stale
-    /// edits are dropped and counted, an error message when the client rejects
-    /// the `workspace/applyEdit`, else the summary from
-    /// [`fix_all_workspace_summary`].
     pub(crate) async fn fix_all_workspace_impl(&self) -> String {
         let mut snapshot = self.state.fixable_edits.lock().clone();
         if snapshot.is_empty() {
             return "No auto-fixable problems in the workspace.".to_string();
         }
 
-        // The edit boundary is workspace-only and performs synchronous
         // canonicalization, so keep it off the request worker too (#160).
         let edit_roots = self.state.config.read().editable_roots.clone();
         let candidate_uris: Vec<String> = snapshot.keys().cloned().collect();
@@ -312,8 +282,6 @@ mod tests {
     #[test]
     fn plan_workspace_fixes_reports_overlap_skips_per_file() {
         let mut snapshot = HashMap::new();
-        // "aaaa b" and "bbbb" share column 5 — the same overlap fixture as
-        // `plan_file_edits`'s own test.
         snapshot.insert(
             "file:///a.txt".to_string(),
             vec![
@@ -438,9 +406,6 @@ mod tests {
         assert!(fixable_edits_match(&closed, Some(&unchanged)));
     }
 
-    /// "Nothing to fix" and "everything fixable is off-limits" are different
-    /// answers: the second leaves problems the user can still see in the panel,
-    /// so saying there are none would read as a bug in the command.
     #[test]
     fn outside_workspace_summary_does_not_claim_there_is_nothing_to_fix() {
         let msg = outside_workspace_summary(2);

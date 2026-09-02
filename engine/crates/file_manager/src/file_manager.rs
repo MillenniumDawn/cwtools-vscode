@@ -4,11 +4,7 @@ use cwtools_string_table::string_table::StringTable;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-// ── Encoding helper ───────────────────────────────────────────────────────────
-
 /// Windows-1252 → Unicode mapping for the 0x80-0x9F range (the gap not covered
-/// by ISO-8859-1).  Index 0 = byte 0x80, index 31 = byte 0x9F.
-///
 /// Source: https://encoding.spec.whatwg.org/index-windows-1252.txt
 const CP1252_HIGH: [char; 32] = [
     '\u{20AC}', // 0x80 €
@@ -53,16 +49,13 @@ fn cp1252_byte(b: u8) -> char {
     } else if b <= 0x9F {
         CP1252_HIGH[(b - 0x80) as usize]
     } else {
-        // 0xA0-0xFF: identical to Latin-1 / Unicode
         b as char
     }
 }
 
-/// How a file was encoded on disk, detected while reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileEncoding {
     /// Valid UTF-8 starting with the UTF-8 BOM (`EF BB BF`). What Paradox wants
-    /// for localisation files.
     Utf8Bom,
     /// Valid UTF-8 but with no BOM.
     Utf8NoBom,
@@ -73,15 +66,11 @@ pub enum FileEncoding {
 const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
 /// Read a file as text: try UTF-8 first, fall back to Windows-1252.
-///
-/// Pre-Jomini games (CK2, EU4, VIC2, HOI4 old mods) often encode files in
 /// Windows-1252.  Blindly using `read_to_string` fails on any accented byte
-/// outside ASCII (e.g. `é` = 0xE9).  This helper avoids that breakage.
 pub fn read_text(path: &Path) -> Result<String, FileError> {
     read_text_with_encoding(path).map(|(s, _)| s)
 }
 
-/// As [`read_text`], but also reports how the file was encoded so callers can
 /// enforce encoding rules (e.g. localisation must be UTF-8 BOM).
 pub fn read_text_with_encoding(path: &Path) -> Result<(String, FileEncoding), FileError> {
     Ok(decode_bytes(std::fs::read(path)?))
@@ -89,12 +78,7 @@ pub fn read_text_with_encoding(path: &Path) -> Result<(String, FileEncoding), Fi
 
 /// Read a file as text through a hard byte cap. Opens once and reads at most
 /// `max_bytes`; a file that reports a larger length, grows under us, or is a
-/// special file that reports length 0 is refused rather than truncated (a
-/// truncated script would parse into garbage). Returns the raw byte count read
 /// so callers can enforce a per-scan total-byte budget.
-///
-/// This is the bounded read used by every bulk discovery/scan path. The
-/// unbounded [`read_text`] stays for single-file explicit reads (a file the
 /// user opened by name), which aren't fed by symlink-following discovery.
 pub fn read_text_capped(path: &Path, max_bytes: u64) -> Result<(String, u64), FileError> {
     read_text_capped_with_encoding(path, max_bytes).map(|(s, _, n)| (s, n))
@@ -108,7 +92,6 @@ pub fn read_text_capped_with_encoding(
     use std::io::Read as _;
     let file = std::fs::File::open(path)?;
     let mut bytes = Vec::new();
-    // `take` bounds the allocation as well as the read, so a file that grows
     // under us or misreports its length still can't outrun the cap.
     file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)?;
@@ -123,8 +106,6 @@ pub fn read_text_capped_with_encoding(
     Ok((text, enc, n))
 }
 
-/// Decode already-read file bytes by the same rules as [`read_text`], for
-/// callers that must own the read itself (the LSP's URI access boundary reads
 /// through a cap) but still need script files to decode identically.
 pub fn decode_bytes(bytes: Vec<u8>) -> (String, FileEncoding) {
     let has_bom = bytes.starts_with(&UTF8_BOM);
@@ -148,27 +129,15 @@ pub fn decode_bytes(bytes: Vec<u8>) -> (String, FileEncoding) {
     (text, FileEncoding::NonUtf8)
 }
 
-/// How the file should be treated during discovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileKind {
-    /// Paradox script (.txt / .gui / .gfx) — parsed into an AST.
     Script,
-    /// Localisation (.yml / .csv) — not script-parsed, stored separately.
     Localisation,
-    /// Binary / asset file (.dds, .png, .tga, .wav, .lua, .mesh, .shader, etc.)
-    /// — existence is noted but the file is not read.
     Resource,
 }
 
-/// File extensions treated as Paradox script (the set discovered and validated).
-/// The single source of truth for "what's a script file" — workspace discovery
-/// in the LSP and the CLI driver both filter by this list.
 pub const SCRIPT_EXTENSIONS: &[&str] = &["txt", "gui", "gfx", "sfx", "asset", "map"];
 
-/// True for a localisation file extension (case-insensitive): `yml`, `yaml`,
-/// `csv`. The single source of truth so script discovery, the localisation
-/// walker, and the LSP's loc-file predicate all agree — previously the loc
-/// walker missed `.yaml`.
 pub fn is_loc_ext(ext: &str) -> bool {
     ext.eq_ignore_ascii_case("yml")
         || ext.eq_ignore_ascii_case("yaml")
@@ -191,10 +160,6 @@ pub(crate) fn classify_extension(path: &Path) -> FileKind {
     }
 }
 
-/// Directory names skipped everywhere during discovery: VCS, build output, and
-/// editor/tooling dirs that never hold game content (walking them double-counts
-/// files, e.g. a `.claude` worktree mirroring the whole mod tree). The single
-/// source of truth, shared with the localisation walker via [`is_excluded_dir`].
 pub const EXCLUDED_DIRS: &[&str] = &[
     ".git",
     ".claude",
@@ -209,33 +174,18 @@ pub const EXCLUDED_DIRS: &[&str] = &[
     ".vscode",
 ];
 
-/// Directory names skipped ONLY at the workspace root. A top-level `resources/`
-/// is dev scratch the game never loads, but nested `common/resources/` defines
-/// the `resource` type (oil, steel, …) and must be indexed. Shared via
-/// [`is_excluded_root_dir`].
 pub const EXCLUDED_ROOT_DIRS: &[&str] = &["resources"];
 
-/// True for a directory name skipped everywhere during discovery (see
-/// [`EXCLUDED_DIRS`]). Case-insensitive.
 pub fn is_excluded_dir(name: &str) -> bool {
     EXCLUDED_DIRS.iter().any(|d| name.eq_ignore_ascii_case(d))
 }
 
-/// True for a directory name skipped only at the workspace root (see
-/// [`EXCLUDED_ROOT_DIRS`]). Case-insensitive.
 pub fn is_excluded_root_dir(name: &str) -> bool {
     EXCLUDED_ROOT_DIRS
         .iter()
         .any(|d| name.eq_ignore_ascii_case(d))
 }
 
-/// True if `path` is a script file the discovery filters accept: a script
-/// extension, matching an include pattern, not on the exclude list, and within
-/// the size guard. Shared by single-root discovery ([`FileManager::collect_paths`])
-/// and the multi-mod path so both apply identical file-level rules.
-///
-/// `relative` is the file's root-relative path, for the exclude patterns that
-/// address a location rather than a name (see [`ignore_glob_match`]).
 fn accept_script_file(cfg: &FileManagerConfig, path: &Path, relative: &str) -> bool {
     if classify_extension(path) != FileKind::Script {
         return false;
@@ -268,18 +218,13 @@ fn accept_script_file(cfg: &FileManagerConfig, path: &Path, relative: &str) -> b
 pub enum FileError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    /// The configured root isn't a directory. Distinct from an empty walk: a
-    /// path that doesn't resolve must not read as "this mod has no files".
     #[error("directory does not exist: {0}")]
     MissingRoot(PathBuf),
     /// A file exceeded the hard read cap for a scan. Distinct from a parse
-    /// error: the file was refused before reading, so a special file that
-    /// reports length 0 (e.g. `/dev/zero`) can't be read to EOF.
     #[error("file exceeds the {limit} byte read cap: {path}")]
     OverLimit { path: PathBuf, limit: u64 },
 }
 
-/// A discovered script file before its source is read or parsed.
 #[derive(Debug, Clone)]
 pub struct DiscoveredFile {
     pub path: PathBuf,
@@ -305,19 +250,14 @@ pub struct DiscoveryReport {
     pub failures: Vec<DiscoveryFailure>,
 }
 
-/// A discovered script file with its parsed AST.
 pub struct ParsedFile {
-    /// Absolute path on disk.
     pub path: PathBuf,
-    /// Game-relative logical path (e.g. `common/scripted_effects/foo.txt`).
     pub logical_path: String,
     pub arena: Arena,
     pub root_children: Vec<Child>,
-    /// Non-fatal parse errors (file was partially parsed; validate what survived).
     pub errors: Vec<ParseError>,
 }
 
-/// Paradox `.mod` descriptor fields.
 #[derive(Debug, Clone)]
 pub struct ModDescriptor {
     pub name: String,
@@ -334,32 +274,15 @@ pub enum DirectoryType {
     Unknown,
 }
 
-/// Configuration for file discovery.
 #[derive(Clone)]
 pub struct FileManagerConfig {
-    /// Root directory to search.
     pub root: PathBuf,
-    /// Subdirectories to include (e.g., "common", "events").
     pub include_dirs: Vec<String>,
-    /// Glob patterns for files (e.g., "*.txt").
     pub file_patterns: Vec<String>,
-    /// Patterns to exclude, matched by [`ignore_glob_match`]: a bare name glob
-    /// (`*.md`) matches the file name at any depth, one with a separator
-    /// (`gfx/**/*.txt`) matches the root-relative path.
     pub exclude_patterns: Vec<String>,
-    /// Directory names to skip entirely (exact, case-insensitive).
     pub exclude_dirs: Vec<String>,
-    /// Directory glob patterns to skip entirely. Like `exclude_dirs` but each
-    /// entry is a glob, matched by [`ignore_glob_match`] against the directory's
-    /// basename or, when it carries a separator, its root-relative path.
-    /// Layers on top of `exclude_dirs` — both lists are checked.
     pub exclude_dir_patterns: Vec<String>,
-    /// Directory names skipped ONLY at the workspace root (exact, case-insensitive).
-    /// Use for names that are dev-scratch at the top level but a real game folder
-    /// when nested — e.g. a root `resources/` is scratch, but `common/resources/`
-    /// defines the `resource` type (oil, steel, …) and must be indexed.
     pub exclude_root_dirs: Vec<String>,
-    /// Skip files larger than this (bytes). 0 = no limit.
     pub max_file_size: u64,
     /// Per-scan resource budget (file count and total bytes).
     pub scan_budget: ScanBudget,
@@ -367,13 +290,9 @@ pub struct FileManagerConfig {
 
 /// Per-scan resource budget. Guards one discovery/read pass against a
 /// pathological tree (a symlink to `/`, a special file that reports length 0,
-/// or a huge number of files) so startup and CLI validation can't allocate
-/// without bound. A limit of 0 disables it.
 #[derive(Debug, Clone, Copy)]
 pub struct ScanBudget {
-    /// Maximum number of files accepted by one discovery walk.
     pub max_files: usize,
-    /// Maximum total bytes read across all files in one scan.
     pub max_bytes: u64,
     /// Hard per-file read cap (bytes). 0 = no per-file cap.
     pub max_file_size: u64,
@@ -384,7 +303,6 @@ impl Default for ScanBudget {
         Self {
             max_files: 100_000,
             max_bytes: 2 * 1024 * 1024 * 1024, // 2 GiB
-            // Loc and rules files can legitimately run to a few MB; the CLI's
             // script cap (2 MB) is separate (`FileManagerConfig::max_file_size`).
             max_file_size: 64 * 1024 * 1024, // 64 MB
         }
@@ -393,7 +311,6 @@ impl Default for ScanBudget {
 
 /// Atomic running total of bytes read in one scan, shared across the parallel
 /// read fan-out so the whole scan stops adding files once the total-byte budget
-/// is exhausted.
 #[derive(Debug, Default)]
 pub struct ScanBytes(std::sync::atomic::AtomicU64);
 
@@ -442,9 +359,6 @@ impl Default for FileManagerConfig {
             ],
             file_patterns: SCRIPT_EXTENSIONS.iter().map(|e| format!("*.{e}")).collect(),
             exclude_patterns: vec![
-                // Free-form text/markdown files that aren't Paradox script —
-                // matching `*.txt` would otherwise send them through the full
-                // validator. Users can opt back in by clearing the list.
                 "Changelog.txt".into(),
                 "README.txt".into(),
                 "LICENSE.txt".into(),
@@ -481,8 +395,6 @@ impl FileManager {
         }
     }
 
-    /// Discover all matching script files under the configured root without
-    /// reading or parsing them. Non-script files are silently skipped.
     pub fn discover_files(&self) -> Result<Vec<DiscoveredFile>, FileError> {
         let mut paths: Vec<(PathBuf, String)> = Vec::new();
         let root = &self.config.root;
@@ -508,8 +420,6 @@ impl FileManager {
             .collect())
     }
 
-    /// Discover and parse all matching script files under the configured root.
-    /// Non-script files (localisation, resources) are silently skipped.
     pub fn discover_and_parse(&mut self) -> Result<Vec<ParsedFile>, FileError> {
         use rayon::prelude::*;
 
@@ -551,17 +461,10 @@ impl FileManager {
         Ok(files)
     }
 
-    /// Walk `dir` collecting (path, logical_path) for every file that passes the
-    /// extension/pattern/size filters. Reading and parsing happen later, in
-    /// parallel; this pass is just filesystem traversal.
     fn collect_paths(&self, dir: &Path, out: &mut Vec<(PathBuf, String)>) -> Result<(), FileError> {
         let root_prefix = normalize_root_prefix(&self.config.root);
         let is_root_level = dir == self.config.root.as_path();
         let cfg = &self.config;
-        // Accept only script files that pass the shared file-level filter; each
-        // yields (path, logical_path). The extension test comes first here: it
-        // rejects most of a mod's tree (art, sound) before the logical path an
-        // exclude pattern may match against is built.
         let mut accept = |path: &Path| -> Option<(PathBuf, String)> {
             if classify_extension(path) != FileKind::Script {
                 return None;
@@ -596,16 +499,6 @@ impl FileManager {
         Ok(())
     }
 
-    /// Discover and parse the script files of a `MultipleMod` workspace: a
-    /// directory whose `mod/` (or `mods/`) folder holds `.mod` descriptors, each
-    /// pointing at a mod root ([`classify_directory`] returned `MultipleMod`).
-    ///
-    /// The mods are layered by [`discover_files_multi_mod`]'s load order — a
-    /// later-resolved mod (mods are name-sorted, so the alphabetically-greater
-    /// name) wins a shared logical path, and a mod's `replace_path` suppresses
-    /// lower-priority files under that prefix. The surviving script files use
-    /// the same filters as [`Self::discover_files`]. Vanilla is not folded in;
-    /// the driver indexes the base game separately for reference only.
     pub fn discover_files_multi_mod(&self) -> Vec<DiscoveredFile> {
         let mods = expand_multiple_mods(&self.config.root);
         discover_files_multi_mod(
@@ -621,7 +514,6 @@ impl FileManager {
         .collect()
     }
 
-    /// Discover and parse the script files of a `MultipleMod` workspace.
     pub fn discover_and_parse_multi_mod(&mut self) -> Result<Vec<ParsedFile>, FileError> {
         use rayon::prelude::*;
 
@@ -804,16 +696,10 @@ fn has_hidden_component(path: &str) -> bool {
     path.split('/').any(|component| component.starts_with('.'))
 }
 
-/// Compute the logical (game-relative) path by stripping the root prefix.
-///
-/// Given `root = /mnt/mod` and `path = /mnt/mod/common/effects/foo.txt`,
-/// returns `common/effects/foo.txt`.
 pub(crate) fn compute_logical_path(path: &Path, root: &Path) -> String {
     compute_logical_path_with_root(path, &normalize_root_prefix(root))
 }
 
-/// Normalise `root` to a forward-slash, trailing-slash prefix once, so callers
-/// that strip many paths against the same root don't redo the work per file.
 fn normalize_root_prefix(root: &Path) -> String {
     let s = normalize_slashes(root.to_string_lossy());
     if s.ends_with('/') {
@@ -823,15 +709,12 @@ fn normalize_root_prefix(root: &Path) -> String {
     }
 }
 
-/// Like [`compute_logical_path`] but takes a root prefix already normalised by
-/// [`normalize_root_prefix`].
 fn compute_logical_path_with_root(path: &Path, root_prefix: &str) -> String {
     let path_str = normalize_slashes(path.to_string_lossy());
 
     if let Some(rel) = path_str.strip_prefix(root_prefix) {
         rel.to_string()
     } else {
-        // fallback: just the file name
         path.file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
@@ -839,14 +722,11 @@ fn compute_logical_path_with_root(path: &Path, root_prefix: &str) -> String {
     }
 }
 
-/// The forward-slash spelling of `path`, the form a path glob is written in.
 /// Windows hands back `\` separators, so a match target passes through here
-/// before [`ignore_glob_match`] sees it.
 pub fn to_slash_path(path: &Path) -> String {
     normalize_slashes(path.to_string_lossy()).into_owned()
 }
 
-/// Convert backslashes to forward slashes, avoiding a full scan/allocation when
 /// the string contains none (the common case on Unix).
 fn normalize_slashes(s: std::borrow::Cow<'_, str>) -> std::borrow::Cow<'_, str> {
     if s.contains('\\') {
@@ -856,10 +736,7 @@ fn normalize_slashes(s: std::borrow::Cow<'_, str>) -> std::borrow::Cow<'_, str> 
     }
 }
 
-/// Parse a Paradox `.mod` descriptor file (plain key=value Paradox script).
-///
 /// Mirrors F# FileManager.fs:91-125: extracts `name`, `path`, and
-/// `replace_path` entries.
 pub(crate) fn parse_mod_descriptor(path: &Path) -> Result<ModDescriptor, FileError> {
     let raw = read_text(path)?;
     // Strip UTF-8 BOM (U+FEFF) so the first key isn't parsed as "\u{FEFF}name".
@@ -896,11 +773,8 @@ fn parse_mod_descriptor_str(content: &str) -> ModDescriptor {
     }
 }
 
-/// Extract a `.mod` value. A quoted value is the text between the quotes, so a
-/// trailing inline comment or an `=` inside the quotes is handled correctly
 /// (`replace_path = "common/ideas" # keep` -> `common/ideas`). An unquoted value
 /// runs up to an inline `#` comment. The old `trim_matches('"')` left the closing
-/// quote in place whenever anything followed it.
 fn descriptor_value(v: &str) -> String {
     let v = v.trim();
     if let Some(rest) = v.strip_prefix('"') {
@@ -913,25 +787,13 @@ fn descriptor_value(v: &str) -> String {
     }
 }
 
-// ── Multi-mod expansion ───────────────────────────────────────────────────────
-
-/// A resolved mod entry: its descriptor plus the on-disk root directory.
 #[derive(Debug, Clone)]
 pub struct ResolvedMod {
     pub descriptor: ModDescriptor,
-    /// Absolute path to the mod root directory.
     pub root: PathBuf,
 }
 
-/// Scan a `MultipleMod` workspace directory for `.mod` descriptors and resolve
-/// each to a concrete mod root.
-///
 /// Mirrors F# FileManager.fs:64-90: reads every `*.mod` file inside the
-/// `mod/` (or `mods/`) subfolder, parses it, and returns a `ResolvedMod` for
-/// each descriptor whose `path` resolves to an existing directory.
-///
-/// `workspace` must be the directory that `classify_directory` returned
-/// `MultipleMod` for.
 pub fn expand_multiple_mods(workspace: &Path) -> Vec<ResolvedMod> {
     let mut out = Vec::new();
 
@@ -955,7 +817,6 @@ pub fn expand_multiple_mods(workspace: &Path) -> Vec<ResolvedMod> {
                 && let Ok(desc) = parse_mod_descriptor(&path)
                 && let Some(mod_path) = &desc.path
             {
-                // `path` can be relative (to the workspace) or absolute
                 let root = if std::path::Path::new(mod_path).is_absolute() {
                     PathBuf::from(mod_path)
                 } else {
@@ -971,21 +832,11 @@ pub fn expand_multiple_mods(workspace: &Path) -> Vec<ResolvedMod> {
         }
     }
 
-    // Sort by name for deterministic ordering
     out.sort_by(|a, b| a.descriptor.name.cmp(&b.descriptor.name));
     out
 }
 
-/// Discover files across multiple mods, honouring `replace_path`.
-///
 /// Mirrors F# FileManager.fs:91-147:
-/// * Mods are layered: later mods in `mods` take priority over earlier ones
-///   (typically the caller orders them from lowest to highest priority).
-/// * A mod's `replace_path` entries suppress *all* files whose logical path
-///   starts with that prefix that were contributed by lower-priority sources
-///   (including vanilla).
-///
-/// Returns `(mod_root, files_from_that_root)` pairs so callers know the origin.
 pub fn discover_files_multi_mod(
     vanilla_root: Option<&Path>,
     mods: &[ResolvedMod],
@@ -993,14 +844,11 @@ pub fn discover_files_multi_mod(
     exclude_dir_patterns: &[String],
     budget: ScanBudget,
 ) -> Vec<(PathBuf, String)> {
-    // Collect (logical_path, absolute_path, source_priority) triples.
-    // Higher priority index wins.
     use std::collections::HashMap;
 
     let mut best: HashMap<String, (PathBuf, usize)> = HashMap::new();
     let mut remaining = budget.max_files;
 
-    // Build ordered list: vanilla is priority 0, mods are 1..=n
     let mut sources: Vec<(usize, &Path, &[String])> = Vec::new();
 
     if let Some(v) = vanilla_root {
@@ -1010,7 +858,6 @@ pub fn discover_files_multi_mod(
         sources.push((i + 1, &m.root, include_dirs));
     }
 
-    // Collect candidate files from all sources
     for (priority, root, dirs) in &sources {
         let root_prefix = normalize_root_prefix(root);
         for include_dir in *dirs {
@@ -1033,10 +880,6 @@ pub fn discover_files_multi_mod(
         }
     }
 
-    // Apply replace_path suppression: for each mod (in priority order, highest
-    // first), any file whose logical path starts with a replace_path prefix and
-    // originates from a *lower* priority source is removed.
-    // Lowercase each logical path once, rather than per replace_path entry below.
     let logical_lower: HashMap<String, String> = best
         .keys()
         .map(|k| (k.clone(), k.to_ascii_lowercase()))
@@ -1045,12 +888,9 @@ pub fn discover_files_multi_mod(
         let mod_priority = i + 1;
         for rp in &m.descriptor.replace_paths {
             // Normalize: backslash → slash (Windows-authored .mod files), trim
-            // leading/trailing slashes, then lowercase for case-insensitive match.
             let prefix_lower = rp.replace('\\', "/").trim_matches('/').to_ascii_lowercase();
             let prefix_lower_slash = format!("{}/", prefix_lower);
             best.retain(|logical, (_path, file_prio)| {
-                // If the file's logical path is under this replace_path and
-                // comes from a lower-priority source → suppress it.
                 let ll = &logical_lower[logical.as_str()];
                 let under_prefix = *ll == prefix_lower || ll.starts_with(&prefix_lower_slash);
                 if under_prefix && *file_prio < mod_priority {
@@ -1092,10 +932,6 @@ fn collect_files_recursive(
             continue;
         }
         if ft.is_dir() {
-            // Skip VCS/build/editor dirs, same as the single-root walk, so a
-            // mod's nested `.git`/`target`/… never contributes files, and honor
-            // the configured directory globs (`ignoreDirectories`) exactly as
-            // `walk_dir_generic` does so single- and multi-mod discovery agree.
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
             let dir_relative = if has_path_pattern(exclude_dir_patterns) {
                 compute_logical_path_with_root(&path, root_prefix)
@@ -1120,7 +956,6 @@ fn collect_files_recursive(
         } else {
             *remaining_files -= 1;
             let logical = compute_logical_path_with_root(&path, root_prefix);
-            // Higher priority wins
             let entry = out.entry(logical).or_insert((path.clone(), priority));
             if priority > entry.1 {
                 *entry = (path, priority);
@@ -1129,17 +964,6 @@ fn collect_files_recursive(
     }
 }
 
-/// Recursively collect every file under `root` whose extension is in
-/// `extensions`, skipping engine/IDE directories and free-form text files.
-///
-/// This is the whole-tree walker used by the LSP full-workspace pass. The skip
-/// lists (directories and free-form filenames) come from
-/// `FileManagerConfig::default()` so they are defined in exactly one place and
-/// stay consistent with the CLI's `discover_and_parse`. `extra_file_globs` and
-/// `extra_dir_globs` layer on top of those defaults (they extend, never
-/// replace, the engine baseline). Each directory's entries are sorted, so the
-/// traversal order is deterministic and independent of the filesystem's
-/// `read_dir` order.
 #[deprecated(note = "use cwtools_driver::{workspace_discovery_config, discover_workspace_files}")]
 pub fn walk_workspace_files(
     root: &Path,
@@ -1150,12 +974,8 @@ pub fn walk_workspace_files(
 ) -> Vec<PathBuf> {
     let cfg = FileManagerConfig::default();
     let root_prefix = normalize_root_prefix(root);
-    // Only a pattern that addresses a location reads the relative path, so a
-    // workspace configured with plain name globs never builds one.
     let needs_relative =
         has_path_pattern(&cfg.exclude_patterns) || has_path_pattern(extra_file_globs);
-    // Accept any file whose extension is requested and which isn't a free-form
-    // excluded filename. No per-file size guard (unlike the CLI walker); the
     // read cap and byte budget are enforced when the LSP reads each file.
     let mut accept = |path: &Path| -> Option<PathBuf> {
         let ext = path.extension().and_then(|e| e.to_str())?;
@@ -1180,7 +1000,6 @@ pub fn walk_workspace_files(
         }
         Some(path.to_path_buf())
     };
-    // The LSP walk silently ignores unreadable directories.
     let mut on_err = |_: &Path, _: std::io::Error| {};
     let mut state = WalkState {
         out: Vec::new(),
@@ -1201,28 +1020,14 @@ pub fn walk_workspace_files(
     state.out
 }
 
-/// Shared directory traversal for both discovery walkers. Sorts each
-/// directory's entries for deterministic order, applies the config's
-/// directory-exclusion lists (plus `extra_dir_globs`), and passes every
-/// regular file to `accept`; whatever `accept` returns is collected into
 /// `state.out`. Symlinks and non-regular files (fifos, sockets, devices) are
 /// rejected outright: a symlink can point outside the root or into a cycle,
-/// and a special file can report length 0 and be read to EOF. Regular entries
-/// reuse the `file_type` from `read_dir` to avoid a second stat. Read errors on
-/// child directories go to `on_dir_err`; the top-level read error is returned.
-/// The walk stops once `state.remaining_files` reaches 0.
-///
-/// Mutable state threaded through [`walk_dir_generic`]: the collected output
 /// and the remaining per-scan file budget.
 struct WalkState<T> {
     out: Vec<T>,
     remaining_files: usize,
 }
 
-/// Where the walk started, threaded down the recursion: the normalized root
-/// prefix a directory's path glob is matched relative to, and whether `dir` is
-/// the root itself, since only its direct children get `exclude_root_dirs`.
-/// Every recursive call clears `is_root_level`.
 #[derive(Clone, Copy)]
 struct WalkRoot<'a> {
     prefix: &'a str,
@@ -1238,12 +1043,8 @@ fn walk_dir_generic<T>(
     on_dir_err: &mut dyn FnMut(&Path, std::io::Error),
     state: &mut WalkState<T>,
 ) -> std::io::Result<()> {
-    // Only a directory pattern that addresses a location needs the relative
-    // path built per entry; the usual all-names lists skip it entirely.
     let dir_paths_needed =
         has_path_pattern(&cfg.exclude_dir_patterns) || has_path_pattern(extra_dir_globs);
-    // Collect (sort-key, path, file_type) once so sorting doesn't re-allocate an
-    // OsString per comparison and directory tests reuse the readdir file type.
     let mut entries: Vec<(std::ffi::OsString, PathBuf, std::fs::FileType)> = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -1268,7 +1069,6 @@ fn walk_dir_generic<T>(
             } else {
                 String::new()
             };
-            // Root-anchored excludes apply only to direct children of the root.
             let skip = cfg
                 .exclude_dirs
                 .iter()
@@ -1313,15 +1113,8 @@ fn walk_dir_generic<T>(
 }
 
 /// Classify a directory following F# FileManager.fs:80-147.
-///
-/// - `Vanilla` if it contains `game/` or `common/` typical structure
-/// - `Mod` if it looks like a single mod (has common/events/interface/gfx/localisation)
-/// - `MultipleMod` if it contains a `mod/` or `mods/` folder with `.mod` files
-/// - `Unknown` otherwise
 pub fn classify_directory(dir: &Path) -> DirectoryType {
     let looks_like_game_folder = |d: &Path| -> bool {
-        // Deliberately narrow: the Mod check below short-circuits MultipleMod, so
-        // every name added here can hide a multi-mod workspace root.
         for sub in &["common", "events", "interface", "gfx", "localisation"] {
             if d.join(sub).is_dir() {
                 return true;
@@ -1330,18 +1123,15 @@ pub fn classify_directory(dir: &Path) -> DirectoryType {
         false
     };
 
-    // Vanilla: contains a "game" sub-directory that itself looks like a game folder
     let game_sub = dir.join("game");
     if game_sub.is_dir() && looks_like_game_folder(&game_sub) {
         return DirectoryType::Vanilla;
     }
 
-    // Mod: the directory itself looks like a mod
     if looks_like_game_folder(dir) {
         return DirectoryType::Mod;
     }
 
-    // MultipleMod: contains mod/ or mods/ with .mod files
     for mod_folder_name in &["mod", "mods"] {
         let mod_folder = dir.join(mod_folder_name);
         if mod_folder.is_dir() {
@@ -1374,39 +1164,23 @@ pub fn classify_directory(dir: &Path) -> DirectoryType {
     DirectoryType::Unknown
 }
 
-/// Simple glob matching (supports `*` wildcard and `?`).
-///
-/// Handles:
-/// - `*.ext` suffix matching
-/// - `prefix*` prefix matching
-/// - `?` single-char wildcard
-/// - Directory-name plain equality
 pub fn glob_match(pattern: &str, text: &str) -> bool {
-    // Fast path for wildcard-free patterns (the default excludes are all
-    // literal filenames): plain equality, skipping the DP matcher entirely.
     if !pattern.contains(['*', '?']) {
         return pattern == text;
     }
-    // Fast path for *.ext — only valid when the remainder has no further wildcards.
     if let Some(suffix) = pattern.strip_prefix('*')
         && !suffix.contains(['*', '?'])
     {
         return text.ends_with(suffix);
     }
-    // Fast path for prefix* — only valid when the prefix has no wildcards.
     if let Some(prefix) = pattern.strip_suffix('*')
         && !prefix.contains(['*', '?'])
     {
         return text.starts_with(prefix);
     }
-    // General: treat * as "any chars", ? as "any single char"
     glob_match_general(pattern, text)
 }
 
-/// Greedy two-pointer wildcard match (`*` = any run, `?` = one char). The
-/// classic backtracking algorithm: amortized O(m+n) with O(1) scratch, no
-/// per-call allocations beyond the two char vectors. Worst case is O(m*n)
-/// (a long literal segment after a `*` re-scanned against a near-miss text),
 /// which the callers' pattern-length caps keep bounded (#169).
 fn glob_match_general(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
@@ -1414,28 +1188,16 @@ fn glob_match_general(pattern: &str, text: &str) -> bool {
     glob_greedy(&p, &t)
 }
 
-/// True if `pattern` addresses a location in the tree rather than a bare name.
 /// Windows users write `\`, so both separators count.
 fn is_path_pattern(pattern: &str) -> bool {
     pattern.contains(['/', '\\'])
 }
 
-/// True if any of `patterns` addresses a location, so a walk that finds none
-/// can skip building a root-relative path per entry.
 fn has_path_pattern(patterns: &[String]) -> bool {
     patterns.iter().any(|p| is_path_pattern(p))
 }
 
-/// Match one user ignore glob against a discovered entry. A pattern with no
-/// separator is a name glob matched against `name` at any depth, which is what
-/// every pattern meant before this existed. One with a separator addresses a
-/// location and is matched against `relative`, the entry's path relative to the
-/// mod or workspace root, forward-slashed. So `**/skip.txt`, the spelling the
-/// VS Code client generates for every `errors.ignorefiles` entry, matches the
 /// file it names instead of nothing at all (#244).
-///
-/// `relative` is read only for path patterns, so a caller whose lists hold none
-/// can pass `""`.
 pub fn ignore_glob_match(pattern: &str, name: &str, relative: &str) -> bool {
     if is_path_pattern(pattern) {
         path_glob_match(pattern, relative)
@@ -1444,7 +1206,6 @@ pub fn ignore_glob_match(pattern: &str, name: &str, relative: &str) -> bool {
     }
 }
 
-/// Excluded by engine baseline or `extra_file_globs`.
 pub fn is_ignored_logical_path(logical_path: &str, extra_file_globs: &[String]) -> bool {
     let cfg = FileManagerConfig::default();
     // Handle Windows separators.
@@ -1463,7 +1224,6 @@ pub fn is_ignored_logical_path(logical_path: &str, extra_file_globs: &[String]) 
             .any(|pat| ignore_glob_match(pat, file_name, &normalized))
 }
 
-/// Like `is_ignored_logical_path` but derives logical path from `root`.
 pub fn is_ignored_file(
     root: &std::path::Path,
     path: &std::path::Path,
@@ -1473,9 +1233,6 @@ pub fn is_ignored_file(
     is_ignored_logical_path(&logical, extra_file_globs)
 }
 
-/// Excluded by engine baseline, file globs, engine directory lists, or directory
-/// globs. This is the predicate workspace discovery applies, surfaced so the
-/// LSP's incremental paths cannot drift from a full scan.
 pub fn is_ignored_path(
     logical_path: &str,
     extra_file_globs: &[String],
@@ -1493,7 +1250,6 @@ pub fn is_ignored_path(
         logical_path.to_string()
     };
     let segments: Vec<&str> = normalized.split('/').collect();
-    // A bare filename has no parent directories to match against.
     if segments.len() < 2 {
         return false;
     }
@@ -1513,14 +1269,6 @@ pub fn is_ignored_path(
     false
 }
 
-/// Path-aware glob: `**` spans any run of directories (including none), while
-/// `*` and `?` stay inside one segment. That segment boundary is the whole
-/// reason this can't be [`glob_match`] over the joined path, where `*` would
-/// happily cross a `/`.
-///
-/// A leading separator anchors at the root, which `path` already is, so it only
-/// says where matching starts. A trailing one means everything below, and is
-/// read as a trailing `**`.
 fn path_glob_match(pattern: &str, path: &str) -> bool {
     let mut segments: Vec<&str> = pattern.split(['/', '\\']).collect();
     if segments.first() == Some(&"") {
@@ -1534,9 +1282,6 @@ fn path_glob_match(pattern: &str, path: &str) -> bool {
     segments_greedy(&segments, &text)
 }
 
-/// [`glob_greedy`] one level up: the same backtracking walk with `**` as the
-/// star and a whole segment as the unit, each pair compared by [`glob_match`]
-/// so `*` and `?` keep their meaning inside a single name.
 fn segments_greedy(p: &[&str], t: &[&str]) -> bool {
     let (m, n) = (p.len(), t.len());
     let mut i = 0; // position in t
@@ -1552,7 +1297,6 @@ fn segments_greedy(p: &[&str], t: &[&str]) -> bool {
             i += 1;
             j += 1;
         } else if let Some(s) = star {
-            // The star swallows one more directory and the run re-tries.
             j = s + 1;
             mark += 1;
             i = mark;
@@ -1574,8 +1318,6 @@ fn glob_greedy(p: &[char], t: &[char]) -> bool {
     let mut mark = 0; // t position the star segment restarts from
     while i < n {
         if j < m && p[j] == '*' {
-            // Star before equality: a literal '*' in the text must not
-            // consume the pattern's star and lose the backtrack point.
             star = Some(j);
             j += 1;
             mark = i;
@@ -1583,7 +1325,6 @@ fn glob_greedy(p: &[char], t: &[char]) -> bool {
             i += 1;
             j += 1;
         } else if let Some(s) = star {
-            // The star matches one more char and the segment re-tries.
             j = s + 1;
             mark += 1;
             i = mark;
@@ -1632,8 +1373,6 @@ mod tests {
 
     #[test]
     fn mod_descriptor_clean_lines_unchanged() {
-        // The common case (clean quoted lines, as in the Millennium Dawn
-        // descriptor) must parse identically to before.
         let d = parse_mod_descriptor_str(
             "name=\"Millennium Dawn\"\nreplace_path = \"common/ideas\"\nreplace_path = \"events\"\n",
         );
@@ -1654,12 +1393,10 @@ mod tests {
 
     #[test]
     fn glob_match_multi_wildcard() {
-        // *foo* must not take the *.ext fast path and treat "foo*" as a literal suffix.
         assert!(glob_match("*foo*", "barfoobar"));
         assert!(glob_match("*foo*", "foo"));
         assert!(glob_match("*foo*", "xfoox"));
         assert!(!glob_match("*foo*", "bar"));
-        // prefix* fast path must not trigger when the prefix itself contains ?.
         assert!(glob_match("fo?*", "foobar"));
         assert!(!glob_match("fo?*", "fo")); // needs at least one char after "fo"
     }
@@ -1667,8 +1404,6 @@ mod tests {
     #[test]
     fn path_globs_match_a_location_not_just_a_name() {
         // #244: the VS Code client rewrites every `errors.ignorefiles` entry to
-        // `**/<name>`, which matched nothing at all while every ignore pattern
-        // was a name glob.
         assert!(ignore_glob_match("**/skip.txt", "skip.txt", "skip.txt"));
         assert!(ignore_glob_match(
             "**/skip.txt",
@@ -1680,14 +1415,11 @@ mod tests {
             "keep.txt",
             "common/keep.txt"
         ));
-        // The shipped `cwtools.ignore_patterns` default, dead for the same reason.
         assert!(ignore_glob_match(
             "**/99_README**.txt",
             "99_README_units.txt",
             "common/99_README_units.txt"
         ));
-        // A name glob keeps its old meaning: the name, at any depth, and it
-        // never consults the relative path.
         assert!(ignore_glob_match("*.md", "notes.md", "docs/notes.md"));
         assert!(ignore_glob_match("*.md", "notes.md", ""));
         assert!(!ignore_glob_match("*.md", "notes.txt", "docs/notes.txt"));
@@ -1695,7 +1427,6 @@ mod tests {
 
     #[test]
     fn path_globs_anchor_at_the_root_and_respect_segments() {
-        // A separator anchors the pattern, unlike a bare name.
         assert!(ignore_glob_match(
             "common/foo.txt",
             "foo.txt",
@@ -1706,13 +1437,11 @@ mod tests {
             "foo.txt",
             "gfx/common/foo.txt"
         ));
-        // A leading separator says the same thing; the target is already relative.
         assert!(ignore_glob_match(
             "/common/foo.txt",
             "foo.txt",
             "common/foo.txt"
         ));
-        // `*` stays inside one segment; `**` spans any run of them, including none.
         assert!(!ignore_glob_match(
             "common/*.txt",
             "foo.txt",
@@ -1733,7 +1462,6 @@ mod tests {
             "foo.txt",
             "common/foo.txt"
         ));
-        // A trailing separator covers the tree below it.
         assert!(ignore_glob_match("build/", "foo.txt", "build/a/foo.txt"));
         assert!(!ignore_glob_match("build/", "foo.txt", "src/foo.txt"));
         // The Windows spelling of a path pattern means the same thing.
@@ -1745,7 +1473,6 @@ mod tests {
     }
 
     /// The pre-#169 DP matcher, kept as the reference for the greedy
-    /// matcher's equivalence tests.
     fn glob_dp_reference(p: &[char], t: &[char]) -> bool {
         let m = p.len();
         let n = t.len();
@@ -1777,8 +1504,6 @@ mod tests {
 
     #[test]
     fn glob_greedy_agrees_with_reference_dp_exhaustive() {
-        // Every pattern/text pair over {a, b, *, ?} up to length 4 (341
-        // strings each) must agree with the reference DP, fast paths included.
         let alphabet = ['a', 'b', '*', '?'];
         let mut strings: Vec<String> = vec![String::new()];
         for _ in 1..=4 {
@@ -1804,7 +1529,6 @@ mod tests {
 
     #[test]
     fn glob_greedy_agrees_with_reference_dp_randomized() {
-        // Longer randomized cases; a fixed LCG so a failure reproduces.
         let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
         let alphabet = ['a', 'b', 'c', 'x', 'y', '*', '?'];
         for _ in 0..5000 {
@@ -1833,14 +1557,10 @@ mod tests {
     #[test]
     fn glob_worst_case_pattern_completes() {
         // #169 regression: a 1 MB '?'-heavy pattern used to force ~255M DP
-        // iterations per maximum-length filename, repeated across the walk.
-        // The greedy matcher is linear here (milliseconds); the DP would run
-        // tens of seconds in debug and time the suite out.
         let pat = "?".repeat(1024 * 1024);
         let text = "a".repeat(255);
         assert!(!glob_match(&pat, &text));
         // Star-segment worst case at the config length cap. The '?' keeps the
-        // pattern off the *.ext fast path so the backtracking runs.
         let pat = format!("*{}?{}b", "a".repeat(512), "a".repeat(511));
         let text = format!("{}c", "a".repeat(255));
         assert!(!glob_match(&pat, &text));
@@ -1863,11 +1583,6 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
 
-        // Layout:
-        //   root/common/foo.txt          (include)
-        //   root/temp/skipme.txt         (skip: dir matches "temp")
-        //   root/template/keepme.txt     (include: dir does NOT match "temp")
-        //   root/notes/Changelog.txt     (skip: filename matches)
         for rel in [
             "common/foo.txt",
             "temp/skipme.txt",
@@ -1907,8 +1622,6 @@ mod tests {
         );
     }
 
-    /// `exclude_dir_patterns` (`ignoreDirectories`) must prune an ignored
-    /// subtree in a multi-mod workspace just as it does for single-mod
     /// discovery, so the two paths agree on directory ignore semantics (#412).
     #[test]
     fn exclude_dir_patterns_skips_matching_dirs_multi_mod() {
@@ -1916,16 +1629,12 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let ws = tmp.path();
 
-        // A multi-mod workspace: `mod/` descriptor resolving to `alpha/`.
         fs::create_dir_all(ws.join("mod")).unwrap();
         fs::write(
             ws.join("mod/alpha.mod"),
             "name = \"Alpha Mod\"\npath = \"alpha\"\n",
         )
         .unwrap();
-        //   alpha/common/keep.txt          (include)
-        //   alpha/common/temp/skip.txt     (skip: dir matches "temp")
-        //   alpha/common/template/keep2.txt (include: dir does NOT match "temp")
         fs::create_dir_all(ws.join("alpha/common/temp")).unwrap();
         fs::create_dir_all(ws.join("alpha/common/template")).unwrap();
         fs::write(ws.join("alpha/common/keep.txt"), "x = 1").unwrap();
@@ -1960,10 +1669,6 @@ mod tests {
         );
     }
 
-    /// A root-level `resources/` is dev scratch the game never loads, but
-    /// `common/resources/` defines the `resource` type (oil, steel, …). The
-    /// default excludes must skip the former and keep the latter, on BOTH the
-    /// CLI (`collect_paths`) and LSP (`walk_workspace_files`) discovery paths.
     #[test]
     fn root_resources_skipped_but_common_resources_indexed() {
         use std::fs;
@@ -1974,7 +1679,6 @@ mod tests {
             fs::write(root.join(rel), "").unwrap();
         }
 
-        // CLI path.
         let fm = FileManager::new(FileManagerConfig {
             root: root.to_path_buf(),
             include_dirs: vec![".".into()],
@@ -1993,7 +1697,6 @@ mod tests {
             "root resources/ must be skipped: {cli:?}"
         );
 
-        // LSP whole-tree path.
         let lsp = walk_workspace_files(root, &["txt"], &[], &[], ScanBudget::default());
         let lsp: Vec<String> = lsp
             .iter()
@@ -2042,17 +1745,13 @@ mod tests {
         assert_eq!(compute_logical_path(&path, &root), "foo.txt");
     }
 
-    // ── CP-1252 / encoding tests ──────────────────────────────────────────────
-
     #[test]
     fn cp1252_e_acute_0xe9() {
-        // 0xE9 in CP-1252 is U+00E9 (é), same as Latin-1 for bytes >= 0xA0
         assert_eq!(cp1252_byte(0xE9), 'é');
     }
 
     #[test]
     fn cp1252_euro_sign_0x80() {
-        // 0x80 in CP-1252 is the Euro sign U+20AC — NOT U+0080
         assert_eq!(cp1252_byte(0x80), '€');
     }
 
@@ -2066,7 +1765,6 @@ mod tests {
     fn read_text_cp1252_bytes_via_tmpfile() {
         use std::io::Write as _;
 
-        // Build a sequence: "caf" + 0xE9 (é in CP-1252) + "\n"
         let bytes: &[u8] = b"caf\xE9\n";
         let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
         tmp.write_all(bytes).expect("write");
@@ -2075,8 +1773,6 @@ mod tests {
         assert_eq!(text, "caf\u{E9}\n", "0xE9 should decode as é (U+00E9)");
     }
 
-    /// The bytes a loc file actually carries decide CW254, and every test of
-    /// that code hands the enum over ready-made. These are the real ones.
     #[test]
     fn decode_bytes_reports_the_encoding_the_leading_bytes_describe() {
         let body = b"l_english:\n key: \"hi\"\n";
@@ -2128,8 +1824,6 @@ mod tests {
         assert_eq!(enc, FileEncoding::Utf8Bom, "a BOM and nothing else");
     }
 
-    /// The whole path a real file travels: bytes on disk, read, sniffed. The
-    /// enum every CW254 test builds by hand comes from here.
     #[test]
     fn read_text_with_encoding_sniffs_a_real_bom_off_disk() {
         use std::io::Write as _;
@@ -2150,18 +1844,11 @@ mod tests {
         assert_eq!(len, body.len() as u64);
     }
 
-    // ── multi-mod expand / replace_path tests ─────────────────────────────────
-
     #[test]
     fn multi_mod_replace_path_suppresses_vanilla() {
         use std::collections::HashMap;
         use std::fs;
 
-        // Create a tiny temp filesystem:
-        //   workspace/
-        //     vanilla/common/foo.txt
-        //     moda/common/foo.txt      (replaces common/)
-        //     modb/events/bar.txt
         let workspace = tempfile::TempDir::new().expect("tmpdir");
         let wsp = workspace.path();
 
@@ -2205,7 +1892,6 @@ mod tests {
             ScanBudget::default(),
         );
 
-        // Build logical_path → content map
         let by_logical: HashMap<String, String> = files
             .iter()
             .map(|(abs, logical)| {
@@ -2214,25 +1900,18 @@ mod tests {
             })
             .collect();
 
-        // Vanilla's common/foo.txt should be suppressed by ModA's replace_path
         assert_eq!(
             by_logical.get("common/foo.txt").map(|s| s.as_str()),
             Some("moda"),
             "ModA's common/foo.txt should win; vanilla suppressed by replace_path"
         );
 
-        // ModB's events/bar.txt should be present
         assert!(
             by_logical.contains_key("events/bar.txt"),
             "ModB events/bar.txt should be present"
         );
     }
 
-    /// A workspace of two mods (a `mod/` folder with two `.mod` descriptors)
-    /// must classify as `MultipleMod`, expand to both resolved roots (name-sorted),
-    /// and discover the union of their script files with later-mod-wins override:
-    /// the alphabetically-greater mod name wins a shared logical path. Non-script
-    /// and default-excluded files are dropped, same as the single-root walk.
     #[test]
     fn multi_mod_workspace_expands_and_overrides() {
         use std::collections::HashMap;
@@ -2241,7 +1920,6 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let ws = tmp.path();
 
-        // Two mods, resolved via .mod descriptors in the workspace's mod/ folder.
         fs::create_dir_all(ws.join("mod")).unwrap();
         fs::write(
             ws.join("mod/alpha.mod"),
@@ -2254,7 +1932,6 @@ mod tests {
         )
         .unwrap();
 
-        // Alpha: a shared file, an alpha-only file, plus files that must be filtered.
         fs::create_dir_all(ws.join("alpha/common")).unwrap();
         fs::create_dir_all(ws.join("alpha/localisation")).unwrap();
         fs::write(ws.join("alpha/common/foo.txt"), "shared = alpha").unwrap();
@@ -2262,7 +1939,6 @@ mod tests {
         fs::write(ws.join("alpha/common/README.md"), "notes").unwrap();
         fs::write(ws.join("alpha/localisation/x.yml"), "l_english:").unwrap();
 
-        // Bravo: overrides the shared file, adds an event file.
         fs::create_dir_all(ws.join("bravo/common")).unwrap();
         fs::create_dir_all(ws.join("bravo/events")).unwrap();
         fs::write(ws.join("bravo/common/foo.txt"), "shared = bravo").unwrap();
@@ -2293,7 +1969,6 @@ mod tests {
             .map(|f| (f.logical_path.clone(), f.path.clone()))
             .collect();
 
-        // Shared file: Bravo wins (alphabetically-greater name = higher priority).
         let foo = by_logical
             .get("common/foo.txt")
             .expect("common/foo.txt present");
@@ -2302,10 +1977,8 @@ mod tests {
             "shared = bravo",
             "Bravo's common/foo.txt overrides Alpha's"
         );
-        // Alpha-only and Bravo-only files both survive.
         assert!(by_logical.contains_key("common/only_a.txt"));
         assert!(by_logical.contains_key("events/e.txt"));
-        // Non-script and default-excluded files are dropped.
         assert!(
             !by_logical.keys().any(|k| k.ends_with("README.md")),
             "*.md excluded: {by_logical:?}"
@@ -2316,8 +1989,6 @@ mod tests {
         );
     }
 
-    /// A plain single mod directory must classify as `Mod`, NOT `MultipleMod`, so
-    /// the driver keeps taking the existing single-root discovery path unchanged.
     #[test]
     fn single_mod_directory_classifies_as_mod() {
         use std::fs;
@@ -2329,7 +2000,6 @@ mod tests {
 
         assert_eq!(classify_directory(root), DirectoryType::Mod);
 
-        // The existing single-root walk still finds the file.
         let fm = FileManager::new(FileManagerConfig {
             root: root.to_path_buf(),
             include_dirs: vec!["common".into()],
@@ -2342,9 +2012,6 @@ mod tests {
 
     #[test]
     fn walk_workspace_files_returns_sorted_order() {
-        // The workspace scan must process files in a deterministic, sorted order
-        // independent of the filesystem's read_dir order, so editor diagnostics
-        // and indexing are reproducible run to run.
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
         for name in ["zebra.txt", "alpha.txt", "middle.txt"] {
@@ -2364,8 +2031,6 @@ mod tests {
     }
 
     /// #244: the globs the LSP forwards reach the walk, and a `**/`-prefixed one
-    /// (every `errors.ignorefiles` entry, once the client has rewritten it) drops
-    /// the file it names wherever it sits.
     #[test]
     fn walk_workspace_files_honours_path_globs() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -2388,7 +2053,6 @@ mod tests {
         let filtered = names(&["**/skip.txt".to_string()], &[]);
         assert_eq!(filtered, ["common/units/keep.txt"], "got: {filtered:?}");
 
-        // Anchored to one location, the sibling at the root survives.
         let anchored = names(&["common/**/skip.txt".to_string()], &[]);
         assert!(
             anchored.contains(&"skip.txt".to_string()),
@@ -2399,14 +2063,10 @@ mod tests {
             "got: {anchored:?}"
         );
 
-        // A directory glob addressing a path prunes that subtree and no other.
         let pruned = names(&[], &["common/units".to_string()]);
         assert_eq!(pruned, ["skip.txt"], "got: {pruned:?}");
     }
 
-    /// The CLI walker reads the same globs the same way (`exclude_patterns` is
-    /// where the driver puts `--ignore-file`), so the two discovery paths can't
-    /// disagree about what a pattern means.
     #[test]
     fn collect_paths_honours_path_globs() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -2426,8 +2086,6 @@ mod tests {
         assert_eq!(logical, ["common/units/keep.txt"], "got: {logical:?}");
     }
 
-    /// A root that isn't there is an error, not an empty result: a typo'd
-    /// `--directory` used to walk nothing and report a clean run.
     #[test]
     fn discover_and_parse_missing_root_is_an_error() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -2445,8 +2103,6 @@ mod tests {
         );
     }
 
-    /// An existing-but-empty root still succeeds with no files; "empty" is the
-    /// caller's policy call, only "not there" is an error here.
     #[test]
     fn discover_and_parse_empty_root_is_ok() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -2461,7 +2117,6 @@ mod tests {
 
     /// A symlinked directory or file must not be walked: a dir symlink can point
     /// outside the root or into a cycle, and a file symlink can point at a
-    /// special file (e.g. `/dev/zero`) that reports length 0 and reads to EOF.
     #[cfg(unix)]
     #[test]
     fn walk_workspace_files_rejects_symlinks() {
@@ -2470,7 +2125,6 @@ mod tests {
         let root = tmp.path();
 
         // A real file that must be found, plus a dir symlink and a file symlink
-        // that must be ignored.
         std::fs::write(root.join("real.txt"), "x").unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
         std::fs::write(root.join("sub").join("inside.txt"), "x").unwrap();
@@ -2526,7 +2180,6 @@ mod tests {
     }
 
     /// The per-scan file-count budget stops a pathological tree from being
-    /// walked to exhaustion.
     #[test]
     fn walk_workspace_files_enforces_file_budget() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -2582,7 +2235,6 @@ mod tests {
     }
 
     /// `read_text_capped` refuses a file over the cap rather than truncating it,
-    /// so a special file that reports length 0 can't be read to EOF.
     #[test]
     fn read_text_capped_refuses_over_limit() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -2603,8 +2255,6 @@ mod tests {
     }
 
     /// `discover_and_parse` must skip a file over the per-file cap instead of
-    /// reading it to EOF (the CLI's metadata-only check didn't protect special
-    /// files that report length 0).
     #[test]
     fn discover_and_parse_skips_over_limit_file() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -2629,7 +2279,6 @@ mod tests {
 
     #[test]
     fn is_ignored_logical_path_applies_engine_baseline() {
-        // Baseline must win even with no user globs.
         assert!(is_ignored_logical_path("README.txt", &[]));
         assert!(is_ignored_logical_path("Changelog.txt", &[]));
         assert!(is_ignored_logical_path("LICENSE.txt", &[]));
@@ -2671,7 +2320,6 @@ mod tests {
             "skip.txt",
             &["common/**/skip.txt".to_string()]
         ));
-        // Trailing slash means everything below.
         assert!(is_ignored_logical_path(
             "common/units/foo.txt",
             &["common/units/".to_string()]
@@ -2692,13 +2340,10 @@ mod tests {
     fn is_ignored_file_wrapper_derives_logical_path() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
-        // Inside root.
         let inside = root.join("common/ignored.txt");
         std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
         std::fs::write(&inside, "").unwrap();
         assert!(is_ignored_file(root, &inside, &["ignored.txt".to_string()]));
-        // Outside root falls back to filename (compute_logical_path) and still
-        // matches a bare glob.
         let outside = tmp.path().join("../outside_ignored.txt");
         assert!(is_ignored_file(
             root,
@@ -2706,7 +2351,6 @@ mod tests {
             &["outside_ignored.txt".to_string()]
         ));
         assert!(!is_ignored_file(root, &inside, &[]));
-        // Engine baseline via wrapper.
         let readme = root.join("README.txt");
         std::fs::write(&readme, "").unwrap();
         assert!(is_ignored_file(root, &readme, &[]));
@@ -2766,7 +2410,6 @@ mod tests {
 
     #[test]
     fn is_ignored_path_applies_dir_globs() {
-        // Bare directory name matches at any depth.
         assert!(is_ignored_path("scratch/foo.txt", &[], &["scratch".into()]));
         assert!(is_ignored_path(
             "common/scratch/foo.txt",
@@ -2778,7 +2421,6 @@ mod tests {
             &[],
             &["scratch".into()]
         ));
-        // Path-aware directory glob.
         assert!(is_ignored_path(
             "common/scratch/foo.txt",
             &[],
@@ -2794,7 +2436,6 @@ mod tests {
             &[],
             &["**/scratch".into()]
         ));
-        // File and directory globs stack.
         assert!(is_ignored_path(
             "scratch/README.txt",
             &[],
@@ -2878,7 +2519,6 @@ mod tests {
 
     #[test]
     fn is_ignored_logical_path_handles_windows_separators() {
-        // Pattern with \ must still match a forward-slashed logical path and vice versa.
         assert!(is_ignored_logical_path(
             "common\\ignored.txt",
             &["ignored.txt".to_string()]

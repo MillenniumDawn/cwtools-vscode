@@ -1,7 +1,3 @@
-//! Type extraction: `types = { type[x] = { ... } }` blocks into `TypeDefinition`s,
-//! including their localisation/modifier sub-blocks and the `##` directives that
-//! precede the node.
-
 use super::*;
 
 pub(crate) fn extract_types_from_children(
@@ -60,13 +56,11 @@ pub(crate) fn process_type_node(
         modifiers: Vec::new(),
     };
 
-    // Parse type_key_filter from comments before this type[] node
     def.type_key_filter = parse_type_key_filter_from_comments(comments);
     def.graph_related_types = parse_graph_related_types_from_comments(comments);
     apply_option_directives(&mut def, comments);
 
     if let Value::Clause(children) = &leaf.value {
-        // First pass: collect subtypes, localisation node, modifiers node
         let mut localisation_children: Option<Vec<Child>> = None;
         let mut modifiers_children: Option<Vec<Child>> = None;
 
@@ -129,12 +123,6 @@ pub(crate) fn process_type_node(
                         "unique" => {
                             def.unique = leaf_value_string(l, table) == "yes";
                         }
-                        // The `should_be_used` directive maps onto the
-                        // `should_be_referenced` field (the field is named for
-                        // the cross-file "is this type ever referenced?" check
-                        // it feeds, but the directive that enables it is spelled
-                        // `should_be_used`). Field is shared across crates, so
-                        // it is not renamed here (#204).
                         "should_be_used" => {
                             def.should_be_referenced = leaf_value_string(l, table) == "yes";
                         }
@@ -156,15 +144,8 @@ pub(crate) fn process_type_node(
             }
         }
 
-        // Multiple leaf skip_root_key directives are already promoted inline
-        // (above) to a single MultipleKeys entry.  The block form intentionally
-        // produces one entry per element (nested levels), so no further
-        // collapsing is needed or correct here.
-
-        // Parse localisation block
         if let Some(loc_children) = localisation_children {
             def.localisation = parse_localisation_block(&loc_children, ast, table);
-            // Also look for subtype localisation sub-blocks and attach them
             let subtype_locs = parse_subtype_localisation(&loc_children, ast, table);
             for (st_name, locs) in subtype_locs {
                 if let Some(st) = def.subtypes.iter_mut().find(|s| s.name == st_name) {
@@ -173,7 +154,6 @@ pub(crate) fn process_type_node(
             }
         }
 
-        // Parse modifiers block
         if let Some(mod_children) = modifiers_children {
             def.modifiers = parse_modifiers_block(&mod_children, ast, table);
             let subtype_mods = parse_subtype_modifiers(&mod_children, ast, table);
@@ -188,31 +168,16 @@ pub(crate) fn process_type_node(
     def
 }
 
-/// Seed the type options that may equally be written as a `## key = value`
-/// directive above the `type[x]` node instead of as a leaf in its body (#264).
-/// Seeding happens before the body loop, but the body leaf is authoritative
-/// for all six options: a body `unique = no` or `severity = error` overrides a
-/// directive that set the option on.
-///
-/// `path`, `path_file`, `path_extension`, `name_field`, `type_key_prefix` and
-/// `skip_root_key` stay body-only: nothing writes them as directives, and
-/// `skip_root_key` has block and leaf forms that don't map onto a comment line.
 fn apply_option_directives(def: &mut TypeDefinition, comments: &[String]) {
     let yes = |key: &str| find_directive(comments, key) == Some("yes");
     def.unique = yes("unique");
     def.type_per_file = yes("type_per_file");
     def.path_options.path_strict = yes("path_strict");
-    // The directive is spelled `should_be_used`; the field it feeds is named
-    // `should_be_referenced` (see the body-loop arm comment, #204).
     def.should_be_referenced = yes("should_be_used");
     def.warning_only = find_directive(comments, "severity") == Some("warning");
     def.starts_with = find_directive(comments, "starts_with").map(str::to_string);
 }
 
-/// Block form: `skip_root_key = { A B }`.
-/// Each element is a separate nested level (F# RulesParser.fs:1031-1035 maps
-/// each to its own layer). `any` becomes `AnyKey`; anything else becomes
-/// `SpecificKey`. Appends to `out`.
 fn parse_skip_root_key_block(
     block_children: &[Child],
     ast: &ParsedFile,
@@ -235,11 +200,6 @@ fn parse_skip_root_key_block(
     }
 }
 
-/// Leaf form: `skip_root_key = A`.
-/// `any` becomes `AnyKey`. A first named key becomes `SpecificKey`; subsequent
-/// named leaves (multiple `skip_root_key = ...` directives) promote the prior
-/// entries into a single `MultipleKeys` alternative, using the first entry's
-/// operator (F# parity). Appends to / rewrites `out`.
 fn parse_skip_root_key_leaf(
     l: &cwtools_parser::ast::Leaf,
     table: &StringTable,
@@ -252,15 +212,11 @@ fn parse_skip_root_key_leaf(
     } else if out.is_empty() {
         out.push(SkipRootKey::SpecificKey(v));
     } else {
-        // Multiple leaves: promote to MultipleKeys, using the first entry's
-        // operator (F# parity).
         let should_match = op == cwtools_parser::ast::Operator::Equals;
         let first_match_kind = match &out[0] {
             SkipRootKey::MultipleKeys(_, mk) => *mk,
             _ => MatchKind::from_equals(should_match),
         };
-        // Flatten the existing entries (SpecificKey / MultipleKeys) plus the
-        // new key into one alternative list. AnyKey carries no key text.
         let mut all_keys: Vec<String> = out
             .drain(..)
             .flat_map(|existing| match existing {
@@ -274,9 +230,6 @@ fn parse_skip_root_key_leaf(
     }
 }
 
-/// Split a brace-wrapped list `{ a b c }` into its whitespace-separated items,
-/// dropping empties. The braces must already be confirmed by the caller via
-/// `rhs.starts_with('{') && rhs.ends_with('}')`; only the inner text is split.
 fn split_brace_list(rhs: &str) -> Vec<String> {
     let inner = rhs.trim_matches(|c| c == '{' || c == '}');
     inner
@@ -289,7 +242,6 @@ fn split_brace_list(rhs: &str) -> Vec<String> {
 pub(crate) fn parse_type_key_filter_from_comments(
     comments: &[String],
 ) -> Option<(Vec<String>, bool)> {
-    // Check for negated form first (`type_key_filter <> value`) — only on exactly-## lines.
     for c in comments.iter().rev() {
         let Some(rest) = c.strip_prefix("##") else {
             continue;
@@ -330,12 +282,6 @@ fn parse_graph_related_types_from_comments(comments: &[String]) -> Vec<String> {
     Vec::new()
 }
 
-/// Walk the leaf children of a localisation/modifier sub-block, invoking `f`
-/// with `(child_comments, key, value)` for each `Child::Leaf` whose key is not a
-/// `subtype[...]` sub-block (those carry Leaf+Clause children handled elsewhere).
-///
-/// Shared skeleton for `parse_localisation_block` / `parse_modifiers_block`,
-/// which differ only in the directives they read and the struct they build.
 fn for_each_block_leaf(
     children: &[Child],
     ast: &ParsedFile,
@@ -407,7 +353,6 @@ pub(crate) fn parse_modifiers_block(
     let mut out = Vec::new();
     for_each_block_leaf(children, ast, table, |child_comments, key, value| {
         let explicit = has_directive(child_comments, "explicit");
-        // Documentation is the first exactly-### line (not ##, which is directives).
         let documentation = child_comments
             .iter()
             .find(|s| s.starts_with("###"))
@@ -496,7 +441,6 @@ mod option_directive_tests {
         assert_eq!(def.starts_with, Some("my_".to_string()));
     }
 
-    // `= yes` options need exactly `yes`, so an explicit `no` stays off.
     #[test]
     fn explicit_no_directive_leaves_the_option_off() {
         let def = parse_typedef(
@@ -510,9 +454,6 @@ mod option_directive_tests {
         assert!(!def.path_options.path_strict);
     }
 
-    // The body leaf is authoritative for the boolean/severity options, so an
-    // off-value spelling turns a directive-set option off. `starts_with` has
-    // no off spelling; its body override is covered below.
     #[test]
     fn body_off_value_overrides_directive_on_value() {
         let def = parse_typedef(
@@ -532,8 +473,6 @@ mod option_directive_tests {
         assert!(!def.warning_only);
     }
 
-    // Quoted directive values unquote like the body form, so `## unique = "yes"`
-    // and `## severity = "warning"` read the same as their bare spellings.
     #[test]
     fn quoted_yes_and_warning_directives_set_the_option() {
         let def = parse_typedef(
@@ -558,8 +497,6 @@ mod option_directive_tests {
         assert_eq!(def.starts_with, Some("from_body_".to_string()));
     }
 
-    // The body form goes through `value_to_string`, which unquotes. A directive
-    // is raw comment text, so it has to unquote too or the two forms disagree.
     #[test]
     fn quoted_directive_value_is_unquoted() {
         let def = parse_typedef(
@@ -571,7 +508,6 @@ mod option_directive_tests {
         assert_eq!(def.starts_with, Some("my_".to_string()));
     }
 
-    // A directive on a neighbouring type must not leak across.
     #[test]
     fn directives_do_not_leak_to_the_next_type() {
         let table = StringTable::new();
@@ -590,8 +526,6 @@ mod option_directive_tests {
         assert!(!second.unique);
     }
 
-    // `type_key_filter` between the directive and the node is the shape the HOI4
-    // config actually uses for its focus types.
     #[test]
     fn directive_survives_another_directive_below_it() {
         let def = parse_typedef(
@@ -630,7 +564,6 @@ mod skip_root_key_tests {
             .unwrap_or_default()
     }
 
-    // Single leaf: skip_root_key = ideas
     #[test]
     fn single_leaf_produces_specific_key() {
         let srk = parse_type(
@@ -639,7 +572,6 @@ mod skip_root_key_tests {
         assert_eq!(srk, vec![SkipRootKey::SpecificKey("ideas".into())]);
     }
 
-    // Single leaf: skip_root_key = any
     #[test]
     fn single_any_leaf_produces_any_key() {
         let srk = parse_type(
@@ -648,8 +580,6 @@ mod skip_root_key_tests {
         assert_eq!(srk, vec![SkipRootKey::AnyKey]);
     }
 
-    // Block form: skip_root_key = { ideas any }
-    // Must produce TWO nested levels, not one MultipleKeys.
     #[test]
     fn block_form_produces_nested_levels() {
         let srk = parse_type(
@@ -665,7 +595,6 @@ mod skip_root_key_tests {
         );
     }
 
-    // Block form with two named keys: skip_root_key = { A B }
     #[test]
     fn block_form_two_named_keys_are_two_levels() {
         let srk = parse_type(
@@ -680,8 +609,6 @@ mod skip_root_key_tests {
         );
     }
 
-    // Multiple leaves: skip_root_key = A  +  skip_root_key = B  (alternatives, F# parity)
-    // Must keep MultipleKeys (alternative form, single level with two candidates).
     #[test]
     fn multiple_leaves_produce_multiple_keys() {
         let srk = parse_type(

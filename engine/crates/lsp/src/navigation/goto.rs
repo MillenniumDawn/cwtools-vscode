@@ -28,8 +28,6 @@ impl Backend {
         }
     }
 
-    /// Goto for a `$KEY$` reference in a `.yml` loc file: jump to the entry the
-    /// key names. `None` when the cursor isn't on a known loc-key reference.
     async fn loc_ref_goto(
         &self,
         uri: &str,
@@ -73,20 +71,14 @@ impl Backend {
         let logical_path = logical_path_from_uri(&uri, &ws_prefix);
         let fallback = &params.text_document_position_params.text_document.uri;
 
-        // Localisation file: goto on a `$KEY$` reference jumps to the loc entry
-        // it names. .yml isn't a game AST, so handle it before the rule walk.
         if crate::paths::is_loc_file(&uri) {
             return Ok(self.loc_ref_goto(&uri, pos, fallback).await);
         }
 
-        // `.cwt` rule file: a `<type>` / `enum[..]` / `single_alias_right[..]`
-        // reference jumps to its definition in the loaded rules folder.
         if crate::paths::is_cwt_file(&uri) {
             return Ok(self.cwt_goto(&uri, pos, fallback).await);
         }
 
-        // Rule-aware lookup via the position resolver. The classified hint tells
-        // us how to find the definition; mirror the kinds hover handles.
         if let Some(info) = self.rule_info_at_cursor(&uri, pos, &logical_path) {
             let locations = match &info.hint {
                 ReferenceHint::TypeRef { type_name, value } => {
@@ -133,9 +125,6 @@ impl Backend {
                     }
                 }
                 ReferenceHint::FileRef { path } => self.file_ref_locations(path, fallback).await,
-                // An enum member has no definition of its own in the game
-                // files; the config is where it comes from, so jump to the
-                // member inside its `enum[..]` block.
                 ReferenceHint::EnumRef { enum_name, value } => self
                     .cwt_def_location(
                         cwtools_rules::rules_types::CwtDefKind::Enum,
@@ -154,11 +143,6 @@ impl Backend {
             }
         }
 
-        // Fallback: heuristic symbol-based lookup. Try the leaf VALUE before the
-        // key — an event/decision reference like `id = some.1` or
-        // `trigger_event = some.1` resolves by its dotted id (the instance name),
-        // which the rule-aware path misses when the field is typed `scalar`. The
-        // key is tried second so a definition node (e.g. `decision = { … }`)
         // still resolves. (#39)
         if let Some(element) = self.element_at_cursor(&uri, pos) {
             let candidates: Vec<String> = match &element {
@@ -173,7 +157,6 @@ impl Backend {
                 candidates
                     .iter()
                     .map(|symbol| {
-                        // Type-instance index first: events/decisions are keyed by id.
                         let instances = info
                             .type_index
                             .instance_locations(symbol)
@@ -204,10 +187,6 @@ impl Backend {
         Ok(None)
     }
 
-    /// Resolve a `FilepathField` reference (a game-relative path like
-    /// `gfx/…/foo.dds`) to a file Location by probing the workspace root, then
-    /// the configured vanilla install. Returns an empty Vec when nothing exists
-    /// inside either of them.
     async fn file_ref_locations(&self, path: &str, fallback: &Url) -> Vec<Location> {
         resolve_file_ref(&self.search_roots(), path)
             .await
@@ -219,8 +198,6 @@ impl Backend {
             .collect()
     }
 
-    /// The classified `.cwt` reference under the cursor, read from the line
-    /// text (rule files aren't game ASTs, so no rule walk).
     pub(crate) async fn cwt_ref_at_cursor(
         &self,
         uri: &str,
@@ -233,8 +210,6 @@ impl Backend {
         cwt_ref_at(line, col as u32)
     }
 
-    /// Goto inside a `.cwt`: jump to the referenced definition recorded by the
-    /// ruleset loader. `None` when the cursor isn't on a resolvable reference.
     async fn cwt_goto(
         &self,
         uri: &str,
@@ -246,11 +221,6 @@ impl Backend {
         Some(GotoDefinitionResponse::Array(vec![loc]))
     }
 
-    /// Where the ruleset loader recorded `name`'s definition, as a Location.
-    /// `member` anchors on that token inside the definition's block (an enum
-    /// value in its `enum[..]` body), falling back to the defining key when the
-    /// block doesn't spell it out — a complex enum's members come from the game
-    /// files, not the config. `None` when nothing defines `name`.
     async fn cwt_def_location(
         &self,
         kind: cwtools_rules::rules_types::CwtDefKind,
@@ -289,8 +259,6 @@ impl Backend {
         ))
     }
 
-    /// The roots a game-relative path resolves against, in probe order: the
-    /// workspace, then the configured vanilla install.
     pub(crate) fn search_roots(&self) -> Vec<std::path::PathBuf> {
         let (ws_uri, vanilla_dir) = {
             let cfg = self.state.config.read();

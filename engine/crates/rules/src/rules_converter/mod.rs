@@ -1,18 +1,3 @@
-//! `.cwt` AST -> `RuleSet` conversion.
-//!
-//! The top-level entry point [`ast_to_ruleset`] dispatches each root block to a
-//! focused submodule grouped by output kind:
-//! - [`field_parser`] — the `.cwt` field-type string parser
-//! - [`types`] — `type[x]` definitions
-//! - [`enums`] — `enum[x]` / `complex_enum[x]` / `value[x]`
-//! - [`subtypes`] — `subtype[x]` bodies and subtype-scoped loc/modifiers
-//! - [`scopes_links`] — `scopes` / `links` / top-level `modifiers`
-//! - [`comment_directives`] — `#`/`##`/`###` option and documentation parsing
-//!
-//! Shared helpers (comment precomputation, the recursive rule builder, value
-//! stringification, bracket/alias parsing) stay here and are re-exported into the
-//! submodules via `use super::*`.
-
 mod comment_directives;
 mod enums;
 pub(crate) mod field_parser;
@@ -31,14 +16,11 @@ use crate::rules_types::*;
 use cwtools_parser::ast::{Child, ParsedFile, Value};
 use cwtools_string_table::string_table::StringTable;
 
-// ±1e12 sentinel for unranged float; 1e6 was too narrow (build costs, populations).
 const FLOAT_MAX: f64 = 1e12;
 const FLOAT_MIN: f64 = -1e12;
 const INT_MAX: i32 = 2_147_483_647;
 const INT_MIN: i32 = -2_147_483_648;
 
-/// Precompute comment text directly preceding every child in a single O(N) pass.
-/// `result[i]` is the list of comments before child `i` (may be empty).
 pub(crate) fn precompute_comments(
     children: &[Child],
     ast: &ParsedFile,
@@ -62,18 +44,13 @@ pub(crate) fn precompute_comments(
     result
 }
 
-/// Convert a parsed .cwt AST into a RuleSet.
 pub fn ast_to_ruleset(ast: &ParsedFile, table: &StringTable) -> RuleSet {
     let mut ruleset = fill_ruleset(ast, table);
     ruleset.reindex();
     ruleset
 }
 
-/// Like `ast_to_ruleset` but skips the per-ruleset `reindex()` call.
-/// Only safe when the caller is about to merge the result into a larger
-/// `RuleSet` and will call `reindex()` on the final combined set.
 pub(crate) fn ast_to_ruleset_raw(ast: &ParsedFile, table: &StringTable) -> RuleSet {
-    // No reindex() — caller is responsible.
     fill_ruleset(ast, table)
 }
 
@@ -245,7 +222,6 @@ pub(crate) fn children_to_rules(
                     }
                     _ => {
                         let right_str = value_to_string(&leaf.value, table);
-                        // colour[rgb]/colour[hsv] special: expand inline to NodeRule
                         if right_str.starts_with("colour[") && right_str.ends_with(']') {
                             let colour_rules = build_colour_rules(&right_str);
                             RuleType::NodeRule {
@@ -264,7 +240,6 @@ pub(crate) fn children_to_rules(
             Child::LeafValue(lvidx) => {
                 let lv = &ast.arena.leaf_values[*lvidx as usize];
                 if let Value::Clause(clause_ch) = &lv.value {
-                    // Anonymous {…} block in a rule definition — same as F# ValueClauseC.
                     let opts = options_from_comments(comments, false);
                     let inner = children_to_rules(clause_ch, ast, table);
                     rules.push((
@@ -287,11 +262,6 @@ pub(crate) fn children_to_rules(
     rules
 }
 
-/// Build colour sub-rules for the inline `colour[rgb]` / `colour[hsv]` RHS
-/// syntax (int 0-255 / float 0-2, 3-4 values). Distinct from the
-/// `colour_field` MARKER expanded in `post_process::expand_colour_rule`
-/// (float -256..256, exactly 3) — two different .cwt constructs with
-/// deliberately different ranges, not a duplicate.
 fn build_colour_rules(colour_spec: &str) -> Vec<NewRule> {
     let inner = if colour_spec.starts_with("colour[") && colour_spec.ends_with(']') {
         &colour_spec[7..colour_spec.len() - 1]
@@ -324,7 +294,6 @@ fn build_colour_rules(colour_spec: &str) -> Vec<NewRule> {
             },
         )],
         _ => {
-            // Unknown colour format — emit both
             vec![
                 (
                     RuleType::LeafValueRule {
@@ -404,9 +373,6 @@ pub(crate) fn extract_bracket_content(full: &str, prefix: &str) -> Option<String
     None
 }
 
-/// Strip one balanced pair of surrounding double quotes, nothing more.
-/// `value_to_string` and the comment-directive readers share this so a quoted
-/// directive value reads the same as the equivalent body value.
 pub(crate) fn strip_quotes(s: &str) -> &str {
     if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
         &s[1..s.len() - 1]
@@ -423,7 +389,6 @@ pub(crate) fn value_to_string(value: &Value, table: &StringTable) -> String {
         }
         Value::Float(f) => f.to_string(),
         Value::Int(i) => i.to_string(),
-        // CW script uses yes/no for booleans, not true/false
         Value::Bool(true) => "yes".to_string(),
         Value::Bool(false) => "no".to_string(),
         Value::Clause(_) => String::new(),
@@ -467,8 +432,6 @@ mod description_tests {
 
     #[test]
     fn only_triple_hash_is_documentation() {
-        // `## cardinality`/`## scope` are options and must not appear in the
-        // hover tooltip; only `###` lines are documentation.
         let comments = vec![
             "### Numeric index of an ai_area (see common/ai_areas), not a name.".to_string(),
             "## cardinality = 0..1".to_string(),

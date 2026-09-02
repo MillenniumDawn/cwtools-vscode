@@ -1,25 +1,7 @@
-//! Prefix-searchable view of the loc-key union, for loc completion.
-//!
-//! The union is the whole project's localisation namespace — ~400K keys on
-//! Millennium Dawn with vanilla merged in. Completion only ever returns the
-//! [`CONTEXT_CAP`](super::CONTEXT_CAP) best-ranked matches for the typed token,
-//! but the request used to reach them by sweeping every key in the union on
-//! every keystroke. [`LocKeyIndex`] is built once per workspace scan (alongside
-//! the union it mirrors) and answers the same question by binary-searching a
-//! sorted key blob, so the common case touches a few thousand keys instead of
-//! four hundred thousand.
-//!
-//! The selection order is unchanged: start-matches ahead of looser subsequence
-//! matches, then lexicographic, capped. [`select_loc_keys`] keeps the linear
-//! sweep for the window before the first scan has built an index.
-
 use std::collections::{BTreeSet, HashSet};
 
 use super::subsequence_match;
 
-/// One candidate ranked the way the loc list orders keys: a start-match sorts
-/// ahead of a mere subsequence match, then lexicographically, so a later
-/// truncation keeps the keys the user most likely meant.
 type Ranked<'a> = (bool, &'a str);
 
 fn rank<'a>(key: &'a str, token: &str) -> Ranked<'a> {
@@ -29,8 +11,6 @@ fn rank<'a>(key: &'a str, token: &str) -> Ranked<'a> {
     (!starts, key)
 }
 
-/// Bounded "keep the `cap` smallest" accumulator. Holds at most `cap` entries,
-/// so a 400K-key sweep never materialises more than the response needs.
 struct TopK<'a> {
     selected: BTreeSet<Ranked<'a>>,
     cap: usize,
@@ -69,8 +49,6 @@ impl<'a> TopK<'a> {
     }
 }
 
-/// Linear sweep over `keys`, keeping the `cap` best-ranked subsequence matches
-/// for `token`. Used before the first scan has built a [`LocKeyIndex`].
 pub(crate) fn select_loc_keys<'a>(
     keys: impl Iterator<Item = &'a str>,
     token: &str,
@@ -83,13 +61,6 @@ pub(crate) fn select_loc_keys<'a>(
     top.into_keys()
 }
 
-/// Which ASCII characters a string contains, folded into 64 buckets. A
-/// subsequence match needs every needle character present in the haystack, so
-/// `key & needle != needle` rejects a key without touching its text. Bucket
-/// collisions (`'1'` lands on `'q'`) only ever let a key through, never reject
-/// one. A non-ASCII key answers `!0` (always considered) and a non-ASCII needle
-/// answers `0` (never rejects), because `to_lowercase` can fold a non-ASCII
-/// character down to an ASCII one and the byte view would miss it.
 fn char_mask(text: &str, non_ascii: u64) -> u64 {
     if !text.is_ascii() {
         return non_ascii;
@@ -98,26 +69,13 @@ fn char_mask(text: &str, non_ascii: u64) -> u64 {
         .fold(0u64, |mask, b| mask | 1 << (b.to_ascii_lowercase() & 63))
 }
 
-/// Sorted loc keys in one contiguous blob plus their start offsets. Sorted
-/// storage is what makes the start-match lookup a binary search; the blob (over
-/// a `Vec<String>`) keeps the fallback sweep to one linear pass through memory
-/// instead of 400K pointer chases, and costs one allocation.
 pub(crate) struct LocKeyIndex {
     blob: String,
-    /// `len() + 1` entries: each key's start, plus a trailing `blob.len()`.
     offsets: Vec<usize>,
-    /// Per-key [`char_mask`], so the fallback sweep rejects most keys with one
-    /// load and one `and` instead of walking their text.
     masks: Vec<u64>,
 }
 
 impl LocKeyIndex {
-    /// Build from the loc-key union. Keys are stored as given, which relies on
-    /// the same lowercased-key contract `LocIndex::exists_any` already has:
-    /// every key in the union and in the live overlay is `to_lowercase`d at
-    /// build, so byte order IS the case-insensitive order the start-match
-    /// binary search needs. `select_loc_keys` stays exact for any input and is
-    /// what runs before an index exists.
     pub(crate) fn build<'a>(keys: impl Iterator<Item = &'a str>) -> Self {
         let mut sorted: Vec<&str> = keys.collect();
         sorted.sort_unstable();
@@ -146,7 +104,6 @@ impl LocKeyIndex {
         &self.blob[self.offsets[i]..self.offsets[i + 1]]
     }
 
-    /// Index of the first key at or after `prefix` in sort order.
     fn prefix_start(&self, prefix: &str) -> usize {
         let (mut lo, mut hi) = (0, self.len());
         while lo < hi {
@@ -160,9 +117,6 @@ impl LocKeyIndex {
         lo
     }
 
-    /// The `cap` best-ranked keys matching `token`, drawn from the index plus
-    /// `overlay` (the live keys of open `.yml` files, too small and too churny
-    /// to index). Identical result to [`select_loc_keys`] over the same keys.
     pub(crate) fn select<'a>(
         &'a self,
         token: &str,
@@ -170,10 +124,6 @@ impl LocKeyIndex {
         cap: usize,
     ) -> HashSet<String> {
         let mut top = TopK::new(cap);
-        // Start-matches outrank everything else and are already in
-        // lexicographic order, so the first `cap` of them are exactly the ones
-        // that can survive the cap — the rest of the bucket never needs looking
-        // at. A start-match is always a subsequence match too.
         let prefix = token.to_ascii_lowercase();
         for i in self.prefix_start(&prefix)..self.len() {
             let key = self.key(i);
@@ -182,10 +132,6 @@ impl LocKeyIndex {
             }
             top.push(rank(key, token));
         }
-        // Looser subsequence matches only fill what the start-matches left over.
-        // This sweep is in lexicographic order too, and every start-match is
-        // already in, so once the cap is full every later key ranks worse than
-        // the current worst and the sweep can stop.
         if top.len() < cap {
             let needle = char_mask(token, 0);
             for (i, mask) in self.masks.iter().enumerate() {

@@ -1,18 +1,6 @@
 //! Locale selection and the server's own user-visible strings.
-//!
-//! Leaf crate (depends on nothing) so `cwtools_cache`, `cwtools_error_codes`,
-//! `cwtools_validation` and `cwtools_lsp` can all reach the active locale
-//! without a dependency cycle.
-//!
-//! The locale is process-global and set once, from the `locale` the client
-//! sends in `initialize` (`vscode-languageclient` fills it in from
-//! `vscode.env.language`). Nothing sets it in the CLI, so batch runs stay
-//! English and the corpus baselines don't move.
-//!
-//! Two string sets live in two places, each next to the code that owns it:
-//! the diagnostic message templates are in `cwtools_error_codes`, beside the
-//! English catalog they translate; everything the server says on its own
-//! behalf — progress, command results, code-action titles, hover labels — is
+//! Leaf crate so error codes, cache and validation can reach locale without cycle.
+//! The locale is set once from client initialize; CLI stays English.
 //! here.
 //!
 //! # Examples

@@ -1,18 +1,3 @@
-//! Dynamically-defined value collection for editor features.
-//!
-//! Two kinds of names are defined by game/mod *content* rather than the rules:
-//!   * complex-enum members — extracted from script files per the config's
-//!     `complex_enum[...]` definitions (e.g. `equipment_stat` from
-//!     `common/script_enums.txt`, `country_tags` from `common/country_tags`).
-//!   * `value_set[...]` members — flags/tokens written by effects
-//!     (`set_country_flag = my_flag` defines a `country_flag`).
-//!
-//! Complex-enum members feed completion (and hover) only: validation keeps its
-//! lenient behavior for absent/large enums, so collecting them changes no
-//! diagnostics. Value-set members feed completion the same way, but the rule
-//! engine reads them too, for `from_data` scope links whose `data_source` is
-//! `value[<set>]` (see `TypeIndex::value_set_values`).
-
 use crate::{dec_ref, unquote};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,17 +8,8 @@ use cwtools_string_table::string_table::{StringId, StringTable};
 
 use crate::check_path_dir;
 
-/// One (enum-name, value) pair stored in the per-file bookkeeping list.
 type NameValuePair = (Arc<str>, Arc<str>);
 
-/// `name -> value -> refcount`, with per-file bookkeeping so single-file
-/// re-indexing (the LSP edit path) replaces a file's contribution instead of
-/// leaking it. Used for both complex-enum members (name = enum name) and
-/// value-set members (name = namespace).
-///
-/// `Arc<str>` keys in both maps share the same allocation — each (name, value)
-/// string is allocated once even though it appears in both `by_name` and the
-/// per-file bookkeeping list.
 #[derive(Debug, Clone, Default)]
 pub struct NamedValueIndex {
     by_name: HashMap<Arc<str>, HashMap<Arc<str>, usize>>,
@@ -45,7 +21,6 @@ impl NamedValueIndex {
         Self::default()
     }
 
-    /// Replace `file_uri`'s contribution with `items`.
     pub fn merge_file(&mut self, file_uri: &str, items: HashMap<String, Vec<String>>) {
         self.remove_file(file_uri);
         let mut flat: Vec<(Arc<str>, Arc<str>)> = Vec::new();
@@ -67,7 +42,6 @@ impl NamedValueIndex {
         }
     }
 
-    /// Drop `file_uri`'s contribution (refcounted).
     pub fn remove_file(&mut self, file_uri: &str) {
         let Some(flat) = self.per_file.remove(file_uri) else {
             return;
@@ -82,7 +56,6 @@ impl NamedValueIndex {
         }
     }
 
-    /// All known values for `name`.
     pub fn values(&self, name: &str) -> impl Iterator<Item = &str> {
         self.by_name
             .get(name)
@@ -90,8 +63,6 @@ impl NamedValueIndex {
             .flat_map(|m| m.keys().map(Arc::as_ref))
     }
 
-    /// Whether `name`'s set contains `value` (O(1) hash probe, versus scanning
-    /// every member with `values(name)`).
     pub fn contains(&self, name: &str, value: &str) -> bool {
         self.by_name
             .get(name)
@@ -102,7 +73,6 @@ impl NamedValueIndex {
         self.by_name.is_empty()
     }
 
-    /// Export as `(name, values)` pairs (the vanilla-cache shape).
     pub fn export(&self) -> Vec<(String, Vec<String>)> {
         self.by_name
             .iter()
@@ -116,7 +86,6 @@ impl NamedValueIndex {
     }
 }
 
-/// Collect complex-enum members defined in one parsed file, keyed by enum name.
 pub fn collect_complex_enum_values(
     ruleset: &RuleSet,
     parsed: &ParsedFile,
@@ -138,7 +107,6 @@ pub fn collect_complex_enum_values(
                 &mut values,
             );
         } else {
-            // The tree applies inside each top-level entity.
             for child in &parsed.root_children {
                 if let Child::Leaf(idx) = child
                     && let Value::Clause(ch) = &parsed.arena.leaves[*idx as usize].value
@@ -154,8 +122,6 @@ pub fn collect_complex_enum_values(
     out
 }
 
-/// Push a value-set member, stripping an `@datestamp` suffix
-/// (`my_flag@1936.1.1` sets `my_flag`). Empty bases are skipped.
 fn push_member(out: &mut HashMap<String, Vec<String>>, ns: String, raw: &str) {
     let v = unquote(raw);
     let base = v.split('@').next().unwrap_or(v);
@@ -170,7 +136,6 @@ fn push_unquoted_key(out: &mut Vec<String>, table: &StringTable, id: StringId) {
     }
 }
 
-/// `scalar` matches any key; otherwise compare case-insensitively.
 fn key_matches(table: &StringTable, id: StringId, key: &str) -> bool {
     key == "scalar"
         || table
@@ -179,13 +144,6 @@ fn key_matches(table: &StringTable, id: StringId, key: &str) -> bool {
 }
 
 /// Walk one level of a complex-enum name tree against `children`, capturing
-/// member names per the marker forms:
-///   * `enum_name = { ... }` (Node, key `enum_name`)  -> each clause child's KEY
-///   * `enum_name = scalar`  (Leaf, key `enum_name`)  -> each scalar leaf's KEY
-///   * `key = enum_name`     (Leaf, is_name)          -> matching leaves' VALUE
-///   * bare `enum_name`      (BareName)               -> each bare value
-///
-/// `scalar` as a Node key is a wildcard (descend every clause child).
 fn walk_name_tree(
     tree: &ComplexEnumNameTree,
     children: &[Child],
@@ -223,7 +181,6 @@ fn walk_name_tree(
                         continue;
                     }
                     if *is_name {
-                        // `key = enum_name`: the VALUE of matching leaves.
                         if key_matches(table, leaf.key.normal, key)
                             && let Value::String(t) | Value::QString(t) = &leaf.value
                             && let Some(v) = table.get_string(t.normal)
@@ -231,7 +188,6 @@ fn walk_name_tree(
                             out.push(unquote(&v).to_string());
                         }
                     } else if key == "enum_name" {
-                        // `enum_name = scalar`: each scalar leaf's KEY.
                         push_unquoted_key(out, table, leaf.key.normal);
                     }
                 }
@@ -253,9 +209,6 @@ fn walk_name_tree(
     }
 }
 
-/// Collect `value_set[...]` members written by one parsed file, keyed by
-/// namespace. Uses `ruleset.value_set_effects` (built by `reindex()`): for a
-/// leaf like `set_country_flag = my_flag` the scalar value is the member; for
 /// the block form, a `flag`/`name`/`token`/`var`/`variable` child carries it.
 pub fn collect_value_set_members(
     ruleset: &RuleSet,
@@ -282,7 +235,6 @@ fn collect_value_sets_in(
         let leaf = &ast.arena.leaves[*idx as usize];
         let ns = value_set_leaf(leaf, ast, ruleset, table, out);
         // Descend into every clause EXCEPT a `variable`-namespace block, whose
-        // members are collected elsewhere (CW246 + `all_variables`).
         if let Value::Clause(sub) = &leaf.value
             && ns.as_deref() != Some("variable")
         {
@@ -291,17 +243,9 @@ fn collect_value_sets_in(
     }
 }
 
-/// Non-recursive value-set work for one leaf child. Looks the leaf's key up in
 /// `value_set_effects`; if it names a set, captures the member from a scalar RHS
 /// or (block form) from the block's direct children — a binding-field match, or
-/// the fixed `flag`/`name`/`token`/… heuristic. Returns the namespace the key
-/// maps to so the caller can decide whether to descend (a `variable`-namespace
 /// block is skipped — variables have their own collection path). `None` when the
-/// key names no set.
-///
-/// The per-node core shared by [`collect_value_set_members`] and the fused index
-/// walk (`crate::collect`); the recursion into clause children stays with the
-/// caller so both walk shapes reuse it.
 pub(crate) fn value_set_leaf(
     leaf: &Leaf,
     ast: &ParsedFile,
@@ -314,8 +258,6 @@ pub(crate) fn value_set_leaf(
     }
     let ns = table
         .with_string(leaf.key.normal, |s| {
-            // Lowercase into a reused thread-local buffer instead of allocating
-            // a String per leaf just to probe the (lowercased-key) effect map.
             LOWER_BUF.with(|buf| {
                 let mut key = buf.borrow_mut();
                 key.clear();
@@ -325,15 +267,12 @@ pub(crate) fn value_set_leaf(
         })
         .flatten();
     match (&leaf.value, ns.as_deref()) {
-        // Variables have their own collection path (CW246 + completion via
-        // all_variables); skip them here to avoid double-storing 100k names.
         (_, Some("variable")) => {}
         (Value::String(t) | Value::QString(t), Some(n)) => {
             table.with_string(t.normal, |v| push_member(out, n.to_string(), v));
         }
         (Value::Clause(sub), Some(n)) => {
             // Block form: the member is the value of the child bound to
-            // `value_set[ns]` in the rules (e.g. `flag`, `token_base`, `id`).
             let bindings = table
                 .with_string(leaf.key.normal, |s| {
                     LOWER_BUF.with(|buf| {
@@ -368,7 +307,6 @@ pub(crate) fn value_set_leaf(
                     }
                 }
             } else {
-                // No binding-field info — fall back to the fixed-key heuristic
                 // for the common flag/name/token block shapes.
                 const NAME_KEYS: &[&str] = &["flag", "name", "token", "var", "variable"];
                 for c in sub {
@@ -528,10 +466,7 @@ alias[effect:set_country_flag] = {
 
     #[test]
     fn value_set_member_under_nonobvious_block_key() {
-        // The member lives under `token_base`, which is NOT one of the fixed
-        // NAME_KEYS guesses. The collector must read the field actually bound
         // to `value_set[character_token]` in the rules, and must NOT capture the
-        // sibling `name = localisation` value as a token.
         let table = StringTable::new();
         let mut rs = ruleset_from(
             r#"
@@ -590,7 +525,6 @@ alias[effect:generate_character] = {
         assert!(mutated.contains("country_flag", "b_flag"));
         assert!(snap.contains("country_flag", "a_flag"));
         assert!(!snap.contains("country_flag", "b_flag"));
-        // Removing from original must not affect clone.
         idx.remove_file("a.txt");
         assert!(!idx.contains("country_flag", "a_flag"));
         assert!(snap.contains("country_flag", "a_flag"));
@@ -615,7 +549,6 @@ alias[effect:generate_character] = {
         assert!(!idx.contains("country_flag", "b_flag"));
         assert!(mutated.contains("country_flag", "b_flag"));
         assert!(snap.contains("global_flag", "g_flag"));
-        // export() must not alias
         let snap_export = snap.export();
         let idx_export = idx.export();
         assert_eq!(snap_export.len(), idx_export.len());

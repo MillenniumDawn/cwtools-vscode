@@ -1,8 +1,3 @@
-//! The report row shared by `validate` and `loc`: mapping a diagnostic from
-//! either source onto a common shape, hashing it for `--ignore-hashes`
-//! baselines, and rendering the csv/json/cli columns. The `github` and `sarif`
-//! renderers live in `report`.
-
 use cwtools_validation::{ErrorSeverity, ValidationError};
 use std::borrow::Cow;
 use std::path::Path;

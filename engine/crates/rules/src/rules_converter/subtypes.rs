@@ -1,6 +1,3 @@
-//! Subtype extraction: `subtype[x] = { ... }` bodies plus the subtype-scoped
-//! localisation/modifier sub-blocks nested inside a type's `localisation`/`modifiers`.
-
 use super::*;
 
 pub(crate) fn parse_subtype_localisation(
@@ -10,8 +7,6 @@ pub(crate) fn parse_subtype_localisation(
 ) -> Vec<(String, Vec<TypeLocalisation>)> {
     let mut out = Vec::new();
     for child in children {
-        // keyed_clause: `subtype[x] = { ... }` is a Leaf+Clause from the live
-        // parser (rules are never cache-loaded, so a Node-only match never fires).
         if let Some(kc) = ast.arena.keyed_clause(child) {
             let nk = table.get_string(kc.key.normal).unwrap_or_default();
             if nk.starts_with("subtype[")
@@ -69,23 +64,16 @@ fn build_subtype(
     _ruleset: &mut RuleSet,
     comments: &[String],
 ) -> SubTypeDefinition {
-    // Parse metadata from comments preceding the subtype[] declaration
     let display_name = extract_comment_value(comments, "display_name");
     let abbreviation = extract_comment_value(comments, "abbreviation");
     let push_scope = extract_comment_value(comments, "push_scope");
     let starts_with = extract_comment_value(comments, "starts_with");
-    // `## type_key_filter = X` discriminates on the instance's OWN node key — a
-    // different mechanism from `type_key_field` (which checks for a child field).
     let type_key_filter = parse_type_key_filter_from_comments(comments)
         .map(|(vals, _)| vals)
         .unwrap_or_default();
     let mut type_key_field: Option<String> = None;
     let only_if_not = parse_only_if_not_from_comments(comments);
 
-    // Also recognise `type_key_field = <value>` placed as a direct leaf inside the
-    // subtype body (the inline alternative to a ## type_key_filter = ... comment).
-    // Strip it out of the children before building rules so it doesn't become a
-    // spurious required field.
     let filtered_children: Vec<Child> = children
         .iter()
         .filter(|child| {
@@ -93,7 +81,6 @@ fn build_subtype(
                 let leaf = &ast.arena.leaves[*lidx as usize];
                 let k = table.get_string(leaf.key.normal).unwrap_or_default();
                 if k == "type_key_field" {
-                    // Extract its value as the type_key_field discriminator and skip it.
                     if type_key_field.is_none() {
                         type_key_field = Some(value_to_string(&leaf.value, table));
                     }
@@ -105,7 +92,6 @@ fn build_subtype(
         .cloned()
         .collect();
 
-    // Convert children using full children_to_rules for proper typing
     let rules = children_to_rules(&filtered_children, ast, table);
 
     SubTypeDefinition {
@@ -166,8 +152,6 @@ mod subtype_directive_tests {
             .expect("no subtype parsed")
     }
 
-    // Directive values are raw comment text, so quotes must be stripped to
-    // match how `value_to_string` returns body values.
     #[test]
     fn quoted_subtype_directive_value_is_unquoted() {
         let sub = parse_subtype(

@@ -44,61 +44,25 @@ pub(crate) use state::{
     ValidateTrigger, remove_debounce_task,
 };
 
-// ── Custom LSP notification types ─────────────────────────────────────────────
-
-/// `loadingBar` server→client notification (S→C).
-/// Payload: `{ "enable": bool, "value": string }`.
-/// Used to drive the extension's status-bar progress indicator.
 enum LoadingBar {}
 impl tower_lsp::lsp_types::notification::Notification for LoadingBar {
     type Params = serde_json::Value;
     const METHOD: &'static str = "loadingBar";
 }
 
-/// `updateFileList` server→client notification (S→C).
-/// Payload: `{ "fileList": [{ "scope": string, "uri": string, "logicalpath": string }] }`.
-/// Used to populate the extension's file explorer tree view.
 enum UpdateFileList {}
 impl tower_lsp::lsp_types::notification::Notification for UpdateFileList {
     type Params = serde_json::Value;
     const METHOD: &'static str = "updateFileList";
 }
 
-/// Debounce window for `did_change`: a burst of keystrokes within this window
-/// coalesces into a single validation. Short enough to feel live, long enough
-/// to skip the per-keystroke re-parse that made large files lag.
 const DEBOUNCE_MS: u64 = 250;
 
 /// Test-only one-shot panic switch for `CWTOOLS_VALIDATE_PANIC_ONCE` (#182),
-/// the debounced-validation counterpart of the scan-side switches. Fires at
-/// most once per server process so the e2e suite can prove a panicking
-/// validation is logged without arming every later edit.
 static VALIDATE_PANIC_ONCE: AtomicBool = AtomicBool::new(true);
 
-// ── Custom notifications ──────────────────────────────────────────────────────
-
-// Code actions live in `code_action.rs` (QUICKFIX from SuggestedFix); the
-// techGraph / event-graph data is in `graph.rs` behind `getGraphData`.
-//
-// Not implemented: `getEmbeddedMetadata`, a per-file metadata bundle pushed to
-// the extension on open. Nothing in cwtools-vscode asks for it, so it stays
-// unbuilt until the extension side wants it.
-
 impl Backend {
-    /// Spawn a background validation for `uri` at `version` and register the
-    /// task in `debounce_handles`, aborting any predecessor for the same URI
-    /// (`did_close` aborts it too). `delay_ms` is the debounce sleep before
-    /// validating: `did_change` passes `DEBOUNCE_MS` to coalesce keystrokes,
-    /// open/save pass 0 to validate promptly. The task re-reads a
-    /// version-checked snapshot inside `debounced_validate`, so a newer edit
-    /// landing in the gap supersedes this one instead of publishing stale
-    /// results.
-    ///
-    /// The task that joins the handle logs a panic instead of dropping it with
     /// the handle (#182); the next edit is the retry. This site keeps its own
-    /// join rather than `scan::spawn_logging_panics` because it needs the
-    /// `AbortHandle` and must not report an ordinary supersede/close abort as
-    /// a panic.
     fn spawn_debounced_validate(
         &self,
         uri: String,
@@ -159,20 +123,12 @@ impl Backend {
         }
     }
 
-    /// Bump the info-revision counter. Called from every site that mutates
-    /// `info_service` or `rules` (the two state sources the loc/fallback
-    /// completion caches depend on), so the completion cache invalidates
-    /// exactly when the inputs change. `Relaxed` is enough — the only
-    /// consumer is a single-threaded `load` that tolerates missing an
-    /// in-flight bump (the next request picks it up).
     pub(crate) fn bump_info_revision(&self) {
         self.state
             .info_revision
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Write access to the open-document loc overlay. See [`LocOverlayWrite`]:
-    /// the revision bump the derived caches key on rides on the guard's `Drop`.
     pub(crate) fn loc_live_overlay_mut(&self) -> LocOverlayWrite<'_> {
         LocOverlayWrite {
             guard: self.state.loc_live_overlay.write(),
@@ -180,7 +136,6 @@ impl Backend {
         }
     }
 
-    /// Write access to the watched-file loc overlay. See [`LocOverlayWrite`].
     pub(crate) fn loc_watched_overlay_mut(&self) -> LocOverlayWrite<'_> {
         LocOverlayWrite {
             guard: self.state.loc_watched_overlay.write(),
@@ -204,9 +159,6 @@ impl Backend {
         {
             return;
         }
-        // `workspace/semanticTokens/refresh` tells the client to re-request tokens
-        // for visible editors. Ignore errors from clients that advertised support
-        // but reject the request.
         let _ = self.client.semantic_tokens_refresh().await;
     }
 
@@ -217,21 +169,10 @@ impl Backend {
         let _ = self.client.code_lens_refresh().await;
     }
 
-    /// Called when the VS Code extension tells us the user switched to a file.
-    /// Focus is user activity: reset the background-reindex idle clock.
     async fn on_did_focus_file(&self, _params: Value) {
         self.mark_activity();
     }
 
-    /// Resolve the leaf under the cursor with the position resolver and
-    /// classify it: the AST element, a [`ReferenceHint`] derived from the
-    /// matched rule's right-hand side, the alias category the key resolves
-    /// through (trigger/effect/…), and the matched rule's description +
-    /// required scopes (for hover).
-    ///
-    /// Shared by hover, goto_definition, references, prepare_rename, and
-    /// rename. Returns `None` when the cursor isn't on a leaf inside a known
-    /// entity — callers fall back to `element_at_position`.
     pub(crate) fn rule_info_at_cursor(
         &self,
         uri: &str,
@@ -268,11 +209,6 @@ impl Backend {
                 hint = hint_from_rule_right(rule_type, &leaf.value, rs);
             }
         }
-        // Key-position references: when the right-hand classification yields
-        // nothing and the cursor is on a key (e.g. `<character> = { … }` used as
-        // a scoped-trigger block, or a `type[…]` definition key), classify the
-        // key against the matched rule's LEFT field so hover renders a rich
-        // header and goto can resolve the definition.
         if matches!(hint, ReferenceHint::Unknown) && !leaf.key.is_empty() {
             for (rule_type, _) in &rctx.value_rules {
                 let left_hint = hint_from_rule_left(rule_type, &leaf.key);
@@ -282,11 +218,6 @@ impl Backend {
                 }
             }
         }
-        // Scope-link key: a bare key that is a known instance of a type used as a
-        // link `data_source` (e.g. a character name scoping into that character).
-        // Such keys don't match a rule, so `value_rules` is empty and any
-        // description that did match comes from a coincidental alias — resolve the
-        // key to its type and drop the misleading description/category.
         let mut scope_link_key = false;
         let info_guard = self.state.info_service.read();
         if !leaf.in_value
@@ -312,12 +243,6 @@ impl Backend {
             )
         };
         drop(info_guard);
-        // Current scope at the cursor (the scope the containing block evaluates
-        // in), so a hover shows where you are regardless of whether the rule
-        // declares a required scope. The related scopes (ROOT/PREV and the FROM
-        // chain) come along for the hover scope table. In every case suppress the
-        // wildcards (`any`/`invalid`) and the unnamed-scope fallback (`scope_N`,
-        // when no config scope is loaded): showing those is noise.
         let resolve_scope = |sc: &cwtools_game::scope_engine::ScopeContext,
                              id: cwtools_game::ScopeId| {
             let name = sc.registry.name_of(id);
@@ -330,11 +255,9 @@ impl Backend {
             Some(sc) => {
                 let current = resolve_scope(sc, sc.current());
                 let root = resolve_scope(sc, sc.root);
-                // PREV is the scope one level out: the second-from-top of the stack.
                 let prev = (sc.scopes.len() >= 2)
                     .then(|| sc.scopes[sc.scopes.len() - 2])
                     .and_then(|id| resolve_scope(sc, id));
-                // FROM chain: [0] = FROM, [1] = FROM.FROM, …; drop placeholders.
                 let from = sc
                     .from
                     .iter()
@@ -344,11 +267,6 @@ impl Backend {
             }
             None => (None, None, None, Vec::new()),
         };
-        // The scope the hovered key resolves TO: run it through `change_scope` on
-        // a clone of the cursor's context. For a scope-changing link (`owner`) or
-        // a meta keyword (`FROM`/`ROOT`/`PREV`) this is the target scope; for
-        // anything that doesn't change scope it stays the ambient one (and is
-        // suppressed at display when it matches). Only computed when the
         // `hover.scopeDisplay = "resolved"` setting is on. (#37)
         let resolved_scope = self
             .state
@@ -379,17 +297,7 @@ impl Backend {
 }
 
 impl Backend {
-    /// Snapshot the document AST for `uri`, plus whether it came from the
-    /// current document version. When there is no cached AST, re-parse the live
-    /// text so hover/goto/completion still resolve a context mid-edit. The fresh
-    /// AST is not written back to the document. The debounced validate owns the
-    /// long-term one. The `documents` mutex is held only for the snapshot, never
-    /// across the parse.
-    ///
-    /// The fresh parse is memoized by `(uri, version)` in `fresh_ast_cache`
     /// (#87): a document has no stored AST from `did_open` until its first
-    /// successful validate, and every feature request landing in that window
-    /// used to re-parse the whole file for itself.
     pub(crate) fn ast_snapshot_for(&self, uri: &str) -> Option<AstSnapshot> {
         let (text, version) = {
             let docs = self.state.documents.lock();
@@ -433,15 +341,10 @@ impl Backend {
         })
     }
 
-    /// Snapshot the document AST for `uri`, preserving the existing behavior for
-    /// hover/goto callers that do not need freshness metadata.
     pub(crate) fn ast_for(&self, uri: &str) -> Option<Arc<ParsedFile>> {
         self.ast_snapshot_for(uri).map(|snapshot| snapshot.ast)
     }
 
-    /// The classified element under the cursor via `element_at_position`, run on
-    /// the snapshotted AST (with the mid-edit re-parse fallback from `ast_for`).
-    /// Shared by hover and goto's heuristic fallbacks.
     pub(crate) fn element_at_cursor(
         &self,
         uri: &str,
@@ -457,10 +360,6 @@ impl Backend {
         cwtools_info::element_at_position(&ast, line, col, &self.state.string_table)
     }
 
-    /// Resolve the rule context at the cursor, snapshotting the AST and ruleset
-    /// so neither the `documents` mutex nor the rules guard is held across
-    /// `rules_at_pos`. Shared by completion and `rule_info_at_cursor` (hover /
-    /// goto). `RuleContext` is owned, so all guards are released on return.
     pub(crate) fn resolve_at_cursor(
         &self,
         uri: &str,
@@ -493,8 +392,6 @@ impl Backend {
             || crate::paths::lsp_pos_to_source(pos),
             |text| crate::paths::lsp_pos_to_source_in_text(text, pos, &position_encoding),
         );
-        // info_service read is held only for the resolve; `rules_at_pos` returns
-        // owned data, so it is dropped before the caller runs.
         let info_guard = self.state.info_service.read();
         let inline_guard = self.state.inline_scripts.read();
         let prepared = crate::validate::make_prepared(
@@ -516,10 +413,7 @@ impl Backend {
         Some(CursorResolution { rctx, ruleset })
     }
 
-    /// The `$KEY$` loc reference under the cursor in an open `.yml` document, plus
     /// its `[start, end)` range in the negotiated position encoding. `None` when
-    /// the cursor isn't on a reference (or the document isn't open). Shared by
-    /// hover and goto.
     pub(crate) fn loc_ref_at_cursor_doc(
         &self,
         uri: &str,
@@ -533,8 +427,6 @@ impl Backend {
     }
 }
 
-// CursorResolution / RuleCursorInfo / hint helpers live in `cursor`.
-
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
@@ -546,7 +438,6 @@ impl LanguageServer for Backend {
             .log_message(MessageType::INFO, "CWTools server initialized!")
             .await;
 
-        // Notifications are only forwarded from here on.
         self.state
             .handshake_complete
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -568,8 +459,6 @@ impl LanguageServer for Backend {
             }
         }
 
-        // Workspace-wide initial validation spawned in background so the LSP
-        // handshake returns promptly.
         let client = self.client.clone();
         let state = self.state.clone();
         let watch_state = self.state.clone();
@@ -577,37 +466,19 @@ impl LanguageServer for Backend {
             let backend = Backend { client, state };
             backend.validate_entire_workspace(false).await;
         });
-        // Log if the workspace scan panics — without this, a panic is silently
-        // swallowed (the JoinHandle is dropped) and the server runs in a
-        // degraded state with no diagnostics.
         tokio::spawn(async move {
             if let Err(e) = handle.await {
                 tracing::error!("validate_entire_workspace panicked: {}", e);
-                // The scan didn't reach the point where it flips index_ready, so
-                // diagnostics would stay suppressed forever. Release the gate so
-                // per-file validation still publishes (degraded but not silent).
                 watch_state
                     .index_ready
                     .store(true, std::sync::atomic::Ordering::Relaxed);
-                // The bar-off the panic skipped is `ScanGuard`'s job — it
-                // unwinds with the scan and closes both progress channels.
             }
         });
 
-        // Periodic quiet re-scan so a long-running session doesn't accumulate
-        // stale index state. Off by default (background_reindex_interval_minutes
-        // == 0); runs only while the user is idle, and every notification the
-        // scan would normally send to the status bar is suppressed.
         let reindex_client = self.client.clone();
         let reindex_state = self.state.clone();
         tokio::spawn(async move {
-            // Each pass is already panic-safe on its own
-            // (`crate::scan::Backend::run_reindex_pass`); this additionally
-            // wraps the loop's own task, so a panic in its scaffolding
-            // (interval/idle-window bookkeeping) is logged instead of
             // silently ending periodic reindexing with no trace (#155).
-            // Log-only — unlike the per-pass wrapper, there's no single bad
-            // pass to retry here, just the loop itself dying.
             crate::scan::spawn_logging_panics("background reindex loop", async move {
                 Backend {
                     client: reindex_client,
@@ -628,7 +499,6 @@ impl LanguageServer for Backend {
         self.did_change_configuration_impl(params).await
     }
 
-    // --- Text document sync ---
     #[tracing::instrument(skip_all)]
     async fn did_open(&self, mut params: DidOpenTextDocumentParams) {
         self.mark_activity();
@@ -664,8 +534,6 @@ impl LanguageServer for Backend {
             return;
         }
 
-        // The open overlay owns this file's keys from here; a stale watched
-        // entry left behind could resurrect keys the buffer removed.
         if crate::paths::is_loc_file(&uri) {
             self.loc_watched_overlay_mut().remove(&uri);
         }
@@ -681,13 +549,7 @@ impl LanguageServer for Backend {
             return;
         }
 
-        // Offload validation off the message future so a burst of opens can't
         // hold the bounded request queue (#90). `debounced_validate`'s
-        // export-diff-gated dependent sweep replaces the old inline sweep here:
-        // opening a file whose exports match what's already indexed skips the
-        // sweep entirely, and a changed export refreshes only real dependents.
-        // Bump the edit counter so that sweep is tagged and a later edit
-        // supersedes it.
         let generation = self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.invalidate_semantic_tokens(&uri);
         self.spawn_debounced_validate(uri, version, generation, ValidateTrigger::DidOpen, 0);
@@ -707,7 +569,6 @@ impl LanguageServer for Backend {
             return;
         }
 
-        // FULL-sync spec requires last-wins; use the last change in the batch.
         let Some(change) = params.content_changes.into_iter().last() else {
             return;
         };
@@ -718,10 +579,6 @@ impl LanguageServer for Backend {
             return;
         }
 
-        // Store the new text+version immediately (keep the prior AST until we
-        // revalidate). The debounced task checks the version to know whether this
-        // is still the latest edit. An unsolicited didChange cannot create a new
-        // retained document.
         let admission = self
             .state
             .documents
@@ -743,15 +600,9 @@ impl LanguageServer for Backend {
             return;
         }
 
-        // Bump the global edit counter so any in-flight dependent sweep from an
-        // earlier edit knows it has been superseded and can stop early.
         let generation = self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.invalidate_semantic_tokens(&uri);
 
-        // Validate in the background after a short debounce so a burst of
-        // keystrokes coalesces into one validation and the handler returns
-        // immediately (no per-keystroke re-parse lag). The helper aborts any
-        // pending sleeper for this file so a burst can't stack hundreds of
         // debounce tasks (#47).
         self.spawn_debounced_validate(
             uri,
@@ -781,11 +632,7 @@ impl LanguageServer for Backend {
             }
             return;
         }
-        // A save isn't an edit, so don't bump the edit counter, just re-read the
-        // current version and generation. Offload the validation like did_change
         // (#90); the entry version guard in `debounced_validate` makes a racing
-        // did_change safe. The export-diff-gated dependent sweep also refreshes
-        // callers when a save changed this file's exports.
         let Some(version) = ({
             let docs = self.state.documents.lock();
             docs.get(&uri).map(|d| d.version)
@@ -896,8 +743,6 @@ impl LanguageServer for Backend {
             match &disk_ast {
                 DiskState::Parsed { parsed, text, .. } => {
                     self.index_parsed_file(&uri, parsed, None);
-                    // Reset the inline-script registry to disk truth: the
-                    // buffer that may have kept it live-updated is gone now
                     // (#259).
                     if let Some(name) = self.refresh_inline_script(&uri, text) {
                         self.state.pending_changed_names.lock().insert(name);
@@ -906,17 +751,10 @@ impl LanguageServer for Backend {
                 DiskState::Absent => {
                     self.state.info_service.write().clear_file(&uri);
                     self.bump_info_revision();
-                    // Gone from disk too, so it can no longer expand at its
                     // callers; queue its name for the sweep below (#259).
                     if let Some(name) = self.remove_inline_script(&uri) {
                         self.state.pending_changed_names.lock().insert(name);
                     }
-                    // The file is gone from disk too, so its recorded `<type>` uses
-                    // must not keep suppressing CW239 on the instances it referenced.
-                    // Queue those names so the sweep below revalidates their
-                    // definition files. (A file that still exists keeps its entry,
-                    // refreshed from the disk AST below when the close discarded
-                    // unsaved edits.)
                     if let Some(uses) = self.state.type_uses.write().remove(&uri) {
                         let dropped = uses.changed_names(&Default::default());
                         if !dropped.is_empty() {
@@ -949,11 +787,6 @@ impl LanguageServer for Backend {
             )
         };
 
-        // A close that discarded unsaved edits leaves `type_uses` describing text
-        // that never reached disk, and nothing else refreshes it: no watched event
-        // fires for a file that didn't change. The index was just rebuilt from the
-        // disk AST, so rebuild the recorded uses from it too, or a reference the
-        // discard restored keeps a false CW239 on its definition until the next
         // full scan (#133). Queued names land in the sweep below.
         if let DiskState::Parsed {
             parsed,
@@ -962,7 +795,6 @@ impl LanguageServer for Backend {
         } = &disk_ast
             && !self.state.documents.lock().contains_key(&uri)
         {
-            // block_in_place: a whole-file validate, the same sync CPU work the
             // keystroke path fences (#87).
             tokio::task::block_in_place(|| self.refresh_type_uses_from_parsed(&uri, parsed));
         }
@@ -1007,8 +839,6 @@ impl LanguageServer for Backend {
         self.request_code_lens_refresh().await;
     }
 
-    // --- Language features ---
-
     async fn hover(&self, mut params: HoverParams) -> Result<Option<Hover>> {
         self.mark_activity();
         canonicalize_url(&mut params.text_document_position_params.text_document.uri);
@@ -1029,8 +859,6 @@ impl LanguageServer for Backend {
     async fn completion(&self, mut params: CompletionParams) -> Result<Option<CompletionResponse>> {
         canonicalize_url(&mut params.text_document_position.text_document.uri);
         let mut response = self.completion_impl(params).await;
-        // Origin labels are stamped once here so every completion path (game
-        // script, loc, .cwt) is covered, gated on the client capability.
         if self
             .state
             .completion_label_details
@@ -1223,7 +1051,6 @@ impl LanguageServer for Backend {
             canonicalize_uri_string(&mut f.new_uri);
             let old = f.old_uri.as_str();
             let new = f.new_uri.as_str();
-            // Move open-document state if the renamed file was open.
             let moved = {
                 let mut docs = self.state.documents.lock();
                 docs.remove(old)
@@ -1232,8 +1059,6 @@ impl LanguageServer for Backend {
             if let Some((old_uri, new_uri, mut doc)) = moved {
                 doc.loc_cache = None;
                 let _ = self.state.documents.lock().open(new_uri.clone(), doc);
-                // Move cached tokens to the new URI so delta resumes. Bound to a
-                // `let` so the take's guard drops before the insert re-locks the
                 // same non-reentrant mutex (#334).
                 let moved_tokens = self.state.semantic_tokens_cache.lock().remove(&old_uri);
                 if let Some(entry) = moved_tokens {
@@ -1269,8 +1094,6 @@ impl LanguageServer for Backend {
 }
 
 fn main() {
-    // Handle --help / --version before entering the LSP serve loop so the
-    // binary prints useful output instead of silently blocking on stdin.
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         eprintln!("cwtools-server {}", env!("CARGO_PKG_VERSION"));
@@ -1289,8 +1112,6 @@ fn main() {
         std::process::exit(0);
     }
 
-    // Logs/profiling go to stderr (stdout is the LSP JSON-RPC channel). Quiet
-    // unless RUST_LOG or CWTOOLS_PROFILE is set. See PROFILING.md.
     cwtools_profiling::init_tracing();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1302,19 +1123,11 @@ fn main() {
                 transport::BoundedLspReader::new(tokio::io::stdin()),
                 tokio::io::stdout(),
             );
-            // Use LspService::build to register the custom didFocusFile notification
-            // so tower-lsp doesn't reject it with an error response.
             let (service, socket) = LspService::build(|client| Backend {
                 client,
                 state: state.clone(),
             })
             .custom_method("didFocusFile", Backend::on_did_focus_file)
-            // `window/workDoneProgress/cancel` is the Cancel button on a
-            // client-driven progress notification. tower-lsp 0.20 has no slot
-            // for it on the `LanguageServer` trait (its lib.rs carries a TODO
-            // to add one), so it is registered as a custom method — without
-            // this the notification comes back as a "method not found" error
-            // and Cancel does nothing. See `command_progress`.
             .custom_method(
                 "window/workDoneProgress/cancel",
                 Backend::on_work_done_progress_cancel,
@@ -1324,8 +1137,6 @@ fn main() {
             tracing::info!("LSP server shut down (stdin closed)");
         });
 }
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -1341,9 +1152,6 @@ mod tests {
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
 
-    /// The base game and the rules dir are readable but never writable, so
-    /// `refresh_roots` must keep them out of `editable_roots` while leaving
-    /// them in `authorized_roots`. Collapsing the two lists would let a
     /// generated edit write into the user's game install (#160).
     #[test]
     fn refresh_roots_keeps_read_only_roots_out_of_the_edit_boundary() {
@@ -1699,15 +1507,9 @@ mod tests {
         );
     }
 
-    // ── didFocusFile (background-reindex idle clock) ─────────────────────────
-
     #[test]
     fn test_loc_overlay_write_invalidates_the_cached_key_sets() {
         // #87 caches both overlay-derived key sets. The cache is keyed on
-        // `loc_overlay_revision`, which `LocOverlayWrite::drop` bumps — so a
-        // write through the accessor MUST change what the next read sees. If it
-        // doesn't, a key the user just typed reads as undefined (CW225/CW122)
-        // for as long as the stale entry lives.
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -1748,12 +1550,6 @@ mod tests {
 
     #[test]
     fn test_unchanged_loc_key_set_keeps_the_cached_union() {
-        // The common loc keystroke edits a VALUE, not the key set. Taking the
-        // overlay write guard is what invalidates the derived caches, so
-        // re-recording an identical set rebuilt the ~200K-String `$ref$`
-        // universe on every edit and the cache never hit while a `.yml` was
-        // being typed in. Measured on a 1.29 MB Millennium Dawn loc file:
-        // 65.7ms -> 13.7ms per edit once the no-op write is skipped.
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -1771,7 +1567,6 @@ mod tests {
             assert!(changed.contains("my_key"), "got: {changed:?}");
             let first = backend.loc_overlay_keys();
 
-            // Same keys, new value: nothing the derived sets depend on moved.
             let changed =
                 backend.record_watched_loc_keys(uri, path, "l_english:\n MY_KEY:0 \"one two\"\n");
             assert!(changed.is_empty(), "got: {changed:?}");
@@ -1781,7 +1576,6 @@ mod tests {
                 "an unchanged key set must leave the cached union in place"
             );
 
-            // A real key change must still invalidate it.
             let changed = backend.record_watched_loc_keys(
                 uri,
                 path,
@@ -1796,9 +1590,6 @@ mod tests {
 
     #[test]
     fn test_did_focus_file_marks_activity() {
-        // A focus switch is user activity: the handler must reset the idle
-        // clock the background reindex loop watches, like edits and feature
-        // requests do. Sentinel u64::MAX can never be a real elapsed value.
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();

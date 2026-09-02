@@ -1,12 +1,3 @@
-//! "Object is missing its localisation" check (CW100).
-//!
-//! A type can declare which loc keys each of its instances must have via a
-//! `localisation = { ## required name = "$" … }` block (the `$` is the instance
-//! name, with an optional prefix/suffix). For every instance defined in a file
-//! this flags any `## required` loc key that no loc file provides, so a modder
-//! can see at a glance which objects lack localisation. Mirrors the old cwtools
-//! "object has no localisation" warning.
-
 use cwtools_index::{NormalizedPath, TypeInstance, check_path_dir_norm};
 use cwtools_parser::fix::SuggestedFix;
 use cwtools_rules::rules_types::{RuleSet, TypeDefinition};
@@ -14,23 +5,12 @@ use cwtools_rules::rules_types::{RuleSet, TypeDefinition};
 use crate::ValidationError;
 use cwtools_error_codes as error_codes;
 
-/// Whether a type declares a loc key this check can flag: any `## required`
-/// entry that isn't also `## optional`, whether its key comes from the instance
-/// name (`prefix$suffix`) or from a child field's value (`explicit_field`).
 fn has_required_loc(td: &TypeDefinition) -> bool {
     td.localisation
         .iter()
         .any(|loc| loc.is_required_name_derived() || loc.required_explicit_field().is_some())
 }
 
-/// Flag indexed instances whose `## required` localisation keys are not
-/// provided by any loc file. `loc_exists(key_lower)` reports whether a
-/// (lowercased) loc key exists across the indexed languages. Keys built from
-/// the instance name (`prefix$suffix`) are derived here; `explicit_field` keys
-/// were read off the child field at index time
-/// ([`TypeInstance::required_loc_keys`]), so an instance that omits the field
-/// contributes nothing (its absence is the rules' cardinality problem, not a
-/// missing translation).
 pub fn check_missing_localisation(
     instances: &[(&str, &TypeInstance)],
     logical_path: &str,
@@ -38,9 +18,6 @@ pub fn check_missing_localisation(
     ruleset: &RuleSet,
     loc_exists: impl Fn(&str) -> bool,
 ) -> Vec<ValidationError> {
-    // Only a type whose path covers this file can contribute instances here, so
-    // unless one of those declares a `## required` name-derived loc key the whole
-    // instance walk is dead work — which is most files (events, gfx, history, …).
     let np = NormalizedPath::new(logical_path);
     let relevant: Vec<&TypeDefinition> = ruleset
         .types
@@ -63,8 +40,6 @@ pub fn check_missing_localisation(
                 .iter()
                 .filter(|loc| loc.is_required_name_derived())
                 .map(|loc| loc.derived_key(&inst.name));
-            // The explicit-field keys were resolved at collection time, so they
-            // are already the literal key the field named.
             let explicit = inst.required_loc_keys.iter().cloned();
             for expected in derived.chain(explicit) {
                 if loc_exists(&expected.to_ascii_lowercase()) {
@@ -113,8 +88,6 @@ types = {
 thing = { x = scalar }
 "#;
 
-    /// A type whose `## required` loc key is taken from a child field's value
-    /// rather than from the instance name (F#'s `explicit_field` form).
     const EXPLICIT_RULES: &str = r#"
 types = {
     type[thing] = {
@@ -174,7 +147,6 @@ thing = { title_key = scalar flavour_key = scalar }
 
     #[test]
     fn flags_instance_missing_required_loc() {
-        // `my_thing` has its name loc but not `my_thing_desc`.
         let errs = run("my_thing = { x = yes }\n", &["my_thing"]);
         let msgs: Vec<&str> = errs.iter().map(|e| e.message.as_str()).collect();
         assert_eq!(
@@ -186,8 +158,6 @@ thing = { title_key = scalar flavour_key = scalar }
         assert!(errs[0].message.contains("my_thing_desc"), "got: {:?}", msgs);
         assert_eq!(errs[0].code, Some("CW100"));
 
-        // The fix carries the missing key for the LSP's "create localisation
-        // key" action, not a span edit — there's no existing text to replace.
         let fix = errs[0].fix.as_ref().expect("CW100 carries a fix");
         assert_eq!(fix.create_loc_key.as_deref(), Some("my_thing_desc"));
         assert!(fix.edits.is_empty());
@@ -196,8 +166,6 @@ thing = { title_key = scalar flavour_key = scalar }
 
     #[test]
     fn clean_when_no_loc_bearing_type_owns_the_path() {
-        // No type declaring a required loc key covers `events/`, so the file is
-        // skipped whole — same instance name, nothing flagged.
         let errs = run_at("events/test.txt", "my_thing = { x = yes }\n", &[]);
         assert!(
             errs.is_empty(),
@@ -223,8 +191,6 @@ thing = { title_key = scalar flavour_key = scalar }
             &[],
         );
         let msgs: Vec<&str> = errs.iter().map(|e| e.message.as_str()).collect();
-        // Only the `## required` entry is flagged; the `## optional` sibling and
-        // the instance name itself are not loc keys of this type at all.
         assert_eq!(errs.len(), 1, "got: {:?}", msgs);
         assert!(errs[0].message.contains("MY_TITLE"), "got: {:?}", msgs);
         assert_eq!(errs[0].code, Some("CW100"));
@@ -244,8 +210,6 @@ thing = { title_key = scalar flavour_key = scalar }
 
     #[test]
     fn clean_when_explicit_field_is_absent() {
-        // Nothing names a key, so there is nothing to look up. A missing
-        // `title_key` is the rules' cardinality complaint, not CW100's.
         let errs = run_explicit("my_thing = { flavour_key = MY_FLAVOUR }\n", &[]);
         assert!(
             errs.is_empty(),

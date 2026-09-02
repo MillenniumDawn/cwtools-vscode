@@ -1,6 +1,3 @@
-//! Enum extraction: `enums = { enum[x] = { ... } complex_enum[x] = { ... } }`
-//! and the related `values = { value[x] = { ... } }` block.
-
 use super::*;
 
 pub(crate) fn extract_enums_from_children(
@@ -84,7 +81,6 @@ pub(crate) fn process_enum_node(
         }
     }
 
-    // Description from ### or ## comments
     let description = extract_description_from_comments(comments).unwrap_or_else(|| name.clone());
 
     EnumDefinition {
@@ -112,7 +108,6 @@ pub(crate) fn process_complex_enum_from_children(
         if let Child::Leaf(lidx) = child {
             let l = &ast.arena.leaves[*lidx as usize];
             let k = table.get_string(l.key.normal).unwrap_or_default();
-            // Handle `name = { ... }` as a Leaf with Clause value
             if k == "name"
                 && let Value::Clause(name_ch) = &l.value
             {
@@ -157,7 +152,6 @@ pub(crate) fn process_complex_enum_from_children(
     }
 }
 
-/// Build a ComplexEnumNameTree from the `name = { ... }` block children.
 fn build_name_tree(
     children: &[Child],
     ast: &ParsedFile,
@@ -169,7 +163,6 @@ fn build_name_tree(
             Child::Leaf(lidx) => {
                 let l = &ast.arena.leaves[*lidx as usize];
                 let k = table.get_string(l.key.normal).unwrap_or_default();
-                // Leaf with Clause value = nested node in CWT
                 if let Value::Clause(sub_ch) = &l.value {
                     let sub = build_name_tree(sub_ch, ast, table);
                     entries.push(ComplexEnumNameTreeEntry::Node {
@@ -184,8 +177,6 @@ fn build_name_tree(
                     });
                 }
             }
-            // A bare `enum_name` value (`stats = { enum_name }`): every bare
-            // value at this level of the target file is an enum member.
             Child::LeafValue(lvidx) => {
                 let lv = &ast.arena.leaf_values[*lvidx as usize];
                 if let Value::String(t) | Value::QString(t) = &lv.value

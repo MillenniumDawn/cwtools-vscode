@@ -1,13 +1,3 @@
-//! Read-only loc-key index consumed by config validation.
-//!
-//! Built once per validation run from a [`LocService`], it answers the
-//! questions the config-side `LocalisationField` check needs:
-//! * does this key exist in any language? (synced=false)
-//! * which languages-with-data are missing this key? (synced=true)
-//! * what is the parsed loc entry for this key? (scope-aware command checks)
-//!
-//! All keys are stored lowercased to match F#'s case-insensitive comparison.
-
 use crate::commands::{Lang, LocEntry};
 use crate::service::LocService;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -16,36 +6,19 @@ use std::sync::Arc;
 pub type LocKey = Arc<str>;
 pub type LocKeySet = FxHashSet<LocKey>;
 
-/// Per-language loc-key index plus a representative parsed entry per key.
 #[derive(Debug, Clone, Default)]
 pub struct LocIndex {
-    /// language -> lowercased key set
     per_language: FxHashMap<Lang, LocKeySet>,
-    /// union of all keys across every language
     union: LocKeySet,
-    /// languages the project actually ships loc data for
     languages_with_data: Vec<Lang>,
-    /// lowercased key -> a representative parsed entry for command validation.
-    /// English wins when it exists: an English string with no `[command]`s stores
-    /// nothing, so a later Brazilian `[Grécia]` cannot become the representative.
-    /// Without English, the first command-bearing entry wins. Kept only for keys
-    /// whose representative has `[command]` chains; the sole consumer is the
-    /// scope-aware command check.
     entries: FxHashMap<LocKey, LocEntry>,
 }
 
 impl LocIndex {
-    /// Build from a loaded [`LocService`].
     pub fn build(service: &LocService) -> Self {
         Self::build_scoped(service, None)
     }
 
-    /// As [`build`], but restrict the "missing translation" check to a chosen
-    /// set of languages. With `langs = Some([English])`, an english-targeted mod
-    /// won't be told every key is missing in french/german/… that the loaded
-    /// vanilla install happens to ship. `langs = None` keeps all languages with
-    /// data (the previous behavior). The key `union` (existence resolution) is
-    /// never restricted, so config `$ref$` checks still resolve any loaded key.
     pub fn build_scoped(service: &LocService, langs: Option<&[Lang]>) -> Self {
         let mut per_language: FxHashMap<Lang, LocKeySet> = FxHashMap::default();
         let mut union = LocKeySet::default();
@@ -103,11 +76,6 @@ impl LocIndex {
         }
     }
 
-    /// Merge cached per-language key sets (the vanilla-cache restore path):
-    /// keys join the union + per-language sets, and languages new to the index
-    /// join `languages_with_data` subject to the same `langs` scoping as
-    /// [`build_scoped`]. No `entries` are added — cached keys carry no parsed
-    /// loc values (the command check only applies to content we validate).
     pub fn merge_cached_keys(
         &mut self,
         per_language: Vec<(Lang, Vec<String>)>,
@@ -126,16 +94,6 @@ impl LocIndex {
         }
     }
 
-    /// Merge an index built over a different file set into this one — the LSP
-    /// memoizes the base-game install as its own index and folds it under the
-    /// freshly-walked workspace on every scan (#89).
-    ///
-    /// Keys are already interned, so one this index doesn't have costs a
-    /// refcount bump instead of a fresh allocation. `self` wins on a collision:
-    /// it holds the workspace, which overrides the base game. `other` must be
-    /// unscoped ([`build_scoped`](Self::build_scoped) with `langs = None`) —
-    /// its languages are walked in `languages_with_data` order, which is the
-    /// complete set only when nothing was scoped out.
     pub fn merge_from(&mut self, other: &LocIndex, langs: Option<&[Lang]>) {
         for (key, entry) in &other.entries {
             if self
@@ -171,15 +129,10 @@ impl LocIndex {
         }
     }
 
-    /// synced=false: the key exists in at least one language.
     pub fn exists_any(&self, key_lower: &str) -> bool {
         self.union.contains(key_lower)
     }
 
-    /// synced=true: languages that have loc data but are missing this key.
-    ///
-    /// Only languages the project actually ships are considered, so an
-    /// english-only mod never reports "missing in french/german/...".
     pub fn missing_synced_languages(&self, key_lower: &str) -> Vec<Lang> {
         self.languages_with_data
             .iter()
@@ -193,29 +146,23 @@ impl LocIndex {
             .collect()
     }
 
-    /// The representative parsed entry for a key (for command validation).
     pub fn entry(&self, key_lower: &str) -> Option<&LocEntry> {
         self.entries.get(key_lower)
     }
 
-    /// Languages with loc data.
     pub fn languages_with_data(&self) -> &[Lang] {
         &self.languages_with_data
     }
 
-    /// The union of all loc keys (lowercased), for single-file `$ref$` checks.
     pub fn union(&self) -> &LocKeySet {
         &self.union
     }
 
-    /// Return the shared lowercased key for `key`, if it is indexed.
     pub fn key(&self, key: &str) -> Option<LocKey> {
         self.union.get(key.to_lowercase().as_str()).cloned()
     }
 }
 
-/// Extract per-language lowercased key sets from a loaded [`LocService`] —
-/// the shape the vanilla cache stores (language display name -> keys).
 pub fn per_language_keys(service: &LocService) -> Vec<(String, Vec<String>)> {
     let mut per: FxHashMap<Lang, LocKeySet> = FxHashMap::default();
     for file in service.files() {
@@ -283,7 +230,6 @@ mod tests {
 
     #[test]
     fn synced_only_flags_languages_with_data() {
-        // english + german present; german is missing KEY_B
         let svc = service_from(&[
             (
                 "a_l_english.yml",
@@ -292,20 +238,14 @@ mod tests {
             ("a_l_german.yml", "l_german:\n key_a: \"a\"\n"),
         ]);
         let idx = LocIndex::build(&svc);
-        // key_a present in both -> no missing
         assert!(idx.missing_synced_languages("key_a").is_empty());
-        // key_b only in english -> german missing
         let missing = idx.missing_synced_languages("key_b");
         assert_eq!(missing, vec![Lang::German]);
-        // a project that ships no french never reports french missing
         assert!(!missing.contains(&Lang::French));
     }
 
     #[test]
     fn merge_from_folds_a_second_index_under_this_one() {
-        // The LSP builds the base game once and merges it under each fresh
-        // workspace walk (#89): its keys and languages join, its shared key
-        // allocations are reused, and the workspace wins a collision.
         let workspace = LocIndex::build(&service_from(&[(
             "ws_l_english.yml",
             "l_english:\n shared: \"mod [ROOT.GetName]\"\n ws_only: \"w\"\n",
@@ -322,7 +262,6 @@ mod tests {
 
         assert!(merged.exists_any("ws_only"));
         assert!(merged.exists_any("base_only"));
-        // German only has base-game data, so it joins languages_with_data.
         assert_eq!(
             merged.languages_with_data(),
             &[Lang::English, Lang::German],
@@ -332,10 +271,8 @@ mod tests {
             merged.missing_synced_languages("ws_only"),
             vec![Lang::German]
         );
-        // A key both sides define keeps this index's parsed entry.
         assert!(merged.entry("shared").unwrap().desc.contains("mod"));
         assert!(merged.entry("base_only").is_some());
-        // A base-game-only key reuses the allocation the base index owns.
         assert!(Arc::ptr_eq(
             merged.union.get("base_only").unwrap(),
             vanilla.union.get("base_only").unwrap()
@@ -353,14 +290,12 @@ mod tests {
             "l_german:\n base_only: \"b\"\n",
         )]));
         english_only.merge_from(&vanilla, Some(&[Lang::English]));
-        // Scoped out of the missing-translation check, but still resolvable.
         assert_eq!(english_only.languages_with_data(), &[Lang::English]);
         assert!(english_only.exists_any("base_only"));
     }
 
     #[test]
     fn build_scoped_restricts_missing_check_to_chosen_languages() {
-        // english + german present, key_b missing in german.
         let svc = service_from(&[
             (
                 "a_l_english.yml",
@@ -368,12 +303,9 @@ mod tests {
             ),
             ("a_l_german.yml", "l_german:\n key_a: \"a\"\n"),
         ]);
-        // Scoped to english only: german is not a language-with-data, so the
-        // missing-translation check no longer flags key_b.
         let idx = LocIndex::build_scoped(&svc, Some(&[Lang::English]));
         assert!(idx.missing_synced_languages("key_b").is_empty());
         assert_eq!(idx.languages_with_data(), &[Lang::English]);
-        // Existence still resolves against every loaded language.
         assert!(idx.exists_any("key_a"));
     }
 
@@ -472,6 +404,5 @@ mod tests {
         );
         assert!(!idx.exists_any("b_key"), "original must not see merged key");
         assert!(snap.exists_any("a_key"));
-        // original remove not in test; clone independence for merge is the snapshot invariant workspace.rs:760 relies on
     }
 }

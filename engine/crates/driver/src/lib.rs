@@ -1,25 +1,4 @@
-//! Shared validation driver.
-//!
-//! The full pipeline is: load rules -> discover/parse files -> build the
-//! `TypeIndex` (+ var index + vanilla index) -> expand modifier keys -> build the
-//! loc index -> build the `ScopeRegistry` -> validate. The reusable primitives
-//! for this live in the shared crates ([`index_game_dir`],
-//! `cwtools_validation::{build_scope_registry_arc, Prepared, validate_prepared}`);
-//! both the CLI and the LSP call those directly so the sequence isn't
-//! reimplemented and can't drift the way it did before.
-//!
-//! [`Session`] bundles those primitives into the CLI's batch model: load
-//! everything from disk once into immutable-after-load state, then validate the
-//! whole set ([`Session::validate_all`]). The LSP does NOT use `Session` — its
-//! index is mutable and incremental (single files are re-indexed on each edit,
 //! behind an `RwLock`, with no whole-workspace re-parse), which doesn't fit
-//! `Session`'s load-once/immutable ownership. Instead the LSP holds its own
-//! workspace state and builds a [`Prepared`] from the same shared primitives per
-//! validation.
-//!
-//! Loc-file diagnostics (CW225 etc.) need the parsed `LocService`, so the session
-//! keeps it resident and serves both the loc-key index and the project lint from
-//! the one service, matching the CLI's prior behavior.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -66,7 +45,6 @@ pub struct WorkspaceDiscoveryRequest {
     pub policy: DiscoveryPolicy,
 }
 
-/// A discovered workspace/mod file, retained between indexing and validation.
 pub struct SourceFile {
     pub path: PathBuf,
     pub logical_path: String,
@@ -292,14 +270,12 @@ fn parse_discovered_files_for_index(
         .collect()
 }
 
-/// How to load the rules: a single `.cwt` file or a directory of them.
 pub enum RulesInput {
     Dir(PathBuf),
     File(PathBuf),
 }
 
 impl RulesInput {
-    /// Classify a path as a rules dir or rules file.
     pub fn from_path(path: PathBuf) -> Self {
         if path.is_dir() {
             RulesInput::Dir(path)
@@ -309,91 +285,41 @@ impl RulesInput {
     }
 }
 
-/// The checks a run cannot make without a base-game index, so a caller can say
-/// so instead of letting them read as clean.
-///
-/// Every one of these compares script against the union of mod and base-game
-/// definitions. Without `--vanilla` or `--vanilla-cache` that union is only the
-/// mod, so the engine cannot tell a genuinely missing definition from one the
-/// base game supplies and stays silent rather than flagging every vanilla
-/// reference. Returns an empty slice when `has_vanilla`, so a caller can render
-/// the notice unconditionally.
-///
 /// # Examples
-///
-/// ```
-/// use cwtools_driver::vanilla_gated_checks;
-/// use cwtools_game::constants::Game;
-///
-/// assert!(vanilla_gated_checks(Game::Hoi4, true).is_empty());
-/// assert!(vanilla_gated_checks(Game::Hoi4, false).contains(&"CW500"));
-/// ```
 pub fn vanilla_gated_checks(game: Game, has_vanilla: bool) -> &'static [&'static str] {
     if has_vanilla {
         return &[];
     }
     match game {
-        // CW227/CW229 (ship-design templates) and CW250 (planet-killer support
-        // script) sit behind the same index-completeness gate, but only the
-        // Stellaris validator emits them.
         Game::Stellaris => &["CW113", "CW222", "CW227", "CW229", "CW250", "CW500"],
         _ => &["CW113", "CW222", "CW500"],
     }
 }
 
-/// Auto-managed on-disk cache of the base-game index, so a batch run doesn't
-/// re-parse the whole install every time. Only consulted when `vanilla` is a
-/// directory and no explicit `vanilla_cache` was supplied: a cache whose
 /// fingerprint matches the install short-circuits the walk, and a
-/// missing/stale/unreadable one is rebuilt and written after it.
 #[derive(Debug, Clone)]
 pub struct VanillaCacheAuto {
     /// Directory holding one cache file per game + fingerprint. Same layout and
-    /// filename as the LSP's, so the CLI and the editor share warm caches.
     pub dir: PathBuf,
-    /// Ignore any existing file: re-index the install and rewrite it.
     pub refresh: bool,
 }
 
-/// Inputs to [`Session::load`].
 pub struct SessionConfig<'a> {
-    /// Engine the rules/files are written for.
     pub game: Game,
-    /// Rules source (file or directory of `.cwt`).
     pub rules: RulesInput,
-    /// Mod/workspace root to validate.
     pub directory: PathBuf,
-    /// Base-game install indexed for reference resolution (never validated).
     pub vanilla: Option<PathBuf>,
-    /// Pre-generated vanilla data to merge (from a `--vanilla-cache`). When
-    /// present the `vanilla` dir is NOT walked — type instances, loc keys, file
-    /// paths, and variable names all come from the cache.
     pub vanilla_cache: Option<VanillaCacheData>,
-    /// Cache the base-game index on disk and reuse it on later runs. Ignored
-    /// when `vanilla_cache` is already supplied. See [`VanillaCacheAuto`].
     pub vanilla_cache_auto: Option<VanillaCacheAuto>,
-    /// Extra filename globs to skip during discovery (on top of engine defaults).
     pub ignore_files: &'a [String],
-    /// Extra directory globs to skip during discovery.
     pub ignore_dirs: &'a [String],
-    /// Languages to scope loc validation to. `None` = every language with data.
     pub loc_languages: Option<Vec<Lang>>,
-    /// Enforce exact on-disk case for CW113 `filepath` references against the
     /// mod's own (live-walked) files. Off by default (Windows-authored mods);
     /// enable for mods that also target case-sensitive filesystems (Linux/Mac),
-    /// so a reference that only differs from the file by case is flagged.
     pub case_sensitive_files: bool,
-    /// Optional sink for the problems the `.cwt` ruleset itself has, so the CLI
-    /// can report them alongside the mod's own diagnostics. Dropped when `None`.
     pub on_rules_diagnostic: Option<&'a mut dyn FnMut(RuleParseError)>,
 }
 
-/// The immutable-after-load engine state for the batch (CLI) path.
-///
-/// Built once by [`Session::load`]; thereafter read-only for validation. The CLI
-/// builds one per run. The LSP does not use this (its index is mutable and
-/// re-indexed per edit); it builds [`Prepared`] from the shared primitives
-/// directly. See the module docs.
 pub struct Session {
     game: Game,
     rules_table: StringTable,
@@ -410,12 +336,10 @@ pub struct Session {
 }
 
 impl Session {
-    /// Run the full load pipeline without a persistent parse cache.
     pub fn load(config: SessionConfig) -> SessionWithFiles {
         Self::load_with_parse_cache(config, None)
     }
 
-    /// Run the full load pipeline with an optional persistent per-file parse cache.
     pub fn load_with_parse_cache(
         config: SessionConfig,
         parse_cache_dir: Option<PathBuf>,
@@ -434,7 +358,6 @@ impl Session {
             on_rules_diagnostic,
         } = config;
 
-        // Rules share their StringTable with the game files so interned ids match.
         let rules_table = StringTable::new();
         let (ruleset, rule_errors) = load_rules(&rules, &rules_table).unwrap_or_else(|e| {
             eprintln!("error: {}", e);
@@ -453,8 +376,6 @@ impl Session {
             .as_ref()
             .and_then(|_| parse_cache.as_ref().map(|cache| cache.dir.clone()));
 
-        // Discover + parse mod files using the SAME string table. Layer the
-        // user-supplied ignore globs on top of the engine defaults.
         let mut fm_config = workspace_discovery_config(&directory, Some(&ruleset));
         if !ignore_files.is_empty() {
             fm_config
@@ -514,15 +435,8 @@ impl Session {
             workspace_cache::prune(&cache.dir, cache.fingerprint);
         }
 
-        // Take ownership of each parsed AST once for indexing. They are dropped
-        // before localisation is built; validation reparses each source later.
         let parsed = files;
 
-        // Cross-file TypeIndex from the already-parsed arenas. Per-file
-        // collection runs in parallel (each call is pure &-borrows); merge is
-        // sequential in the original file order so TypeIndex.merge call order
-        // is identical to the sequential version (goto-def "first match" and
-        // duplicate-name refcounts are order-sensitive).
         use rayon::prelude::*;
         type PerFileResult = (
             HashMap<String, Vec<cwtools_index::TypeInstance>>,
@@ -537,9 +451,6 @@ impl Session {
         let per_file: Vec<PerFileResult> = parsed
             .par_iter()
             .map(|src| {
-                // Base instances and subtype-qualified membership share one
-                // skip-root walk. Keep the maps separate so TypeIndex preserves
-                // the base-instance refcount and export semantics.
                 let collected = collect_type_instances_with_subtypes(
                     &ruleset,
                     &src.parsed,
@@ -549,29 +460,18 @@ impl Session {
                 );
                 let mut var_names: Vec<String> = Vec::new();
                 collect_set_variable_names(&src.parsed, &rules_table, &var_effects, &mut var_names);
-                // Value-set members defined in mod files (flags, character tokens,
-                // …). The vanilla path collects these too; without this mod-defined
-                // members are missing from `value_set_values`, so a from-data scope
-                // link can't recognise its own instances (e.g. a `generate_character`
-                // token used as `<token> = { ... }`). Completion-only otherwise.
                 let value_sets = cwtools_index::dynamic_values::collect_value_set_members(
                     &ruleset,
                     &src.parsed,
                     &rules_table,
                 );
-                // Complex-enum members defined in mod files. The vanilla path
-                // collects these too; without this mod-defined members are
-                // missing from `complex_enum_values`. Completion-only otherwise.
                 let complex = cwtools_index::dynamic_values::collect_complex_enum_values(
                     &ruleset,
                     &src.parsed,
                     &src.logical_path,
                     &rules_table,
                 );
-                // Scripted-localisation names, so a loc command naming one is not
                 // reported as an unknown command (#348). Path-driven: the HOI4
-                // ruleset's `scripted_loc` type points at Stellaris's folder, so
-                // the type index never sees them.
                 let scripted_locs = cwtools_index::collect_scripted_loc_names(
                     &src.parsed,
                     &src.logical_path,
@@ -634,13 +534,8 @@ impl Session {
             })
             .collect();
 
-        // Bodies an `inline_script` call site splices in. Kept resident because a
-        // call site can only be checked against what it pulls in, and the same
-        // script is reached from every file that references it.
         let inline_scripts = load_inline_scripts(&source_files, &rules_table);
 
-        // Auto-managed cache: reuse a fresh one instead of walking the install,
-        // and remember where to write one when there's nothing to reuse.
         let mut cache_write_target: Option<(PathBuf, String)> = None;
         let mut force_vanilla_rebuild = false;
         if let (None, Some(auto), Some(vanilla_dir)) =
@@ -657,24 +552,14 @@ impl Session {
             }
         }
 
-        // Vanilla data: from a pre-generated cache when given (skips walking the
-        // install entirely — types, loc keys, file paths, and variables all come
-        // from the cache), otherwise by indexing the install. Vanilla files
-        // populate the indexes (so a mod can reference base-game content without
-        // "not a known instance" errors) but are never validated themselves.
         let has_vanilla_data = vanilla.is_some() || vanilla_cache.is_some();
         let mut cached_loc_keys: Option<Vec<(String, Vec<String>)>> = None;
         if let Some(cache) = vanilla_cache {
-            // Merge each cached instance under its real source file (not a shared
-            // sentinel) so cross-file reference resolution keeps the base-game
-            // provenance the cache stored.
             type_index.merge_base_game_with_uris(cache.per_type);
             let aux = cache.aux;
             for n in &aux.var_names {
                 type_index.var_index.add_name(n);
             }
-            // File index (mod + cached vanilla paths) for `filepath` checks
-            // (CW113), same coverage as a live vanilla walk.
             type_index.file_index = build_file_index(
                 &directory,
                 ignore_files,
@@ -682,8 +567,6 @@ impl Session {
                 VanillaFiles::Cached(aux.file_paths),
                 case_sensitive_files,
             );
-            // Dynamic values (complex-enum / value_set members) collected from the
-            // vanilla walk; without this a cache hit silently drops them.
             type_index.complex_enum_values.merge_file(
                 "<vanilla-cache>",
                 aux.complex_enum_values.into_iter().collect(),
@@ -714,8 +597,6 @@ impl Session {
             } else {
                 index_game_dir(vanilla_dir, &ruleset, &rules_table, &var_effects)
             };
-            // Persist before the index is consumed below, so the next run can
-            // skip this walk entirely.
             if let Some((path, fingerprint)) = &cache_write_target {
                 let aux = build_vanilla_cache_aux(vanilla_dir, &vanilla_index);
                 match write_vanilla_cache(&vanilla_index, &game_id, fingerprint, path, aux) {
@@ -754,8 +635,6 @@ impl Session {
                 )]);
                 type_index.merge_base_game("<vanilla>", per_type);
             }
-            // File index (mod + vanilla) for `filepath` checks (CW113). Only when
-            // vanilla is present: mod files commonly reference base-game assets.
             type_index.file_index = build_file_index(
                 &directory,
                 ignore_files,
@@ -765,23 +644,12 @@ impl Session {
             );
         }
 
-        // Mark the index as complete when vanilla data was loaded (either from a
-        // directory or a pre-generated cache).  This lets CW500 type-reference
-        // checks fire without false positives on mod-only validation. Set
-        // together with the file index above, so `complete` answers for every
-        // family [`vanilla_gated_checks`] names.
         if has_vanilla_data {
             type_index.complete = true;
         }
 
-        // Modifier names valid in `alias_name[modifier]` slots. Templated entries
-        // are expanded against the type index, one per instance.
         let modifier_keys = build_modifier_keys(&ruleset, &type_index);
 
-        // Loc: mod directory plus the vanilla install (so config referencing
-        // base-game loc keys doesn't false-positive). Only mod-path loc files are
-        // reported by the caller. With a vanilla cache, the cached key sets stand
-        // in for walking the install's loc files.
         let mut loc_service =
             LocService::from_paths(loc_paths, ScanBudget::default(), loc_languages.as_deref());
         let mut loc_index = LocIndex::build_scoped(&loc_service, loc_languages.as_deref());
@@ -800,8 +668,6 @@ impl Session {
             loc_service.merge_from(vanilla_loc);
         }
         if let Some(keys) = cached_loc_keys {
-            // Scoped the same way as the walked files above, so a cache hit and a
-            // live walk answer `--loc-language` identically.
             let typed: Vec<(Lang, Vec<String>)> = keys
                 .into_iter()
                 .filter_map(|(name, ks)| Lang::from_name(&name).map(|l| (l, ks)))
@@ -810,7 +676,6 @@ impl Session {
             loc_index.merge_cached_keys(typed, loc_languages.as_deref());
         }
 
-        // Per-run scope registry, shared (cheaply cloned) across every file.
         let registry = build_scope_registry_arc(&ruleset, Some(game));
 
         Session {
@@ -830,7 +695,6 @@ impl Session {
         .with_source_files(source_files, discovery_failed)
     }
 
-    /// Attach the discovered mod-file set the batch path validates over.
     fn with_source_files(self, files: Vec<SourceFile>, discovery_failed: bool) -> SessionWithFiles {
         SessionWithFiles {
             session: self,
@@ -839,7 +703,6 @@ impl Session {
         }
     }
 
-    /// Bundle this session's prebuilt state into a [`Prepared`] for validation.
     fn prepared(&self) -> Prepared<'_> {
         let (scope_checks, var_checks) = checks_from_env();
         Prepared {
@@ -849,7 +712,6 @@ impl Session {
             type_index: Some(&self.type_index),
             modifier_keys: Some(&self.modifier_keys),
             loc_index: Some(&self.loc_index),
-            // The CLI/driver loads loc from disk; no live-edit overlay.
             extra_loc_keys: None,
             inline_scripts: Some(&self.inline_scripts),
             registry: self.registry.as_ref(),
@@ -858,13 +720,8 @@ impl Session {
         }
     }
 
-    /// Loc-project diagnostics (CW225/CW234/CW259/CW268/CW275) for the workspace,
-    /// scoped to this session's loc languages. Resolves references against the full
-    /// mod+vanilla union; the caller filters to mod-path files.
     pub fn loc_project_diagnostics(&self) -> Vec<LocDiagnostic> {
         let extra = self.loc_extra_valid_refs();
-        // Reuse the prebuilt loc-index union (with cached vanilla keys already
-        // merged) rather than rebuilding the ~2M-key set here.
         cwtools_localization::validate_loc_project_with_union(
             &self.loc_service,
             self.loc_languages.as_deref(),
@@ -873,67 +730,48 @@ impl Session {
         )
     }
 
-    /// Names a loc `$ref$` may resolve to besides loc keys: the engine resolves
-    /// `$modifier$` / `$idea$` / `$dynamic_modifier$` embeds and `$some_variable$`
-    /// substitutions against those registries. Lowercased to match the loc union's
-    /// case-insensitive lookup. Cached vanilla keys are resolved via the loc-index
-    /// union passed to `validate_loc_project_with_union`, so they don't need to be
-    /// duplicated into this set.
     pub fn loc_extra_valid_refs(&self) -> HashSet<String> {
         let mut extra = self.modifier_keys.clone();
         extra.extend(self.type_index.loc_bindable_names());
         extra
     }
 
-    /// The mod/workspace root this session was loaded for.
     pub fn directory(&self) -> &Path {
         &self.directory
     }
 
-    /// The shared rules string table.
     pub fn string_table(&self) -> &StringTable {
         &self.rules_table
     }
 
-    /// The loaded ruleset.
     pub fn ruleset(&self) -> &RuleSet {
         &self.ruleset
     }
 
-    /// The workspace + vanilla type index.
     pub fn type_index(&self) -> &TypeIndex {
         &self.type_index
     }
 
-    /// The expanded modifier-key set.
     pub fn modifier_keys(&self) -> &HashSet<String> {
         &self.modifier_keys
     }
 
-    /// The `common/inline_scripts` bodies call sites expand against.
     pub fn inline_scripts(&self) -> &InlineScripts {
         &self.inline_scripts
     }
 
-    /// The loc-key index (workspace + vanilla).
     pub fn loc_index(&self) -> &LocIndex {
         &self.loc_index
     }
 
-    /// The prebuilt scope registry, if a game is set.
     pub fn registry(&self) -> Option<&Arc<ScopeRegistry>> {
         self.registry.as_ref()
     }
 }
 
-/// A [`Session`] plus the discovered mod-file set, returned by [`Session::load`].
-/// The batch path reparses each file after the shared indexes are ready; the LSP,
-/// which supplies its own ASTs per file, derefs to the inner [`Session`].
 pub struct SessionWithFiles {
     session: Session,
     files: Vec<SourceFile>,
-    /// True when the initial `discover_and_parse` failed; callers should treat
-    /// this as a hard error (log already printed) and exit nonzero.
     pub discovery_failed: bool,
 }
 
@@ -945,24 +783,10 @@ impl std::ops::Deref for SessionWithFiles {
 }
 
 impl SessionWithFiles {
-    /// Validate every parsed mod file in parallel, in input order. Returns one
-    /// entry per file as `(path, diagnostics)`. The per-run shared state (scope
-    /// registry) is built ONCE and reused across the batch.
     pub fn validate_all(&self) -> Vec<(PathBuf, Vec<ValidationError>)> {
         self.validate_selected(None)
     }
 
-    /// [`Self::validate_all`] restricted to `only`, for a run that reports on a
-    /// subset of the files (`validate --file` / `--since`). A skipped file
-    /// contributes no entry to the result.
-    ///
-    /// Skipping is sound exactly while the cross-file use pass is off: every
-    /// other check here reads one file plus the shared indexes, which are built
-    /// during load and don't depend on what this pass covers. With `track_uses`
-    /// on, CW239/CW231 judge each definition against the references collected
-    /// from *every* file, so a partial pass would report a definition as unused
-    /// that a skipped file uses — `only` is ignored there and the whole set is
-    /// validated, leaving the caller to filter the report.
     pub fn validate_selected(
         &self,
         only: Option<&HashSet<PathBuf>>,
@@ -970,11 +794,6 @@ impl SessionWithFiles {
         use rayon::prelude::*;
 
         let prepared = self.session.prepared();
-        // CW239/CW231 need every file's `<type>` references before any file can
-        // be judged, so the per-file pass collects them and a second pass over
-        // the same results reports what nothing used. Off entirely for a config
-        // that declares no `should_be_used` type outside Stellaris, and without
-        // an index there are no definitions to report against.
         let track_uses =
             prepared.type_index.is_some() && needs_use_tracking(prepared.ruleset, prepared.game);
         let only = only.filter(|_| !track_uses);
@@ -1045,10 +864,6 @@ impl SessionWithFiles {
                     UsedInstances::default()
                 };
                 // CW100: objects defined here whose `## required` localisation
-                // keys aren't provided by any loc file. Gated on the loc index
-                // being non-empty, same as the LSP's `append_missing_loc_errors`:
-                // a mod with no `localisation/` would otherwise report every key
-                // as missing.
                 if let (Some(loc), Some(type_index)) = (prepared.loc_index, prepared.type_index)
                     && !loc.union().is_empty()
                 {
@@ -1070,8 +885,6 @@ impl SessionWithFiles {
             for (_, _, file_used) in &mut results {
                 used.absorb(std::mem::take(file_used));
             }
-            // Only the mod's own files are checked: the base game is indexed but
-            // never validated, so its definitions never reach this loop.
             for (path, errors, _) in &mut results {
                 let file_str: cwtools_validation::FilePath =
                     std::sync::Arc::from(path.to_str().unwrap_or(""));
@@ -1092,16 +905,11 @@ impl SessionWithFiles {
             .collect()
     }
 
-    /// The discovered mod-file set (for profiling/inspection by the caller).
     pub fn parsed_files(&self) -> &[SourceFile] {
         &self.files
     }
 }
 
-/// Parse the workspace's `common/inline_scripts` files into the expansion
-/// registry. Re-read rather than kept from the indexing pass: the ASTs there are
-/// consumed building the indexes, and a mod holds a handful of these against
-/// thousands of script files.
 fn load_inline_scripts(files: &[SourceFile], table: &StringTable) -> InlineScripts {
     let mut scripts = InlineScripts::default();
     for file in files
@@ -1125,8 +933,6 @@ fn load_inline_scripts(files: &[SourceFile], table: &StringTable) -> InlineScrip
     scripts
 }
 
-/// Convert parse errors from a partially-parsed file into `ValidationError`s so
-/// they appear in the CLI report (and count toward the exit-1 threshold).
 fn parse_errors_to_validation(
     errors: &[ParseError],
     file_path: &cwtools_validation::FilePath,
@@ -1176,7 +982,6 @@ fn localisation_paths(
     }
 }
 
-/// Load the loc files under `dirs` with workspace discovery filters applied.
 pub fn load_loc_service(
     dirs: &[&Path],
     langs: Option<&[Lang]>,
@@ -1194,15 +999,10 @@ pub fn load_loc_service(
 }
 
 /// Cache file for `game` at `fingerprint` under `dir`. The name comes from the
-/// cache module itself, so a cache warmed by either side is reused by the other
-/// and neither drifts from what `clearAllCaches` recognises.
 fn vanilla_cache_path(dir: &Path, game: &str, fingerprint: &str) -> PathBuf {
     dir.join(vanilla_cache::cache_file_name(game, fingerprint))
 }
 
-/// Serialize the base-game index to a sibling temp file and rename it into
-/// place. Two runs (or a run and the LSP) can share a cache dir, and a reader
-/// must never see a half-written file: the rename either happened or it didn't.
 fn write_vanilla_cache(
     index: &TypeIndex,
     game: &str,
@@ -1221,10 +1021,7 @@ fn write_vanilla_cache(
     }
 }
 
-/// Read a cached base-game index, but only if it was built for this game from
-/// this exact install and ruleset. Anything else (missing, unreadable, written
 /// by an older format, stale fingerprint) reads as a miss so the caller
-/// re-indexes; a stale cache is never silently used.
 fn load_fresh_vanilla_cache(
     path: &Path,
     game: &str,
@@ -1266,9 +1063,7 @@ fn load_fresh_vanilla_cache(
     }
 }
 
-/// Default directory for automatic vanilla and parse caches:
 /// `XDG_CACHE_HOME`/`LOCALAPPDATA`, else `~/.cache` (Linux) or `~/Library/Caches`
-/// (macOS), else the temp dir. All use the same `cwtools` directory as the LSP.
 pub fn default_cache_dir() -> Option<PathBuf> {
     if let Ok(x) = std::env::var("XDG_CACHE_HOME")
         && !x.is_empty()
@@ -1296,22 +1091,12 @@ pub fn default_cache_dir() -> Option<PathBuf> {
     Some(std::env::temp_dir().join("cwtools"))
 }
 
-/// Where the base game's half of the file index comes from: a cache that stored
-/// the paths, or an install to walk.
 pub enum VanillaFiles<'a> {
-    /// Paths restored from a vanilla cache, in their on-disk case.
     Cached(Vec<String>),
-    /// A base-game install directory.
     Install(&'a Path),
 }
 
-/// Build the index a `filepath` reference (CW113) resolves against: every file
-/// under the workspace root plus the base game's. Both front ends build it here,
 /// so the editor and the CLI answer the same reference the same way (#283).
-///
-/// Only call this when base-game data is loaded. The check is gated on a
-/// non-empty index, and half an index (a mod without its base game) would flag
-/// every reference into vanilla content.
 pub fn build_file_index(
     workspace_root: &Path,
     workspace_ignore_files: &[String],
@@ -1320,8 +1105,6 @@ pub fn build_file_index(
     case_sensitive: bool,
 ) -> FileIndex {
     let mut index = FileIndex::new();
-    // Before any path is added: the flag decides whether on-disk case is
-    // recorded as the index is built.
     index.set_case_sensitive(case_sensitive);
     index.add_paths(discover_file_index_paths(
         workspace_root,
@@ -1387,11 +1170,6 @@ fn discover_file_index_paths(
     }
 }
 
-/// Walk a vanilla install for the cache's aux payload: per-language loc keys
-/// and the file-path set (CW113), plus the variable names and dynamic values
-/// (complex-enum + value_set members) from an already-built vanilla index.
-/// Shared by the CLI `cache-vanilla` command, the CLI stale-rebuild path, and
-/// the LSP's cache writer so every cache carries the full payload.
 pub fn build_vanilla_cache_aux(
     vanilla_dir: &Path,
     index: &TypeIndex,
@@ -1406,7 +1184,6 @@ pub fn build_vanilla_cache_aux(
     let loc_keys = cwtools_localization::loc_index::per_language_keys(&loc_service);
     let mut file_index = cwtools_index::FileIndex::new();
     // Collect on-disk case so a later case-sensitive run can case-check vanilla
-    // references restored from this cache.
     file_index.set_case_sensitive(true);
     file_index.add_paths(discover_file_index_paths(
         vanilla_dir,
@@ -1433,12 +1210,6 @@ pub fn build_vanilla_cache_aux(
     }
 }
 
-/// Build a `TypeIndex` from every script file under `dir` (a base-game install).
-/// Files are parsed and indexed for reference resolution; they are never validated.
-///
-/// This unifies what used to be two copies (the CLI's `index_game_dir` and the
-/// LSP's `index_vanilla_dir`) onto the CLI's broader, corpus-verified
-/// `search_config_for` discovery config.
 pub fn index_game_dir(
     dir: &Path,
     ruleset: &RuleSet,
@@ -1448,8 +1219,6 @@ pub fn index_game_dir(
     index_game_dir_with_cache(dir, ruleset, table, var_effects, None)
 }
 
-/// Index a base-game directory through the persistent parsed-AST cache.
-/// Entries are keyed by `dir`, so one install is shared across mod workspaces.
 pub fn index_game_dir_with_parse_cache(
     dir: &Path,
     ruleset: &RuleSet,
@@ -1497,14 +1266,6 @@ fn index_game_dir_with_cache(
     )
 }
 
-/// Override the engine's built-in folder list with the config's `folders.cwt`
-/// when the ruleset ships one and the target looks like a game/mod root (it
-/// contains at least one of the listed folders). This wins over the leaf-dir
-/// heuristic in `search_config_for`: a mod root with loose .txt files at the
-/// top level (Changelog.txt etc.) would otherwise be scanned whole-tree,
-/// pulling in non-script dirs the config never asks for.
-///
-/// Crate-local: callers should use [`workspace_discovery_config`] instead.
 pub(crate) fn apply_config_folders(config: &mut FileManagerConfig, folders: &[String]) {
     if folders.is_empty() {
         return;
@@ -1514,12 +1275,6 @@ pub(crate) fn apply_config_folders(config: &mut FileManagerConfig, folders: &[St
     }
 }
 
-/// Build the `FileManagerConfig` the workspace scan should use, narrowed to the
-/// ruleset's `folders` (via [`apply_config_folders`]) and, for a multi-mod
-/// workspace, overridden **unconditionally** to exactly the ruleset's folders
-/// (bypassing the `root.contains(folder)` check, since a `MultipleMod`
-/// workspace root lacks the game folders themselves). Shared by the CLI
-/// ([`Session::load`]) and the LSP so `cwtools validate` and the editor
 /// discover the same file set (#284).
 pub fn workspace_discovery_config(root: &Path, ruleset: Option<&RuleSet>) -> FileManagerConfig {
     let mut config = search_config_for(root);
@@ -1532,21 +1287,10 @@ pub fn workspace_discovery_config(root: &Path, ruleset: Option<&RuleSet>) -> Fil
     config
 }
 
-/// Discover the workspace's script files using a fully-built config (typically
-/// from [`workspace_discovery_config`]). Handles both single-mod and multi-mod
 /// workspaces, so the CLI and LSP share one branching point (#284).
-///
-/// This does not need a `StringTable`: discovery only filters paths by
-/// `include_dirs` / globs / `FileKind::Script` and builds `logical_path`.
-/// Parsing with a shared table happens later in `Session` / the LSP indexer.
 pub fn discover_workspace_files(
     config: FileManagerConfig,
 ) -> Result<Vec<DiscoveredFile>, FileError> {
-    // `workspace_discovery_config` already called `classify_directory` for the
-    // multi-mod `include_dirs` override. Re-classifying here costs one extra
-    // stat (two `read_dir` checks) but keeps `discover_workspace_files` usable
-    // standalone without a precomputed flag. TOCTOU between the two calls is
-    // acceptable: a racing `mod/` creation would only affect the next scan.
     let is_multi_mod = classify_directory(&config.root) == DirectoryType::MultipleMod;
     let manager = FileManager::new(config);
     if is_multi_mod {
@@ -1643,9 +1387,6 @@ pub fn discover_localisation_files(
     })
 }
 
-/// Decide whether to search a directory directly (as a leaf directory containing
-/// script files) or as a mod root with standard subfolders. Shared by mod and
-/// vanilla discovery so both entry points index the same way.
 pub fn search_config_for(directory: &Path) -> FileManagerConfig {
     let known_script_folders = [
         "common",
@@ -1704,7 +1445,6 @@ pub fn search_config_for(directory: &Path) -> FileManagerConfig {
     ];
     let dir_name = directory.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-    // If this directory itself contains script files, search it directly.
     let script_exts = cwtools_file_manager::file_manager::SCRIPT_EXTENSIONS;
     let has_script_files = std::fs::read_dir(directory)
         .ok()
@@ -1736,11 +1476,6 @@ pub fn search_config_for(directory: &Path) -> FileManagerConfig {
     }
 }
 
-/// Load a `RuleSet` from a `.cwt` file or a directory of `.cwt` files, together
-/// with the problems the ruleset itself has. Those are non-fatal: the caller
-/// reports them (see `cwtools rules`) and decides what an error means. A rules
-/// *file* that can't be read at all is an `Err` — there is no ruleset and
-/// nothing to report against.
 pub fn load_rules(
     rules: &RulesInput,
     table: &StringTable,
@@ -1782,7 +1517,6 @@ mod tests {
     }
 
     /// The filename must survive both halves of the fingerprint verbatim where
-    /// it can, so a cache stays findable across runs (and shared with the LSP).
     #[test]
     fn vanilla_cache_path_is_sanitized_and_stable() {
         let path = vanilla_cache_path(Path::new("/cache"), "hoi4", "v1.19.2.0|rs:493876ece638460f");
@@ -1827,8 +1561,6 @@ mod tests {
             vanilla_gated_checks(Game::Hoi4, false),
             ["CW113", "CW222", "CW500"]
         );
-        // The ship-design and planet-killer checks share the gate but only
-        // Stellaris emits them.
         assert_eq!(
             vanilla_gated_checks(Game::Stellaris, false),
             ["CW113", "CW222", "CW227", "CW229", "CW250", "CW500"]
@@ -1839,7 +1571,6 @@ mod tests {
     fn default_cache_dir_is_absolute_and_honors_env() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Must be absolute on both Unix and Windows; a relative XDG/LAPPDATA
-        // would break the cache-key canonicalization.
         let dir = default_cache_dir().expect("cache dir");
         assert!(
             dir.is_absolute(),
@@ -1954,7 +1685,6 @@ mod tests {
         let scoped = load_loc_service(&[tmp.path()], Some(&[Lang::English]), &[], &[]);
         assert_eq!(scoped.files().len(), 1);
         assert_eq!(scoped.files()[0].lang, Some(Lang::English));
-        // CSV (no single header language) is never dropped by the language filter.
         std::fs::write(loc.join("names.csv"), "key;english;french\nfoo;Foo;Bar\n").unwrap();
         let scoped_with_csv = load_loc_service(&[tmp.path()], Some(&[Lang::English]), &[], &[]);
         assert!(scoped_with_csv.files().iter().any(|f| f.is_csv));
