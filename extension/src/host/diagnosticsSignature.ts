@@ -1,7 +1,13 @@
-import { fnv1a } from './fnv1a';
+import { fnv1a } from "./fnv1a";
 
-interface PositionLike { line: number; character: number }
-interface RangeLike { start: PositionLike; end: PositionLike }
+interface PositionLike {
+	line: number;
+	character: number;
+}
+interface RangeLike {
+	start: PositionLike;
+	end: PositionLike;
+}
 
 // Structural subset of vscode.Diagnostic — keeps this file vscode-free.
 export interface DiagnosticLike {
@@ -13,15 +19,19 @@ export interface DiagnosticLike {
 	relatedInformation?: readonly unknown[];
 }
 
-function codeString(code: DiagnosticLike['code']): string | number | null {
-	if (code === undefined) { return null; }
-	return typeof code === 'object' ? code.value : code;
+function codeString(code: DiagnosticLike["code"]): string | number | null {
+	if (code === undefined) {
+		return null;
+	}
+	return typeof code === "object" ? code.value : code;
 }
 
 // JSON (not raw separators): message is arbitrary server text that could
 // otherwise inject a field/record boundary.
-export function diagnosticsSignature(diagnostics: readonly DiagnosticLike[]): string {
-	const normalized = diagnostics.map(d => [
+export function diagnosticsSignature(
+	diagnostics: readonly DiagnosticLike[],
+): string {
+	const normalized = diagnostics.map((d) => [
 		d.range.start.line,
 		d.range.start.character,
 		d.range.end.line,
@@ -43,9 +53,12 @@ export class DiagnosticsSignatureCache {
 	// Bound the map so a session touching many files (or re-scan churn) can't
 	// grow it unbounded until restart. Evicting the oldest entry only costs one
 	// re-publish for that file, which is harmless.
-	private readonly maxSize = 1000;
+	private readonly maxSize = 2_000;
 
-	shouldPublish(uriKey: string, diagnostics: readonly DiagnosticLike[]): boolean {
+	shouldPublish(
+		uriKey: string,
+		diagnostics: readonly DiagnosticLike[],
+	): boolean {
 		const signature = diagnosticsSignature(diagnostics);
 		if (this.signatures.get(uriKey) === signature) {
 			return false;
