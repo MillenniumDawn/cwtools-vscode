@@ -91,6 +91,7 @@ const hostFiles = [
 	"./dist/extension/bin/client/test/host/graphTypes.test.js",
 	"./dist/extension/bin/client/test/host/fileExplorer.test.js",
 	"./dist/extension/bin/client/test/host/extension.test.js",
+	"./dist/extension/bin/client/test/host/diagnostics.test.js",
 	"./dist/extension/bin/client/test/host/hover.test.js",
 	"./dist/extension/bin/client/test/host/completion.test.js",
 	"./dist/extension/bin/client/test/host/codeLens.test.js",

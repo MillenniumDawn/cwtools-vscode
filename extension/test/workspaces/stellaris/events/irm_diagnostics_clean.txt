@@ -1,0 +1,7 @@
+namespace = irm_diagnostics_clean
+
+country_event = {
+	id = irm_diagnostics_clean.1
+	hide_window = yes
+	is_triggered_only = yes
+}
