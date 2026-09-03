@@ -334,7 +334,6 @@ def publish_github_release(
 ) -> None:
     notes = release_notes(read_changelog(), version)
     notes_file = VSIX_ROOT / "release-notes.md"
-    notes_file.write_text(notes, encoding="utf-8")
     if run_or_null("gh", ["release", "view", tag]) == 0:
         is_tag_release = os.environ.get("TAG_RELEASE", "").lower() in {"1", "true"}
         if not is_tag_release:
@@ -343,6 +342,7 @@ def publish_github_release(
             )
         print(f"release {tag} already exists; deleting before recreate")
         run("gh", ["release", "delete", tag, "--yes"])
+    notes_file.write_text(notes, encoding="utf-8")
     args = [
         "release",
         "create",
