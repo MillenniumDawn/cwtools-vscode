@@ -219,10 +219,6 @@ export function createLanguageClient(
 	];
 	context.subscriptions.push(...fileEvents);
 
-	// Forward the user's ignore globs + suppressed diagnostic codes to the server
-	// so it skips those files and drops those codes when validating.
-	const ignoreOptions = readIgnoreOptions();
-
 	const diagnosticsCache = new DiagnosticsSignatureCache();
 
 	const middleware: LanguageClientOptions["middleware"] = {
@@ -354,33 +350,36 @@ export function createLanguageClient(
 			// mapped payload ourselves on change instead (see below).
 			fileEvents: fileEvents,
 		},
-		initializationOptions: {
-			language: cfg.language === "eu5" ? "paradox" : cfg.language,
-			rulesCache: cfg.rulesCache,
-			...readLiveServerSettings(),
-			// Inlay hints. The server reads both at initialize only — neither key is
-			// in its didChangeConfiguration handler — so a change needs a window
-			// reload, which the setting descriptions say.
-			inlayHintsLocTitles:
-				workspace
+		initializationOptions: () => {
+			const ignoreOptions = readIgnoreOptions();
+			return {
+				language: cfg.language === "eu5" ? "paradox" : cfg.language,
+				rulesCache: cfg.rulesCache,
+				...readLiveServerSettings(),
+				// Inlay hints. The server reads both at initialize only — neither key is
+				// in its didChangeConfiguration handler — so a change needs a window
+				// reload, which the setting descriptions say.
+				inlayHintsLocTitles:
+					workspace
+						.getConfiguration("cwtools")
+						.get<boolean>("inlayHints.locTitles") ?? true,
+				inlayHintsScopes:
+					workspace
+						.getConfiguration("cwtools")
+						.get<boolean>("inlayHints.scopes") ?? false,
+				// Persistent cache dir + the user's vanilla install path. The Rust
+				// server caches the base-game index here keyed by game version, so
+				// it isn't re-parsed every startup. Passing the explicit install
+				// path avoids relying on Steam auto-discovery.
+				cacheDir: path.join(cfg.cacheDir, "vanilla"),
+				vanilla: workspace
 					.getConfiguration("cwtools")
-					.get<boolean>("inlayHints.locTitles") ?? true,
-			inlayHintsScopes:
-				workspace
-					.getConfiguration("cwtools")
-					.get<boolean>("inlayHints.scopes") ?? false,
-			// Persistent cache dir + the user's vanilla install path. The Rust
-			// server caches the base-game index here keyed by game version, so
-			// it isn't re-parsed every startup. Passing the explicit install
-			// path avoids relying on Steam auto-discovery.
-			cacheDir: path.join(cfg.cacheDir, "vanilla"),
-			vanilla: workspace
-				.getConfiguration("cwtools")
-				.get("cache." + cfg.language),
-			ignoreFilePatterns: ignoreOptions.ignoreFilePatterns,
-			ignoredErrorCodes: ignoreOptions.ignoredErrorCodes,
-			backgroundReindexIntervalMinutes: readBackgroundReindexMinutes(),
-			backgroundReindexIdleSeconds: readBackgroundReindexIdleSeconds(),
+					.get("cache." + cfg.language),
+				ignoreFilePatterns: ignoreOptions.ignoreFilePatterns,
+				ignoredErrorCodes: ignoreOptions.ignoredErrorCodes,
+				backgroundReindexIntervalMinutes: readBackgroundReindexMinutes(),
+				backgroundReindexIdleSeconds: readBackgroundReindexIdleSeconds(),
+			};
 		},
 		// Never force-reveal: genuine failures still surface via window.showErrorMessage in extension.ts.
 		revealOutputChannelOn: RevealOutputChannelOn.Never,
