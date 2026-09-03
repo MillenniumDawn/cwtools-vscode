@@ -106,6 +106,7 @@
 
 #### Engine
 
+* LSP parse errors now use the same per-file cap as validation errors. (#590)
 * LSP color ranges clamp columns beyond the parser limit instead of wrapping.
   (#593)
 * CLI integration coverage now exercises `cache-vanilla` writes and
