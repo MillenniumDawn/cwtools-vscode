@@ -4,6 +4,8 @@
 
 * `publish-prebuilt` now refuses to delete an existing GitHub release unless
   the run is a tag push. (#508)
+* Remaining GitHub workflows now set `persist-credentials: false` on every
+  `actions/checkout`. (#574)
 * Host tests now verify diagnostics reach the editor, including diagnostic codes,
   ranges, and a clean-file case. (#517)
 * The weekly rules-pin workflow runs npm and tests with read-only contents

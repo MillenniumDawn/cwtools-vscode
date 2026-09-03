@@ -59,6 +59,8 @@ jobs:
       - name: Checkout
         # v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - name: Setup Rust
         # stable branch, 2026-03-27
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
@@ -97,6 +99,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         # v7.0.1
         with:
+          persist-credentials: false
           # workflow_dispatch has no head_ref; fall back to the
           # dispatched branch.
           ref: ${{ github.head_ref || github.ref_name }}
