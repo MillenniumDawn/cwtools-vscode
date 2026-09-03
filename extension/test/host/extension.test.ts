@@ -640,4 +640,19 @@ suite("FileExplorer — UI integration", function () {
 		assert.ok(showStub.called, "showTextDocument should be called");
 		assert.ok(showStub.firstCall.args[0].fsPath.endsWith("events/irm.txt"));
 	});
+
+	test("openFile command shows an error when the document cannot be opened", async function () {
+		await activate();
+		const uri = vscode.Uri.file(path.join(root, "events/irm.txt"));
+		sandbox.stub(vscode.window, "showTextDocument").rejects(new Error("gone"));
+		const errStub = sandbox.stub(vscode.window, "showErrorMessage").resolves();
+
+		await vscode.commands.executeCommand("cwtools-files.openFile", uri);
+
+		assert.ok(errStub.called, "showErrorMessage should be called");
+		assert.ok(
+			String(errStub.firstCall.args[0]).includes(uri.fsPath),
+			`error should name the path, got: ${String(errStub.firstCall.args[0])}`,
+		);
+	});
 });

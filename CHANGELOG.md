@@ -8,6 +8,8 @@
   `actions/checkout`. (#574)
 * Release, marketplace, CodeQL, and build-bench checkouts now set
   `persist-credentials: false`. (#574)
+* Opening a missing or invalid file from the files tree now shows an error that
+  names the path. (#589)
 * Host tests now verify diagnostics reach the editor, including diagnostic codes,
   ranges, and a clean-file case. (#517)
 * The weekly rules-pin workflow runs npm and tests with read-only contents
