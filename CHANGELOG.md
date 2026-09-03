@@ -2,6 +2,8 @@
 
 #### Extension
 
+* Host tests now verify diagnostics reach the editor, including diagnostic codes,
+  ranges, and a clean-file case. (#517)
 * Development webview bundles now expose a development `process.env.NODE_ENV`.
   (#583)
 * Issue templates now request reproduction steps, environment details, rules
