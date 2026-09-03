@@ -4,6 +4,8 @@
 
 * Host tests now verify diagnostics reach the editor, including diagnostic codes,
   ranges, and a clean-file case. (#517)
+* The weekly rules-pin workflow runs npm and tests with read-only contents
+  permissions before a separate write-enabled PR job. (#542)
 * Development webview bundles now expose a development `process.env.NODE_ENV`.
   (#583)
 * Issue templates now request reproduction steps, environment details, rules
