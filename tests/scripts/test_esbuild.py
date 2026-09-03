@@ -24,6 +24,13 @@ def procs(*codes: int | None) -> list[subprocess.Popen[bytes]]:
     return cast("list[subprocess.Popen[bytes]]", [FakeProcess(code) for code in codes])
 
 
+TEST_ENV_DEFINES = (
+    "--define:process.env.CWTOOLS_TEST_HOI4_REPO=undefined",
+    "--define:process.env.CWTOOLS_TEST_HOI4_REF=undefined",
+    "--define:process.env.CWTOOLS_TEST_RULES_MANIFEST_URL=undefined",
+)
+
+
 def test_extension_bundle_is_node_cjs() -> None:
     args = " ".join(esbuild.extension_args(watch=False))
     assert "--platform=node" in args
@@ -31,6 +38,14 @@ def test_extension_bundle_is_node_cjs() -> None:
     assert "--external:vscode" in args
     assert "extension.ts" in args
     assert "--watch" not in args
+    for define in TEST_ENV_DEFINES:
+        assert define not in args
+
+
+def test_release_folds_test_env_overrides() -> None:
+    args = " ".join(esbuild.extension_args(watch=False, release=True))
+    for define in TEST_ENV_DEFINES:
+        assert define in args
 
 
 def test_webview_bundle_is_browser_iife() -> None:
@@ -94,6 +109,23 @@ def test_dev_flag_sets_development_without_watch(
     )
     assert "--watch" not in " ".join(commands[0])
     assert "--watch" not in " ".join(commands[1])
+    for define in TEST_ENV_DEFINES:
+        assert define not in " ".join(commands[0])
+
+
+def test_release_flag_defines_test_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub_bin = tmp_path / "esbuild"
+    stub_bin.touch()
+    monkeypatch.setattr(esbuild, "esbuild_bin", lambda: stub_bin)
+    commands: list[list[str]] = []
+    monkeypatch.setattr(esbuild, "_run", commands.append)
+    assert esbuild.main(["--release"]) == 0
+    extension = " ".join(commands[0])
+    for define in TEST_ENV_DEFINES:
+        assert define in extension
+    assert "--watch" not in extension
 
 
 def test_bundle_commands_use_the_platform_esbuild_entrypoint() -> None:

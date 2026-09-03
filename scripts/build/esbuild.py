@@ -26,7 +26,7 @@ def esbuild_bin() -> Path:
     return REPO_ROOT / "node_modules" / "esbuild" / "bin" / "esbuild"
 
 
-def extension_args(*, watch: bool) -> list[str]:
+def extension_args(*, watch: bool, release: bool = False) -> list[str]:
     outfile = EXTENSION_DIST_ROOT / "bin" / "client" / "extension" / "extension.js"
     args = [
         str(esbuild_bin()),
@@ -40,6 +40,14 @@ def extension_args(*, watch: bool) -> list[str]:
         "--sourcemap",
         "--log-level=info",
     ]
+    if release:
+        args.extend(
+            [
+                "--define:process.env.CWTOOLS_TEST_HOI4_REPO=undefined",
+                "--define:process.env.CWTOOLS_TEST_HOI4_REF=undefined",
+                "--define:process.env.CWTOOLS_TEST_RULES_MANIFEST_URL=undefined",
+            ]
+        )
     if watch:
         args.append("--watch")
     return args
@@ -65,9 +73,11 @@ def webview_args(*, watch: bool, dev: bool) -> list[str]:
     return args
 
 
-def bundle_commands(*, watch: bool, dev: bool) -> list[list[str]]:
+def bundle_commands(
+    *, watch: bool, dev: bool, release: bool = False
+) -> list[list[str]]:
     commands = [
-        extension_args(watch=watch),
+        extension_args(watch=watch, release=release),
         webview_args(watch=watch, dev=dev),
     ]
     if sys.platform == "win32":
@@ -99,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     watch = "--watch" in args
     dev = "--dev" in args or watch
-    commands = bundle_commands(watch=watch, dev=dev)
+    release = "--release" in args
+    commands = bundle_commands(watch=watch, dev=dev, release=release)
     if not esbuild_bin().is_file():
         raise RuntimeError(f"esbuild not found at {esbuild_bin()}; run npm install")
     if not watch:

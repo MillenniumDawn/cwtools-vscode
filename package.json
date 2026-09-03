@@ -5,6 +5,8 @@
     "build": "node scripts/build/python.mjs scripts/build/build.py",
     "compile": "node scripts/build/python.mjs scripts/build/build.py compile",
     "compile:code": "tsc -p ./tsconfig.extension.json && node scripts/build/python.mjs scripts/build/esbuild.py",
+    "compile:code:release": "tsc -p ./tsconfig.extension.json && node scripts/build/python.mjs scripts/build/esbuild.py --release",
+    "compile:release": "node scripts/build/python.mjs scripts/build/build.py compile-release",
     "typecheck": "tsc -p ./tsconfig.json --noEmit",
     "lint": "eslint .",
     "check": "npm run typecheck && npm run lint",
