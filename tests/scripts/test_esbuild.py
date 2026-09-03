@@ -142,3 +142,44 @@ def test_watch_returns_when_the_second_bundle_exits() -> None:
 
 def test_watch_treats_an_early_clean_exit_as_failure() -> None:
     assert esbuild.wait_for_watcher_exit(procs(None, 0), poll_interval=0) == 1
+
+
+def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
+    binary = esbuild.esbuild_bin()
+    if not binary.is_file():
+        pytest.skip("esbuild is not installed")
+
+    source = tmp_path / "repo.ts"
+    source.write_text(
+        'export const repo = process.env.CWTOOLS_TEST_HOI4_REPO || "https://ok.example";\n',
+        encoding="utf-8",
+    )
+    dropped = tmp_path / "dropped.js"
+    kept = tmp_path / "kept.js"
+    common = [str(binary), str(source), "--bundle", "--format=cjs"]
+
+    folded = subprocess.run(
+        [
+            *common,
+            f"--outfile={dropped}",
+            "--define:process.env.CWTOOLS_TEST_HOI4_REPO=undefined",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert folded.returncode == 0, folded.stderr
+
+    live = subprocess.run(
+        [*common, f"--outfile={kept}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert live.returncode == 0, live.stderr
+
+    dropped_js = dropped.read_text(encoding="utf-8")
+    kept_js = kept.read_text(encoding="utf-8")
+    assert "CWTOOLS_TEST" not in dropped_js
+    assert "https://ok.example" in dropped_js
+    assert "CWTOOLS_TEST" in kept_js
