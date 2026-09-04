@@ -1,6 +1,8 @@
 use crate::ast::{SourcePos, SourceRange};
 use smallvec::SmallVec;
 
+pub const EOF_POS: SourcePos = SourcePos { line: 0, col: 0 };
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpanEdit {
     pub range: SourceRange,
@@ -69,8 +71,8 @@ pub fn pos_to_byte(text: &str, line_starts: &[usize], pos: SourcePos) -> usize {
         return text.len();
     };
     let mut byte = line_start;
-    for (col, ch) in (0_u16..).zip(text[line_start..].chars()) {
-        if col >= pos.col || ch == '\n' {
+    for (col, ch) in (0usize..).zip(text[line_start..].chars()) {
+        if col >= usize::from(pos.col) || ch == '\n' {
             break;
         }
         byte += ch.len_utf8();
@@ -78,16 +80,24 @@ pub fn pos_to_byte(text: &str, line_starts: &[usize], pos: SourcePos) -> usize {
     byte
 }
 
+fn edit_pos_to_byte(text: &str, line_starts: &[usize], pos: SourcePos) -> usize {
+    if pos == EOF_POS {
+        text.len()
+    } else {
+        pos_to_byte(text, line_starts, pos)
+    }
+}
+
 pub fn plan_file_edits<T>(text: &str, mut planned: Vec<(T, SpanEdit)>) -> (Vec<SpanEdit>, Vec<T>) {
     let starts = line_start_bytes(text);
-    planned.sort_by_key(|(_, e)| pos_to_byte(text, &starts, e.range.start));
+    planned.sort_by_key(|(_, e)| edit_pos_to_byte(text, &starts, e.range.start));
     let mut kept: Vec<SpanEdit> = Vec::new();
     let mut skipped: Vec<T> = Vec::new();
     let mut last_end = 0usize;
     let mut first = true;
     for (tag, edit) in planned {
-        let s = pos_to_byte(text, &starts, edit.range.start);
-        let e = pos_to_byte(text, &starts, edit.range.end);
+        let s = edit_pos_to_byte(text, &starts, edit.range.start);
+        let e = edit_pos_to_byte(text, &starts, edit.range.end);
         if !first && s < last_end {
             skipped.push(tag);
             continue;
@@ -105,8 +115,8 @@ pub fn apply_edits(text: &str, edits: &[SpanEdit]) -> String {
         .iter()
         .map(|e| {
             (
-                pos_to_byte(text, &starts, e.range.start),
-                pos_to_byte(text, &starts, e.range.end),
+                edit_pos_to_byte(text, &starts, e.range.start),
+                edit_pos_to_byte(text, &starts, e.range.end),
                 e.replacement.as_str(),
             )
         })
@@ -136,6 +146,23 @@ mod tests {
         assert_eq!(pos_to_byte(text, &starts, pos(1, 2)), 2);
         assert_eq!(pos_to_byte(text, &starts, pos(2, 4)), 3 + 5);
         assert_eq!(pos_to_byte(text, &starts, pos(1, 99)), 2);
+    }
+
+    #[test]
+    fn exact_maximum_column_stays_at_that_column() {
+        let text = format!("prefix\n{}", "x".repeat(70_000));
+        let starts = line_start_bytes(&text);
+        assert_eq!(
+            pos_to_byte(&text, &starts, pos(2, u16::MAX)),
+            starts[1] + usize::from(u16::MAX)
+        );
+    }
+
+    #[test]
+    fn apply_eof_edit_replaces_a_70k_last_line() {
+        let text = format!("prefix\n{}", "x".repeat(70_000));
+        let edit = span_to_eof(1, 0, "replacement");
+        assert_eq!(apply_edits(&text, &[edit]), "replacement");
     }
 
     #[test]
@@ -174,6 +201,16 @@ mod tests {
             range: SourceRange {
                 start: pos(sl, sc),
                 end: pos(el, ec),
+            },
+            replacement: repl.to_string(),
+        }
+    }
+
+    fn span_to_eof(sl: u32, sc: u16, repl: &str) -> SpanEdit {
+        SpanEdit {
+            range: SourceRange {
+                start: pos(sl, sc),
+                end: EOF_POS,
             },
             replacement: repl.to_string(),
         }

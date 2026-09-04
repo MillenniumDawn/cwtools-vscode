@@ -12,6 +12,7 @@ use crate::paths::{encoded_position_len, position_byte_index, source_column_to_l
 pub(crate) struct DocLines<'a> {
     lines: Vec<&'a str>,
     encoding: PositionEncodingKind,
+    trailing_newline: bool,
 }
 
 impl<'a> DocLines<'a> {
@@ -19,6 +20,7 @@ impl<'a> DocLines<'a> {
         Self {
             lines: text.lines().collect(),
             encoding,
+            trailing_newline: text.ends_with('\n'),
         }
     }
 
@@ -27,6 +29,7 @@ impl<'a> DocLines<'a> {
         Self {
             lines: Vec::new(),
             encoding: PositionEncodingKind::UTF16,
+            trailing_newline: false,
         }
     }
 
@@ -46,6 +49,20 @@ impl<'a> DocLines<'a> {
         let line = self.line(pos.line);
         let byte = position_byte_index(line, pos.character, &self.encoding);
         line[..byte].chars().count().min(u16::MAX as usize) as u16
+    }
+
+    pub(crate) fn document_end_position(&self) -> Position {
+        let line = if self.trailing_newline {
+            self.lines.len() as u32
+        } else {
+            self.lines.len().saturating_sub(1) as u32
+        };
+        let last_line = if self.trailing_newline {
+            ""
+        } else {
+            self.lines.last().copied().unwrap_or("")
+        };
+        Position::new(line, encoded_position_len(last_line, &self.encoding))
     }
 
     pub(crate) fn token_range(&self, line: u32, column: u32, token: &str) -> Range {
@@ -144,6 +161,27 @@ mod tests {
             DocLines::new(text, PositionEncodingKind::UTF32).position(0, 2),
             Position::new(0, 2)
         );
+    }
+
+    #[test]
+    fn document_end_position_handles_empty_and_newline_terminated_text() {
+        for (text, expected_line, expected_utf16, expected_utf32) in [
+            ("", 0, 0, 0),
+            ("x😀", 0, 3, 2),
+            ("x😀\n", 1, 0, 0),
+            ("x😀\r\n", 1, 0, 0),
+        ] {
+            assert_eq!(
+                DocLines::new(text, PositionEncodingKind::UTF16).document_end_position(),
+                Position::new(expected_line, expected_utf16),
+                "UTF-16: {text:?}"
+            );
+            assert_eq!(
+                DocLines::new(text, PositionEncodingKind::UTF32).document_end_position(),
+                Position::new(expected_line, expected_utf32),
+                "UTF-32: {text:?}"
+            );
+        }
     }
 
     #[test]

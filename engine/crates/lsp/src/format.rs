@@ -5,7 +5,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
 use cwtools_parser::ast::SourcePos;
-use cwtools_parser::fix::SpanEdit;
+use cwtools_parser::fix::{EOF_POS, SpanEdit};
 use cwtools_parser::format::{format_edits, format_range_edits};
 
 use crate::command_progress::CommandProgress;
@@ -291,10 +291,14 @@ fn span_to_text_edit(edit: &SpanEdit, lines: &DocLines) -> TextEdit {
                 edit.range.start.line.saturating_sub(1),
                 u32::from(edit.range.start.col),
             ),
-            end: lines.position(
-                edit.range.end.line.saturating_sub(1),
-                u32::from(edit.range.end.col),
-            ),
+            end: if edit.range.end == EOF_POS {
+                lines.document_end_position()
+            } else {
+                lines.position(
+                    edit.range.end.line.saturating_sub(1),
+                    u32::from(edit.range.end.col),
+                )
+            },
         },
         new_text: edit.replacement.clone(),
     }
@@ -326,6 +330,34 @@ fn workspace_edit_for_snapshots(
             changes: Some(changes),
             document_changes: None,
             change_annotations: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cwtools_parser::ast::SourceRange;
+
+    #[test]
+    fn eof_text_edit_end_uses_the_actual_document_end_for_each_encoding() {
+        let last_line = format!("{}😀", "x".repeat(usize::from(u16::MAX) + 1));
+        let text = format!("first\n{last_line}");
+        let edit = SpanEdit {
+            range: SourceRange {
+                start: SourcePos { line: 1, col: 0 },
+                end: EOF_POS,
+            },
+            replacement: String::new(),
+        };
+
+        for (encoding, expected_character) in [
+            (PositionEncodingKind::UTF16, 65_538),
+            (PositionEncodingKind::UTF32, 65_537),
+        ] {
+            let lines = DocLines::new(&text, encoding);
+            let mapped = span_to_text_edit(&edit, &lines);
+            assert_eq!(mapped.range.end, Position::new(1, expected_character));
         }
     }
 }
