@@ -265,11 +265,7 @@ pub(crate) fn validate_parsed_with_indexes(
     lines: &DocLines,
     track_uses: bool,
 ) -> (Vec<Diagnostic>, Option<UsedInstances>) {
-    let mut diagnostics: Vec<Diagnostic> = parsed
-        .errors
-        .iter()
-        .map(|e| parse_error_to_diagnostic(e, lines))
-        .collect();
+    let mut diagnostics = parse_errors_to_diagnostics(&parsed.errors, lines);
     let (mut errs, used) = if track_uses {
         let (errs, used) = validate_prepared_tracking_uses(parsed, uri, prepared);
         (errs, Some(used))
@@ -357,6 +353,48 @@ pub(crate) fn parse_error_to_diagnostic(e: &ParseError, lines: &DocLines) -> Dia
         None,
         msg.clone(),
     )
+}
+
+pub(crate) fn parse_errors_to_diagnostics(
+    errors: &[ParseError],
+    lines: &DocLines,
+) -> Vec<Diagnostic> {
+    let total = errors.len();
+    let mut diagnostics: Vec<Diagnostic> = errors
+        .iter()
+        .take(MAX_FILE_ERRORS)
+        .map(|e| parse_error_to_diagnostic(e, lines))
+        .collect();
+    if total > MAX_FILE_ERRORS {
+        let dropped = total - MAX_FILE_ERRORS;
+        diagnostics.push(diagnostic_at(
+            0,
+            0,
+            lines,
+            DiagnosticSeverity::INFORMATION,
+            "cwtools",
+            None,
+            format!("... {dropped} additional errors truncated"),
+        ));
+    }
+    diagnostics
+}
+
+pub(crate) fn truncate_diagnostics(diagnostics: &mut Vec<Diagnostic>, lines: &DocLines) {
+    if diagnostics.len() <= MAX_FILE_ERRORS {
+        return;
+    }
+    let dropped = diagnostics.len() - MAX_FILE_ERRORS;
+    diagnostics.truncate(MAX_FILE_ERRORS);
+    diagnostics.push(diagnostic_at(
+        0,
+        0,
+        lines,
+        DiagnosticSeverity::INFORMATION,
+        "cwtools",
+        None,
+        format!("... {dropped} additional errors truncated"),
+    ));
 }
 
 pub(crate) fn rule_parse_error_to_diagnostic(
@@ -981,11 +1019,7 @@ impl Backend {
                         rules_guard.scope_registry.as_ref(),
                         &lines,
                     ),
-                    None => ast
-                        .errors
-                        .iter()
-                        .map(|e| parse_error_to_diagnostic(e, &lines))
-                        .collect(),
+                    None => parse_errors_to_diagnostics(&ast.errors, &lines),
                 };
                 out.push((
                     uri,
@@ -1213,6 +1247,7 @@ impl Backend {
             let mut diagnostics =
                 self.validate_loc_parsed(&path, &cache.files, &lines, additional_loc_keys, extra);
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
+            truncate_diagnostics(&mut diagnostics, &lines);
             #[cfg(test)]
             loc_sweep_test_hook::run(self, &target.uri);
             let still_current = self
@@ -1371,6 +1406,7 @@ impl Backend {
             }
             let mut diagnostics = diagnostics;
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
+            truncate_diagnostics(&mut diagnostics, &lines);
             return (diagnostics, None);
         }
 
@@ -1381,9 +1417,12 @@ impl Backend {
         // flag every rule field as unknown). See #43.
         if crate::paths::is_cwt_file(uri) {
             let parsed = parse_string(text, &self.state.string_table);
-            for parse_err in &parsed.errors {
-                diagnostics.push(parse_error_to_diagnostic(parse_err, &lines));
-            }
+            diagnostics.extend(
+                parsed
+                    .errors
+                    .iter()
+                    .map(|e| parse_error_to_diagnostic(e, &lines)),
+            );
             let rules_guard = self.state.rules.read();
             if let Some(ruleset) = rules_guard.ruleset.as_ref() {
                 let path = std::path::PathBuf::from(uri_to_path_str(uri));
@@ -1397,6 +1436,7 @@ impl Backend {
                 }
             }
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
+            truncate_diagnostics(&mut diagnostics, &lines);
             return (diagnostics, None);
         }
 
@@ -1405,9 +1445,7 @@ impl Backend {
         // that do the same work already fence theirs. (#87)
         tokio::task::block_in_place(|| {
             let parsed = parse_string(text, &self.state.string_table);
-            for parse_err in &parsed.errors {
-                diagnostics.push(parse_error_to_diagnostic(parse_err, &lines));
-            }
+            diagnostics.extend(parse_errors_to_diagnostics(&parsed.errors, &lines));
 
             self.index_parsed_file(uri, &parsed, parsed_version);
 
@@ -2147,6 +2185,18 @@ mod truncation_tests {
         errs.iter().rev().take(3).rev().map(|e| e.code).collect()
     }
 
+    fn diag(message: String) -> Diagnostic {
+        diagnostic_at(
+            0,
+            0,
+            &DocLines::none(),
+            DiagnosticSeverity::ERROR,
+            "cwtools",
+            None,
+            message,
+        )
+    }
+
     #[test]
     fn under_the_cap_nothing_is_touched() {
         let mut errs: Vec<_> = (0..MAX_FILE_ERRORS).map(|_| error(Some("CW240"))).collect();
@@ -2209,6 +2259,65 @@ mod truncation_tests {
             tail_codes(&errs)
         );
         assert_eq!(errs.last().map(|e| e.code), Some(Some("CW277")));
+    }
+
+    #[test]
+    fn parse_errors_over_the_cap_are_truncated() {
+        let errors: Vec<_> = (0..MAX_FILE_ERRORS + 5)
+            .map(|i| ParseError::Pos(1, 0, format!("e{i}")))
+            .collect();
+        let diags = parse_errors_to_diagnostics(&errors, &DocLines::none());
+        assert_eq!(diags.len(), MAX_FILE_ERRORS + 1);
+        let marker = diags.last().expect("summary marker");
+        assert_eq!(marker.severity, Some(DiagnosticSeverity::INFORMATION));
+        assert_eq!(marker.code, None);
+        assert!(
+            marker.message.contains("5 additional"),
+            "got: {}",
+            marker.message
+        );
+        assert!(
+            diags[..MAX_FILE_ERRORS]
+                .iter()
+                .all(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+        );
+    }
+
+    #[test]
+    fn truncate_diagnostics_over_the_cap_adds_the_marker() {
+        let mut diags: Vec<_> = (0..MAX_FILE_ERRORS + 5)
+            .map(|i| diag(format!("e{i}")))
+            .collect();
+        truncate_diagnostics(&mut diags, &DocLines::none());
+        assert_eq!(diags.len(), MAX_FILE_ERRORS + 1);
+        let marker = diags.last().expect("summary marker");
+        assert_eq!(marker.severity, Some(DiagnosticSeverity::INFORMATION));
+        assert_eq!(marker.code, None);
+        assert_eq!(marker.source.as_deref(), Some("cwtools"));
+        assert!(
+            marker.message.contains("5 additional"),
+            "got: {}",
+            marker.message
+        );
+        assert!(
+            diags[..MAX_FILE_ERRORS]
+                .iter()
+                .all(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+        );
+    }
+
+    #[test]
+    fn truncate_diagnostics_under_the_cap_is_unchanged() {
+        let mut diags: Vec<_> = (0..MAX_FILE_ERRORS)
+            .map(|i| diag(format!("e{i}")))
+            .collect();
+        truncate_diagnostics(&mut diags, &DocLines::none());
+        assert_eq!(diags.len(), MAX_FILE_ERRORS);
+        assert!(
+            diags
+                .iter()
+                .all(|d| d.severity == Some(DiagnosticSeverity::ERROR) && d.code.is_none())
+        );
     }
 }
 

@@ -19,7 +19,7 @@ use crate::command_progress::{
 use crate::lines::DocLines;
 use crate::paths::{logical_path_from_uri, path_to_uri, uri_to_path_str};
 use crate::validate::{
-    make_prepared, parse_error_to_diagnostic, validate_parsed_with_indexes,
+    make_prepared, parse_errors_to_diagnostics, validate_parsed_with_indexes,
     validation_error_to_diagnostic,
 };
 
@@ -772,14 +772,7 @@ impl Backend {
                         Some(prepared) => validate_parsed_with_indexes(
                             &file.uri, parsed, prepared, &no_lines, track_uses,
                         ),
-                        None => (
-                            parsed
-                                .errors
-                                .iter()
-                                .map(|e| parse_error_to_diagnostic(e, &no_lines))
-                                .collect(),
-                            None,
-                        ),
+                        None => (parse_errors_to_diagnostics(&parsed.errors, &no_lines), None),
                     };
                     Some((
                         file.uri.clone(),
@@ -1172,11 +1165,7 @@ impl Backend {
                             registry_snap.as_ref(),
                             &lines,
                         ),
-                        None => ast
-                            .errors
-                            .iter()
-                            .map(|e| parse_error_to_diagnostic(e, &lines))
-                            .collect(),
+                        None => parse_errors_to_diagnostics(&ast.errors, &lines),
                     };
                     tracing::info!(
                         target: "cwtools::profile",

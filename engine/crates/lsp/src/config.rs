@@ -709,6 +709,9 @@ impl Backend {
                     &crate::lines::DocLines::none(),
                 ));
         }
+        for diags in diags_by_file.values_mut() {
+            crate::validate::truncate_diagnostics(diags, &crate::lines::DocLines::none());
+        }
         let mut to_publish: Vec<(String, Vec<Diagnostic>)> = diags_by_file.into_iter().collect();
         {
             let current: std::collections::HashSet<String> =
