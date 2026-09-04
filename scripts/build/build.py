@@ -144,8 +144,9 @@ def build_and_deploy_rust_server() -> None:
         dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def build_client() -> None:
-    run("npm", ["run", "compile:code"])
+def build_client(*, release: bool = False) -> None:
+    script = "compile:code:release" if release else "compile:code"
+    run("npm", ["run", script])
 
 
 def copy_package_inputs() -> None:
@@ -177,9 +178,9 @@ def clean_extension_dist() -> None:
     remove_tree(EXTENSION_DIST_ROOT)
 
 
-def assemble_client() -> None:
+def assemble_client(*, release: bool = False) -> None:
     copy_package_inputs()
-    build_client()
+    build_client(release=release)
     copy_docs()
     copy_webview_css()
     copy_test_samples()
@@ -385,6 +386,10 @@ def cmd_compile() -> None:
     assemble_client()
 
 
+def cmd_compile_release() -> None:
+    assemble_client(release=True)
+
+
 def cmd_quick() -> None:
     clean_extension_dist()
     assemble_client()
@@ -393,13 +398,14 @@ def cmd_quick() -> None:
 
 def cmd_package() -> None:
     clean_extension_dist()
-    assemble_client()
+    assemble_client(release=True)
     build_and_deploy_rust_server()
     set_release_version(resolve_version()["version"])
     package_vsix()
 
 
 def cmd_package_prebuilt() -> list[str]:
+    build_client(release=True)
     set_release_version(resolve_version()["version"])
     return package_all_vsixes()
 
@@ -475,6 +481,7 @@ def cmd_release() -> None:
 COMMANDS: dict[str, Callable[[], object]] = {
     "nightly-identity": cmd_nightly_identity,
     "compile": cmd_compile,
+    "compile-release": cmd_compile_release,
     "quick": cmd_quick,
     "package": cmd_package,
     "package-prebuilt": cmd_package_prebuilt,

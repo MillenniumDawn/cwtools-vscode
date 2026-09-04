@@ -111,7 +111,7 @@ jobs:
           path: artifacts/server
       - uses: ./.github/actions/setup-node-npm
       - name: Assemble extension
-        run: npm run compile
+        run: npm run compile:release
       - name: Stage binaries into dist/extension
         run: >-
           python3 scripts/stage_release_binaries.py

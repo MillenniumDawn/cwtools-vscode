@@ -700,4 +700,28 @@ suite("engine — rulesFetchCommands", () => {
 		assert.ok(!flat.includes("clone"), flat);
 		assert.ok(!flat.includes("pull"), flat);
 	});
+
+	test("rejects a ref that begins with -", () => {
+		assert.throws(
+			() =>
+				rulesFetchCommands(
+					"/cache/hoi4",
+					{ ...pin, ref: "--upload-pack=evil" },
+					null,
+				),
+			/must not begin with '-'/,
+		);
+	});
+
+	test("rejects a repo that begins with -", () => {
+		assert.throws(
+			() =>
+				rulesFetchCommands(
+					"/cache/hoi4",
+					{ ...pin, repo: "--upload-pack=evil" },
+					null,
+				),
+			/must not begin with '-'/,
+		);
+	});
 });

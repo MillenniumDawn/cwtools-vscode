@@ -10,6 +10,8 @@
   `persist-credentials: false`. (#574)
 * Opening a missing or invalid file from the files tree now shows an error that
   names the path. (#589)
+* Release bundles compile the `CWTOOLS_TEST_*` rules-fetch env overrides out of
+  the extension, and a git ref that begins with `-` is rejected. (#571)
 * Host tests now verify diagnostics reach the editor, including diagnostic codes,
   ranges, and a clean-file case. (#517)
 * The weekly rules-pin workflow runs npm and tests with read-only contents

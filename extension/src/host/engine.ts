@@ -232,6 +232,14 @@ export function rulesFetchCommands(
 	{ repo, ref }: RulesRepo,
 	currentHead: string | null,
 ): string[][] {
+	if (ref.startsWith("-")) {
+		throw new Error(`invalid rules git ref '${ref}' (must not begin with '-')`);
+	}
+	if (repo.startsWith("-")) {
+		throw new Error(
+			`invalid rules git repo '${repo}' (must not begin with '-')`,
+		);
+	}
 	if (currentHead === ref) return [];
 	const commands: string[][] = [];
 	if (currentHead === null) commands.push(["init", "--quiet", dir]);
