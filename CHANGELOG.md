@@ -7,6 +7,8 @@
 * The weekly rules-pin workflow runs npm and tests with read-only contents
   permissions before a separate write-enabled PR job. (#542)
 * Language server restarts now re-read live settings during initialization. (#566)
+* The diagnostics signature cache now retains a full 2,000-file workspace publish
+  pass, avoiding repeat diagnostics. (#567)
 * Development webview bundles now expose a development `process.env.NODE_ENV`.
   (#583)
 * Issue templates now request reproduction steps, environment details, rules
