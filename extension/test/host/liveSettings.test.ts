@@ -12,6 +12,7 @@ const settingsFile = path.join(
 	SAMPLE_ROOT,
 	"common/live_settings/cwtools_live_settings.txt",
 );
+const workspaceRulesFolder = ".cwtools-test-rules";
 const localisationPosition = new vscode.Position(1, 9);
 const ownerPosition = new vscode.Position(2, 2);
 
@@ -80,7 +81,13 @@ suite("Live settings", function () {
 	}
 
 	suiteSetup(async () => {
+		const cfg = cwtoolsConfig();
 		await activate();
+		assert.notStrictEqual(
+			cfg.get<string>("rules_folder"),
+			workspaceRulesFolder,
+			"workspace-supplied rules_folder should not be effective",
+		);
 		document = await vscode.workspace.openTextDocument(settingsFile);
 		await vscode.window.showTextDocument(document);
 		const ready = await waitForLanguageServer(document.uri);

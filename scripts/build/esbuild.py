@@ -46,6 +46,7 @@ def extension_args(*, watch: bool, release: bool = False) -> list[str]:
                 "--define:process.env.CWTOOLS_TEST_HOI4_REPO=undefined",
                 "--define:process.env.CWTOOLS_TEST_HOI4_REF=undefined",
                 "--define:process.env.CWTOOLS_TEST_RULES_MANIFEST_URL=undefined",
+                "--define:process.env.CWTOOLS_TEST_RULES_FOLDER=undefined",
             ]
         )
     if watch:

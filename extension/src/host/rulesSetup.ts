@@ -51,9 +51,9 @@ export async function resolveRulesCache(
 	await fsPromises.mkdir(cacheDir, { recursive: true });
 	const languageRulesCache = path.join(cacheDir, language);
 
-	const rawManualRules = workspace
-		.getConfiguration("cwtools")
-		.get<string>("rules_folder");
+	const rawManualRules =
+		process.env.CWTOOLS_TEST_RULES_FOLDER ??
+		workspace.getConfiguration("cwtools").get<string>("rules_folder");
 	const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath;
 	const manualRules = resolveRulesFolder(rawManualRules, { workspaceRoot });
 	const hasManualRules = !!(rawManualRules && rawManualRules.trim() !== "");

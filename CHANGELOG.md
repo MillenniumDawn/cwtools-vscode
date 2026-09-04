@@ -1,3 +1,15 @@
+### Unreleased
+
+#### Extension
+
+* `cwtools.rules_folder` is now application-scoped, so workspace settings
+  cannot redirect the rules folder. (#539)
+
+#### Engine
+
+* LSP authorization no longer lets a rules directory above a workspace
+  authorize files outside that workspace. (#539)
+
 ### 3.3.0
 
 #### Extension

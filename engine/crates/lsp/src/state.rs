@@ -141,15 +141,20 @@ impl Config {
             .iter()
             .filter_map(|root| std::fs::canonicalize(root).ok())
             .collect();
+        let vanilla = self
+            .vanilla_dir
+            .iter()
+            .filter_map(|root| std::fs::canonicalize(root).ok());
+        let rules = self
+            .rules_dir
+            .iter()
+            .filter_map(|root| std::fs::canonicalize(root).ok())
+            .filter(|root| !editable.iter().any(|workspace| workspace.starts_with(root)));
         self.authorized_roots = editable
             .iter()
             .cloned()
-            .chain(
-                self.vanilla_dir
-                    .iter()
-                    .chain(self.rules_dir.iter())
-                    .filter_map(|root| std::fs::canonicalize(root).ok()),
-            )
+            .chain(vanilla)
+            .chain(rules)
             .collect();
         self.editable_roots = editable.into();
     }
