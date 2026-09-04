@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { logError } from "./logger";
 import { confirmOpen } from "./trustedPaths";
 
 //#region Utilities
@@ -161,7 +162,7 @@ export class FileExplorer implements vscode.Disposable {
 		context.subscriptions.push(
 			vscode.commands.registerCommand(
 				"cwtools-files.openFile",
-				(resource: vscode.Uri) => void this.openResource(resource),
+				(resource: vscode.Uri) => this.openResource(resource),
 			),
 		);
 		context.subscriptions.push(
@@ -191,8 +192,16 @@ export class FileExplorer implements vscode.Disposable {
 	}
 
 	private async openResource(resource: vscode.Uri): Promise<void> {
-		if (await confirmOpen(resource)) {
+		try {
+			if (!(await confirmOpen(resource))) {
+				return;
+			}
 			await vscode.window.showTextDocument(resource);
+		} catch (err) {
+			logError(`Failed to open ${resource.fsPath}`, err);
+			void vscode.window.showErrorMessage(
+				vscode.l10n.t("CWTools: could not open {0}", resource.fsPath),
+			);
 		}
 	}
 
