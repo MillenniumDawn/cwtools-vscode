@@ -9,8 +9,10 @@ const {
 	createFileSystemWatcher,
 	disposable,
 	lastClientOptions,
+	configurationValues,
 } = vi.hoisted(() => {
 	const createdWatchers: { glob: string; dispose: () => void }[] = [];
+	const configurationValues = new Map<string, unknown>();
 	return {
 		createdWatchers,
 		createFileSystemWatcher: vi.fn((glob: string) => {
@@ -22,6 +24,7 @@ const {
 		lastClientOptions: {
 			value: undefined as LanguageClientOptions | undefined,
 		},
+		configurationValues,
 	};
 });
 
@@ -41,7 +44,9 @@ vi.mock("vscode", async (importOriginal) => ({
 	},
 	workspace: {
 		createFileSystemWatcher,
-		getConfiguration: () => ({ get: () => undefined }),
+		getConfiguration: () => ({
+			get: (key: string) => configurationValues.get(key),
+		}),
 		onDidChangeConfiguration: vi.fn(() => disposable),
 	},
 }));
@@ -96,7 +101,9 @@ const WATCHED: [path: string, watched: boolean][] = [
 	["music/track.ogg", false],
 ];
 
-function create(onStopped: () => void = () => {}): { context: ExtensionContext } {
+function create(onStopped: () => void = () => {}): {
+	context: ExtensionContext;
+} {
 	const context = { subscriptions: [] } as unknown as ExtensionContext;
 	createLanguageClient(
 		context,
@@ -120,6 +127,28 @@ suite("lspClient — watched files", () => {
 		createdWatchers.length = 0;
 		createFileSystemWatcher.mockClear();
 		lastClientOptions.value = undefined;
+		configurationValues.clear();
+	});
+
+	test("re-reads initialization settings for each client start", () => {
+		configurationValues.set("localisation.languages", ["English"]);
+		create();
+		const initializationOptions: unknown =
+			lastClientOptions.value?.initializationOptions;
+		assert.strictEqual(typeof initializationOptions, "function");
+		const first = (
+			initializationOptions as () => {
+				localisationLanguages: string[];
+			}
+		)();
+		configurationValues.set("localisation.languages", ["French"]);
+		const second = (
+			initializationOptions as () => {
+				localisationLanguages: string[];
+			}
+		)();
+		assert.deepStrictEqual(first.localisationLanguages, ["English"]);
+		assert.deepStrictEqual(second.localisationLanguages, ["French"]);
 	});
 
 	test("the globs match every file class the server indexes", () => {
@@ -159,8 +188,8 @@ suite("lspClient — watched files", () => {
 			forwarded.push(event.uri);
 			return Promise.resolve();
 		};
-		const middleware = lastClientOptions.value?.middleware?.workspace
-			?.didChangeWatchedFile;
+		const middleware =
+			lastClientOptions.value?.middleware?.workspace?.didChangeWatchedFile;
 		assert.ok(middleware, "no didChangeWatchedFile middleware");
 		for (const uri of [
 			"file:///mod/Changelog.txt",
@@ -180,6 +209,7 @@ suite("lspClient — watched files", () => {
 suite("lspClient — restart-limiting error handler", () => {
 	beforeEach(() => {
 		lastClientOptions.value = undefined;
+		configurationValues.clear();
 	});
 
 	test("restarts up to the limit, then stops and calls onStopped", async () => {
@@ -228,11 +258,19 @@ suite("lspClient — restart-limiting error handler", () => {
 		const boom = new Error("boom");
 		for (const count of [1, 2, 3]) {
 			const result = await errorHandler.error(boom, undefined, count);
-			assert.strictEqual(result.action, 1 /* ErrorAction.Continue */, `count ${count}`);
+			assert.strictEqual(
+				result.action,
+				1 /* ErrorAction.Continue */,
+				`count ${count}`,
+			);
 		}
 		for (const count of [0, 4, undefined]) {
 			const result = await errorHandler.error(boom, undefined, count);
-			assert.strictEqual(result.action, 2 /* ErrorAction.Shutdown */, `count ${count}`);
+			assert.strictEqual(
+				result.action,
+				2 /* ErrorAction.Shutdown */,
+				`count ${count}`,
+			);
 		}
 	});
 });
