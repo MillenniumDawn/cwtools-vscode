@@ -18,10 +18,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+    outputs:
+      changed: ${{ steps.pins.outputs.changed }}
+      summary: ${{ steps.pins.outputs.summary }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Bump the pins
         id: pins
         run: |
@@ -61,11 +65,41 @@ jobs:
         if: steps.pins.outputs.changed == 'true'
         timeout-minutes: 10
         run: npm run test:rules-sync
-      - name: Commit and open a PR
+      - name: Upload changed pins
         if: steps.pins.outputs.changed == 'true'
+        # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rules-pins
+          path: |
+            extension/src/host/games.ts
+            rules-pins.json
+          if-no-files-found: error
+          retention-days: 1
+
+  pr:
+    if: needs.bump.outputs.changed == 'true'
+    needs: bump
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download changed pins
+        # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rules-pins
+          path: .
+      - name: Commit and open a PR
         env:
           GH_TOKEN: ${{ github.token }}
-          RULES_SUMMARY: ${{ steps.pins.outputs.summary }}
+          RULES_SUMMARY: ${{ needs.bump.outputs.summary }}
         run: |
           pins=(extension/src/host/games.ts rules-pins.json)
           branch="rules-pins/$(date -u +%Y-%m-%d)"
@@ -74,6 +108,7 @@ jobs:
             '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -c "$branch"
           git commit -m 'chore: bump the pinned rules commits' -- "${pins[@]}"
+          gh auth setup-git
           git push origin "$branch"
           description='Weekly refresh of the reviewed rules manifest'
           description+=' by scripts/build/rules_pins.py.'
