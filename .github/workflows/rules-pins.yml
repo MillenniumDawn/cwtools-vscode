@@ -88,6 +88,8 @@ jobs:
     steps:
       # v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - name: Download changed pins
         # v4.3.0
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -106,6 +108,7 @@ jobs:
             '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -c "$branch"
           git commit -m 'chore: bump the pinned rules commits' -- "${pins[@]}"
+          gh auth setup-git
           git push origin "$branch"
           description='Weekly refresh of the reviewed rules manifest'
           description+=' by scripts/build/rules_pins.py.'
