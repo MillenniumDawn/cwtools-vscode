@@ -37,6 +37,28 @@ def has_binary(directory: Path, platform: str) -> bool:
     return (directory / platform / "cwtools-server").is_file()
 
 
+def test_rejects_flat_binary_without_changing_staged_tree(
+    staged: tuple[Path, Path],
+) -> None:
+    server_bin_dir, holding = staged
+    flat = server_bin_dir / "cwtools-server"
+    flat.write_text("quick-build", encoding="utf-8")
+    seen: list[str | None] = []
+
+    def package_one(platform: str | None) -> list[str]:
+        seen.append(platform)
+        return [platform or "universal"]
+
+    with pytest.raises(RuntimeError, match="flat server binaries: cwtools-server"):
+        run_platform_packaging(server_bin_dir, holding, PLATFORMS, package_one)
+
+    assert dirs_present(server_bin_dir) == PLATFORMS
+    assert all(has_binary(server_bin_dir, platform) for platform in PLATFORMS)
+    assert flat.read_text(encoding="utf-8") == "quick-build"
+    assert not holding.exists()
+    assert not seen
+
+
 @pytest.fixture(name="staged")
 def staged_fixture(tmp_path: Path) -> tuple[Path, Path]:
     server_bin_dir = tmp_path / "server" / "cwtools-server"

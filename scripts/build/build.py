@@ -221,6 +221,14 @@ def run_platform_packaging(
 ) -> list[str]:
     remove_tree(holding)
     holding.parent.mkdir(parents=True, exist_ok=True)
+    flat_files = sorted(
+        entry.name for entry in server_bin_dir.iterdir() if entry.is_file()
+    )
+    if platforms and flat_files:
+        carried = ", ".join(flat_files)
+        raise RuntimeError(
+            f"cannot package platform VSIXes with flat server binaries: {carried}"
+        )
     server_bin_dir.replace(holding)
 
     vsixes: list[str] = []

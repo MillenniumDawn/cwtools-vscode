@@ -121,6 +121,9 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
                 raise SystemExit(1)
             print(f"  {target}: {platform} only, OK")
             return platform, names
+        if "flat" in names:
+            gh_error(f"{vsix.name}: universal vsix carries a flat server binary")
+            raise SystemExit(1)
         carried = " ".join(sorted(names))
         print(f"  universal: [{carried}] OK")
         return None, names
