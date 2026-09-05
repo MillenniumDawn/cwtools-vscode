@@ -39,6 +39,11 @@
 * Graph webview file navigation is pinned by tests: relative paths are refused,
   outside-root paths wait for confirmation, and 1-based graph positions reveal
   the clamped 0-based range. (#664)
+* Host tests now drive the registered workspace command handlers and the
+  language client's executeCommand middleware against a fake client, pinning
+  the exact requests, capability gates, cancellation, success, and failure
+  behavior, and verify formatWorkspace returns through a real
+  workspace/applyEdit request. (#665)
 
 ### 3.3.0
 

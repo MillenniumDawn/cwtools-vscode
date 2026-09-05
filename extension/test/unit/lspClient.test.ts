@@ -1,6 +1,7 @@
 import * as assert from "assert";
 import { minimatch } from "minimatch";
 import { beforeEach, suite, test, vi } from "vitest";
+import { LSPErrorCodes } from "vscode-languageserver-protocol";
 import type { ExtensionContext } from "vscode";
 import type { LanguageClientOptions } from "vscode-languageclient/node";
 
@@ -9,10 +10,23 @@ const {
 	createFileSystemWatcher,
 	disposable,
 	lastClientOptions,
+	lastClient,
 	configurationValues,
+	requestType,
+	progressToken,
+	withProgress,
+	showInformationMessage,
+	showErrorMessage,
+	openTextDocument,
+	showTextDocument,
 } = vi.hoisted(() => {
 	const createdWatchers: { glob: string; dispose: () => void }[] = [];
 	const configurationValues = new Map<string, unknown>();
+	const lastClient: { value: unknown } = { value: undefined };
+	const progressToken = {
+		isCancellationRequested: false,
+		onCancellationRequested: () => ({ dispose: () => undefined }),
+	};
 	return {
 		createdWatchers,
 		createFileSystemWatcher: vi.fn((glob: string) => {
@@ -24,7 +38,23 @@ const {
 		lastClientOptions: {
 			value: undefined as LanguageClientOptions | undefined,
 		},
+		lastClient,
 		configurationValues,
+		requestType: {},
+		progressToken,
+		withProgress: vi.fn(
+			(
+				_options: unknown,
+				task: (
+					progress: { report: (value: unknown) => void },
+					token: unknown,
+				) => Promise<unknown>,
+			): Promise<unknown> => task({ report: () => undefined }, progressToken),
+		),
+		showInformationMessage: vi.fn(),
+		showErrorMessage: vi.fn(),
+		openTextDocument: vi.fn(),
+		showTextDocument: vi.fn(),
 	};
 });
 
@@ -39,8 +69,10 @@ vi.mock("vscode", async (importOriginal) => ({
 	},
 	window: {
 		createOutputChannel: () => ({ appendLine: () => {} }),
-		showErrorMessage: vi.fn(),
-		showInformationMessage: vi.fn(),
+		withProgress,
+		showInformationMessage,
+		showErrorMessage,
+		showTextDocument,
 	},
 	workspace: {
 		createFileSystemWatcher,
@@ -48,12 +80,13 @@ vi.mock("vscode", async (importOriginal) => ({
 			get: (key: string) => configurationValues.get(key),
 		}),
 		onDidChangeConfiguration: vi.fn(() => disposable),
+		openTextDocument,
 	},
 }));
 
 vi.mock("vscode-languageclient/node", () => ({
 	DidChangeConfigurationNotification: { type: {} },
-	ExecuteCommandRequest: { type: {} },
+	ExecuteCommandRequest: { type: requestType },
 	ErrorAction: { Continue: 1, Shutdown: 2 },
 	CloseAction: { DoNotRestart: 1, Restart: 2 },
 	LanguageClient: class {
@@ -64,6 +97,7 @@ vi.mock("vscode-languageclient/node", () => ({
 			options: LanguageClientOptions,
 		) {
 			lastClientOptions.value = options;
+			lastClient.value = this;
 		}
 
 		onDidChangeState(): { dispose: () => void } {
@@ -272,5 +306,327 @@ suite("lspClient — restart-limiting error handler", () => {
 				`count ${count}`,
 			);
 		}
+	});
+});
+
+suite("lspClient — executeCommand middleware", () => {
+	interface FakeClient {
+		initializeResult?: {
+			capabilities: {
+				executeCommandProvider?: {
+					commands: string[];
+					workDoneProgress?: boolean;
+				};
+			};
+		};
+		sendRequest: ReturnType<typeof vi.fn>;
+	}
+
+	type Middleware = NonNullable<
+		NonNullable<LanguageClientOptions["middleware"]>["executeCommand"]
+	>;
+
+	function serverCommands(
+		commands: string[],
+		workDoneProgress?: boolean,
+	): FakeClient["initializeResult"] {
+		return {
+			capabilities: {
+				executeCommandProvider: {
+					commands,
+					...(workDoneProgress ? { workDoneProgress: true } : {}),
+				},
+			},
+		};
+	}
+
+	// createLanguageClient hands its real LanguageClient instance to the
+	// middleware closure, so the fake client's sendRequest has to be set on
+	// that instance for the middleware's requests to reach the stub.
+	function middlewareSetup(): { middleware: Middleware; client: FakeClient } {
+		create();
+		const middleware = lastClientOptions.value?.middleware?.executeCommand;
+		assert.ok(middleware, "no executeCommand middleware");
+		const client = lastClient.value as FakeClient;
+		client.sendRequest = vi.fn().mockResolvedValue("");
+		return { middleware, client };
+	}
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		lastClientOptions.value = undefined;
+		configurationValues.clear();
+		progressToken.isCancellationRequested = false;
+	});
+
+	test("getGraphData sends the exact request with no workDoneToken and passes the graph through", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["getGraphData"], true);
+		const graphData = [{ id: "a" }];
+		client.sendRequest.mockResolvedValue(graphData);
+		const next = vi.fn();
+
+		const result: unknown = await middleware("getGraphData", ["idea", 3], next);
+
+		// The panel renders whatever it gets back, so the result must be the
+		// server's value, not a toast or an undefined.
+		assert.strictEqual(result, graphData);
+		assert.deepStrictEqual(client.sendRequest.mock.calls, [
+			[
+				requestType,
+				{ command: "getGraphData", arguments: ["idea", 3] },
+				progressToken,
+			],
+		]);
+		// The server has no graceful cancel for this command, so the request
+		// must not carry a token that would advertise one.
+		assert.strictEqual(
+			(client.sendRequest.mock.calls[0]?.[1] as { workDoneToken?: string })
+				.workDoneToken,
+			undefined,
+		);
+		assert.deepStrictEqual(withProgress.mock.calls[0]?.[0], {
+			location: 15,
+			title: "CWTools: Build graph",
+			cancellable: true,
+		});
+		assert.deepStrictEqual(next.mock.calls, []);
+	});
+
+	test("getGraphData failures reach the caller instead of becoming a toast", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["getGraphData"]);
+		const failure = new Error("server down");
+		client.sendRequest.mockRejectedValue(failure);
+		const next = vi.fn();
+
+		await assert.rejects(
+			async () => {
+				await middleware("getGraphData", ["idea", 3], next);
+			},
+			(err: unknown) => err === failure,
+		);
+		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		assert.deepStrictEqual(next.mock.calls, []);
+	});
+
+	test("genlocall opens each non-empty stub as an untitled document with a BOM", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["genlocall"]);
+		const stubs = [
+			{ content: 'KEY:0 "text"' },
+			{ content: "" },
+			"not-a-stub",
+			{ content: 'OTHER:0 "more"' },
+		];
+		client.sendRequest.mockResolvedValue(stubs);
+		openTextDocument.mockImplementation((options: { content: string }) =>
+			Promise.resolve({ content: options.content }),
+		);
+		const next = vi.fn();
+
+		const result: unknown = await middleware("genlocall", [], next);
+
+		assert.strictEqual(result, stubs);
+		// Paradox loc files need the UTF-8 BOM; a manual save keeps it.
+		assert.deepStrictEqual(openTextDocument.mock.calls, [
+			[
+				{
+					content: '\uFEFFKEY:0 "text"',
+					language: "paradox-localisation",
+				},
+			],
+			[
+				{
+					content: '\uFEFFOTHER:0 "more"',
+					language: "paradox-localisation",
+				},
+			],
+		]);
+		assert.deepStrictEqual(showTextDocument.mock.calls, [
+			[{ content: '\uFEFFKEY:0 "text"' }, { preview: false }],
+			[{ content: '\uFEFFOTHER:0 "more"' }, { preview: false }],
+		]);
+		assert.deepStrictEqual(next.mock.calls, []);
+	});
+
+	test("genlocall with no stubs reports that nothing was missing", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["genlocall"]);
+		client.sendRequest.mockResolvedValue([]);
+		const next = vi.fn();
+
+		const result: unknown = await middleware("genlocall", [], next);
+
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			["CWTools: no missing localisation found."],
+		]);
+		assert.deepStrictEqual(openTextDocument.mock.calls, []);
+		// The server's value still comes back; only the error/cancel paths
+		// collapse to undefined.
+		assert.deepStrictEqual(result, []);
+	});
+
+	test("genlocall cancellation is reported and yields no result", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["genlocall"]);
+		client.sendRequest.mockRejectedValue({
+			code: LSPErrorCodes.RequestCancelled,
+		});
+		const next = vi.fn();
+
+		const result: unknown = await middleware("genlocall", [], next);
+
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			["CWTools: genlocall cancelled."],
+		]);
+		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
+		assert.strictEqual(result, undefined);
+	});
+
+	test("genlocall failures show an error and yield no result", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["genlocall"]);
+		client.sendRequest.mockRejectedValue(new Error("boom"));
+		const next = vi.fn();
+
+		const result: unknown = await middleware("genlocall", [], next);
+
+		assert.deepStrictEqual(showErrorMessage.mock.calls, [
+			["CWTools: genlocall failed: boom"],
+		]);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		assert.strictEqual(result, undefined);
+	});
+
+	test("reindexWorkspace goes through the progress notification and shows the server's reply", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["reindexWorkspace"]);
+		client.sendRequest.mockResolvedValue("Workspace re-indexed.");
+		const next = vi.fn();
+
+		const result: unknown = await middleware("reindexWorkspace", [], next);
+
+		assert.strictEqual(result, "Workspace re-indexed.");
+		assert.deepStrictEqual(withProgress.mock.calls[0]?.[0], {
+			location: 15,
+			title: "CWTools: Re-index workspace",
+			cancellable: true,
+		});
+		assert.deepStrictEqual(client.sendRequest.mock.calls, [
+			[
+				requestType,
+				{ command: "reindexWorkspace", arguments: [] },
+				progressToken,
+			],
+		]);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			["CWTools: Workspace re-indexed."],
+		]);
+		assert.deepStrictEqual(next.mock.calls, []);
+	});
+
+	test("each known server command gets its progress title", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands([
+			"cacheVanilla",
+			"clearAllCaches",
+			"reloadrulesconfig",
+		]);
+		const next = vi.fn();
+
+		for (const command of [
+			"cacheVanilla",
+			"clearAllCaches",
+			"reloadrulesconfig",
+		]) {
+			await middleware(command, [], next);
+		}
+
+		assert.deepStrictEqual(
+			withProgress.mock.calls.map(
+				(call) => (call[0] as { title: string }).title,
+			),
+			[
+				"CWTools: Regenerate game vanilla cache file",
+				"CWTools: Clear all caches and reindex",
+				"CWTools: Reload config rules",
+			],
+		);
+	});
+
+	test("known commands without a string result show no toast", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["reindexWorkspace"]);
+		client.sendRequest.mockResolvedValue(undefined);
+		const next = vi.fn();
+
+		const result: unknown = await middleware("reindexWorkspace", [], next);
+
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		assert.strictEqual(result, undefined);
+	});
+
+	test("known commands report cancellation and yield no result", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["reindexWorkspace"]);
+		client.sendRequest.mockRejectedValue({
+			code: LSPErrorCodes.ServerCancelled,
+		});
+		const next = vi.fn();
+
+		const result: unknown = await middleware("reindexWorkspace", [], next);
+
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			["CWTools: reindexWorkspace cancelled."],
+		]);
+		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
+		assert.strictEqual(result, undefined);
+	});
+
+	test("known command failures show an error and yield no result", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["reindexWorkspace"]);
+		client.sendRequest.mockRejectedValue(new Error("boom"));
+		const next = vi.fn();
+
+		const result: unknown = await middleware("reindexWorkspace", [], next);
+
+		assert.deepStrictEqual(showErrorMessage.mock.calls, [
+			["CWTools: reindexWorkspace failed: boom"],
+		]);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		assert.strictEqual(result, undefined);
+	});
+
+	test("unknown commands are delegated untouched", async () => {
+		const { middleware, client } = middlewareSetup();
+		const next = vi.fn().mockResolvedValue("server says");
+
+		const result: unknown = await middleware(
+			"someOtherCommand",
+			[1, "a"],
+			next,
+		);
+
+		assert.strictEqual(result, "server says");
+		assert.deepStrictEqual(next.mock.calls, [["someOtherCommand", [1, "a"]]]);
+		assert.deepStrictEqual(withProgress.mock.calls, []);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
+		assert.deepStrictEqual(client.sendRequest.mock.calls, []);
+	});
+
+	test("server-advertised commands without a progress title are delegated too", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["getFileTypes"]);
+		const next = vi.fn().mockResolvedValue(["event"]);
+
+		const result: unknown = await middleware("getFileTypes", ["x"], next);
+
+		assert.deepStrictEqual(result, ["event"]);
+		assert.deepStrictEqual(next.mock.calls, [["getFileTypes", ["x"]]]);
+		assert.deepStrictEqual(withProgress.mock.calls, []);
 	});
 });
