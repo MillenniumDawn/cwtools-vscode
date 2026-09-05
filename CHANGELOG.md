@@ -44,6 +44,11 @@
   the exact requests, capability gates, cancellation, success, and failure
   behavior, and verify formatWorkspace returns through a real
   workspace/applyEdit request. (#665)
+#### Engine
+
+* Strict path matching (`path_strict`) now distinguishes the documented
+  `dlc/<id>/<pattern>` shape from unrelated relative parents, while absolute
+  logical paths keep the suffix fallback. (#666)
 
 ### 3.3.0
 
