@@ -11631,6 +11631,119 @@ fn test_format_workspace_applies_one_edit() {
 }
 
 #[test]
+fn test_format_workspace_emits_versioned_document_changes_when_supported() {
+    // A client advertising workspace.workspaceEdit.documentChanges gets
+    // TextDocumentEdits carrying versions: the open file at its buffer
+    // version, a closed file with null, and no legacy changes map. The
+    // startup scan finishes first so the didOpen publish below is the
+    // readiness signal that the versioned buffer is registered; a snapshot
+    // taken before it lands would silently fall back to disk (null version)
+    // and the test would fail instead of passing by luck of the scheduler.
+    let ws = tempfile::tempdir().unwrap();
+    let a = ws.path().join("common").join("a.txt");
+    std::fs::create_dir_all(a.parent().unwrap()).unwrap();
+    let a_text = "root={\n a=1\n}\n";
+    std::fs::write(&a, a_text).unwrap();
+    let b = ws.path().join("common").join("b.txt");
+    std::fs::write(&b, "other={\n b=2\n}\n").unwrap();
+    let a_uri = path_uri(&a);
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {
+                    "workspace": { "workspaceEdit": { "documentChanges": true } }
+                },
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    wait_for_scan_done(&mut reader);
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": a_uri,
+                    "languageId": "hoi4",
+                    "version": 7,
+                    "text": a_text,
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    wait_for_diagnostics(&mut reader, "a.txt");
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "formatWorkspace", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    let (resp_str, applied_edit) =
+        read_response_answering_apply_edit(&mut child, &mut reader).expect("no command response");
+    stop_server(&mut child);
+    let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
+    assert!(
+        resp["result"]
+            .as_str()
+            .is_some_and(|s| s.starts_with("Formatted ")),
+        "got: {resp_str}"
+    );
+    let edit = applied_edit.expect("the server must call workspace/applyEdit");
+    assert!(
+        edit.get("changes").is_none(),
+        "a documentChanges client must not get the legacy changes map, got: {edit}"
+    );
+    let doc_changes = edit["documentChanges"]
+        .as_array()
+        .unwrap_or_else(|| panic!("documentChanges must be present, got: {edit}"));
+    assert_eq!(doc_changes.len(), 2, "both files must be edited: {edit}");
+    let entry_for = |suffix: &str| {
+        doc_changes
+            .iter()
+            .find(|e| {
+                e["textDocument"]["uri"]
+                    .as_str()
+                    .is_some_and(|u| u.ends_with(suffix))
+            })
+            .unwrap_or_else(|| panic!("no documentChanges entry for {suffix}, got: {edit}"))
+    };
+    assert_eq!(
+        entry_for("a.txt")["textDocument"]["version"],
+        7,
+        "the open file must carry its buffer version, got: {edit}"
+    );
+    assert_eq!(
+        entry_for("b.txt")["textDocument"].get("version"),
+        Some(&serde_json::Value::Null),
+        "the closed file must carry a null version, got: {edit}"
+    );
+}
+
+#[test]
 fn test_range_formatting_leaves_unselected_statements() {
     let ws = tempfile::tempdir().unwrap();
     let p = ws.path().join("common").join("a.txt");
