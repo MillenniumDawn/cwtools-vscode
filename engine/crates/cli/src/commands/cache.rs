@@ -65,7 +65,11 @@ pub(super) fn vanilla(game: String, vanilla: PathBuf, rules: PathBuf, output: Pa
     println!("  Loaded {} types from rules", ruleset.types.len());
 
     let var_effects = cwtools_info::variable_defining_effects(&ruleset);
-    let index = index_game_dir(&vanilla, &ruleset, &rules_table, &var_effects);
+    let index =
+        index_game_dir(&vanilla, &ruleset, &rules_table, &var_effects).unwrap_or_else(|e| {
+            eprintln!("Error indexing vanilla {}: {}", vanilla.display(), e);
+            std::process::exit(1);
+        });
     // Loc keys + file paths + variable names ride along so a cache hit
     // also skips the loc walk and file-index walk over the install.
     let aux = cwtools_driver::build_vanilla_cache_aux(&vanilla, &index);

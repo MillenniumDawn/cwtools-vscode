@@ -359,12 +359,21 @@ pub(super) fn run(args: ValidateArgs) {
             } else {
                 index_game_dir(vanilla_dir, ruleset, rules_table, &var_effects)
             };
-            let aux = cwtools_driver::build_vanilla_cache_aux(vanilla_dir, &index);
-            match vanilla_cache::save(&index, &game, &fp_live, cache_path, aux) {
-                Ok(n) => note(format!("  Rebuilt vanilla cache with {} instances", n)),
+            match index {
+                Ok(index) => {
+                    let aux = cwtools_driver::build_vanilla_cache_aux(vanilla_dir, &index);
+                    match vanilla_cache::save(&index, &game, &fp_live, cache_path, aux) {
+                        Ok(n) => note(format!("  Rebuilt vanilla cache with {} instances", n)),
+                        Err(e) => eprintln!(
+                            "  warn: could not write rebuilt cache {}: {}",
+                            cache_path.display(),
+                            e
+                        ),
+                    }
+                }
                 Err(e) => eprintln!(
-                    "  warn: could not write rebuilt cache {}: {}",
-                    cache_path.display(),
+                    "  warn: could not rebuild vanilla cache from {}: {}",
+                    vanilla_dir.display(),
                     e
                 ),
             }

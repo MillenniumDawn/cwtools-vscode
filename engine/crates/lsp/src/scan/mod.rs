@@ -835,7 +835,7 @@ mod tests {
         std::fs::write(foos.join("a.txt"), "foo_one = { }\nfoo_two = { }\n").unwrap();
 
         let table = StringTable::new();
-        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4");
+        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4").unwrap();
 
         let names: Vec<&str> = per_type
             .get("foo")
@@ -855,7 +855,7 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let table = StringTable::new();
 
-        let (first, _) = index_vanilla_dir(&root, &rs, &table, Some(cache.path()), "hoi4");
+        let (first, _) = index_vanilla_dir(&root, &rs, &table, Some(cache.path()), "hoi4").unwrap();
         assert!(first.get("foo").is_some_and(|entries| !entries.is_empty()));
 
         let namespace = std::fs::read_dir(cache.path().join("parse-cache"))
@@ -871,7 +871,8 @@ mod tests {
                 .any(|entry| entry.path().extension().is_some_and(|ext| ext == "cwb"))
         );
 
-        let (second, _) = index_vanilla_dir(&root, &rs, &table, Some(cache.path()), "hoi4");
+        let (second, _) =
+            index_vanilla_dir(&root, &rs, &table, Some(cache.path()), "hoi4").unwrap();
         assert!(second.get("foo").is_some_and(|entries| !entries.is_empty()));
     }
 
@@ -889,7 +890,7 @@ mod tests {
         .unwrap();
 
         let table = StringTable::new();
-        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4");
+        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4").unwrap();
 
         let names: Vec<&str> = per_type
             .get("foo")
@@ -920,7 +921,7 @@ mod tests {
         std::fs::create_dir_all(root.join("other")).unwrap();
 
         let table = StringTable::new();
-        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4");
+        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4").unwrap();
         assert!(
             per_type.is_empty(),
             "no matching path should yield an empty index, got: {:?}",
@@ -939,7 +940,7 @@ mod tests {
         std::fs::write(foos.join("bad.txt"), "}\n").unwrap();
 
         let table = StringTable::new();
-        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4");
+        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4").unwrap();
 
         let entries = per_type.get("foo").cloned().unwrap_or_default();
         let names: Vec<&str> = entries.iter().map(|(_, i)| i.name.as_str()).collect();
@@ -967,7 +968,7 @@ mod tests {
         std::fs::write(foos.join("a.txt"), "foo_one = { }\n").unwrap();
 
         let table = StringTable::new();
-        let (_per_type, aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4");
+        let (_per_type, aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4").unwrap();
         let logical = aux
             .file_paths
             .iter()
@@ -1025,7 +1026,7 @@ mod tests {
         std::fs::write(sibling.join("b.txt"), "foo_two = { }\n").unwrap();
 
         let table = StringTable::new();
-        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4");
+        let (per_type, _aux) = index_vanilla_dir(&root, &rs, &table, None, "hoi4").unwrap();
 
         let names: Vec<&str> = per_type
             .get("foo")

@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use tower_lsp::lsp_types::*;
 
+use cwtools_file_manager::file_manager::FileError;
 use cwtools_localization::Lang;
 use cwtools_rules::rules_types::RuleSet;
 
@@ -20,10 +21,13 @@ pub(crate) fn index_vanilla_dir(
     table: &cwtools_string_table::string_table::StringTable,
     parse_cache_dir: Option<&std::path::Path>,
     game: &str,
-) -> (
-    HashMap<String, Vec<(Arc<str>, cwtools_info::TypeInstance)>>,
-    cwtools_info::vanilla_cache::VanillaCacheAux,
-) {
+) -> Result<
+    (
+        HashMap<String, Vec<(Arc<str>, cwtools_info::TypeInstance)>>,
+        cwtools_info::vanilla_cache::VanillaCacheAux,
+    ),
+    FileError,
+> {
     let var_effects = cwtools_info::variable_defining_effects(ruleset);
     let index = match parse_cache_dir {
         Some(cache_dir) => cwtools_driver::index_game_dir_with_parse_cache(
@@ -35,10 +39,10 @@ pub(crate) fn index_vanilla_dir(
             game,
         ),
         None => cwtools_driver::index_game_dir(dir, ruleset, table, &var_effects),
-    };
+    }?;
     let aux = cwtools_driver::build_vanilla_cache_aux(dir, &index);
     let per_type = index.map.into_iter().collect();
-    (per_type, aux)
+    Ok((per_type, aux))
 }
 
 pub(crate) struct VanillaLoc {
@@ -344,7 +348,20 @@ impl Backend {
         })
         .await;
         let (per_type, aux) = match join_result {
-            Ok(result) => result,
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
+                self.client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!(
+                            "Vanilla indexing failed for {} — base-game references will not resolve. Error: {}",
+                            dir.display(),
+                            e
+                        ),
+                    )
+                    .await;
+                return;
+            }
             Err(e) => {
                 self.client
                     .log_message(

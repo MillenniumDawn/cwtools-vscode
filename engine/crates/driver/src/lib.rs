@@ -552,9 +552,19 @@ impl Session {
             }
         }
 
-        let has_vanilla_data = vanilla.is_some() || vanilla_cache.is_some();
+        let missing_vanilla = vanilla.as_ref().filter(|dir| !dir.is_dir()).cloned();
+        let mut vanilla_discovery_failed = false;
+        let mut has_vanilla_data = vanilla_cache.is_some();
         let mut cached_loc_keys: Option<Vec<(String, Vec<String>)>> = None;
         if let Some(cache) = vanilla_cache {
+            if let Some(vanilla_dir) = &missing_vanilla {
+                vanilla_discovery_failed = true;
+                eprintln!(
+                    "error: discovery failed for vanilla {}: {}",
+                    vanilla_dir.display(),
+                    FileError::MissingRoot(vanilla_dir.clone())
+                );
+            }
             type_index.merge_base_game_with_uris(cache.per_type);
             let aux = cache.aux;
             for n in &aux.var_names {
@@ -583,7 +593,9 @@ impl Session {
                 .set_vanilla_names(aux.scripted_gui_names);
             cached_loc_keys = Some(aux.loc_keys);
         } else if let Some(vanilla_dir) = &vanilla {
-            let vanilla_index = if let Some(parse_cache_dir) = &vanilla_parse_cache_dir
+            let vanilla_index = if let Some(missing_vanilla) = &missing_vanilla {
+                Err(FileError::MissingRoot(missing_vanilla.clone()))
+            } else if let Some(parse_cache_dir) = &vanilla_parse_cache_dir
                 && !force_vanilla_rebuild
             {
                 index_game_dir_with_parse_cache(
@@ -597,54 +609,68 @@ impl Session {
             } else {
                 index_game_dir(vanilla_dir, &ruleset, &rules_table, &var_effects)
             };
-            if let Some((path, fingerprint)) = &cache_write_target {
-                let aux = build_vanilla_cache_aux(vanilla_dir, &vanilla_index);
-                match write_vanilla_cache(&vanilla_index, &game_id, fingerprint, path, aux) {
-                    Ok(n) => eprintln!(
-                        "  Cached {} base-game instances to {} ({})",
-                        n,
-                        path.display(),
-                        fingerprint
-                    ),
-                    Err(e) => eprintln!(
-                        "  warn: could not write base-game cache {}: {}",
-                        path.display(),
-                        e
-                    ),
+            match vanilla_index {
+                Ok(vanilla_index) => {
+                    has_vanilla_data = true;
+                    if let Some((path, fingerprint)) = &cache_write_target {
+                        let aux = build_vanilla_cache_aux(vanilla_dir, &vanilla_index);
+                        match write_vanilla_cache(&vanilla_index, &game_id, fingerprint, path, aux)
+                        {
+                            Ok(n) => eprintln!(
+                                "  Cached {} base-game instances to {} ({})",
+                                n,
+                                path.display(),
+                                fingerprint
+                            ),
+                            Err(e) => eprintln!(
+                                "  warn: could not write base-game cache {}: {}",
+                                path.display(),
+                                e
+                            ),
+                        }
+                    }
+                    type_index.var_index.merge(&vanilla_index.var_index);
+                    type_index.scripted_loc_index.set_vanilla_names(
+                        vanilla_index
+                            .scripted_loc_index
+                            .names()
+                            .map(str::to_string)
+                            .collect(),
+                    );
+                    type_index.scripted_gui_index.set_vanilla_names(
+                        vanilla_index
+                            .scripted_gui_index
+                            .names()
+                            .map(str::to_string)
+                            .collect(),
+                    );
+                    for (type_name, entries) in vanilla_index.map {
+                        let per_type = HashMap::from([(
+                            type_name,
+                            entries.into_iter().map(|(_, inst)| inst).collect(),
+                        )]);
+                        type_index.merge_base_game("<vanilla>", per_type);
+                    }
+                    type_index.file_index = build_file_index(
+                        &directory,
+                        ignore_files,
+                        ignore_dirs,
+                        VanillaFiles::Install(vanilla_dir),
+                        case_sensitive_files,
+                    );
+                }
+                Err(error) => {
+                    vanilla_discovery_failed = true;
+                    eprintln!(
+                        "error: discovery failed for vanilla {}: {}",
+                        vanilla_dir.display(),
+                        error
+                    );
                 }
             }
-            type_index.var_index.merge(&vanilla_index.var_index);
-            type_index.scripted_loc_index.set_vanilla_names(
-                vanilla_index
-                    .scripted_loc_index
-                    .names()
-                    .map(str::to_string)
-                    .collect(),
-            );
-            type_index.scripted_gui_index.set_vanilla_names(
-                vanilla_index
-                    .scripted_gui_index
-                    .names()
-                    .map(str::to_string)
-                    .collect(),
-            );
-            for (type_name, entries) in vanilla_index.map {
-                let per_type = HashMap::from([(
-                    type_name,
-                    entries.into_iter().map(|(_, inst)| inst).collect(),
-                )]);
-                type_index.merge_base_game("<vanilla>", per_type);
-            }
-            type_index.file_index = build_file_index(
-                &directory,
-                ignore_files,
-                ignore_dirs,
-                VanillaFiles::Install(vanilla_dir),
-                case_sensitive_files,
-            );
         }
 
-        if has_vanilla_data {
+        if has_vanilla_data && !vanilla_discovery_failed {
             type_index.complete = true;
         }
 
@@ -692,7 +718,7 @@ impl Session {
             directory,
             parse_cache,
         }
-        .with_source_files(source_files, discovery_failed)
+        .with_source_files(source_files, discovery_failed || vanilla_discovery_failed)
     }
 
     fn with_source_files(self, files: Vec<SourceFile>, discovery_failed: bool) -> SessionWithFiles {
@@ -1215,7 +1241,7 @@ pub fn index_game_dir(
     ruleset: &RuleSet,
     table: &StringTable,
     var_effects: &HashSet<String>,
-) -> TypeIndex {
+) -> Result<TypeIndex, FileError> {
     index_game_dir_with_cache(dir, ruleset, table, var_effects, None)
 }
 
@@ -1226,7 +1252,7 @@ pub fn index_game_dir_with_parse_cache(
     var_effects: &HashSet<String>,
     cache_dir: &Path,
     game: &str,
-) -> TypeIndex {
+) -> Result<TypeIndex, FileError> {
     let cache = open_parse_cache(cache_dir, game, dir);
     index_game_dir_with_cache(dir, ruleset, table, var_effects, cache.as_ref())
 }
@@ -1237,33 +1263,28 @@ fn index_game_dir_with_cache(
     table: &StringTable,
     var_effects: &HashSet<String>,
     cache: Option<&ParseCache>,
-) -> TypeIndex {
+) -> Result<TypeIndex, FileError> {
     let mut config = search_config_for(dir);
     apply_config_folders(&mut config, &ruleset.folders);
     let mut mgr = FileManager::with_string_table(config, table.clone());
     let files = if let Some(cache) = cache {
-        match mgr.discover_files() {
-            Ok(files) => parse_discovered_files_for_index(files, table, cache, &mgr.config),
-            Err(_) => return TypeIndex::new(),
-        }
+        let files = mgr.discover_files()?;
+        parse_discovered_files_for_index(files, table, cache, &mgr.config)
     } else {
-        match mgr.discover_and_parse() {
-            Ok(files) => files,
-            Err(_) => return TypeIndex::new(),
-        }
+        mgr.discover_and_parse()?
     };
     if let Some(cache) = cache
         && cache.wrote.swap(false, Ordering::Relaxed)
     {
         workspace_cache::prune(&cache.dir, cache.fingerprint);
     }
-    index_discovered_files(
+    Ok(index_discovered_files(
         files,
         ruleset,
         table,
         Some(var_effects),
         Some(cwtools_validation::subtype_membership_for_instance),
-    )
+    ))
 }
 
 pub(crate) fn apply_config_folders(config: &mut FileManagerConfig, folders: &[String]) {
