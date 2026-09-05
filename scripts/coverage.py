@@ -158,7 +158,19 @@ def write_summary(lcov: Path, dest: Path, repo_root: Path, workspace: Path) -> N
     dest.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
 
+def reset_coverage_outputs(coverage_dir: Path) -> tuple[Path, Path]:
+    # Drop prior reports so a failure leaves no stale summary behind (#662).
+    coverage_dir.mkdir(parents=True, exist_ok=True)
+    lcov = coverage_dir / "lcov.info"
+    summary = coverage_dir / "coverage-summary.json"
+    lcov.unlink(missing_ok=True)
+    summary.unlink(missing_ok=True)
+    return lcov, summary
+
+
 def main() -> int:
+    workspace = Path(os.environ.get("CWTOOLS_RS") or (REPO_ROOT / "engine"))
+    lcov, summary = reset_coverage_outputs(workspace / "target" / "coverage")
     if shutil.which("cargo-llvm-cov") is None:
         print(
             "cargo-llvm-cov is required. Install it with: cargo install cargo-llvm-cov",
@@ -166,14 +178,9 @@ def main() -> int:
         )
         return 1
 
-    workspace = Path(os.environ.get("CWTOOLS_RS") or (REPO_ROOT / "engine"))
-    coverage_dir = workspace / "target" / "coverage"
-    coverage_dir.mkdir(parents=True, exist_ok=True)
-
+    # Floor sits just under the measured baseline; CI pins the same value.
+    threshold = os.environ.get("COVERAGE_THRESHOLD", "91.5")
     ignore = r"(crates/lsp/src/main\.rs|crates/cli/src/main\.rs)"
-    threshold = os.environ.get("COVERAGE_THRESHOLD", "85")
-    lcov = coverage_dir / "lcov.info"
-    summary = coverage_dir / "coverage-summary.json"
 
     first = subprocess.run(
         [
@@ -192,10 +199,15 @@ def main() -> int:
         cwd=workspace,
         check=False,
     )
-    if lcov.is_file():
-        write_summary(lcov, summary, REPO_ROOT, workspace)
     if first.returncode != 0:
         return first.returncode
+    if not lcov.is_file():
+        print(
+            f"cargo llvm-cov did not produce {lcov} despite exit 0",
+            file=sys.stderr,
+        )
+        return 1
+    write_summary(lcov, summary, REPO_ROOT, workspace)
 
     second = subprocess.run(
         [

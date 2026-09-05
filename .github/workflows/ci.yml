@@ -384,11 +384,10 @@ jobs:
           cargo +nightly-2026-07-24 fuzz run parse_loc_text
           fuzz/seeds/parse_loc_text -- -runs=0
 
-  # Coverage is a hard target, but this path starts with a 85% line floor so
-  # we can see which gaps remain before making it a required gate. The
-  # report step is continue-on-error, so this job reports the number without
-  # failing the run on it; the lcov artifact is the record. The rendered
-  # comment is the coverage-report job, next to the client numbers.
+  # Coverage is a hard target: the lcov step has `--fail-under-lines`
+  # attached so a Rust-side regression fails the gate, and the report step
+  # renders the coverage numbers without gating. The lcov artifact is the
+  # record. The coverage-report job renders the comment.
   coverage-rs:
     if: github.event_name != 'schedule'
     name: Rust coverage
@@ -408,11 +407,10 @@ jobs:
           cache-prefix: cargo-coverage-target
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked --version 0.8.7
-      - name: Run coverage (85% line floor)
+      - name: Run coverage (91.5% line floor)
         env:
-          COVERAGE_THRESHOLD: 85
+          COVERAGE_THRESHOLD: 91.5
         run: python3 ../scripts/coverage.py
-        continue-on-error: true
       - name: Upload rust coverage
         # v7.0.1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
