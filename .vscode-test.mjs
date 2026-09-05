@@ -4,7 +4,7 @@
 //   unit        fast suites that need the VS Code API but not the language server
 //   smoke       unit + activation, in the sample workspace
 //   live        the live-settings suite, in sample-live (its own workspace
-//               because .vscode/settings.json pins rules_folder)
+//               because .vscode/settings.json attempts to set rules_folder)
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
 //               (see below; its own CI step, not part of test:smoke)
 //   host        full suite excl. live (slower, see below)
@@ -50,6 +50,10 @@ const rulesSyncWorkspace = "./extension/test/workspaces/hoi4";
 const sampleFile = "./extension/test/workspaces/stellaris/events/irm.txt";
 const liveSampleFile = "./extension/test/workspaces/live/events/irm.txt";
 const rulesSyncSampleFile = "./extension/test/workspaces/hoi4/events/irm.txt";
+const liveRulesFolder = path.resolve(
+	import.meta.dirname,
+	"extension/test/workspaces/live/.cwtools-test-rules",
+);
 const hoi4RulesFixture = path.resolve(
 	import.meta.dirname,
 	"extension/test/fixtures/hoi4-rules.git",
@@ -73,11 +77,11 @@ const smokeFiles = [
 	"./dist/extension/bin/client/test/host/extension.test.js",
 	deactivateFile,
 ];
-// Live-settings fixture is isolated: its .vscode/settings.json pins
-// cwtools.rules_folder to .cwtools-test-rules, which replaces the ruleset.
-// Running it in the shared sample workspace would pollute the host/unit
-// suites (they expect the generic paradox ruleset), so it lives in
-// extension/test/workspaces/live with its own workspace.
+// Live-settings fixture is isolated: its .vscode/settings.json attempts to set
+// cwtools.rules_folder to .cwtools-test-rules, while the test environment
+// supplies the absolute fixture path before activation. Running it in the
+// shared sample workspace would pollute the host/unit suites (they expect the
+// generic paradox ruleset), so it lives in extension/test/workspaces/live.
 const liveFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/liveSettings.test.js",
@@ -155,6 +159,9 @@ export default defineConfig({
 				disableCrashReporter,
 				...headless,
 			],
+			env: {
+				CWTOOLS_TEST_RULES_FOLDER: liveRulesFolder,
+			},
 		},
 		{
 			...base,

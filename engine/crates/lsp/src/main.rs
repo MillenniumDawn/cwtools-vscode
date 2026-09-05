@@ -1176,6 +1176,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn refresh_roots_does_not_authorize_a_rules_ancestor_of_the_workspace() {
+        let parent = tempfile::TempDir::new().expect("parent");
+        let workspace = parent.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let vanilla = tempfile::TempDir::new().expect("vanilla");
+        let outside = parent.path().join("outside.txt");
+        std::fs::write(&outside, "not in the workspace\n").expect("outside");
+        let canonical = |path: &std::path::Path| std::fs::canonicalize(path).expect("canonical");
+
+        let mut cfg = Config::new();
+        cfg.workspace_roots = vec![workspace.clone()];
+        cfg.vanilla_dir = Some(vanilla.path().to_path_buf());
+        cfg.rules_dir = Some(parent.path().to_path_buf());
+        cfg.refresh_roots();
+
+        assert_eq!(cfg.editable_roots.as_ref(), [canonical(&workspace)]);
+        assert!(cfg.authorized_roots.contains(&canonical(&workspace)));
+        assert!(cfg.authorized_roots.contains(&canonical(vanilla.path())));
+        assert!(!cfg.authorized_roots.contains(&canonical(parent.path())));
+        let outside_uri = Url::from_file_path(&outside).expect("file URI").to_string();
+        assert_eq!(
+            crate::access::authorized_path(&outside_uri, &cfg.authorized_roots),
+            None
+        );
+    }
+
     fn document(text: &str) -> ParsedDoc {
         ParsedDoc {
             version: 1,

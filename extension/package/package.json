@@ -238,7 +238,7 @@
         "order": 1,
         "properties": {
           "cwtools.rules_folder": {
-            "scope": "window",
+            "scope": "application",
             "type": "string",
             "markdownDescription": "%configuration.cwtools.rules_folder.description%"
           }

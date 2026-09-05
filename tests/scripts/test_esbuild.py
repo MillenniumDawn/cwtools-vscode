@@ -28,6 +28,7 @@ TEST_ENV_DEFINES = (
     "--define:process.env.CWTOOLS_TEST_HOI4_REPO=undefined",
     "--define:process.env.CWTOOLS_TEST_HOI4_REF=undefined",
     "--define:process.env.CWTOOLS_TEST_RULES_MANIFEST_URL=undefined",
+    "--define:process.env.CWTOOLS_TEST_RULES_FOLDER=undefined",
 )
 
 
@@ -151,7 +152,7 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
 
     source = tmp_path / "repo.ts"
     source.write_text(
-        'export const repo = process.env.CWTOOLS_TEST_HOI4_REPO || "https://ok.example";\n',
+        'export const repo = process.env.CWTOOLS_TEST_RULES_FOLDER ?? "https://ok.example";\n',
         encoding="utf-8",
     )
     dropped = tmp_path / "dropped.js"
@@ -162,7 +163,7 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
         [
             *common,
             f"--outfile={dropped}",
-            "--define:process.env.CWTOOLS_TEST_HOI4_REPO=undefined",
+            "--define:process.env.CWTOOLS_TEST_RULES_FOLDER=undefined",
         ],
         check=False,
         capture_output=True,
