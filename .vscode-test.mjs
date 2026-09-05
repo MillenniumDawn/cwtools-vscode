@@ -99,6 +99,7 @@ const hostFiles = [
 	"./dist/extension/bin/client/test/host/hover.test.js",
 	"./dist/extension/bin/client/test/host/completion.test.js",
 	"./dist/extension/bin/client/test/host/codeLens.test.js",
+	"./dist/extension/bin/client/test/host/commands.test.js",
 	deactivateFile,
 ];
 
