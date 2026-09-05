@@ -297,6 +297,26 @@ mod tests {
     #[tokio::test]
     async fn an_aborted_code_lens_refresh_survives_the_clients_reply() {
         use futures_util::{SinkExt, StreamExt};
+        use tower::Service;
+        use tower_lsp::jsonrpc;
+        use tower_lsp::lsp_types::{InitializeParams, InitializeResult};
+
+        // tower-lsp suppresses every server→client message until the service
+        // has answered an `initialize` request, so without a handshake the
+        // refresh never reaches the socket. Only the inbound half is stubbed:
+        // driving `initialize` through the real `Backend` would put its own
+        // client requests on the socket ahead of the refresh.
+        struct Handshake;
+        #[tower_lsp::async_trait]
+        impl LanguageServer for Handshake {
+            async fn initialize(&self, _: InitializeParams) -> jsonrpc::Result<InitializeResult> {
+                Ok(InitializeResult::default())
+            }
+
+            async fn shutdown(&self) -> jsonrpc::Result<()> {
+                Ok(())
+            }
+        }
 
         let state = Arc::new(DocumentState::new());
         state
@@ -304,14 +324,27 @@ mod tests {
             .store(true, Ordering::Relaxed);
         let captured = Arc::new(Mutex::new(None));
         let slot = captured.clone();
-        let st = state.clone();
-        let (_service, mut socket) = LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: st.clone(),
-            }
+        let (mut service, mut socket) = LspService::new(move |client| {
+            *slot.lock() = Some(client);
+            Handshake
         });
+        std::future::poll_fn(|cx| service.poll_ready(cx))
+            .await
+            .expect("the service must accept the handshake");
+        let handshake = service
+            .call(
+                jsonrpc::Request::build("initialize")
+                    .params(serde_json::json!({ "capabilities": {} }))
+                    .id(1_i64)
+                    .finish(),
+            )
+            .await
+            .expect("initialize must route");
+        assert!(
+            handshake.is_some_and(|res| res.is_ok()),
+            "tower-lsp suppresses server-to-client requests until the handshake succeeds"
+        );
+
         let backend = Backend {
             client: captured.lock().take().expect("client"),
             state,
