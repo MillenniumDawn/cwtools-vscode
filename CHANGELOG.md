@@ -10,6 +10,9 @@
 
 * A crashed language server is now restarted through the existing restart
   budget instead of being stopped permanently on the first broken pipe. (#675)
+* The workspace-command gating host tests wait for the initial scan instead of
+  racing server startup, and report the notification text and the client's
+  state when one does fail. (#675)
 
 #### Extension
 

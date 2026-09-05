@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import {
 	activate,
 	graphPanelModule,
+	waitForServerReady,
 	waitUntil,
 	EXTENSION_ID,
 	SAMPLE_ROOT,
@@ -124,6 +125,17 @@ suite(`Debug Integration Test: `, function () {
 				`pinned server should advertise fixAllWorkspace, got: ${advertised.join(", ")}`,
 			);
 
+			// activate() returns while the server is still indexing, and a
+			// command sent into that window comes back as a transport rejection
+			// rather than a result: the test failed exactly once in CI that way,
+			// having passed twice earlier in the same job against a settled
+			// server (#675). Gate on the scan the way every other suite that
+			// talks to the server does.
+			assert.ok(
+				await waitForServerReady(api),
+				`server never finished its initial scan, last status: ${api.serverStatusText()}`,
+			);
+
 			const sandbox = sinon.createSandbox();
 			const warn = sandbox.stub(vscode.window, "showWarningMessage");
 			const err = sandbox.stub(vscode.window, "showErrorMessage");
@@ -140,10 +152,20 @@ suite(`Debug Integration Test: `, function () {
 				false,
 				`unexpected upgrade warning: ${warnings.join(" | ")}`,
 			);
-			assert.strictEqual(
-				err.called,
-				false,
-				"no raw protocol error should be surfaced",
+			// deepStrictEqual, not `err.called === false`: the boolean form
+			// reports "true !== false" and drops the one thing that says why.
+			const errors = err.getCalls().map((c) => String(c.args[0]));
+			assert.deepStrictEqual(
+				errors,
+				[],
+				`no raw protocol error should be surfaced (status: ${api.serverStatusText()})`,
+			);
+			// A crashed server is restarted silently now (#675), so nothing else
+			// here would notice one. initializeResult is cleared while the client
+			// is not Running, which makes the advertised list the crash probe.
+			assert.ok(
+				api.serverCommands().includes("fixAllWorkspace"),
+				"the client left Running during the command; the server crashed and restarted",
 			);
 		});
 	});
@@ -158,6 +180,12 @@ suite(`Debug Integration Test: `, function () {
 			assert.ok(
 				advertised.includes("formatWorkspace"),
 				`pinned server should advertise formatWorkspace, got: ${advertised.join(", ")}`,
+			);
+
+			// Same startup race as the fixAllWorkspace gate above.
+			assert.ok(
+				await waitForServerReady(api),
+				`server never finished its initial scan, last status: ${api.serverStatusText()}`,
 			);
 
 			const sandbox = sinon.createSandbox();
@@ -176,10 +204,15 @@ suite(`Debug Integration Test: `, function () {
 				false,
 				`unexpected upgrade warning: ${warnings.join(" | ")}`,
 			);
-			assert.strictEqual(
-				err.called,
-				false,
-				"no raw protocol error should be surfaced",
+			const errors = err.getCalls().map((c) => String(c.args[0]));
+			assert.deepStrictEqual(
+				errors,
+				[],
+				`no raw protocol error should be surfaced (status: ${api.serverStatusText()})`,
+			);
+			assert.ok(
+				api.serverCommands().includes("formatWorkspace"),
+				"the client left Running during the command; the server crashed and restarted",
 			);
 		});
 	});
@@ -234,15 +267,10 @@ suite("Restart command and status bar", function () {
 		);
 	});
 
-	// The literal English text is safe here: the downloaded test VS Code
-	// build ships no language packs, so l10n always resolves English.
 	test("the status item settles on the ready text once the initial scan finishes", async function () {
 		const api = await activate();
 		assert.ok(api, "activation API should be exposed");
-		const ready = await waitUntil(
-			() => api.serverStatusText() === "CWTools: ready",
-			45_000,
-		);
+		const ready = await waitForServerReady(api);
 		assert.ok(
 			ready,
 			`status item should settle to ready, last seen: ${api.serverStatusText()}`,
