@@ -11,6 +11,10 @@
   authorize files outside that workspace. (#539)
 * Platform packaging now rejects a flat server binary when staging a universal
   VSIX. (#549)
+#### Engine
+
+* The CLI restores Unix's default SIGPIPE handling, so closed output pipes no
+  longer cause a broken-pipe panic. (#498)
 
 ### 3.3.0
 

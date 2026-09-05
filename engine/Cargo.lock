@@ -389,6 +389,7 @@ dependencies = [
  "cwtools_rules",
  "cwtools_string_table",
  "cwtools_validation",
+ "libc",
  "predicates",
  "serde",
  "serde_json",

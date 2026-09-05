@@ -10,6 +10,12 @@ mod run;
 mod scope;
 
 fn main() {
+    #[cfg(unix)]
+    // SAFETY: restoring SIGPIPE only changes this process's signal disposition.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     // Quiet by default; set RUST_LOG or CWTOOLS_PROFILE to turn on logging /
     // profiling. See PROFILING.md and `cwtools_profiling`.
     cwtools_profiling::init_tracing();

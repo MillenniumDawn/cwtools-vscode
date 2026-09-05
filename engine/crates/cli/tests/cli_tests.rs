@@ -1,6 +1,14 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::process::{Command as ProcessCommand, Stdio};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -155,6 +163,27 @@ fn test_completions_unknown_shell_fails() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("tcsh"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_closed_stdout_does_not_panic() {
+    let (read_peer, write_peer) = UnixStream::pair().unwrap();
+    drop(read_peer);
+    let write_peer: OwnedFd = write_peer.into();
+
+    let mut command = ProcessCommand::new(env!("CARGO_BIN_EXE_cwtools"));
+    command
+        .arg("list-codes")
+        .env("RUST_LOG", "")
+        .stdout(Stdio::from(write_peer));
+    let status = command.spawn().unwrap().wait().unwrap();
+
+    assert_eq!(
+        status.signal(),
+        Some(libc::SIGPIPE),
+        "unexpected exit status: {status:?}"
+    );
 }
 
 // ── Parse ────────────────────────────────────────────────────────────────────
