@@ -19,6 +19,11 @@
 
 * Whole-file formatting now replaces saturated columns through the end of
   long final lines. (#553)
+#### Engine
+
+* LSP: removing a multi-root primary promotes and rescans the first
+  surviving root; removing the final root still clears workspace state.
+  (#661)
 
 ### 3.3.0
 

@@ -164,6 +164,28 @@ fn folders_to_paths(uris: &[String]) -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+/// The primary after a folder change (#661): a surviving primary stays put,
+/// otherwise an added folder wins, else the first surviving root is promoted.
+fn replacement_primary(
+    current: Option<&str>,
+    removed: &[String],
+    added: &[String],
+    surviving_roots: &[std::path::PathBuf],
+) -> Option<String> {
+    let primary_survives = match current {
+        Some(uri) => !removed.iter().any(|r| r == uri),
+        None => false,
+    };
+    if primary_survives {
+        return current.map(str::to_string);
+    }
+    added.first().cloned().or_else(|| {
+        surviving_roots
+            .first()
+            .map(|p| crate::paths::path_to_uri(p))
+    })
+}
+
 fn locale_tag(params: &InitializeParams) -> Option<&str> {
     params.locale.as_deref().or_else(|| {
         params
@@ -833,42 +855,48 @@ impl Backend {
             .iter()
             .map(|f| crate::paths::canonical_uri(f.uri.as_str()))
             .collect();
-        let current = self.state.config.read().workspace_uri.clone();
-        let current = current.as_deref().map(str::to_string);
+        let removed_paths = folders_to_paths(&removed);
+        let added_paths = folders_to_paths(&added);
 
-        let next = match &current {
-            Some(uri) if removed.iter().any(|r| r == uri) => added.first().cloned(),
-            None => added.first().cloned(),
-            _ => current.clone(),
-        };
-        if next != current {
-            match &next {
-                Some(uri) => {
-                    let mut cfg = self.state.config.write();
-                    cfg.workspace_prefix = Some(crate::paths::workspace_prefix_of(uri));
-                    cfg.workspace_uri = Some(uri.as_str().into());
-                }
-                None => {
-                    let mut cfg = self.state.config.write();
-                    cfg.workspace_prefix = None;
-                    cfg.workspace_uri = None;
-                }
-            }
-        }
-        {
-            let removed_paths = folders_to_paths(&removed);
+        // Derive roots and primary under one write lock so concurrent
+        // unordered notifications each apply as one transaction (#661).
+        let next = {
             let mut cfg = self.state.config.write();
-            cfg.workspace_roots.retain(|r| !removed_paths.contains(r));
-            for path in folders_to_paths(&added) {
-                if !cfg.workspace_roots.contains(&path) {
-                    cfg.workspace_roots.push(path);
+            let current = cfg.workspace_uri.as_deref().map(str::to_string);
+            let surviving_roots = {
+                let mut roots: Vec<std::path::PathBuf> = cfg
+                    .workspace_roots
+                    .iter()
+                    .filter(|r| !removed_paths.contains(r))
+                    .cloned()
+                    .collect();
+                for path in &added_paths {
+                    if !roots.contains(path) {
+                        roots.push(path.clone());
+                    }
+                }
+                roots
+            };
+            let next = replacement_primary(current.as_deref(), &removed, &added, &surviving_roots);
+            if next != current {
+                match &next {
+                    Some(uri) => {
+                        cfg.workspace_prefix = Some(crate::paths::workspace_prefix_of(uri));
+                        cfg.workspace_uri = Some(uri.as_str().into());
+                    }
+                    None => {
+                        cfg.workspace_prefix = None;
+                        cfg.workspace_uri = None;
+                    }
                 }
             }
+            cfg.workspace_roots = surviving_roots;
             cfg.refresh_roots();
             self.state
                 .workspace_roots_generation
                 .fetch_add(1, Ordering::Release);
-        }
+            next
+        };
         let open_uris: Vec<String> = {
             let documents = self.state.documents.lock();
             documents.keys().cloned().collect()
@@ -1677,6 +1705,56 @@ mod tests {
         };
         let paths = folders_to_paths(&[file_uri.to_string()]);
         assert_eq!(paths.len(), 1);
+    }
+
+    #[test]
+    fn replacement_primary_promotes_a_surviving_root_when_the_primary_is_removed() {
+        // Fixtures use the same URI→path→URI round trip as production.
+        let uri = |name: &str| {
+            if cfg!(windows) {
+                format!("file:///C:/{name}")
+            } else {
+                format!("file:///{name}")
+            }
+        };
+        let (a, b, c) = (uri("ws-a"), uri("ws-b"), uri("ws-c"));
+        let roots = folders_to_paths(&[a.clone(), b.clone()]);
+        assert_eq!(roots.len(), 2);
+        let only_b = roots[1..].to_vec();
+        let only_a = roots[..1].to_vec();
+
+        // Removal-only: the surviving root becomes the primary (#661).
+        assert_eq!(
+            replacement_primary(Some(&a), std::slice::from_ref(&a), &[], &only_b),
+            Some(b.clone())
+        );
+        // An added folder in the same event still wins over the survivors.
+        assert_eq!(
+            replacement_primary(
+                Some(&a),
+                std::slice::from_ref(&a),
+                std::slice::from_ref(&c),
+                &only_b
+            ),
+            Some(c.clone())
+        );
+        // Removing a folder that is not the primary leaves the primary alone.
+        assert_eq!(
+            replacement_primary(Some(&a), std::slice::from_ref(&b), &[], &only_a),
+            Some(a.clone())
+        );
+        // Removing every root leaves no primary, so the rescan is skipped.
+        assert_eq!(
+            replacement_primary(Some(&a), std::slice::from_ref(&a), &[], &[]),
+            None
+        );
+        // No primary to begin with, nothing arrives, nothing survives.
+        assert_eq!(replacement_primary(None, &[], &[], &[]), None);
+        // No primary to begin with, a folder arrives: it becomes the primary.
+        assert_eq!(
+            replacement_primary(None, &[], std::slice::from_ref(&c), &[]),
+            Some(c)
+        );
     }
 
     #[test]
