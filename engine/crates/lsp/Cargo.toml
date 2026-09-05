@@ -38,4 +38,7 @@ rustc-hash = { workspace = true }
 [dev-dependencies]
 assert_cmd = { workspace = true }
 tempfile = { workspace = true }
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
+futures-util = { version = "0.3", default-features = false, features = [
+    "std",
+    "sink",
+] }

@@ -143,14 +143,20 @@ impl Backend {
         {
             return;
         }
-        let _ = self.client.semantic_tokens_refresh().await;
+        let client = self.client.clone();
+        let refresh = async move { client.semantic_tokens_refresh().await };
+        let _ = crate::scan::detached_client_request(refresh).await;
     }
 
     pub(crate) async fn request_code_lens_refresh(&self) {
         if !self.state.code_lens_refresh_support.load(Ordering::Relaxed) {
             return;
         }
-        let _ = self.client.code_lens_refresh().await;
+        // The debounced validation that ends here is aborted by the next edit,
+        // so the request has to outlive it (#675).
+        let client = self.client.clone();
+        let refresh = async move { client.code_lens_refresh().await };
+        let _ = crate::scan::detached_client_request(refresh).await;
     }
 
     pub(crate) async fn on_did_focus_file(&self, _params: Value) {

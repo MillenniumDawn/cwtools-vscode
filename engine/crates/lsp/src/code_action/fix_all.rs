@@ -221,21 +221,29 @@ impl Backend {
             .workspace_edit_document_changes
             .load(std::sync::atomic::Ordering::Relaxed);
         let edit = workspace_edit_for_snapshots(changes, &current, document_changes);
-        match self.client.apply_edit(edit).await {
-            Ok(resp) if resp.applied => fix_all_workspace_summary(
+        // The reply has to outlive this handler: tower-lsp panics when a
+        // server→client request future is dropped before the client answers
+        // (#675), and executeCommand handlers are cancellable.
+        let client = self.client.clone();
+        let applied =
+            crate::scan::detached_client_request(async move { client.apply_edit(edit).await })
+                .await;
+        match applied {
+            Some(Ok(resp)) if resp.applied => fix_all_workspace_summary(
                 edits_applied,
                 files_changed,
                 skipped_stale,
                 skipped_overlapping,
                 refused,
             ),
-            Ok(resp) => format!(
+            Some(Ok(resp)) => format!(
                 "The client rejected the workspace edit{}.",
                 resp.failure_reason
                     .map(|r| format!(": {r}"))
                     .unwrap_or_default()
             ),
-            Err(e) => format!("The client rejected the workspace edit: {e}"),
+            Some(Err(e)) => format!("The client rejected the workspace edit: {e}"),
+            None => "The client rejected the workspace edit.".to_string(),
         }
     }
 }

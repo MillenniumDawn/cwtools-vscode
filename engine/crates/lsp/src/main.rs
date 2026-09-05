@@ -288,6 +288,61 @@ mod tests {
         assert!(state.documents.lock().is_empty());
     }
 
+    /// tower-lsp holds a pending slot per server→client request and `expect`s
+    /// the receiver to still be there when the client answers, so dropping the
+    /// future that awaits the reply panics the whole server. Every edit aborts
+    /// the previous debounced validation, and that validation ends on
+    /// `code_lens_refresh` — so typing used to be enough to kill the process
+    /// (#675). The reply must land safely even after the abort.
+    #[tokio::test]
+    async fn an_aborted_code_lens_refresh_survives_the_clients_reply() {
+        use futures_util::{SinkExt, StreamExt};
+
+        let state = Arc::new(DocumentState::new());
+        state
+            .code_lens_refresh_support
+            .store(true, Ordering::Relaxed);
+        let captured = Arc::new(Mutex::new(None));
+        let slot = captured.clone();
+        let st = state.clone();
+        let (_service, mut socket) = LspService::new(move |client| {
+            *slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: st.clone(),
+            }
+        });
+        let backend = Backend {
+            client: captured.lock().take().expect("client"),
+            state,
+        };
+
+        let refresh = tokio::spawn(async move { backend.request_code_lens_refresh().await });
+        let request = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .expect("server never asked the client to refresh code lenses")
+            .expect("socket closed");
+        assert_eq!(request.method(), "workspace/codeLens/refresh");
+        let id = request
+            .id()
+            .expect("refresh is a request, not a notification")
+            .clone();
+
+        refresh.abort();
+        assert!(
+            refresh.await.unwrap_err().is_cancelled(),
+            "the refresh task must be cancelled while the reply is still pending"
+        );
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            socket.send(tower_lsp::jsonrpc::Response::from_ok(id, Value::Null)),
+        )
+        .await
+        .expect("routing the reply stalled")
+        .expect("the reply must route without panicking the server");
+    }
+
     #[test]
     fn document_state_configures_two_validation_permits() {
         let state = DocumentState::new();

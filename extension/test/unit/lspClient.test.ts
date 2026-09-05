@@ -285,12 +285,15 @@ suite("lspClient — restart-limiting error handler", () => {
 		}
 	});
 
-	test("transport errors continue three times, then shut down", async () => {
+	// Shutdown stops the client, and the library skips the close handler for a
+	// stopping client — so shutting down on an uncounted error meant a single
+	// server panic was never restarted (#675).
+	test("a dead pipe defers to the close handler, repeated failures shut down", async () => {
 		create();
 		const errorHandler = lastClientOptions.value?.errorHandler;
 		assert.ok(errorHandler, "no errorHandler set on clientOptions");
 		const boom = new Error("boom");
-		for (const count of [1, 2, 3]) {
+		for (const count of [undefined, 0, 1, 2, 3]) {
 			const result = await errorHandler.error(boom, undefined, count);
 			assert.strictEqual(
 				result.action,
@@ -298,7 +301,7 @@ suite("lspClient — restart-limiting error handler", () => {
 				`count ${count}`,
 			);
 		}
-		for (const count of [0, 4, undefined]) {
+		for (const count of [4, 5]) {
 			const result = await errorHandler.error(boom, undefined, count);
 			assert.strictEqual(
 				result.action,
