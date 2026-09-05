@@ -49,6 +49,13 @@
 * Strict path matching (`path_strict`) now distinguishes the documented
   `dlc/<id>/<pattern>` shape from unrelated relative parents, while absolute
   logical paths keep the suffix fallback. (#666)
+#### Engine
+
+* The rules feature test now asserts bounded variable/value field parsing
+  through `ast_to_ruleset` with mandatory matches, covering every bounded form
+  in `field_parser` (variable/value/scope-marker/int/float) and exact
+  `is_int`/`is_32bit`/`min`/`max` values including `-inf`/`inf`, zero,
+  negative, and off-by-one neighboring finite bounds. (#667)
 
 ### 3.3.0
 
