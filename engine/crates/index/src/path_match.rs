@@ -36,30 +36,58 @@ pub fn path_contains_segment(haystack: &str, needle: &str) -> bool {
 }
 
 /// The one per-pattern directory test shared by the indexer (`check_path_dir`)
-/// and the validator (`find_type_by_path_and_key`).
-/// `path_strict` means the file sits DIRECTLY in the pattern directory: the dir
-/// must equal the pattern or end with `/<pattern>` (so base-game content nested
-/// under `dlc/<id>/…` still matches). Non-strict allows the pattern anywhere as
-/// a whole segment run. Both inputs must be lowercased, '/'-separated, with no
+/// and the validator (`find_type_by_path_and_key`). `path_strict` means the
+/// file sits DIRECTLY in the pattern directory: the dir must equal the pattern,
+/// be the documented logical DLC shape `dlc/<nonempty-id>/<pattern>` (so
+/// base-game content nested under `dlc/<id>/…` still matches, while e.g.
+/// `not_dlc/<pattern>` does not), or be an absolute dir whose suffix is
+/// `/<pattern>` at a segment boundary — the fallback for LSP logical paths
+/// carrying no workspace prefix. Non-strict allows the pattern anywhere as a
+/// whole segment run. Both inputs must be lowercased, '/'-separated, with no
 /// trailing slash.
 pub fn dir_matches_pattern(dir_lower: &str, pat_lower: &str, strict: bool) -> bool {
     if strict {
-        dir_lower == pat_lower
-            || (dir_lower.len() > pat_lower.len()
+        if dir_lower == pat_lower {
+            return true;
+        }
+        if is_absolute_normalized(dir_lower) {
+            // Suffix is `/<pattern>` at a segment boundary.
+            return dir_lower.len() > pat_lower.len()
                 && dir_lower.ends_with(pat_lower)
-                && dir_lower.as_bytes()[dir_lower.len() - pat_lower.len() - 1] == b'/')
+                && dir_lower.as_bytes()[dir_lower.len() - pat_lower.len() - 1] == b'/';
+        }
+        // Relative dirs: only the documented DLC wrapper may prefix the pattern.
+        let Some(rest) = dir_lower.strip_prefix("dlc/") else {
+            return false;
+        };
+        match rest.split_once('/') {
+            Some((id, tail)) => !id.is_empty() && tail == pat_lower,
+            None => false,
+        }
     } else {
         path_contains_segment(dir_lower, pat_lower)
     }
 }
 
+/// Host-independent absolute test for normalized dirs: a leading `/` covers
+/// POSIX and UNC, `x:/` is a Windows drive letter. `Path::is_absolute` would
+/// flip meaning between hosts, so it must not be used here.
+fn is_absolute_normalized(dir_lower: &str) -> bool {
+    if dir_lower.starts_with('/') {
+        return true;
+    }
+    let b = dir_lower.as_bytes();
+    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'/'
+}
+
 /// Returns true when `logical_path` (e.g. `"events/my_events.txt"`) is covered
-/// by `path_options`. The directory must equal the pattern when `path_strict`,
-/// else contain it as a path segment (so base-game content nested under
-/// `dlc/<id>/…` is indexed by the same type that validates it).
-///
-/// Also enforces `path_file` (exact filename match) and `path_extension` (extension
-/// match), mirroring the validator's `find_type_by_path_and_key` behaviour.
+/// by `path_options`. The directory must equal the pattern when `path_strict`
+/// (or sit in the logical `dlc/<id>/<pattern>` shape, or be an absolute dir
+/// ending in the pattern — the fallback for LSP logical paths with no
+/// workspace prefix), else contain it as a path segment (so base-game content
+/// nested under `dlc/<id>/…` is indexed by the same type that validates it).
+/// Also enforces `path_file` (exact filename match) and `path_extension`
+/// (extension match), mirroring the validator's `find_type_by_path_and_key`.
 pub fn check_path_dir(opts: &PathOptions, logical_path: &str) -> bool {
     check_path_dir_norm(opts, &NormalizedPath::new(logical_path))
 }
@@ -152,4 +180,93 @@ pub fn check_path_dir_norm(opts: &PathOptions, np: &NormalizedPath) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cwtools_rules::rules_types::{RuleSet, TypeDefinition};
+
+    /// A strict `common/foo` PathOptions, either raw (paths only, no reindex)
+    /// or reindexed (paths_lower populated via `RuleSet::reindex`).
+    fn strict_opts(reindexed: bool) -> PathOptions {
+        let mut rs = RuleSet::new();
+        rs.types.push(TypeDefinition {
+            name: "foo".to_string(),
+            name_field: None,
+            path_options: PathOptions {
+                paths: vec!["common/foo".to_string()],
+                path_strict: true,
+                ..Default::default()
+            },
+            subtypes: Vec::new(),
+            type_key_filter: None,
+            skip_root_key: Vec::new(),
+            starts_with: None,
+            type_per_file: false,
+            key_prefix: None,
+            warning_only: false,
+            unique: false,
+            should_be_referenced: false,
+            localisation: Vec::new(),
+            graph_related_types: Vec::new(),
+            modifiers: Vec::new(),
+        });
+        if reindexed {
+            rs.reindex();
+        }
+        rs.types[0].path_options.clone()
+    }
+
+    /// (logical_path, expected) for strict `common/foo`. The negative cases pin
+    /// the segment boundary: a nested subdir, a non-DLC prefix, a non-segment
+    /// prefix, and an off-by-one sibling must all be rejected. Relative dirs
+    /// accept only the exact pattern or the documented `dlc/<id>/<pattern>`
+    /// shape; absolute dirs (POSIX/UNC `/…`, Windows `c:/…` — the LSP fallback
+    /// when no workspace prefix applies) keep the pre-existing suffix match,
+    /// which is why the absolute `not_dlc/…` row is still accepted.
+    const CASES: &[(&str, bool)] = &[
+        ("common/foo/00_foo.txt", true),
+        ("dlc/dlc022/common/foo/00_foo.txt", true),
+        ("dlc//common/foo/00_foo.txt", false),
+        ("/home/user/mod/common/foo/00_foo.txt", true),
+        ("//server/share/common/foo/00_foo.txt", true),
+        ("C:/Users/mod/common/foo/00_foo.txt", true),
+        ("/home/user/mod/not_dlc/common/foo/00_foo.txt", true),
+        ("common/foo/subdir/00_foo.txt", false),
+        ("dlc/dlc022/common/foo/subdir/00_foo.txt", false),
+        ("not_dlc/common/foo/00_foo.txt", false),
+        ("not_common/foo/00_foo.txt", false),
+        ("common/foo2/00_foo.txt", false),
+        ("/home/user/mod/common/foo2/00_foo.txt", false),
+    ];
+
+    #[test]
+    fn strict_matching_raw_path_options() {
+        let opts = strict_opts(false);
+        assert!(
+            opts.paths_lower.is_empty(),
+            "raw opts must hit the fallback branch"
+        );
+        for &(path, expected) in CASES {
+            assert_eq!(
+                check_path_dir(&opts, path),
+                expected,
+                "raw strict match for {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_matching_reindexed_path_options() {
+        let opts = strict_opts(true);
+        assert_eq!(opts.paths_lower, vec!["common/foo".to_string()]);
+        for &(path, expected) in CASES {
+            assert_eq!(
+                check_path_dir(&opts, path),
+                expected,
+                "reindexed strict match for {path:?}"
+            );
+        }
+    }
 }
