@@ -30,6 +30,12 @@
   and removes stale summaries on failed runs. (#662)
 * Node and extension-host coverage now enforce per-metric floors to catch
   regressions. (#526)
+#### Engine
+
+* LSP: formatWorkspace to a client that advertises
+  `workspace.workspaceEdit.documentChanges` now has integration coverage
+  asserting the open file's exact version, `null` for closed files, and no
+  legacy `changes` map. (#663)
 
 ### 3.3.0
 
