@@ -1,5 +1,19 @@
 ### Unreleased
 
+#### Engine
+
+* Server-to-client requests now outlive the task that issued them, so a
+  debounced validation aborted by the next keystroke no longer panics the
+  server with `receiver already dropped` when the editor answers. (#675)
+
+#### Extension
+
+* A crashed language server is now restarted through the existing restart
+  budget instead of being stopped permanently on the first broken pipe. (#675)
+* The workspace-command gating host tests wait for the initial scan instead of
+  racing server startup, and report the notification text and the client's
+  state when one does fail. (#675)
+
 #### Extension
 
 * `cwtools.rules_folder` is now application-scoped, so workspace settings

@@ -232,14 +232,17 @@ impl Backend {
                 if !open_stream {
                     return;
                 }
-                if self
-                    .client
-                    .send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
-                        token: token.clone(),
-                    })
-                    .await
-                    .is_err()
-                {
+                let client = self.client.clone();
+                let create_token = token.clone();
+                let created = detached_client_request(async move {
+                    client
+                        .send_request::<WorkDoneProgressCreate>(WorkDoneProgressCreateParams {
+                            token: create_token,
+                        })
+                        .await
+                })
+                .await;
+                if !matches!(created, Some(Ok(()))) {
                     return;
                 }
                 WorkDoneProgress::Begin(WorkDoneProgressBegin {
@@ -286,6 +289,23 @@ impl Backend {
         drop(rules);
         self.bump_info_revision();
     }
+}
+
+/// tower-lsp 0.20 keeps a pending slot per server→client request and `expect`s
+/// the oneshot receiver to still be alive when the reply lands
+/// (`service/client/pending.rs`). Dropping the future that awaits the reply
+/// leaves the slot behind, so the client's answer panics the whole process
+/// (#675) — and `spawn_debounced_validate` aborts the previous validation on
+/// every keystroke. Running the request on its own task moves the receiver out
+/// of the abortable future: dropping a `JoinHandle` detaches, it does not
+/// cancel, so the reply still finds a live receiver. Awaiting the handle keeps
+/// the caller's ordering and return value; `None` means the task panicked.
+pub(crate) async fn detached_client_request<T, F>(fut: F) -> Option<T>
+where
+    F: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::spawn(fut).await.ok()
 }
 
 /// it (#155). `context` names the task in the log line. Returns whether `fut`

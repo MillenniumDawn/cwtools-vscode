@@ -146,8 +146,17 @@ function createRestartLimitingErrorHandler(
 	const maxRestartCount = 4;
 	const restarts: number[] = [];
 	return {
+		// Deliberately unlike DefaultErrorHandler, which shuts down whenever
+		// count is undefined. Shutdown calls client.stop(), which puts the client
+		// in Stopping — and the library skips the close handler entirely for a
+		// stopping client, falling back to a bare DoNotRestart. A crashed server
+		// surfaces as an uncounted transport error (the pipe broke), so that
+		// branch turned every server panic into a permanent stop on the very
+		// first occurrence and the restart budget below never applied (#675).
+		// Defer to closed() instead; it owns that budget. Repeated failures on a
+		// still-open connection are the one case worth giving up on outright.
 		error: (_error, _message, count) =>
-			count !== undefined && count > 0 && count <= 3
+			count === undefined || count <= 3
 				? { action: ErrorAction.Continue }
 				: { action: ErrorAction.Shutdown },
 		closed: () => {

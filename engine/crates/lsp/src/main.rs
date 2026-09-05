@@ -288,6 +288,94 @@ mod tests {
         assert!(state.documents.lock().is_empty());
     }
 
+    /// tower-lsp holds a pending slot per server→client request and `expect`s
+    /// the receiver to still be there when the client answers, so dropping the
+    /// future that awaits the reply panics the whole server. Every edit aborts
+    /// the previous debounced validation, and that validation ends on
+    /// `code_lens_refresh` — so typing used to be enough to kill the process
+    /// (#675). The reply must land safely even after the abort.
+    #[tokio::test]
+    async fn an_aborted_code_lens_refresh_survives_the_clients_reply() {
+        use futures_util::{SinkExt, StreamExt};
+        use tower::Service;
+        use tower_lsp::jsonrpc;
+        use tower_lsp::lsp_types::{InitializeParams, InitializeResult};
+
+        // tower-lsp suppresses every server→client message until the service
+        // has answered an `initialize` request, so without a handshake the
+        // refresh never reaches the socket. Only the inbound half is stubbed:
+        // driving `initialize` through the real `Backend` would put its own
+        // client requests on the socket ahead of the refresh.
+        struct Handshake;
+        #[tower_lsp::async_trait]
+        impl LanguageServer for Handshake {
+            async fn initialize(&self, _: InitializeParams) -> jsonrpc::Result<InitializeResult> {
+                Ok(InitializeResult::default())
+            }
+
+            async fn shutdown(&self) -> jsonrpc::Result<()> {
+                Ok(())
+            }
+        }
+
+        let state = Arc::new(DocumentState::new());
+        state
+            .code_lens_refresh_support
+            .store(true, Ordering::Relaxed);
+        let captured = Arc::new(Mutex::new(None));
+        let slot = captured.clone();
+        let (mut service, mut socket) = LspService::new(move |client| {
+            *slot.lock() = Some(client);
+            Handshake
+        });
+        std::future::poll_fn(|cx| service.poll_ready(cx))
+            .await
+            .expect("the service must accept the handshake");
+        let handshake = service
+            .call(
+                jsonrpc::Request::build("initialize")
+                    .params(serde_json::json!({ "capabilities": {} }))
+                    .id(1_i64)
+                    .finish(),
+            )
+            .await
+            .expect("initialize must route");
+        assert!(
+            handshake.is_some_and(|res| res.is_ok()),
+            "tower-lsp suppresses server-to-client requests until the handshake succeeds"
+        );
+
+        let backend = Backend {
+            client: captured.lock().take().expect("client"),
+            state,
+        };
+
+        let refresh = tokio::spawn(async move { backend.request_code_lens_refresh().await });
+        let request = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .expect("server never asked the client to refresh code lenses")
+            .expect("socket closed");
+        assert_eq!(request.method(), "workspace/codeLens/refresh");
+        let id = request
+            .id()
+            .expect("refresh is a request, not a notification")
+            .clone();
+
+        refresh.abort();
+        assert!(
+            refresh.await.unwrap_err().is_cancelled(),
+            "the refresh task must be cancelled while the reply is still pending"
+        );
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            socket.send(tower_lsp::jsonrpc::Response::from_ok(id, Value::Null)),
+        )
+        .await
+        .expect("routing the reply stalled")
+        .expect("the reply must route without panicking the server");
+    }
+
     #[test]
     fn document_state_configures_two_validation_permits() {
         let state = DocumentState::new();

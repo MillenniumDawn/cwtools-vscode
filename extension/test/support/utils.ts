@@ -175,3 +175,20 @@ export async function waitForLanguageServer(
 		return hovers !== undefined;
 	}, timeoutMs);
 }
+
+/**
+ * Wait until the status item says the initial scan finished.
+ *
+ * activate() only means client.start() returned; the server is still indexing
+ * behind it. Anything that sends the server a workspace command wants this,
+ * not just activation.
+ *
+ * The literal English text is safe: the downloaded test VS Code build ships no
+ * language packs, so l10n always resolves English.
+ */
+export async function waitForServerReady(
+	api: CwtoolsApi,
+	timeoutMs = 45_000,
+): Promise<boolean> {
+	return waitUntil(() => api.serverStatusText() === "CWTools: ready", timeoutMs);
+}
