@@ -90,10 +90,12 @@ suite("graph panel restore", () => {
 		subscriptions: [],
 	} as unknown as ExtensionContext;
 	const client: {
+		isRunning: () => boolean;
 		initializeResult: {
 			capabilities: { executeCommandProvider: { commands: string[] } };
 		};
 	} = {
+		isRunning: () => true,
 		initializeResult: {
 			capabilities: {
 				executeCommandProvider: { commands: [GRAPH_DATA_COMMAND] },

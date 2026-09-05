@@ -30,6 +30,7 @@ let defaultClient: LanguageClient;
 let rulesCacheRoot: string | undefined;
 // The status item's text getter, once registerServerNotifications has run.
 let statusText: (() => string | undefined) | undefined;
+let notifyStopped: (() => void) | undefined;
 
 // What activate() hands back to other extensions and to the host tests. The
 // tests can't import graphPanel.ts directly: the extension host runs the
@@ -116,11 +117,10 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		// registerServerNotifications (below) owns markStopped, but the
 		// errorHandler that calls it has to be in clientOptions before the
 		// client exists, so this holder lets the client be created first.
-		const stopped: { notify?: () => void } = {};
 		const client = createLanguageClient(
 			context,
 			{ language, serverExe, cacheDir, rulesCache },
-			() => stopped.notify?.(),
+			() => notifyStopped?.(),
 		);
 		defaultClient = client;
 		client.registerProposedFeatures();
@@ -129,7 +129,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		const notifications = registerServerNotifications(context, client);
 		const initialScanDone = notifications.initialScanDone;
 		statusText = notifications.statusText;
-		stopped.notify = notifications.markStopped;
+		notifyStopped = notifications.markStopped;
 
 		if (workspace.name === undefined) {
 			void window.showWarningMessage(
@@ -195,6 +195,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 // the LSP shutdown/exit handshake finish and the server exit on its own rather
 // than dying with the extension host. (#502)
 export function deactivate(): Thenable<void> | undefined {
+	notifyStopped?.();
 	// stop() throws unless the client is Running, same as restart()'s stop half.
 	return defaultClient?.isRunning() ? defaultClient.stop() : undefined;
 }
