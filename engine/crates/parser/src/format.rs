@@ -1,5 +1,5 @@
 use crate::ast::{Arena, Child, ParsedFile, SourcePos, SourceRange, Value};
-use crate::fix::{SpanEdit, line_start_bytes, plan_file_edits, pos_to_byte};
+use crate::fix::{EOF_POS, SpanEdit, line_start_bytes, plan_file_edits, pos_to_byte};
 use crate::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
 
@@ -75,7 +75,7 @@ pub fn format_edits(input: &str, table: &StringTable, opts: &FormatOptions) -> V
     if formatted == input {
         return Vec::new();
     }
-    let (kept, _) = plan_file_edits(input, vec![((), whole_file_edit(input, formatted))]);
+    let (kept, _) = plan_file_edits(input, vec![((), whole_file_edit(formatted))]);
     kept
 }
 
@@ -165,28 +165,14 @@ fn newline_of(input: &str) -> &'static str {
     if input.contains("\r\n") { "\r\n" } else { "\n" }
 }
 
-fn whole_file_edit(input: &str, formatted: String) -> SpanEdit {
+fn whole_file_edit(formatted: String) -> SpanEdit {
     SpanEdit {
         range: SourceRange {
             start: SourcePos { line: 1, col: 0 },
-            end: end_pos(input),
+            end: EOF_POS,
         },
         replacement: formatted,
     }
-}
-
-fn end_pos(text: &str) -> SourcePos {
-    let mut line = 1u32;
-    let mut col = 0u16;
-    for c in text.chars() {
-        if c == '\n' {
-            line += 1;
-            col = 0;
-        } else if c != '\r' {
-            col = col.saturating_add(1);
-        }
-    }
-    SourcePos { line, col }
 }
 
 fn print_file(
@@ -807,6 +793,18 @@ mod tests {
         let src = "foo={\nbar=1\n}\n";
         let edits = format_edits(src, &table, &FormatOptions::default());
         let once = crate::fix::apply_edits(src, &edits);
+        assert!(format_edits(&once, &table, &FormatOptions::default()).is_empty());
+    }
+
+    #[test]
+    fn whole_file_format_replaces_a_saturated_last_line() {
+        let table = table();
+        let comment = format!("#{}", "x".repeat(69_999));
+        let src = format!("foo=1\n{comment}");
+        let expected = format!("foo = 1\n{comment}\n");
+        let edits = format_edits(&src, &table, &FormatOptions::default());
+        let once = crate::fix::apply_edits(&src, &edits);
+        assert_eq!(once, expected);
         assert!(format_edits(&once, &table, &FormatOptions::default()).is_empty());
     }
 }

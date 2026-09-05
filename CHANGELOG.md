@@ -15,6 +15,10 @@
 
 * The CLI restores Unix's default SIGPIPE handling, so closed output pipes no
   longer cause a broken-pipe panic. (#498)
+#### Engine
+
+* Whole-file formatting now replaces saturated columns through the end of
+  long final lines. (#553)
 
 ### 3.3.0
 
