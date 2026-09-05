@@ -18,6 +18,7 @@ HOST_COVERAGE_DROPS = (
     "extension/src/host/commandProgress.ts",
     "extension/src/host/commands.ts",
     "extension/src/host/diagnosticsSignature.ts",
+    "extension/src/host/documentLanguage.ts",
     "extension/src/host/engine.ts",
     "extension/src/host/executable.ts",
     "extension/src/host/fileListSignature.ts",
