@@ -15263,6 +15263,276 @@ fn test_did_change_workspace_folders_repoints_and_rescans() {
     );
 }
 
+#[test]
+fn test_did_change_workspace_folders_keeps_a_remaining_root_primary() {
+    // #661: a removal-only event that takes out the primary promotes the
+    // first survivor, which is rescanned and stays usable.
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    let old = first.path().join("events/old.txt");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, "old_event = { id = old_event }\n").unwrap();
+    let p = second.path().join("common/national_focus/tree.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "moved_focus = {\n    id = moved_focus\n}\n").unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "workspaceFolders": [
+                    { "uri": path_uri(first.path()), "name": "first" },
+                    { "uri": path_uri(second.path()), "name": "second" },
+                ],
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    // Wait for the startup scan (covers only `first`) so a publish for
+    // `second`'s file can only come from the survivor rescan.
+    wait_for_scan_done(&mut reader);
+
+    // Remove only the primary folder; nothing is added.
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "workspace/didChangeWorkspaceFolders",
+            serde_json::json!({
+                "event": {
+                    "added": [],
+                    "removed": [{ "uri": path_uri(first.path()), "name": "first" }],
+                }
+            }),
+        ),
+    )
+    .unwrap();
+
+    // The startup scan never touched `second`, so this publish is the rescan.
+    let stdin = child.stdin.take().unwrap();
+    let result = run_child_with_deadline(child, stdin, reader, 120, move |stdin, reader| {
+        let mut requested_symbols = false;
+        let mut requested_format = false;
+        let mut format_msg = String::new();
+        for _ in 0..4000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if v.get("method").and_then(|m| m.as_str()) == Some("workspace/applyEdit") {
+                let reply = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": v["id"],
+                    "result": { "applied": true },
+                });
+                write_frame_to(stdin, &reply.to_string()).unwrap();
+                continue;
+            }
+            if !requested_symbols
+                && v["method"] == "textDocument/publishDiagnostics"
+                && v["params"]["uri"]
+                    .as_str()
+                    .is_some_and(|u| u.ends_with("common/national_focus/tree.txt"))
+            {
+                requested_symbols = true;
+                write_frame_to(
+                    stdin,
+                    &jsonrpc_request(
+                        99,
+                        "workspace/symbol",
+                        serde_json::json!({ "query": "moved_focus" }),
+                    ),
+                )
+                .unwrap();
+                continue;
+            }
+            if requested_symbols && v["method"].is_null() && v["id"] == 99 {
+                // Indexed only if the survivor was scanned as the primary.
+                let indexed = v["result"].as_array().is_some_and(|syms| {
+                    syms.iter().any(|s| {
+                        s["name"] == "moved_focus"
+                            && s["location"]["uri"]
+                                .as_str()
+                                .is_some_and(|u| u.ends_with("common/national_focus/tree.txt"))
+                    })
+                });
+                if !indexed {
+                    return (true, false, String::new());
+                }
+                requested_format = true;
+                write_frame_to(
+                    stdin,
+                    &jsonrpc_request(
+                        100,
+                        "workspace/executeCommand",
+                        serde_json::json!({ "command": "formatWorkspace", "arguments": [] }),
+                    ),
+                )
+                .unwrap();
+                continue;
+            }
+            if requested_format && v["method"].is_null() && v["id"] == 100 {
+                format_msg = v["result"].as_str().unwrap_or_default().to_string();
+                return (true, true, format_msg);
+            }
+        }
+        (requested_symbols, requested_format, format_msg)
+    });
+    let (rescanned, indexed, format_msg) =
+        result.expect("timed out waiting for the rescan of the surviving root");
+    assert!(
+        rescanned,
+        "the surviving root was not rescanned: no diagnostics published for its file"
+    );
+    assert!(
+        indexed,
+        "workspace/symbol found no symbol from the surviving root; it was never scanned as primary"
+    );
+    assert!(
+        format_msg.starts_with("Formatted ")
+            || format_msg.starts_with("No files needed formatting"),
+        "formatWorkspace must return a successful result for the surviving primary"
+    );
+}
+
+#[test]
+fn test_did_change_workspace_folders_with_no_root_left_reports_no_workspace() {
+    // #661: removing the last folder clears the primary on purpose, so the
+    // opened document leaves the workspace and commands report no-folder.
+    let first = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    let p = first.path().join("common/national_focus/tree.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(&p, "my_focus = {\n    mood = sleepy\n}\n").unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "workspaceFolders": [{ "uri": path_uri(first.path()), "name": "first" }],
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": path_uri(&p),
+                    "languageId": "hoi4",
+                    "version": 1,
+                    "text": "my_focus = {\n    mood = sleepy\n}\n",
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    wait_for_diagnostics(&mut reader, "common/national_focus/tree.txt");
+
+    // Remove the only folder; nothing is added.
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "workspace/didChangeWorkspaceFolders",
+            serde_json::json!({
+                "event": {
+                    "added": [],
+                    "removed": [{ "uri": path_uri(first.path()), "name": "first" }],
+                }
+            }),
+        ),
+    )
+    .unwrap();
+
+    let stdin = child.stdin.take().unwrap();
+    let result = run_child_with_deadline(child, stdin, reader, 90, move |stdin, reader| {
+        let mut cleared = false;
+        for _ in 0..2000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            // The document left the workspace, so its diagnostics clear.
+            if v["method"] == "textDocument/publishDiagnostics"
+                && v["params"]["uri"]
+                    .as_str()
+                    .is_some_and(|u| u.ends_with("common/national_focus/tree.txt"))
+                && v["params"]["diagnostics"]
+                    .as_array()
+                    .is_some_and(|d| d.is_empty())
+            {
+                cleared = true;
+                write_frame_to(
+                    stdin,
+                    &jsonrpc_request(
+                        100,
+                        "workspace/executeCommand",
+                        serde_json::json!({ "command": "formatWorkspace", "arguments": [] }),
+                    ),
+                )
+                .unwrap();
+            }
+            if cleared && v["method"].is_null() && v["id"] == 100 {
+                return v["result"].as_str().unwrap_or_default().to_string();
+            }
+        }
+        String::new()
+    });
+    assert_eq!(
+        result,
+        Some("No workspace folder.".to_string()),
+        "the removal must clear the primary so workspace commands report the no-folder state"
+    );
+}
+
 // ── #98: rules-config errors reach the Problems panel ────────────────────────
 
 /// The rules load runs inside `initialize`, where tower-lsp drops notifications,
