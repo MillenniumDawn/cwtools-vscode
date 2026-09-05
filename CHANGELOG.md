@@ -36,6 +36,9 @@
   `workspace.workspaceEdit.documentChanges` now has integration coverage
   asserting the open file's exact version, `null` for closed files, and no
   legacy `changes` map. (#663)
+* Graph webview file navigation is pinned by tests: relative paths are refused,
+  outside-root paths wait for confirmation, and 1-based graph positions reveal
+  the clamped 0-based range. (#664)
 
 ### 3.3.0
 
