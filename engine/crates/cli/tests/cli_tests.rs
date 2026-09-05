@@ -432,6 +432,35 @@ fn test_cache_vanilla_unknown_game_fails() {
 }
 
 #[test]
+fn test_cache_vanilla_missing_directory_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("no_such_vanilla");
+    let rules = fixtures_dir().join("rules");
+    let output = tmp.path().join("vanilla.cwv");
+
+    cwtools()
+        .args([
+            "cache-vanilla",
+            "--game",
+            "stellaris",
+            "--vanilla",
+            missing.to_str().unwrap(),
+            "--rules",
+            rules.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains(missing.to_str().unwrap()));
+    assert!(
+        !output.exists(),
+        "a failed cache must not write an output file"
+    );
+}
+
+#[test]
 fn test_cache_vanilla_writes_instances_and_validate_loads_cache() {
     let tmp = tempfile::tempdir().unwrap();
     let vanilla = fixtures_dir().join("discover").join("mod_a");
@@ -1523,6 +1552,8 @@ fn test_validate_missing_vanilla_directory_fails() {
         .failure()
         .code(3)
         .stderr(predicate::str::contains("discovery failed for vanilla"))
+        .stderr(predicate::str::contains("report nothing"))
+        .stdout(predicate::str::contains("[CW113]").not())
         .stderr(predicate::str::contains(missing.to_str().unwrap()));
 }
 
@@ -1549,6 +1580,8 @@ fn test_fix_missing_vanilla_directory_fails() {
         .failure()
         .code(3)
         .stderr(predicate::str::contains("discovery failed for vanilla"))
+        .stderr(predicate::str::contains("report nothing"))
+        .stdout(predicate::str::contains("[CW113]").not())
         .stderr(predicate::str::contains(missing.to_str().unwrap()));
 }
 

@@ -7,6 +7,8 @@ use cwtools_parser::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
 use std::path::PathBuf;
 
+use crate::run::EXIT_DISCOVERY_FAILED;
+
 use super::rules::load_rules;
 
 pub(super) fn serialize(input: PathBuf, output: PathBuf) {
@@ -68,7 +70,7 @@ pub(super) fn vanilla(game: String, vanilla: PathBuf, rules: PathBuf, output: Pa
     let index =
         index_game_dir(&vanilla, &ruleset, &rules_table, &var_effects).unwrap_or_else(|e| {
             eprintln!("Error indexing vanilla {}: {}", vanilla.display(), e);
-            std::process::exit(1);
+            std::process::exit(EXIT_DISCOVERY_FAILED);
         });
     // Loc keys + file paths + variable names ride along so a cache hit
     // also skips the loc walk and file-index walk over the install.

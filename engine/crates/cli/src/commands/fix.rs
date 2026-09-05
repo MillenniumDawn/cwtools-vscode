@@ -8,7 +8,8 @@ use std::collections::BTreeMap;
 
 use crate::cli::FixArgs;
 use crate::run::{
-    EXIT_DISCOVERY_FAILED, announce_config, exit_if_empty, load_config, missing_required,
+    EXIT_DISCOVERY_FAILED, announce_config, exit_if_empty, load_config, missing_required, note,
+    vanilla_notice,
 };
 use crate::{codes, config};
 
@@ -192,6 +193,10 @@ pub(super) fn run(args: FixArgs) {
         },
         cwtools_driver::default_cache_dir(),
     );
+
+    if let Some(notice) = vanilla_notice(game_id, session.type_index().complete) {
+        note(format!("  note: {notice}"));
+    }
 
     // Same guards as `validate`: a failed walk, an empty ruleset, or an
     // empty file set must not read as "nothing needed fixing".
