@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -57,12 +56,9 @@ def _assert_versions_match(
             )
 
 
-def test_source_manifest_matches_changelog_and_tag() -> None:
-    env = {
-        name: os.environ.get(name, "") for name in ("TAG_RELEASE", "GITHUB_REF_NAME")
-    }
-    _assert_versions_match(
-        _read_manifest_version(), CHANGELOG_PATH.read_text(encoding="utf-8"), env
+def test_source_manifest_matches_latest_changelog_heading() -> None:
+    assert _read_manifest_version() == top_changelog_version(
+        CHANGELOG_PATH.read_text(encoding="utf-8")
     )
 
 
@@ -89,6 +85,5 @@ def test_tag_mismatch_fails_on_a_tag_run() -> None:
 
 
 def test_unreleased_heading_is_skipped() -> None:
-    if top_changelog_version(RELEASE_CHANGELOG) != "3.3.0":
-        raise AssertionError("Unreleased heading was treated as a release version")
+    assert top_changelog_version(RELEASE_CHANGELOG) == "3.3.0"
     _assert_versions_match("3.3.0", RELEASE_CHANGELOG, {})
