@@ -24,6 +24,12 @@
 * LSP: removing a multi-root primary promotes and rescans the first
   surviving root; removing the final root still clears workspace state.
   (#661)
+#### Coverage
+
+* Rust coverage includes the language server, enforces the 91.5% line floor,
+  and removes stale summaries on failed runs. (#662)
+* Node and extension-host coverage now enforce per-metric floors to catch
+  regressions. (#526)
 
 ### 3.3.0
 

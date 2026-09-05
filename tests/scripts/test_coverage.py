@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 
 from coverage_metrics import (
+    COVERAGE_METRICS,
     HOST_COVERAGE_DROPS,
     HOST_COVERAGE_LABELS,
+    HOST_COVERAGE_THRESHOLDS,
     FileCoverage,
     Metric,
     validate_host_coverage_summary,
@@ -77,6 +79,50 @@ def test_rejects_a_zero_metric_total(metric_name: str) -> None:
             {
                 "total": file_coverage(),
                 "/repo/extension/src/host/fileExplorer.ts": file_coverage(totals),
+            }
+        )
+
+
+@pytest.mark.parametrize("metric_name", METRIC_NAMES)
+def test_rejects_a_missing_covered_value(metric_name: str) -> None:
+    coverage = file_coverage()
+    del coverage[metric_name]["covered"]
+
+    with pytest.raises(RuntimeError, match=f"invalid {metric_name} covered value"):
+        validate_host_coverage_summary(
+            {
+                "total": file_coverage(),
+                "/repo/extension/src/host/fileExplorer.ts": coverage,
+            }
+        )
+
+
+@pytest.mark.parametrize("metric_name", METRIC_NAMES)
+@pytest.mark.parametrize("covered", [None, "1", 1.5, True])
+def test_rejects_an_invalid_covered_value(metric_name: str, covered: object) -> None:
+    with pytest.raises(RuntimeError, match=f"invalid {metric_name} covered value"):
+        validate_host_coverage_summary(
+            {
+                "total": file_coverage(),
+                "/repo/extension/src/host/fileExplorer.ts": {
+                    **file_coverage(),
+                    metric_name: {"total": 1, "covered": covered},
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize("metric_name", METRIC_NAMES)
+@pytest.mark.parametrize("covered", [-1, 2])
+def test_rejects_an_out_of_range_covered_value(metric_name: str, covered: int) -> None:
+    coverage = file_coverage()
+    coverage[metric_name]["covered"] = covered
+
+    with pytest.raises(RuntimeError, match=f"out-of-range {metric_name} covered value"):
+        validate_host_coverage_summary(
+            {
+                "total": file_coverage(),
+                "/repo/extension/src/host/fileExplorer.ts": coverage,
             }
         )
 
@@ -275,7 +321,81 @@ def test_host_report_omits_vitest_owned_modules() -> None:
         assert path not in rendered
 
 
+def test_host_gate_ignores_vitest_owned_zero_coverage() -> None:
+    dropped = {name: {"total": 1000, "covered": 0, "pct": 0} for name in METRIC_NAMES}
+    validate_host_coverage_summary(
+        {
+            "total": file_coverage(),
+            "/repo/extension/src/host/fileExplorer.ts": weighted(100, 80),
+            f"/repo/{HOST_COVERAGE_DROPS[0]}": dropped,
+        }
+    )
+
+
 def test_host_only_selects_the_labeled_source() -> None:
     selected = [source for source in SOURCES if source.labels]
     assert [source.title for source in selected] == ["Extension-host client"]
     assert selected[0].labels == HOST_COVERAGE_LABELS
+
+
+# Host coverage floor wiring (#662, #526).
+def test_host_thresholds_cover_every_metric() -> None:
+    assert set(HOST_COVERAGE_THRESHOLDS) == set(COVERAGE_METRICS)
+
+
+def test_host_thresholds_allow_a_fully_covered_summary() -> None:
+    validate_host_coverage_summary(
+        {
+            "total": file_coverage(),
+            "/repo/extension/src/host/fileExplorer.ts": file_coverage(),
+        }
+    )
+
+
+@pytest.mark.parametrize("metric_name", METRIC_NAMES)
+def test_host_threshold_rejects_a_summary_below_the_floor(
+    metric_name: str,
+) -> None:
+    # Only the named metric sits below its floor; the rest are at 100%.
+    threshold = HOST_COVERAGE_THRESHOLDS[metric_name]
+    floor = int(threshold)
+    # One count under the floor, still non-zero so only the floor can fail.
+    total = 1000
+    covered_below = floor * total // 100 - 1
+    file_payload: FileCoverage = {}
+    for metric_id in COVERAGE_METRICS:
+        if metric_id == metric_name:
+            file_payload[metric_id] = {
+                "total": total,
+                "covered": covered_below,
+                "skipped": 0,
+                "pct": 100 * covered_below / total,
+            }
+        else:
+            file_payload[metric_id] = {
+                "total": total,
+                "covered": total,
+                "skipped": 0,
+                "pct": 100.0,
+            }
+
+    with pytest.raises(
+        RuntimeError,
+        match=rf"host coverage {metric_name} is .*below the {floor}% floor",
+    ):
+        validate_host_coverage_summary(
+            {
+                "total": {"lines": file_coverage()},
+                "/repo/extension/src/host/fileExplorer.ts": file_payload,
+            }
+        )
+
+
+# Pin the exact floors so a drive-by edit to the constant is caught.
+def test_host_threshold_values_pin_the_intended_floors() -> None:
+    assert HOST_COVERAGE_THRESHOLDS == {
+        "lines": 80,
+        "statements": 80,
+        "branches": 71,
+        "functions": 76,
+    }

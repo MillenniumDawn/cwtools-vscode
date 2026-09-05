@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 // The VS Code host suites live in extension/test/host and run under
 // @vscode/test-cli (see .vscode-test.mjs). coverage.include is the node
 // report's file list; HOST_COVERAGE_DROPS mirrors the host/common entries
-// so the two reports stay disjoint.
+// so the two reports stay disjoint. The per-metric `thresholds` are the
+// node-side floor for the coverage gate; host-side floors live in
+// scripts/build/coverage_metrics.py.
 export default defineConfig({
 	test: {
 		include: ["extension/test/unit/**/*.test.ts"],
@@ -34,6 +36,12 @@ export default defineConfig({
 			],
 			reporter: ["text-summary", "html", "lcov", "json-summary"],
 			reportsDirectory: "coverage-node",
+			thresholds: {
+				lines: 70,
+				statements: 70,
+				branches: 68,
+				functions: 71,
+			},
 		},
 	},
 	resolve: {
