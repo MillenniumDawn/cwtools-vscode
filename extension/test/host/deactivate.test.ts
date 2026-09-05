@@ -1,4 +1,6 @@
 import * as assert from "assert";
+import * as vscode from "vscode";
+import sinon from "sinon";
 import { activate } from "../support/utils";
 
 // Last file in the labels that run it: it stops the shared language client, so
@@ -28,6 +30,25 @@ suite("deactivate", function () {
 			[],
 			"deactivate should have stopped the client",
 		);
+		assert.strictEqual(api.serverStatusText(), "CWTools: stopped");
+
+		const sandbox = sinon.createSandbox();
+		const warning = sandbox.stub(vscode.window, "showWarningMessage");
+		const error = sandbox.stub(vscode.window, "showErrorMessage");
+		try {
+			await vscode.commands.executeCommand("cwtools.formatWorkspace");
+		} finally {
+			sandbox.restore();
+		}
+		assert.ok(
+			warning
+				.getCalls()
+				.some((call) =>
+					String(call.args[0]).includes("language server is stopped"),
+				),
+			"commands against a stopped client should explain how to recover",
+		);
+		assert.strictEqual(error.called, false);
 
 		// Disposing the client from context.subscriptions stops it again right after
 		// deactivate() resolves, so a second call has to be harmless.

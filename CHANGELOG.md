@@ -18,6 +18,9 @@
 
 * The source manifest now tracks the latest release version and tagged builds.
   (#512)
+* Graph, workspace fix, and workspace format commands now clear their
+  availability when the language server stops and explain how to restart it.
+  (#506)
 * `cwtools.rules_folder` is now application-scoped, so workspace settings
   cannot redirect the rules folder. (#539)
 

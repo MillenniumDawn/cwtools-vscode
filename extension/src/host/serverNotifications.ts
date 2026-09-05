@@ -1,12 +1,16 @@
 import type { ExtensionContext } from "vscode";
 import { window, l10n, commands, StatusBarAlignment } from "vscode";
-import type { LanguageClient, StateChangeEvent } from "vscode-languageclient/node";
+import type {
+	LanguageClient,
+	StateChangeEvent,
+} from "vscode-languageclient/node";
 import { State } from "vscode-languageclient/node";
 
 import type { FileListItem } from "./fileExplorer";
 import { FileExplorer } from "./fileExplorer";
 import { fileListSignature } from "./fileListSignature";
 import { commandProgressActive } from "./commandProgress";
+import { clearCommandAvailability } from "./commands";
 
 interface LoadingBarParams {
 	enable: boolean;
@@ -63,6 +67,11 @@ export function registerServerNotifications(
 		}),
 	);
 
+	const markStopped = (): void => {
+		status.text = l10n.t("CWTools: stopped");
+		clearCommandAvailability();
+	};
+
 	context.subscriptions.push(
 		// onDidChangeState is a lib getter returning Event<StateChangeEvent>;
 		// type-aware lint resolves it as unsafe under skipLibCheck though tsc
@@ -71,6 +80,11 @@ export function registerServerNotifications(
 		client.onDidChangeState((e: StateChangeEvent) => {
 			if (e.newState === State.Starting) {
 				status.text = l10n.t("CWTools: starting");
+			} else if (
+				e.newState === State.Stopped ||
+				e.newState === State.StartFailed
+			) {
+				markStopped();
 			}
 		}),
 	);
@@ -115,8 +129,6 @@ export function registerServerNotifications(
 	return {
 		initialScanDone,
 		statusText: () => status.text,
-		markStopped: () => {
-			status.text = l10n.t("CWTools: stopped");
-		},
+		markStopped,
 	};
 }
