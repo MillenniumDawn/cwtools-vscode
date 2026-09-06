@@ -1,4 +1,6 @@
 import * as assert from "assert";
+import * as vscode from "vscode";
+import sinon from "sinon";
 import { activate } from "../support/utils";
 
 // Last file in the labels that run it: it stops the shared language client, so
@@ -17,17 +19,49 @@ suite("deactivate", function () {
 			"the client should be running before deactivate",
 		);
 
-		await api.deactivate();
+		const sandbox = sinon.createSandbox();
+		const executeCommand = sandbox
+			.stub(vscode.commands, "executeCommand")
+			.callThrough();
+		const warning = sandbox.stub(vscode.window, "showWarningMessage");
+		const error = sandbox.stub(vscode.window, "showErrorMessage");
+		try {
+			await api.deactivate();
 
-		// Awaiting the thenable is what proves the handshake: stop() rejects when the
-		// server does not answer shutdown and exit inside its 2s budget. It clears
-		// initializeResult on the way in, so an empty command list is the client
-		// having left Running.
-		assert.deepStrictEqual(
-			api.serverCommands(),
-			[],
-			"deactivate should have stopped the client",
+			// Awaiting the thenable is what proves the handshake: stop() rejects when the
+			// server does not answer shutdown and exit inside its 2s budget. It clears
+			// initializeResult on the way in, so an empty command list is the client
+			// having left Running.
+			assert.deepStrictEqual(
+				api.serverCommands(),
+				[],
+				"deactivate should have stopped the client",
+			);
+			assert.strictEqual(api.serverStatusText(), "CWTools: stopped");
+			for (const key of [
+				"cwtoolsGraphAvailable",
+				"cwtoolsFixAllAvailable",
+				"cwtoolsFormatWorkspaceAvailable",
+			]) {
+				assert.ok(
+					executeCommand.calledWith("setContext", key, false),
+					`deactivate should clear ${key}`,
+				);
+			}
+
+			await vscode.commands.executeCommand("cwtools.formatWorkspace");
+		} finally {
+			sandbox.restore();
+		}
+		assert.ok(
+			warning
+				.getCalls()
+				.some((call) =>
+					String(call.args[0]).includes("language server is stopped"),
+				),
+			"commands against a stopped client should explain how to recover",
 		);
+		assert.strictEqual(error.called, false);
 
 		// Disposing the client from context.subscriptions stops it again right after
 		// deactivate() resolves, so a second call has to be harmless.

@@ -35,6 +35,7 @@ const state = vi.hoisted(() => {
 		token,
 		withProgress,
 		showInformationMessage: vi.fn(),
+		executeCommand: vi.fn(),
 		showWarningMessage: vi.fn(),
 		showErrorMessage: vi.fn(),
 		showSaveDialog: vi.fn(),
@@ -56,7 +57,7 @@ vi.mock("vscode", async (importOriginal) => ({
 				return { dispose: () => undefined };
 			},
 		),
-		executeCommand: vi.fn(),
+		executeCommand: state.executeCommand,
 	},
 	window: {
 		createOutputChannel: () => ({ appendLine: () => undefined }),
@@ -79,7 +80,10 @@ vi.mock("vscode-languageclient/node", () => ({
 	ExecuteCommandRequest: { type: state.requestType },
 }));
 
-import { registerCommands } from "../../src/host/commands";
+import {
+	clearCommandAvailability,
+	registerCommands,
+} from "../../src/host/commands";
 
 interface FakeClient {
 	initializeResult: {
@@ -91,6 +95,7 @@ interface FakeClient {
 		};
 	};
 	onProgress: LanguageClient["onProgress"];
+	isRunning: ReturnType<typeof vi.fn>;
 	sendRequest: ReturnType<typeof vi.fn>;
 }
 
@@ -105,6 +110,7 @@ function fakeClient(commands: string[], workDoneProgress = false): FakeClient {
 			},
 		},
 		onProgress: vi.fn(() => ({ dispose: () => undefined })),
+		isRunning: vi.fn(() => true),
 		sendRequest: vi.fn(),
 	};
 }
@@ -136,7 +142,50 @@ suite("registered workspace commands", () => {
 		state.token.isCancellationRequested = false;
 	});
 
+	test("clears command availability contexts when the server stops", () => {
+		clearCommandAvailability();
+
+		assert.deepStrictEqual(state.executeCommand.mock.calls, [
+			["setContext", "cwtoolsGraphAvailable", false],
+			["setContext", "cwtoolsFixAllAvailable", false],
+			["setContext", "cwtoolsFormatWorkspaceAvailable", false],
+		]);
+	});
+
+	suite("cwtools.showGraph", () => {
+		test("reports that the server stopped instead of loading graph data", async () => {
+			const client = fakeClient(["getGraphData"]);
+			client.isRunning.mockReturnValue(false);
+			register(client);
+
+			await handler("cwtools.showGraph")();
+
+			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
+				[
+					"CWTools: the language server is stopped. Run 'CWTools: Restart Server' to start it again.",
+				],
+			]);
+			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
+		});
+	});
+
 	suite("cwtools.fixAllWorkspace", () => {
+		test("reports that the server stopped instead of sending a request", async () => {
+			const client = fakeClient(["fixAllWorkspace"]);
+			client.isRunning.mockReturnValue(false);
+			register(client);
+
+			await handler("cwtools.fixAllWorkspace")();
+
+			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
+				[
+					"CWTools: the language server is stopped. Run 'CWTools: Restart Server' to start it again.",
+				],
+			]);
+			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
+			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
+		});
+
 		test("warns and sends nothing when the server doesn't advertise the command", async () => {
 			const client = fakeClient(["getGraphData"]);
 			register(client);
@@ -215,6 +264,22 @@ suite("registered workspace commands", () => {
 	});
 
 	suite("cwtools.formatWorkspace", () => {
+		test("reports that the server stopped instead of sending a request", async () => {
+			const client = fakeClient(["formatWorkspace"]);
+			client.isRunning.mockReturnValue(false);
+			register(client);
+
+			await handler("cwtools.formatWorkspace")();
+
+			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
+				[
+					"CWTools: the language server is stopped. Run 'CWTools: Restart Server' to start it again.",
+				],
+			]);
+			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
+			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
+		});
+
 		test("warns and sends nothing when the server doesn't advertise the command", async () => {
 			const client = fakeClient(["getGraphData"]);
 			register(client);

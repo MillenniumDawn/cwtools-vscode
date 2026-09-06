@@ -61,6 +61,28 @@ export function publishCommandAvailability(client: LanguageClient): void {
 	);
 }
 
+export function clearCommandAvailability(): void {
+	void commands.executeCommand("setContext", "cwtoolsGraphAvailable", false);
+	void commands.executeCommand("setContext", "cwtoolsFixAllAvailable", false);
+	void commands.executeCommand(
+		"setContext",
+		"cwtoolsFormatWorkspaceAvailable",
+		false,
+	);
+}
+
+function requireRunningServer(client: LanguageClient): boolean {
+	if (client.isRunning()) {
+		return true;
+	}
+	window.showWarningMessage(
+		l10n.t(
+			"CWTools: the language server is stopped. Run 'CWTools: Restart Server' to start it again.",
+		),
+	);
+	return false;
+}
+
 function protocolRecord(value: unknown): Record<string, unknown> | undefined {
 	return value !== null && typeof value === "object"
 		? (value as Record<string, unknown>)
@@ -178,6 +200,9 @@ export function registerCommands(
 		window.showInformationMessage(l10n.t("CWTools: no graph for this file."));
 	};
 	const showGraph = async function () {
+		if (!requireRunningServer(client)) {
+			return;
+		}
 		if (!serverProvidesGraphData(client)) {
 			window.showWarningMessage(
 				l10n.t(
@@ -201,6 +226,10 @@ export function registerCommands(
 			// The graph build now runs under a cancellable notification, so
 			// Cancel lands here. Opening an empty panel would be worse than
 			// doing nothing.
+			if (!client.isRunning()) {
+				requireRunningServer(client);
+				return;
+			}
 			if (err instanceof vscode.CancellationError) {
 				return;
 			}
@@ -223,6 +252,9 @@ export function registerCommands(
 		commands.registerCommand("cwtools.setGraphDepth", async () => {
 			// Redrawing at a new depth re-queries the server, so a graph imported
 			// from JSON can't be re-cut without it either.
+			if (!requireRunningServer(client)) {
+				return;
+			}
 			if (!serverProvidesGraphData(client)) {
 				window.showWarningMessage(
 					l10n.t(
@@ -393,6 +425,9 @@ export function registerCommands(
 
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.fixAllWorkspace", async () => {
+			if (!requireRunningServer(client)) {
+				return;
+			}
 			if (!serverProvidesFixAll(client)) {
 				window.showWarningMessage(
 					l10n.t(
@@ -416,6 +451,10 @@ export function registerCommands(
 					window.showInformationMessage(`CWTools: ${result}`);
 				}
 			} catch (err) {
+				if (!client.isRunning()) {
+					requireRunningServer(client);
+					return;
+				}
 				if (err instanceof vscode.CancellationError) {
 					return;
 				}
@@ -429,6 +468,9 @@ export function registerCommands(
 
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.formatWorkspace", async () => {
+			if (!requireRunningServer(client)) {
+				return;
+			}
 			if (!serverProvidesFormatWorkspace(client)) {
 				window.showWarningMessage(
 					l10n.t(
@@ -448,6 +490,10 @@ export function registerCommands(
 					window.showInformationMessage(`CWTools: ${result}`);
 				}
 			} catch (err) {
+				if (!client.isRunning()) {
+					requireRunningServer(client);
+					return;
+				}
 				if (err instanceof vscode.CancellationError) {
 					return;
 				}
