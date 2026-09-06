@@ -629,8 +629,8 @@ fn index_game_dir_is_populated_and_stable() {
     );
     let var_effects = variable_defining_effects(&ruleset);
 
-    let first = index_game_dir(&perf_mod(), &ruleset, &table, &var_effects);
-    let second = index_game_dir(&perf_mod(), &ruleset, &table, &var_effects);
+    let first = index_game_dir(&perf_mod(), &ruleset, &table, &var_effects).unwrap();
+    let second = index_game_dir(&perf_mod(), &ruleset, &table, &var_effects).unwrap();
 
     let n1 = total_instances(&first);
     assert!(n1 > 0, "expected the fixture to yield type instances");
@@ -653,8 +653,22 @@ fn index_game_dir_is_populated_and_stable() {
 fn index_game_dir_empty_ruleset_yields_empty_index() {
     let table = StringTable::new();
     let ruleset = cwtools_rules::rules_types::RuleSet::new();
-    let index = index_game_dir(&perf_mod(), &ruleset, &table, &HashSet::new());
+    let index = index_game_dir(&perf_mod(), &ruleset, &table, &HashSet::new()).unwrap();
     assert_eq!(total_instances(&index), 0);
+}
+
+#[test]
+fn index_game_dir_missing_root_returns_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("no_such_vanilla");
+    let table = StringTable::new();
+    let ruleset = cwtools_rules::rules_types::RuleSet::new();
+    let result = index_game_dir(&missing, &ruleset, &table, &HashSet::new());
+
+    assert!(matches!(
+        result,
+        Err(FileError::MissingRoot(path)) if path == missing
+    ));
 }
 
 // ── Session::load / validate_all ─────────────────────────────────────────────
@@ -694,6 +708,34 @@ fn session_load_builds_indexes() {
     assert!(
         session.registry().is_some(),
         "a game is set, so the scope registry should be prebuilt"
+    );
+}
+
+#[test]
+fn session_missing_vanilla_root_is_a_discovery_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("no_such_vanilla");
+    let session = Session::load(SessionConfig {
+        game: Game::Stellaris,
+        rules: RulesInput::Dir(perf_rules()),
+        directory: perf_mod(),
+        vanilla: Some(missing),
+        vanilla_cache: None,
+        vanilla_cache_auto: None,
+        ignore_files: &[],
+        ignore_dirs: &[],
+        loc_languages: None,
+        case_sensitive_files: false,
+        on_rules_diagnostic: None,
+    });
+
+    assert!(
+        session.discovery_failed,
+        "missing vanilla root must fail discovery"
+    );
+    assert!(
+        !session.type_index().complete,
+        "a failed vanilla walk must not mark its empty index complete"
     );
 }
 

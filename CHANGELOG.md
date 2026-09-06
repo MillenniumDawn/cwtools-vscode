@@ -30,6 +30,8 @@
   authorize files outside that workspace. (#539)
 * Platform packaging now rejects a flat server binary when staging a universal
   VSIX. (#549)
+* CLI validation now rejects a missing `--vanilla` directory instead of loading
+  an empty base-game index. (#490)
 
 #### Engine
 

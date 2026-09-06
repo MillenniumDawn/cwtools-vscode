@@ -175,7 +175,7 @@ fn bench_snapshot_clone(c: &mut Criterion) {
         "snapshot_clone: rules problems: {rule_errors:?}"
     );
     let var_effects = variable_defining_effects(&ruleset);
-    let idx = index_game_dir(&corpus, &ruleset, &table, &var_effects);
+    let idx = index_game_dir(&corpus, &ruleset, &table, &var_effects).unwrap();
     assert!(
         !idx.map.is_empty(),
         "snapshot_clone: {CORPUS_NAME} indexed to nothing; the clone would measure an empty map"
