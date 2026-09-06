@@ -16,6 +16,8 @@
 
 #### Extension
 
+* The source manifest now tracks the latest release version and tagged builds.
+  (#512)
 * `cwtools.rules_folder` is now application-scoped, so workspace settings
   cannot redirect the rules folder. (#539)
 
