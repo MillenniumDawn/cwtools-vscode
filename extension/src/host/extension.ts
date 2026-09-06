@@ -52,7 +52,33 @@ export interface CwtoolsApi {
 }
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
-	void commands.executeCommand("setContext", "cwtoolsEnabled", true);
+	const api: CwtoolsApi = {
+		graphPanel: () => import("./graphPanel"),
+		serverCommands: () =>
+			defaultClient?.initializeResult?.capabilities.executeCommandProvider
+				?.commands ?? [],
+		serverOutputChannel: () => defaultClient?.outputChannel,
+		rulesCacheRoot: () => rulesCacheRoot,
+		serverStatusText: () => statusText?.(),
+		deactivate,
+	};
+	const descriptors = await Promise.all(
+		(workspace.workspaceFolders ?? []).map(async (folder) => {
+			try {
+				const stat = await workspace.fs.stat(
+					vscode.Uri.joinPath(folder.uri, "descriptor.mod"),
+				);
+				return (stat.type & vscode.FileType.File) !== 0;
+			} catch {
+				return false;
+			}
+		}),
+	);
+	const enabled = descriptors.some(Boolean);
+	void commands.executeCommand("setContext", "cwtoolsEnabled", enabled);
+	if (!enabled) {
+		return api;
+	}
 	// The editor/title graph button is gated on `cwtoolsWebview == false`, which an
 	// unset key does not satisfy. Only GraphPanel ever wrote this key, so without a
 	// seed the button could not appear until a panel had opened and closed once.
@@ -131,14 +157,6 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		statusText = notifications.statusText;
 		notifyStopped = notifications.markStopped;
 
-		if (workspace.name === undefined) {
-			void window.showWarningMessage(
-				l10n.t(
-					'You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using "File, Open Folder"',
-				),
-			);
-		}
-
 		registerCommands(context, client, tracker, serverExe);
 
 		// Subscriptions are pushed here so the client is disposed with the extension.
@@ -178,16 +196,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 
 	await init(languageId);
 
-	return {
-		graphPanel: () => import("./graphPanel"),
-		serverCommands: () =>
-			defaultClient?.initializeResult?.capabilities.executeCommandProvider
-				?.commands ?? [],
-		serverOutputChannel: () => defaultClient?.outputChannel,
-		rulesCacheRoot: () => rulesCacheRoot,
-		serverStatusText: () => statusText?.(),
-		deactivate,
-	};
+	return api;
 }
 
 // VS Code awaits a thenable returned from deactivate(), but it does not await
