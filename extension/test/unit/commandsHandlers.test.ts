@@ -15,6 +15,8 @@ import type { LanguageClient } from "vscode-languageclient/node";
 const state = vi.hoisted(() => {
 	class CancellationError extends Error {}
 	const registeredCommands = new Map<string, (...args: never[]) => unknown>();
+	const initialiseGraph = vi.fn();
+	const graphPanel = { initialiseGraph };
 	const token = {
 		isCancellationRequested: false,
 		onCancellationRequested: () => ({ dispose: () => undefined }),
@@ -38,11 +40,13 @@ const state = vi.hoisted(() => {
 		executeCommand: vi.fn(),
 		showWarningMessage: vi.fn(),
 		showErrorMessage: vi.fn(),
+		showInputBox: vi.fn(),
 		showSaveDialog: vi.fn(),
 		showTextDocument: vi.fn(),
 		openTextDocument: vi.fn(),
 		writeFile: vi.fn(),
 		registerWebviewPanelSerializer: vi.fn(),
+		graphPanel,
 	};
 });
 
@@ -65,6 +69,7 @@ vi.mock("vscode", async (importOriginal) => ({
 		showInformationMessage: state.showInformationMessage,
 		showWarningMessage: state.showWarningMessage,
 		showErrorMessage: state.showErrorMessage,
+		showInputBox: state.showInputBox,
 		showSaveDialog: state.showSaveDialog,
 		showTextDocument: state.showTextDocument,
 		registerWebviewPanelSerializer: state.registerWebviewPanelSerializer,
@@ -84,6 +89,15 @@ import {
 	clearCommandAvailability,
 	registerCommands,
 } from "../../src/host/commands";
+import { GraphPanel } from "../../src/host/graphPanel";
+
+const graphPanelCreate = vi
+	.spyOn(GraphPanel, "create")
+	.mockImplementation(() => {
+		GraphPanel.currentPanel = {
+			initialiseGraph: state.graphPanel.initialiseGraph,
+		} as unknown as GraphPanel;
+	});
 
 interface FakeClient {
 	initializeResult: {
@@ -115,12 +129,14 @@ function fakeClient(commands: string[], workDoneProgress = false): FakeClient {
 	};
 }
 
-function register(client: FakeClient): void {
+function register(client: FakeClient, latestType = ""): void {
 	const context = {
 		extensionPath: "/ext",
 		subscriptions: [],
 	} as unknown as ExtensionContext;
-	const tracker = { getLatestType: () => "" } as unknown as EditorTracker;
+	const tracker = {
+		getLatestType: () => latestType,
+	} as unknown as EditorTracker;
 	registerCommands(
 		context,
 		client as unknown as LanguageClient,
@@ -135,9 +151,49 @@ function handler(id: string): () => Promise<void> {
 	return found as () => Promise<void>;
 }
 
+interface Deferred<T> {
+	promise: Promise<T>;
+	resolve: (value: T) => void;
+	reject: (reason?: unknown) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+		resolve = resolvePromise;
+		reject = rejectPromise;
+	});
+	return { promise, resolve, reject };
+}
+
+interface GraphRequest {
+	entityType: unknown;
+	depth: unknown;
+	result: Deferred<unknown[]>;
+}
+
+function mockGraphRequests(): GraphRequest[] {
+	const requests: GraphRequest[] = [];
+	state.executeCommand.mockImplementation(
+		(command: unknown, entityType: unknown, depth: unknown) => {
+			if (command !== "getGraphData") {
+				return undefined;
+			}
+			const result = deferred<unknown[]>();
+			requests.push({ entityType, depth, result });
+			return result.promise;
+		},
+	);
+	return requests;
+}
+
 suite("registered workspace commands", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		state.executeCommand.mockReset();
+		state.showInputBox.mockReset();
+		GraphPanel.currentPanel = undefined;
 		state.registeredCommands.clear();
 		state.token.isCancellationRequested = false;
 	});
@@ -166,6 +222,104 @@ suite("registered workspace commands", () => {
 				],
 			]);
 			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
+		});
+
+		test("renders only the newest depth when responses resolve out of order", async () => {
+			const requests = mockGraphRequests();
+			const client = fakeClient(["getGraphData"]);
+			state.showInputBox.mockResolvedValue("1");
+			register(client, "event");
+
+			const oldRequest = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const newRequest = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			assert.deepStrictEqual(
+				requests.map(({ entityType, depth }) => [entityType, depth]),
+				[
+					["event", 3],
+					["event", 1],
+				],
+			);
+			requests[1].result.resolve([{ id: "new" }]);
+			await newRequest;
+			requests[0].result.resolve([{ id: "old" }]);
+			await oldRequest;
+
+			assert.strictEqual(graphPanelCreate.mock.calls.length, 1);
+			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+				[
+					[{ id: "new" }],
+					1,
+					{ source: "server", entityType: "event", depth: 1 },
+				],
+			]);
+		});
+
+		test("does not revive a stale graph after the newest request is cancelled", async () => {
+			const requests = mockGraphRequests();
+			const client = fakeClient(["getGraphData"]);
+			state.showInputBox.mockResolvedValue("1");
+			register(client, "event");
+
+			const oldRequest = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const newRequest = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			requests[1].result.reject(new state.CancellationError());
+			await newRequest;
+			requests[0].result.resolve([{ id: "old" }]);
+			await oldRequest;
+
+			assert.strictEqual(graphPanelCreate.mock.calls.length, 0);
+			assert.strictEqual(state.graphPanel.initialiseGraph.mock.calls.length, 0);
+		});
+
+		test("does not revive a stale graph after the newest request fails", async () => {
+			const requests = mockGraphRequests();
+			const client = fakeClient(["getGraphData"]);
+			state.showInputBox.mockResolvedValue("1");
+			register(client, "event");
+
+			const oldRequest = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const newRequest = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			requests[1].result.reject(new Error("newest failed"));
+			await assert.rejects(newRequest, /newest failed/);
+			requests[0].result.resolve([{ id: "old" }]);
+			await oldRequest;
+
+			assert.strictEqual(graphPanelCreate.mock.calls.length, 0);
+			assert.strictEqual(state.graphPanel.initialiseGraph.mock.calls.length, 0);
+		});
+
+		test("ignores a stale rejection after the newest graph renders", async () => {
+			const requests = mockGraphRequests();
+			const client = fakeClient(["getGraphData"]);
+			state.showInputBox.mockResolvedValue("1");
+			register(client, "event");
+
+			const oldRequest = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const newRequest = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			requests[1].result.resolve([{ id: "new" }]);
+			await newRequest;
+			requests[0].result.reject(new Error("stale failed"));
+			await oldRequest;
+
+			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+				[
+					[{ id: "new" }],
+					1,
+					{ source: "server", entityType: "event", depth: 1 },
+				],
+			]);
 		});
 	});
 

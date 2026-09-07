@@ -1,3 +1,8 @@
+### Unreleased
+
+* Show graph now discards superseded requests, so an older response cannot
+  replace the graph selected by the user. (#588)
+
 ### 3.4.0
 
 #### Extension
