@@ -1,3 +1,10 @@
+### Unreleased
+
+#### Engine
+
+* CLI `fix --apply` and `format --apply` now write atomically and fail on
+  unreadable files. (#496)
+
 ### 3.4.0
 
 #### Extension

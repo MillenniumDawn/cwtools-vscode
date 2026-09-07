@@ -1,7 +1,12 @@
 use clap::CommandFactory;
 use cwtools_game::constants::Game;
 use cwtools_validation::ErrorSeverity;
+use std::fs::{self, File, OpenOptions};
+use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 
 use crate::cli::Cli;
 use crate::config;
@@ -59,6 +64,7 @@ pub(crate) fn load_ignore_hashes(path: Option<&Path>) -> std::collections::HashS
 
 static QUIET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static NO_COLOR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ATOMIC_WRITE_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Record the run's `--quiet` / `--no-color`. Called once, before dispatch.
 pub(crate) fn set_output_style(quiet: bool, no_color: bool) {
@@ -238,6 +244,48 @@ pub(crate) fn exit_code(failing: usize, discovery_failed: bool, write_failed: bo
     }
 }
 
+pub(crate) fn write_atomically(
+    path: &Path,
+    write: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<()> {
+    let target = fs::canonicalize(path)?;
+    let source = OpenOptions::new().write(true).open(&target)?;
+    let permissions = source.metadata()?.permissions();
+    drop(source);
+    let (temp, mut file) = loop {
+        let id = ATOMIC_WRITE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut name = target.as_os_str().to_os_string();
+        name.push(format!(".tmp-{}-{id}", std::process::id()));
+        let temp = PathBuf::from(name);
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&temp) {
+            Ok(file) => break (temp, file),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    };
+
+    let write_result = (|| {
+        write(&mut file)?;
+        file.sync_all()?;
+        file.set_permissions(permissions)
+    })();
+    drop(file);
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+
+    if let Err(error) = fs::rename(&temp, &target) {
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// A path as the run resolved it: absolute where that can be computed, so an
 /// error names the location a relative CI path actually pointed at.
 pub(crate) fn resolved_path(path: &std::path::Path) -> String {
@@ -279,6 +327,103 @@ mod tests {
         // operational failures take precedence over validation errors
         assert_eq!(exit_code(5, false, true), 2);
         assert_eq!(exit_code(5, true, true), 3);
+    }
+
+    #[test]
+    fn a_failed_atomic_write_keeps_the_previous_file() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        std::fs::write(&path, b"original").unwrap();
+        let error = write_atomically(&path, |file| {
+            file.write_all(b"partial")?;
+            Err(std::io::Error::other("disk full"))
+        })
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "disk full");
+        assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_failed_atomic_commit_keeps_the_previous_path() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        std::fs::create_dir(&path).unwrap();
+        let error = write_atomically(&path, |file| file.write_all(b"new")).unwrap_err();
+
+        assert!(error.kind() != std::io::ErrorKind::NotFound);
+        assert!(path.is_dir());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_atomic_write_preserves_permissions_and_file_symlinks() {
+        use std::io::Write;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("source.txt");
+        let link = dir.path().join("link.txt");
+        std::fs::write(&target, b"original").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+        symlink(&target, &link).unwrap();
+
+        write_atomically(&link, |file| {
+            assert_eq!(file.metadata()?.permissions().mode() & 0o777, 0o600);
+            file.write_all(b"updated")
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"updated");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_atomic_write_checks_source_write_access_before_replacement() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.txt");
+        std::fs::write(&path, b"original").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let mut closure_called = false;
+        let result = write_atomically(&path, |file| {
+            closure_called = true;
+            file.write_all(b"updated")
+        });
+        let running_as_root = unsafe { libc::geteuid() == 0 };
+
+        if running_as_root {
+            assert!(result.is_ok(), "root can bypass read-only mode bits");
+            assert!(closure_called);
+            assert_eq!(std::fs::read(&path).unwrap(), b"updated");
+        } else {
+            assert_eq!(
+                result.unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+            assert!(!closure_called);
+            assert_eq!(std::fs::read(&path).unwrap(), b"original");
+        }
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     /// Every severity, so a gate test reads as the whole range rather than a
