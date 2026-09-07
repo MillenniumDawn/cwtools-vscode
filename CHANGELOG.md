@@ -1,10 +1,4 @@
-### Unreleased
-
-#### Engine
-
-* Server-to-client requests now outlive the task that issued them, so a
-  debounced validation aborted by the next keystroke no longer panics the
-  server with `receiver already dropped` when the editor answers. (#675)
+### 3.4.0
 
 #### Extension
 
@@ -13,9 +7,6 @@
 * The workspace-command gating host tests wait for the initial scan instead of
   racing server startup, and report the notification text and the client's
   state when one does fail. (#675)
-
-#### Extension
-
 * The source manifest now tracks the latest release version and tagged builds.
   (#512)
 * Graph, workspace fix, and workspace format commands now clear their
@@ -26,40 +17,22 @@
 
 #### Engine
 
+* Server-to-client requests now outlive the task that issued them, so a
+  debounced validation aborted by the next keystroke no longer panics the
+  server with `receiver already dropped` when the editor answers. (#675)
 * LSP authorization no longer lets a rules directory above a workspace
   authorize files outside that workspace. (#539)
 * Platform packaging now rejects a flat server binary when staging a universal
   VSIX. (#549)
 * CLI validation now rejects a missing `--vanilla` directory instead of loading
   an empty base-game index. (#490)
-
-#### Engine
-
 * The CLI restores Unix's default SIGPIPE handling, so closed output pipes no
   longer cause a broken-pipe panic. (#498)
-
-#### Engine
-
 * Whole-file formatting now replaces saturated columns through the end of
   long final lines. (#553)
-
-#### Engine
-
 * LSP: removing a multi-root primary promotes and rescans the first
   surviving root; removing the final root still clears workspace state.
   (#661)
-
-#### Coverage
-
-* Rust coverage includes the language server, enforces the 91.5% line floor,
-  and removes stale summaries on failed runs. (#662)
-* Node and extension-host coverage now enforce per-metric floors to catch
-  regressions. (#526)
-* Node coverage now reports `documentLanguage.ts`, while extension-host
-  coverage drops it to keep the reports disjoint. (#642)
-
-#### Engine
-
 * LSP: formatWorkspace to a client that advertises
   `workspace.workspaceEdit.documentChanges` now has integration coverage
   asserting the open file's exact version, `null` for closed files, and no
@@ -72,20 +45,23 @@
   the exact requests, capability gates, cancellation, success, and failure
   behavior, and verify formatWorkspace returns through a real
   workspace/applyEdit request. (#665)
-
-#### Engine
-
 * Strict path matching (`path_strict`) now distinguishes the documented
   `dlc/<id>/<pattern>` shape from unrelated relative parents, while absolute
   logical paths keep the suffix fallback. (#666)
-
-#### Engine
-
 * The rules feature test now asserts bounded variable/value field parsing
   through `ast_to_ruleset` with mandatory matches, covering every bounded form
   in `field_parser` (variable/value/scope-marker/int/float) and exact
   `is_int`/`is_32bit`/`min`/`max` values including `-inf`/`inf`, zero,
   negative, and off-by-one neighboring finite bounds. (#667)
+
+#### Coverage
+
+* Rust coverage includes the language server, enforces the 91.5% line floor,
+  and removes stale summaries on failed runs. (#662)
+* Node and extension-host coverage now enforce per-metric floors to catch
+  regressions. (#526)
+* Node coverage now reports `documentLanguage.ts`, while extension-host
+  coverage drops it to keep the reports disjoint. (#642)
 
 ### 3.3.0
 
