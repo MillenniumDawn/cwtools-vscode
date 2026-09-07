@@ -1,3 +1,10 @@
+### Unreleased
+
+#### Engine
+
+* LSP hover localisation text is escaped before entering Markdown, so mod values
+  render as literal text. (#592)
+
 ### 3.4.0
 
 #### Extension
