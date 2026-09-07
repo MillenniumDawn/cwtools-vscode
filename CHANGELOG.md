@@ -1,3 +1,10 @@
+### Unreleased
+
+#### Tooling
+
+* Guard baselines now warn when corpus, rules, or vanilla inputs drift from
+  their recorded revisions. (#611)
+
 ### 3.4.0
 
 #### Extension
