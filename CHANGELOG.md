@@ -1,3 +1,10 @@
+### Unreleased
+
+#### Engine
+
+* Type dispatch now honors `starts_with` and `type_key_prefix` for validation
+  and navigation. (#581)
+
 ### 3.4.0
 
 #### Extension
