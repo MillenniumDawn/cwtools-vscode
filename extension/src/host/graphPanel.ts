@@ -322,7 +322,7 @@ export class GraphPanel {
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-   <meta http-equiv="Content-Security-Policy" content="default-src 'nonce-${nonce}'; img-src ${cspSource} https: data:; script-src 'nonce-${nonce}' 'strict-dynamic'; base-uri 'self'; object-src 'none'; style-src ${cspSource} 'unsafe-inline'">
+   <meta http-equiv="Content-Security-Policy" content="default-src 'nonce-${nonce}'; img-src ${cspSource} data:; script-src 'nonce-${nonce}' 'strict-dynamic'; base-uri 'self'; object-src 'none'; form-action 'none'; style-src ${cspSource} 'unsafe-inline'">
            <link href="${styleUri.toString()}" rel="stylesheet" type="text/css" nonce="${nonce}" />
     </head>
 <body>

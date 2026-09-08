@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Extension
+
+* Graph webviews now block remote images and form submissions without breaking
+  graph rendering. (#602)
 #### Engine
 
 * LSP hover localisation text is escaped before entering Markdown, so mod values
