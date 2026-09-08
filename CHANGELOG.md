@@ -1,5 +1,15 @@
 ### Unreleased
 
+#### Engine
+
+* Reading an open document's text no longer copies the buffer. The LSP requests
+  that fire at cursor-movement and scroll cadence — code actions, inlay hints,
+  code lenses, document links, highlights, folding and selection ranges,
+  formatting and semantic tokens — each took a full copy of the file every time
+  they ran, and the semantic-token full and delta requests took two, so a large
+  focus-tree or events file paid a document-sized allocation per request. They
+  now share the open buffer. (#473)
+
 ### 3.4.1
 
 #### Tooling
