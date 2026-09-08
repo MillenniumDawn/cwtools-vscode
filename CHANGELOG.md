@@ -11,6 +11,9 @@
   (#696)
 * Guard baselines now warn when corpus, rules, or vanilla inputs drift from
   their recorded revisions. (#611)
+* The release PR is now opened by a GitHub App rather than a personal access
+  token, so no individual is its author and its checks still run on the merge
+  commit. (#710)
 #### Extension
 
 * Graph webviews now block remote images and form submissions without breaking
