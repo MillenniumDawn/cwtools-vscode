@@ -143,7 +143,13 @@ Every substantive PR or push updates `CHANGELOG.md` as part of the change, engin
 
 ## Releasing
 
-Being reworked as part of the repo merge. Until that lands, the extension side is unchanged: `npm run build -- release` checks the CHANGELOG, refuses a dirty tree or an existing tag, then pushes `v<x.y.z>`, and `.github/workflows/release.yml` does the matrix build, the smoke test and the publish. The engine's own tag-and-archive release process no longer applies now that it has no repo of its own.
+Publishing is automatic on two channels, and neither is run from a developer's machine.
+
+Every push to `main` publishes a **pre-release** (`.github/workflows/pre-release.yml`) to the Marketplace, Open VSX, and GitHub Releases. Stable takes the even minors and pre-release the odd minor above it, with the Actions run number as the patch: with stable at `3.4.0`, pre-releases are `3.5.<run>` (`prerelease_identity_from` in `scripts/build/build.py`).
+
+A **release** is cut by merging the release PR. `.github/workflows/release-pr.yml` regenerates `release/version-bump` on every push to `main`, where `scripts/build/release_pr.py` promotes `### Unreleased` to a version heading and moves `extension/package/package.json` to match — so that branch is force-pushed and edits on it are discarded; fix release notes in `main`'s `### Unreleased`. Merging it makes `.github/workflows/tag-release.yml` push `v<x.y.z>` and call `release.yml` for the matrix build, smoke test, and publish. Releases stay on even minors, so a minor bump goes `3.4.0` → `3.6.0`.
+
+`npm run build -- release` remains the manual fallback: it checks the CHANGELOG, refuses a dirty tree or an existing tag, then pushes the tag, which triggers the same `release.yml`. The engine's own tag-and-archive release process no longer applies now that it has no repo of its own.
 
 ## Performance work
 

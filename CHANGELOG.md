@@ -2,6 +2,13 @@
 
 #### Tooling
 
+* Publishing is now automatic on two channels. Every push to `main` publishes a
+  pre-release to the Marketplace, Open VSX, and GitHub Releases, versioned on
+  the odd minor above stable with the run number as the patch; releases are cut
+  by merging an auto-maintained release PR, which promotes the changelog's
+  `### Unreleased` section and moves the manifest, after which the merge is
+  tagged and published. The nightly workflow is replaced by the pre-release one.
+  (#696)
 * Guard baselines now warn when corpus, rules, or vanilla inputs drift from
   their recorded revisions. (#611)
 #### Extension

@@ -33,15 +33,21 @@ The Rust server builds from the in-repo `engine` workspace. To build from anothe
 CWTOOLS_RUST_WORKSPACE=../some-other-cwtools/engine ./build.sh quick
 ```
 
-Other commands: `package` packages a vsix without publishing, `package-prebuilt` packages the binaries already staged by CI (one vsix per platform plus a universal fallback), `publish-prebuilt` publishes what `package-prebuilt` produced, and `release-prebuilt` does both.
+Other commands: `package` packages a vsix without publishing, `package-prebuilt` packages the binaries already staged by CI (one vsix per platform plus a universal fallback), `publish-prebuilt` publishes what `package-prebuilt` produced, `publish-marketplace` is its Marketplace-only half (what the pre-release workflow uses, since a pre-release has no CHANGELOG section to draw GitHub release notes from), and `release-prebuilt` does package plus publish.
 
-`release` cuts a release: it checks the CHANGELOG has a section for the top version, refuses a dirty tree or an existing tag, then pushes `v<x.y.z>`. Everything after that is CI. The tag push triggers `.github/workflows/release.yml`, which builds the server on every platform, packages one vsix per platform plus the universal fallback, smoke-tests them, and publishes. Nothing is built or published from your machine.
+### The two channels
 
-The nightly workflow keeps the extension version numeric because VS Code does not
-support SemVer prerelease suffixes. It adds the Actions run number to the latest
-release's patch and marks the VSIX as prerelease; the Git tag adds
-`-nightly.<attempt>` so reruns stay unique. The next production release must bump
-the minor version so it sorts above every nightly in the previous minor line.
+Publishing is automatic on both channels; neither needs anything run from your machine.
+
+**Pre-release**, on every push to `main`. `.github/workflows/pre-release.yml` builds every platform, smoke-tests the VSIX files, and publishes them to the VS Code Marketplace and Open VSX on the pre-release channel, plus a GitHub prerelease. Versions follow VS Code's convention: stable takes the even minors, pre-release the odd minor directly above. With stable at `3.4.0`, pre-releases are `3.5.<run number>` — the extension version stays numeric because VS Code rejects SemVer prerelease suffixes, and only the Git tag carries the `-pre.<attempt>` suffix so reruns stay unique. `prerelease_identity_from` in [`scripts/build/build.py`](../scripts/build/build.py) is where that lives; it refuses to run when the stable minor is odd.
+
+**Release**, by merging the release PR. `.github/workflows/release-pr.yml` keeps a `release/version-bump` branch and PR up to date on every push to `main`: [`scripts/build/release_pr.py`](../scripts/build/release_pr.py) promotes the changelog's `### Unreleased` section to a version heading and moves `extension/package/package.json` to match. The bump defaults to `patch`; dispatch the workflow with `release_type: minor|major` for anything else. A minor bump skips the odd line (`3.4.0` → `3.6.0`) so releases stay on even minors.
+
+That branch is regenerated from `origin/main` and force-pushed on every push, so edits made on it are discarded — correct the release notes in `main`'s `### Unreleased` section instead.
+
+Merging the release PR is what cuts the release. `.github/workflows/tag-release.yml` notices that the manifest version matches the top changelog heading with no tag for it yet, pushes `v<x.y.z>`, and calls `release.yml`, which builds every platform, smoke-tests, and publishes to the Marketplace, Open VSX, and GitHub Releases. (It calls rather than relies on the tag push: a tag pushed with `GITHUB_TOKEN` starts no workflow.)
+
+`npm run build -- release` still works as the manual fallback: it checks the CHANGELOG has a section for the top version, refuses a dirty tree or an existing tag, then pushes `v<x.y.z>`, which triggers the same `release.yml` through its tag-push trigger.
 
 ## Syntax highlighting
 

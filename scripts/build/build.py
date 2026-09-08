@@ -289,21 +289,54 @@ def resolve_version_from(env: Mapping[str, str], changelog: str) -> dict[str, An
     }
 
 
-def nightly_identity_from(env: Mapping[str, str], changelog: str) -> dict[str, str]:
+# VS Code's channel convention: stable takes the even minors, pre-release the
+# odd minor directly above the current stable one. The run number is the patch,
+# so the pre-release line only ever climbs, and the Marketplace version stays
+# numeric (VS Code rejects SemVer prerelease suffixes). Only the Git tag carries
+# the rerun suffix.
+def prerelease_identity_from(env: Mapping[str, str], changelog: str) -> dict[str, str]:
     try:
         run_number = int(env.get("GITHUB_RUN_NUMBER", "").strip())
         run_attempt = int(env.get("GITHUB_RUN_ATTEMPT", "1").strip())
         base = top_changelog_version(changelog).split("-", maxsplit=1)[0]
         major, minor, patch = (int(part) for part in base.split("."))
     except ValueError as error:
-        raise RuntimeError("nightly version inputs must be integers") from error
+        raise RuntimeError("pre-release version inputs must be integers") from error
     if run_number < 1 or run_attempt < 1:
-        raise RuntimeError("nightly run number and attempt must be positive")
-    version = f"{major}.{minor}.{patch + run_number}"
+        raise RuntimeError("pre-release run number and attempt must be positive")
+    if minor % 2 != 0:
+        raise RuntimeError(
+            f"pre-release requires an even stable minor, but the changelog is at "
+            f"{major}.{minor}.{patch}; releases must not land on the odd "
+            "pre-release line"
+        )
+    version = f"{major}.{minor + 1}.{run_number}"
     return {
         "version": version,
-        "tag": f"v{version}-nightly.{run_attempt}",
+        "tag": f"v{version}-pre.{run_attempt}",
     }
+
+
+# Releases stay on even minors, so a minor bump skips the odd pre-release line
+# that sits directly above the current stable version.
+def next_release_version(current: str, bump: str) -> str:
+    try:
+        major, minor, patch = (
+            int(part) for part in current.split("-", maxsplit=1)[0].split(".")
+        )
+    except ValueError as error:
+        raise RuntimeError(f"cannot bump '{current}': not a x.y.z version") from error
+    if minor % 2 != 0:
+        raise RuntimeError(
+            f"cannot bump '{current}': {major}.{minor} is a pre-release line"
+        )
+    if bump == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    if bump == "minor":
+        return f"{major}.{minor + 2}.0"
+    if bump == "major":
+        return f"{major + 1}.0.0"
+    raise RuntimeError(f"unknown bump '{bump}'; expected patch, minor, or major")
 
 
 def read_changelog() -> str:
@@ -369,7 +402,7 @@ def publish_github_release(
     run("gh", args)
 
 
-def publish_to_marketplace(vsixes: list[str]) -> None:
+def publish_to_marketplace(vsixes: list[str], pre_release: bool = False) -> None:
     token = os.environ.get("VSCE_TOKEN", "").strip()
     if not token:
         is_tag_release = os.environ.get("TAG_RELEASE", "").lower() in {"1", "true"}
@@ -380,14 +413,14 @@ def publish_to_marketplace(vsixes: list[str]) -> None:
             )
             return
         raise RuntimeError("VSCE_TOKEN is not set; cannot publish to the Marketplace.")
-    run(
-        "npx",
-        ["--no-install", "vsce", "publish", "--pat", token, "--packagePath", *vsixes],
-    )
+    args = ["--no-install", "vsce", "publish", "--pat", token]
+    if pre_release:
+        args.append("--pre-release")
+    run("npx", [*args, "--packagePath", *vsixes])
 
 
-def cmd_nightly_identity() -> None:
-    identity = nightly_identity_from(os.environ, read_changelog())
+def cmd_prerelease_identity() -> None:
+    identity = prerelease_identity_from(os.environ, read_changelog())
     print(f"version={identity['version']}")
     print(f"tag={identity['tag']}")
 
@@ -426,7 +459,15 @@ def cmd_publish_prebuilt() -> None:
     publish_github_release(
         resolved["tag"], resolved["version"], resolved["preRelease"], vsixes
     )
-    publish_to_marketplace(vsixes)
+    publish_to_marketplace(vsixes, resolved["preRelease"])
+
+
+# The Marketplace half of publish-prebuilt on its own. The pre-release workflow
+# creates its own GitHub prerelease, and publish_github_release would fail there
+# anyway: a pre-release version has no CHANGELOG section to draw notes from.
+def cmd_publish_marketplace() -> None:
+    resolved = resolve_version()
+    publish_to_marketplace(find_vsixes(), resolved["preRelease"])
 
 
 def cmd_release_prebuilt() -> None:
@@ -489,13 +530,14 @@ def cmd_release() -> None:
 
 
 COMMANDS: dict[str, Callable[[], object]] = {
-    "nightly-identity": cmd_nightly_identity,
+    "prerelease-identity": cmd_prerelease_identity,
     "compile": cmd_compile,
     "compile-release": cmd_compile_release,
     "quick": cmd_quick,
     "package": cmd_package,
     "package-prebuilt": cmd_package_prebuilt,
     "publish-prebuilt": cmd_publish_prebuilt,
+    "publish-marketplace": cmd_publish_marketplace,
     "release-prebuilt": cmd_release_prebuilt,
     "release": cmd_release,
 }

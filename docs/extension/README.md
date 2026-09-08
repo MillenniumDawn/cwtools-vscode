@@ -11,15 +11,21 @@ This is a fork of [cwtools/cwtools-vscode](https://github.com/cwtools/cwtools-vs
 This extension is still in preview, it may not work, it may stop working at any time.
 **Make backups of your mod files.**
 
-## Nightly builds
+## Pre-release builds
 
-The [nightly prereleases](https://github.com/MillenniumDawn/cwtools-vscode/releases)
-contain builds from `main` for Linux, macOS, and Windows. Download the VSIX for
-that platform, then run **Extensions: Install from VSIX...** in VS Code. The
-universal VSIX carries every server binary.
+Every push to `main` is published as a pre-release. Switch to it from the
+extension's page in VS Code — **Switch to Pre-Release Version** — and VS Code
+keeps you on that channel; the same builds are on Open VSX. Pre-releases take
+the odd minor above the current stable one, so `3.5.x` is the pre-release line
+for stable `3.4.x`.
 
-Nightlies do not publish to the VS Code Marketplace or Open VSX. They are test
-builds and may break.
+The same builds are also attached to the
+[GitHub prereleases](https://github.com/MillenniumDawn/cwtools-vscode/releases)
+for Linux, macOS, and Windows. Download the VSIX for your platform, then run
+**Extensions: Install from VSIX...** in VS Code. The universal VSIX carries
+every server binary.
+
+Pre-releases are test builds and may break.
 
 ## Supported games
 

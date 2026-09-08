@@ -10,9 +10,16 @@ import build
 
 Command = list[str]
 cmd_publish_prebuilt = cast(Callable[[], None], vars(build)["cmd_publish_prebuilt"])
+cmd_publish_marketplace = cast(
+    Callable[[], None], vars(build)["cmd_publish_marketplace"]
+)
 publish_github_release = cast(
     Callable[[str, str, bool, list[str]], None],
     vars(build)["publish_github_release"],
+)
+publish_to_marketplace = cast(
+    Callable[[list[str], bool], None],
+    vars(build)["publish_to_marketplace"],
 )
 
 CHANGELOG = """### Unreleased
@@ -41,7 +48,7 @@ def test_refuses_existing_release_when_non_tag_run_resolves_to_changelog_tag(
     def run(cmd: str, args: list[str], **_kwargs: object) -> None:
         commands.append([cmd, *args])
 
-    def publish_to_marketplace(vsixes: list[str]) -> None:
+    def record_marketplace(vsixes: list[str], _pre_release: bool = False) -> None:
         marketplace_calls.append(vsixes)
 
     monkeypatch.delenv("TAG_RELEASE", raising=False)
@@ -52,7 +59,7 @@ def test_refuses_existing_release_when_non_tag_run_resolves_to_changelog_tag(
     monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
     monkeypatch.setattr(build, "release_notes", lambda _changelog, _version: "notes")
     monkeypatch.setattr(build, "find_vsixes", lambda: [vsix])
-    monkeypatch.setattr(build, "publish_to_marketplace", publish_to_marketplace)
+    monkeypatch.setattr(build, "publish_to_marketplace", record_marketplace)
     monkeypatch.setattr(build, "run_or_null", run_or_null)
     monkeypatch.setattr(build, "run", run)
 
@@ -126,7 +133,7 @@ def test_creates_release_when_non_tag_run_does_not_find_existing_release(
     def run(cmd: str, args: list[str], **_kwargs: object) -> None:
         commands.append([cmd, *args])
 
-    def publish_to_marketplace(vsixes: list[str]) -> None:
+    def record_marketplace(vsixes: list[str], _pre_release: bool = False) -> None:
         marketplace_calls.append(vsixes)
 
     monkeypatch.delenv("TAG_RELEASE", raising=False)
@@ -137,7 +144,7 @@ def test_creates_release_when_non_tag_run_does_not_find_existing_release(
     monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
     monkeypatch.setattr(build, "release_notes", lambda _changelog, _version: "notes")
     monkeypatch.setattr(build, "find_vsixes", lambda: [vsix])
-    monkeypatch.setattr(build, "publish_to_marketplace", publish_to_marketplace)
+    monkeypatch.setattr(build, "publish_to_marketplace", record_marketplace)
     monkeypatch.setattr(build, "run_or_null", run_or_null)
     monkeypatch.setattr(build, "run", run)
 
@@ -161,3 +168,68 @@ def test_creates_release_when_non_tag_run_does_not_find_existing_release(
     assert ["release", "delete"] not in (command[1:3] for command in commands)
     assert (vsix_root / "release-notes.md").exists()
     assert marketplace_calls == [[vsix]]
+
+
+def _captured_publish(
+    monkeypatch: pytest.MonkeyPatch, vsixes: list[str], pre_release: bool
+) -> Command:
+    commands: list[Command] = []
+    monkeypatch.setenv("VSCE_TOKEN", "pat")
+    monkeypatch.setattr(
+        build, "run", lambda cmd, args, **_kwargs: commands.append([cmd, *args])
+    )
+    publish_to_marketplace(vsixes, pre_release)
+    assert len(commands) == 1
+    return commands[0]
+
+
+def test_marketplace_publish_marks_a_prerelease_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = _captured_publish(monkeypatch, ["one.vsix", "two.vsix"], True)
+
+    assert command == [
+        "npx",
+        "--no-install",
+        "vsce",
+        "publish",
+        "--pat",
+        "pat",
+        "--pre-release",
+        "--packagePath",
+        "one.vsix",
+        "two.vsix",
+    ]
+
+
+def test_marketplace_publish_leaves_a_stable_package_unflagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command = _captured_publish(monkeypatch, ["one.vsix"], False)
+
+    assert "--pre-release" not in command
+    assert command[-2:] == ["--packagePath", "one.vsix"]
+
+
+def test_publish_marketplace_command_skips_the_github_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vsix = str(tmp_path / "cwtools.vsix")
+    marketplace_calls: list[tuple[list[str], bool]] = []
+
+    def publish_to_marketplace_stub(vsixes: list[str], pre_release: bool) -> None:
+        marketplace_calls.append((vsixes, pre_release))
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("publish-marketplace must not touch GitHub releases")
+
+    monkeypatch.setenv("CWTOOLS_BUILD_VERSION", "3.5.42")
+    monkeypatch.setenv("CWTOOLS_RELEASE_TAG", "v3.5.42-pre.1")
+    monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
+    monkeypatch.setattr(build, "find_vsixes", lambda: [vsix])
+    monkeypatch.setattr(build, "publish_to_marketplace", publish_to_marketplace_stub)
+    monkeypatch.setattr(build, "publish_github_release", fail)
+
+    cmd_publish_marketplace()
+
+    assert marketplace_calls == [([vsix], True)]
