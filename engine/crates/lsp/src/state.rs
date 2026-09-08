@@ -277,6 +277,9 @@ pub(crate) struct DocumentState {
     pub(crate) fixable_edits: Mutex<HashMap<String, FixableEdits>>,
     pub(crate) last_scan_summary: Mutex<Option<ScanSummary>>,
     pub(crate) published_workspace_uris: Mutex<HashSet<String>>,
+    /// Document and workspace notifications run here rather than on the message
+    /// pump, in the order the client sent them (#470).
+    pub(crate) notifications: NotificationQueue,
 }
 
 pub(crate) struct LocOverlayWrite<'a> {
@@ -597,6 +600,64 @@ pub(crate) enum DiskState {
     Absent,
 }
 
+pub(crate) type NotificationJob = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+/// Deep enough that no realistic burst of edits blocks on it, small enough that
+/// a client which stops being answered cannot grow the queue without bound.
+const NOTIFICATION_QUEUE_CAPACITY: usize = 1024;
+
+/// One worker draining one bounded queue, so document notifications run off
+/// tower-lsp's message pump without losing their order (#470).
+///
+/// Both halves of that matter. `didClose` runs two full-file validations and
+/// `didChangeConfiguration` can start a whole workspace scan, and doing that on
+/// the pump froze the protocol channel. But spawning each notification
+/// separately would let `didOpen` → `didChange` → `didClose` land out of order,
+/// which the document store has no way to recover from. A single worker gives
+/// both properties at once.
+///
+/// `enqueue` is backpressured rather than blocking: a full queue makes the pump
+/// *yield*, which is exactly the right behaviour, unlike a parked thread.
+pub(crate) struct NotificationQueue {
+    sender: tokio::sync::mpsc::Sender<NotificationJob>,
+    receiver: parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<NotificationJob>>>,
+    started: AtomicBool,
+}
+
+impl NotificationQueue {
+    fn new() -> Self {
+        let (sender, receiver) = tokio::sync::mpsc::channel(NOTIFICATION_QUEUE_CAPACITY);
+        Self {
+            sender,
+            receiver: parking_lot::Mutex::new(Some(receiver)),
+            started: AtomicBool::new(false),
+        }
+    }
+
+    /// Hands the draining half to `main`, once. The unit tests build a bare
+    /// `DocumentState` and never call this; `Backend::enqueue_notification`
+    /// then runs each job inline instead, which is what those tests want and
+    /// what keeps a notification from being silently dropped.
+    pub(crate) fn take_receiver(&self) -> Option<tokio::sync::mpsc::Receiver<NotificationJob>> {
+        let receiver = self.receiver.lock().take();
+        if receiver.is_some() {
+            self.started.store(true, Ordering::Release);
+        }
+        receiver
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        self.started.load(Ordering::Acquire)
+    }
+
+    pub(crate) async fn send(
+        &self,
+        job: NotificationJob,
+    ) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<NotificationJob>> {
+        self.sender.send(job).await
+    }
+}
+
 impl DocumentState {
     pub(crate) fn new() -> Self {
         Self {
@@ -678,6 +739,7 @@ impl DocumentState {
             fixable_edits: Mutex::new(HashMap::new()),
             last_scan_summary: Mutex::new(None),
             published_workspace_uris: Mutex::new(HashSet::new()),
+            notifications: NotificationQueue::new(),
         }
     }
 
@@ -701,6 +763,9 @@ impl DocumentState {
     }
 }
 
+/// `Client` is a handle and `state` is an `Arc`, so a clone is two refcount
+/// bumps — cheap enough to hand one to every spawned handler.
+#[derive(Clone)]
 pub(crate) struct Backend {
     pub(crate) client: Client,
     pub(crate) state: Arc<DocumentState>,

@@ -41,6 +41,15 @@ pub(crate) use state::{
     ValidateTrigger,
 };
 
+/// How many requests `Server::serve` will keep in flight at once. tower-lsp's
+/// own default is 4, which was enough while every handler ran to completion on
+/// the pump. Now that `SpawnRequests` puts each one on its own task a slot is
+/// usually held only for a `JoinHandle` await — except a long `executeCommand`
+/// (`reindexWorkspace` and friends), which holds one for its whole run. Sized
+/// well above the number of those a client can have outstanding so a slow
+/// command can never wall off the queue.
+const CONCURRENCY_LEVEL: usize = 64;
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
@@ -67,6 +76,17 @@ fn main() {
         .expect("failed to build tokio runtime")
         .block_on(async {
             let state = Arc::new(DocumentState::new());
+            if let Some(mut jobs) = state.notifications.take_receiver() {
+                tokio::spawn(async move {
+                    // Awaited one at a time, so the client's notification order
+                    // is preserved; spawned, so a panicking handler does not
+                    // take the worker down with it and a `block_in_place`
+                    // inside one is on a task of its own (#470).
+                    while let Some(job) = jobs.recv().await {
+                        scan::spawn_logging_panics("notification handler", job).await;
+                    }
+                });
+            }
             let (stdin, stdout) = (
                 transport::BoundedLspReader::new(tokio::io::stdin()),
                 tokio::io::stdout(),
@@ -81,7 +101,10 @@ fn main() {
                 Backend::on_work_done_progress_cancel,
             )
             .finish();
-            Server::new(stdin, stdout, socket).serve(service).await;
+            Server::new(stdin, stdout, socket)
+                .concurrency_level(CONCURRENCY_LEVEL)
+                .serve(transport::SpawnRequests::new(service))
+                .await;
             tracing::info!("LSP server shut down (stdin closed)");
         });
 }

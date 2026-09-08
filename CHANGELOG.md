@@ -6,6 +6,13 @@
   the configured width otherwise. CLI `--max-line-width` and the
   `cwtools.formatting.maxLineWidth` setting control that width. (#554)
 * Cargo dependency advisory checks now deny yanked crates. (#594)
+* Request handlers and document notifications now run off tower-lsp's message
+  pump, which polls them on the same task that reads stdin and writes stdout. A
+  long request no longer stops `didChange`, diagnostic publishes or anything
+  else from being handled, and `$/cancelRequest` and
+  `window/workDoneProgress/cancel` now reach a scan that is already running
+  instead of waiting for it to finish. Notifications keep the order the client
+  sent them, on a single worker. (#470)
 
 #### Extension
 
