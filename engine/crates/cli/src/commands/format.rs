@@ -17,6 +17,7 @@ pub(super) fn run(args: FormatArgs) {
         ignore_dirs,
         indent_style,
         indent_size,
+        max_line_width,
         apply,
         allow_empty,
     } = args;
@@ -64,6 +65,7 @@ pub(super) fn run(args: FormatArgs) {
     let opts = FormatOptions {
         indent_style,
         indent_size: indent_size.clamp(1, 16),
+        max_line_width,
         ..FormatOptions::default()
     };
 

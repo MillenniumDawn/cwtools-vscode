@@ -61,18 +61,25 @@ jobs:
           mapfile -t vsixes < <(find vsix-artifacts -maxdepth 1 -type f \
             -name '*.vsix' -print | sort)
           # Every platform vsix in one publish call, not one platform at a time.
-          npx @vscode/vsce publish --pat "$VSCE_TOKEN" --packagePath "${vsixes[@]}"
+          npx --no-install @vscode/vsce publish \
+            --pat "$VSCE_TOKEN" \
+            --packagePath "${vsixes[@]}"
 
       - name: Dry run (validate only)
         if: ${{ inputs.dry-run == true }}
         run: |
           mapfile -t vsixes < <(find vsix-artifacts -maxdepth 1 -type f \
             -name '*.vsix' -print | sort)
-          (( ${#vsixes[@]} > 0 )) || { echo "::error::no vsix files found"; exit 1; }
+          (( ${#vsixes[@]} > 0 )) || {
+            echo "::error::no vsix files found"
+            exit 1
+          }
           echo "Dry run — would publish:"
           printf '  %s\n' "${vsixes[@]}"
-          # generate-manifest actually opens and reads each vsix, so a bad package fails the step.
+          # generate-manifest opens and reads each vsix, so a bad package fails.
           for vsix in "${vsixes[@]}"; do
-            npx @vscode/vsce generate-manifest --packagePath "$vsix" -o "$RUNNER_TEMP/$(basename "$vsix").manifest"
+            npx --no-install @vscode/vsce generate-manifest \
+              --packagePath "$vsix" \
+              -o "$RUNNER_TEMP/$(basename "$vsix").manifest"
           done
           echo "Dry run complete. No changes published."

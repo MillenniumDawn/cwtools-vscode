@@ -47,6 +47,7 @@ export interface LiveServerSettings {
 	hoverScopeDisplay: HoverScopeDisplay;
 	formattingIndentStyle: FormattingIndentStyle;
 	formattingIndentSize: number;
+	formattingMaxLineWidth: number;
 	formattingTrimTrailingWhitespace: boolean;
 	formattingInsertFinalNewline: boolean;
 }
@@ -63,6 +64,7 @@ export const LIVE_SETTINGS_KEYS = [
 	"cwtools.hover.scopeDisplay",
 	"cwtools.formatting.indentStyle",
 	"cwtools.formatting.indentSize",
+	"cwtools.formatting.maxLineWidth",
 	"cwtools.formatting.trimTrailingWhitespace",
 	"cwtools.formatting.insertFinalNewline",
 ] as const;

@@ -75,6 +75,8 @@ def test_package_marks_prerelease_vsixes(
     def run(
         cmd: str, args: list[str], *, cwd: Path | None = None, **_kwargs: object
     ) -> None:
+        assert cwd is not None
+        (cwd / "extension.vsix").write_text("vsix", encoding="utf-8")
         commands.append((cmd, args, cwd))
 
     extension_root = tmp_path / "extension"
@@ -84,12 +86,26 @@ def test_package_marks_prerelease_vsixes(
     monkeypatch.setattr(build, "run", run)
     extension_root.mkdir()
 
-    assert package_vsix("linux-x64") == []
+    assert package_vsix("linux-x64") == [str(tmp_path / "vsix" / "extension.vsix")]
     args = ["--no-install", "vsce", "package", "--no-dependencies"]
     if pre_release:
         args.append("--pre-release")
     args.extend(["--target", "linux-x64"])
     assert commands == [("npx", args, extension_root)]
+
+
+def test_package_raises_when_vsce_produces_no_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    extension_root = tmp_path / "extension"
+    monkeypatch.setattr(build, "EXTENSION_DIST_ROOT", extension_root)
+    monkeypatch.setattr(build, "VSIX_ROOT", tmp_path / "vsix")
+    monkeypatch.setattr(build, "resolve_version", lambda: {"preRelease": False})
+    monkeypatch.setattr(build, "run", lambda *_args, **_kwargs: None)
+    extension_root.mkdir()
+
+    with pytest.raises(RuntimeError, match=r"vsce produced no \.vsix file"):
+        package_vsix(None)
 
 
 def test_each_per_platform_pass_sees_only_its_own_dir(
