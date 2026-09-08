@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.1
+
 #### Tooling
 
 * Publishing is now automatic on two channels. Every push to `main` publishes a
