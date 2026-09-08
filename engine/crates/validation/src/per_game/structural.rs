@@ -12,7 +12,7 @@ enum BoolState {
     Neutral,
 }
 
-struct Keywords {
+pub(super) struct Keywords {
     not: StringId,
     if_: StringId,
     else_if: StringId,
@@ -32,7 +32,7 @@ struct Keywords {
 }
 
 impl Keywords {
-    fn new(table: &StringTable) -> Self {
+    pub(super) fn new(table: &StringTable) -> Self {
         Self {
             not: table.intern("not").lower,
             if_: table.intern("if").lower,

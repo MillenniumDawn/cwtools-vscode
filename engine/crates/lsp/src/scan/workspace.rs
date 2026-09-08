@@ -1037,8 +1037,9 @@ impl Backend {
                 .unwrap_or(0);
             tracing::info!(target: "cwtools::profile", "{}", info_summary);
             tracing::info!(target: "cwtools::profile",
-                "string_table {} MiB ({} entries) | vanilla_index {} instances | loc union {} keys",
-                st.total_bytes() / (1024 * 1024), st.entries, vanilla, loc_keys);
+                "string_table {} MiB ({} entries, {} overlay entries in {} regions) | vanilla_index {} instances | loc union {} keys",
+                st.total_bytes() / (1024 * 1024), st.entries, st.overlay_entries,
+                st.overlay_regions, vanilla, loc_keys);
         }
         cwtools_profiling::log_rss("workspace_scan_done");
         cwtools_profiling::trim_memory();

@@ -7,6 +7,17 @@ pub mod hoi4;
 pub mod stellaris;
 pub mod structural;
 
+/// Intern every literal the per-game validators compare against an id taken from
+/// a parsed AST. Seeding them into a long-lived table up front keeps them out of
+/// any per-document overlay region, so the comparison holds whichever handle a
+/// document happened to be parsed through (#475). Calling the real constructors
+/// is what stops this list from drifting as keywords are added.
+pub fn seed_comparison_literals(table: &cwtools_string_table::string_table::StringTable) {
+    let _ = structural::Keywords::new(table);
+    let _ = stellaris::Keys::new(table);
+    let _ = hoi4::redundant_block_defaults(table);
+}
+
 pub(crate) fn run_game_validators(ctx: &ValidationCtx, game: Game) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let ast = ctx.ast;

@@ -8,7 +8,7 @@ use cwtools_parser::fix::{SuggestedFix, key_token_range};
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::{StringId, StringTable};
 
-struct Keys {
+pub(super) struct Keys {
     set_empire_name: StringId,
     set_planet_name: StringId,
     if_: StringId,
@@ -22,7 +22,7 @@ struct Keys {
 }
 
 impl Keys {
-    fn new(table: &StringTable) -> Self {
+    pub(super) fn new(table: &StringTable) -> Self {
         Self {
             set_empire_name: table.intern("set_empire_name").lower,
             set_planet_name: table.intern("set_planet_name").lower,

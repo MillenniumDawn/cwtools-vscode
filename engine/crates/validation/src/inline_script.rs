@@ -157,11 +157,10 @@ pub(crate) fn expand(
     Ok(Expanded {
         name: lookup,
         logical_path: script.logical_path.clone(),
-        ast: ParsedFile {
-            arena: out,
-            root_children,
-            errors: Vec::new(),
-        },
+        // `$ARG$` substitutions are interned through `table`, so the expansion
+        // belongs to whatever region that handle carries, not to the script's own
+        // (base-parsed) AST.
+        ast: ParsedFile::new(out, root_children, Vec::new()).with_overlay(table.overlay_guard()),
     })
 }
 

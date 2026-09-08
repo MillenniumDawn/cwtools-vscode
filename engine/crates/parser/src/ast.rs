@@ -1,4 +1,4 @@
-use cwtools_string_table::string_table::StringTokens;
+use cwtools_string_table::string_table::{OverlayGuard, StringTokens};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
@@ -153,4 +153,32 @@ pub struct ParsedFile {
     pub arena: Arena,
     pub root_children: Vec<Child>,
     pub errors: Vec<ParseError>,
+    /// Keeps alive the overlay region this file's ids were interned into, if any.
+    /// Private so out-of-crate construction has to go through [`ParsedFile::new`]
+    /// rather than silently defaulting it (#475).
+    pub(crate) overlay: Option<OverlayGuard>,
+}
+
+impl ParsedFile {
+    pub fn new(arena: Arena, root_children: Vec<Child>, errors: Vec<ParseError>) -> Self {
+        Self {
+            arena,
+            root_children,
+            errors,
+            overlay: None,
+        }
+    }
+
+    /// Bind this file to the overlay region its ids came from. The region lives at
+    /// least as long as the file, so the ids stay resolvable however long a caller
+    /// holds the `ParsedFile`.
+    #[must_use]
+    pub fn with_overlay(mut self, overlay: Option<OverlayGuard>) -> Self {
+        self.overlay = overlay;
+        self
+    }
+
+    pub fn overlay(&self) -> Option<&OverlayGuard> {
+        self.overlay.as_ref()
+    }
 }

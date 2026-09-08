@@ -12,7 +12,7 @@ use tower_lsp::lsp_types::*;
 use cwtools_info::TypeInstance;
 use cwtools_parser::ast::ParsedFile;
 use cwtools_rules::rules_types::RuleSet;
-use cwtools_string_table::string_table::{StringId, StringTable};
+use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::{InlineScripts, references};
 
 use crate::scan::ScanSummary;
@@ -239,7 +239,11 @@ pub(crate) struct DocumentState {
     pub(crate) published_rule_uris: parking_lot::Mutex<HashSet<String>>,
     pub(crate) published_loc_uris: parking_lot::Mutex<HashSet<String>>,
     pub(crate) edit_generation: AtomicU64,
-    pub(crate) doc_tokens: parking_lot::RwLock<HashMap<String, HashSet<StringId>>>,
+    /// Case-folded content hashes, not `StringId`s: a token interned into a
+    /// document's mid-edit overlay and the same name interned into the base table
+    /// are different ids, so the dependent sweep would silently skip the document
+    /// (#475).
+    pub(crate) doc_tokens: parking_lot::RwLock<HashMap<String, HashSet<u64>>>,
     pub(crate) pending_changed_names: Mutex<HashSet<String>>,
     pub(crate) type_uses: parking_lot::RwLock<HashMap<String, references::UsedInstances>>,
     #[allow(clippy::type_complexity)]
@@ -660,12 +664,16 @@ impl NotificationQueue {
 
 impl DocumentState {
     pub(crate) fn new() -> Self {
+        let string_table = StringTable::new();
+        // Before any document can be parsed into an overlay region, so the ids the
+        // per-game validators compare against are always base ids (#475).
+        cwtools_validation::per_game::seed_comparison_literals(&string_table);
         Self {
             documents: Mutex::new(DocumentStore::new()),
             config: parking_lot::RwLock::new(Config::new()),
             workspace_roots_generation: AtomicU64::new(0),
             rules: parking_lot::RwLock::new(RuleData::new()),
-            string_table: StringTable::new(),
+            string_table,
             info_service: parking_lot::RwLock::new(cwtools_info::InfoService::new()),
             vanilla_index: Mutex::new(None),
             vanilla_merged_uris: Mutex::new(HashSet::new()),

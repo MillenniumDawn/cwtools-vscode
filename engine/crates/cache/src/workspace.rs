@@ -497,11 +497,8 @@ fn load_hash(
     } else {
         Vec::new()
     };
-    Some(ParsedFile {
-        arena,
-        root_children,
-        errors,
-    })
+    // Rehydrated from the on-disk cache through the base table, so no overlay.
+    Some(ParsedFile::new(arena, root_children, errors))
 }
 
 fn log_cache_read_error(path: &Path, error: &crate::io::CacheError) {

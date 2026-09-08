@@ -343,7 +343,10 @@ impl Backend {
                 source: AstSource::FreshParse,
             });
         }
-        let table = self.state.string_table.clone();
+        // Speculative parse of a buffer the user is still typing into: its novel
+        // strings go to a reclaimable region, freed when the next keystroke
+        // replaces this cache slot (#475).
+        let table = self.state.string_table.with_overlay();
         tokio::task::block_in_place(|| {
             let ast = Arc::new(cwtools_parser::parser::parse_string(&text, &table));
             *self.state.fresh_ast_cache.lock() = Some((uri.to_string(), version, Arc::clone(&ast)));
@@ -405,11 +408,12 @@ impl Backend {
             || crate::paths::lsp_pos_to_source(pos),
             |text| crate::paths::lsp_pos_to_source_in_text(text, pos, &position_encoding),
         );
+        let table = self.table_for(&ast);
         let info_guard = self.state.info_service.read();
         let inline_guard = self.state.inline_scripts.read();
         let prepared = crate::validate::make_prepared(
             &ruleset,
-            &self.state.string_table,
+            &table,
             game,
             &info_guard.type_index,
             &modifier_keys,

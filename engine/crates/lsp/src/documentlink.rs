@@ -59,12 +59,13 @@ impl Backend {
             return Ok(None);
         };
 
+        let table = self.table_for(&ast);
         let candidates = {
             let info = self.state.info_service.read();
             let inline_guard = self.state.inline_scripts.read();
             let prepared = crate::validate::make_prepared(
                 &ruleset,
-                &self.state.string_table,
+                &table,
                 game,
                 &info.type_index,
                 &modifier_keys,
@@ -78,7 +79,7 @@ impl Backend {
             let mut out = Vec::new();
             let walk = LinkWalk {
                 ast: &ast,
-                table: &self.state.string_table,
+                table: &table,
                 prepared: &prepared,
                 ruleset: &ruleset,
                 logical_path: &logical_path,

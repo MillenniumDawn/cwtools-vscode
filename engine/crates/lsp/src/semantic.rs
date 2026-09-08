@@ -719,13 +719,14 @@ impl Backend {
             )
         };
 
+        let table = self.table_for(&ast);
         let tokens = match ruleset {
             Some(ruleset) => {
                 let info = self.state.info_service.read();
                 let inline_guard = self.state.inline_scripts.read();
                 let prepared = crate::validate::make_prepared(
                     &ruleset,
-                    &self.state.string_table,
+                    &table,
                     game,
                     &info.type_index,
                     &modifier_keys,
@@ -738,14 +739,14 @@ impl Backend {
                 );
                 semantic_tokens(
                     &ast,
-                    &self.state.string_table,
+                    &table,
                     &text,
                     &encoding,
                     Some((&prepared, logical_path.as_str())),
                     span,
                 )
             }
-            None => semantic_tokens(&ast, &self.state.string_table, &text, &encoding, None, span),
+            None => semantic_tokens(&ast, &table, &text, &encoding, None, span),
         };
 
         Some(encode(tokens))

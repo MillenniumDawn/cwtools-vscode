@@ -2,7 +2,7 @@ use super::common::walk_blocks;
 use crate::{ValidationError, error_codes};
 use cwtools_parser::ast::{Child, ParsedFile, Value};
 use cwtools_parser::fix::SuggestedFix;
-use cwtools_string_table::string_table::StringTable;
+use cwtools_string_table::string_table::{StringId, StringTable};
 
 fn sole_always_value(children: &[Child], ast: &ParsedFile, table: &StringTable) -> Option<bool> {
     let mut found: Option<bool> = None;
@@ -28,6 +28,12 @@ fn sole_always_value(children: &[Child], ast: &ParsedFile, table: &StringTable) 
     found
 }
 
+/// Blocks whose sole `always = <default>` body is redundant, keyed by the block's
+/// lowered id.
+pub(super) fn redundant_block_defaults(table: &StringTable) -> [(StringId, bool); 1] {
+    [(table.intern("allowed_civil_war").lower, false)]
+}
+
 pub fn validate_hoi4(
     ast: &ParsedFile,
     _ruleset: &cwtools_rules::rules_types::RuleSet,
@@ -35,7 +41,7 @@ pub fn validate_hoi4(
     file_path: &crate::FilePath,
     errors: &mut Vec<ValidationError>,
 ) {
-    let defaults = [(table.intern("allowed_civil_war").lower, false)];
+    let defaults = redundant_block_defaults(table);
 
     walk_blocks(&ast.root_children, ast, &mut |block| {
         let Some(&(_, default)) = defaults.iter().find(|(id, _)| *id == block.key_lower) else {

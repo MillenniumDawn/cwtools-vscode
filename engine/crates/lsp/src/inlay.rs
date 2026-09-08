@@ -42,13 +42,14 @@ impl Backend {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = crate::paths::logical_path_from_uri(&uri, &ws_prefix);
         let lines = DocLines::new(&text, encoding);
+        let table = self.table_for(&ast);
         let loc_hints = if loc_titles {
             // Lock order: info_service -> loc_text (documents already released).
             let info = self.state.info_service.read();
             let loc_text = self.state.loc_text.read();
             loc_title_hints(
                 &ast,
-                &self.state.string_table,
+                &table,
                 &lines,
                 params.range,
                 &info.type_index,
@@ -72,7 +73,7 @@ impl Backend {
                 };
                 let prepared = crate::validate::make_prepared(
                     ruleset,
-                    &self.state.string_table,
+                    &table,
                     game,
                     &info_guard.type_index,
                     rules_guard.modifier_keys.as_ref(),

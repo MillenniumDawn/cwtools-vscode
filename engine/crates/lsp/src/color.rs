@@ -516,12 +516,13 @@ impl Backend {
             return Ok(Vec::new());
         };
 
+        let table = self.table_for(&ast);
         let found = {
             let info = self.state.info_service.read();
             let inline_guard = self.state.inline_scripts.read();
             let prepared = crate::validate::make_prepared(
                 &ruleset,
-                &self.state.string_table,
+                &table,
                 game,
                 &info.type_index,
                 &modifier_keys,
@@ -534,7 +535,7 @@ impl Backend {
             );
             document_colours(
                 &ast,
-                &self.state.string_table,
+                &table,
                 &text,
                 Some((&prepared, logical_path.as_str())),
             )

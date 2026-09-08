@@ -535,11 +535,8 @@ pub fn index_discovered_files(
         .into_par_iter()
         .map(|file| {
             let path = file.path.to_str().unwrap_or("").to_string();
-            let pf = ParsedFile {
-                arena: file.arena,
-                root_children: file.root_children,
-                errors: vec![],
-            };
+            // Workspace-scan files, always parsed on the base table.
+            let pf = ParsedFile::new(file.arena, file.root_children, vec![]);
             let (instances, subtype_instances) = match subtype_collector {
                 Some(hook) => {
                     let collected = collect_type_instances_with_subtypes(

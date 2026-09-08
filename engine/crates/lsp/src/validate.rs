@@ -487,30 +487,58 @@ pub(crate) fn validation_error_to_diagnostic(
     diag
 }
 
-pub(crate) fn collect_doc_tokens(ast: &ParsedFile) -> HashSet<StringId> {
+/// Hash of a case-folded token, the identity `doc_tokens` is keyed by. Equal text
+/// always hashes equal, so the sweep can only ever over-select, never miss.
+pub(crate) fn doc_token_hash(lowered: &str) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write(lowered.as_bytes());
+    hasher.write_u8(0xff);
+    hasher.finish()
+}
+
+pub(crate) fn collect_doc_tokens(
+    ast: &ParsedFile,
+    table: &cwtools_string_table::string_table::StringTable,
+) -> HashSet<u64> {
     use cwtools_parser::ast::Value;
     let arena = &ast.arena;
-    let mut tokens = HashSet::new();
+    let mut ids = HashSet::new();
     for leaf in &arena.leaves {
-        tokens.insert(leaf.key.lower);
+        ids.insert(leaf.key.lower);
         if let Value::String(t) | Value::QString(t) = &leaf.value {
-            tokens.insert(t.lower);
+            ids.insert(t.lower);
         }
     }
     for lv in &arena.leaf_values {
         if let Value::String(t) | Value::QString(t) = &lv.value {
-            tokens.insert(t.lower);
+            ids.insert(t.lower);
         }
     }
-    tokens.remove(&StringId(0));
-    tokens
+    ids.remove(&StringId(0));
+    // Dedupe as ids first, so this resolves once per distinct token. `with_string`
+    // takes a single shard guard, not the 64 that `with_read` would.
+    ids.iter()
+        .filter_map(|&id| table.with_string(id, doc_token_hash))
+        .collect()
 }
 
 impl Backend {
+    /// A handle bound to `ast`'s own overlay region. Validation interns as it goes
+    /// — inline-script `$ARG$` substitutions most of all — and those strings are
+    /// derived from the document, so they belong in the region that is reclaimed
+    /// with it rather than in the base table (#475).
+    pub(crate) fn table_for(
+        &self,
+        ast: &ParsedFile,
+    ) -> cwtools_string_table::string_table::StringTable {
+        self.state.string_table.rebound(ast.overlay())
+    }
+
     pub(crate) fn update_doc_tokens(&self, uri: &str, ast: Option<&Arc<ParsedFile>>) {
         match ast {
             Some(ast) => {
-                let toks = collect_doc_tokens(ast);
+                let toks = collect_doc_tokens(ast, &self.state.string_table);
                 self.state.doc_tokens.write().insert(uri.to_string(), toks);
             }
             None => {
@@ -664,6 +692,7 @@ impl Backend {
             return Vec::new();
         }
         let overlay = self.loc_overlay_keys();
+        let table = self.table_for(parsed);
         let info_guard = self.state.info_service.read();
         let loc_guard = self.state.loc_index.read();
         let inline_guard = self.state.inline_scripts.read();
@@ -673,7 +702,7 @@ impl Backend {
         };
         let prepared = make_prepared(
             ruleset,
-            &self.state.string_table,
+            &table,
             game,
             &info_guard.type_index,
             modifier_keys,
@@ -728,6 +757,7 @@ impl Backend {
         if !needs_use_tracking(ruleset, game) {
             return;
         }
+        let table = self.table_for(parsed);
         let info_guard = self.state.info_service.read();
         let loc_guard = self.state.loc_index.read();
         let inline_guard = self.state.inline_scripts.read();
@@ -737,7 +767,7 @@ impl Backend {
         };
         let prepared = make_prepared(
             ruleset,
-            &self.state.string_table,
+            &table,
             game,
             &info_guard.type_index,
             &rules_guard.modifier_keys,
@@ -958,10 +988,10 @@ impl Backend {
     ) {
         use std::sync::atomic::Ordering;
 
-        let changed_ids: Option<Vec<StringId>> = changed_names.map(|names| {
+        let changed_ids: Option<Vec<u64>> = changed_names.map(|names| {
             names
                 .iter()
-                .map(|n| self.state.string_table.intern(n).lower)
+                .map(|n| doc_token_hash(&n.to_lowercase()))
                 .collect()
         });
         let mut others: Vec<(String, i32, Arc<ParsedFile>, Arc<str>)> = {
@@ -1444,7 +1474,10 @@ impl Backend {
 
         // that do the same work already fence theirs. (#87)
         tokio::task::block_in_place(|| {
-            let parsed = parse_string(text, &self.state.string_table);
+            // Mid-edit text: intern its novel strings into a reclaimable region so
+            // half-typed identifiers do not accumulate in the base table (#475).
+            let table = self.state.string_table.with_overlay();
+            let parsed = parse_string(text, &table);
             diagnostics.extend(parse_errors_to_diagnostics(&parsed.errors, &lines));
 
             self.index_parsed_file(uri, &parsed, parsed_version);
@@ -1472,7 +1505,7 @@ impl Backend {
                     };
                     let prepared = make_prepared(
                         ruleset,
-                        &self.state.string_table,
+                        &table,
                         game,
                         type_index,
                         &rules_guard.modifier_keys,
@@ -1570,7 +1603,7 @@ mod perf_bench {
         let parsed = parse_string(&text, &table);
 
         bench("collect_doc_tokens", 30, || {
-            collect_doc_tokens(&parsed).len()
+            collect_doc_tokens(&parsed, &table).len()
         });
 
         let ws: Option<Arc<str>> = Some(crate::paths::workspace_prefix_of(
@@ -1895,6 +1928,124 @@ mod info_revision_tests {
                 },
             )
             .unwrap();
+    }
+
+    /// One debounce tick: re-parse the buffer and install the AST, as
+    /// `debounced_validate` does.
+    async fn type_one_edit(backend: &Backend, uri: &str, version: i32, text: &str) {
+        backend
+            .state
+            .documents
+            .lock()
+            .change(uri, version, Arc::from(text))
+            .unwrap();
+        let (_, parsed) = backend
+            .parse_and_validate(uri, text, crate::ValidateTrigger::DidChange, Some(version))
+            .await;
+        if let Some(parsed) = parsed {
+            let ast = Arc::new(parsed);
+            backend.update_doc_tokens(uri, Some(&ast));
+            backend.state.documents.lock().set_ast(uri, version, ast);
+        }
+    }
+
+    /// #475: every prefix of a half-typed identifier used to be interned into the
+    /// process-lifetime table, two slots at a time, and never released.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_typing_burst_does_not_grow_the_string_table() {
+        let backend = test_backend();
+        let uri = ideas_uri();
+        let typed = "idea_a = { cost = 100 modifier = { research_speed_factor = 0.1 } }";
+        let seed = "idea_a = { }";
+
+        open_loc_doc(&backend, &uri, seed);
+        let (_, parsed) = backend
+            .parse_and_validate(&uri, seed, crate::ValidateTrigger::DidOpen, Some(1))
+            .await;
+        if let Some(parsed) = parsed {
+            backend
+                .state
+                .documents
+                .lock()
+                .set_ast(&uri, 1, Arc::new(parsed));
+        }
+
+        let before = backend.state.string_table.stats().entries;
+
+        for (i, end) in (seed.len()..=typed.len()).enumerate() {
+            type_one_edit(&backend, &uri, i as i32 + 2, &typed[..end]).await;
+        }
+
+        assert_eq!(
+            backend.state.string_table.stats().entries,
+            before,
+            "mid-edit tokens must not reach the base table"
+        );
+        // The live document still owns exactly one region.
+        assert_eq!(backend.state.string_table.stats().overlay_regions, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn closing_a_document_releases_its_overlay_region() {
+        let backend = test_backend();
+        let uri = ideas_uri();
+        open_loc_doc(&backend, &uri, "idea_a = { }");
+        type_one_edit(&backend, &uri, 2, "idea_a = { novel_token_xyz = 1 }").await;
+        assert_eq!(backend.state.string_table.stats().overlay_regions, 1);
+
+        backend.state.documents.lock().remove(&uri);
+        backend.update_doc_tokens(&uri, None);
+        assert_eq!(
+            backend.state.string_table.stats().overlay_regions,
+            0,
+            "the region must go with the document"
+        );
+    }
+
+    /// The hazard that made `ParsedFile` own its guard: a handler can hold an AST
+    /// well past the edit that replaced it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_held_ast_still_resolves_after_the_document_moves_on() {
+        let backend = test_backend();
+        let uri = ideas_uri();
+        open_loc_doc(&backend, &uri, "idea_a = { }");
+        type_one_edit(&backend, &uri, 2, "idea_a = { held_token_abc = 1 }").await;
+
+        let held = backend.ast_for(&uri).expect("stored ast");
+        for (i, text) in ["idea_a = { b = 2 }", "idea_a = { c = 3 }"]
+            .into_iter()
+            .enumerate()
+        {
+            type_one_edit(&backend, &uri, i as i32 + 3, text).await;
+        }
+
+        let keys: Vec<String> = held
+            .arena
+            .leaves
+            .iter()
+            .filter_map(|leaf| backend.state.string_table.get_string(leaf.key.lower))
+            .collect();
+        assert!(
+            keys.iter().any(|k| k == "held_token_abc"),
+            "ids from a held AST must still resolve; got {keys:?}"
+        );
+    }
+
+    /// `doc_tokens` is keyed by case-folded text, so a name that was novel while
+    /// being typed still matches once it is defined elsewhere (#475).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn doc_tokens_match_a_name_first_seen_mid_edit() {
+        let backend = test_backend();
+        let uri = ideas_uri();
+        open_loc_doc(&backend, &uri, "idea_a = { }");
+        type_one_edit(&backend, &uri, 2, "idea_a = { ref = Only_Typed_Here }").await;
+
+        let hash = doc_token_hash("only_typed_here");
+        let tokens = backend.state.doc_tokens.read();
+        assert!(
+            tokens.get(uri.as_str()).is_some_and(|t| t.contains(&hash)),
+            "a mid-edit token must still be findable by the dependent sweep"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -3032,11 +3183,10 @@ mod ignored_tests {
                 .insert("common/foo.txt");
             assert!(info.type_index.file_index.contains("common/foo.txt"));
         }
-        backend
-            .state
-            .doc_tokens
-            .write()
-            .insert(uri.clone(), crate::validate::collect_doc_tokens(&parsed));
+        backend.state.doc_tokens.write().insert(
+            uri.clone(),
+            crate::validate::collect_doc_tokens(&parsed, &backend.state.string_table),
+        );
         let mut uses = cwtools_validation::references::UsedInstances::default();
         uses.mark("my_type", "foo");
         backend.state.type_uses.write().insert(uri.clone(), uses);
@@ -3324,16 +3474,14 @@ mod ignored_tests {
         }
         let table = StringTable::new();
         let parsed = parse_string("x = 1", &table);
-        backend
-            .state
-            .doc_tokens
-            .write()
-            .insert(ignored_uri.clone(), collect_doc_tokens(&parsed));
-        backend
-            .state
-            .doc_tokens
-            .write()
-            .insert(kept_uri.clone(), collect_doc_tokens(&parsed));
+        backend.state.doc_tokens.write().insert(
+            ignored_uri.clone(),
+            collect_doc_tokens(&parsed, &backend.state.string_table),
+        );
+        backend.state.doc_tokens.write().insert(
+            kept_uri.clone(),
+            collect_doc_tokens(&parsed, &backend.state.string_table),
+        );
         {
             let mut info = backend.state.info_service.write();
             let type_index = Arc::make_mut(&mut info.type_index);
@@ -3426,16 +3574,14 @@ mod ignored_tests {
             )
             .unwrap();
         }
-        backend
-            .state
-            .doc_tokens
-            .write()
-            .insert(kept_uri.clone(), collect_doc_tokens(&kept_parsed));
-        backend
-            .state
-            .doc_tokens
-            .write()
-            .insert(ignored_uri.clone(), collect_doc_tokens(&ignored_parsed));
+        backend.state.doc_tokens.write().insert(
+            kept_uri.clone(),
+            collect_doc_tokens(&kept_parsed, &backend.state.string_table),
+        );
+        backend.state.doc_tokens.write().insert(
+            ignored_uri.clone(),
+            collect_doc_tokens(&ignored_parsed, &backend.state.string_table),
+        );
         let mut changed = std::collections::HashSet::new();
         let token = ignored_parsed
             .arena
