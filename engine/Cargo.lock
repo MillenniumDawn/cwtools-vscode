@@ -497,6 +497,7 @@ name = "cwtools_lsp"
 version = "3.4.0"
 dependencies = [
  "assert_cmd",
+ "criterion",
  "cwtools_cache",
  "cwtools_driver",
  "cwtools_error_codes",

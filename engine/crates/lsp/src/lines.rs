@@ -9,14 +9,14 @@ use crate::paths::{encoded_position_len, position_byte_index, source_column_to_l
 
 /// A document's lines plus the negotiated position encoding: everything a
 /// CHAR columns, but the client reads columns in the encoding negotiated at
-pub(crate) struct DocLines<'a> {
+pub struct DocLines<'a> {
     lines: Vec<&'a str>,
     encoding: PositionEncodingKind,
     trailing_newline: bool,
 }
 
 impl<'a> DocLines<'a> {
-    pub(crate) fn new(text: &'a str, encoding: PositionEncodingKind) -> Self {
+    pub fn new(text: &'a str, encoding: PositionEncodingKind) -> Self {
         Self {
             lines: text.lines().collect(),
             encoding,
@@ -37,7 +37,7 @@ impl<'a> DocLines<'a> {
         self.lines.get(line as usize).copied().unwrap_or("")
     }
 
-    pub(crate) fn position(&self, line: u32, col: u32) -> Position {
+    pub fn position(&self, line: u32, col: u32) -> Position {
         let character = self
             .lines
             .get(line as usize)

@@ -593,7 +593,7 @@ pub(crate) fn identity_value(
     None
 }
 
-pub(crate) fn build_doc_symbols(
+pub fn build_doc_symbols(
     children: &[cwtools_parser::ast::Child],
     arena: &cwtools_parser::ast::Arena,
     table: &StringTable,
