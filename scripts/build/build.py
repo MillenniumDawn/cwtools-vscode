@@ -200,6 +200,8 @@ def package_vsix(target: str | None = None) -> list[str]:
             dest = VSIX_ROOT / path.name
             path.replace(dest)
             packaged.append(str(dest))
+    if not packaged:
+        raise RuntimeError("vsce produced no .vsix file")
     return packaged
 
 

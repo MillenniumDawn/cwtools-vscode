@@ -89,6 +89,7 @@ function readLiveServerSettings(): LiveServerSettings {
 		hoverScopeDisplay,
 		formattingIndentStyle,
 		formattingIndentSize: cfg.get<number>("formatting.indentSize") ?? 4,
+		formattingMaxLineWidth: cfg.get<number>("formatting.maxLineWidth") ?? 120,
 		formattingTrimTrailingWhitespace:
 			cfg.get<boolean>("formatting.trimTrailingWhitespace") ?? true,
 		formattingInsertFinalNewline:

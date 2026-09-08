@@ -394,9 +394,12 @@ pub(crate) struct FormatArgs {
     /// Indent with `space` (default) or `tab`.
     #[arg(long, default_value = "space")]
     pub(crate) indent_style: String,
-    /// Spaces per indent level when `--indent-style space`. Ignored for tabs.
+    /// Indent width in spaces or tab stops.
     #[arg(long, default_value_t = 4)]
     pub(crate) indent_size: u32,
+    /// Maximum rendered line width for bare-value lists.
+    #[arg(long, default_value_t = 120)]
+    pub(crate) max_line_width: usize,
     /// Write the formatted files. Without this the command is a dry run.
     #[arg(long)]
     pub(crate) apply: bool,
