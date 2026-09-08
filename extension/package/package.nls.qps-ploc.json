@@ -50,6 +50,7 @@
   "configuration.cwtools.hover.scopeDisplay.resolved": "ȦȦŀşǿǿ şħǿǿẇ ŧħḗḗ şƈǿǿƥḗḗ ŧħḗḗ ħǿǿṽḗḗřḗḗḓ ŀīƞķ ǿǿř ƑŘǾǾḾ/ŘǾǾǾǾŦ/ƤŘḖḖṼ ķḗḗẏẇǿǿřḓ řḗḗşǿǿŀṽḗḗş ŧǿǿ.",
   "configuration.cwtools.formatting.indentStyle.description": "Īƞḓḗḗƞŧ ẇīŧħ şƥȧȧƈḗḗş ǿǿř ŧȧȧƀş. Ƒǿǿřḿȧȧŧ Ḓǿǿƈŭŭḿḗḗƞŧ ŭŭşḗḗş ŧħḗḗ ḗḗḓīŧǿǿř'ş īƞşḗḗřŧŞƥȧȧƈḗḗş/ŧȧȧƀŞīẑḗḗ īƞşŧḗḗȧȧḓ.",
   "configuration.cwtools.formatting.indentSize.description": "Şƥȧȧƈḗḗş ƥḗḗř īƞḓḗḗƞŧ ŀḗḗṽḗḗŀ ẇħḗḗƞ īƞḓḗḗƞŧŞŧẏŀḗḗ īş şƥȧȧƈḗḗ. Ƒǿǿřḿȧȧŧ Ḓǿǿƈŭŭḿḗḗƞŧ ŭŭşḗḗş ŧħḗḗ ḗḗḓīŧǿǿř'ş ŧȧȧƀŞīẑḗḗ īƞşŧḗḗȧȧḓ.",
+  "configuration.cwtools.formatting.maxLineWidth.description": "Ḿȧȧẋīḿŭŭḿ řḗḗƞḓḗḗřḗḗḓ ŀīƞḗḗ ẇīḓŧħ ƒǿǿř ƀȧȧřḗḗ-ṽȧȧŀŭŭḗḗ ŀīşŧş.",
   "configuration.cwtools.formatting.trimTrailingWhitespace.description": "Şŧřīƥ ŧřȧȧīŀīƞɠ ẇħīŧḗḗşƥȧȧƈḗḗ ƒřǿǿḿ ḗḗȧȧƈħ ŀīƞḗḗ ẇħḗḗƞ ƒǿǿřḿȧȧŧŧīƞɠ.",
   "configuration.cwtools.formatting.insertFinalNewline.description": "ḖḖƞşŭŭřḗḗ ŧħḗḗ ƒīŀḗḗ ḗḗƞḓş ẇīŧħ ȧȧ ƞḗḗẇŀīƞḗḗ ẇħḗḗƞ ƒǿǿřḿȧȧŧŧīƞɠ.",
   "configuration.cwtools.inlayHints.locTitles.description": "Şħǿǿẇ ŧħḗḗ ŀǿǿƈȧȧŀīşḗḗḓ ŧīŧŀḗḗ īƞŀīƞḗḗ ȧȧƒŧḗḗř ȧȧ ṽȧȧŀŭŭḗḗ ŧħȧȧŧ ƞȧȧḿḗḗş ȧȧ ķƞǿǿẇƞ ḗḗƞŧīŧẏ, şǿǿ ȧȧƞ ḗḗṽḗḗƞŧ ǿǿř ƒǿǿƈŭŭş īḓ řḗḗȧȧḓş ȧȧş īŧş īƞ-ɠȧȧḿḗḗ ƞȧȧḿḗḗ ẇīŧħǿǿŭŭŧ ħǿǿṽḗḗřīƞɠ. **Řḗḗŀǿǿȧȧḓ ŧħḗḗ ẇīƞḓǿǿẇ** ȧȧƒŧḗḗř ƈħȧȧƞɠīƞɠ ŧħīş.",

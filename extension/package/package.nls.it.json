@@ -61,6 +61,7 @@
   "configuration.cwtools.hover.scopeDisplay.resolved": "Mostra anche lo scope a cui si risolve il link o la parola chiave FROM/ROOT/PREV sotto il puntatore.",
   "configuration.cwtools.formatting.indentStyle.description": "Indenta con spazi o tabulazioni. Format Document usa insertSpaces/tabSize dell'editor.",
   "configuration.cwtools.formatting.indentSize.description": "Spazi per livello di indentazione se indentStyle è space. Format Document usa tabSize dell'editor.",
+  "configuration.cwtools.formatting.maxLineWidth.description": "Larghezza massima della riga visualizzata per gli elenchi di valori senza chiave.",
   "configuration.cwtools.formatting.trimTrailingWhitespace.description": "Rimuovi gli spazi finali da ogni riga in fase di formattazione.",
   "configuration.cwtools.formatting.insertFinalNewline.description": "Assicura che il file termini con un a capo in fase di formattazione.",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code
