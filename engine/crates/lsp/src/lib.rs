@@ -64,6 +64,17 @@ pub fn run() {
         .expect("failed to build tokio runtime")
         .block_on(async {
             let state = Arc::new(DocumentState::new());
+            if let Some(mut jobs) = state.notifications.take_receiver() {
+                tokio::spawn(async move {
+                    // Awaited one at a time, so the client's notification order
+                    // is preserved; spawned, so a panicking handler does not
+                    // take the worker down with it and a `block_in_place`
+                    // inside one is on a task of its own (#470).
+                    while let Some(job) = jobs.recv().await {
+                        scan::spawn_logging_panics("notification handler", job).await;
+                    }
+                });
+            }
             let (stdin, stdout) = (
                 transport::BoundedLspReader::new(tokio::io::stdin()),
                 tokio::io::stdout(),
@@ -78,7 +89,10 @@ pub fn run() {
                 Backend::on_work_done_progress_cancel,
             )
             .finish();
-            Server::new(stdin, stdout, socket).serve(service).await;
+            Server::new(stdin, stdout, socket)
+                .concurrency_level(transport::CONCURRENCY_LEVEL)
+                .serve(transport::SpawnRequests::new(service))
+                .await;
             tracing::info!("LSP server shut down (stdin closed)");
         });
 }

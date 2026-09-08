@@ -38,6 +38,11 @@ cwtools_localization = { workspace = true }
 cwtools_cache = { workspace = true }
 cwtools_profiling = { workspace = true }
 tower-lsp = { workspace = true }
+# `tower::Service` is how `transport::SpawnRequests` wraps the `LspService` to
+# run request handlers off the message pump (#470), and how a test drives an
+# `LspService` handshake by hand; tower-lsp does not re-export the trait.
+# Already in the lock file as one of its dependencies.
+tower = { version = "0.5", default-features = false }
 tokio = { workspace = true, features = ["time", "fs", "io-util", "sync"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -53,7 +58,3 @@ futures-util = { version = "0.3", default-features = false, features = [
     "std",
     "sink",
 ] }
-# `tower::Service` is how a test drives an `LspService` handshake by hand;
-# tower-lsp does not re-export the trait. Already in the lock file as one of
-# its dependencies.
-tower = { version = "0.5", default-features = false }

@@ -332,6 +332,31 @@ pub(crate) async fn hold_parse_for_tests() {
     hold_for_tests("CWTOOLS_PARSE_HOLD_MS", "CWTOOLS_PARSE_HOLD_FILE").await;
 }
 
+/// The blocking sibling of [`hold_parse_for_tests`], for #470.
+///
+/// Every other hold here is an `.await`, which yields — and yielding is exactly
+/// what the pump-blocking bug does *not* do, so no async hold can reproduce it.
+/// This one parks the thread from inside pass 1's `block_in_place`, which is how
+/// a test can make a message arrive while the scan owns its thread rather than
+/// in the gap before the scan starts.
+///
+/// `CWTOOLS_PARSE_BLOCKING_HOLD_READY_FILE` is written just before the thread is
+/// parked, so the test knows the hold has actually begun instead of guessing at
+/// it with a sleep — the difference between a test that fails on this bug and
+/// one that races it. Unset, which is every real run, both are a no-op.
+pub(crate) fn hold_parse_blocking_for_tests() {
+    let Some(ms) = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+    else {
+        return;
+    };
+    if let Ok(ready) = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_READY_FILE") {
+        let _ = std::fs::write(&ready, b"held");
+    }
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+}
+
 async fn hold_for_tests(ms_var: &str, file_var: &str) {
     if let Some(ms) = std::env::var(ms_var)
         .ok()

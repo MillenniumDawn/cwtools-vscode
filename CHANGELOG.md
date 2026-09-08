@@ -29,6 +29,13 @@
   longer rescan the document per node, per cursor lookup, or per workspace file.
   A `document_symbol` criterion bench over a ~1 MB script file covers the
   handler in ASCII and mixed-encoding variants. (#471)
+* Request handlers and document notifications now run off tower-lsp's message
+  pump, which polls them on the same task that reads stdin and writes stdout. A
+  long request no longer stops `didChange`, diagnostic publishes or anything
+  else from being handled, and `$/cancelRequest` and
+  `window/workDoneProgress/cancel` now reach a scan that is already running
+  instead of waiting for it to finish. Notifications keep the order the client
+  sent them, on a single worker. (#470)
 
 #### Extension
 
