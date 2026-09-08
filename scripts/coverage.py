@@ -180,7 +180,12 @@ def main() -> int:
 
     # Floor sits just under the measured baseline; CI pins the same value.
     threshold = os.environ.get("COVERAGE_THRESHOLD", "91.5")
-    ignore = r"(crates/lsp/src/main\.rs|crates/cli/src/main\.rs)"
+    # `crates/lsp/src/lib.rs` is the entrypoint's other half after the bin/lib
+    # split (#471): module declarations, `run`, and the `#[cfg(test)] mod tests`
+    # that used to sit in `main.rs`. Excluding it alongside `main.rs` keeps the
+    # measured file set identical to before the split -- `server.rs` still
+    # carries the `Backend`/`LanguageServer` dispatch the gate is for (#662).
+    ignore = r"(crates/lsp/src/(main|lib)\.rs|crates/cli/src/main\.rs)"
 
     first = subprocess.run(
         [

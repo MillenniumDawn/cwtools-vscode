@@ -9,9 +9,19 @@ repository.workspace = true
 [lints]
 workspace = true
 
+# Both halves. `src/main.rs` is a thin `fn main`; everything else lives in the
+# library so `benches/` can link against it (#471).
 [[bin]]
 name = "cwtools-server"
 path = "src/main.rs"
+
+[lib]
+name = "cwtools_lsp"
+path = "src/lib.rs"
+
+[[bench]]
+name = "document_symbol"
+harness = false
 
 [dependencies]
 cwtools_parser = { workspace = true }
@@ -37,6 +47,7 @@ rustc-hash = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+criterion = { workspace = true }
 tempfile = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = [
     "std",

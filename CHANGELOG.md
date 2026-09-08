@@ -24,6 +24,11 @@
   the configured width otherwise. CLI `--max-line-width` and the
   `cwtools.formatting.maxLineWidth` setting control that width. (#554)
 * Cargo dependency advisory checks now deny yanked crates. (#594)
+* `documentSymbol` and the other LSP position handlers now resolve a document's
+  columns entirely through the one line index the request already builds, and no
+  longer rescan the document per node, per cursor lookup, or per workspace file.
+  A `document_symbol` criterion bench over a ~1 MB script file covers the
+  handler in ASCII and mixed-encoding variants. (#471)
 
 #### Extension
 
