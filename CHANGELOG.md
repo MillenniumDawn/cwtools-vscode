@@ -21,6 +21,9 @@
 
 * VSIX smoke tests now require a universal fallback package and fail when
   packaging produces no VSIX. (#560)
+* Start the language server only when an opened workspace folder has a root
+  `descriptor.mod`. Unrelated folders and nested test fixtures no longer
+  trigger startup. (#655)
 * Marketplace publishing now requires the locally installed `vsce` CLI instead
   of allowing `npx` to download it. (#596)
 
