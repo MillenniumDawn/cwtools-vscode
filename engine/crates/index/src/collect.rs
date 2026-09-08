@@ -50,6 +50,10 @@ fn key_prefix_matches(td: &TypeDefinition, key: &str) -> bool {
     }
 }
 
+pub fn type_key_matches(td: &TypeDefinition, key: &str) -> bool {
+    type_key_filter_matches(td, key) && starts_with_matches(td, key) && key_prefix_matches(td, key)
+}
+
 /// The field name an instance's `## primary` localisation is taken from, when it
 /// localisation — those need nothing captured at index time.
 fn primary_explicit_loc_field(td: &TypeDefinition) -> Option<&str> {
@@ -127,9 +131,7 @@ fn walk_skip_root_child<V>(
     let key = get_string_or_empty(table, kc.key.normal);
     match skip_stack {
         [] => {
-            if type_key_filter_matches(td, &key)
-                && starts_with_matches(td, &key)
-                && key_prefix_matches(td, &key)
+            if type_key_matches(td, &key)
                 && let Some(name) =
                     instance_name_from_children(td, &key, clause_children, arena, table)
             {

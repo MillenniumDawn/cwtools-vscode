@@ -61,6 +61,7 @@
   "configuration.cwtools.hover.scopeDisplay.resolved": "同時顯示停留的連結或 FROM/ROOT/PREV 關鍵字解析到的作用域。",
   "configuration.cwtools.formatting.indentStyle.description": "用空格或定位字元縮排。Format Document 改用編輯器的 insertSpaces/tabSize。",
   "configuration.cwtools.formatting.indentSize.description": "indentStyle 為 space 時每一層縮排的空格數。Format Document 改用編輯器的 tabSize。",
+  "configuration.cwtools.formatting.maxLineWidth.description": "裸值清單的最大呈現行寬。",
   "configuration.cwtools.formatting.trimTrailingWhitespace.description": "格式化時去掉每行結尾空白。",
   "configuration.cwtools.formatting.insertFinalNewline.description": "格式化時確保檔案以換行結束。",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code

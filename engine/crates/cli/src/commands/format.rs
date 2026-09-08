@@ -2,6 +2,7 @@
 
 use cwtools_parser::format::{FormatOptions, IndentStyle, format_text};
 use cwtools_string_table::string_table::StringTable;
+use std::io::Write as _;
 use std::path::PathBuf;
 
 use crate::cli::FormatArgs;
@@ -17,6 +18,7 @@ pub(super) fn run(args: FormatArgs) {
         ignore_dirs,
         indent_style,
         indent_size,
+        max_line_width,
         apply,
         allow_empty,
     } = args;
@@ -64,6 +66,7 @@ pub(super) fn run(args: FormatArgs) {
     let opts = FormatOptions {
         indent_style,
         indent_size: indent_size.clamp(1, 16),
+        max_line_width,
         ..FormatOptions::default()
     };
 
@@ -97,6 +100,9 @@ pub(super) fn run(args: FormatArgs) {
         let Ok(text) = std::fs::read_to_string(path) else {
             eprintln!("warn: could not read {}; skipping", path.display());
             skipped += 1;
+            if apply {
+                write_failed = true;
+            }
             continue;
         };
         match format_text(&text, &table, &opts) {
@@ -107,7 +113,9 @@ pub(super) fn run(args: FormatArgs) {
             Some(formatted) if formatted == text => {}
             Some(formatted) => {
                 if apply {
-                    if let Err(e) = std::fs::write(path, &formatted) {
+                    if let Err(e) = crate::run::write_atomically(path, |file| {
+                        file.write_all(formatted.as_bytes())
+                    }) {
                         eprintln!("Error writing {}: {e}", path.display());
                         write_failed = true;
                     } else {
