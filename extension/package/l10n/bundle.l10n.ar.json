@@ -5,7 +5,6 @@
   "Antivirus Help": "مساعدة بشأن مكافح الفيروسات",
   "CWTools server was blocked from running ({0}). This is almost always antivirus (e.g. Windows Defender) quarantining the unsigned server binary. Restore it from quarantine and add an exclusion for the extension's server folder, then reload the window.": "مُنع خادم CWTools من العمل ({0}). يكاد يكون السبب دائمًا أن مكافح الفيروسات (مثل Windows Defender) عزل ملف الخادم غير الموقّع. استعده من الحجر، وأضف استثناءً لمجلد server الخاص بالامتداد، ثم أعد تحميل النافذة.",
   "CWTools language server failed to start: {0}": "تعذّر تشغيل خادم لغة CWTools: {0}",
-  "You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using \"File, Open Folder\"": "لقد فتحت ملفًا مباشرةً.\n\rلكي يعمل CWTools بشكل صحيح، افتح مجلد التعديل عبر «ملف، فتح مجلد».",
   "CWTools: updating {0} rules": "CWTools: يجري تحديث قواعد {0}",
   "CWTools: {0} rules changed from {1} to {2}. Validation may differ under the new pin.": "CWTools: تغيّرت قواعد {0} من {1} إلى {2}. قد تختلف نتائج التحقق مع الإصدار المثبّت الجديد.",
   "CWTools needs Git on your PATH to fetch the {0} rules; install Git and reload the window.": "يحتاج CWTools إلى وجود Git في PATH لجلب قواعد {0}؛ ثبّت Git وأعد تحميل النافذة.",

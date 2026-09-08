@@ -196,6 +196,15 @@ fn content_length(header: &[u8]) -> io::Result<usize> {
     })
 }
 
+/// How many requests `Server::serve` will keep in flight at once. tower-lsp's
+/// own default is 4, which was enough while every handler ran to completion on
+/// the pump. Now that [`SpawnRequests`] puts each one on its own task a slot is
+/// usually held only for a `JoinHandle` await — except a long `executeCommand`
+/// (`reindexWorkspace` and friends), which holds one for its whole run. Sized
+/// well above the number of those a client can have outstanding so a slow
+/// command can never wall off the queue.
+pub(crate) const CONCURRENCY_LEVEL: usize = 64;
+
 /// Runs request handlers on a task of their own so they stop owning the message
 /// pump (#470).
 ///

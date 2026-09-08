@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import ModuleType
 
@@ -246,6 +247,64 @@ def test_main_uses_the_default_threshold_when_env_is_unset(
     lcov_command = next(cmd for cmd in captured if "--output-path" in cmd)
     fail_under_index = lcov_command.index("--fail-under-lines") + 1
     assert lcov_command[fail_under_index] == DEFAULT_LINE_FLOOR
+
+
+def test_ignore_regex_excludes_both_lsp_entrypoint_halves(
+    rust_coverage: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The bin/lib split must not change which files the gate measures (#471).
+
+    `crates/lsp/src/lib.rs` inherited `main.rs`'s module tree and its large
+    `#[cfg(test)] mod tests`. Left measured, those near-fully-covered test lines
+    would drift the aggregate upward and quietly loosen the floor.
+    """
+
+    coverage_dir = tmp_path / "engine" / "target" / "coverage"
+    coverage_dir.mkdir(parents=True)
+    captured: list[list[str]] = []
+
+    class _FakeCompleted:
+        returncode = 0
+
+        def __init__(self, command: list[str]) -> None:
+            captured.append(list(command))
+
+    def fake_run(
+        command: object,
+        *_args: object,
+        **_kwargs: object,
+    ) -> object:
+        if not isinstance(command, list):
+            return _FakeCompleted([])
+        if "--output-path" in command:
+            out_index = command.index("--output-path") + 1
+            Path(command[out_index]).write_text(
+                "TN:\nSF:placeholder\nend_of_record\n", encoding="utf-8"
+            )
+        return _FakeCompleted(command)
+
+    monkeypatch.setattr(
+        rust_coverage.shutil, "which", lambda _name: "/usr/bin/cargo-llvm-cov"
+    )
+    monkeypatch.setattr(rust_coverage.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        rust_coverage.os, "environ", {"CWTOOLS_RS": str(tmp_path / "engine")}
+    )
+
+    assert rust_coverage.main() == 0
+
+    lcov_command = next(cmd for cmd in captured if "--output-path" in cmd)
+    pattern = re.compile(
+        lcov_command[lcov_command.index("--ignore-filename-regex") + 1]
+    )
+    assert pattern.search("engine/crates/lsp/src/main.rs")
+    assert pattern.search("engine/crates/lsp/src/lib.rs")
+    assert pattern.search("engine/crates/cli/src/main.rs")
+    # The dispatch the gate exists for, and the module this change touches.
+    assert not pattern.search("engine/crates/lsp/src/server.rs")
+    assert not pattern.search("engine/crates/lsp/src/lines.rs")
 
 
 def test_ci_workflow_pins_the_same_threshold_and_step_name() -> None:

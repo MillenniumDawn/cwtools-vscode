@@ -1,8 +1,8 @@
 // Backend implementations and the `LanguageServer` trait dispatch for the
 // cwtools-server binary. Lives in its own module so the Rust coverage gate
 // can measure it without having to also include the thin `main()` entrypoint
-// (#662). Tests live alongside it in main.rs so they can stay as
-// `#[cfg(test)] mod tests` against the binary crate root.
+// (#662). Tests live alongside it in lib.rs so they can stay as
+// `#[cfg(test)] mod tests` against the crate root.
 
 use std::collections::HashSet;
 use std::sync::Arc;
