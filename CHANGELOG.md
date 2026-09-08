@@ -11,6 +11,8 @@
 
 * VSIX smoke tests now require a universal fallback package and fail when
   packaging produces no VSIX. (#560)
+* Marketplace publishing now requires the locally installed `vsce` CLI instead
+  of allowing `npx` to download it. (#596)
 
 ### 3.4.0
 
