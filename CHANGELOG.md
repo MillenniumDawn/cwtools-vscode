@@ -6,6 +6,16 @@
   graph rendering. (#602)
 #### Engine
 
+* LSP hover localisation text is escaped before entering Markdown, so mod values
+  render as literal text. (#592)
+* CLI `fix --apply` and `format --apply` now write atomically and fail on
+  unreadable files. (#496)
+* Show graph now discards superseded requests, so an older response cannot
+  replace the graph selected by the user. (#588)
+#### Engine
+
+* Type dispatch now honors `starts_with` and `type_key_prefix` for validation
+  and navigation. (#581)
 * Bare-value lists now stay inline when their rendered width fits, and wrap at
   the configured width otherwise. CLI `--max-line-width` and the
   `cwtools.formatting.maxLineWidth` setting control that width. (#554)
@@ -15,6 +25,9 @@
 
 * VSIX smoke tests now require a universal fallback package and fail when
   packaging produces no VSIX. (#560)
+* Start the language server only when an opened workspace folder has a root
+  `descriptor.mod`. Unrelated folders and nested test fixtures no longer
+  trigger startup. (#655)
 * Marketplace publishing now requires the locally installed `vsce` CLI instead
   of allowing `npx` to download it. (#596)
 

@@ -5,7 +5,6 @@
   "Antivirus Help": "防毒軟體說明",
   "CWTools server was blocked from running ({0}). This is almost always antivirus (e.g. Windows Defender) quarantining the unsigned server binary. Restore it from quarantine and add an exclusion for the extension's server folder, then reload the window.": "CWTools 伺服器被阻擋執行（{0}）。這幾乎都是因為防毒軟體（例如 Windows Defender）隔離了未簽署的伺服器二進位檔。請從隔離區還原該檔案，並為擴充功能的 server 資料夾加入排除項目，然後重新載入視窗。",
   "CWTools language server failed to start: {0}": "CWTools 語言伺服器啟動失敗：{0}",
-  "You have opened a file directly.\n\rFor CWTools to work correctly, the mod folder should be opened using \"File, Open Folder\"": "你直接開啟了一個檔案。\n\r為了讓 CWTools 正常運作，請用「檔案 > 開啟資料夾」開啟 mod 資料夾。",
   "CWTools: updating {0} rules": "CWTools：正在更新 {0} 規則",
   "CWTools: {0} rules changed from {1} to {2}. Validation may differ under the new pin.": "CWTools：{0} 規則已從 {1} 變更為 {2}。在新的釘選版本下驗證結果可能不同。",
   "CWTools needs Git on your PATH to fetch the {0} rules; install Git and reload the window.": "CWTools 需要 PATH 中有 Git 才能取得 {0} 規則；請安裝 Git 並重新載入視窗。",

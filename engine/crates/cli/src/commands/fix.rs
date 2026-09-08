@@ -5,6 +5,7 @@ use cwtools_game::constants::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
 use std::collections::BTreeMap;
+use std::io::Write as _;
 
 use crate::cli::FixArgs;
 use crate::run::{
@@ -264,6 +265,9 @@ pub(super) fn run(args: FixArgs) {
     for (file, planned) in by_file {
         let Ok(text) = std::fs::read_to_string(&file) else {
             eprintln!("warn: could not read {file}; skipping its fixes");
+            if apply {
+                write_failed = true;
+            }
             continue;
         };
         let (kept, skipped) = cwtools_parser::fix::plan_file_edits(&text, planned);
@@ -275,7 +279,9 @@ pub(super) fn run(args: FixArgs) {
         }
         if apply {
             let fixed = cwtools_parser::fix::apply_edits(&text, &kept);
-            if let Err(e) = std::fs::write(&file, &fixed) {
+            if let Err(e) = crate::run::write_atomically(std::path::Path::new(&file), |file| {
+                file.write_all(fixed.as_bytes())
+            }) {
                 eprintln!("Error writing {file}: {e}");
                 write_failed = true;
             } else {

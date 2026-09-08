@@ -53,6 +53,11 @@ builds and may break.
 
 ## Usage
 
+CWTools starts only when an opened workspace folder contains a `descriptor.mod`
+file at its root. Descriptors inside nested folders (including test fixtures) do
+not count. Standalone files, metadata-only mods, and vanilla folders do not start
+the server. If you add a descriptor after activation, reload the VS Code window.
+
 1. Install this extension
 2. Open your mod folder directly, which should be within a folder containing the game name:
 
