@@ -1,7 +1,16 @@
 ### Unreleased
 
+#### Engine
+
+* Bare-value lists now stay inline when their rendered width fits, and wrap at
+  the configured width otherwise. CLI `--max-line-width` and the
+  `cwtools.formatting.maxLineWidth` setting control that width. (#554)
+* Cargo dependency advisory checks now deny yanked crates. (#594)
+
 #### Extension
 
+* VSIX smoke tests now require a universal fallback package and fail when
+  packaging produces no VSIX. (#560)
 * Start the language server only when an opened workspace folder has a root
   `descriptor.mod`. Unrelated folders and nested test fixtures no longer
   trigger startup. (#655)

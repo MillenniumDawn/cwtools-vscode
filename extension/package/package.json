@@ -429,6 +429,13 @@
             "default": 4,
             "description": "%configuration.cwtools.formatting.indentSize.description%"
           },
+          "cwtools.formatting.maxLineWidth": {
+            "scope": "window",
+            "type": "number",
+            "minimum": 1,
+            "default": 120,
+            "description": "%configuration.cwtools.formatting.maxLineWidth.description%"
+          },
           "cwtools.formatting.trimTrailingWhitespace": {
             "scope": "window",
             "type": "boolean",

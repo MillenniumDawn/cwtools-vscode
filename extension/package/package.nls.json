@@ -61,6 +61,7 @@
   "configuration.cwtools.hover.scopeDisplay.resolved": "Also show the scope the hovered link or FROM/ROOT/PREV keyword resolves to.",
   "configuration.cwtools.formatting.indentStyle.description": "Indent with spaces or tabs. Format Document uses the editor's insertSpaces/tabSize instead.",
   "configuration.cwtools.formatting.indentSize.description": "Spaces per indent level when indentStyle is space. Format Document uses the editor's tabSize instead.",
+  "configuration.cwtools.formatting.maxLineWidth.description": "Maximum rendered line width for formatting bare-value lists.",
   "configuration.cwtools.formatting.trimTrailingWhitespace.description": "Strip trailing whitespace from each line when formatting.",
   "configuration.cwtools.formatting.insertFinalNewline.description": "Ensure the file ends with a newline when formatting.",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code

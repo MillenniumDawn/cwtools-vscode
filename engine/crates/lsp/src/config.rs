@@ -137,6 +137,9 @@ fn apply_formatting_settings(
     if let Some(size) = extract_u64_setting(opts, "formattingIndentSize") {
         current.indent_size = (size as u32).clamp(1, 16);
     }
+    if let Some(width) = extract_u64_setting(opts, "formattingMaxLineWidth") {
+        current.max_line_width = usize::try_from(width).unwrap_or(usize::MAX);
+    }
     if let Some(trim) = extract_bool_setting(opts, "formattingTrimTrailingWhitespace") {
         current.trim_trailing_whitespace = trim;
     }
@@ -1775,6 +1778,7 @@ mod tests {
             &json!({
                 "formattingIndentStyle": "tab",
                 "formattingIndentSize": 2,
+                "formattingMaxLineWidth": 80,
                 "formattingTrimTrailingWhitespace": false,
                 "formattingInsertFinalNewline": false,
             }),
@@ -1782,6 +1786,7 @@ mod tests {
         );
         assert_eq!(out.indent_style, cwtools_parser::format::IndentStyle::Tab);
         assert_eq!(out.indent_size, 2);
+        assert_eq!(out.max_line_width, 80);
         assert!(!out.trim_trailing_whitespace);
         assert!(!out.insert_final_newline);
         assert_eq!(apply_formatting_settings(&json!({}), base), base);
