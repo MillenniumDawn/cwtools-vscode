@@ -1,5 +1,7 @@
 ### Unreleased
 
+* Show graph now discards superseded requests, so an older response cannot
+  replace the graph selected by the user. (#588)
 #### Engine
 
 * Type dispatch now honors `starts_with` and `type_key_prefix` for validation

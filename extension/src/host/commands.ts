@@ -194,6 +194,7 @@ export function registerCommands(
 		}),
 	);
 	let currentGraphDepth = 3;
+	let latestShowGraphRequest = 0;
 	const wheelSensitivity = (): number =>
 		workspace.getConfiguration("cwtools.graph").get("zoomSensitivity") ?? 1;
 	const reportNoGraph = (): void => {
@@ -216,13 +217,18 @@ export function registerCommands(
 			reportNoGraph();
 			return;
 		}
+		const depth = currentGraphDepth;
+		const requestId = ++latestShowGraphRequest;
 		let loaded: [GraphPanelModule, GraphData];
 		try {
 			loaded = await Promise.all([
 				import("./graphPanel"),
-				getGraphData(entityType, currentGraphDepth),
+				getGraphData(entityType, depth),
 			]);
 		} catch (err) {
+			if (requestId !== latestShowGraphRequest) {
+				return;
+			}
 			// The graph build now runs under a cancellable notification, so
 			// Cancel lands here. Opening an empty panel would be worse than
 			// doing nothing.
@@ -235,12 +241,15 @@ export function registerCommands(
 			}
 			throw err;
 		}
+		if (requestId !== latestShowGraphRequest) {
+			return;
+		}
 		const [gp, graphData] = loaded;
 		gp.GraphPanel.create(context.extensionPath);
 		gp.GraphPanel.currentPanel!.initialiseGraph(graphData, wheelSensitivity(), {
 			source: "server",
 			entityType,
-			depth: currentGraphDepth,
+			depth,
 		});
 	};
 	context.subscriptions.push(
