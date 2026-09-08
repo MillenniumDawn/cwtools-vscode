@@ -6,6 +6,11 @@
   the configured width otherwise. CLI `--max-line-width` and the
   `cwtools.formatting.maxLineWidth` setting control that width. (#554)
 
+#### Extension
+
+* VSIX smoke tests now require a universal fallback package and fail when
+  packaging produces no VSIX. (#560)
+
 ### 3.4.0
 
 #### Extension
