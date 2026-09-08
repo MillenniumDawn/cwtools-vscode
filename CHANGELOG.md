@@ -1,3 +1,10 @@
+### Unreleased
+
+#### Extension
+
+* Graph webviews now block remote images and form submissions without breaking
+  graph rendering. (#602)
+
 ### 3.4.0
 
 #### Extension

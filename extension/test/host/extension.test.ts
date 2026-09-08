@@ -592,9 +592,30 @@ suite("GraphPanel — UI integration", function () {
 
 	// The graph script is allowed by nonce, not by origin, so its own directive
 	// has to keep carrying one that matches the tag.
-	test("the webview CSP permits the graph script by nonce", async function () {
+	test("the webview CSP protects the graph and still renders content", async function () {
 		await setupPanel();
-		const html = gp.GraphPanel.currentPanel!["_panel"].webview.html;
+		const webview = gp.GraphPanel.currentPanel!["_panel"].webview;
+		const html = webview.html;
+		const csp = /Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1];
+		assert.ok(csp, "no Content-Security-Policy meta tag found");
+
+		const imgSrc = /img-src ([^;"]+)/.exec(csp)?.[1];
+		assert.ok(imgSrc, "CSP has no img-src directive");
+		assert.ok(
+			imgSrc.includes(webview.cspSource),
+			"img-src must preserve the webview CSP source",
+		);
+		assert.ok(
+			imgSrc.split(/\s+/).includes("data:"),
+			"img-src must preserve data URLs",
+		);
+		assert.ok(
+			!imgSrc.split(/\s+/).includes("https:"),
+			"img-src must not allow every HTTPS origin",
+		);
+		const formAction = /form-action ([^;"]+)/.exec(csp)?.[1];
+		assert.strictEqual(formAction?.trim(), "'none'");
+
 		const scriptNonce = /<script src="[^"]+" nonce="([^"]+)"/.exec(html)?.[1];
 		assert.ok(scriptNonce, "no nonced <script> found");
 		const scriptSrc = /script-src ([^;"]+)/.exec(html)?.[1];
@@ -602,6 +623,17 @@ suite("GraphPanel — UI integration", function () {
 			scriptSrc?.includes(`'nonce-${scriptNonce}'`),
 			`script-src "${scriptSrc}" does not carry the script tag's nonce`,
 		);
+
+		const data: GraphData = [
+			{ id: "a", name: "A", references: [], isPrimary: true, entityType: "x" },
+			{ id: "b", name: "B", references: [], isPrimary: false, entityType: "x" },
+		];
+		gp.GraphPanel.currentPanel!.initialiseGraph(data, 1.0);
+		const rendered = await waitUntil(
+			() => gp.GraphPanel.currentPanel!.checkCytoscapeRendered(),
+			30_000,
+		);
+		assert.ok(rendered, "graph content should render under the CSP");
 	});
 
 	test("initialiseGraph transitions out of New once data is queued", async function () {
