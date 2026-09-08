@@ -4,6 +4,23 @@
 
 * CLI `fix --apply` and `format --apply` now write atomically and fail on
   unreadable files. (#496)
+* Show graph now discards superseded requests, so an older response cannot
+  replace the graph selected by the user. (#588)
+#### Engine
+
+* Type dispatch now honors `starts_with` and `type_key_prefix` for validation
+  and navigation. (#581)
+* Bare-value lists now stay inline when their rendered width fits, and wrap at
+  the configured width otherwise. CLI `--max-line-width` and the
+  `cwtools.formatting.maxLineWidth` setting control that width. (#554)
+* Cargo dependency advisory checks now deny yanked crates. (#594)
+
+#### Extension
+
+* VSIX smoke tests now require a universal fallback package and fail when
+  packaging produces no VSIX. (#560)
+* Marketplace publishing now requires the locally installed `vsce` CLI instead
+  of allowing `npx` to download it. (#596)
 
 ### 3.4.0
 

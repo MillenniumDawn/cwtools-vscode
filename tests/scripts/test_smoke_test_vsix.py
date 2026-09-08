@@ -65,6 +65,14 @@ def test_accepts_targeted_and_universal_vsixes(
     assert smoke_test_vsix.main([str(tmp_path), "linux-x64", "win-x64"]) == 0
 
 
+def test_rejects_targeted_only_vsixes(
+    smoke_test_vsix: ModuleType, tmp_path: Path
+) -> None:
+    write_vsix(tmp_path / "ext-linux-x64-1.0.0.vsix", ["linux-x64"])
+
+    assert smoke_test_vsix.main([str(tmp_path), "linux-x64"]) == 1
+
+
 def test_rejects_a_flat_binary_in_a_universal_vsix(
     smoke_test_vsix: ModuleType, tmp_path: Path
 ) -> None:
