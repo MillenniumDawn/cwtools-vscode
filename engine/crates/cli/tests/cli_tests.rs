@@ -2197,6 +2197,31 @@ fn test_fix_apply_writes_and_is_idempotent() {
 }
 
 #[test]
+fn test_fix_apply_read_failure_exits_two() {
+    let tmp = fix_mod();
+    let rules_dir = fixtures_dir().join("rules");
+    let file = tmp.path().join("common").join("hint.txt");
+    std::fs::write(&file, b"x = { if = { } } # \xff\n").unwrap();
+
+    cwtools()
+        .args([
+            "fix",
+            "--game",
+            "stellaris",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("could not read"));
+    assert_eq!(std::fs::read(&file).unwrap(), b"x = { if = { } } # \xff\n");
+}
+
+#[test]
 fn test_fix_code_filter_excludes_unmatched() {
     let tmp = fix_mod();
     let rules_dir = fixtures_dir().join("rules");
@@ -3135,6 +3160,29 @@ fn test_format_skips_a_parse_error() {
         .assert()
         .success()
         .stderr(predicate::str::contains("failed to parse"));
+}
+
+#[test]
+fn test_format_apply_read_failure_exits_two() {
+    let tmp = tempfile::tempdir().unwrap();
+    let common = tmp.path().join("common");
+    std::fs::create_dir_all(&common).unwrap();
+    let file = common.join("bad.txt");
+    let original = b"root={\n \xff\n}\n";
+    std::fs::write(&file, original).unwrap();
+
+    cwtools()
+        .args([
+            "format",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("could not read"));
+    assert_eq!(std::fs::read(&file).unwrap(), original);
 }
 
 #[test]

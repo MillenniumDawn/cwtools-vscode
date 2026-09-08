@@ -269,3 +269,286 @@ fn wrapper_root_validates_grandchildren_not_the_node() {
         bad.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+const PREFIX_RULES: &str = r#"
+types = {
+    type[starts] = {
+        path = "game/common/prefix"
+        starts_with = AbC_
+    }
+    type[prefix] = {
+        path = "game/common/prefix"
+        type_key_prefix = XyZ_
+    }
+}
+starts = {
+    starts_field = scalar
+}
+prefix = {
+    prefix_field = scalar
+}
+"#;
+
+#[test]
+fn prefixes_gate_unwrapped_instances_case_insensitively() {
+    let script = r#"
+aBc_good = { wrong_start = 1 }
+xYz_good = { wrong_key = 1 }
+ab = { wrong_short = 1 }
+ébc_good = { wrong_nonascii_start = 1 }
+xy = { wrong_short_key = 1 }
+éyz_good = { wrong_nonascii_key = 1 }
+"#;
+    let errors = validate(PREFIX_RULES, script, "game/common/prefix/test.txt");
+    let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+    assert!(messages.iter().any(|m| m.contains("wrong_start")));
+    assert!(messages.iter().any(|m| m.contains("wrong_key")));
+    for field in [
+        "wrong_short",
+        "wrong_nonascii_start",
+        "wrong_short_key",
+        "wrong_nonascii_key",
+    ] {
+        assert!(
+            !messages.iter().any(|m| m.contains(field)),
+            "rejected instance {field} was validated"
+        );
+    }
+
+    let starts_context = navigate(
+        PREFIX_RULES,
+        script,
+        "game/common/prefix/test.txt",
+        "wrong_start = 1",
+    )
+    .expect("navigator must resolve a matching starts_with instance");
+    assert!(specific_keys(&starts_context.child_rules).contains(&"starts_field".to_string()));
+    let key_context = navigate(
+        PREFIX_RULES,
+        script,
+        "game/common/prefix/test.txt",
+        "wrong_key = 1",
+    )
+    .expect("navigator must resolve a matching type_key_prefix instance");
+    assert!(specific_keys(&key_context.child_rules).contains(&"prefix_field".to_string()));
+    assert!(
+        navigate(
+            PREFIX_RULES,
+            script,
+            "game/common/prefix/test.txt",
+            "wrong_short = 1",
+        )
+        .is_none(),
+        "navigator must reject a key shorter than a prefix"
+    );
+}
+
+const PREFIX_WRAPPER_RULES: &str = r#"
+types = {
+    type[starts_wrapper] = {
+        path = "game/common/wrappers"
+        skip_root_key = holder
+        starts_with = start_
+    }
+    type[prefix_wrapper] = {
+        path = "game/common/wrappers"
+        skip_root_key = holder
+        type_key_prefix = key_
+    }
+    type[nested_wrapper] = {
+        path = "game/common/wrappers"
+        skip_root_key = { outer inner }
+        starts_with = nested_
+    }
+}
+starts_wrapper = {
+    start_field = scalar
+}
+prefix_wrapper = {
+    prefix_field = scalar
+}
+nested_wrapper = {
+    nested_field = scalar
+}
+"#;
+
+#[test]
+fn prefixes_gate_instances_but_not_wrapper_keys() {
+    let script = r#"
+holder = {
+    Start_good = { wrong_start = 1 }
+    KEY_good = { wrong_prefix = 1 }
+    rejected = { wrong_rejected = 1 }
+}
+outer = {
+    inner = {
+        Nested_good = { wrong_nested = 1 }
+        rejected_nested = { wrong_rejected_nested = 1 }
+    }
+}
+"#;
+    let errors = validate(
+        PREFIX_WRAPPER_RULES,
+        script,
+        "game/common/wrappers/test.txt",
+    );
+    let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
+    for field in ["wrong_start", "wrong_prefix", "wrong_nested"] {
+        assert!(
+            messages.iter().any(|m| m.contains(field)),
+            "missing {field}"
+        );
+    }
+    for field in ["wrong_rejected", "wrong_rejected_nested"] {
+        assert!(
+            !messages.iter().any(|m| m.contains(field)),
+            "rejected instance {field} was validated"
+        );
+    }
+
+    let nested_context = navigate(
+        PREFIX_WRAPPER_RULES,
+        script,
+        "game/common/wrappers/test.txt",
+        "wrong_nested = 1",
+    )
+    .expect("navigator must agree on a matching nested instance");
+    assert!(specific_keys(&nested_context.child_rules).contains(&"nested_field".to_string()));
+    assert!(
+        navigate(
+            PREFIX_WRAPPER_RULES,
+            script,
+            "game/common/wrappers/test.txt",
+            "wrong_rejected_nested = 1",
+        )
+        .is_none(),
+        "navigator must reject a nonmatching nested instance"
+    );
+}
+
+const GENERIC_FALLBACK_RULES: &str = r#"
+types = {
+    ## type_key_filter = named
+    type[named] = {
+        path = "game/common/generic"
+        skip_root_key = holder
+        starts_with = named_
+    }
+    type[generic] = {
+        path = "game/common/generic"
+        skip_root_key = holder
+        starts_with = generic_
+    }
+}
+named = {
+    named_field = scalar
+}
+generic = {
+    generic_field = scalar
+}
+"#;
+
+#[test]
+fn generic_grandchild_fallback_still_applies_prefixes() {
+    let script = r#"
+holder = {
+    generic_good = { wrong_generic = 1 }
+    other = { wrong_other = 1 }
+}
+"#;
+    let errors = validate(
+        GENERIC_FALLBACK_RULES,
+        script,
+        "game/common/generic/test.txt",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("wrong_generic")),
+        "the generic fallback should validate a matching prefixed instance, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        !errors.iter().any(|e| e.message.contains("wrong_other")),
+        "the generic fallback must not validate a nonmatching instance, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    let context = navigate(
+        GENERIC_FALLBACK_RULES,
+        script,
+        "game/common/generic/test.txt",
+        "wrong_generic = 1",
+    )
+    .expect("navigator must agree with generic grandchild fallback");
+    assert!(specific_keys(&context.child_rules).contains(&"generic_field".to_string()));
+}
+
+const DIRECT_NAME_RULES: &str = r#"
+types = {
+    type[direct] = {
+        path = "game/common/direct"
+        starts_with = allowed_
+    }
+}
+direct = {
+    direct_field = scalar
+}
+"#;
+
+#[test]
+fn direct_name_dispatch_does_not_bypass_prefixes() {
+    let script = r#"
+direct = { wrong_direct = 1 }
+allowed_direct = { wrong_allowed = 1 }
+"#;
+    let errors = validate(DIRECT_NAME_RULES, script, "game/common/direct/test.txt");
+    assert!(
+        !errors.iter().any(|e| e.message.contains("wrong_direct")),
+        "the direct type name must not bypass starts_with"
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("wrong_allowed")),
+        "a matching key must still validate"
+    );
+
+    assert!(
+        navigate(
+            DIRECT_NAME_RULES,
+            script,
+            "game/common/direct/test.txt",
+            "wrong_direct = 1",
+        )
+        .is_none(),
+        "navigator must reject a direct-name key that misses starts_with"
+    );
+    assert!(
+        navigate(
+            DIRECT_NAME_RULES,
+            script,
+            "game/common/direct/test.txt",
+            "wrong_allowed = 1",
+        )
+        .is_some(),
+        "navigator must resolve a matching direct-name candidate"
+    );
+}
+
+#[test]
+fn type_per_file_dispatch_does_not_require_an_instance_prefix() {
+    let rules = r#"
+types = {
+    type[file] = {
+        path = "game/common/per_file"
+        type_per_file = yes
+        starts_with = file_
+    }
+}
+file = {
+    allowed = scalar
+}
+"#;
+    let errors = validate(rules, "not_file = 1\n", "game/common/per_file/test.txt");
+    assert!(
+        errors.iter().any(|e| e.message.contains("not_file")),
+        "type_per_file dispatch has no instance key to prefix-gate"
+    );
+}
