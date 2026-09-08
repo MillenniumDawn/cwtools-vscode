@@ -14,6 +14,8 @@
 * Start the language server only when an opened workspace folder has a root
   `descriptor.mod`. Unrelated folders and nested test fixtures no longer
   trigger startup. (#655)
+* Marketplace publishing now requires the locally installed `vsce` CLI instead
+  of allowing `npx` to download it. (#596)
 
 ### 3.4.0
 
