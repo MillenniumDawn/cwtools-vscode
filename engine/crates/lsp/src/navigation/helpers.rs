@@ -342,7 +342,12 @@ pub(crate) fn at_var_at_cursor(text: &str, line0: u32, col: u32) -> Option<(Stri
 }
 
 pub(crate) fn word_at_position(text: &str, line0: u32, char0: u32) -> Option<String> {
-    let line = text.lines().nth(line0 as usize)?;
+    word_in_line(text.lines().nth(line0 as usize)?, char0)
+}
+
+/// `word_at_position` for a caller that already holds the line, so it does not
+/// scan the whole document again to find it (#471).
+pub(crate) fn word_in_line(line: &str, char0: u32) -> Option<String> {
     let chars: Vec<char> = line.chars().collect();
     let cur = (char0 as usize).min(chars.len());
     let mut start = cur;
@@ -616,9 +621,9 @@ pub fn build_doc_symbols(
         let start_line = kc.pos.start.line.saturating_sub(1);
         let start = lines.position(start_line, kc.pos.start.col as u32);
         let end = lines.position(kc.pos.end.line.saturating_sub(1), kc.pos.end.col as u32);
-        let selection_end = lines
-            .token_range(start_line, kc.pos.start.col as u32, &key)
-            .end;
+        // `token_range` would recompute `start`, which this clause already
+        // holds; only the selection's end column is new work (#471).
+        let selection_end = lines.token_end(start_line, kc.pos.start.col as u32, &key);
         #[allow(deprecated)]
         syms.push(DocumentSymbol {
             name,

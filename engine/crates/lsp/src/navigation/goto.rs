@@ -5,7 +5,7 @@ use cwtools_info::PositionElement;
 use cwtools_info::ReferenceHint;
 
 use crate::lines::DocLines;
-use crate::paths::{logical_path_from_uri, lsp_pos_to_source_in_text, parse_uri};
+use crate::paths::{logical_path_from_uri, parse_uri};
 use crate::{Backend, RuleCursorInfo};
 
 use super::{
@@ -205,9 +205,13 @@ impl Backend {
     ) -> Option<(cwtools_rules::rules_types::CwtDefKind, String)> {
         let text = self.file_text_for(uri).await?;
         let encoding = self.state.config.read().position_encoding.clone();
-        let (_, col) = lsp_pos_to_source_in_text(&text, pos, &encoding);
+        // One scan for the line, then the column off that line.
+        // `lsp_pos_to_source_in_text` would walk the document to find the same
+        // line a second time (#471).
         let line = text.lines().nth(pos.line as usize)?;
-        cwt_ref_at(line, col as u32)
+        let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
+        let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
+        cwt_ref_at(line, col)
     }
 
     async fn cwt_goto(

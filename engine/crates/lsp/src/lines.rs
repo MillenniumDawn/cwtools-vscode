@@ -65,11 +65,23 @@ impl<'a> DocLines<'a> {
         Position::new(line, encoded_position_len(last_line, &self.encoding))
     }
 
+    /// The end of `token_range` on its own, for a caller that already holds the
+    /// start and would otherwise pay to compute it twice (#471).
+    pub(crate) fn token_end(&self, line: u32, column: u32, token: &str) -> Position {
+        self.position(line, column + token.chars().count() as u32)
+    }
+
     pub(crate) fn token_range(&self, line: u32, column: u32, token: &str) -> Range {
         Range {
             start: self.position(line, column),
-            end: self.position(line, column + token.chars().count() as u32),
+            end: self.token_end(line, column, token),
         }
+    }
+
+    /// The document's lines with their 0-based numbers, for a caller that would
+    /// otherwise re-run `text.lines()` over a text this already indexed (#471).
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u32, &'a str)> + '_ {
+        self.lines.iter().enumerate().map(|(i, l)| (i as u32, *l))
     }
 
     pub(crate) fn has_text(&self) -> bool {

@@ -3,7 +3,7 @@ use tower_lsp::lsp_types::*;
 
 use crate::Backend;
 use crate::lines::DocLines;
-use crate::paths::{logical_path_from_uri, lsp_pos_to_source_in_text};
+use crate::paths::logical_path_from_uri;
 
 use super::{
     brace_folding_ranges, brace_pairs, build_doc_symbols, code_token_cols_in_line,
@@ -43,7 +43,10 @@ impl Backend {
             .positions
             .iter()
             .map(|pos| {
-                let (_, col) = lsp_pos_to_source_in_text(&text, *pos, &encoding);
+                // Through the index, not `lsp_pos_to_source_in_text`: this runs
+                // once per requested position, and that would rescan the whole
+                // document each time (#471).
+                let col = lines.source_column(*pos);
                 let spans = selection_spans(&text, &pairs, pos.line, col as u32);
                 let mut node: Option<SelectionRange> = None;
                 for &((sl, sc), (el, ec)) in spans.iter().rev() {
@@ -85,7 +88,10 @@ impl Backend {
             (cfg.workspace_prefix.clone(), cfg.position_encoding.clone())
         };
         let logical_path = logical_path_from_uri(&uri, &ws_prefix);
-        let (_, source_col) = lsp_pos_to_source_in_text(&text, pos, &position_encoding);
+        // Built before the symbol lookup rather than after it, so the cursor's
+        // own column comes out of the index too (#471).
+        let lines = DocLines::new(&text, position_encoding);
+        let source_col = lines.source_column(pos);
         let symbol = self
             .type_ref_at_cursor(&uri, pos, &logical_path)
             .map(|(_, name)| name)
@@ -95,16 +101,14 @@ impl Backend {
             return Ok(None);
         };
         let symbol = symbol.as_str();
-        let lines = DocLines::new(&text, position_encoding);
-        let highlights: Vec<DocumentHighlight> = text
-            .lines()
-            .enumerate()
+        let lines = &lines;
+        let highlights: Vec<DocumentHighlight> = lines
+            .iter()
             .flat_map(|(line0, line)| {
-                let lines = &lines;
                 code_token_cols_in_line(line, symbol)
                     .into_iter()
                     .map(move |col| DocumentHighlight {
-                        range: lines.token_range(line0 as u32, col, symbol),
+                        range: lines.token_range(line0, col, symbol),
                         kind: Some(highlight_kind(line, col, symbol)),
                     })
             })
