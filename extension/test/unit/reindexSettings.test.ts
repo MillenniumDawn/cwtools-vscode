@@ -94,6 +94,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 		hoverScopeDisplay: "context",
 		formattingIndentStyle: "space",
 		formattingIndentSize: 4,
+		formattingMaxLineWidth: 120,
 		formattingTrimTrailingWhitespace: true,
 		formattingInsertFinalNewline: true,
 	};
@@ -112,6 +113,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 		assert.strictEqual(payload.hoverShowAllLanguages, false);
 		assert.strictEqual(payload.hoverDebug, false);
 		assert.strictEqual(payload.hoverScopeDisplay, "context");
+		assert.strictEqual(payload.formattingMaxLineWidth, 120);
 	});
 
 	test("defaults the interval and idle window when unset in the payload too", () => {
@@ -140,6 +142,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 			hoverScopeDisplay: "resolved",
 			formattingIndentStyle: "space",
 			formattingIndentSize: 4,
+			formattingMaxLineWidth: 120,
 			formattingTrimTrailingWhitespace: true,
 			formattingInsertFinalNewline: true,
 		};
@@ -165,6 +168,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 			hoverScopeDisplay: "context",
 			formattingIndentStyle: "space",
 			formattingIndentSize: 4,
+			formattingMaxLineWidth: 120,
 			formattingTrimTrailingWhitespace: true,
 			formattingInsertFinalNewline: true,
 		} satisfies LiveServerSettings);
@@ -183,6 +187,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 				hoverScopeDisplay: "resolved",
 				formattingIndentStyle: "tab",
 				formattingIndentSize: 2,
+				formattingMaxLineWidth: 80,
 				formattingTrimTrailingWhitespace: false,
 				formattingInsertFinalNewline: false,
 			} satisfies LiveServerSettings,
@@ -193,6 +198,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 		]);
 		assert.strictEqual(payload.hoverShowAllLanguages, true);
 		assert.strictEqual(payload.hoverScopeDisplay, "resolved");
+		assert.strictEqual(payload.formattingMaxLineWidth, 80);
 	});
 });
 

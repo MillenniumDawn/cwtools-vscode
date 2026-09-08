@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         gh_error(f"No .vsix file found in {vsix_dir}")
         return 1
 
-    universal: set[str] = set()
+    universal: set[str] | None = None
     targeted: set[str] = set()
     for vsix in vsixes:
         platform, names = check_vsix(vsix)
@@ -151,11 +151,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             targeted.add(platform)
 
-    if universal:
-        missing = targeted - universal
-        for platform in sorted(missing):
-            gh_error(f"universal vsix is missing {platform}, which has its own package")
-            return 1
+    if universal is None:
+        gh_error("no universal fallback vsix was packaged")
+        return 1
+
+    missing = targeted - universal
+    for platform in sorted(missing):
+        gh_error(f"universal vsix is missing {platform}, which has its own package")
+        return 1
 
     packaged = universal | targeted
     for platform in expected:

@@ -61,6 +61,7 @@
   "configuration.cwtools.hover.scopeDisplay.resolved": "إظهار الـ scope الذي يُحَل إليه الرابط أو الكلمة المفتاحية FROM/ROOT/PREV تحت المؤشر أيضًا.",
   "configuration.cwtools.formatting.indentStyle.description": "المسافة البادئة بمسافات أو علامات جدولة. Format Document يستخدم insertSpaces/tabSize من المحرر.",
   "configuration.cwtools.formatting.indentSize.description": "عدد المسافات لكل مستوى عندما يكون indentStyle هو space. Format Document يستخدم tabSize من المحرر.",
+  "configuration.cwtools.formatting.maxLineWidth.description": "الحد الأقصى لعرض السطر المُنسّق لقوائم القيم الخام.",
   "configuration.cwtools.formatting.trimTrailingWhitespace.description": "إزالة المسافات الزائدة في نهاية كل سطر عند التنسيق.",
   "configuration.cwtools.formatting.insertFinalNewline.description": "التأكد من أن الملف ينتهي بسطر جديد عند التنسيق.",
   // An inlay hint is the greyed-out text VS Code renders inline within a line of code
