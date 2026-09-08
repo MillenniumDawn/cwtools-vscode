@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
@@ -7,9 +8,12 @@ import pytest
 
 import build
 
-nightly_identity_from = cast(
+next_release_version = cast(
+    Callable[[str, str], str], vars(build)["next_release_version"]
+)
+prerelease_identity_from = cast(
     Callable[[Mapping[str, str], str], dict[str, str]],
-    vars(build)["nightly_identity_from"],
+    vars(build)["prerelease_identity_from"],
 )
 resolve_version_from = cast(
     Callable[[Mapping[str, str], str], dict[str, Any]],
@@ -21,6 +25,16 @@ CHANGELOG = """### Unreleased
 * Work in progress.
 
 ### 2.5.0
+
+* Added the widget.
+"""
+
+# Pre-releases derive from the stable line, which lives on the even minors.
+STABLE_CHANGELOG = """### Unreleased
+
+* Work in progress.
+
+### 3.4.0
 
 * Added the widget.
 """
@@ -103,21 +117,35 @@ def test_throws_when_the_changelog_has_no_version_heading() -> None:
         resolve_version_from({}, "# Title\n\nBody only.\n")
 
 
-def test_nightly_identity_uses_numeric_version_and_unique_release_tag() -> None:
+def test_prerelease_identity_uses_the_odd_minor_above_stable() -> None:
     env = {"GITHUB_RUN_NUMBER": "42", "GITHUB_RUN_ATTEMPT": "3"}
-    assert nightly_identity_from(env, CHANGELOG) == {
-        "version": "2.5.42",
-        "tag": "v2.5.42-nightly.3",
+    assert prerelease_identity_from(env, STABLE_CHANGELOG) == {
+        "version": "3.5.42",
+        "tag": "v3.5.42-pre.3",
     }
 
 
-def test_nightly_identity_uses_the_stable_part_of_a_prerelease_heading() -> None:
+def test_prerelease_identity_defaults_the_run_attempt_to_one() -> None:
+    env = {"GITHUB_RUN_NUMBER": "7"}
+    assert prerelease_identity_from(env, "### 4.0.2\n\n* Stable.\n") == {
+        "version": "4.1.7",
+        "tag": "v4.1.7-pre.1",
+    }
+
+
+def test_prerelease_identity_uses_the_stable_part_of_a_prerelease_heading() -> None:
     env = {"GITHUB_RUN_NUMBER": "7"}
     changelog = "### 4.0.2-beta.2\n\n* Beta.\n"
-    assert nightly_identity_from(env, changelog) == {
-        "version": "4.0.9",
-        "tag": "v4.0.9-nightly.1",
+    assert prerelease_identity_from(env, changelog) == {
+        "version": "4.1.7",
+        "tag": "v4.1.7-pre.1",
     }
+
+
+def test_prerelease_identity_rejects_an_odd_stable_minor() -> None:
+    env = {"GITHUB_RUN_NUMBER": "1"}
+    with pytest.raises(RuntimeError, match="even stable minor"):
+        prerelease_identity_from(env, CHANGELOG)
 
 
 @pytest.mark.parametrize(
@@ -130,6 +158,37 @@ def test_nightly_identity_uses_the_stable_part_of_a_prerelease_heading() -> None
         {"GITHUB_RUN_NUMBER": "1", "GITHUB_RUN_ATTEMPT": "0"},
     ],
 )
-def test_nightly_identity_rejects_invalid_run_identity(env: dict[str, str]) -> None:
-    with pytest.raises(RuntimeError, match="nightly"):
-        nightly_identity_from(env, CHANGELOG)
+def test_prerelease_identity_rejects_invalid_run_identity(env: dict[str, str]) -> None:
+    with pytest.raises(RuntimeError, match="pre-release"):
+        prerelease_identity_from(env, STABLE_CHANGELOG)
+
+
+@pytest.mark.parametrize(
+    ("current", "bump", "expected"),
+    [
+        ("3.4.0", "patch", "3.4.1"),
+        ("3.4.7", "patch", "3.4.8"),
+        # A minor bump skips the odd line the pre-releases sit on.
+        ("3.4.0", "minor", "3.6.0"),
+        ("3.4.9", "major", "4.0.0"),
+    ],
+)
+def test_next_release_version_keeps_releases_on_even_minors(
+    current: str, bump: str, expected: str
+) -> None:
+    assert next_release_version(current, bump) == expected
+
+
+def test_next_release_version_refuses_to_bump_a_prerelease_line() -> None:
+    with pytest.raises(RuntimeError, match="pre-release line"):
+        next_release_version("3.5.42", "patch")
+
+
+def test_next_release_version_rejects_an_unknown_bump() -> None:
+    with pytest.raises(RuntimeError, match="unknown bump"):
+        next_release_version("3.4.0", "huge")
+
+
+def test_next_release_version_rejects_a_malformed_version() -> None:
+    with pytest.raises(RuntimeError, match=re.escape("not a x.y.z version")):
+        next_release_version("3.4", "patch")
