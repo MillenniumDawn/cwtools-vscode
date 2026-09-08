@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* CLI `fix --apply` and `format --apply` now write atomically and fail on
+  unreadable files. (#496)
 * Show graph now discards superseded requests, so an older response cannot
   replace the graph selected by the user. (#588)
 #### Engine
