@@ -678,6 +678,7 @@ impl<'a> Parser<'a> {
             arena: self.arena,
             root_children,
             errors: self.errors,
+            overlay: self.table.overlay_guard(),
         }
     }
 }

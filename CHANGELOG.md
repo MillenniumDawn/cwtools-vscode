@@ -17,6 +17,16 @@
   graph rendering. (#602)
 #### Engine
 
+* The LSP's string table no longer grows with every keystroke. Mid-edit parses —
+  both the debounced document validation and the speculative re-parse behind
+  hover, goto, completion, semantic tokens and inlay hints — now intern strings
+  the table has never seen into a per-document region that is released with the
+  document, instead of appending to a table that had no removal at all. Inline
+  script `$ARG$` substitutions follow the document's region too. Strings already
+  in the base table still resolve to their existing ids, so ids stay comparable
+  across documents; `doc_tokens` is now keyed by case-folded content hash rather
+  than by interned id, which also fixes a stale diagnostic when a name first seen
+  mid-edit was later defined elsewhere. (#475)
 * LSP hover localisation text is escaped before entering Markdown, so mod values
   render as literal text. (#592)
 * CLI `fix --apply` and `format --apply` now write atomically and fail on

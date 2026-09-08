@@ -497,11 +497,13 @@ pub(super) fn run(args: ValidateArgs) {
         }
         let st = rules_table.stats();
         eprintln!(
-            "  [profile]   string_table: {} ({} entries, strings {}, keys {})",
+            "  [profile]   string_table: {} ({} entries, strings {}, keys {}, {} overlay entries in {} regions)",
             mib(st.total_bytes()),
             st.entries,
             mib(st.id_to_string_bytes),
             mib(st.map_key_bytes),
+            st.overlay_entries,
+            st.overlay_regions,
         );
         let type_instances: usize = type_index.map.values().map(|v| v.len()).sum();
         eprintln!(

@@ -14,6 +14,12 @@ Layer 0 (leaves, no cwtools dependencies):
 - `i18n`: locale selection and translated engine messages.
 - `string_table`: the string interner. `StringTable::new()` builds a fresh sharded
   table; `Clone` shares that instance only. AST keys are `u32` ids into it.
+  `with_overlay()` returns a handle whose *new* strings go into a private,
+  reclaimable region instead of the permanent table — the LSP parses mid-edit
+  buffers through one so half-typed identifiers do not accumulate for the process
+  lifetime. Base ids resolve through any handle and overlay ids resolve through
+  any handle to the same table while the region lives; a `ParsedFile` holds the
+  region's `OverlayGuard`, so its ids stay valid exactly as long as it does.
 - `game`: the `Game` enum plus the scope engine (`ScopeId`/`ScopeContext`/transitions)
   and the config-driven `ScopeRegistry`.
 
