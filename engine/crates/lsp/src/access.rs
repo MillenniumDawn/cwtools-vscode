@@ -204,8 +204,40 @@ pub(crate) fn read_capped_text(path: &Path, max_bytes: u64) -> Option<String> {
     }
 }
 
+/// Every path this module has actually opened, for tests that assert a code
+/// path performs no disk reads (#472). A recorded list rather than a counter:
+/// `cargo test` runs tests in parallel threads inside one binary, so a caller
+/// filters by its own fixture root and is unaffected by other tests reading
+/// their own files.
+#[cfg(test)]
+static RECORDED_READS: parking_lot::Mutex<Vec<PathBuf>> = parking_lot::Mutex::new(Vec::new());
+
+/// How many reads this module has performed under `root`.
+///
+/// Recorded paths arrive in whatever form the caller had: `read_authorized`
+/// canonicalizes first, which on Windows yields a verbatim `\\?\` prefix that
+/// a plain fixture path never matches, while `read_capped_text` passes its
+/// path through untouched. Both forms of the root are tried so the filter does
+/// not silently match nothing.
+#[cfg(test)]
+pub(crate) fn recorded_reads_under(root: &Path) -> usize {
+    let canonical = canonicalize_for_containment(root);
+    RECORDED_READS
+        .lock()
+        .iter()
+        .filter(|path| {
+            path.starts_with(root)
+                || canonical
+                    .as_deref()
+                    .is_some_and(|canonical| path.starts_with(canonical))
+        })
+        .count()
+}
+
 fn read_capped(path: &Path, max_bytes: u64) -> FileRead {
     use std::io::Read as _;
+    #[cfg(test)]
+    RECORDED_READS.lock().push(path.to_path_buf());
     let Ok(file) = std::fs::File::open(path) else {
         return FileRead::Missing;
     };

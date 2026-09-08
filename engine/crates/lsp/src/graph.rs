@@ -428,7 +428,7 @@ impl GraphSource for BackendGraphSource<'_> {
     }
 
     fn use_sites(&self, type_name: &str, name: &str) -> Vec<(String, SourceLocation)> {
-        self.backend.collect_use_sites(type_name, name)
+        crate::navigation::key_sites(self.backend.collect_use_sites(type_name, name))
     }
 
     fn instances_in_file(&self, file_uri: &str) -> Vec<GraphEntity> {
