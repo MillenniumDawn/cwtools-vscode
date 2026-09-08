@@ -182,6 +182,10 @@ mod tests {
             ("x😀", 0, 3, 2),
             ("x😀\n", 1, 0, 0),
             ("x😀\r\n", 1, 0, 0),
+            // All-ASCII, and a CRLF terminator: `str::lines` strips the `\r`,
+            // so it never reaches the reported column (#471).
+            ("abc", 0, 3, 3),
+            ("abc\r\n", 1, 0, 0),
         ] {
             assert_eq!(
                 DocLines::new(text, PositionEncodingKind::UTF16).document_end_position(),
@@ -226,6 +230,93 @@ mod tests {
                     crate::paths::lsp_pos_to_source_in_text(text, pos, &encoding),
                 );
             }
+        }
+    }
+
+    /// The whole index has to agree with the char-walking implementations in
+    /// `paths.rs` that the handlers used to call directly: for every line, every
+    /// column past the end of it included, out-of-range line indices, and both
+    /// encodings. #471 moved several cursor lookups off `paths.rs` and onto
+    /// `DocLines`, and this is what says those were the same computation. Any
+    /// later attempt to make these conversions cheaper has an oracle to answer
+    /// to -- one was tried on this branch, measured at nothing, and dropped.
+    #[test]
+    fn the_index_agrees_with_the_char_walking_reference() {
+        // Pure ASCII; ASCII but for one accented comment, the shape of a real
+        // corpus file; non-ASCII throughout, BMP and astral.
+        for text in [
+            "alpha = 1\n  beta = { gamma = 2 }\n\nlast",
+            "alpha = 1\n  # caf\u{e9} comment\n  beta = 2\n",
+            "  \u{1f600}name\u{10400} = 1\n\u{4e16}\u{754c} = 2\n",
+        ] {
+            for encoding in [PositionEncodingKind::UTF16, PositionEncodingKind::UTF32] {
+                let lines = DocLines::new(text, encoding.clone());
+                for line0 in 0..text.lines().count() as u32 + 2 {
+                    let raw = text.lines().nth(line0 as usize);
+                    let width = raw.map_or(0, |l| l.chars().count() as u32);
+                    for col in 0..width + 3 {
+                        let want = raw.map_or(col, |l| source_column_to_lsp(l, col, &encoding));
+                        assert_eq!(
+                            lines.position(line0, col),
+                            Position::new(line0, want),
+                            "position {encoding:?} {text:?} line {line0} col {col}"
+                        );
+                    }
+                    for col in 0..width {
+                        let pos = lines.position(line0, col);
+                        assert_eq!(
+                            (pos.line + 1, lines.source_column(pos)),
+                            crate::paths::lsp_pos_to_source_in_text(text, pos, &encoding),
+                            "source_column {encoding:?} {text:?} line {line0} col {col}"
+                        );
+                    }
+                    assert_eq!(
+                        lines.end_position(line0, 0).character,
+                        raw.map_or(0, |l| encoded_position_len(l.trim_end(), &encoding))
+                            .max(1),
+                        "end_position {encoding:?} {text:?} line {line0}"
+                    );
+                    assert_eq!(
+                        lines.token_range(line0, 0, "beta"),
+                        Range::new(lines.position(line0, 0), lines.position(line0, 4)),
+                        "token_range {encoding:?} {text:?} line {line0}"
+                    );
+                }
+                let last = text.lines().last().unwrap_or("");
+                let count = text.lines().count() as u32;
+                assert_eq!(
+                    lines.document_end_position(),
+                    Position::new(
+                        if text.ends_with('\n') {
+                            count
+                        } else {
+                            count.saturating_sub(1)
+                        },
+                        if text.ends_with('\n') {
+                            0
+                        } else {
+                            encoded_position_len(last, &encoding)
+                        },
+                    ),
+                    "document_end_position {encoding:?} {text:?}"
+                );
+            }
+        }
+    }
+
+    /// A column past the end of a line clamps to that line's width, because
+    /// `chars().take(col)` runs out -- but a column on a line that does not
+    /// exist passes straight through, which is what `position`'s `map_or(col,
+    /// ..)` promises. Two different answers to "out of range", and both are
+    /// load-bearing (#471).
+    #[test]
+    fn a_column_past_the_end_of_the_line_clamps_to_its_width() {
+        for encoding in [PositionEncodingKind::UTF16, PositionEncodingKind::UTF32] {
+            let lines = DocLines::new("abc\n", encoding.clone());
+            assert_eq!(lines.position(0, 99), Position::new(0, 3), "{encoding:?}");
+            assert_eq!(lines.position(9, 99), Position::new(9, 99), "{encoding:?}");
+            assert_eq!(lines.source_column(Position::new(0, 99)), 3, "{encoding:?}");
+            assert_eq!(lines.source_column(Position::new(9, 99)), 0, "{encoding:?}");
         }
     }
 
