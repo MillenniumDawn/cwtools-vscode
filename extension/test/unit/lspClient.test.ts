@@ -166,6 +166,7 @@ suite("lspClient — watched files", () => {
 
 	test("re-reads initialization settings for each client start", () => {
 		configurationValues.set("localisation.languages", ["English"]);
+		configurationValues.set("formatting.maxLineWidth", 80);
 		create();
 		const initializationOptions: unknown =
 			lastClientOptions.value?.initializationOptions;
@@ -173,16 +174,20 @@ suite("lspClient — watched files", () => {
 		const first = (
 			initializationOptions as () => {
 				localisationLanguages: string[];
+				formattingMaxLineWidth: number;
 			}
 		)();
 		configurationValues.set("localisation.languages", ["French"]);
 		const second = (
 			initializationOptions as () => {
 				localisationLanguages: string[];
+				formattingMaxLineWidth: number;
 			}
 		)();
 		assert.deepStrictEqual(first.localisationLanguages, ["English"]);
+		assert.strictEqual(first.formattingMaxLineWidth, 80);
 		assert.deepStrictEqual(second.localisationLanguages, ["French"]);
+		assert.strictEqual(second.formattingMaxLineWidth, 80);
 	});
 
 	test("the globs match every file class the server indexes", () => {
