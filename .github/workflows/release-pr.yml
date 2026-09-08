@@ -39,18 +39,24 @@ jobs:
     env:
       BRANCH: release/version-bump
       BUMP: ${{ inputs.release_type || 'patch' }}
-      # A PR opened with GITHUB_TOKEN triggers no workflow, so CI never runs
-      # against it. With RELEASE_PR_TOKEN (a PAT) the PR gets real checks.
-      GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
-      HAS_PAT: ${{ secrets.RELEASE_PR_TOKEN != '' }}
     steps:
+      # A PR opened with GITHUB_TOKEN triggers no workflow, so CI would never
+      # run against it. An App installation token does trigger workflows, and
+      # unlike a PAT it leaves no person as the author of the release PR.
+      - name: Mint a GitHub App token
+        id: app-token
+        # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
       - name: Checkout
         # v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           # Credentials are kept on purpose: this job pushes the release branch.
-          token: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
       # The branch is regenerated from origin/main on every push rather than
       # merged forward, so the edit is always the same mechanical rewrite and
       # nothing can conflict. Hand edits pushed to it are discarded; fixes
@@ -77,6 +83,7 @@ jobs:
         env:
           VERSION: ${{ steps.prepare.outputs.version }}
           REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           title="Release $VERSION"
           body_file="$RUNNER_TEMP/release-pr-body.md"
@@ -96,12 +103,6 @@ jobs:
             echo
             echo "Bump: \`$BUMP\`. Re-run \`release-pr.yml\` with a different"
             echo "\`release_type\` to change it."
-            if [ "$HAS_PAT" != "true" ]; then
-              echo
-              echo "> Opened with \`GITHUB_TOKEN\`, so the checks on this PR"
-              echo "> are advisory: CI was dispatched against the branch"
-              echo "> instead of the merge commit."
-            fi
           } > "$body_file"
           number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
             --json number --jq '.[0].number // empty')
@@ -112,10 +113,3 @@ jobs:
             gh pr create --repo "$REPO" --base main --head "$BRANCH" \
               --title "$title" --body-file "$body_file"
           fi
-      # Without a PAT the PR itself starts no workflow. Dispatch CI against the
-      # branch so the release commit is at least built and tested somewhere.
-      - name: Dispatch CI against the release branch
-        if: >-
-          ${{ steps.prepare.outputs.release == 'true'
-          && env.HAS_PAT != 'true' }}
-        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"

@@ -45,6 +45,8 @@ Publishing is automatic on both channels; neither needs anything run from your m
 
 That branch is regenerated from `origin/main` and force-pushed on every push, so edits made on it are discarded — correct the release notes in `main`'s `### Unreleased` section instead.
 
+The PR is opened by `cwtools-release-bot`, an org-owned GitHub App, so no individual is its author and it still gets real checks on the merge commit — an App installation token triggers workflows where `GITHUB_TOKEN` does not (the same quirk as the tag push below). It needs `Contents` and `Pull requests` write on this repo, plus the `RELEASE_PR_APP_ID` and `RELEASE_PR_APP_PRIVATE_KEY` secrets; without them the job fails at the token step rather than falling back to anything.
+
 Merging the release PR is what cuts the release. `.github/workflows/tag-release.yml` notices that the manifest version matches the top changelog heading with no tag for it yet, pushes `v<x.y.z>`, and calls `release.yml`, which builds every platform, smoke-tests, and publishes to the Marketplace, Open VSX, and GitHub Releases. (It calls rather than relies on the tag push: a tag pushed with `GITHUB_TOKEN` starts no workflow.)
 
 `npm run build -- release` still works as the manual fallback: it checks the CHANGELOG has a section for the top version, refuses a dirty tree or an existing tag, then pushes `v<x.y.z>`, which triggers the same `release.yml` through its tag-push trigger.
