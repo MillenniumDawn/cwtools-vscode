@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use cwtools_parser::ast::ParsedFile;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
@@ -18,6 +20,19 @@ use super::{
     dedup_locations, locations_at_with_lines, source_range_without_text, value_col_in_line,
     value_start_after_eq,
 };
+
+/// Reduce use sites to the `(uri, key_location)` pairs `resolve_value_sites`
+/// takes. Callers that refine the value column from file text — `references`,
+/// `rename`, the graph — stay on the key position and the text scan; only the
+/// code lens path uses the indexed value position directly (#472).
+pub(crate) fn key_sites(
+    sites: Vec<cwtools_info::UseSite>,
+) -> Vec<(String, cwtools_info::SourceLocation)> {
+    sites
+        .into_iter()
+        .map(|site| (site.file.to_string(), site.key))
+        .collect()
+}
 
 impl Backend {
     pub(crate) fn is_known_loc_key(&self, lower: &str) -> bool {
@@ -296,7 +311,7 @@ impl Backend {
                 Vec::new()
             };
 
-            let sites = self.collect_use_sites(&type_name, &instance_name);
+            let sites = key_sites(self.collect_use_sites(&type_name, &instance_name));
             let mut text_uris: Vec<String> = definitions
                 .iter()
                 .map(|(file_uri, _)| file_uri.clone())
@@ -357,35 +372,48 @@ impl Backend {
         Ok(None)
     }
 
+    /// Every use site of `instance_name`: open documents from their in-memory
+    /// ASTs, everything else from the reference index.
+    ///
+    /// The open-document ASTs and the open-URI set are snapshotted under one
+    /// `documents` lock and the guard released before anything is walked —
+    /// every `did_change` needs that same mutex, and holding `config` across
+    /// another lock is what `DocumentState`'s lock order forbids (#472).
     pub(crate) fn collect_use_sites(
         &self,
         type_name: &str,
         instance_name: &str,
-    ) -> Vec<(String, cwtools_info::SourceLocation)> {
-        let mut sites: Vec<(String, cwtools_info::SourceLocation)> = Vec::new();
-        let open_uris: HashSet<String> = {
+    ) -> Vec<cwtools_info::UseSite> {
+        let (asts, open_uris): (Vec<(String, Arc<ParsedFile>)>, HashSet<String>) = {
             let docs = self.state.documents.lock();
-            let rules_guard = self.state.rules.read();
-            let ws_prefix = self.state.config.read().workspace_prefix.clone();
-            if let Some(rs) = rules_guard.ruleset.as_ref() {
-                sites.extend(scan_use_sites(
-                    type_name,
-                    instance_name,
-                    &docs,
-                    rs,
-                    &ws_prefix,
-                    &self.state.string_table,
-                ));
-            }
-            docs.keys().cloned().collect()
+            (
+                docs.iter()
+                    .filter_map(|(uri, doc)| doc.ast.clone().map(|ast| (uri.clone(), ast)))
+                    .collect(),
+                docs.keys().cloned().collect(),
+            )
         };
+        let ruleset = self.state.rules.read().ruleset.clone();
+        let ws_prefix = self.state.config.read().workspace_prefix.clone();
+        let mut sites: Vec<cwtools_info::UseSite> = Vec::new();
+        if let Some(rs) = ruleset {
+            sites.extend(scan_use_sites(
+                type_name,
+                instance_name,
+                &asts,
+                &rs,
+                &ws_prefix,
+                &self.state.string_table,
+            ));
+        }
         {
             let info = self.state.info_service.read();
-            for (file_uri, loc) in info.reference_index.references(type_name, instance_name) {
-                if !open_uris.contains(file_uri.as_ref()) {
-                    sites.push((file_uri.to_string(), loc));
-                }
-            }
+            sites.extend(
+                info.reference_index
+                    .references(type_name, instance_name)
+                    .into_iter()
+                    .filter(|site| !open_uris.contains(site.file.as_ref())),
+            );
         }
         sites
     }

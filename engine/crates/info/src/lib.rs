@@ -12,7 +12,7 @@ mod position;
 mod references;
 
 pub use position::{PositionElement, ReferenceHint, element_at_position};
-pub use references::ReferenceIndex;
+pub use references::{ReferenceIndex, UseSite, value_location};
 use references::{TypeRefRule, build_type_ref_keys, collect_type_ref_uses};
 
 #[derive(Debug, Clone, Default)]
@@ -1298,7 +1298,12 @@ alias[effect:set_variable] = {
         svc.clear_file("a.txt");
         let refs = svc.reference_index.references("focus", "SHARED");
         assert_eq!(refs.len(), 1, "only b's site should remain");
-        assert_eq!(refs[0].0.as_ref(), "b.txt");
+        assert_eq!(refs[0].file.as_ref(), "b.txt");
+        // `test = { my_ref = SHARED }` — the leaf key starts at column 9 and
+        // the referenced name at column 18, both straight from the parser, so
+        // no caller has to re-read the file to point at the name (#472).
+        assert_eq!((refs[0].key.line, refs[0].key.col), (1, 9));
+        assert_eq!((refs[0].value.line, refs[0].value.col), (1, 18));
 
         svc.index_file_with_path(
             "a.txt",

@@ -8,14 +8,36 @@ use cwtools_string_table::string_table::StringTable;
 use crate::{SourceLocation, check_path_dir};
 
 /// One recorded reference to a type instance: the file it appears in, the
-/// referenced instance name, and the leaf's KEY location (the parser records
-/// only the leaf start reliably; the value column is resolved from text on
-/// demand by the LSP references/rename handlers).
+/// referenced instance name, the leaf's KEY location, and where the referenced
+/// name itself starts. Both positions come from the parser, so a caller that
+/// wants the name rather than the enclosing key needs no file text (#472).
 #[derive(Debug, Clone)]
 struct ReferenceSite {
     file: Arc<str>,
     name: String,
     location: SourceLocation,
+    value: SourceLocation,
+}
+
+/// One use site handed back to a caller: the file, the `key = value` leaf's key
+/// position, and the position of the referenced name itself — inside the quotes
+/// for a quoted value, matching what a text scan for the name would find.
+#[derive(Debug, Clone)]
+pub struct UseSite {
+    pub file: Arc<str>,
+    pub key: SourceLocation,
+    pub value: SourceLocation,
+}
+
+/// A reference collected from one file's AST, before it is filed under its
+/// referenced type. A named struct rather than a tuple so the collector's
+/// output stays readable as it grows.
+#[derive(Debug, Clone)]
+pub(crate) struct CollectedRef {
+    pub(crate) ref_type: Arc<str>,
+    pub(crate) name: String,
+    pub(crate) key: SourceLocation,
+    pub(crate) value: SourceLocation,
 }
 
 /// Workspace-wide reverse index of type-instance USE sites (as opposed to the
@@ -34,21 +56,25 @@ pub struct ReferenceIndex {
 }
 
 impl ReferenceIndex {
-    pub(crate) fn merge(&mut self, file_uri: &str, refs: Vec<(Arc<str>, String, SourceLocation)>) {
+    pub(crate) fn merge(&mut self, file_uri: &str, refs: Vec<CollectedRef>) {
         if refs.is_empty() {
             return;
         }
         let uri: Arc<str> = Arc::from(file_uri);
-        for (ty, name, location) in refs {
+        for collected in refs {
             self.file_types
                 .entry(Arc::clone(&uri))
                 .or_default()
-                .insert(Arc::clone(&ty));
-            self.map.entry(ty).or_default().push(ReferenceSite {
-                file: Arc::clone(&uri),
-                name,
-                location,
-            });
+                .insert(Arc::clone(&collected.ref_type));
+            self.map
+                .entry(collected.ref_type)
+                .or_default()
+                .push(ReferenceSite {
+                    file: Arc::clone(&uri),
+                    name: collected.name,
+                    location: collected.key,
+                    value: collected.value,
+                });
         }
     }
 
@@ -72,21 +98,46 @@ impl ReferenceIndex {
         }
     }
 
-    /// `(file_uri, key_location)` for every recorded reference to instance
-    /// `name` of `type_name`. Exact-match on the name (Paradox refs are written
-    /// verbatim); the KEY location is returned — the caller resolves the value
-    /// column from text.
-    pub fn references(&self, type_name: &str, name: &str) -> Vec<(Arc<str>, SourceLocation)> {
+    /// Every recorded reference to instance `name` of `type_name`. Exact-match
+    /// on the name (Paradox refs are written verbatim). Both the key and the
+    /// name's own position are returned, so a caller needs no file text to
+    /// point at the name.
+    pub fn references(&self, type_name: &str, name: &str) -> Vec<UseSite> {
         self.map
             .get(type_name)
             .map(|sites| {
                 sites
                     .iter()
                     .filter(|s| s.name == name)
-                    .map(|s| (Arc::clone(&s.file), s.location))
+                    .map(|s| UseSite {
+                        file: Arc::clone(&s.file),
+                        key: s.location,
+                        value: s.value,
+                    })
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+/// Where a reference's name starts, from the parser's value range.
+///
+/// `parse_value` takes the range start *before* consuming the opening quote, so
+/// for a quoted value the range begins on the `"` and the name one column
+/// further in. Offsetting here keeps the recorded position on the name itself,
+/// which is what a text scan for the name used to find. The end is left equal
+/// to the start: callers size the range from the name they are looking for, the
+/// way `source_range_*` already does.
+pub fn value_location(
+    value_pos: &cwtools_parser::ast::SourceRange,
+    quoted: bool,
+) -> SourceLocation {
+    let line = value_pos.start.line;
+    let col = value_pos.start.col.saturating_add(u16::from(quoted));
+    SourceLocation {
+        line,
+        col,
+        end: (line, col),
     }
 }
 
@@ -192,7 +243,8 @@ pub(crate) fn classify_type_ref_key(
 
 /// Walk a file's AST recording every type-instance reference (a `key = value`
 /// leaf whose key classifies as a `<type>` ref and whose value is a string).
-/// Records the KEY location; the value column is resolved from text on demand.
+/// Records the KEY location and the position of the referenced name itself, so
+/// callers never have to re-read the file to recover the value column (#472).
 pub(crate) fn collect_type_ref_uses(
     children: &[Child],
     arena: &Arena,
@@ -200,7 +252,7 @@ pub(crate) fn collect_type_ref_uses(
     map: &HashMap<String, Vec<TypeRefRule>>,
     ruleset: &RuleSet,
     logical_path: &str,
-    out: &mut Vec<(Arc<str>, String, SourceLocation)>,
+    out: &mut Vec<CollectedRef>,
 ) {
     for child in children {
         let Child::Leaf(idx) = child else { continue };
@@ -216,15 +268,16 @@ pub(crate) fn collect_type_ref_uses(
                 .and_then(|x| x.strip_suffix('"'))
                 .unwrap_or(&raw);
             if !name.is_empty() {
-                out.push((
+                out.push(CollectedRef {
                     ref_type,
-                    name.to_string(),
-                    SourceLocation {
+                    key: SourceLocation {
                         line: leaf.pos.start.line,
                         col: leaf.pos.start.col,
                         end: (leaf.pos.end.line, leaf.pos.end.col),
                     },
-                ));
+                    value: value_location(&leaf.value_pos, name.len() != raw.len()),
+                    name: name.to_string(),
+                });
             }
         }
         if let Value::Clause(ch) = &leaf.value {

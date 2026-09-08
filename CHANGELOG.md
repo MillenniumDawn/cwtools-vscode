@@ -6,6 +6,13 @@
   the configured width otherwise. CLI `--max-line-width` and the
   `cwtools.formatting.maxLineWidth` setting control that width. (#554)
 * Cargo dependency advisory checks now deny yanked crates. (#594)
+* Code lens resolution no longer reads referencing files from disk. The
+  reference index and the open-document walk now record where a referenced name
+  starts, not just the enclosing key, so a lens answers from indexed data
+  instead of re-reading every referencing file to recover the value column. The
+  open-document walk also runs on a snapshot rather than holding the document
+  store, the ruleset and the config for its duration, and no longer allocates a
+  string per leaf. (#472)
 
 #### Extension
 
