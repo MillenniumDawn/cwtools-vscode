@@ -2730,7 +2730,7 @@ fn test_hover_idea_definition_shows_name_and_desc() {
         "hover on an idea key should show its name loc, got: {hover}"
     );
     assert!(
-        hover.contains("It is great."),
+        hover.contains(r#"It is great\."#),
         "hover on an idea key should show its _desc loc, got: {hover}"
     );
 }

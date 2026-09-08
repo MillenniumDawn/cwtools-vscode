@@ -2,6 +2,8 @@
 
 #### Engine
 
+* LSP hover localisation text is escaped before entering Markdown, so mod values
+  render as literal text. (#592)
 * CLI `fix --apply` and `format --apply` now write atomically and fail on
   unreadable files. (#496)
 * Show graph now discards superseded requests, so an older response cannot

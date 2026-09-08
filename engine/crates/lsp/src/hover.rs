@@ -193,7 +193,11 @@ impl Backend {
         };
         let mut md = format!("**Localisation key** `{}`", key);
         for (lang, text) in translations {
-            md.push_str(&format!("\n- {}: {}", lang_display_name(*lang), text));
+            md.push_str(&format!(
+                "\n- {}: {}",
+                lang_display_name(*lang),
+                escape_markdown(text),
+            ));
         }
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -244,6 +248,17 @@ fn display_type_name(
         Some(d) => format!("{}.{}", base, d),
         None => type_name.to_string(),
     }
+}
+
+fn escape_markdown(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_ascii_punctuation() {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -371,7 +386,11 @@ pub(crate) fn append_localisation(
         if let Some(translations) = loc_text.get(loc_key) {
             md.push_str(label);
             for (lang, text) in translations {
-                md.push_str(&format!("\n- {}: {}", lang_display_name(*lang), text));
+                md.push_str(&format!(
+                    "\n- {}: {}",
+                    lang_display_name(*lang),
+                    escape_markdown(text),
+                ));
             }
         }
     };
@@ -420,7 +439,11 @@ pub(crate) fn append_type_localisation(
         if let Some(translations) = loc_text.get(key.as_str()) {
             md.push_str("\n\n---\n\n**Localisation**:");
             for (lang, text) in translations {
-                md.push_str(&format!("\n- {}: {}", lang_display_name(*lang), text));
+                md.push_str(&format!(
+                    "\n- {}: {}",
+                    lang_display_name(*lang),
+                    escape_markdown(text),
+                ));
             }
             return;
         }
@@ -764,6 +787,129 @@ mod tests {
         m
     }
 
+    const MARKDOWN_LOCALISATION: &str = r#"[Get the DLC](https://evil.tld) ![image](img.png) `code` \ <b>html</b> &lt;tag&gt;
+# heading
+- item
+1. ordered
+```fenced```
+https://evil.tld www.evil.tld user@evil.tld <https://evil.tld>"#;
+
+    fn assert_escaped_localisation(md: &str) {
+        let escaped = escape_markdown(MARKDOWN_LOCALISATION);
+        assert!(md.contains(&escaped), "escaped localisation missing: {md}");
+        assert!(
+            !md.contains(MARKDOWN_LOCALISATION),
+            "raw localisation leaked: {md}"
+        );
+    }
+
+    #[test]
+    fn test_escape_markdown_preserves_plain_text_and_neutralises_syntax() {
+        assert_eq!(escape_markdown("Plain text."), "Plain text\\.");
+        assert_eq!(
+            escape_markdown(MARKDOWN_LOCALISATION),
+            r#"\[Get the DLC\]\(https\:\/\/evil\.tld\) \!\[image\]\(img\.png\) \`code\` \\ \<b\>html\<\/b\> \&lt\;tag\&gt\;
+\# heading
+\- item
+1\. ordered
+\`\`\`fenced\`\`\`
+https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
+        );
+    }
+
+    #[test]
+    fn test_append_localisation_escapes_markdown() {
+        let mut md = String::new();
+        append_localisation(
+            &mut md,
+            &PositionElement::Leaf {
+                key: "name".to_string(),
+                value: "my_idea".to_string(),
+            },
+            &loc_map_with(&[("my_idea", MARKDOWN_LOCALISATION)]),
+        );
+        assert_escaped_localisation(&md);
+    }
+
+    #[test]
+    fn test_append_type_localisation_escapes_markdown() {
+        use cwtools_info::{SourceLocation, TypeIndex, TypeInstance};
+        use cwtools_rules::rules_types::RuleSet;
+
+        let mut type_index = TypeIndex::new();
+        type_index.map.insert(
+            "idea".to_string(),
+            vec![(
+                std::sync::Arc::<str>::from("file:///ideas/test.txt"),
+                TypeInstance {
+                    name: "my_idea".to_string(),
+                    location: SourceLocation {
+                        line: 0,
+                        col: 0,
+                        end: (0, 0),
+                    },
+                    primary_loc_key: Some("my_idea".to_string()),
+                    required_loc_keys: Vec::new(),
+                },
+            )],
+        );
+
+        let mut md = String::new();
+        append_type_localisation(
+            &mut md,
+            "idea",
+            "my_idea",
+            &type_index,
+            &RuleSet::new(),
+            &loc_map_with(&[("my_idea", MARKDOWN_LOCALISATION)]),
+        );
+        assert_escaped_localisation(&md);
+    }
+
+    #[test]
+    fn test_loc_ref_hover_escapes_markdown() {
+        let state = std::sync::Arc::new(crate::state::DocumentState::new());
+        let server_state = state.clone();
+        let (service, _socket) = tower_lsp::LspService::build(move |client| Backend {
+            client,
+            state: server_state.clone(),
+        })
+        .finish();
+        let uri = "file:///localisation/test_l_english.yml";
+        state
+            .documents
+            .lock()
+            .open(
+                uri.to_string(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: std::sync::Arc::from("$my_idea$\n"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        state.loc_text.write().insert(
+            std::sync::Arc::from("my_idea"),
+            vec![(
+                cwtools_localization::Lang::English,
+                MARKDOWN_LOCALISATION.to_string(),
+            )],
+        );
+
+        let hover = service
+            .inner()
+            .loc_ref_hover(uri, Position::new(0, 1))
+            .expect("localisation reference hover");
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected Markdown hover");
+        };
+        assert_escaped_localisation(&content.value);
+        assert_eq!(state.loc_text.read()["my_idea"][0].1, MARKDOWN_LOCALISATION);
+    }
+
     #[test]
     fn test_append_localisation_strips_quoted_value() {
         // #317: a quoted leaf value (`"my_war_flag"`) carries the surrounding
@@ -809,7 +955,7 @@ mod tests {
             ]),
         );
         assert!(md.contains("Great Idea"), "got: {}", md);
-        assert!(md.contains("It is great."), "got: {}", md);
+        assert!(md.contains(r#"It is great\."#), "got: {}", md);
     }
 
     #[test]
