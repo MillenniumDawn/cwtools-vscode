@@ -3105,6 +3105,26 @@ fn test_format_apply_rewrites_and_second_dry_run_is_clean() {
 }
 
 #[test]
+fn test_format_max_line_width_is_passed_to_formatter() {
+    let tmp = format_mod_dir();
+    let path = tmp.path().join("common").join("a.txt");
+    std::fs::write(path, "root={\n    values={1 22 333}\n}\n").unwrap();
+    cwtools()
+        .args([
+            "format",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--max-line-width",
+            "20",
+            "--apply",
+        ])
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(tmp.path().join("common").join("a.txt")).unwrap();
+    assert!(text.contains("values = {\n"), "{text}");
+}
+
+#[test]
 fn test_format_skips_a_parse_error() {
     let tmp = tempfile::tempdir().unwrap();
     let common = tmp.path().join("common");
