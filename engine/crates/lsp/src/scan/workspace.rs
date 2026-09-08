@@ -24,8 +24,9 @@ use crate::validate::{
 };
 
 use super::{
-    OpenDocSnapshot, ScanGuard, ScanSummary, ScannedFile, hold_parse_for_tests,
-    hold_scan_for_tests, quiet_pass_can_skip, spawn_logging_panics, stat_signature_for,
+    OpenDocSnapshot, ScanGuard, ScanSummary, ScannedFile, hold_parse_blocking_for_tests,
+    hold_parse_for_tests, hold_scan_for_tests, quiet_pass_can_skip, spawn_logging_panics,
+    stat_signature_for,
 };
 
 #[cfg(not(test))]
@@ -421,6 +422,7 @@ impl Backend {
         );
         let scan_bytes = cwtools_file_manager::file_manager::ScanBytes::new();
         let outcomes: Vec<Option<ParseOutcome>> = tokio::task::block_in_place(|| {
+            hold_parse_blocking_for_tests();
             scan_files
                 .par_iter()
                 .map(|file| {

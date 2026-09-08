@@ -9,9 +9,19 @@ repository.workspace = true
 [lints]
 workspace = true
 
+# Both halves. `src/main.rs` is a thin `fn main`; everything else lives in the
+# library so `benches/` can link against it (#471).
 [[bin]]
 name = "cwtools-server"
 path = "src/main.rs"
+
+[lib]
+name = "cwtools_lsp"
+path = "src/lib.rs"
+
+[[bench]]
+name = "document_symbol"
+harness = false
 
 [dependencies]
 cwtools_parser = { workspace = true }
@@ -28,6 +38,11 @@ cwtools_localization = { workspace = true }
 cwtools_cache = { workspace = true }
 cwtools_profiling = { workspace = true }
 tower-lsp = { workspace = true }
+# `tower::Service` is how `transport::SpawnRequests` wraps the `LspService` to
+# run request handlers off the message pump (#470), and how a test drives an
+# `LspService` handshake by hand; tower-lsp does not re-export the trait.
+# Already in the lock file as one of its dependencies.
+tower = { version = "0.5", default-features = false }
 tokio = { workspace = true, features = ["time", "fs", "io-util", "sync"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -37,12 +52,9 @@ rustc-hash = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+criterion = { workspace = true }
 tempfile = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = [
     "std",
     "sink",
 ] }
-# `tower::Service` is how a test drives an `LspService` handshake by hand;
-# tower-lsp does not re-export the trait. Already in the lock file as one of
-# its dependencies.
-tower = { version = "0.5", default-features = false }

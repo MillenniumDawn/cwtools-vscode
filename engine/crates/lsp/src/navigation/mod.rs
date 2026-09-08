@@ -8,10 +8,13 @@ mod symbols;
 pub(crate) mod test_rules;
 mod use_sites;
 
+// Public only so `bench_support` can re-export it; a `pub use` of a
+// `pub(crate)` item is E0365 (#471).
+pub use helpers::build_doc_symbols;
 pub(crate) use helpers::{
-    TopSymbols, at_var_at_cursor, brace_folding_ranges, brace_pairs, build_doc_symbols,
-    code_token_cols_in_line, comment_and_region_folds, cwt_ref_at, dedup_locations, highlight_kind,
-    locations_at, locations_at_with_lines, make_symbol, member_pos_in_block, prepare_rename_range,
+    TopSymbols, at_var_at_cursor, brace_folding_ranges, brace_pairs, code_token_cols_in_line,
+    comment_and_region_folds, cwt_ref_at, dedup_locations, highlight_kind, locations_at,
+    locations_at_with_lines, make_symbol, member_pos_in_block, prepare_rename_range,
     rename_refused, resolve_file_ref, selection_spans, source_range_without_text, symbol_rank,
     unquote, value_col_in_line, value_start_after_eq, word_at_position,
 };

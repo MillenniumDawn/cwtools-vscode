@@ -149,7 +149,7 @@ Being reworked as part of the repo merge. Until that lands, the extension side i
 
 Claim an improvement only with before and after numbers taken the same way. A rebuild evicts the page cache, so a run straight after `cargo build` is not comparable to one before it; interleave the two binaries instead of measuring them in blocks.
 
-Benches live in `engine/crates/*/benches` and run under criterion. `cargo bench -p cwtools_driver --bench rules_hot` covers the editor hot paths and needs a rules checkout. `cargo bench -p cwtools_driver --bench validate_hot` covers the batch validation inner loop. [PROFILING.md](docs/engine/PROFILING.md) covers the `CWTOOLS_PROFILE` instrumentation.
+Benches live in `engine/crates/*/benches` and run under criterion. `cargo bench -p cwtools_driver --bench rules_hot` covers the editor hot paths and needs a rules checkout. `cargo bench -p cwtools_driver --bench validate_hot` covers the batch validation inner loop. `cargo bench -p cwtools_lsp --bench document_symbol` covers the LSP's per-request position conversions and takes an optional corpus checkout. [PROFILING.md](docs/engine/PROFILING.md) covers the `CWTOOLS_PROFILE` instrumentation.
 
 ## Don't
 

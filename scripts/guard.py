@@ -21,7 +21,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 HASH_RE = re.compile(r"^[0-9a-f]{16}$")
 CODE_RE = re.compile(r",CW[0-9]{3},")
+PIN_RE = re.compile(r"^# (corpus|rules|vanilla): .* @ (.+)$")
 COLUMN_HEADER = "file,line,severity,code,message"
+PIN_NAMES = ("corpus", "rules", "vanilla")
 
 
 @dataclass
@@ -88,6 +90,38 @@ def report_body(text: str) -> list[str]:
             seen = True
             out.append(line)
     return out
+
+
+def parse_pins(text: str) -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.startswith("#"):
+            break
+        match = PIN_RE.match(line)
+        if match:
+            pins[match.group(1)] = match.group(2)
+    return pins
+
+
+def compare_pins(
+    baseline: Mapping[str, str], current: Mapping[str, str]
+) -> list[tuple[str, str, str]]:
+    mismatches: list[tuple[str, str, str]] = []
+    for name in PIN_NAMES:
+        recorded = baseline.get(name)
+        actual = current.get(name)
+        if recorded is None or actual is None:
+            continue
+        if recorded != actual or actual.endswith(" (dirty)"):
+            mismatches.append((name, recorded, actual))
+    return mismatches
+
+
+def format_pin_mismatches(mismatches: list[tuple[str, str, str]]) -> str:
+    return "; ".join(
+        f"{name}: baseline {recorded}, current {actual}"
+        for name, recorded, actual in mismatches
+    )
 
 
 def describe(directory: Path) -> str:
@@ -375,6 +409,7 @@ def run_guard(config: Config) -> int:
             encoding="utf-8", errors="surrogateescape"
         )
         baseline_body = report_body(baseline_text)
+        pin_mismatches = compare_pins(parse_pins(baseline_text), parse_pins(current))
         (work / "baseline.body").write_text(
             "\n".join(baseline_body) + "\n", encoding="utf-8", newline="\n"
         )
@@ -385,6 +420,11 @@ def run_guard(config: Config) -> int:
         if baseline_body == current_body:
             n = max(len(current_body) - 1, 0)
             print(f"guard: OK, {n} diagnostics match the baseline")
+            if pin_mismatches:
+                print(
+                    "guard: note: baseline input revisions differ from current "
+                    f"inputs ({format_pin_mismatches(pin_mismatches)})"
+                )
             return 0
 
         keep = True
@@ -421,6 +461,17 @@ def run_guard(config: Config) -> int:
         print(f"  baseline {base_n} diagnostics")
         print(f"  current  {curr_n} diagnostics")
         print(f"  -{removed} +{added} rows")
+        if pin_mismatches:
+            print()
+            print(
+                "  warning: baseline input revisions differ from current inputs "
+                f"({format_pin_mismatches(pin_mismatches)}); this diff may be input "
+                "drift, not your change"
+            )
+            print(
+                "  for a current-input before-baseline, use "
+                f"--baseline <path> --bless (currently {config.baseline})"
+            )
         print()
         print("  by code (gone/new):")
 

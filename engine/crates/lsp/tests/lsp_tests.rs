@@ -2730,7 +2730,7 @@ fn test_hover_idea_definition_shows_name_and_desc() {
         "hover on an idea key should show its name loc, got: {hover}"
     );
     assert!(
-        hover.contains("It is great."),
+        hover.contains(r#"It is great\."#),
         "hover on an idea key should show its _desc loc, got: {hover}"
     );
 }
@@ -15068,6 +15068,365 @@ fn test_work_done_progress_cancel_stops_a_command() {
     );
     let progress_end = progress_end.expect("cancelled command never closed its progress token");
     assert_eq!(progress_end["message"], "Re-index cancelled.");
+}
+
+/// The state #470 describes, reproduced: pass 1 of a command-driven scan owns
+/// its thread, and everything else has to keep working anyway.
+///
+/// `CWTOOLS_SCAN_HOLD_MS`, which the two cancel tests use, holds the scan at an
+/// `.await` — it yields, so it cannot reproduce this at all.
+/// `CWTOOLS_PARSE_BLOCKING_HOLD_MS` parks the thread from inside pass 1's
+/// `block_in_place` instead, and writes the ready file first so the test acts
+/// while the thread is genuinely held rather than in the gap before the hold
+/// starts. That gap is what would let a timing-only version of this test pass on
+/// the bug.
+///
+/// The scan has to be command-driven: the startup scan already runs on a task of
+/// its own, where `block_in_place` behaves.
+const PASS1_HOLD_MS: u64 = 6000;
+
+struct HeldPass1 {
+    workspace: tempfile::TempDir,
+    rules: tempfile::TempDir,
+    markers: tempfile::TempDir,
+}
+
+impl HeldPass1 {
+    fn new() -> Self {
+        let workspace = tempfile::tempdir().unwrap();
+        let rules = tempfile::tempdir().unwrap();
+        std::fs::write(rules.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+        let focus = workspace.path().join("common/national_focus/tree.txt");
+        std::fs::create_dir_all(focus.parent().unwrap()).unwrap();
+        std::fs::write(&focus, "my_focus = {\n    id = my_focus\n}\n").unwrap();
+        Self {
+            workspace,
+            rules,
+            markers: tempfile::tempdir().unwrap(),
+        }
+    }
+
+    fn ready_file(&self) -> std::path::PathBuf {
+        self.markers.path().join("pass1-holding")
+    }
+
+    /// A handshaken server whose every scan parks pass 1 for [`PASS1_HOLD_MS`].
+    fn start(&self) -> (std::process::Child, BufReader<std::process::ChildStdout>) {
+        let mut child = cwtools_server_cmd()
+            .env("CWTOOLS_PARSE_BLOCKING_HOLD_MS", PASS1_HOLD_MS.to_string())
+            .env("CWTOOLS_PARSE_BLOCKING_HOLD_READY_FILE", self.ready_file())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn");
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        write_frame(
+            &mut child,
+            &jsonrpc_request(
+                1,
+                "initialize",
+                serde_json::json!({
+                    "processId": std::process::id(),
+                    "rootUri": path_uri(self.workspace.path()),
+                    "capabilities": { "window": { "workDoneProgress": true } },
+                    "initializationOptions": {
+                        "language": "hoi4",
+                        "rulesCache": self.rules.path().to_string_lossy(),
+                    }
+                }),
+            ),
+        )
+        .unwrap();
+        let _ = read_response(&mut reader).expect("no init response");
+        write_frame(
+            &mut child,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+        (child, reader)
+    }
+}
+
+/// How long to give the marker once a scan has opened its bar. A scan reaches
+/// pass 1 in milliseconds; the budget only has to outlast that, and it is spent
+/// not reading, so it stays well short of what would fill the stdout pipe.
+const MARKER_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Blocks until pass 1 says it has parked its thread. `false` means this bar
+/// belonged to some other scan — a startup or deferred one — and the caller
+/// should go back to reading and try again on the next one.
+fn wait_for_pass1_hold(ready: &std::path::Path, budget: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + budget;
+    while std::time::Instant::now() < deadline {
+        if ready.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
+/// #470: a `reindexWorkspace` whose pass 1 owns the thread used to own the
+/// message pump with it, so nothing else was read, written or dispatched until
+/// the scan finished. An unrelated request has to come back while the hold is
+/// still running.
+#[test]
+fn test_a_blocked_scan_does_not_stall_the_pump() {
+    let fixture = HeldPass1::new();
+    let ready = fixture.ready_file();
+    let (mut child, reader) = fixture.start();
+
+    let stdin = child.stdin.take().unwrap();
+    let collected = run_child_with_deadline(child, stdin, reader, 180, move |stdin, reader| {
+        let mut attempt = 0i64;
+        let mut command_sent = false;
+        let mut probe_sent_at: Option<std::time::Instant> = None;
+        let mut answered_in = None;
+        let send_command = |stdin: &mut std::process::ChildStdin, attempt: i64| {
+            // Clearing the marker is what keeps an earlier scan's hold from
+            // being mistaken for this one's — the startup scan parks on the
+            // same hold, off the pump, where `block_in_place` behaves and this
+            // bug does not exist.
+            let _ = std::fs::remove_file(&ready);
+            write_frame_to(
+                stdin,
+                &jsonrpc_request(
+                    600 + attempt,
+                    "workspace/executeCommand",
+                    serde_json::json!({ "command": "reindexWorkspace", "arguments": [] }),
+                ),
+            )
+            .unwrap();
+        };
+
+        for _ in 0..20_000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                break; // EOF
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if v["method"] == "window/workDoneProgress/create" {
+                write_frame_to(
+                    stdin,
+                    &serde_json::json!({ "jsonrpc": "2.0", "id": v["id"], "result": null })
+                        .to_string(),
+                )
+                .unwrap();
+                continue;
+            }
+            // The probe's answer is the whole measurement.
+            if v["id"] == serde_json::json!(701) && v.get("result").is_some() {
+                answered_in = probe_sent_at.map(|at| at.elapsed());
+                break;
+            }
+            // Same scan-guard race the cancel tests hit: a command sent on the
+            // bar-off notification can still lose the CAS to the scan that just
+            // released it. Retry until one actually starts a scan.
+            if v["id"] == serde_json::json!(600 + attempt)
+                && v["result"] == serde_json::json!("Re-index already in progress.")
+            {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                send_command(stdin, attempt);
+                continue;
+            }
+            if v["method"] != "loadingBar" {
+                continue;
+            }
+            // The startup scan is done; run the command it was blocking.
+            if !command_sent && v["params"]["enable"] == serde_json::Value::Bool(false) {
+                command_sent = true;
+                send_command(stdin, attempt);
+                continue;
+            }
+            // The command's own scan has opened its bar, so it won the scan
+            // guard and is committed — no "already in progress" reply is coming
+            // and it is safe to stop reading and wait for pass 1 to park.
+            if command_sent
+                && probe_sent_at.is_none()
+                && v["params"]["enable"] == serde_json::Value::Bool(true)
+            {
+                if !wait_for_pass1_hold(&ready, MARKER_BUDGET) {
+                    continue;
+                }
+                probe_sent_at = Some(std::time::Instant::now());
+                write_frame_to(
+                    stdin,
+                    &jsonrpc_request(
+                        701,
+                        "workspace/executeCommand",
+                        serde_json::json!({ "command": "exportProfilingLog", "arguments": [] }),
+                    ),
+                )
+                .unwrap();
+            }
+        }
+        answered_in
+    });
+
+    let answered_in = collected
+        .expect("timed out waiting on the server")
+        .expect("the probe request was never answered");
+    assert!(
+        answered_in < std::time::Duration::from_millis(PASS1_HOLD_MS / 2),
+        "a request must be answered while pass 1 holds its thread, took {answered_in:?} \
+         against a {PASS1_HOLD_MS}ms hold"
+    );
+}
+
+/// The acceptance case from #470: the cancel arrives while the scan owns its
+/// thread — not before it starts, which is all the older cancel tests could
+/// arrange — and the scan actually stops.
+///
+/// "Actually stops" needs an observable, because the reply says
+/// "Re-index cancelled." either way: a cancel that is only read *after* pass 1
+/// still trips a later checkpoint. Pass 1's own log line is that observable. Its
+/// per-file `cancel.is_cancelled()` poll drops every file, and the `return`
+/// right after pass 1 comes before the "Indexing pass:" summary — so with the
+/// cancel observed in time the scan never reaches that log, and without it the
+/// whole workspace is parsed and counted first.
+const INDEXING_PASS_LOG: &str = "Indexing pass:";
+
+#[test]
+fn test_cancel_reaches_a_scan_that_holds_its_thread() {
+    let fixture = HeldPass1::new();
+    let ready = fixture.ready_file();
+    let (mut child, reader) = fixture.start();
+
+    let stdin = child.stdin.take().unwrap();
+    let collected = run_child_with_deadline(child, stdin, reader, 180, move |stdin, reader| {
+        let mut attempt = 0i64;
+        let mut token = String::new();
+        let mut cancelled_mid_hold = false;
+        let mut indexed_after_cancel = false;
+        let mut result = None;
+        let mut progress_end = None;
+        let send_attempt = |stdin: &mut std::process::ChildStdin, attempt: i64| -> String {
+            let token = format!("cwtools/command/470/{attempt}");
+            write_frame_to(
+                stdin,
+                &jsonrpc_request(
+                    800 + attempt,
+                    "workspace/executeCommand",
+                    serde_json::json!({
+                        "command": "reindexWorkspace",
+                        "arguments": [],
+                        "workDoneToken": token,
+                    }),
+                ),
+            )
+            .unwrap();
+            token
+        };
+        for _ in 0..20_000 {
+            let Ok(raw) = read_frame(reader) else { break };
+            if raw.is_empty() {
+                break; // EOF
+            }
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if v["id"] == serde_json::json!(800 + attempt) && v.get("result").is_some() {
+                if v["result"] == serde_json::json!("Re-index already in progress.") {
+                    attempt += 1;
+                    cancelled_mid_hold = false;
+                    indexed_after_cancel = false;
+                    progress_end = None;
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let _ = std::fs::remove_file(&ready);
+                    token = send_attempt(stdin, attempt);
+                    continue;
+                }
+                result = Some(v["result"].clone());
+                if progress_end.is_some() {
+                    break;
+                }
+                continue;
+            }
+            match v["method"].as_str() {
+                Some("window/workDoneProgress/create") => write_frame_to(
+                    stdin,
+                    &serde_json::json!({ "jsonrpc": "2.0", "id": v["id"], "result": null })
+                        .to_string(),
+                )
+                .unwrap(),
+                Some("window/logMessage")
+                    if cancelled_mid_hold
+                        && v["params"]["message"]
+                            .as_str()
+                            .is_some_and(|m| m.contains(INDEXING_PASS_LOG)) =>
+                {
+                    indexed_after_cancel = true;
+                }
+                // The startup scan is done; run the command it was blocking.
+                Some("loadingBar")
+                    if token.is_empty()
+                        && v["params"]["enable"] == serde_json::Value::Bool(false) =>
+                {
+                    let _ = std::fs::remove_file(&ready);
+                    token = send_attempt(stdin, attempt);
+                }
+                // Some scan has opened a bar. If it is this command's, pass 1
+                // parks within milliseconds and the marker appears; if it is a
+                // startup or deferred one, the budget lapses and the next bar
+                // gets another try. Either way the cancel only goes out with the
+                // thread genuinely held, which is the whole point — `begin` on
+                // its own lands before the scan has even started.
+                Some("loadingBar")
+                    if !token.is_empty()
+                        && !cancelled_mid_hold
+                        && v["params"]["enable"] == serde_json::Value::Bool(true)
+                        && wait_for_pass1_hold(&ready, MARKER_BUDGET) =>
+                {
+                    cancelled_mid_hold = true;
+                    write_frame_to(
+                        stdin,
+                        &jsonrpc_notification(
+                            "window/workDoneProgress/cancel",
+                            serde_json::json!({ "token": token }),
+                        ),
+                    )
+                    .unwrap();
+                }
+                Some("$/progress")
+                    if v["params"]["token"] == token.as_str()
+                        && v["params"]["value"]["kind"] == "end" =>
+                {
+                    progress_end = Some(v["params"]["value"].clone());
+                    if result.is_some() {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        (
+            cancelled_mid_hold,
+            indexed_after_cancel,
+            result,
+            progress_end,
+        )
+    });
+
+    let (cancelled_mid_hold, indexed_after_cancel, result, progress_end) =
+        collected.expect("timed out; the command never answered");
+    assert!(
+        cancelled_mid_hold,
+        "the cancel has to be sent while pass 1 owns its thread, or this proves nothing"
+    );
+    assert!(
+        !indexed_after_cancel,
+        "the scan indexed the workspace after being cancelled, so the cancel was not read \
+         until pass 1 had already finished"
+    );
+    assert_eq!(
+        result.expect("cancelled command never answered").as_str(),
+        Some("Re-index cancelled."),
+        "a cancel delivered mid-scan must stop the scan and say so"
+    );
+    assert_eq!(
+        progress_end.expect("cancelled command never closed its token")["message"],
+        "Re-index cancelled."
+    );
 }
 
 /// #204: the client cancels a long `workspace/executeCommand` while its scan is

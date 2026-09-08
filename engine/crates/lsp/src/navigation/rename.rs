@@ -4,7 +4,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
 use crate::lines::{DocLines, index_snapshots};
-use crate::paths::{logical_path_from_uri, lsp_pos_to_source_in_text};
+use crate::paths::logical_path_from_uri;
 use crate::{Backend, FileTextSnapshot};
 
 use super::{
@@ -37,8 +37,11 @@ impl Backend {
         }
 
         if let Some(key_lower) = self.loc_key_at_cursor(&uri, pos, &logical_path).await {
-            let token = if let Some(t) = text.as_deref() {
-                let (_, col) = lsp_pos_to_source_in_text(t, pos, &position_encoding);
+            // `lines` is `text.as_deref().map(..)`, so it is `Some` on exactly
+            // the same condition and the index answers this without the
+            // document rescan `lsp_pos_to_source_in_text` would do (#471).
+            let token = if let (Some(t), Some(lines)) = (text.as_deref(), lines.as_ref()) {
+                let col = lines.source_column(pos);
                 word_at_position(t, pos.line, col as u32).unwrap_or_else(|| key_lower.clone())
             } else {
                 key_lower.clone()
@@ -57,22 +60,23 @@ impl Backend {
         Ok(None)
     }
 
+    /// `lines` is built from the document's text, so it is also the line
+    /// source here; there is no second `text.lines()` pass and no `text`
+    /// parameter left to take (#471).
     fn rename_at_var(
         &self,
         uri: &str,
-        text: &str,
         lines: &DocLines,
         name: &str,
         new_name: &str,
     ) -> Result<Option<WorkspaceEdit>> {
-        let edits: Vec<TextEdit> = text
-            .lines()
-            .enumerate()
+        let edits: Vec<TextEdit> = lines
+            .iter()
             .flat_map(|(line0, line)| {
                 code_token_cols_in_line(line, name)
                     .into_iter()
                     .map(move |col| TextEdit {
-                        range: lines.token_range(line0 as u32, col, name),
+                        range: lines.token_range(line0, col, name),
                         new_text: new_name.to_string(),
                     })
             })
@@ -251,10 +255,12 @@ impl Backend {
             };
             let text = &snapshot.text;
             let lines = DocLines::new(text, encoding.clone());
-            for (line0, line) in text.lines().enumerate() {
+            // Over the index rather than a second `text.lines()` pass over
+            // the same text, once per workspace file (#471).
+            for (line0, line) in lines.iter() {
                 for (key_lower, new_text) in target_to_new.iter() {
                     for col in code_token_cols_in_line_ignore_case(line, key_lower) {
-                        let range = lines.token_range(line0 as u32, col, key_lower);
+                        let range = lines.token_range(line0, col, key_lower);
                         by_uri.entry(uri.clone()).or_default().push(TextEdit {
                             range,
                             new_text: new_text.clone(),
@@ -283,10 +289,11 @@ impl Backend {
             };
             let text = &snapshot.text;
             let lines = DocLines::new(text, encoding.clone());
-            for (line0, line) in text.lines().enumerate() {
+            // Over the index rather than a second `text.lines()` pass (#471).
+            for (line0, line) in lines.iter() {
                 for (key_lower, new_text) in target_to_new.iter() {
                     for col in loc_ref_key_cols_in_line(line, key_lower) {
-                        let range = lines.token_range(line0 as u32, col, key_lower);
+                        let range = lines.token_range(line0, col, key_lower);
                         by_uri.entry(uri.clone()).or_default().push(TextEdit {
                             range,
                             new_text: new_text.clone(),
@@ -371,7 +378,7 @@ impl Backend {
         if let (Some(text), Some(lines)) = (source_text.as_deref(), source_lines.as_ref())
             && let Some((name, _)) = Self::at_var_rename_target(text, lines, pos)
         {
-            return self.rename_at_var(&uri, text, lines, &name, &new_name);
+            return self.rename_at_var(&uri, lines, &name, &new_name);
         }
 
         if let Some(key_lower) = self.loc_key_at_cursor(&uri, pos, &logical_path).await {

@@ -8,10 +8,8 @@ use tower_lsp::lsp_types::*;
 use cwtools_info::PositionElement;
 
 use crate::lines::{DocLines, index_snapshots};
-use crate::navigation::helpers::{code_token_cols_in_line_ignore_case, word_at_position};
-use crate::paths::{
-    loc_ref_at_cursor_with_encoding, logical_path_from_uri, lsp_pos_to_source_in_text, parse_uri,
-};
+use crate::navigation::helpers::{code_token_cols_in_line_ignore_case, word_in_line};
+use crate::paths::{loc_ref_at_cursor_with_encoding, logical_path_from_uri, parse_uri};
 use crate::{Backend, FileTextSnapshot};
 use cwtools_info::ReferenceHint;
 
@@ -69,8 +67,12 @@ impl Backend {
             {
                 return Some(key.to_lowercase());
             }
-            let (_, col) = lsp_pos_to_source_in_text(&text, pos, &encoding);
-            let word = word_at_position(&text, pos.line, col as u32)?;
+            // `line` above is already `text.lines().nth(pos.line)`, which is all
+            // `lsp_pos_to_source_in_text` and `word_at_position` would each go
+            // and find again (#471).
+            let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
+            let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
+            let word = word_in_line(line, col)?;
             let lower = word.to_lowercase();
             if self.is_known_loc_key(&lower) {
                 return Some(lower);
@@ -90,8 +92,13 @@ impl Backend {
         }
         let text = self.file_text_for(uri).await?;
         let encoding = self.state.config.read().position_encoding.clone();
-        let (_, col) = lsp_pos_to_source_in_text(&text, pos, &encoding);
-        let word = word_at_position(&text, pos.line, col as u32)?;
+        // One scan for the line, then both the column and the word off it; the
+        // pair used to walk the document twice over (#471). A missing line
+        // returns None here instead of at `word_at_position`'s own `?`.
+        let line = text.lines().nth(pos.line as usize)?;
+        let byte = crate::paths::position_byte_index(line, pos.character, &encoding);
+        let col = line[..byte].chars().count().min(u16::MAX as usize) as u32;
+        let word = word_in_line(line, col)?;
         let lower = word.to_lowercase();
         if self.is_known_loc_key(&lower) {
             Some(lower)
@@ -253,12 +260,14 @@ impl Backend {
             let text = &snapshot.text;
             let fallback_url = Url::parse(&uri).unwrap_or_else(|_| fallback.clone());
             let lines = DocLines::new(text, encoding.clone());
-            for (line0, line) in text.lines().enumerate() {
+            // Over the index rather than a second `text.lines()` pass over
+            // the same text, once per workspace file (#471).
+            for (line0, line) in lines.iter() {
                 for key_lower in keys.iter() {
                     for col in code_token_cols_in_line_ignore_case(line, key_lower) {
                         out.push(Location {
                             uri: fallback_url.clone(),
-                            range: lines.token_range(line0 as u32, col, key_lower),
+                            range: lines.token_range(line0, col, key_lower),
                         });
                     }
                 }

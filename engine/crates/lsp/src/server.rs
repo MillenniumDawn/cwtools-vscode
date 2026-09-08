@@ -1,8 +1,8 @@
 // Backend implementations and the `LanguageServer` trait dispatch for the
 // cwtools-server binary. Lives in its own module so the Rust coverage gate
 // can measure it without having to also include the thin `main()` entrypoint
-// (#662). Tests live alongside it in main.rs so they can stay as
-// `#[cfg(test)] mod tests` against the binary crate root.
+// (#662). Tests live alongside it in lib.rs so they can stay as
+// `#[cfg(test)] mod tests` against the crate root.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -104,6 +104,29 @@ impl Backend {
         let _ = start_tx.send(());
         if let Some(previous) = previous {
             previous.abort.abort();
+        }
+    }
+
+    /// Queues one notification body behind every notification already queued,
+    /// off tower-lsp's message pump (#470). Sending backpressures on a full
+    /// queue, which yields the pump rather than parking its thread.
+    ///
+    /// Runs the job inline when no worker is draining the queue — the unit
+    /// tests' bare `DocumentState`, or a shutdown that has already dropped the
+    /// worker. Inline is the old, pump-blocking behaviour, but dropping a
+    /// notification outright would lose an edit.
+    pub(crate) async fn enqueue_notification<F>(&self, job: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let queue = &self.state.notifications;
+        if !queue.is_running() {
+            job.await;
+            return;
+        }
+        if let Err(returned) = queue.send(Box::pin(job)).await {
+            tracing::warn!("notification worker is gone; running the handler inline");
+            returned.0.await;
         }
     }
 
@@ -417,81 +440,12 @@ impl Backend {
     }
 }
 
-#[tower_lsp::async_trait]
-impl LanguageServer for Backend {
-    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        self.initialize_impl(params).await
-    }
-
-    async fn initialized(&self, _params: InitializedParams) {
-        self.client
-            .log_message(MessageType::INFO, "CWTools server initialized!")
-            .await;
-
-        self.state
-            .handshake_complete
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        let deferred = std::mem::take(&mut *self.state.deferred_rule_diagnostics.lock());
-        for (uri, diags) in deferred {
-            if let Ok(url) = uri.parse() {
-                self.client.publish_diagnostics(url, diags, None).await;
-            }
-        }
-        let deferred_msgs = std::mem::take(&mut *self.state.deferred_rules_messages.lock());
-        for msg in deferred_msgs {
-            match msg {
-                DeferredRulesMessage::Log(text) => {
-                    self.client.log_message(MessageType::ERROR, text).await;
-                }
-                DeferredRulesMessage::Toast(text) => {
-                    self.client.show_message(MessageType::ERROR, text).await;
-                }
-            }
-        }
-
-        let client = self.client.clone();
-        let state = self.state.clone();
-        let watch_state = self.state.clone();
-        let handle = tokio::spawn(async move {
-            let backend = Backend { client, state };
-            backend.validate_entire_workspace(false).await;
-        });
-        tokio::spawn(async move {
-            if let Err(e) = handle.await {
-                tracing::error!("validate_entire_workspace panicked: {}", e);
-                watch_state
-                    .index_ready
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-        });
-
-        let reindex_client = self.client.clone();
-        let reindex_state = self.state.clone();
-        tokio::spawn(async move {
-            // silently ending periodic reindexing with no trace (#155).
-            crate::scan::spawn_logging_panics("background reindex loop", async move {
-                Backend {
-                    client: reindex_client,
-                    state: reindex_state,
-                }
-                .background_reindex_loop()
-                .await;
-            })
-            .await;
-        });
-    }
-
-    async fn shutdown(&self) -> Result<()> {
-        Ok(())
-    }
-
-    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
-        self.did_change_configuration_impl(params).await
-    }
-
+/// The bodies behind the document notifications. They are queued rather than run
+/// on the message pump (#470), so they live outside the trait impl where the
+/// unit tests can drive them directly without a worker.
+impl Backend {
     #[tracing::instrument(skip_all)]
-    async fn did_open(&self, mut params: DidOpenTextDocumentParams) {
-        self.mark_activity();
+    pub(crate) async fn did_open_impl(&self, mut params: DidOpenTextDocumentParams) {
         canonicalize_url(&mut params.text_document.uri);
         let uri = params.text_document.uri.to_string();
         let text = params.text_document.text;
@@ -546,8 +500,7 @@ impl LanguageServer for Backend {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn did_change(&self, mut params: DidChangeTextDocumentParams) {
-        self.mark_activity();
+    pub(crate) async fn did_change_impl(&self, mut params: DidChangeTextDocumentParams) {
         canonicalize_url(&mut params.text_document.uri);
         let uri = params.text_document.uri.to_string();
         let version = params.text_document.version;
@@ -603,7 +556,7 @@ impl LanguageServer for Backend {
         );
     }
 
-    async fn did_save(&self, mut params: DidSaveTextDocumentParams) {
+    pub(crate) async fn did_save_impl(&self, mut params: DidSaveTextDocumentParams) {
         canonicalize_url(&mut params.text_document.uri);
         let uri = params.text_document.uri.to_string();
         self.invalidate_semantic_tokens(&uri);
@@ -638,7 +591,7 @@ impl LanguageServer for Backend {
     }
 
     #[tracing::instrument(skip_all)]
-    async fn did_close(&self, mut params: DidCloseTextDocumentParams) {
+    pub(crate) async fn did_close_impl(&self, mut params: DidCloseTextDocumentParams) {
         canonicalize_url(&mut params.text_document.uri);
         let uri = params.text_document.uri.to_string();
         self.invalidate_semantic_tokens(&uri);
@@ -751,10 +704,7 @@ impl LanguageServer for Backend {
                             self.state
                                 .type_uses_revision
                                 .fetch_add(1, Ordering::Release);
-                            self.state
-                                .pending_changed_names
-                                .lock()
-                                .extend(dropped.into_iter());
+                            self.state.pending_changed_names.lock().extend(dropped);
                         }
                     }
                 }
@@ -828,7 +778,111 @@ impl LanguageServer for Backend {
         }
         self.request_code_lens_refresh().await;
     }
+}
 
+#[tower_lsp::async_trait]
+impl LanguageServer for Backend {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        self.initialize_impl(params).await
+    }
+
+    async fn initialized(&self, _params: InitializedParams) {
+        self.client
+            .log_message(MessageType::INFO, "CWTools server initialized!")
+            .await;
+
+        self.state
+            .handshake_complete
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let deferred = std::mem::take(&mut *self.state.deferred_rule_diagnostics.lock());
+        for (uri, diags) in deferred {
+            if let Ok(url) = uri.parse() {
+                self.client.publish_diagnostics(url, diags, None).await;
+            }
+        }
+        let deferred_msgs = std::mem::take(&mut *self.state.deferred_rules_messages.lock());
+        for msg in deferred_msgs {
+            match msg {
+                DeferredRulesMessage::Log(text) => {
+                    self.client.log_message(MessageType::ERROR, text).await;
+                }
+                DeferredRulesMessage::Toast(text) => {
+                    self.client.show_message(MessageType::ERROR, text).await;
+                }
+            }
+        }
+
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let watch_state = self.state.clone();
+        let handle = tokio::spawn(async move {
+            let backend = Backend { client, state };
+            backend.validate_entire_workspace(false).await;
+        });
+        tokio::spawn(async move {
+            if let Err(e) = handle.await {
+                tracing::error!("validate_entire_workspace panicked: {}", e);
+                watch_state
+                    .index_ready
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+
+        let reindex_client = self.client.clone();
+        let reindex_state = self.state.clone();
+        tokio::spawn(async move {
+            // silently ending periodic reindexing with no trace (#155).
+            crate::scan::spawn_logging_panics("background reindex loop", async move {
+                Backend {
+                    client: reindex_client,
+                    state: reindex_state,
+                }
+                .background_reindex_loop()
+                .await;
+            })
+            .await;
+        });
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        let backend = self.clone();
+        self.enqueue_notification(async move {
+            backend.did_change_configuration_impl(params).await;
+        })
+        .await;
+    }
+
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        // Cheap, and the background-reindex idle clock wants the real arrival
+        // time rather than the time the queue got to this notification.
+        self.mark_activity();
+        let backend = self.clone();
+        self.enqueue_notification(async move { backend.did_open_impl(params).await })
+            .await;
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        self.mark_activity();
+        let backend = self.clone();
+        self.enqueue_notification(async move { backend.did_change_impl(params).await })
+            .await;
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let backend = self.clone();
+        self.enqueue_notification(async move { backend.did_save_impl(params).await })
+            .await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let backend = self.clone();
+        self.enqueue_notification(async move { backend.did_close_impl(params).await })
+            .await;
+    }
     async fn hover(&self, mut params: HoverParams) -> Result<Option<Hover>> {
         self.mark_activity();
         canonicalize_url(&mut params.text_document_position_params.text_document.uri);
@@ -1021,64 +1075,85 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change_watched_files(&self, mut params: DidChangeWatchedFilesParams) {
-        for change in &mut params.changes {
-            canonicalize_url(&mut change.uri);
-        }
-        self.did_change_watched_files_impl(params).await;
+        let backend = self.clone();
+        self.enqueue_notification(async move {
+            for change in &mut params.changes {
+                canonicalize_url(&mut change.uri);
+            }
+            backend.did_change_watched_files_impl(params).await;
+        })
+        .await;
     }
 
     async fn did_create_files(&self, mut params: CreateFilesParams) {
-        for f in &mut params.files {
-            canonicalize_uri_string(&mut f.uri);
-            self.invalidate_semantic_tokens(f.uri.as_str());
-        }
-        self.request_semantic_refresh().await;
+        let backend = self.clone();
+        self.enqueue_notification(async move {
+            for f in &mut params.files {
+                canonicalize_uri_string(&mut f.uri);
+                backend.invalidate_semantic_tokens(f.uri.as_str());
+            }
+            backend.request_semantic_refresh().await;
+        })
+        .await;
     }
 
     async fn did_rename_files(&self, mut params: RenameFilesParams) {
-        for f in &mut params.files {
-            canonicalize_uri_string(&mut f.old_uri);
-            canonicalize_uri_string(&mut f.new_uri);
-            let old = f.old_uri.as_str();
-            let new = f.new_uri.as_str();
-            let moved = {
-                let mut docs = self.state.documents.lock();
-                docs.remove(old)
-                    .map(|doc| (old.to_string(), new.to_string(), doc))
-            };
-            if let Some((old_uri, new_uri, mut doc)) = moved {
-                doc.loc_cache = None;
-                let _ = self.state.documents.lock().open(new_uri.clone(), doc);
-                // same non-reentrant mutex (#334).
-                let moved_tokens = self.state.semantic_tokens_cache.lock().remove(&old_uri);
-                if let Some(entry) = moved_tokens {
-                    self.state
-                        .semantic_tokens_cache
-                        .lock()
-                        .insert(new_uri, entry);
+        let backend = self.clone();
+        self.enqueue_notification(async move {
+            for f in &mut params.files {
+                canonicalize_uri_string(&mut f.old_uri);
+                canonicalize_uri_string(&mut f.new_uri);
+                let old = f.old_uri.as_str();
+                let new = f.new_uri.as_str();
+                let moved = {
+                    let mut docs = backend.state.documents.lock();
+                    docs.remove(old)
+                        .map(|doc| (old.to_string(), new.to_string(), doc))
+                };
+                if let Some((old_uri, new_uri, mut doc)) = moved {
+                    doc.loc_cache = None;
+                    let _ = backend.state.documents.lock().open(new_uri.clone(), doc);
+                    // same non-reentrant mutex (#334).
+                    let moved_tokens = backend.state.semantic_tokens_cache.lock().remove(&old_uri);
+                    if let Some(entry) = moved_tokens {
+                        backend
+                            .state
+                            .semantic_tokens_cache
+                            .lock()
+                            .insert(new_uri, entry);
+                    } else {
+                        backend.invalidate_semantic_tokens(&new_uri);
+                    }
+                    backend.invalidate_semantic_tokens(&old_uri);
                 } else {
-                    self.invalidate_semantic_tokens(&new_uri);
+                    backend.invalidate_semantic_tokens(old);
+                    backend.invalidate_semantic_tokens(new);
                 }
-                self.invalidate_semantic_tokens(&old_uri);
-            } else {
-                self.invalidate_semantic_tokens(old);
-                self.invalidate_semantic_tokens(new);
             }
-        }
-        self.request_semantic_refresh().await;
-        self.request_code_lens_refresh().await;
+            backend.request_semantic_refresh().await;
+            backend.request_code_lens_refresh().await;
+        })
+        .await;
     }
 
     async fn did_delete_files(&self, mut params: DeleteFilesParams) {
-        for f in &mut params.files {
-            canonicalize_uri_string(&mut f.uri);
-            self.invalidate_semantic_tokens(f.uri.as_str());
-        }
-        self.request_semantic_refresh().await;
-        self.request_code_lens_refresh().await;
+        let backend = self.clone();
+        self.enqueue_notification(async move {
+            for f in &mut params.files {
+                canonicalize_uri_string(&mut f.uri);
+                backend.invalidate_semantic_tokens(f.uri.as_str());
+            }
+            backend.request_semantic_refresh().await;
+            backend.request_code_lens_refresh().await;
+        })
+        .await;
     }
 
     async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
-        self.did_change_workspace_folders_impl(params).await;
+        let backend = self.clone();
+        self.enqueue_notification(async move {
+            backend.did_change_workspace_folders_impl(params).await;
+        })
+        .await;
     }
 }
