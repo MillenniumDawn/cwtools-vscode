@@ -1,4 +1,4 @@
-use cwtools_index::dir_matches_pattern;
+use cwtools_index::{dir_matches_pattern, type_key_matches};
 use cwtools_rules::rules_types::*;
 
 /// paths are `/`-separated, so a Windows backslash path would make `rsplit('/')`
@@ -156,6 +156,12 @@ pub(crate) fn find_type_from_candidates<'a>(
 
     for c in candidates {
         let t = c.type_def;
+        if let Some(rk) = root_key
+            && t.skip_root_key.is_empty()
+            && !type_key_matches(t, rk)
+        {
+            continue;
+        }
         let tkf_bonus = match (root_key, t.skip_root_key.is_empty(), &t.type_key_filter) {
             (Some(rk), true, Some((keys, negate))) => {
                 let hit = keys.iter().any(|k| k.eq_ignore_ascii_case(rk));
@@ -207,6 +213,9 @@ pub(crate) fn find_grandchild_type<'a>(
 ) -> Option<&'a TypeDefinition> {
     let mut generic: Option<&TypeDefinition> = None;
     for &t in candidates {
+        if !type_key_matches(t, gc_key) {
+            continue;
+        }
         match &t.type_key_filter {
             Some((keys, negative)) => {
                 let in_list = keys.iter().any(|k| k.eq_ignore_ascii_case(gc_key));
@@ -239,15 +248,7 @@ pub(crate) fn refine_grandchild_type<'a>(
             }
             Some((t, r))
         }
-        None => {
-            if let Some((keys, negate)) = &type_def.type_key_filter {
-                let hit = keys.iter().any(|k| k.eq_ignore_ascii_case(gc_key));
-                if hit == *negate {
-                    return None;
-                }
-            }
-            Some((type_def, inner_rules))
-        }
+        None => type_key_matches(type_def, gc_key).then_some((type_def, inner_rules)),
     }
 }
 
@@ -302,7 +303,8 @@ pub(crate) fn resolve_root_child<'a>(
     {
         let skips = should_skip_root_key(root_key, td);
         let skip_gate_ok = td.skip_root_key.is_empty() || skips;
-        if type_has_content(td, inner_rules) && skip_gate_ok {
+        let key_gate_ok = !td.skip_root_key.is_empty() || type_key_matches(td, root_key);
+        if type_has_content(td, inner_rules) && skip_gate_ok && key_gate_ok {
             return if skips {
                 ResolvedType::Wrapper {
                     type_def: td,
