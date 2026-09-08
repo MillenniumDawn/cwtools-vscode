@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Guard baselines now warn when corpus, rules, or vanilla inputs drift from
+  their recorded revisions. (#611)
 #### Extension
 
 * Graph webviews now block remote images and form submissions without breaking

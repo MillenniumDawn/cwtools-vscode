@@ -56,7 +56,7 @@ def _fixed_work_dir(
     monkeypatch.setattr(guard.tempfile, "mkdtemp", lambda **_kwargs: str(work))
 
 
-def test_run_guard_clean_match_removes_work_dir(
+def test_run_guard_missing_pins_are_compatible(
     guard: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -79,7 +79,9 @@ def test_run_guard_clean_match_removes_work_dir(
     config = guard.build_config(_config_args(tmp_path), {})
 
     assert guard.run_guard(config) == 0
-    assert "guard: OK, 1 diagnostics match the baseline" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "guard: OK, 1 diagnostics match the baseline" in output
+    assert "input revisions differ" not in output
     assert not work.exists()
 
 
@@ -95,12 +97,21 @@ def test_run_guard_drift_returns_one_and_preserves_useful_diff(
         f"{corpus}/common/x.txt,4,Warning,CW222,new message,0123456789abcdef\n"
     )
     (tmp_path / "baseline.csv").write_text(
-        "# old run\n"
+        "# cwtools guard baseline\n"
+        "# corpus: mod @ old-corpus\n"
+        "# rules:  config/Config @ old-rules\n"
         "file,line,severity,code,message\n"
         "common/x.txt,4,Warning,CW100,old message\n",
         encoding="utf-8",
     )
     _stub_subprocess(monkeypatch, guard, raw)
+    monkeypatch.setattr(
+        guard,
+        "describe",
+        lambda directory: (
+            "current-corpus" if directory.name == "mod" else "current-rules"
+        ),
+    )
     work = tmp_path / "work"
     _fixed_work_dir(monkeypatch, guard, work)
     config = guard.build_config(_config_args(tmp_path), {})
@@ -110,12 +121,95 @@ def test_run_guard_drift_returns_one_and_preserves_useful_diff(
     output = capsys.readouterr().out
     diff = (work / "drift.diff").read_text(encoding="utf-8")
     assert "guard: FAIL, diagnostics drifted from the baseline" in output
+    warning = (
+        "warning: baseline input revisions differ from current inputs "
+        "(corpus: baseline old-corpus, current current-corpus; rules: baseline "
+        "old-rules, current current-rules); this diff may be input drift, not your "
+        "change"
+    )
+    assert warning in output
+    assert output.index(warning) < output.index("by code (gone/new):")
+    assert "for a current-input before-baseline, use --baseline <path>" in output
+    assert "--compare" not in output
     assert f"guard: artifacts in {work}" in output
     assert "--- baseline" in diff
     assert "+++ current" in diff
     assert "-common/x.txt,4,Warning,CW100,old message" in diff
     assert "+common/x.txt,4,Warning,CW222,new message" in diff
     assert (work / "current.csv").is_file()
+
+
+def test_run_guard_matching_clean_pins_are_silent(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    corpus = tmp_path / "mod"
+    raw = (
+        "file,line,severity,code,message,hash\n"
+        f"{corpus}/common/x.txt,4,Warning,CW100,same message,0123456789abcdef\n"
+    )
+    (tmp_path / "baseline.csv").write_text(
+        "# cwtools guard baseline\n"
+        f"# corpus: mod @ {REVISION}\n"
+        f"# rules:  config/Config @ {REVISION}\n"
+        "file,line,severity,code,message\n"
+        "common/x.txt,4,Warning,CW100,same message\n",
+        encoding="utf-8",
+    )
+    _stub_subprocess(monkeypatch, guard, raw)
+    work = tmp_path / "work"
+    _fixed_work_dir(monkeypatch, guard, work)
+    config = guard.build_config(_config_args(tmp_path), {})
+
+    assert guard.run_guard(config) == 0
+
+    output = capsys.readouterr().out
+    assert "guard: OK, 1 diagnostics match the baseline" in output
+    assert "input revisions differ" not in output
+
+
+def test_run_guard_pass_with_mismatched_pins_prints_one_line_notice(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    corpus = tmp_path / "mod"
+    raw = (
+        "file,line,severity,code,message,hash\n"
+        f"{corpus}/common/x.txt,4,Warning,CW100,same message,0123456789abcdef\n"
+    )
+    (tmp_path / "baseline.csv").write_text(
+        "# cwtools guard baseline\n"
+        "# corpus: mod @ old-corpus\n"
+        "# rules:  config/Config @ old-rules\n"
+        "file,line,severity,code,message\n"
+        "common/x.txt,4,Warning,CW100,same message\n",
+        encoding="utf-8",
+    )
+    _stub_subprocess(monkeypatch, guard, raw)
+    monkeypatch.setattr(
+        guard,
+        "describe",
+        lambda directory: (
+            "current-corpus" if directory.name == "mod" else "current-rules"
+        ),
+    )
+    work = tmp_path / "work"
+    _fixed_work_dir(monkeypatch, guard, work)
+    config = guard.build_config(_config_args(tmp_path), {})
+
+    assert guard.run_guard(config) == 0
+
+    output = capsys.readouterr().out
+    notice = (
+        "guard: note: baseline input revisions differ from current inputs "
+        "(corpus: baseline old-corpus, current current-corpus; rules: baseline "
+        "old-rules, current current-rules)"
+    )
+    assert notice in output.splitlines()
 
 
 def test_run_guard_bless_writes_expected_baseline(
@@ -208,6 +302,30 @@ def test_normalize_rewrites_backslashes(guard: ModuleType) -> None:
 def test_report_body_skips_hash_headers(guard: ModuleType) -> None:
     text = "# comment\n# another\nfile,line,severity,code,message\nrow\n"
     assert guard.report_body(text) == ["file,line,severity,code,message", "row"]
+
+
+def test_parse_pins_reads_known_leading_headers(guard: ModuleType) -> None:
+    text = (
+        "# cwtools guard baseline\n"
+        "# corpus: mod @ abc1234\n"
+        "# rules:  config/Config @ def5678\n"
+        "# vanilla: vanilla @ 9876543\n"
+        "file,line,severity,code,message\n"
+        "# rules: ignored @ later\n"
+    )
+    assert guard.parse_pins(text) == {
+        "corpus": "abc1234",
+        "rules": "def5678",
+        "vanilla": "9876543",
+    }
+
+
+def test_compare_pins_treats_matching_dirty_revision_as_mismatch(
+    guard: ModuleType,
+) -> None:
+    assert guard.compare_pins(
+        {"rules": "abc1234 (dirty)"}, {"rules": "abc1234 (dirty)"}
+    ) == [("rules", "abc1234 (dirty)", "abc1234 (dirty)")]
 
 
 def test_default_projects_falls_back_to_the_repo_root_parent(
