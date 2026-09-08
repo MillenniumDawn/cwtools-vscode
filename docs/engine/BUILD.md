@@ -107,6 +107,8 @@ default linker and needs no extra install.
 The `build-bench` workflow (`.github/workflows/build-bench.yml`) measures clean
 release-build time across all three platforms. Run it from the Actions tab.
 
-The `release` workflow (`.github/workflows/release.yml`) builds the server on
+The `Publish` workflow (`.github/workflows/publish.yml`) builds the server on
 every platform, packages one vsix per platform plus the universal fallback,
-smoke-tests them, and publishes when a `v*` tag is pushed.
+smoke-tests them, and publishes them on every push to `main` — as a release when
+that push cut one, as a pre-release otherwise. A `v*` tag pushed by hand lands
+in the same workflow.

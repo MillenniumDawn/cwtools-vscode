@@ -1,7 +1,7 @@
 # One PR-path gate for the merged repo. The TypeScript client, Rust engine,
 # cargo-deny, and diagnostics guards used to be four workflows; they share
 # this file so the Checks tab is one group instead of a leftover-from-the-
-# merger pile. CodeQL, release, marketplace publish, rules-pins, and the
+# merger pile. CodeQL, publish, marketplace publish, rules-pins, and the
 # build bench stay on their own triggers.
 on:
   push:

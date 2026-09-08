@@ -60,10 +60,19 @@ jobs:
           fi
           mapfile -t vsixes < <(find vsix-artifacts -maxdepth 1 -type f \
             -name '*.vsix' -print | sort)
-          # Every platform vsix in one publish call, not one platform at a time.
-          npx --no-install @vscode/vsce publish \
-            --pat "$VSCE_TOKEN" \
-            --packagePath "${vsixes[@]}"
+          # One upload per call, not all of them batched: the gallery times out
+          # on a long batch, and --skip-duplicate makes re-running this safe.
+          failed=()
+          for vsix in "${vsixes[@]}"; do
+            npx --no-install @vscode/vsce publish \
+              --pat "$VSCE_TOKEN" \
+              --skip-duplicate \
+              --packagePath "$vsix" || failed+=("$vsix")
+          done
+          (( ${#failed[@]} == 0 )) || {
+            echo "::error::failed to publish: ${failed[*]}"
+            exit 1
+          }
 
       - name: Dry run (validate only)
         if: ${{ inputs.dry-run == true }}

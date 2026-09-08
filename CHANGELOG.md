@@ -1,5 +1,26 @@
 ### Unreleased
 
+#### Tooling
+
+* Publishing works again, and is now one `Publish` workflow instead of three.
+  No stable release had ever published: `tag-release.yml` capped the reusable
+  `release.yml` at `contents: read` while its publish job asked for
+  `contents: write`, and a called workflow may only narrow the caller's token,
+  so every run died at startup in under a second. Nothing had reached Open VSX
+  either, from either channel — on the pre-release path the Marketplace step ran
+  first in the same job and timed out on `/_apis/gallery` uploading all six
+  VSIX files in one `vsce publish` call, which aborted the job before the Open
+  VSX step. `pre-release.yml`, `release.yml`, and `tag-release.yml` are replaced
+  by `publish.yml`: `check` picks the channel once, `verify` fails the run
+  before the 45-minute matrix when a release is missing a publish token, and
+  the Marketplace, Open VSX, and GitHub Releases each publish as their own job
+  from one packaged artifact, so a failure names itself and re-running one job
+  re-publishes one target. The Marketplace publish now uploads one VSIX per
+  call with `--skip-duplicate` and retries, a release commit no longer also
+  publishes a pre-release, the Git tag is created by the GitHub publish job (so
+  a failed release is retried by the next push to `main`), and a failed release
+  opens a draft `fix/release-v<x.y.z>` pull request naming the jobs that broke.
+
 ### 3.4.1
 
 #### Tooling
