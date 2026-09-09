@@ -10,6 +10,15 @@
   focus-tree or events file paid a document-sized allocation per request. They
   now share the open buffer. (#473)
 
+#### Tooling
+
+* Regression tests cover failed fix writes without losing source bytes or
+  counting failed edits, plus incompatible and malformed error-cache sidecars.
+  (#520, #693)
+* Host tests require the activation API, CWTools command IDs, expected graph
+  nodes and edges after creation and restoration, and nonempty, correct hover
+  content within the latency limit. (#693, #717)
+
 ### 3.4.1
 
 #### Tooling
@@ -26,10 +35,12 @@
 * The release PR is now opened by a GitHub App rather than a personal access
   token, so no individual is its author and its checks still run on the merge
   commit. (#710)
+
 #### Extension
 
 * Graph webviews now block remote images and form submissions without breaking
   graph rendering. (#602)
+
 #### Engine
 
 * The LSP's string table no longer grows with every keystroke. Mid-edit parses —
@@ -48,6 +59,7 @@
   unreadable files. (#496)
 * Show graph now discards superseded requests, so an older response cannot
   replace the graph selected by the user. (#588)
+
 #### Engine
 
 * Type dispatch now honors `starts_with` and `type_key_prefix` for validation
