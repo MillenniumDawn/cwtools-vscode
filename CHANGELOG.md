@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.2
+
 #### Engine
 
 * Reading an open document's text no longer copies the buffer. The LSP requests
