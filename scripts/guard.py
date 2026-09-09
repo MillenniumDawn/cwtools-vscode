@@ -24,6 +24,8 @@ CODE_RE = re.compile(r",CW[0-9]{3},")
 PIN_RE = re.compile(r"^# (corpus|rules|vanilla): .* @ (.+)$")
 COLUMN_HEADER = "file,line,severity,code,message"
 PIN_NAMES = ("corpus", "rules", "vanilla")
+VALIDATE_TIMEOUT_SECONDS = 15 * 60
+VALIDATE_LOG_TAIL_LINES = 40
 
 
 @dataclass
@@ -295,11 +297,41 @@ def code_from_diff_line(line: str) -> str:
 
 def run_guard(config: Config) -> int:
     if not config.corpus.is_dir():
-        die(f"corpus not found: {config.corpus}")
+        if config.preset == "md":
+            die(
+                f"corpus not found: {config.corpus}\n"
+                "  Set CWTOOLS_CORPUS, pass --corpus, or clone Millennium-Dawn "
+                "under CWTOOLS_PROJECTS."
+            )
+        die(
+            f"corpus not found: {config.corpus}\n"
+            "  Pass --corpus or restore the committed "
+            "scripts/vanilla-fixture/mod fixture."
+        )
     if not config.rules.is_dir():
-        die(f"rules not found: {config.rules}")
+        if config.preset == "md":
+            die(
+                f"rules not found: {config.rules}\n"
+                "  Set CWTOOLS_RULES, pass --rules, or clone cwtools-hoi4-config "
+                "under CWTOOLS_PROJECTS."
+            )
+        die(
+            f"rules not found: {config.rules}\n"
+            "  Pass --rules or restore the committed "
+            "scripts/vanilla-fixture/rules fixture."
+        )
     if config.vanilla is not None and not config.vanilla.is_dir():
-        die(f"vanilla not found: {config.vanilla}")
+        if config.preset == "md":
+            hint = (
+                "Set CWTOOLS_VANILLA, pass --vanilla, or provide the committed "
+                "scripts/vanilla-fixture/vanilla."
+            )
+        else:
+            hint = (
+                "Pass --vanilla or provide the committed "
+                "scripts/vanilla-fixture/vanilla."
+            )
+        die(f"vanilla not found: {config.vanilla}\n  {hint}")
 
     if config.build:
         print("guard: cargo build --release -p cwtools_cli")
@@ -369,10 +401,30 @@ def run_guard(config: Config) -> int:
             print(f"guard: {vanilla} [{vanilla_rev}]")
             cmd.extend(["--vanilla", str(vanilla), "--no-vanilla-cache"])
 
-        with log_path.open("w", encoding="utf-8", errors="surrogateescape") as log:
-            status = subprocess.run(
-                cmd, stdout=log, stderr=subprocess.STDOUT, check=False
-            ).returncode
+        try:
+            with log_path.open("w", encoding="utf-8", errors="surrogateescape") as log:
+                status = subprocess.run(
+                    cmd,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                    timeout=VALIDATE_TIMEOUT_SECONDS,
+                ).returncode
+        except subprocess.TimeoutExpired:
+            keep = True
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+            tail = text.splitlines()[-VALIDATE_LOG_TAIL_LINES:]
+            print(
+                f"guard: validate timed out after {VALIDATE_TIMEOUT_SECONDS} seconds",
+                file=sys.stderr,
+            )
+            print(
+                f"guard: last {VALIDATE_LOG_TAIL_LINES} lines of validate.log:",
+                file=sys.stderr,
+            )
+            if tail:
+                print("\n".join(tail), file=sys.stderr)
+            die("validate timed out, no report to compare")
         if status > 1:
             keep = True
             text = log_path.read_text(encoding="utf-8", errors="replace")

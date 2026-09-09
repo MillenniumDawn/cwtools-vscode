@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 from types import ModuleType
+from typing import TextIO, cast
 
 import pytest
 
@@ -265,6 +266,100 @@ def test_run_guard_missing_corpus_dies_with_setup_error(
 
     error = capsys.readouterr().err
     assert f"guard: corpus not found: {tmp_path / 'missing-mod'}" in error
+    assert "CWTOOLS_CORPUS" in error
+    assert "--corpus" in error
+    assert "Millennium-Dawn" in error
+    assert "CWTOOLS_PROJECTS" in error
+
+
+def test_run_guard_missing_rules_names_overrides_and_checkout(
+    guard: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = guard.build_config(
+        [
+            "md",
+            "--corpus",
+            str(tmp_path / "mod"),
+            "--rules",
+            str(tmp_path / "missing-rules"),
+            "--baseline",
+            str(tmp_path / "baseline.csv"),
+            "--bin",
+            str(tmp_path / "cwtools"),
+            "--no-build",
+        ],
+        {},
+    )
+    config.corpus.mkdir()
+
+    with pytest.raises(SystemExit, match="2"):
+        guard.run_guard(config)
+
+    error = capsys.readouterr().err
+    assert f"guard: rules not found: {tmp_path / 'missing-rules'}" in error
+    assert "CWTOOLS_RULES" in error
+    assert "--rules" in error
+    assert "cwtools-hoi4-config" in error
+    assert "CWTOOLS_PROJECTS" in error
+
+
+def test_run_guard_missing_vanilla_fixture_does_not_recommend_ignored_env(
+    guard: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script_dir = tmp_path / "scripts"
+    fixture = script_dir / "vanilla-fixture"
+    (fixture / "mod").mkdir(parents=True)
+    (fixture / "rules").mkdir()
+    config = guard.build_config(
+        ["vanilla"],
+        {"CWTOOLS_VANILLA": str(tmp_path / "ignored")},
+        script_dir=script_dir,
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        guard.run_guard(config)
+
+    error = capsys.readouterr().err
+    assert f"guard: vanilla not found: {fixture / 'vanilla'}" in error
+    assert "--vanilla" in error
+    assert "vanilla-fixture/vanilla" in error
+    assert "CWTOOLS_VANILLA" not in error
+
+
+def test_run_guard_timeout_keeps_log_and_prints_tail(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = guard.build_config(_config_args(tmp_path), {})
+    work = tmp_path / "work"
+    _fixed_work_dir(monkeypatch, guard, work)
+    monkeypatch.setattr(guard, "describe", lambda _directory: REVISION)
+
+    def timeout(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        assert kwargs["timeout"] == guard.VALIDATE_TIMEOUT_SECONDS
+        log = cast(TextIO, kwargs["stdout"])
+        for index in range(45):
+            log.write(f"line {index}\n")
+        raise subprocess.TimeoutExpired(command, guard.VALIDATE_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(guard.subprocess, "run", timeout)
+
+    with pytest.raises(SystemExit, match="2"):
+        guard.run_guard(config)
+
+    captured = capsys.readouterr()
+    assert "validate timed out after" in captured.err
+    assert "last 40 lines of validate.log" in captured.err
+    assert "line 44" in captured.err
+    assert "\nline 4\n" not in captured.err
+    assert f"guard: artifacts in {work}" in captured.out
+    assert (work / "validate.log").read_text(encoding="utf-8") == "".join(
+        f"line {index}\n" for index in range(45)
+    )
 
 
 def test_normalize_strips_prefix_and_hash(guard: ModuleType) -> None:

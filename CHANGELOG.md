@@ -1,5 +1,11 @@
 ### Unreleased
 
+#### Tooling
+
+* Guard setup failures now explain the expected input checkouts and overrides.
+  Validation also times out with the retained log tail, and vanilla guard pins are
+  checked for clean revisions. (#515)
+
 #### Engine
 
 * Reading an open document's text no longer copies the buffer. The LSP requests
@@ -26,10 +32,12 @@
 * The release PR is now opened by a GitHub App rather than a personal access
   token, so no individual is its author and its checks still run on the merge
   commit. (#710)
+
 #### Extension
 
 * Graph webviews now block remote images and form submissions without breaking
   graph rendering. (#602)
+
 #### Engine
 
 * The LSP's string table no longer grows with every keystroke. Mid-edit parses —
@@ -48,6 +56,7 @@
   unreadable files. (#496)
 * Show graph now discards superseded requests, so an older response cannot
   replace the graph selected by the user. (#588)
+
 #### Engine
 
 * Type dispatch now honors `starts_with` and `type_key_prefix` for validation
