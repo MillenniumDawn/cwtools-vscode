@@ -143,13 +143,15 @@ Every substantive PR or push updates `CHANGELOG.md` as part of the change, engin
 
 ## Releasing
 
-Publishing is automatic on two channels, and neither is run from a developer's machine.
+Publishing is automatic, and none of it is run from a developer's machine. One workflow does it: `.github/workflows/publish.yml`, one run per push to `main`.
 
-Every push to `main` publishes a **pre-release** (`.github/workflows/pre-release.yml`) to the Marketplace, Open VSX, and GitHub Releases. Stable takes the even minors and pre-release the odd minor above it, with the Actions run number as the patch: with stable at `3.4.0`, pre-releases are `3.5.<run>` (`prerelease_identity_from` in `scripts/build/build.py`).
+Its `check` job picks the channel once. A commit whose `extension/package/package.json` version matches the top changelog heading with no tag for it yet is a **release**; everything else is a **pre-release**, versioned on the odd minor above stable with the Actions run number as the patch — with stable at `3.4.0`, pre-releases are `3.5.<run>` (`prerelease_identity_from` in `scripts/build/build.py`). A release commit publishes the release *instead of* a pre-release, so the same code is never built twice.
 
-A **release** is cut by merging the release PR. `.github/workflows/release-pr.yml` regenerates `release/version-bump` on every push to `main`, where `scripts/build/release_pr.py` promotes `### Unreleased` to a version heading and moves `extension/package/package.json` to match — so that branch is force-pushed and edits on it are discarded; fix release notes in `main`'s `### Unreleased`. Merging it makes `.github/workflows/tag-release.yml` push `v<x.y.z>` and call `release.yml` for the matrix build, smoke test, and publish. Releases stay on even minors, so a minor bump goes `3.4.0` → `3.6.0`.
+Whichever channel it picked, the same three jobs publish it in parallel: `Publish: VS Code Marketplace`, `Publish: Open VSX`, and `Publish: GitHub`. They are independent — one registry timing out no longer cancels the others, and re-running a single failed job re-publishes one target. The Git tag is created by the GitHub job, so a tag means published rather than attempted, and a release that failed is retried by the next push to `main`. When a release-channel job fails, `release-failed` opens a draft `fix/release-v<x.y.z>` pull request naming what broke.
 
-`npm run build -- release` remains the manual fallback: it checks the CHANGELOG, refuses a dirty tree or an existing tag, then pushes the tag, which triggers the same `release.yml`. The engine's own tag-and-archive release process no longer applies now that it has no repo of its own.
+A **release** is cut by merging the release PR. `.github/workflows/release-pr.yml` regenerates `release/version-bump` on every push to `main`, where `scripts/build/release_pr.py` promotes `### Unreleased` to a version heading and moves `extension/package/package.json` to match — so that branch is force-pushed and edits on it are discarded; fix release notes in `main`'s `### Unreleased`. Releases stay on even minors, so a minor bump goes `3.4.0` → `3.6.0`.
+
+`npm run build -- release` remains the manual fallback: it checks the CHANGELOG, refuses a dirty tree or an existing tag, then pushes the tag, which `publish.yml` also triggers on. The engine's own tag-and-archive release process no longer applies now that it has no repo of its own.
 
 ## Performance work
 

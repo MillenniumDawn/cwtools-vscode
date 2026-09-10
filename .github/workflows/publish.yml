@@ -1,0 +1,470 @@
+---
+# One workflow, one run per push. `check` decides the channel once -- a commit
+# whose manifest matches the top changelog heading with no tag for it yet is a
+# release, everything else is a pre-release -- and the three publish jobs below
+# serve whichever channel it picked. They fan out in parallel from `package`, so
+# one registry timing out no longer cancels the others.
+"on":
+  push:
+    branches:
+      - main
+    # `npm run build -- release` pushes a tag by hand; it lands here too.
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+name: Publish
+
+permissions:
+  contents: read
+
+# Never cancel a publish; queue instead. A half-finished release is much more
+# expensive than a superseded pre-release build.
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Decide the publish channel
+    if: >-
+      github.ref == 'refs/heads/main'
+      || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release: ${{ steps.check.outputs.release }}
+      version: ${{ steps.check.outputs.version }}
+      tag: ${{ steps.check.outputs.tag }}
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Full history so the existing tags are present to check against.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Decide the publish channel
+        id: check
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "A v* tag was pushed by hand; publishing it as a release."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          version=$(python3 <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = Path("extension/package/package.json")
+          print(json.loads(manifest.read_text(encoding="utf-8"))["version"])
+          PY
+          )
+          top=$(grep -m1 -oE '^#+ +v?[0-9]+\.[0-9]+\.[0-9]+' CHANGELOG.md \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          echo "manifest=$version changelog=$top"
+          # Only the commit that merged the release PR has these agreeing with
+          # no tag yet. The tag is created by the GitHub publish job, so a
+          # release that failed to publish is retried by the next push.
+          if [ "$version" = "$top" ] \
+            && ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "This push cuts release v$version."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "tag=v$version" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Not a release commit; publishing a pre-release."
+          echo "release=false" >> "$GITHUB_OUTPUT"
+          python3 scripts/build/build.py prerelease-identity >> "$GITHUB_OUTPUT"
+
+  # Fails the run before the 45-minute matrix rather than after it, and before
+  # any target has published. A pre-release skips a registry it has no token
+  # for; a release refuses to go out half-published.
+  verify:
+    name: Verify publish inputs
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      has_vsce: ${{ steps.tokens.outputs.has_vsce }}
+      has_open_vsx: ${{ steps.tokens.outputs.has_open_vsx }}
+    env:
+      # `secrets` is unavailable in a job-level `if:`, so their presence is
+      # lifted into plain booleans the publish jobs can read through `needs`.
+      HAS_VSCE: ${{ secrets.VSCE_TOKEN != '' }}
+      HAS_OPEN_VSX: ${{ secrets.OPEN_VSX_TOKEN != '' }}
+      RELEASE: ${{ needs.check.outputs.release }}
+      VERSION: ${{ needs.check.outputs.version }}
+      TAG: ${{ needs.check.outputs.tag }}
+    steps:
+      - name: Check the publish tokens
+        id: tokens
+        run: |
+          echo "has_vsce=$HAS_VSCE" >> "$GITHUB_OUTPUT"
+          echo "has_open_vsx=$HAS_OPEN_VSX" >> "$GITHUB_OUTPUT"
+          if [ "$RELEASE" = "true" ]; then
+            channel=release
+          else
+            channel=pre-release
+          fi
+          {
+            echo "### Publishing $channel $VERSION"
+            echo
+            echo "* Tag: \`$TAG\`"
+            echo "* VS Code Marketplace: $HAS_VSCE"
+            echo "* Open VSX: $HAS_OPEN_VSX"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$RELEASE" = "true" ] || exit 0
+          missing=""
+          [ "$HAS_VSCE" = "true" ] || missing="VSCE_TOKEN"
+          if [ "$HAS_OPEN_VSX" != "true" ]; then
+            missing="${missing:+$missing, }OPEN_VSX_TOKEN"
+          fi
+          if [ -n "$missing" ]; then
+            echo "::error::cannot publish release $TAG: $missing not set."
+            exit 1
+          fi
+
+  # Build the Rust server natively on each platform. To add or remove a
+  # platform, edit the matrix below -- the staging step is platform-agnostic.
+  build-server:
+    name: Build server (${{ matrix.platform }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            bin: cwtools-server
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            bin: cwtools-server
+          - os: windows-latest
+            platform: win-x64
+            target: x86_64-pc-windows-msvc
+            bin: cwtools-server.exe
+          - os: macos-latest
+            platform: osx-arm64
+            target: aarch64-apple-darwin
+            bin: cwtools-server
+          # Intel Macs. The client resolves osx-x64 there, so without this build
+          # every Intel Mac install ends at "no language server binary found".
+          # Cross-compiled from the arm64 runner; the Apple toolchain links both
+          # slices, so only the rust target needs adding.
+          - os: macos-latest
+            platform: osx-x64
+            target: x86_64-apple-darwin
+            bin: cwtools-server
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      ROOT: engine/target
+    steps:
+      # The engine lives in-repo at engine/, so one checkout names both halves:
+      # the commit being published is the engine being bundled.
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Setup Rust
+        # stable branch, 2026-03-27
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache Rust build
+        # v2.9.1
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: engine
+      - name: Build server
+        working-directory: engine
+        run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
+      - name: Upload binary
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: server-${{ matrix.platform }}
+          path: >-
+            ${{ env.ROOT }}/${{ matrix.target }}/release/${{ matrix.bin }}
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  # One vsix per platform plus a universal fallback. package-prebuilt takes its
+  # identity from the environment, so this job is channel-agnostic: `check`
+  # already resolved which version and tag are being built.
+  package:
+    name: Package VSIX files
+    needs: [check, verify, build-server]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}
+      CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download server binaries
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: server-*
+          path: artifacts/server
+      - uses: ./.github/actions/setup-node-npm
+      - name: Assemble extension
+        run: npm run compile:release
+      - name: Stage binaries into dist/extension
+        run: >-
+          python3 scripts/stage_release_binaries.py
+          artifacts/server dist/extension
+      - name: Package VSIX files
+        run: npm run build -- package-prebuilt
+      # Checks every packaged vsix. The per-platform ones carry exactly their
+      # own binary, while the universal fallback carries all of them. The
+      # platform list is passed explicitly so a silently shrunken build matrix
+      # fails here, before anything is published.
+      - name: Smoke test VSIX files
+        run: |
+          python3 scripts/smoke_test_vsix.py artifacts/vsix \
+            linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
+      # The single hand-off to the three publish jobs. They all publish these
+      # bytes, so a failed target can be re-run from the artifact rather than
+      # rebuilt -- and every target ships identical files.
+      - name: Upload the packaged VSIX files
+        # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vsix-${{ needs.check.outputs.tag }}
+          path: artifacts/vsix/*.vsix
+          if-no-files-found: error
+          retention-days: 14
+
+  marketplace:
+    name: "Publish: VS Code Marketplace"
+    needs: [check, verify, package]
+    # A pre-release skips quietly without a token; a release never reaches here
+    # without one, because `verify` already failed the run.
+    if: ${{ needs.verify.outputs.has_vsce == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
+      CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}
+      CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}
+      TAG_RELEASE: ${{ needs.check.outputs.release }}
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # @vscode/vsce is a devDependency, so `npx --no-install` needs the tree.
+      - uses: ./.github/actions/setup-node-npm
+      - name: Download the packaged VSIX files
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: vsix-${{ needs.check.outputs.tag }}
+          path: artifacts/vsix
+      # --pre-release needs no branching here: resolve_version derives it from
+      # the tag, and only a pre-release tag carries a -pre.<attempt> suffix.
+      - name: Publish to the VS Code Marketplace
+        run: npm run build -- publish-marketplace
+
+  open-vsx:
+    name: "Publish: Open VSX"
+    needs: [check, verify, package]
+    if: ${{ needs.verify.outputs.has_open_vsx == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No checkout and no node: the action brings its own ovsx.
+    permissions: {}
+    steps:
+      - name: Download the packaged VSIX files
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: vsix-${{ needs.check.outputs.tag }}
+          path: artifacts/vsix
+      # Open VSX takes the universal vsix, which carries every platform binary.
+      - name: Locate the universal vsix
+        id: universal
+        run: |
+          path=$(find artifacts/vsix -maxdepth 1 -name '*.vsix' \
+            ! -name '*-win32-*' ! -name '*-linux-*' ! -name '*-darwin-*' \
+            -print | sort | head -n 1)
+          [ -n "$path" ] || {
+            echo "::error::no universal vsix in artifacts/vsix"
+            exit 1
+          }
+          echo "Publishing $path to Open VSX"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+      - name: Publish to the Open VSX Registry
+        # v2.0.0
+        uses: >-
+          HaaLeo/publish-vscode-extension@ca5561daa085dee804bf9f37fe0165785a9b14db
+        with:
+          extensionFile: ${{ steps.universal.outputs.path }}
+          pat: ${{ secrets.OPEN_VSX_TOKEN }}
+          preRelease: ${{ needs.check.outputs.release != 'true' }}
+          # Makes re-running just this job safe after a partial failure.
+          skipDuplicate: true
+
+  github:
+    name: "Publish: GitHub"
+    needs: [check, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The only job that writes: creating the release is what creates the tag.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # publish-github reads CHANGELOG.md for a release's notes.
+          persist-credentials: false
+      - name: Download the packaged VSIX files
+        # v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: vsix-${{ needs.check.outputs.tag }}
+          path: artifacts/vsix
+      # Notes come from the changelog for a release and from a generated blurb
+      # for a pre-release; --prerelease and --target are derived the same way,
+      # so one command covers both channels.
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_RELEASE: ${{ needs.check.outputs.release }}
+          CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}
+          CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}
+        run: python3 scripts/build/build.py publish-github
+
+  # A failed release gets a branch and a draft pull request to fix it on. A
+  # failed pre-release is a red job and nothing more: the next push supersedes
+  # it. `cancelled` is excluded on purpose -- someone stopping a run by hand
+  # should not open a pull request.
+  release-failed:
+    name: "Release: open a fix pull request"
+    needs:
+      - check
+      - verify
+      - build-server
+      - package
+      - marketplace
+      - open-vsx
+      - github
+    if: >-
+      ${{ always() && needs.check.outputs.release == 'true' && (
+          needs.verify.result == 'failure'
+       || needs.build-server.result == 'failure'
+       || needs.package.result == 'failure'
+       || needs.marketplace.result == 'failure'
+       || needs.open-vsx.result == 'failure'
+       || needs.github.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    env:
+      BRANCH: fix/release-${{ needs.check.outputs.tag }}
+      TAG: ${{ needs.check.outputs.tag }}
+      VERSION: ${{ needs.check.outputs.version }}
+      TAGGED: ${{ needs.github.result == 'success' }}
+    steps:
+      # The same App as release-pr.yml: an installation token triggers workflows
+      # where GITHUB_TOKEN does not, so the fix PR gets real checks.
+      - name: Mint a GitHub App token
+        id: app-token
+        # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          # Credentials are kept on purpose: this job pushes the fix branch.
+          token: ${{ steps.app-token.outputs.token }}
+      # The per-attempt endpoint, so a re-run lists this attempt's failures
+      # rather than every failure the run has ever had.
+      - name: Collect the failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
+            --paginate \
+            --jq '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"' \
+            > "$RUNNER_TEMP/failed-jobs.md"
+          cat "$RUNNER_TEMP/failed-jobs.md"
+      # One empty commit: all the detail is in the pull request body, so there
+      # is nothing to delete before merging the fix.
+      - name: Push the fix branch
+        run: |
+          git checkout -B "$BRANCH" "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "Fix release $TAG"
+          git push --force origin "$BRANCH"
+      - name: Open or update the fix pull request
+        env:
+          REPO: ${{ github.repository }}
+          RUN_URL: >-
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{
+            github.run_id }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          title="Fix release $TAG"
+          body_file="$RUNNER_TEMP/fix-pr-body.md"
+          {
+            echo "Release \`$TAG\` failed to publish."
+            echo "[The run]($RUN_URL) left these jobs red:"
+            echo
+            cat "$RUNNER_TEMP/failed-jobs.md"
+            echo
+            if [ "$TAGGED" = "true" ]; then
+              echo "\`$TAG\` **was** tagged and released on GitHub, so"
+              echo "\`check\` will not retry this release. Re-run the failed"
+              echo "job from the run above, or dispatch"
+              echo "\`publish-marketplace.yml\` against \`$TAG\`."
+            else
+              echo "No \`$TAG\` tag exists, so nothing published anywhere."
+              echo "Merging this pull request re-runs \`Publish\` on \`main\`,"
+              echo "which retries the whole release."
+            fi
+            echo
+            echo "If the fix changes shipped code, bump the version instead of"
+            echo "reusing \`$VERSION\`: publishes are idempotent"
+            echo "(\`--skip-duplicate\`), so a registry that already accepted"
+            echo "$VERSION would silently keep the broken upload."
+            echo
+            echo "This branch carries one empty commit; there is nothing to"
+            echo "delete before merging the fix."
+          } > "$body_file"
+          number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --repo "$REPO" \
+              --title "$title" --body-file "$body_file"
+          else
+            gh pr create --draft --repo "$REPO" --base main --head "$BRANCH" \
+              --title "$title" --body-file "$body_file"
+          fi
