@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.3
+
 #### Tooling
 
 * Publishing works again, and is now one `Publish` workflow instead of three.
