@@ -335,6 +335,15 @@ impl DocumentStore {
         }
     }
 
+    /// The open buffer's text as a refcount clone. `ParsedDoc.text` is an
+    /// `Arc<str>` precisely so a reader that only looks at the text does not
+    /// copy the document; every such read goes through here.
+    pub(crate) fn text_of(&self, uri: &str) -> Option<Arc<str>> {
+        self.documents
+            .get(uri)
+            .map(|document| document.text.clone())
+    }
+
     pub(crate) fn open(
         &mut self,
         uri: String,

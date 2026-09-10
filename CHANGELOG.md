@@ -20,6 +20,17 @@
   publishes a pre-release, the Git tag is created by the GitHub publish job (so
   a failed release is retried by the next push to `main`), and a failed release
   opens a draft `fix/release-v<x.y.z>` pull request naming the jobs that broke.
+### 3.4.2
+
+#### Engine
+
+* Reading an open document's text no longer copies the buffer. The LSP requests
+  that fire at cursor-movement and scroll cadence — code actions, inlay hints,
+  code lenses, document links, highlights, folding and selection ranges,
+  formatting and semantic tokens — each took a full copy of the file every time
+  they ran, and the semantic-token full and delta requests took two, so a large
+  focus-tree or events file paid a document-sized allocation per request. They
+  now share the open buffer. (#473)
 
 ### 3.4.1
 

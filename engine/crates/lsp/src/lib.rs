@@ -192,6 +192,29 @@ mod tests {
         })
     }
 
+    /// `text_of` hands back the stored buffer, not a copy of it. Pointer
+    /// identity is the whole point: the readers that call it run at
+    /// cursor-movement cadence, and a copy there is a document-sized
+    /// allocation per request (#473).
+    #[test]
+    fn document_store_text_of_shares_the_buffer() {
+        let mut store = DocumentStore::new();
+        let doc = document("focus_tree = { id = a }");
+        let stored = doc.text.clone();
+        store.open("file:///doc".to_string(), doc).unwrap();
+
+        for _ in 0..32 {
+            let text = store.text_of("file:///doc").expect("the doc is open");
+            assert!(
+                Arc::ptr_eq(&stored, &text),
+                "text_of copied the buffer instead of sharing it"
+            );
+        }
+
+        assert_eq!(Arc::strong_count(&stored), 2, "every read must be released");
+        assert!(store.text_of("file:///not-open").is_none());
+    }
+
     #[test]
     fn document_store_bounds_a_burst_of_distinct_opens() {
         let mut store = DocumentStore::new();

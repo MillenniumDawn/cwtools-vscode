@@ -469,11 +469,22 @@ impl Backend {
         out
     }
 
-    pub(crate) async fn file_text_for(&self, uri: &str) -> Option<String> {
+    /// The current text of `uri`: the open-doc buffer if open, else read from
+    /// disk through the access boundary on Tokio's blocking pool.
+    ///
+    /// `Arc<str>` rather than `String` because the callers are the requests
+    /// that fire at cursor-movement and scroll cadence — code actions, inlay
+    /// hints, semantic tokens — and copying the buffer for each of them cost a
+    /// document-sized allocation per request. The open-doc path is a refcount
+    /// bump. The disk path pays one copy wrapping the read (an `Arc` cannot
+    /// adopt a `String`'s buffer), which is noise next to the read itself.
+    pub(crate) async fn file_text_for(&self, uri: &str) -> Option<Arc<str>> {
         {
+            // Scoped so the guard is gone before the blocking read, the same
+            // way the copy it replaced was.
             let docs = self.state.documents.lock();
-            if let Some(doc) = docs.get(uri) {
-                return Some(doc.text.to_string());
+            if let Some(text) = docs.text_of(uri) {
+                return Some(text);
             }
         }
         let roots = self.state.config.read().authorized_roots.clone();
@@ -484,6 +495,7 @@ impl Backend {
         .await
         .ok()
         .flatten()
+        .map(Arc::from)
     }
 
     pub(crate) async fn file_text_snapshots_for(
@@ -572,5 +584,109 @@ impl Backend {
             uri: parse_uri(uri, fallback),
             range: self.source_range_with_lines(lines, line, column, token),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{DocumentState, ParsedDoc};
+
+    const DOC_URI: &str = if cfg!(windows) {
+        "file:///C:/ws/common/national_focus/tree.txt"
+    } else {
+        "file:///ws/common/national_focus/tree.txt"
+    };
+
+    /// A `Backend` over a fresh state, with the `Client` captured out of the
+    /// service builder — the only way to get one without a live connection.
+    fn backend() -> (Backend, Arc<DocumentState>) {
+        let state = Arc::new(DocumentState::new());
+        let captured = Arc::new(parking_lot::Mutex::new(None));
+        let slot = captured.clone();
+        let server_state = state.clone();
+        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
+            *slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: server_state.clone(),
+            }
+        });
+        let client = captured.lock().take().expect("the builder ran");
+        (
+            Backend {
+                client,
+                state: state.clone(),
+            },
+            state,
+        )
+    }
+
+    /// The open-document path must be a refcount bump. `code_action`,
+    /// `inlay_hint`, `code_lens` and the semantic-token fast paths all call
+    /// this on a cursor move, so a copy here is a document-sized allocation
+    /// per request; pointer identity is the proof there isn't one (#473).
+    #[tokio::test]
+    async fn file_text_for_open_doc_shares_the_buffer() {
+        let (backend, state) = backend();
+        let stored: Arc<str> = Arc::from("focus_tree = {\n\tid = tree\n}\n");
+        state
+            .documents
+            .lock()
+            .open(
+                DOC_URI.to_string(),
+                ParsedDoc {
+                    version: 1,
+                    text: stored.clone(),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts one small doc");
+
+        // A cursor-move burst: every request must hand back the same buffer.
+        for _ in 0..32 {
+            let text = backend
+                .file_text_for(DOC_URI)
+                .await
+                .expect("the doc is open");
+            assert!(
+                Arc::ptr_eq(&stored, &text),
+                "file_text_for copied the open buffer instead of sharing it"
+            );
+        }
+
+        // The store's handle and ours, and nothing left over from the burst.
+        assert_eq!(Arc::strong_count(&stored), 2);
+    }
+
+    /// The closed-file path still reads through the access boundary, and a
+    /// path outside every authorized root still reads as absent.
+    #[tokio::test]
+    async fn file_text_for_reads_a_closed_file_under_an_authorized_root() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        let file = ws.path().join("a.txt");
+        std::fs::write(&file, "foo = { }\n").unwrap();
+        let uri = Url::from_file_path(&file)
+            .expect("absolute path")
+            .to_string();
+        let outside = tempfile::TempDir::new().expect("tmpdir");
+        let stray = outside.path().join("b.txt");
+        std::fs::write(&stray, "bar = { }\n").unwrap();
+        let stray_uri = Url::from_file_path(&stray)
+            .expect("absolute path")
+            .to_string();
+
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+
+        assert_eq!(
+            backend.file_text_for(&uri).await.as_deref(),
+            Some("foo = { }\n")
+        );
+        assert_eq!(backend.file_text_for(&stray_uri).await, None);
     }
 }
