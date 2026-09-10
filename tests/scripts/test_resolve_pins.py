@@ -27,6 +27,13 @@ MISSING_RULES_BASELINE = (
 
 FULL_SHA_A = "a" * 40
 FULL_SHA_B = "b" * 40
+VANILLA_BASELINE = (
+    "# cwtools guard baseline\n"
+    "# corpus: mod @ abc1234\n"
+    "# rules: vanilla-fixture/rules @ def5678\n"
+    "# vanilla: vanilla @ 9876543\n"
+    "file,line,severity,code,message\n"
+)
 
 
 def test_parses_a_clean_pin(resolve_pins: ModuleType) -> None:
@@ -42,12 +49,65 @@ def test_parses_the_committed_baseline_header(resolve_pins: ModuleType) -> None:
     assert resolve_pins.parse_pin(text, "rules") is not None
 
 
+def test_parses_all_committed_vanilla_pins(resolve_pins: ModuleType) -> None:
+    text = resolve_pins.VANILLA_BASELINE.read_text(encoding="utf-8")
+    labels = ("corpus", "rules", "vanilla")
+    pins = resolve_pins.validate_pins(text, resolve_pins.VANILLA_BASELINE, labels)
+    assert set(pins) == set(labels)
+    assert all(resolve_pins.parse_pin(text, label) == pins[label] for label in labels)
+
+
+def test_resolves_vanilla_pins_with_the_repository_api(
+    resolve_pins: ModuleType,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def gh_api(repo: str, pin: str) -> str:
+        calls.append((repo, pin))
+        return FULL_SHA_A
+
+    pins = resolve_pins.resolve_vanilla_pins(
+        VANILLA_BASELINE, Path("vanilla-baseline.csv"), "owner/repo", gh_api
+    )
+
+    assert set(pins) == {"corpus", "rules", "vanilla"}
+    assert [repo for repo, _pin in calls] == ["owner/repo"] * 3
+
+
+def test_rejects_an_unresolvable_vanilla_pin(
+    resolve_pins: ModuleType,
+) -> None:
+    with pytest.raises(resolve_pins.PinError, match="full SHA"):
+        resolve_pins.resolve_vanilla_pins(
+            VANILLA_BASELINE,
+            Path("vanilla-baseline.csv"),
+            "owner/repo",
+            lambda _repo, _pin: "not-a-sha",
+        )
+
+
 def test_rejects_a_dirty_pin(resolve_pins: ModuleType) -> None:
     assert resolve_pins.parse_pin(DIRTY_BASELINE, "corpus") is None
 
 
 def test_missing_pin_is_none(resolve_pins: ModuleType) -> None:
     assert resolve_pins.parse_pin(MISSING_RULES_BASELINE, "rules") is None
+
+
+def test_validate_pins_rejects_a_dirty_or_missing_pin(
+    resolve_pins: ModuleType,
+) -> None:
+    dirty = VANILLA_BASELINE.replace("@ def5678", "@ def5678 (dirty)")
+    with pytest.raises(resolve_pins.PinError, match="no clean revision pin"):
+        resolve_pins.validate_pins(
+            dirty, Path("vanilla-baseline.csv"), ("corpus", "rules", "vanilla")
+        )
+
+    missing = VANILLA_BASELINE.replace("# vanilla: vanilla @ 9876543\n", "")
+    with pytest.raises(resolve_pins.PinError, match="no clean revision pin"):
+        resolve_pins.validate_pins(
+            missing, Path("vanilla-baseline.csv"), ("corpus", "rules", "vanilla")
+        )
 
 
 @pytest.mark.parametrize(
@@ -126,6 +186,7 @@ def test_main_writes_outputs_and_succeeds(
         {
             "MD_REPO": "MillenniumDawn/Millennium-Dawn",
             "RULES_REPO": "Kaiserreich/cwtools-hoi4-config",
+            "GITHUB_REPOSITORY": "MillenniumDawn/cwtools-vscode",
             "GITHUB_OUTPUT": str(output_path),
         }
     )
@@ -137,21 +198,29 @@ def test_main_writes_outputs_and_succeeds(
 
 
 def test_main_fails_without_a_clean_pin(
-    resolve_pins: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    resolve_pins: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(resolve_pins, "MD_BASELINE", tmp_path / "md-baseline.csv")
     resolve_pins.MD_BASELINE.write_text(DIRTY_BASELINE, encoding="utf-8")
+    monkeypatch.setattr(
+        resolve_pins, "gh_api_commit_sha", lambda _repo, _pin: FULL_SHA_A
+    )
     output_path = tmp_path / "github_output"
 
     exit_code = resolve_pins.main(
         {
             "MD_REPO": "MillenniumDawn/Millennium-Dawn",
             "RULES_REPO": "Kaiserreich/cwtools-hoi4-config",
+            "GITHUB_REPOSITORY": "MillenniumDawn/cwtools-vscode",
             "GITHUB_OUTPUT": str(output_path),
         }
     )
 
     assert exit_code == 1
+    assert "::error::no clean revision pin" in capsys.readouterr().out
     assert not output_path.exists()
 
 

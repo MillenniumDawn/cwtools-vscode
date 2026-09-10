@@ -1,9 +1,16 @@
 ### Unreleased
 
+#### Tooling
+
+* Guard setup failures now explain the expected input checkouts and overrides.
+  Validation also times out with the retained log tail, and vanilla guard pins are
+  checked for clean revisions. (#515)
 ### 3.4.2
 
 #### Engine
 
+* LSP command progress coverage now waits for the startup scan's progress stream
+  to close before issuing a re-index command. (#690)
 * Reading an open document's text no longer copies the buffer. The LSP requests
   that fire at cursor-movement and scroll cadence — code actions, inlay hints,
   code lenses, document links, highlights, folding and selection ranges,

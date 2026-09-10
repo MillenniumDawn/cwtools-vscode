@@ -1,7 +1,7 @@
-# cwtools guard baseline. Regenerate with scripts/vanilla-guard.sh --bless
-# corpus: mod @ f3051983 (dirty)
-# rules:  vanilla-fixture/rules @ f3051983 (dirty)
-# vanilla: vanilla @ f3051983 (dirty)
+# cwtools guard baseline. Regenerate with python3 scripts/guard.py vanilla --bless
+# corpus: mod @ 833d66ddeb8eedc38694d782273a67c326f7bcdc
+# rules:  vanilla-fixture/rules @ 833d66ddeb8eedc38694d782273a67c326f7bcdc
+# vanilla: vanilla @ 833d66ddeb8eedc38694d782273a67c326f7bcdc
 file,line,severity,code,message
 common/gate_refs/refs.txt,5,Error,CW500,Field 'thing' references 'no_such_thing' which is not a known instance of type 'gate_thing'
 common/gate_refs/refs.txt,6,Warning,CW222,The event id no.such.event is not defined
