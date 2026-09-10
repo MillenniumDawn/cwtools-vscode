@@ -397,14 +397,13 @@ def publish_github_release(
         else release_notes(read_changelog(), version)
     )
     notes_file = VSIX_ROOT / "release-notes.md"
+    # Same contract as --skip-duplicate on the registries: an existing release
+    # is the previous attempt's, so a re-run of the job leaves it alone rather
+    # than deleting and recreating it under the same tag. Shipping different
+    # code means a new version, never a reused tag.
     if run_or_null("gh", ["release", "view", tag]) == 0:
-        is_tag_release = os.environ.get("TAG_RELEASE", "").lower() in {"1", "true"}
-        if not is_tag_release:
-            raise RuntimeError(
-                f"release {tag} already exists; refusing to delete it on a non-tag run"
-            )
-        print(f"release {tag} already exists; deleting before recreate")
-        run("gh", ["release", "delete", tag, "--yes"])
+        print(f"release {tag} already exists; skipping")
+        return
     notes_file.write_text(notes, encoding="utf-8")
     args = [
         "release",

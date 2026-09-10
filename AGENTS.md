@@ -66,7 +66,7 @@ Run as `npm run build -- <command>` or `./build.sh <command>`:
 - `package`: Package a vsix without publishing
 - `package-prebuilt`: Package server binaries already staged by CI, no publish
 - `publish-prebuilt`: Publish the vsixes `package-prebuilt` produced
-- `release`: Push a `v*` tag; the tag-triggered workflow builds, smoke-tests, and publishes
+- `release`: Push a `v*` tag; `publish.yml` picks it up through its tag trigger and builds, smoke-tests, and publishes
 - `release-prebuilt`: `package-prebuilt` followed by `publish-prebuilt`
 
 ### Testing
@@ -147,9 +147,9 @@ Publishing is automatic, and none of it is run from a developer's machine. One w
 
 Its `check` job picks the channel once. A commit whose `extension/package/package.json` version matches the top changelog heading with no tag for it yet is a **release**; everything else is a **pre-release**, versioned on the odd minor above stable with the Actions run number as the patch — with stable at `3.4.0`, pre-releases are `3.5.<run>` (`prerelease_identity_from` in `scripts/build/build.py`). A release commit publishes the release *instead of* a pre-release, so the same code is never built twice.
 
-Whichever channel it picked, the same three jobs publish it in parallel: `Publish: VS Code Marketplace`, `Publish: Open VSX`, and `Publish: GitHub`. They are independent — one registry timing out no longer cancels the others, and re-running a single failed job re-publishes one target. The Git tag is created by the GitHub job, so a tag means published rather than attempted, and a release that failed is retried by the next push to `main`. When a release-channel job fails, `release-failed` opens a draft `fix/release-v<x.y.z>` pull request naming what broke.
+Whichever channel it picked, the same three jobs publish it in parallel: `Publish: VS Code Marketplace`, `Publish: Open VSX`, and `Publish: GitHub`. They are independent — one registry timing out no longer cancels the others, and re-running a single failed job re-publishes one target (an existing GitHub release is skipped, not recreated). Only those three jobs serialize, each on a concurrency group keyed on the channel, so a release run is never the pending run a later pre-release push cancels. The Git tag is created by the GitHub job, so a tag means published rather than attempted, and a release that failed is retried by the next push to `main` — that retry builds the retrying commit, not the release commit. When a release-channel job fails, `release-failed` opens a draft `fix/release-v<x.y.z>` pull request naming what broke; if only a registry failed after the tag exists, dispatch `publish.yml` against the tag.
 
-A **release** is cut by merging the release PR. `.github/workflows/release-pr.yml` regenerates `release/version-bump` on every push to `main`, where `scripts/build/release_pr.py` promotes `### Unreleased` to a version heading and moves `extension/package/package.json` to match — so that branch is force-pushed and edits on it are discarded; fix release notes in `main`'s `### Unreleased`. Releases stay on even minors, so a minor bump goes `3.4.0` → `3.6.0`.
+A **release** is cut by merging the release PR. `.github/workflows/release-pr.yml` regenerates `release/version-bump` on every push to `main`, where `scripts/build/release_pr.py` promotes `### Unreleased` to a version heading and moves `extension/package/package.json` to match — so that branch is force-pushed and edits on it are discarded; fix release notes in `main`'s `### Unreleased`. A run whose `main` moved since checkout yields to the newer run, and the run with nothing to release closes any PR left open on the branch, so the merge of one release cannot leave a duplicate release PR behind. Releases stay on even minors, so a minor bump goes `3.4.0` → `3.6.0`.
 
 `npm run build -- release` remains the manual fallback: it checks the CHANGELOG, refuses a dirty tree or an existing tag, then pushes the tag, which `publish.yml` also triggers on. The engine's own tag-and-archive release process no longer applies now that it has no repo of its own.
 

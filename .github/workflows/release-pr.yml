@@ -3,7 +3,14 @@
 # regenerates release/version-bump from origin/main: the changelog's
 # `### Unreleased` section becomes a version heading and the extension manifest
 # moves to the same version. Merging that PR is what cuts a release --
-# tag-release.yml takes it from there.
+# publish.yml takes it from there.
+#
+# Two runs can still race the merge button: the run for the push before the
+# release merge checks out a main that still has the Unreleased bullets, and by
+# the time it looks for an open PR the release PR has merged, so it opens a
+# second one. Two guards close that: the push step yields when main moved
+# since checkout (the newer run is queued behind this one and takes over), and
+# the "nothing to release" path closes whatever PR is left on the branch.
 "on":
   push:
     branches:
@@ -65,21 +72,35 @@ jobs:
         id: prepare
         run: |
           git checkout -B "$BRANCH" origin/main
+          echo "base=$(git rev-parse origin/main)" >> "$GITHUB_OUTPUT"
           python3 scripts/build/release_pr.py --bump "$BUMP" \
             >> "$GITHUB_OUTPUT"
+      # A release merged after this run checked out main, or any other push,
+      # means a newer run is already queued behind this one with the right
+      # tree. Pushing this one would put a stale "Release x.y.z" on the branch
+      # and, if the release PR just merged, open a second one for it.
       - name: Push the release branch
+        id: push
         if: ${{ steps.prepare.outputs.release == 'true' }}
         env:
           VERSION: ${{ steps.prepare.outputs.version }}
+          BASE: ${{ steps.prepare.outputs.base }}
         run: |
+          git fetch --quiet origin main
+          if [ "$(git rev-parse origin/main)" != "$BASE" ]; then
+            echo "main moved since checkout; the newer run takes over."
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md extension/package/package.json
           git commit -m "Release $VERSION"
           git push --force origin "$BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
       - name: Open or update the release pull request
-        if: ${{ steps.prepare.outputs.release == 'true' }}
+        if: ${{ steps.push.outputs.pushed == 'true' }}
         env:
           VERSION: ${{ steps.prepare.outputs.version }}
           REPO: ${{ github.repository }}
@@ -115,3 +136,25 @@ jobs:
             gh pr create --repo "$REPO" --base main --head "$BRANCH" \
               --title "$title" --body-file "$body_file"
           fi
+      # Nothing to release means no release PR should be open. The one that
+      # can be is the duplicate a racing run opened after the release merged
+      # (see the header), and this run is queued behind that one, so closing
+      # it here is what makes the branch converge.
+      - name: Close a stale release pull request
+        if: ${{ steps.prepare.outputs.release != 'true' }}
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          number=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "No open release pull request; nothing to close."
+            exit 0
+          fi
+          echo "Closing stale release pull request #$number."
+          comment="Nothing left to release on \`main\`: the release this pull"
+          comment="$comment request carried has already merged."
+          comment="$comment Closed by \`release-pr.yml\`."
+          gh pr close "$number" --repo "$REPO" --delete-branch \
+            --comment "$comment"
