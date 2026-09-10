@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.2
+
 #### Engine
 
 * LSP command progress coverage now waits for the startup scan's progress stream
