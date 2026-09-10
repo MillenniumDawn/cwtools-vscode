@@ -1,5 +1,23 @@
 ### Unreleased
 
+#### Tooling
+
+* The release pipeline no longer races itself. Merging a release PR could leave
+  a duplicate "Release x.y.z" PR open: the `Release PR` run for the push
+  *before* the merge checked out a `main` that still had the Unreleased
+  bullets and, by the time it looked for an open PR, the release had merged,
+  so it opened a second one (#721 was that duplicate). The push step now
+  yields when `main` moved since checkout, and the run with nothing to release
+  closes any PR left on the branch. Separately, `Publish` serialized every run
+  on one workflow-level group, and GitHub cancels the older pending run in a
+  group, so a release queued behind a pre-release build was cancelled by the
+  next push to `main` with no fix PR to show for it; only the three publish
+  jobs serialize now, each on a group keyed on the channel. `Publish: GitHub`
+  skips a release that already exists instead of deleting and recreating it on
+  a re-run, and the hand-dispatched `publish-marketplace.yml` is gone — it
+  published without `--pre-release`, so a pre-release tag would have gone out
+  on the stable channel; dispatch `publish.yml` against the tag instead.
+
 ### 3.4.3
 
 #### Tooling

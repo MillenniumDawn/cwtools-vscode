@@ -33,8 +33,13 @@ CHANGELOG = """### Unreleased
 """
 
 
-def test_refuses_existing_release_when_non_tag_run_resolves_to_changelog_tag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+# A re-run of `Publish: GitHub` after a partial failure finds the release its
+# first attempt created. It is skipped, never deleted and recreated: the same
+# --skip-duplicate contract the registries have, whichever way the run was
+# triggered.
+@pytest.mark.parametrize("tag_release", [None, "true"])
+def test_an_existing_release_is_skipped_never_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tag_release: str | None
 ) -> None:
     vsix_root = tmp_path / "vsix"
     vsix_root.mkdir()
@@ -52,7 +57,10 @@ def test_refuses_existing_release_when_non_tag_run_resolves_to_changelog_tag(
     def record_marketplace(vsixes: list[str], _pre_release: bool = False) -> None:
         marketplace_calls.append(vsixes)
 
-    monkeypatch.delenv("TAG_RELEASE", raising=False)
+    if tag_release is None:
+        monkeypatch.delenv("TAG_RELEASE", raising=False)
+    else:
+        monkeypatch.setenv("TAG_RELEASE", tag_release)
     monkeypatch.delenv("CWTOOLS_BUILD_VERSION", raising=False)
     monkeypatch.delenv("CWTOOLS_RELEASE_TAG", raising=False)
     monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
@@ -64,60 +72,12 @@ def test_refuses_existing_release_when_non_tag_run_resolves_to_changelog_tag(
     monkeypatch.setattr(build, "run_or_null", run_or_null)
     monkeypatch.setattr(build, "run", run)
 
-    with pytest.raises(RuntimeError) as error:
-        cmd_publish_prebuilt()
+    cmd_publish_prebuilt()
 
-    assert str(error.value) == (
-        "release v2.5.0 already exists; refusing to delete it on a non-tag run"
-    )
     assert commands == [["gh", "release", "view", "v2.5.0"]]
-    assert not marketplace_calls
     assert not (vsix_root / "release-notes.md").exists()
-
-
-def test_deletes_existing_release_on_a_tag_push(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    vsix_root = tmp_path / "vsix"
-    vsix_root.mkdir()
-    vsix = str(vsix_root / "cwtools.vsix")
-    commands: list[Command] = []
-
-    def run_or_null(cmd: str, args: list[str], **_kwargs: object) -> int:
-        commands.append([cmd, *args])
-        return 0
-
-    def run(cmd: str, args: list[str], **_kwargs: object) -> None:
-        commands.append([cmd, *args])
-
-    monkeypatch.setenv("TAG_RELEASE", "true")
-    # Set in Actions, so it has to be pinned here or the argv below drifts.
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
-    monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
-    monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
-    monkeypatch.setattr(build, "release_notes", lambda _changelog, _version: "notes")
-    monkeypatch.setattr(build, "run_or_null", run_or_null)
-    monkeypatch.setattr(build, "run", run)
-
-    publish_github_release("v3.1.0", "3.1.0", False, [vsix])
-
-    notes_file = str(vsix_root / "release-notes.md")
-    assert commands == [
-        ["gh", "release", "view", "v3.1.0"],
-        ["gh", "release", "delete", "v3.1.0", "--yes"],
-        [
-            "gh",
-            "release",
-            "create",
-            "v3.1.0",
-            vsix,
-            "--title",
-            "v3.1.0",
-            "--notes-file",
-            notes_file,
-        ],
-    ]
-    assert (vsix_root / "release-notes.md").read_text(encoding="utf-8") == "notes"
+    # The GitHub half being done is no reason to skip the Marketplace half.
+    assert marketplace_calls == [[vsix]]
 
 
 def test_creates_release_when_non_tag_run_does_not_find_existing_release(

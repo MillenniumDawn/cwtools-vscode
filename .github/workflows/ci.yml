@@ -1,8 +1,8 @@
 # One PR-path gate for the merged repo. The TypeScript client, Rust engine,
 # cargo-deny, and diagnostics guards used to be four workflows; they share
 # this file so the Checks tab is one group instead of a leftover-from-the-
-# merger pile. CodeQL, publish, marketplace publish, rules-pins, and the
-# build bench stay on their own triggers.
+# merger pile. CodeQL, publish, release-pr, rules-pins, and the build bench
+# stay on their own triggers.
 on:
   push:
     branches:
@@ -244,8 +244,8 @@ jobs:
         run: python3 scripts/workspace_manifest.py
 
   # Releases ship Linux, Windows, and macOS binaries, so a platform-only
-  # break must fail here before it ships. The tag-triggered release workflow
-  # separately builds the server binaries the vsix bundles.
+  # break must fail here before it ships. publish.yml separately builds the
+  # server binaries the vsix bundles.
   test-rs:
     if: github.event_name != 'schedule'
     name: Rust build & test (${{ matrix.os }})

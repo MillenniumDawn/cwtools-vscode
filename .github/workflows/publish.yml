@@ -4,6 +4,15 @@
 # release, everything else is a pre-release -- and the three publish jobs below
 # serve whichever channel it picked. They fan out in parallel from `package`, so
 # one registry timing out no longer cancels the others.
+#
+# Serialization is per channel and per publish job, not per workflow. A
+# workflow-level group keeps one running and one pending run and cancels the
+# older pending one, so with pushes landing minutes apart a release run queued
+# behind a pre-release build was cancelled by the next push -- silently, since
+# `release-failed` ignores cancels on purpose. Now the build jobs of any two
+# runs may overlap (they only produce artifacts), pre-release publishes still
+# supersede one another, and a release publish shares a queue with nothing but
+# another release.
 "on":
   push:
     branches:
@@ -17,12 +26,6 @@ name: Publish
 
 permissions:
   contents: read
-
-# Never cancel a publish; queue instead. A half-finished release is much more
-# expensive than a superseded pre-release build.
-concurrency:
-  group: publish
-  cancel-in-progress: false
 
 jobs:
   check:
@@ -258,6 +261,13 @@ jobs:
     if: ${{ needs.verify.outputs.has_vsce == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Never cancel a publish in flight; queue behind it. Keyed on the channel
+    # so a release is never the pending run a later pre-release evicts.
+    concurrency:
+      group: >-
+        publish-marketplace-${{
+        needs.check.outputs.release == 'true' && 'release' || 'pre-release' }}
+      cancel-in-progress: false
     env:
       VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
       CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}
@@ -288,6 +298,11 @@ jobs:
     if: ${{ needs.verify.outputs.has_open_vsx == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    concurrency:
+      group: >-
+        publish-open-vsx-${{
+        needs.check.outputs.release == 'true' && 'release' || 'pre-release' }}
+      cancel-in-progress: false
     # No checkout and no node: the action brings its own ovsx.
     permissions: {}
     steps:
@@ -326,6 +341,11 @@ jobs:
     needs: [check, package]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    concurrency:
+      group: >-
+        publish-github-${{
+        needs.check.outputs.release == 'true' && 'release' || 'pre-release' }}
+      cancel-in-progress: false
     # The only job that writes: creating the release is what creates the tag.
     permissions:
       contents: write
@@ -344,11 +364,11 @@ jobs:
           path: artifacts/vsix
       # Notes come from the changelog for a release and from a generated blurb
       # for a pre-release; --prerelease and --target are derived the same way,
-      # so one command covers both channels.
+      # so one command covers both channels. A release that already exists is
+      # left alone, which is what makes re-running this job safe.
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_RELEASE: ${{ needs.check.outputs.release }}
           CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}
           CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}
         run: python3 scripts/build/build.py publish-github
@@ -443,8 +463,10 @@ jobs:
             if [ "$TAGGED" = "true" ]; then
               echo "\`$TAG\` **was** tagged and released on GitHub, so"
               echo "\`check\` will not retry this release. Re-run the failed"
-              echo "job from the run above, or dispatch"
-              echo "\`publish-marketplace.yml\` against \`$TAG\`."
+              echo "job from the run above, or dispatch \`publish.yml\`"
+              echo "against \`$TAG\` (\`gh workflow run publish.yml --ref"
+              echo "$TAG\`): every target publishes with skip-duplicate, so"
+              echo "the ones that already went out are left alone."
             else
               echo "No \`$TAG\` tag exists, so nothing published anywhere."
               echo "Merging this pull request re-runs \`Publish\` on \`main\`,"
