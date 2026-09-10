@@ -119,14 +119,15 @@ suite('LSP Hover Tests', function () {
 			const uri = vscode.Uri.file(testEventFile);
 			const document = await vscode.workspace.openTextDocument(uri);
 			await vscode.window.showTextDocument(document);
-			await waitForLanguageServer(document.uri);
+			assert.ok(await waitForLanguageServer(document.uri), 'Language server should be ready');
 			const start = Date.now();
-			await vscode.commands.executeCommand<vscode.Hover[]>(
-				'vscode.executeHoverProvider',
+			const result = await checkHoverContains(
 				document.uri,
-				new vscode.Position(8, 7)
+				new vscode.Position(37, 45),
+				['`is_country_type`', '**Scope**: country']
 			);
 			const duration = Date.now() - start;
+			expect(result.missing, `actual hover:\n${result.actual}`).to.deep.equal([]);
 			assert.ok(duration < 500, `Hover request should complete within 500 ms, took ${duration}ms`);
 			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
 		});

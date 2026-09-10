@@ -19,6 +19,15 @@
   focus-tree or events file paid a document-sized allocation per request. They
   now share the open buffer. (#473)
 
+#### Tooling
+
+* Regression tests cover failed fix writes without losing source bytes or
+  counting failed edits, plus incompatible and malformed error-cache sidecars.
+  (#520, #693)
+* Host tests require the activation API, CWTools command IDs, expected graph
+  nodes and edges after creation and restoration, and nonempty, correct hover
+  content within the latency limit. (#693, #717)
+
 ### 3.4.1
 
 #### Tooling
