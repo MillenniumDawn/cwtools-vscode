@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.3
+
 #### Tooling
 
 * Guard setup failures now explain the expected input checkouts and overrides.
