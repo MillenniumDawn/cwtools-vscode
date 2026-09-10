@@ -794,6 +794,63 @@ mod tests {
     }
 
     #[test]
+    fn wrong_sidecar_version_invalidates_an_otherwise_valid_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let table = StringTable::new();
+        let fp = 7;
+        validate_or_clear(tmp.path(), fp).unwrap();
+        let text = "x = 1\n";
+        let parsed = parse_string(text, &table);
+        store(tmp.path(), fp, text, &parsed, &table);
+        assert!(load(tmp.path(), fp, text, &table).is_some());
+
+        let dir = workspace_cache_dir(tmp.path(), fp);
+        let path = error_cache_path(&dir, content_hash(text));
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[4] = bytes[4].wrapping_add(1);
+        fs::write(&path, bytes).unwrap();
+
+        assert!(matches!(
+            read_errors_from_file(&path),
+            Err(crate::io::CacheError::Deserialize {
+                msg: "incompatible or missing error-cache header",
+                source: None,
+            })
+        ));
+        assert!(load(tmp.path(), fp, text, &table).is_none());
+        assert!(load_for_index(tmp.path(), fp, text, &table).is_some());
+    }
+
+    #[test]
+    fn malformed_sidecar_body_with_a_valid_header_invalidates_the_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let table = StringTable::new();
+        let fp = 7;
+        validate_or_clear(tmp.path(), fp).unwrap();
+        let text = "x = 1\n";
+        let parsed = parse_string(text, &table);
+        store(tmp.path(), fp, text, &parsed, &table);
+        assert!(load(tmp.path(), fp, text, &table).is_some());
+
+        let dir = workspace_cache_dir(tmp.path(), fp);
+        let path = error_cache_path(&dir, content_hash(text));
+        let mut bytes = fs::read(&path).unwrap();
+        bytes.truncate(5);
+        bytes.push(255);
+        fs::write(&path, bytes).unwrap();
+
+        assert!(matches!(
+            read_errors_from_file(&path),
+            Err(crate::io::CacheError::Deserialize {
+                msg: "error-cache rkyv access failed",
+                source: Some(_),
+            })
+        ));
+        assert!(load(tmp.path(), fp, text, &table).is_none());
+        assert!(load_for_index(tmp.path(), fp, text, &table).is_some());
+    }
+
+    #[test]
     fn index_load_skips_parse_error_sidecar() {
         let tmp = tempfile::tempdir().unwrap();
         let table = StringTable::new();

@@ -2222,6 +2222,45 @@ fn test_fix_apply_read_failure_exits_two() {
 }
 
 #[test]
+fn test_fix_apply_write_failure_preserves_file_and_counts_only_successes() {
+    let tmp = fix_mod();
+    let rules_dir = fixtures_dir().join("rules");
+    let common = tmp.path().join("common");
+    // The target fits a filename component; its appended temporary suffix does not.
+    let filename = format!("{}.txt", "a".repeat(251));
+    let file = common.join(&filename);
+    let original = b"x = { if = { } }\n";
+    std::fs::write(&file, original).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+
+    cwtools()
+        .args([
+            "fix",
+            "--game",
+            "stellaris",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Error writing"))
+        .stderr(predicate::str::contains(&filename))
+        .stdout(predicate::str::contains(
+            "Applied 1 fix(es) across 1 file(s)",
+        ));
+
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    assert_eq!(
+        std::fs::read_to_string(common.join("hint.txt")).unwrap(),
+        "x = { }\n"
+    );
+    assert_eq!(std::fs::read_dir(common).unwrap().count(), 2);
+}
+
+#[test]
 fn test_fix_code_filter_excludes_unmatched() {
     let tmp = fix_mod();
     let rules_dir = fixtures_dir().join("rules");

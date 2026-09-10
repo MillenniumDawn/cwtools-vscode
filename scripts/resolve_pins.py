@@ -20,6 +20,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 MD_BASELINE = SCRIPT_DIR / "md-baseline.csv"
+VANILLA_BASELINE = SCRIPT_DIR / "vanilla-baseline.csv"
 
 # Anchored on end-of-line so a `(dirty)` suffix does not match. A baseline
 # blessed against a modified checkout pins nothing CI can reproduce, and
@@ -58,6 +59,19 @@ def check_sha(label: str, sha: str) -> None:
         raise PinError(f"could not resolve the {label} pin to a full SHA (got '{sha}')")
 
 
+def validate_pins(
+    baseline_text: str, baseline_path: Path, labels: tuple[str, ...]
+) -> dict[str, str]:
+    pins = {label: parse_pin(baseline_text, label) for label in labels}
+    if any(pin is None for pin in pins.values()):
+        raise PinError(
+            f"no clean revision pin in {baseline_path} (a '(dirty)' pin is "
+            "not reproducible; re-bless from a clean checkout)",
+            detail=header_lines(baseline_text),
+        )
+    return {label: pin for label, pin in pins.items() if pin is not None}
+
+
 def resolve_pins(
     baseline_text: str,
     baseline_path: Path,
@@ -70,14 +84,9 @@ def resolve_pins(
     Returns (md_sha, rules_sha, log_lines). Raises PinError on a missing,
     dirty, or unresolvable pin.
     """
-    corpus_pin = parse_pin(baseline_text, "corpus")
-    rules_pin = parse_pin(baseline_text, "rules")
-    if not corpus_pin or not rules_pin:
-        raise PinError(
-            f"no clean revision pin in {baseline_path} (a '(dirty)' pin is "
-            "not reproducible; re-bless from a clean checkout)",
-            detail=header_lines(baseline_text),
-        )
+    pins = validate_pins(baseline_text, baseline_path, ("corpus", "rules"))
+    corpus_pin = pins["corpus"]
+    rules_pin = pins["rules"]
 
     lines = [f"md baseline pins: corpus {corpus_pin}, rules {rules_pin}"]
 
@@ -88,6 +97,19 @@ def resolve_pins(
 
     lines.append(f"resolved: md {md_sha}, rules {rules_sha}")
     return md_sha, rules_sha, lines
+
+
+def resolve_vanilla_pins(
+    baseline_text: str,
+    baseline_path: Path,
+    repo: str,
+    gh_api: GhApi,
+) -> dict[str, str]:
+    pins = validate_pins(baseline_text, baseline_path, ("corpus", "rules", "vanilla"))
+    for label, pin in pins.items():
+        resolved = gh_api(repo, pin)
+        check_sha(f"vanilla {label}", resolved)
+    return pins
 
 
 def gh_api_commit_sha(repo: str, pin: str) -> str:
@@ -109,17 +131,25 @@ def main(env: Mapping[str, str] | None = None) -> int:
     environ = os.environ if env is None else env
     md_repo = environ.get("MD_REPO")
     rules_repo = environ.get("RULES_REPO")
+    github_repo = environ.get("GITHUB_REPOSITORY")
     github_output = environ.get("GITHUB_OUTPUT")
-    if not md_repo or not rules_repo:
-        print("resolve_pins: MD_REPO and RULES_REPO must be set", file=sys.stderr)
+    if not md_repo or not rules_repo or not github_repo:
+        print(
+            "resolve_pins: MD_REPO, RULES_REPO and GITHUB_REPOSITORY must be set",
+            file=sys.stderr,
+        )
         return 1
     if not github_output:
         print("resolve_pins: GITHUB_OUTPUT must be set", file=sys.stderr)
         return 1
 
     baseline_text = MD_BASELINE.read_text(encoding="utf-8")
+    vanilla_text = VANILLA_BASELINE.read_text(encoding="utf-8")
 
     try:
+        vanilla_pins = resolve_vanilla_pins(
+            vanilla_text, VANILLA_BASELINE, github_repo, gh_api_commit_sha
+        )
         md_sha, rules_sha, lines = resolve_pins(
             baseline_text, MD_BASELINE, md_repo, rules_repo, gh_api_commit_sha
         )
@@ -134,6 +164,10 @@ def main(env: Mapping[str, str] | None = None) -> int:
 
     for line in lines:
         print(line)
+    print(
+        "vanilla baseline pins: "
+        + ", ".join(f"{label} {pin}" for label, pin in vanilla_pins.items())
+    )
 
     with Path(github_output).open("a", encoding="utf-8") as output:
         output.write(f"md_rev={md_sha}\n")

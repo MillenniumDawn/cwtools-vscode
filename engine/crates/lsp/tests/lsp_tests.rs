@@ -14561,31 +14561,24 @@ fn test_execute_command_reports_progress_against_the_client_token() {
         let mut foreign_during_command: Vec<String> = Vec::new();
         let mut created_for_command = false;
         let mut result: Option<serde_json::Value> = None;
-        // `ScanGuard::finish` sends the bar-off *before* it releases the scan
-        // flag, deliberately, so the next scan's `begin` can't be overtaken by
-        // this one's `end`. A command fired the instant that notification
-        // arrives therefore races the release and can lose the CAS — rarely
-        // when the suite runs alone, reliably under a loaded `cargo test`. So
-        // retry until one actually re-indexes, each attempt on its own id and
-        // token so the frames stay attributable.
-        let mut attempt = 0i64;
+        let mut startup_bar_closed = false;
+        let mut startup_progress_ended = false;
         let mut token = String::new();
-        let send_attempt = |stdin: &mut std::process::ChildStdin, attempt: i64| -> String {
-            let token = format!("cwtools/command/1/{attempt}");
+        let command_token = "cwtools/command/1";
+        let send_command = |stdin: &mut std::process::ChildStdin| {
             write_frame_to(
                 stdin,
                 &jsonrpc_request(
-                    100 + attempt,
+                    100,
                     "workspace/executeCommand",
                     serde_json::json!({
                         "command": "reindexWorkspace",
                         "arguments": [],
-                        "workDoneToken": token,
+                        "workDoneToken": command_token,
                     }),
                 ),
             )
             .unwrap();
-            token
         };
         for _ in 0..20_000 {
             let Ok(raw) = read_frame(reader) else { break };
@@ -14593,19 +14586,7 @@ fn test_execute_command_reports_progress_against_the_client_token() {
                 break; // EOF
             }
             let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-            if v["id"] == serde_json::json!(100 + attempt) && v.get("result").is_some() {
-                if v["result"] == serde_json::json!("Re-index already in progress.") {
-                    // Lost the CAS to the tail of the startup scan. Drop what
-                    // that attempt reported and try again.
-                    attempt += 1;
-                    kinds.clear();
-                    percentages.clear();
-                    foreign_during_command.clear();
-                    created_for_command = false;
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    token = send_attempt(stdin, attempt);
-                    continue;
-                }
+            if v["id"] == serde_json::json!(100) && v.get("result").is_some() {
                 // Recorded rather than returned: `end` is sent before the
                 // handler returns, but tower-lsp merges notifications and
                 // responses onto one output with no ordering between them, so
@@ -14618,6 +14599,7 @@ fn test_execute_command_reports_progress_against_the_client_token() {
             }
             match v["method"].as_str() {
                 Some("window/workDoneProgress/create") => {
+                    assert_eq!(v["params"]["token"], "cwtools/scan");
                     if !token.is_empty() {
                         created_for_command = true;
                     }
@@ -14630,33 +14612,32 @@ fn test_execute_command_reports_progress_against_the_client_token() {
                 }
                 Some("$/progress") => {
                     let seen = v["params"]["token"].as_str().unwrap_or_default();
+                    let kind = v["params"]["value"]["kind"].as_str().unwrap();
+                    if seen == "cwtools/scan" && kind == "end" {
+                        startup_progress_ended = true;
+                    }
                     if seen != token {
-                        // Only from the command's own `begin` onward. The
-                        // startup scan closes its `cwtools/scan` stream just
-                        // *after* the `loadingBar(false)` that tells us it
-                        // finished, and that trailing `end` is its own, not a
-                        // second stream opened alongside the command.
-                        if !kinds.is_empty() {
+                        if !token.is_empty() {
                             foreign_during_command.push(seen.to_string());
                         }
-                        continue;
-                    }
-                    kinds.push(v["params"]["value"]["kind"].as_str().unwrap().to_string());
-                    if let Some(pct) = v["params"]["value"]["percentage"].as_u64() {
-                        percentages.push(pct);
-                    }
-                    if result.is_some() && kinds.last().map(String::as_str) == Some("end") {
-                        break;
+                    } else {
+                        kinds.push(kind.to_string());
+                        if let Some(pct) = v["params"]["value"]["percentage"].as_u64() {
+                            percentages.push(pct);
+                        }
+                        if result.is_some() && kinds.last().map(String::as_str) == Some("end") {
+                            break;
+                        }
                     }
                 }
-                // The startup scan is done; run the command it was blocking.
-                Some("loadingBar")
-                    if token.is_empty()
-                        && v["params"]["enable"] == serde_json::Value::Bool(false) =>
-                {
-                    token = send_attempt(stdin, attempt);
+                Some("loadingBar") if v["params"]["enable"] == serde_json::Value::Bool(false) => {
+                    startup_bar_closed = true;
                 }
                 _ => {}
+            }
+            if token.is_empty() && startup_bar_closed && startup_progress_ended {
+                send_command(stdin);
+                token = command_token.to_string();
             }
         }
         (

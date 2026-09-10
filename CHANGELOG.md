@@ -20,10 +20,15 @@
   publishes a pre-release, the Git tag is created by the GitHub publish job (so
   a failed release is retried by the next push to `main`), and a failed release
   opens a draft `fix/release-v<x.y.z>` pull request naming the jobs that broke.
+* Guard setup failures now explain the expected input checkouts and overrides.
+  Validation also times out with the retained log tail, and vanilla guard pins are
+  checked for clean revisions. (#515)
 ### 3.4.2
 
 #### Engine
 
+* LSP command progress coverage now waits for the startup scan's progress stream
+  to close before issuing a re-index command. (#690)
 * Reading an open document's text no longer copies the buffer. The LSP requests
   that fire at cursor-movement and scroll cadence — code actions, inlay hints,
   code lenses, document links, highlights, folding and selection ranges,
@@ -31,6 +36,15 @@
   they ran, and the semantic-token full and delta requests took two, so a large
   focus-tree or events file paid a document-sized allocation per request. They
   now share the open buffer. (#473)
+
+#### Tooling
+
+* Regression tests cover failed fix writes without losing source bytes or
+  counting failed edits, plus incompatible and malformed error-cache sidecars.
+  (#520, #693)
+* Host tests require the activation API, CWTools command IDs, expected graph
+  nodes and edges after creation and restoration, and nonempty, correct hover
+  content within the latency limit. (#693, #717)
 
 ### 3.4.1
 
@@ -48,10 +62,12 @@
 * The release PR is now opened by a GitHub App rather than a personal access
   token, so no individual is its author and its checks still run on the merge
   commit. (#710)
+
 #### Extension
 
 * Graph webviews now block remote images and form submissions without breaking
   graph rendering. (#602)
+
 #### Engine
 
 * The LSP's string table no longer grows with every keystroke. Mid-edit parses —
@@ -70,6 +86,7 @@
   unreadable files. (#496)
 * Show graph now discards superseded requests, so an older response cannot
   replace the graph selected by the user. (#588)
+
 #### Engine
 
 * Type dispatch now honors `starts_with` and `type_key_prefix` for validation

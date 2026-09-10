@@ -13,6 +13,7 @@ import { it, describe } from "mocha";
 import type * as GraphPanelNamespace from "../../src/host/graphPanel";
 type GraphPanelModule = typeof GraphPanelNamespace;
 import type { GraphData } from "../../src/common/graphTypes";
+import type { ElementsDefinition } from "cytoscape";
 import sinon from "sinon";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -37,21 +38,17 @@ suite(`Debug Integration Test: `, function () {
 	test("should activate and expose the host-test API", async function () {
 		this.timeout(1 * 60 * 1000);
 		const extension = await activate();
-		// The exports may be absent when the language server can't start in the
-		// test environment, but when present the activation API must expose the
-		// running modules and channels that host tests cannot import directly.
-		if (extension) {
-			assert.strictEqual(
-				typeof extension.graphPanel,
-				"function",
-				"activation API should expose graphPanel()",
-			);
-			assert.strictEqual(
-				typeof extension.serverOutputChannel,
-				"function",
-				"activation API should expose serverOutputChannel()",
-			);
-		}
+		assert.ok(extension, "activation API should be exposed");
+		assert.strictEqual(
+			typeof extension.graphPanel,
+			"function",
+			"activation API should expose graphPanel()",
+		);
+		assert.strictEqual(
+			typeof extension.serverOutputChannel,
+			"function",
+			"activation API should expose serverOutputChannel()",
+		);
 	});
 
 	test("Extension activation status", async function () {
@@ -69,44 +66,28 @@ suite(`Debug Integration Test: `, function () {
 		);
 	});
 
-	test("Commands are registered", async function () {
+	test("registers the CWTools commands", async function () {
 		this.timeout(1 * 60 * 1000);
-		// Ensure extension is activated first
 		await activate();
-
-		// Test that CWTools commands are registered
 		const commands = await vscode.commands.getCommands();
-		const cwtoolsCommands = commands.filter(
-			(cmd) =>
-				cmd.includes("cwtools") ||
-				cmd === "genlocall" ||
-				cmd === "cwtools.showGraph",
-		);
-
-		console.log(
-			"All available commands:",
-			commands.slice(0, 20).join(", ") + "...",
-		);
-		console.log("CWTools related commands found:", cwtoolsCommands);
-
-		// In test environment, commands may not be fully registered due to server issues
-		// But we should have at least some extension infrastructure
-		assert.ok(
-			commands.length > 50,
-			"Should have many VS Code commands available",
-		);
-
-		// Test for basic VS Code commands that should always be there
-		const basicCommands = [
-			"workbench.action.files.openFile",
-			"workbench.action.showCommands",
+		const required = [
+			"cwtools.showReferences",
+			"cwtools.showOutput",
+			"cwtools.restartServer",
+			"cwtools.showGraph",
+			"cwtools.setGraphDepth",
+			"cwtools.graphFromJson",
+			"cwtools.exportProfilingLog",
+			"cwtools.fixAllWorkspace",
+			"cwtools.formatWorkspace",
+			"cwtools.statusBarMenu",
+			"genlocall",
 		];
-		for (const basicCmd of basicCommands) {
-			assert.ok(
-				commands.includes(basicCmd),
-				`Basic command '${basicCmd}' should be registered`,
-			);
-		}
+		assert.deepStrictEqual(
+			required.filter((command) => !commands.includes(command)),
+			[],
+			"CWTools commands should be registered",
+		);
 	});
 
 	describe("fixAllWorkspace gating", function () {
@@ -317,7 +298,7 @@ describe("GraphPanel Tests", function () {
 			isPrimary: true,
 			entityType: "test",
 			location: { filename: root + "/events/irm.txt", line: 1, column: 0 },
-			references: [],
+			references: [{ key: "test2", isOutgoing: true }],
 		},
 		{
 			id: "test2",
@@ -338,6 +319,37 @@ describe("GraphPanel Tests", function () {
 	let tempDir: string;
 	let tempFile: string;
 	let sandbox: sinon.SinonSandbox;
+
+	async function assertRenderedGraph(panel: GraphPanelNamespace.GraphPanel) {
+		assert.ok(
+			await waitUntil(() => panel.checkCytoscapeRendered()),
+			"Cytoscape should render the supplied graph",
+		);
+		let exported: string | undefined;
+		const listener = panel["_panel"].webview.onDidReceiveMessage(
+			(message: { command: string; json: string }) => {
+				if (message.command === "saveJson") exported = message.json;
+			},
+		);
+		sandbox.stub(vscode.window, "showSaveDialog").resolves(undefined);
+		try {
+			await vscode.commands.executeCommand("cwtools.saveGraphJson");
+			assert.ok(await waitUntil(() => exported !== undefined), "graph export should arrive");
+			assert.ok(exported);
+			const graph = JSON.parse(exported) as { elements: ElementsDefinition };
+			assert.ok(graph.elements.edges, "exported graph should contain the expected edge");
+			assert.deepStrictEqual(
+				graph.elements.nodes.map((node) => node.data.id).sort(),
+				["test1", "test2"],
+			);
+			assert.deepStrictEqual(
+				graph.elements.edges.map((edge) => [edge.data.source, edge.data.target]),
+				[["test1", "test2"]],
+			);
+		} finally {
+			listener.dispose();
+		}
+	}
 
 	setup(async () => {
 		sandbox = sinon.createSandbox();
@@ -403,6 +415,7 @@ describe("GraphPanel Tests", function () {
 		};
 		const result = await waitUntil(testStatus);
 		assert.strictEqual(result, true, "GraphPanel should be in the Done state");
+		await assertRenderedGraph(gp.GraphPanel.currentPanel!);
 	});
 
 	it("should dispose GraphPanel properly", function () {
@@ -447,6 +460,7 @@ describe("GraphPanel Tests", function () {
 		};
 		const result = await waitUntil(testStatus);
 		assert.strictEqual(result, true, "restored GraphPanel should reach Done");
+		await assertRenderedGraph(revived);
 	});
 });
 
