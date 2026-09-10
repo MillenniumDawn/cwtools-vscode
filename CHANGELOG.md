@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.4
+
 #### Tooling
 
 * The release pipeline no longer races itself. Merging a release PR could leave
