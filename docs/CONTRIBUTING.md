@@ -33,23 +33,32 @@ The Rust server builds from the in-repo `engine` workspace. To build from anothe
 CWTOOLS_RUST_WORKSPACE=../some-other-cwtools/engine ./build.sh quick
 ```
 
-Other commands: `package` packages a vsix without publishing, `package-prebuilt` packages the binaries already staged by CI (one vsix per platform plus a universal fallback), `publish-prebuilt` publishes what `package-prebuilt` produced, `publish-marketplace` is its Marketplace-only half (what the pre-release workflow uses, since a pre-release has no CHANGELOG section to draw GitHub release notes from), and `release-prebuilt` does package plus publish.
+Other commands: `package` packages a vsix without publishing, `package-prebuilt` packages the binaries already staged by CI (one vsix per platform plus a universal fallback), `publish-prebuilt` publishes what `package-prebuilt` produced, `publish-marketplace` and `publish-github` are its two halves (CI runs each as its own job so one registry cannot cancel the other; the Marketplace half uploads one vsix per `vsce publish` call with `--skip-duplicate` and retries, because a batched upload of every platform times out on the gallery often enough to matter), and `release-prebuilt` does package plus publish.
 
 ### The two channels
 
-Publishing is automatic on both channels; neither needs anything run from your machine.
+Publishing is automatic on both channels; neither needs anything run from your machine. It is one workflow, `.github/workflows/publish.yml`, with one run per push to `main` (and on a `v*` tag). Its `check` job decides the channel once, `verify` fails the run before the 45-minute matrix if a release is missing a publish token, and then three jobs publish whatever `check` picked, in parallel: `Publish: VS Code Marketplace`, `Publish: Open VSX`, `Publish: GitHub`.
 
-**Pre-release**, on every push to `main`. `.github/workflows/pre-release.yml` builds every platform, smoke-tests the VSIX files, and publishes them to the VS Code Marketplace and Open VSX on the pre-release channel, plus a GitHub prerelease. Versions follow VS Code's convention: stable takes the even minors, pre-release the odd minor directly above. With stable at `3.4.0`, pre-releases are `3.5.<run number>` — the extension version stays numeric because VS Code rejects SemVer prerelease suffixes, and only the Git tag carries the `-pre.<attempt>` suffix so reruns stay unique. `prerelease_identity_from` in [`scripts/build/build.py`](../scripts/build/build.py) is where that lives; it refuses to run when the stable minor is odd.
+That fan-out is the point. They used to be sequential steps in one job, so a Marketplace timeout aborted the job before Open VSX was reached and the extension never appeared there at all. Now one registry failing leaves the others alone, every target publishes the same smoke-tested bytes from a single `package` job, and re-running one red job re-publishes one target (`--skip-duplicate` on both registries makes that safe).
+
+**Pre-release**, on every push to `main` that is not a release commit. Versions follow VS Code's convention: stable takes the even minors, pre-release the odd minor directly above. With stable at `3.4.0`, pre-releases are `3.5.<run number>` — the extension version stays numeric because VS Code rejects SemVer prerelease suffixes, and only the Git tag carries the `-pre.<attempt>` suffix so reruns stay unique. `prerelease_identity_from` in [`scripts/build/build.py`](../scripts/build/build.py) is where that lives; it refuses to run when the stable minor is odd.
 
 **Release**, by merging the release PR. `.github/workflows/release-pr.yml` keeps a `release/version-bump` branch and PR up to date on every push to `main`: [`scripts/build/release_pr.py`](../scripts/build/release_pr.py) promotes the changelog's `### Unreleased` section to a version heading and moves `extension/package/package.json` to match. The bump defaults to `patch`; dispatch the workflow with `release_type: minor|major` for anything else. A minor bump skips the odd line (`3.4.0` → `3.6.0`) so releases stay on even minors.
 
 That branch is regenerated from `origin/main` and force-pushed on every push, so edits made on it are discarded — correct the release notes in `main`'s `### Unreleased` section instead.
 
-The PR is opened by `cwtools-release-bot`, an org-owned GitHub App, so no individual is its author and it still gets real checks on the merge commit — an App installation token triggers workflows where `GITHUB_TOKEN` does not (the same quirk as the tag push below). It needs `Contents` and `Pull requests` write on this repo, plus the `RELEASE_PR_APP_ID` and `RELEASE_PR_APP_PRIVATE_KEY` secrets; without them the job fails at the token step rather than falling back to anything.
+The PR is opened by `cwtools-release-bot`, an org-owned GitHub App, so no individual is its author and it still gets real checks on the merge commit — an App installation token triggers workflows where `GITHUB_TOKEN` does not. It needs `Contents` and `Pull requests` write on this repo, plus the `RELEASE_PR_APP_ID` and `RELEASE_PR_APP_PRIVATE_KEY` secrets; without them the job fails at the token step rather than falling back to anything. `publish.yml` uses the same App to open a fix PR when a release fails.
 
-Merging the release PR is what cuts the release. `.github/workflows/tag-release.yml` notices that the manifest version matches the top changelog heading with no tag for it yet, pushes `v<x.y.z>`, and calls `release.yml`, which builds every platform, smoke-tests, and publishes to the Marketplace, Open VSX, and GitHub Releases. (It calls rather than relies on the tag push: a tag pushed with `GITHUB_TOKEN` starts no workflow.)
+Merging the release PR is what cuts the release: `check` sees the manifest version matching the top changelog heading with no tag for it yet, and the run publishes the release instead of a pre-release. The tag is created by `Publish: GitHub`, not before it — so a tag means *published*, and a release that failed to publish is simply retried by the next push to `main`.
 
-`npm run build -- release` still works as the manual fallback: it checks the CHANGELOG has a section for the top version, refuses a dirty tree or an existing tag, then pushes `v<x.y.z>`, which triggers the same `release.yml` through its tag-push trigger.
+When a release-channel job fails, `release-failed` opens a draft `fix/release-v<x.y.z>` pull request off the release commit, listing which jobs went red with links to their logs. Merging it re-runs the release. Two things it will tell you, and both are worth knowing in advance:
+
+* If `Publish: GitHub` succeeded and only a registry failed, the tag already exists, so `check` will *not* retry. Re-run that one job, or dispatch `publish-marketplace.yml` against the tag.
+* If the fix changes shipped code, bump the version rather than reusing it. Publishes are idempotent, so a registry that already accepted the version silently keeps the broken upload.
+
+A `check` job that itself errors skips everything downstream, `release-failed` included: the run is red on the Actions tab and no pull request appears.
+
+`npm run build -- release` still works as the manual fallback: it checks the CHANGELOG has a section for the top version, refuses a dirty tree or an existing tag, then pushes `v<x.y.z>`, which `publish.yml` picks up through its tag trigger.
 
 ## Syntax highlighting
 

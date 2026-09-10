@@ -7,6 +7,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -373,10 +374,28 @@ def find_vsixes() -> list[str]:
     return [str(VSIX_ROOT / name) for name in files]
 
 
+# A pre-release version has no CHANGELOG section to draw notes from, so it gets
+# a generated blurb instead. Keeping the branch here rather than in the workflow
+# is what lets one publish job serve both channels.
+def prerelease_notes(version: str) -> str:
+    commit = os.environ.get("GITHUB_SHA", "").strip() or "this commit"
+    return (
+        f"Automated pre-release build {version} from commit {commit}.\n"
+        "\n"
+        "Pick the VSIX for your platform, or use the universal VSIX. The same "
+        "build is published to the VS Code Marketplace and Open VSX on the "
+        "pre-release channel, so installing from there gets you this build.\n"
+    )
+
+
 def publish_github_release(
     tag: str, version: str, pre_release: bool, vsixes: list[str]
 ) -> None:
-    notes = release_notes(read_changelog(), version)
+    notes = (
+        prerelease_notes(version)
+        if pre_release
+        else release_notes(read_changelog(), version)
+    )
     notes_file = VSIX_ROOT / "release-notes.md"
     if run_or_null("gh", ["release", "view", tag]) == 0:
         is_tag_release = os.environ.get("TAG_RELEASE", "").lower() in {"1", "true"}
@@ -397,9 +416,39 @@ def publish_github_release(
         "--notes-file",
         str(notes_file),
     ]
+    # The publish workflow runs on a branch ref, so without a target gh would
+    # tag whatever the default branch head is by the time it runs.
+    target = os.environ.get("GITHUB_SHA", "").strip()
+    if target:
+        args += ["--target", target]
     if pre_release:
         args.append("--prerelease")
     run("gh", args)
+
+
+# One gallery upload per attempt, three attempts, backing off between them. The
+# Marketplace times out on /_apis/gallery often enough that a single batched
+# upload of every platform vsix is a coin flip; --skip-duplicate is what makes
+# the retry (and a re-run of the job) safe.
+MARKETPLACE_ATTEMPTS = 3
+MARKETPLACE_BACKOFF_SECONDS = (15, 45)
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def publish_one_to_marketplace(vsix: str, args: list[str]) -> None:
+    for attempt in range(1, MARKETPLACE_ATTEMPTS + 1):
+        try:
+            run("npx", [*args, "--packagePath", vsix])
+            return
+        except RuntimeError as error:
+            if attempt == MARKETPLACE_ATTEMPTS:
+                raise
+            delay = MARKETPLACE_BACKOFF_SECONDS[attempt - 1]
+            print(f"{vsix}: {error}; retrying in {delay}s")
+            _sleep(delay)
 
 
 def publish_to_marketplace(vsixes: list[str], pre_release: bool = False) -> None:
@@ -413,10 +462,20 @@ def publish_to_marketplace(vsixes: list[str], pre_release: bool = False) -> None
             )
             return
         raise RuntimeError("VSCE_TOKEN is not set; cannot publish to the Marketplace.")
-    args = ["--no-install", "vsce", "publish", "--pat", token]
+    args = ["--no-install", "vsce", "publish", "--pat", token, "--skip-duplicate"]
     if pre_release:
         args.append("--pre-release")
-    run("npx", [*args, "--packagePath", *vsixes])
+    # Every vsix is attempted even after one fails, so a single flaky platform
+    # cannot strand the other five; a re-run then only retries what is missing.
+    failed: list[str] = []
+    for vsix in vsixes:
+        try:
+            publish_one_to_marketplace(vsix, args)
+        except RuntimeError as error:
+            print(f"::error::{vsix} failed to publish: {error}")
+            failed.append(vsix)
+    if failed:
+        raise RuntimeError("Marketplace publish failed for: " + ", ".join(failed))
 
 
 def cmd_prerelease_identity() -> None:
@@ -462,12 +521,19 @@ def cmd_publish_prebuilt() -> None:
     publish_to_marketplace(vsixes, resolved["preRelease"])
 
 
-# The Marketplace half of publish-prebuilt on its own. The pre-release workflow
-# creates its own GitHub prerelease, and publish_github_release would fail there
-# anyway: a pre-release version has no CHANGELOG section to draw notes from.
+# The two halves of publish-prebuilt on their own. The publish workflow runs
+# each target as its own job, so one registry timing out no longer cancels the
+# others; publish-prebuilt stays for the local release-prebuilt path.
 def cmd_publish_marketplace() -> None:
     resolved = resolve_version()
     publish_to_marketplace(find_vsixes(), resolved["preRelease"])
+
+
+def cmd_publish_github() -> None:
+    resolved = resolve_version()
+    publish_github_release(
+        resolved["tag"], resolved["version"], resolved["preRelease"], find_vsixes()
+    )
 
 
 def cmd_release_prebuilt() -> None:
@@ -525,7 +591,7 @@ def cmd_release() -> None:
     run("git", ["tag", tag])
     run("git", ["push", "origin", tag])
     print(
-        f"pushed {tag}; the Release workflow now builds, smoke-tests, and publishes it."
+        f"pushed {tag}; the Publish workflow now builds, smoke-tests, and publishes it."
     )
 
 
@@ -538,6 +604,7 @@ COMMANDS: dict[str, Callable[[], object]] = {
     "package-prebuilt": cmd_package_prebuilt,
     "publish-prebuilt": cmd_publish_prebuilt,
     "publish-marketplace": cmd_publish_marketplace,
+    "publish-github": cmd_publish_github,
     "release-prebuilt": cmd_release_prebuilt,
     "release": cmd_release,
 }

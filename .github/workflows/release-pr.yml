@@ -92,10 +92,12 @@ jobs:
             echo "\`### $VERSION\` and moves"
             echo "\`extension/package/package.json\` to the same version."
             echo
-            echo "Merging this PR cuts the release: \`tag-release.yml\` pushes"
-            echo "\`v$VERSION\` and calls the Release workflow, which builds"
-            echo "every platform, smoke-tests the VSIX files, and publishes to"
-            echo "the Marketplace and Open VSX."
+            echo "Merging this PR cuts the release: the \`Publish\` workflow"
+            echo "builds every platform, smoke-tests the VSIX files, and"
+            echo "publishes them to the VS Code Marketplace, Open VSX, and"
+            echo "GitHub Releases as three independent jobs. The"
+            echo "\`v$VERSION\` tag is created by the GitHub one, so a release"
+            echo "that fails to publish is retried by the next push to main."
             echo
             echo "This branch is regenerated from \`main\` on every push, so"
             echo "edits made here are discarded. Correct the release notes in"
