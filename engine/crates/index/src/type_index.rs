@@ -513,6 +513,32 @@ impl TypeIndex {
         self.map.get(type_name).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
+    pub fn is_instance_at(
+        &self,
+        type_name: &str,
+        uri: &str,
+        name: &str,
+        line: u32,
+        col: u16,
+    ) -> bool {
+        let Some(positions) = self
+            .file_positions
+            .get(uri)
+            .and_then(|types| types.get(type_name))
+        else {
+            return false;
+        };
+        let Some(entries) = self.map.get(type_name) else {
+            return false;
+        };
+        positions.iter().any(|&idx| {
+            let (_, inst) = &entries[idx];
+            inst.location.line == line
+                && inst.location.col == col
+                && inst.name.eq_ignore_ascii_case(name)
+        })
+    }
+
     pub fn instance_locations(&self, name: &str) -> Vec<(Arc<str>, SourceLocation)> {
         self.map
             .values()

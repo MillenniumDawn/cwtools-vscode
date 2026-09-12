@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use cwtools_index::TypeIndex;
 use cwtools_parser::ast::{Arena, Child, Value};
-use cwtools_rules::rules_types::{NewField, RootRule, RuleSet, RuleType, TypeType};
+use cwtools_rules::rules_types::{NewField, PatternKind, RootRule, RuleSet, RuleType, TypeType};
 use cwtools_string_table::string_table::StringTable;
 
 use crate::{SourceLocation, check_path_dir};
@@ -103,12 +104,20 @@ impl ReferenceIndex {
     /// name's own position are returned, so a caller needs no file text to
     /// point at the name.
     pub fn references(&self, type_name: &str, name: &str) -> Vec<UseSite> {
+        self.references_where(type_name, |n| n == name)
+    }
+
+    pub fn references_ci(&self, type_name: &str, name: &str) -> Vec<UseSite> {
+        self.references_where(type_name, |n| n.eq_ignore_ascii_case(name))
+    }
+
+    fn references_where(&self, type_name: &str, matches: impl Fn(&str) -> bool) -> Vec<UseSite> {
         self.map
             .get(type_name)
             .map(|sites| {
                 sites
                     .iter()
-                    .filter(|s| s.name == name)
+                    .filter(|s| matches(&s.name))
                     .map(|s| UseSite {
                         file: Arc::clone(&s.file),
                         key: s.location,
@@ -283,5 +292,355 @@ pub(crate) fn collect_type_ref_uses(
         if let Value::Clause(ch) = &leaf.value {
             collect_type_ref_uses(ch, arena, table, map, ruleset, logical_path, out);
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AliasKeySite {
+    key: String,
+    location: SourceLocation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypePatternAlias {
+    pub prefix: String,
+    pub suffix: String,
+    pub type_name: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct AliasKeyCache {
+    sites: HashMap<Arc<str>, Vec<AliasKeySite>>,
+}
+
+impl AliasKeyCache {
+    pub(crate) fn remove_file(&mut self, file_uri: &str) {
+        self.sites.remove(file_uri);
+    }
+
+    pub(crate) fn merge_file(&mut self, file_uri: &str, sites: Vec<AliasKeySite>) {
+        if sites.is_empty() {
+            self.sites.remove(file_uri);
+        } else {
+            self.sites.insert(Arc::from(file_uri), sites);
+        }
+    }
+
+    pub(crate) fn file_uris(&self) -> impl Iterator<Item = &Arc<str>> {
+        self.sites.keys()
+    }
+
+    pub(crate) fn sites(&self, file_uri: &str) -> &[AliasKeySite] {
+        self.sites.get(file_uri).map(Vec::as_slice).unwrap_or(&[])
+    }
+}
+
+pub fn strip_affix<'a>(key: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    let rest = key.strip_prefix(prefix)?;
+    let middle = rest.strip_suffix(suffix)?;
+    if middle.is_empty() {
+        None
+    } else {
+        Some(middle)
+    }
+}
+
+pub fn build_type_patterns(ruleset: &RuleSet) -> Vec<TypePatternAlias> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for cat in ruleset.alias_categories().values() {
+        for pat in &cat.parsed_patterns {
+            if pat.kind != PatternKind::Type {
+                continue;
+            }
+            let type_name = pat
+                .placeholder_name
+                .split('.')
+                .next()
+                .unwrap_or(pat.placeholder_name.as_str());
+            if !ruleset.type_by_name().contains_key(type_name) {
+                continue;
+            }
+            let pattern = TypePatternAlias {
+                prefix: pat.prefix.clone(),
+                suffix: pat.suffix.clone(),
+                type_name: type_name.to_string(),
+            };
+            if seen.insert(pattern.clone()) {
+                out.push(pattern);
+            }
+        }
+    }
+    out
+}
+
+pub fn key_matches_type_pattern(
+    patterns: &[TypePatternAlias],
+    type_name: &str,
+    instance_name: &str,
+    key: &str,
+) -> bool {
+    patterns.iter().any(|pat| {
+        if pat.type_name != type_name {
+            return false;
+        }
+        strip_affix(key, &pat.prefix, &pat.suffix)
+            .is_some_and(|middle| middle.eq_ignore_ascii_case(instance_name))
+    })
+}
+
+fn add_schema_field(field: &NewField, keys: &mut HashSet<String>) {
+    if let NewField::SpecificField(key) = field {
+        keys.insert(key.to_ascii_lowercase());
+    }
+}
+
+fn collect_schema_fields(rule: &RuleType, keys: &mut HashSet<String>) {
+    match rule {
+        RuleType::LeafRule { left, right } => {
+            add_schema_field(left, keys);
+            add_schema_field(right, keys);
+        }
+        RuleType::NodeRule { left, rules } => {
+            add_schema_field(left, keys);
+            for (inner, _) in rules.iter() {
+                collect_schema_fields(inner, keys);
+            }
+        }
+        RuleType::LeafValueRule { right } => add_schema_field(right, keys),
+        RuleType::ValueClauseRule { rules } | RuleType::SubtypeRule { rules, .. } => {
+            for (inner, _) in rules.iter() {
+                collect_schema_fields(inner, keys);
+            }
+        }
+    }
+}
+
+pub(crate) fn build_schema_keys(ruleset: &RuleSet) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    for cat in ruleset.alias_exact().values() {
+        for key in cat.keys() {
+            keys.insert(key.to_ascii_lowercase());
+        }
+    }
+    for root in &ruleset.root_rules {
+        let (_, (rule, _)) = match root {
+            RootRule::TypeRule(name, rule) => (name.as_str(), rule),
+            RootRule::AliasRule(name, rule) | RootRule::SingleAliasRule(name, rule) => {
+                (name.as_str(), rule)
+            }
+        };
+        collect_schema_fields(rule, &mut keys);
+    }
+    for (_, (rule, _)) in &ruleset.aliases {
+        collect_schema_fields(rule, &mut keys);
+    }
+    for (_, (rule, _)) in &ruleset.single_aliases {
+        collect_schema_fields(rule, &mut keys);
+    }
+    keys
+}
+
+fn is_schema_key(schema: &HashSet<String>, key: &str) -> bool {
+    if key.bytes().any(|b| b.is_ascii_uppercase()) {
+        schema.contains(&key.to_ascii_lowercase())
+    } else {
+        schema.contains(key)
+    }
+}
+
+pub(crate) fn collect_alias_key_candidates(
+    children: &[Child],
+    arena: &Arena,
+    table: &StringTable,
+    schema: &HashSet<String>,
+    out: &mut Vec<AliasKeySite>,
+) {
+    for child in children {
+        let Child::Leaf(idx) = child else { continue };
+        let leaf = &arena.leaves[*idx as usize];
+        if let Some(key) = table.get_string(leaf.key.normal)
+            && !key.is_empty()
+            && !is_schema_key(schema, &key)
+        {
+            out.push(AliasKeySite {
+                key,
+                location: SourceLocation {
+                    line: leaf.pos.start.line,
+                    col: leaf.pos.start.col,
+                    end: (leaf.pos.end.line, leaf.pos.end.col),
+                },
+            });
+        }
+        if let Value::Clause(ch) = &leaf.value {
+            collect_alias_key_candidates(ch, arena, table, schema, out);
+        }
+    }
+}
+
+pub(crate) fn classify_alias_key_sites(
+    sites: &[AliasKeySite],
+    file_uri: &str,
+    patterns: &[TypePatternAlias],
+    type_index: &TypeIndex,
+) -> Vec<CollectedRef> {
+    let mut out = Vec::new();
+    for site in sites {
+        for pat in patterns {
+            let Some(middle) = strip_affix(&site.key, &pat.prefix, &pat.suffix) else {
+                continue;
+            };
+            if !type_index.contains(&pat.type_name, middle) {
+                continue;
+            }
+            if type_index.is_instance_at(
+                &pat.type_name,
+                file_uri,
+                middle,
+                site.location.line,
+                site.location.col,
+            ) {
+                continue;
+            }
+            out.push(CollectedRef {
+                ref_type: Arc::from(pat.type_name.as_str()),
+                name: middle.to_string(),
+                key: site.location,
+                value: site.location,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use cwtools_parser::parser::parse_string;
+    use cwtools_rules::rules_converter::ast_to_ruleset;
+    use cwtools_string_table::string_table::StringTable;
+
+    use crate::InfoService;
+
+    const RULES: &str = r#"
+types = {
+    type[scripted_effect] = { path = "game/common/scripted_effects" }
+    type[decision] = { path = "game/common/decisions" }
+}
+decision = {
+    complete_effect = { alias_name[effect] = alias_match_left[effect] }
+}
+scripted_effect = { alias_name[effect] = alias_match_left[effect] }
+alias[effect:<scripted_effect>] = yes
+alias[effect:log] = scalar
+"#;
+
+    fn indexed(files: &[(&str, &str, &str)]) -> InfoService {
+        let table = StringTable::new();
+        let rules = ast_to_ruleset(&parse_string(RULES, &table), &table);
+        let mut svc = InfoService::new();
+        for &(uri, logical_path, source) in files {
+            svc.index_file_with_path(
+                uri,
+                &parse_string(source, &table),
+                &table,
+                &rules,
+                logical_path,
+            );
+        }
+        svc.rebuild_alias_key_index(&rules);
+        svc
+    }
+
+    #[test]
+    fn scripted_effect_call_is_a_use_and_definition_is_not() {
+        let svc = indexed(&[
+            (
+                "e.txt",
+                "common/scripted_effects/e.txt",
+                "my_se = { log = hi }\n",
+            ),
+            (
+                "d.txt",
+                "common/decisions/d.txt",
+                "my_dec = {\n    complete_effect = {\n        my_se = yes\n    }\n}\n",
+            ),
+        ]);
+        let sites = svc.alias_key_index.references("scripted_effect", "my_se");
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].file.as_ref(), "d.txt");
+        assert_eq!((sites[0].key.line, sites[0].key.col), (3, 8));
+        assert_eq!(
+            (sites[0].value.line, sites[0].value.col),
+            (sites[0].key.line, sites[0].key.col)
+        );
+    }
+
+    #[test]
+    fn nested_scripted_effect_call_counts() {
+        let svc = indexed(&[(
+            "e.txt",
+            "common/scripted_effects/e.txt",
+            "my_se = { log = hi }\nmy_caller = { my_se = yes }\n",
+        )]);
+        let sites = svc.alias_key_index.references("scripted_effect", "my_se");
+        assert_eq!(sites.len(), 1, "{sites:?}");
+        assert_eq!(sites[0].file.as_ref(), "e.txt");
+        assert_eq!((sites[0].key.line, sites[0].key.col), (2, 14));
+    }
+
+    #[test]
+    fn rebuild_picks_up_a_caller_indexed_before_the_definition() {
+        let table = StringTable::new();
+        let rules = ast_to_ruleset(&parse_string(RULES, &table), &table);
+        let mut svc = InfoService::new();
+        svc.index_file_with_path(
+            "d.txt",
+            &parse_string(
+                "my_dec = {\n    complete_effect = {\n        my_se = yes\n    }\n}\n",
+                &table,
+            ),
+            &table,
+            &rules,
+            "common/decisions/d.txt",
+        );
+        assert!(
+            svc.alias_key_index
+                .references("scripted_effect", "my_se")
+                .is_empty(),
+            "caller indexed first cannot classify until the definition exists"
+        );
+        svc.index_file_with_path(
+            "e.txt",
+            &parse_string("my_se = { log = hi }\n", &table),
+            &table,
+            &rules,
+            "common/scripted_effects/e.txt",
+        );
+        svc.rebuild_alias_key_index(&rules);
+        assert_eq!(
+            svc.alias_key_index
+                .references("scripted_effect", "my_se")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn schema_effect_keys_are_not_alias_key_uses() {
+        let svc = indexed(&[(
+            "e.txt",
+            "common/scripted_effects/e.txt",
+            "my_se = { log = hi }\n",
+        )]);
+        assert!(
+            svc.alias_key_index
+                .references("scripted_effect", "log")
+                .is_empty()
+        );
+        assert!(
+            svc.alias_key_index
+                .references("scripted_effect", "my_se")
+                .is_empty()
+        );
     }
 }
