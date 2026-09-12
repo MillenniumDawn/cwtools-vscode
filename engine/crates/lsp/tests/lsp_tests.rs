@@ -10900,9 +10900,21 @@ fn editor_server(
     std::process::Child,
     BufReader<std::process::ChildStdout>,
 ) {
+    editor_server_with_rules(EDITOR_RULES, files)
+}
+
+fn editor_server_with_rules(
+    rules: &str,
+    files: &[(&str, &str)],
+) -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    std::process::Child,
+    BufReader<std::process::ChildStdout>,
+) {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
-    std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
+    std::fs::write(rules_dir.path().join("editor_rules.cwt"), rules).unwrap();
     for (rel, content) in files {
         let p = ws.path().join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -10993,6 +11005,57 @@ fn test_code_lens_resolves_reference_locations() {
         "cwtools.showReferences"
     );
     assert_eq!(response["result"]["command"]["arguments"][0], uri);
+    assert_eq!(
+        response["result"]["command"]["arguments"][2]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+}
+
+#[test]
+fn test_code_lens_counts_scripted_effect_calls() {
+    let definition = "my_se = { log = \"hi\" }\n";
+    let use_site = "my_dec = {\n    complete_effect = {\n        my_se = yes\n    }\n}\n";
+    let definition_rel = "game/common/scripted_effects/e.txt";
+    let (ws, _rules, mut child, mut reader) = editor_server_with_rules(
+        GOTO_RULES,
+        &[
+            (definition_rel, definition),
+            ("game/common/decisions/d.txt", use_site),
+        ],
+    );
+    let uri = path_uri(ws.path().join(definition_rel));
+
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            4,
+            "textDocument/codeLens",
+            serde_json::json!({ "textDocument": { "uri": uri } }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response(&mut reader).expect("no codeLens response");
+    let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let lens = response["result"]
+        .as_array()
+        .and_then(|lenses| {
+            lenses
+                .iter()
+                .find(|lens| lens["data"]["instanceName"] == "my_se")
+        })
+        .expect("my_se code lens")
+        .clone();
+
+    write_frame(&mut child, &jsonrpc_request(5, "codeLens/resolve", lens)).unwrap();
+    let raw = read_response(&mut reader).expect("no codeLens resolve response");
+    stop_server(&mut child);
+    let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        response["result"]["command"]["title"], "1 reference",
+        "scripted effect calls are keys, not values: {response}"
+    );
     assert_eq!(
         response["result"]["command"]["arguments"][2]
             .as_array()
