@@ -26,7 +26,7 @@
     "vscode-languageclient": "^10.1.1"
   },
   "devDependencies": {
-    "@eslint/compat": "^2.1.0",
+    "@eslint/compat": "^2.1.1",
     "@eslint/js": "^10.0.1",
     "@types/chai": "^5.2.3",
     "@types/cytoscape-popper": "^2.0.4",
@@ -34,8 +34,8 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "^26.4",
     "@types/sinon": "22.0.0",
-    "@types/vscode": "^1.134.0",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@types/vscode": "^1.136.0",
+    "@vitest/coverage-v8": "^5.0.0",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^3.9.2",
@@ -45,16 +45,16 @@
     "cytoscape-elk": "github:jfstephe/cytoscape.js-elk#8cf116841e241626752b6be79053217f9b9e9101",
     "cytoscape-popper": "^2.0.0",
     "esbuild": "^0.28.2",
-    "eslint": "^10.9.1",
-    "globals": "^17.11.0",
+    "eslint": "^10.10.0",
+    "globals": "^17.12.0",
     "merge-images": "2.0.0",
     "minimatch": "^10.2.5",
-    "mocha": "^11.8.0",
+    "mocha": "^12.0.0",
     "sinon": "22.1.0",
     "tippy.js": "^6.3.7",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.68.0",
-    "vitest": "^4.1.8"
+    "typescript-eslint": "^8.69.0",
+    "vitest": "^5.0.0"
   },
   "overrides": {
     "minimatch@3": "^3.1.5",
