@@ -1,5 +1,12 @@
 ### Unreleased
 
+#### Engine
+
+* Ctrl+Click on `localization_key` in scripted localisation jumps to the loc
+  entry even when the ruleset does not type that folder. HOI4 still points
+  `type[scripted_loc]` at Stellaris's `common/scripted_loc`, so those files
+  never matched and the key was not a loc ref. (#725)
+
 ### 3.4.4
 
 #### Tooling
@@ -45,6 +52,7 @@
 * Guard setup failures now explain the expected input checkouts and overrides.
   Validation also times out with the retained log tail, and vanilla guard pins are
   checked for clean revisions. (#515)
+
 ### 3.4.2
 
 #### Engine
