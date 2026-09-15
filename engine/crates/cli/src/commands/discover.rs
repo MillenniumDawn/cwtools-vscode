@@ -3,6 +3,8 @@
 use cwtools_driver::{discover_and_parse_workspace, search_config_for};
 use std::path::PathBuf;
 
+use crate::run::EXIT_DISCOVERY_FAILED;
+
 pub(super) fn run(directory: PathBuf) {
     let config = search_config_for(&directory);
     match discover_and_parse_workspace(config) {
@@ -23,7 +25,7 @@ pub(super) fn run(directory: PathBuf) {
         }
         Err(e) => {
             eprintln!("Error discovering files in {}: {}", directory.display(), e);
-            std::process::exit(1);
+            std::process::exit(EXIT_DISCOVERY_FAILED);
         }
     }
 }

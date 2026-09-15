@@ -1,5 +1,10 @@
 ### Unreleased
 
+#### Tooling
+
+* The CLI now distinguishes usage, discovery, and empty-input failures from
+  validation findings with their documented exit codes. (#493)
+
 ### 3.4.4
 
 #### Tooling
