@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use crate::cli::FormatArgs;
 use crate::run::{
-    EXIT_DISCOVERY_FAILED, announce_config, exit_if_empty, load_config, missing_required,
+    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty, load_config,
+    missing_required,
 };
 
 pub(super) fn run(args: FormatArgs) {
@@ -60,7 +61,7 @@ pub(super) fn run(args: FormatArgs) {
         "tab" => IndentStyle::Tab,
         other => {
             eprintln!("error: invalid --indent-style '{other}': expected space or tab");
-            std::process::exit(2);
+            std::process::exit(EXIT_USAGE);
         }
     };
     let opts = FormatOptions {
@@ -142,7 +143,7 @@ pub(super) fn run(args: FormatArgs) {
         eprintln!("skipped {skipped} file(s) (unreadable or parse errors)");
     }
     if write_failed {
-        std::process::exit(2);
+        std::process::exit(EXIT_USAGE);
     }
     if !apply && files_changed > 0 {
         std::process::exit(1);

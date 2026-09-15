@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::diag::{Diag, SourceLines, cli_row, csv_row, json_row, rule_error_to_diag};
 use crate::report::{self, ReportType};
-use crate::run::{FailOn, color_enabled, exit_code, status};
+use crate::run::{EXIT_DISCOVERY_FAILED, FailOn, color_enabled, exit_code, status};
 
 pub(super) fn run(file: PathBuf, report_type: Option<ReportType>, fail_on: Option<FailOn>) {
     let report_type = report_type.unwrap_or(ReportType::Cli);
@@ -129,7 +129,7 @@ fn load_rules_reporting(rules_path: &Path, table: &StringTable) -> (RuleSet, Vec
     cwtools_driver::load_rules(&RulesInput::from_path(rules_path.to_path_buf()), table)
         .unwrap_or_else(|e| {
             eprintln!("Error loading rules: {}", e);
-            std::process::exit(1);
+            std::process::exit(EXIT_DISCOVERY_FAILED);
         })
 }
 

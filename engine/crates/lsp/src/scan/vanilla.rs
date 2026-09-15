@@ -162,6 +162,9 @@ impl Backend {
             self.state.vanilla_merged.store(true, Ordering::SeqCst);
             drop(info_guard);
             self.bump_info_revision();
+            if !self.state.scan_in_progress.load(Ordering::SeqCst) {
+                self.rebuild_alias_key_index();
+            }
         }
 
         // (#306). Installed here rather than during the per-type merge so it

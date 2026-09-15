@@ -1,7 +1,6 @@
 //! `fix`: apply (or preview) the machine-applicable fixes the validators emit.
 
 use cwtools_driver::{RulesInput, Session, SessionConfig, VanillaCacheAuto};
-use cwtools_game::constants::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
 use std::collections::BTreeMap;
@@ -9,8 +8,8 @@ use std::io::Write as _;
 
 use crate::cli::FixArgs;
 use crate::run::{
-    EXIT_DISCOVERY_FAILED, announce_config, exit_if_empty, load_config, missing_required, note,
-    vanilla_notice,
+    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty, load_config,
+    missing_required, note, parse_game, vanilla_notice,
 };
 use crate::{codes, config};
 
@@ -140,10 +139,7 @@ pub(super) fn run(args: FixArgs) {
         .unwrap_or_else(|| missing_required("fix", "--directory <DIRECTORY>", "directory", fc));
     let rules = rules.unwrap_or_else(|| missing_required("fix", "--rules <RULES>", "rules", fc));
 
-    let game_id = Game::from_str(&game).unwrap_or_else(|| {
-        eprintln!("Unknown game: {}. Supported: hoi4, stellaris, eu4, ck2, ck3, vic2, vic3, ir, eu5, custom", game);
-        std::process::exit(1);
-    });
+    let game_id = parse_game(&game);
 
     let want = |code: &str| codes::wanted(code, &only_codes, &ignore_codes);
 
@@ -309,7 +305,7 @@ pub(super) fn run(args: FixArgs) {
     }
 
     if write_failed {
-        std::process::exit(2);
+        std::process::exit(EXIT_USAGE);
     }
 }
 

@@ -7,14 +7,14 @@ use cwtools_parser::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
 use std::path::PathBuf;
 
-use crate::run::EXIT_DISCOVERY_FAILED;
+use crate::run::{EXIT_DISCOVERY_FAILED, EXIT_USAGE, parse_game};
 
 use super::rules::load_rules;
 
 pub(super) fn serialize(input: PathBuf, output: PathBuf) {
     let input_str = std::fs::read_to_string(&input).unwrap_or_else(|e| {
         eprintln!("Error reading {}: {}", input.display(), e);
-        std::process::exit(1);
+        std::process::exit(EXIT_DISCOVERY_FAILED);
     });
     let table = StringTable::new();
     let parsed = parse_string(&input_str, &table);
@@ -26,7 +26,7 @@ pub(super) fn serialize(input: PathBuf, output: PathBuf) {
         }
         Err(e) => {
             eprintln!("Error serializing: {}", e);
-            std::process::exit(1);
+            std::process::exit(EXIT_USAGE);
         }
     }
 }
@@ -46,21 +46,13 @@ pub(super) fn deserialize(input: PathBuf) {
         }
         Ok(Err(e)) | Err(e) => {
             eprintln!("Error deserializing {}: {}", input.display(), e);
-            std::process::exit(1);
+            std::process::exit(EXIT_DISCOVERY_FAILED);
         }
     }
 }
 
 pub(super) fn vanilla(game: String, vanilla: PathBuf, rules: PathBuf, output: PathBuf) {
-    use cwtools_game::constants::Game;
-
-    if Game::from_str(&game).is_none() {
-        eprintln!(
-            "Unknown game: {}. Supported: hoi4, stellaris, eu4, ck2, ck3, vic2, vic3, ir, eu5, custom",
-            game
-        );
-        std::process::exit(1);
-    }
+    parse_game(&game);
 
     let rules_table = StringTable::new();
     let ruleset = load_rules(&rules, &rules_table);
@@ -85,7 +77,7 @@ pub(super) fn vanilla(game: String, vanilla: PathBuf, rules: PathBuf, output: Pa
         Ok(n) => println!("Wrote {} base-game instances to {}", n, output.display()),
         Err(e) => {
             eprintln!("Error writing vanilla cache {}: {}", output.display(), e);
-            std::process::exit(1);
+            std::process::exit(EXIT_USAGE);
         }
     }
 }

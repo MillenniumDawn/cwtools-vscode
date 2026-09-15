@@ -20,8 +20,10 @@ pub(crate) fn scan_use_sites(
     ruleset: &RuleSet,
     workspace_prefix: &Option<Arc<str>>,
     string_table: &cwtools_string_table::string_table::StringTable,
+    definitions: &[(String, cwtools_info::SourceLocation)],
 ) -> Vec<cwtools_info::UseSite> {
     let mut results = Vec::new();
+    let patterns = cwtools_info::build_type_patterns(ruleset);
 
     for (file_uri, ast) in docs {
         let logical_path = logical_path_from_uri(file_uri, workspace_prefix);
@@ -36,6 +38,8 @@ pub(crate) fn scan_use_sites(
                 ruleset,
                 logical_path: &logical_path,
                 table: string_table,
+                patterns: &patterns,
+                definitions,
             },
             &mut results,
         );
@@ -52,6 +56,8 @@ struct TypeRefSearch<'a> {
     ruleset: &'a RuleSet,
     logical_path: &'a str,
     table: &'a StringTable,
+    patterns: &'a [cwtools_info::TypePatternAlias],
+    definitions: &'a [(String, cwtools_info::SourceLocation)],
 }
 
 fn scan_ast_for_type_ref(
@@ -68,6 +74,8 @@ fn scan_ast_for_type_ref(
         ruleset,
         logical_path,
         table,
+        patterns,
+        definitions,
     } = search;
 
     for child in children {
@@ -101,6 +109,27 @@ fn scan_ast_for_type_ref(
                     end: (leaf.pos.end.line, leaf.pos.end.col),
                 },
                 value: cwtools_info::value_location(&leaf.value_pos, quoted),
+            });
+        }
+        let key_loc = cwtools_info::SourceLocation {
+            line: leaf.pos.start.line,
+            col: leaf.pos.start.col,
+            end: (leaf.pos.end.line, leaf.pos.end.col),
+        };
+        let is_definition = definitions.iter().any(|(uri, loc)| {
+            uri == file_uri && loc.line == key_loc.line && loc.col == key_loc.col
+        });
+        if !is_definition
+            && table
+                .with_string(leaf.key.normal, |key| {
+                    cwtools_info::key_matches_type_pattern(patterns, type_name, instance_name, key)
+                })
+                .unwrap_or(false)
+        {
+            out.push(cwtools_info::UseSite {
+                file: Arc::from(file_uri),
+                key: key_loc,
+                value: key_loc,
             });
         }
         if let Value::Clause(ch) = &leaf.value {
@@ -238,6 +267,7 @@ mod tests {
             &type_ref_ruleset(),
             &ws_uri,
             &table,
+            &[],
         )
     }
 
@@ -258,5 +288,66 @@ mod tests {
         // The opening quote is at column 15; the name itself starts at 16, so a
         // caller can highlight the name without re-reading the file (#472).
         assert_eq!((sites[0].value.line, sites[0].value.col), (1, 16));
+    }
+
+    fn scripted_effect_ruleset() -> RuleSet {
+        let table = StringTable::new();
+        cwtools_rules::rules_converter::ast_to_ruleset(
+            &parse_string(
+                r#"
+types = { type[scripted_effect] = { path = "game/common/scripted_effects" } }
+scripted_effect = { alias_name[effect] = alias_match_left[effect] }
+alias[effect:<scripted_effect>] = yes
+"#,
+                &table,
+            ),
+            &table,
+        )
+    }
+
+    #[test]
+    fn scan_use_sites_finds_scripted_effect_call_keys() {
+        let table = StringTable::new();
+        let parsed = parse_string("my_caller = { my_se = yes }\n", &table);
+        let docs = vec![("file:///caller.txt".to_string(), Arc::new(parsed))];
+        let ws_uri: Option<Arc<str>> = Some("file:///".into());
+        let sites = scan_use_sites(
+            "scripted_effect",
+            "my_se",
+            &docs,
+            &scripted_effect_ruleset(),
+            &ws_uri,
+            &table,
+            &[],
+        );
+        assert_eq!(sites.len(), 1, "expected the my_se = yes call");
+        assert_eq!((sites[0].key.line, sites[0].key.col), (1, 14));
+        assert_eq!(
+            (sites[0].value.line, sites[0].value.col),
+            (sites[0].key.line, sites[0].key.col)
+        );
+    }
+
+    #[test]
+    fn scan_use_sites_skips_the_scripted_effect_definition() {
+        let table = StringTable::new();
+        let parsed = parse_string("my_se = { log = hi }\n", &table);
+        let docs = vec![("file:///e.txt".to_string(), Arc::new(parsed))];
+        let ws_uri: Option<Arc<str>> = Some("file:///".into());
+        let definition = cwtools_info::SourceLocation {
+            line: 1,
+            col: 0,
+            end: (1, 0),
+        };
+        let sites = scan_use_sites(
+            "scripted_effect",
+            "my_se",
+            &docs,
+            &scripted_effect_ruleset(),
+            &ws_uri,
+            &table,
+            &[("file:///e.txt".to_string(), definition)],
+        );
+        assert!(sites.is_empty(), "the definition is not a use: {sites:?}");
     }
 }

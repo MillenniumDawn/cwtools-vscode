@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use cwtools_driver::RulesInput;
-use cwtools_game::constants::Game;
 use cwtools_localization::{LocScopeData, validate_loc_project_commands};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::build_scope_registry_arc;
@@ -17,7 +16,8 @@ use crate::diag::{
 use crate::report::ReportType;
 use crate::run::{
     EXIT_DISCOVERY_FAILED, announce_config, exit_code, exit_if_empty, load_config,
-    load_ignore_hashes, missing_required, note, report_owns_stdout, resolved_path, status,
+    load_ignore_hashes, missing_required, note, parse_game, report_owns_stdout, resolved_path,
+    status,
 };
 use crate::{codes, config, report};
 
@@ -330,13 +330,7 @@ fn loc_scope_data(game: Option<&str>, rules: Option<&Path>) -> Option<LocScopeDa
             return None;
         }
     };
-    let Some(game) = Game::from_str(game) else {
-        eprintln!(
-            "Unknown game: {game}. Supported: hoi4, stellaris, eu4, ck2, ck3, vic2, vic3, ir, \
-             eu5, custom"
-        );
-        std::process::exit(1);
-    };
+    let game = parse_game(game);
 
     let table = StringTable::new();
     let (ruleset, problems) =
