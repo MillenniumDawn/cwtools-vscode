@@ -652,6 +652,41 @@ impl Backend {
         if exports_changed {
             self.bump_info_revision();
         }
+        self.refresh_alias_key_index();
+    }
+
+    pub(crate) fn refresh_alias_key_index(&self) {
+        if self
+            .state
+            .scan_in_progress
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
+        let Some(ruleset) = self.state.rules.read().ruleset.clone() else {
+            return;
+        };
+        let mut info = self.state.info_service.write();
+        let fingerprint = info.pattern_instance_fingerprint(&ruleset);
+        let previous = self
+            .state
+            .alias_key_fp
+            .swap(fingerprint, std::sync::atomic::Ordering::Relaxed);
+        if fingerprint != previous {
+            info.rebuild_alias_key_index(&ruleset);
+        }
+    }
+
+    pub(crate) fn rebuild_alias_key_index(&self) {
+        let Some(ruleset) = self.state.rules.read().ruleset.clone() else {
+            return;
+        };
+        let mut info = self.state.info_service.write();
+        let fingerprint = info.pattern_instance_fingerprint(&ruleset);
+        info.rebuild_alias_key_index(&ruleset);
+        self.state
+            .alias_key_fp
+            .store(fingerprint, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// workspace scan (#259). Cheap to call unconditionally: the path check
