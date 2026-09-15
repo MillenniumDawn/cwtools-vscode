@@ -644,6 +644,7 @@ impl Backend {
         }
 
         tokio::task::block_in_place(|| self.merge_pending_vanilla_index());
+        tokio::task::block_in_place(|| self.rebuild_alias_key_index());
 
         self.rebuild_modifier_keys();
 

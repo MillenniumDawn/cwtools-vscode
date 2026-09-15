@@ -404,6 +404,19 @@ impl Backend {
         };
         let ruleset = self.state.rules.read().ruleset.clone();
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
+        let (closed_sites, definitions) = {
+            let info = self.state.info_service.read();
+            let mut closed = info.reference_index.references(type_name, instance_name);
+            closed.extend(info.alias_key_index.references_ci(type_name, instance_name));
+            let definitions = info
+                .type_index
+                .instances(type_name)
+                .iter()
+                .filter(|(_, inst)| inst.name.eq_ignore_ascii_case(instance_name))
+                .map(|(file, inst)| (file.to_string(), inst.location))
+                .collect::<Vec<_>>();
+            (closed, definitions)
+        };
         let mut sites: Vec<cwtools_info::UseSite> = Vec::new();
         if let Some(rs) = ruleset {
             sites.extend(scan_use_sites(
@@ -413,17 +426,14 @@ impl Backend {
                 &rs,
                 &ws_prefix,
                 &self.state.string_table,
+                &definitions,
             ));
         }
-        {
-            let info = self.state.info_service.read();
-            sites.extend(
-                info.reference_index
-                    .references(type_name, instance_name)
-                    .into_iter()
-                    .filter(|site| !open_uris.contains(site.file.as_ref())),
-            );
-        }
+        sites.extend(
+            closed_sites
+                .into_iter()
+                .filter(|site| !open_uris.contains(site.file.as_ref())),
+        );
         sites
     }
 

@@ -255,6 +255,7 @@ pub(crate) struct DocumentState {
     pub(crate) next_debounce_id: AtomicU64,
     pub(crate) validation_permits: tokio::sync::Semaphore,
     pub(crate) info_revision: AtomicU64,
+    pub(crate) alias_key_fp: AtomicU64,
     pub(crate) fallback_cache: parking_lot::Mutex<Option<CompletionCacheEntry>>,
     #[allow(clippy::type_complexity)]
     pub(crate) fresh_ast_cache: parking_lot::Mutex<Option<(String, i32, Arc<ParsedFile>)>>,
@@ -735,6 +736,7 @@ impl DocumentState {
             next_debounce_id: AtomicU64::new(0),
             validation_permits: tokio::sync::Semaphore::new(MAX_CONCURRENT_VALIDATIONS),
             info_revision: AtomicU64::new(0),
+            alias_key_fp: AtomicU64::new(0),
             fallback_cache: parking_lot::Mutex::new(None),
             fresh_ast_cache: parking_lot::Mutex::new(None),
             completion_generation: parking_lot::Mutex::new(HashMap::new()),
