@@ -115,13 +115,31 @@ def remove_tree(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def copy_dir(src: Path, dest: Path) -> None:
+def copy_dir(
+    src: Path,
+    dest: Path,
+    *,
+    prune: bool = False,
+    preserve: frozenset[str] = frozenset(),
+) -> None:
     dest.mkdir(parents=True, exist_ok=True)
+    source_names = {entry.name for entry in src.iterdir()}
+    if prune:
+        for entry in dest.iterdir():
+            if entry.name not in source_names and entry.name not in preserve:
+                if entry.is_dir():
+                    remove_tree(entry)
+                else:
+                    entry.unlink()
     for entry in src.iterdir():
         target = dest / entry.name
         if entry.is_dir():
-            copy_dir(entry, target)
+            if target.exists() and not target.is_dir():
+                target.unlink()
+            copy_dir(entry, target, prune=prune)
         else:
+            if target.is_dir():
+                remove_tree(target)
             shutil.copy2(entry, target)
 
 
@@ -151,7 +169,12 @@ def build_client(*, release: bool = False) -> None:
 
 
 def copy_package_inputs() -> None:
-    copy_dir(EXTENSION_PACKAGE_ROOT, EXTENSION_DIST_ROOT)
+    copy_dir(
+        EXTENSION_PACKAGE_ROOT,
+        EXTENSION_DIST_ROOT,
+        prune=True,
+        preserve=frozenset({"bin", "README.md", "LICENSE.md", "CHANGELOG.md"}),
+    )
 
 
 def copy_docs() -> None:
