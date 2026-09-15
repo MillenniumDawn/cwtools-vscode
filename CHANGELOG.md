@@ -13,6 +13,15 @@
 * Live vanilla indexing now preserves the real source URI for each base-game
   instance, matching cache-backed sessions. (#580)
 
+* Find-references and rename on a localisation key no longer read and parse
+  the whole localisation tree, then every script file, on the pump task for
+  each request (289 MB / 2 944 files per request on Millennium Dawn). The loc
+  index now keeps every definition site per key, so references answer the
+  definition half from memory, and usages come from a streamed scan on the
+  blocking pool that holds only the files in flight. Rename still visits every
+  loc file for `$key$` references and unconfigured languages, but streams
+  them the same way. Listed definitions follow `localisation.languages`, the
+  scope goto and hover already use. (#474)
 #### Tooling
 
 * The CLI now distinguishes usage, discovery, and empty-input failures from

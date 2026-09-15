@@ -62,14 +62,14 @@ impl Backend {
                 let Some(rank) = symbol_rank(key, &query) else {
                     continue;
                 };
-                if top.accepts(rank, key, file_uri, *line0, 0) {
+                if top.accepts(rank, key, file_uri, line0, 0) {
                     top.push(SymbolCandidate {
                         rank,
                         name: key.to_string(),
                         container: None,
                         kind: SymbolKind::KEY,
                         file_uri: file_uri.to_string(),
-                        line0: *line0,
+                        line0,
                         col: 0,
                     });
                 }

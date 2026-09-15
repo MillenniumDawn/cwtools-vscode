@@ -42,7 +42,8 @@ impl Backend {
     async fn loc_key_locations(&self, key: &str, fallback: &Url) -> Vec<Location> {
         let target = {
             let map = self.state.loc_locations.read();
-            map.get(key).cloned()
+            map.get(key)
+                .map(|(uri, line)| (std::sync::Arc::clone(uri), line))
         };
         let Some((file_uri, line)) = target else {
             return Vec::new();
