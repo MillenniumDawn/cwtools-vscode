@@ -4,6 +4,18 @@
 
 * The CLI now distinguishes usage, discovery, and empty-input failures from
   validation findings with their documented exit codes. (#493)
+#### Engine
+
+* Ctrl+Click on `localization_key` in scripted localisation jumps to the loc
+  entry even when the ruleset does not type that folder. HOI4 still points
+  `type[scripted_loc]` at Stellaris's `common/scripted_loc`, so those files
+  never matched and the key was not a loc ref. (#725)
+* CodeLens reference counts for scripted effects (and other type-pattern aliases
+  such as scripted triggers) now include `my_se = yes` call sites. Those uses are
+  keys, not `field = <type>` values, so the reverse index never saw them and the
+  lens stayed at 0. Call sites are cached as non-schema leaf keys and reclassified
+  when the instance set changes or after a workspace scan, without walking ASTs
+  or reading files on each lens resolve.
 
 ### 3.4.4
 
@@ -50,6 +62,7 @@
 * Guard setup failures now explain the expected input checkouts and overrides.
   Validation also times out with the retained log tail, and vanilla guard pins are
   checked for clean revisions. (#515)
+
 ### 3.4.2
 
 #### Engine

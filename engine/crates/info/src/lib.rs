@@ -12,8 +12,14 @@ mod position;
 mod references;
 
 pub use position::{PositionElement, ReferenceHint, element_at_position};
-pub use references::{ReferenceIndex, UseSite, value_location};
-use references::{TypeRefRule, build_type_ref_keys, collect_type_ref_uses};
+use references::{
+    AliasKeyCache, TypeRefRule, build_schema_keys, build_type_ref_keys, classify_alias_key_sites,
+    collect_alias_key_candidates, collect_type_ref_uses,
+};
+pub use references::{
+    ReferenceIndex, TypePatternAlias, UseSite, build_type_patterns, key_matches_type_pattern,
+    value_location,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct FileInfo {
@@ -38,7 +44,11 @@ pub struct InfoService {
     pub inline_script_counts: HashMap<String, usize>,
     var_effects: HashSet<String>,
     pub reference_index: ReferenceIndex,
+    pub alias_key_index: ReferenceIndex,
+    alias_key_cache: AliasKeyCache,
     type_ref_keys: Option<HashMap<String, Vec<TypeRefRule>>>,
+    type_patterns: Option<Vec<TypePatternAlias>>,
+    schema_keys: Option<HashSet<String>>,
 }
 
 impl Default for InfoService {
@@ -58,13 +68,21 @@ impl InfoService {
             inline_script_counts: HashMap::new(),
             var_effects: HashSet::new(),
             reference_index: ReferenceIndex::default(),
+            alias_key_index: ReferenceIndex::default(),
+            alias_key_cache: AliasKeyCache::default(),
             type_ref_keys: None,
+            type_patterns: None,
+            schema_keys: None,
         }
     }
 
     pub fn update_ruleset_data(&mut self, effects: HashSet<String>) {
         self.var_effects = effects;
         self.type_ref_keys = None;
+        self.type_patterns = None;
+        self.schema_keys = None;
+        self.alias_key_cache = AliasKeyCache::default();
+        self.alias_key_index = ReferenceIndex::default();
     }
 
     pub fn profile_summary(&self) -> String {
@@ -251,7 +269,86 @@ impl InfoService {
             self.reference_index.merge(uri, refs);
         }
 
+        if self.schema_keys.is_none() {
+            self.schema_keys = Some(build_schema_keys(ruleset));
+        }
+        let mut candidates = Vec::new();
+        collect_alias_key_candidates(
+            &ast.root_children,
+            &ast.arena,
+            table,
+            self.schema_keys.as_ref().expect("schema keys just set"),
+            &mut candidates,
+        );
+        self.alias_key_cache.merge_file(uri, candidates);
+        self.classify_file_alias_keys(uri, ruleset);
+
         self.files.insert(uri.to_string(), info);
+    }
+
+    pub fn classify_file_alias_keys(&mut self, uri: &str, ruleset: &RuleSet) {
+        if self.type_patterns.is_none() {
+            self.type_patterns = Some(build_type_patterns(ruleset));
+        }
+        let patterns = self.type_patterns.as_ref().expect("type patterns just set");
+        if patterns.is_empty() {
+            self.alias_key_index.remove_file(uri);
+            return;
+        }
+        let refs = classify_alias_key_sites(
+            self.alias_key_cache.sites(uri),
+            uri,
+            patterns,
+            &self.type_index,
+        );
+        self.alias_key_index.remove_file(uri);
+        self.alias_key_index.merge(uri, refs);
+    }
+
+    pub fn rebuild_alias_key_index(&mut self, ruleset: &RuleSet) {
+        if self.type_patterns.is_none() {
+            self.type_patterns = Some(build_type_patterns(ruleset));
+        }
+        self.alias_key_index = ReferenceIndex::default();
+        let uris: Vec<String> = self
+            .alias_key_cache
+            .file_uris()
+            .map(|uri| uri.to_string())
+            .collect();
+        for uri in uris {
+            self.classify_file_alias_keys(&uri, ruleset);
+        }
+    }
+
+    pub fn pattern_instance_fingerprint(&mut self, ruleset: &RuleSet) -> u64 {
+        use std::hash::{Hash, Hasher};
+        if self.type_patterns.is_none() {
+            self.type_patterns = Some(build_type_patterns(ruleset));
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut types: Vec<&str> = self
+            .type_patterns
+            .as_ref()
+            .expect("type patterns just set")
+            .iter()
+            .map(|pattern| pattern.type_name.as_str())
+            .collect();
+        types.sort_unstable();
+        types.dedup();
+        for type_name in types {
+            type_name.hash(&mut hasher);
+            let mut names: Vec<String> = self
+                .type_index
+                .instances(type_name)
+                .iter()
+                .map(|(_, inst)| inst.name.to_ascii_lowercase())
+                .collect();
+            names.sort_unstable();
+            for name in names {
+                name.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
     }
 
     pub fn export_fingerprint(&self, uri: &str) -> u64 {
@@ -300,6 +397,8 @@ impl InfoService {
             }
             Arc::make_mut(&mut self.type_index).remove_file(uri);
             self.reference_index.remove_file(uri);
+            self.alias_key_index.remove_file(uri);
+            self.alias_key_cache.remove_file(uri);
             for et in &info.saved_event_targets {
                 if let Some(count) = self.event_target_counts.get_mut(et) {
                     *count -= 1;
