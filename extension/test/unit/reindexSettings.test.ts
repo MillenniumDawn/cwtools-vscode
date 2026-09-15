@@ -1,12 +1,16 @@
 import { suite, test } from "vitest";
 import * as assert from "assert";
+import * as fs from "fs";
+import * as path from "path";
 import {
 	normalizeBackgroundReindexMinutes,
 	normalizeBackgroundReindexIdleSeconds,
 	buildSettingsPayload,
 	mapIgnoreOptions,
 	isLiveSettingsChange,
+	isReloadSettingsChange,
 	LIVE_SETTINGS_KEYS,
+	RELOAD_SETTINGS_KEYS,
 } from "../../src/host/reindexSettings";
 import type { LiveServerSettings } from "../../src/host/reindexSettings";
 
@@ -202,6 +206,79 @@ suite("reindexSettings — buildSettingsPayload", () => {
 	});
 });
 
+suite("reindexSettings — settings change classification", () => {
+	function fakeEvent(touched: string[]) {
+		return {
+			affectsConfiguration(section: string): boolean {
+				return touched.includes(section);
+			},
+		};
+	}
+
+	test("classifies every manifest cwtools setting exactly once", () => {
+		const manifest = JSON.parse(
+			fs.readFileSync(
+				path.resolve(__dirname, "../../package/package.json"),
+				"utf8",
+			),
+		) as {
+			contributes: {
+				configuration: Array<{
+					properties: Record<string, unknown>;
+				}>;
+			};
+		};
+		const settings = manifest.contributes.configuration.flatMap((section) =>
+			Object.keys(section.properties).filter((key) =>
+				key.startsWith("cwtools."),
+			),
+		);
+		const overlap = LIVE_SETTINGS_KEYS.filter((key) =>
+			RELOAD_SETTINGS_KEYS.includes(
+				key as (typeof RELOAD_SETTINGS_KEYS)[number],
+			),
+		);
+		assert.deepStrictEqual(overlap, []);
+		for (const setting of settings) {
+			const classifications = [
+				LIVE_SETTINGS_KEYS.includes(
+					setting as (typeof LIVE_SETTINGS_KEYS)[number],
+				),
+				RELOAD_SETTINGS_KEYS.includes(
+					setting as (typeof RELOAD_SETTINGS_KEYS)[number],
+				),
+			].filter(Boolean);
+			assert.strictEqual(
+				classifications.length,
+				1,
+				`${setting} must be classified as live or reload`,
+			);
+		}
+	});
+
+	test("returns true for each reload key", () => {
+		for (const key of RELOAD_SETTINGS_KEYS) {
+			assert.strictEqual(
+				isReloadSettingsChange(fakeEvent([key])),
+				true,
+				`${key} should require a window reload`,
+			);
+		}
+	});
+
+	test("returns false for live and unrelated keys", () => {
+		assert.strictEqual(
+			isReloadSettingsChange(fakeEvent(["cwtools.hover.debug"])),
+			false,
+		);
+		assert.strictEqual(
+			isReloadSettingsChange(fakeEvent(["cwtools.notASetting"])),
+			false,
+		);
+		assert.strictEqual(isReloadSettingsChange(fakeEvent([])), false);
+	});
+});
+
 suite("reindexSettings — isLiveSettingsChange", () => {
 	function fakeEvent(touched: string[]) {
 		return {
@@ -230,7 +307,7 @@ suite("reindexSettings — isLiveSettingsChange", () => {
 		);
 	});
 
-	test("returns false for non-live keys (rules_folder, cache, other)", () => {
+	test("returns false for reload and unrelated keys", () => {
 		assert.strictEqual(
 			isLiveSettingsChange(fakeEvent(["cwtools.rules_folder"])),
 			false,
@@ -241,10 +318,6 @@ suite("reindexSettings — isLiveSettingsChange", () => {
 		);
 		assert.strictEqual(
 			isLiveSettingsChange(fakeEvent(["cwtools.cache.eu4"])),
-			false,
-		);
-		assert.strictEqual(
-			isLiveSettingsChange(fakeEvent(["cwtools.trace.server"])),
 			false,
 		);
 		assert.strictEqual(isLiveSettingsChange(fakeEvent([])), false);

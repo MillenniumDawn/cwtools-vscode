@@ -1,6 +1,13 @@
 import * as path from "path";
 import type { ExtensionContext } from "vscode";
-import { CancellationError, Uri, l10n, workspace, window } from "vscode";
+import {
+	CancellationError,
+	Uri,
+	commands,
+	l10n,
+	workspace,
+	window,
+} from "vscode";
 import type {
 	ErrorHandler,
 	LanguageClientOptions,
@@ -21,6 +28,7 @@ import {
 	buildSettingsPayload,
 	mapIgnoreOptions,
 	isLiveSettingsChange,
+	isReloadSettingsChange,
 	type FormattingIndentStyle,
 	type HoverScopeDisplay,
 	type LiveServerSettings,
@@ -429,10 +437,30 @@ export function createLanguageClient(
 	// Push mapped configuration when a live setting changes. We drive this
 	// ourselves rather than via synchronize.configurationSection, which would
 	// send the raw (unmapped) `cwtools` section the server can't read.
-	// The allow-list lives in reindexSettings.LIVE_SETTINGS_KEYS so a new
-	// live key can't be added in one place and forgotten in the other.
+	// The allow-lists live in reindexSettings.ts so a new setting can't be added
+	// in one place and forgotten in the other.
 	context.subscriptions.push(
 		workspace.onDidChangeConfiguration((e) => {
+			if (isReloadSettingsChange(e)) {
+				const reloadWindow = l10n.t("Reload Window");
+				void Promise.resolve(
+					window.showInformationMessage(
+						l10n.t(
+							"CWTools settings changed. Reload the window to apply them.",
+						),
+						reloadWindow,
+					),
+				)
+					.then((action) => {
+						if (action === reloadWindow) {
+							return commands.executeCommand("workbench.action.reloadWindow");
+						}
+						return undefined;
+					})
+					.catch((err: unknown) =>
+						logError("Failed to reload window after settings change", err),
+					);
+			}
 			if (!isLiveSettingsChange(e)) {
 				return;
 			}

@@ -50,6 +50,9 @@
 #### Extension
 
 * Graph labels now repaint when the VS Code webview theme changes. (#585)
+#### Extension
+
+* Changing settings that require startup now prompts to reload the window (#504).
 
 ### 3.4.4
 

@@ -19,6 +19,9 @@ const {
 	showErrorMessage,
 	openTextDocument,
 	showTextDocument,
+	executeCommand,
+	onDidChangeConfiguration,
+	logError,
 } = vi.hoisted(() => {
 	const createdWatchers: { glob: string; dispose: () => void }[] = [];
 	const configurationValues = new Map<string, unknown>();
@@ -55,6 +58,9 @@ const {
 		showErrorMessage: vi.fn(),
 		openTextDocument: vi.fn(),
 		showTextDocument: vi.fn(),
+		executeCommand: vi.fn(),
+		onDidChangeConfiguration: vi.fn(() => disposable),
+		logError: vi.fn(),
 	};
 });
 
@@ -74,14 +80,22 @@ vi.mock("vscode", async (importOriginal) => ({
 		showErrorMessage,
 		showTextDocument,
 	},
+	commands: { executeCommand },
 	workspace: {
 		createFileSystemWatcher,
 		getConfiguration: () => ({
 			get: (key: string) => configurationValues.get(key),
 		}),
-		onDidChangeConfiguration: vi.fn(() => disposable),
+		onDidChangeConfiguration,
 		openTextDocument,
 	},
+}));
+
+vi.mock("../../src/host/logger", () => ({
+	errorMessage: (err: unknown) =>
+		err instanceof Error ? err.message : String(err),
+	logError,
+	outputChannel: { appendLine: () => undefined },
 }));
 
 vi.mock("vscode-languageclient/node", () => ({
@@ -154,6 +168,29 @@ function create(onStopped: () => void = () => {}): {
 
 function watchedFileEvent(uri: string): { uri: string; type: 1 | 2 | 3 } {
 	return { uri, type: 2 };
+}
+
+type ConfigurationChangeEvent = {
+	affectsConfiguration(section: string): boolean;
+};
+
+function configurationChangeEvent(touched: string[]): ConfigurationChangeEvent {
+	return {
+		affectsConfiguration(section: string): boolean {
+			return touched.includes(section);
+		},
+	};
+}
+
+function configurationChangeHandler(): (
+	event: ConfigurationChangeEvent,
+) => void {
+	const calls = onDidChangeConfiguration.mock.calls as unknown as Array<
+		[(event: ConfigurationChangeEvent) => void]
+	>;
+	const handler = calls[0]?.[0];
+	assert.ok(handler, "no configuration change handler");
+	return handler;
 }
 
 suite("lspClient — watched files", () => {
@@ -242,6 +279,62 @@ suite("lspClient — watched files", () => {
 			"file:///mod/common/ideas/x.txt",
 			"file:///mod/My%20Mod/events/y.txt",
 		]);
+	});
+});
+
+suite("lspClient — reload settings", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		lastClientOptions.value = undefined;
+		configurationValues.clear();
+	});
+
+	test("prompts once for matching changes and reloads when selected", async () => {
+		showInformationMessage.mockResolvedValue("Reload Window");
+		create();
+		const handler = configurationChangeHandler();
+		handler(
+			configurationChangeEvent([
+				"cwtools.profiling",
+				"cwtools.inlayHints.locTitles",
+			]),
+		);
+		await Promise.resolve();
+
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			[
+				"CWTools settings changed. Reload the window to apply them.",
+				"Reload Window",
+			],
+		]);
+		assert.deepStrictEqual(executeCommand.mock.calls, [
+			["workbench.action.reloadWindow"],
+		]);
+	});
+
+	test("does not reload when the prompt is dismissed", async () => {
+		showInformationMessage.mockResolvedValue(undefined);
+		create();
+		const handler = configurationChangeHandler();
+		handler(configurationChangeEvent(["cwtools.rules_folder"]));
+		await Promise.resolve();
+
+		assert.strictEqual(showInformationMessage.mock.calls.length, 1);
+		assert.deepStrictEqual(executeCommand.mock.calls, []);
+	});
+
+	test("logs when reloading the window fails", async () => {
+		const failure = new Error("reload failed");
+		showInformationMessage.mockResolvedValue("Reload Window");
+		executeCommand.mockRejectedValue(failure);
+		create();
+		const handler = configurationChangeHandler();
+		handler(configurationChangeEvent(["cwtools.rules_folder"]));
+		await vi.waitFor(() =>
+			assert.deepStrictEqual(logError.mock.calls, [
+				["Failed to reload window after settings change", failure],
+			]),
+		);
 	});
 });
 

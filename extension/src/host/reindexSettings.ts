@@ -52,6 +52,9 @@ export interface LiveServerSettings {
 	formattingInsertFinalNewline: boolean;
 }
 
+// Settings that take effect without restarting the language server. The graph
+// and trace settings are handled by their respective VS Code clients; the
+// remaining keys are sent in the mapped didChangeConfiguration payload.
 export const LIVE_SETTINGS_KEYS = [
 	"cwtools.errors.ignore",
 	"cwtools.errors.ignorefiles",
@@ -67,12 +70,39 @@ export const LIVE_SETTINGS_KEYS = [
 	"cwtools.formatting.maxLineWidth",
 	"cwtools.formatting.trimTrailingWhitespace",
 	"cwtools.formatting.insertFinalNewline",
+	"cwtools.graph.zoomSensitivity",
+	"cwtools.trace.server",
+] as const;
+
+// These settings are read only while the extension or server starts. Keep this
+// list disjoint from LIVE_SETTINGS_KEYS so every contributed setting has one
+// clear change path.
+export const RELOAD_SETTINGS_KEYS = [
+	"cwtools.rules_folder",
+	"cwtools.inlayHints.locTitles",
+	"cwtools.inlayHints.scopes",
+	"cwtools.cache.eu4",
+	"cwtools.cache.hoi4",
+	"cwtools.cache.stellaris",
+	"cwtools.cache.ck2",
+	"cwtools.cache.imperator",
+	"cwtools.cache.vic2",
+	"cwtools.cache.ck3",
+	"cwtools.cache.vic3",
+	"cwtools.cache.eu5",
+	"cwtools.profiling",
 ] as const;
 
 export function isLiveSettingsChange(e: {
 	affectsConfiguration(section: string): boolean;
 }): boolean {
 	return LIVE_SETTINGS_KEYS.some((k) => e.affectsConfiguration(k));
+}
+
+export function isReloadSettingsChange(e: {
+	affectsConfiguration(section: string): boolean;
+}): boolean {
+	return RELOAD_SETTINGS_KEYS.some((k) => e.affectsConfiguration(k));
 }
 
 // The didChangeConfiguration payload pushed on a live settings edit: mapped
