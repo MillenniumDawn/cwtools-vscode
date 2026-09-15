@@ -1,5 +1,10 @@
 ### Unreleased
 
+#### Engine
+
+* Bare values now keep their source range tight to the value, so comments and
+  blank lines are preserved by formatting. (#546)
+
 ### 3.4.4
 
 #### Tooling
@@ -45,6 +50,7 @@
 * Guard setup failures now explain the expected input checkouts and overrides.
   Validation also times out with the retained log tail, and vanilla guard pins are
   checked for clean revisions. (#515)
+
 ### 3.4.2
 
 #### Engine
