@@ -1,6 +1,7 @@
 //! `fix`: apply (or preview) the machine-applicable fixes the validators emit.
 
 use cwtools_driver::{RulesInput, Session, SessionConfig, VanillaCacheAuto};
+use cwtools_game::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
 use std::collections::BTreeMap;
@@ -146,7 +147,15 @@ pub(super) fn run(args: FixArgs) {
     let vanilla_cache_index = vanilla_cache
         .as_ref()
         .and_then(|p| match vanilla_cache::load(p) {
-            Ok(loaded) => Some(loaded),
+            Ok((cache_game, fp, data)) => {
+                if Game::from_str(&cache_game) != Some(game_id) {
+                    eprintln!(
+                        "  warn: vanilla cache was built for game '{}', fixing '{}'",
+                        cache_game, game
+                    );
+                }
+                Some((fp, data))
+            }
             Err(e) => {
                 eprintln!(
                     "  warn: could not load vanilla cache {}: {}",
@@ -155,8 +164,7 @@ pub(super) fn run(args: FixArgs) {
                 );
                 None
             }
-        })
-        .map(|(_, fp, data)| (fp, data));
+        });
     let (_fp, vanilla_cache_index) = vanilla_cache_index.unzip();
 
     // Same automatic base-game cache as `validate`, so both commands see

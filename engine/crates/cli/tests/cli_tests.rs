@@ -2147,6 +2147,90 @@ fn fix_mod() -> tempfile::TempDir {
 }
 
 #[test]
+fn test_fix_warns_when_vanilla_cache_is_for_another_game() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vanilla = fixtures_dir().join("discover").join("mod_a");
+    let rules_dir = fixtures_dir().join("rules");
+    let cache = tmp.path().join("vanilla.cwv");
+
+    cwtools()
+        .args([
+            "cache-vanilla",
+            "--game",
+            "stellaris",
+            "--vanilla",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--output",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let mod_dir = fix_mod();
+    cwtools()
+        .args([
+            "fix",
+            "--game",
+            "hoi4",
+            "--directory",
+            mod_dir.path().to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "vanilla cache was built for game 'stellaris', fixing 'hoi4'",
+        ));
+}
+
+#[test]
+fn test_fix_does_not_warn_for_equivalent_vanilla_cache_game_aliases() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vanilla = fixtures_dir().join("discover").join("mod_a");
+    let rules_dir = fixtures_dir().join("rules");
+    let mod_dir = fix_mod();
+
+    for (cache_game, fix_game) in [("stl", "stellaris"), ("imperator", "ir")] {
+        let cache = tmp.path().join(format!("{cache_game}.cwv"));
+        cwtools()
+            .args([
+                "cache-vanilla",
+                "--game",
+                cache_game,
+                "--vanilla",
+                vanilla.to_str().unwrap(),
+                "--rules",
+                rules_dir.to_str().unwrap(),
+                "--output",
+                cache.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+
+        cwtools()
+            .args([
+                "fix",
+                "--game",
+                fix_game,
+                "--directory",
+                mod_dir.path().to_str().unwrap(),
+                "--rules",
+                rules_dir.to_str().unwrap(),
+                "--vanilla-cache",
+                cache.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("vanilla cache was built").not());
+    }
+}
+
+#[test]
 fn test_fix_dry_run_previews_without_writing() {
     let tmp = fix_mod();
     let rules_dir = fixtures_dir().join("rules");
