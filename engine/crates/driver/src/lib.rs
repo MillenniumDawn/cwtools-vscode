@@ -644,13 +644,7 @@ impl Session {
                             .map(str::to_string)
                             .collect(),
                     );
-                    for (type_name, entries) in vanilla_index.map {
-                        let per_type = HashMap::from([(
-                            type_name,
-                            entries.into_iter().map(|(_, inst)| inst).collect(),
-                        )]);
-                        type_index.merge_base_game("<vanilla>", per_type);
-                    }
+                    type_index.merge_base_game_with_uris(vanilla_index.map);
                     type_index.file_index = build_file_index(
                         &directory,
                         ignore_files,

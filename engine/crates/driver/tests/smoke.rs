@@ -1584,6 +1584,45 @@ fn vanilla_cache_auto_writes_then_reuses() {
 }
 
 #[test]
+fn vanilla_cache_auto_preserves_real_source_uris() {
+    let ws = cache_workspace();
+    let vanilla_things = ws.path().join("vanilla").join("common").join("things");
+    std::fs::write(vanilla_things.join("y.txt"), "other_vanilla_thing = { }\n").unwrap();
+
+    let source_uris = |session: &cwtools_driver::SessionWithFiles| {
+        let mut uris: Vec<(String, String)> = session
+            .type_index()
+            .instances("thing")
+            .iter()
+            .filter(|(_, instance)| {
+                instance.name == "vanilla_thing" || instance.name == "other_vanilla_thing"
+            })
+            .map(|(uri, instance)| (instance.name.clone(), uri.to_string()))
+            .collect();
+        uris.sort();
+        uris
+    };
+    let expected = vec![
+        (
+            "other_vanilla_thing".to_string(),
+            vanilla_things.join("y.txt").to_string_lossy().into_owned(),
+        ),
+        (
+            "vanilla_thing".to_string(),
+            vanilla_things.join("x.txt").to_string_lossy().into_owned(),
+        ),
+    ];
+
+    let live = load_cached(ws.path(), false);
+    assert_eq!(source_uris(&live), expected);
+
+    std::fs::write(vanilla_things.join("x.txt"), "").unwrap();
+    std::fs::write(vanilla_things.join("y.txt"), "").unwrap();
+    let cached = load_cached(ws.path(), false);
+    assert_eq!(source_uris(&cached), expected);
+}
+
+#[test]
 fn vanilla_cache_auto_refresh_rebuilds_and_overwrites() {
     let ws = cache_workspace();
     let parse_cache_dir = ws.path().join("ast-cache");
