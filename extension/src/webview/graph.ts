@@ -162,8 +162,11 @@ const style: StylesheetJsonBlock[] = [
 ];
 let _cy: cytoscape.Core;
 let _tips: Instance[] = [];
+let _themeObserver: MutationObserver | undefined;
 
 function initCytoscape(settings: settings): cytoscape.Core {
+	_themeObserver?.disconnect();
+	_themeObserver = undefined;
 	if (_cy) {
 		_tips.forEach((t) => t.destroy());
 		_tips = [];
@@ -469,6 +472,11 @@ function tech(
 		cy.json(json);
 	}
 	cy.style(style);
+	_themeObserver = new MutationObserver(() => cy.style().update());
+	_themeObserver.observe(htmlEl, {
+		attributes: true,
+		attributeFilter: ["style"],
+	});
 
 	setupTooltips(cy);
 

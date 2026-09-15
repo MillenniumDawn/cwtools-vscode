@@ -47,6 +47,9 @@
   lens stayed at 0. Call sites are cached as non-schema leaf keys and reclassified
   when the instance set changes or after a workspace scan, without walking ASTs
   or reading files on each lens resolve.
+#### Extension
+
+* Graph labels now repaint when the VS Code webview theme changes. (#585)
 
 ### 3.4.4
 
