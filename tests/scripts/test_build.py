@@ -55,3 +55,49 @@ def test_copy_package_inputs_prunes_stale_content_and_preserves_generated_files(
         (dist_root / name).read_text(encoding="utf-8") == "generated"
         for name in ("README.md", "LICENSE.md", "CHANGELOG.md")
     )
+
+
+def test_copy_package_inputs_replaces_stale_file_with_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package_root = tmp_path / "package"
+    dist_root = tmp_path / "dist"
+    package_root.mkdir()
+    dist_root.mkdir()
+
+    theme = package_root / "theme"
+    theme.mkdir()
+    (theme / "colors.json").write_text("current", encoding="utf-8")
+    (dist_root / "theme").write_text("stale", encoding="utf-8")
+
+    monkeypatch.setattr(build, "EXTENSION_PACKAGE_ROOT", package_root)
+    monkeypatch.setattr(build, "EXTENSION_DIST_ROOT", dist_root)
+
+    CopyPackageInputs()
+
+    assert (dist_root / "theme").is_dir()
+    assert (dist_root / "theme" / "colors.json").read_text(
+        encoding="utf-8"
+    ) == "current"
+
+
+def test_copy_package_inputs_replaces_stale_directory_with_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package_root = tmp_path / "package"
+    dist_root = tmp_path / "dist"
+    package_root.mkdir()
+    dist_root.mkdir()
+
+    (package_root / "theme").write_text("current", encoding="utf-8")
+    stale_theme = dist_root / "theme"
+    stale_theme.mkdir()
+    (stale_theme / "colors.json").write_text("stale", encoding="utf-8")
+
+    monkeypatch.setattr(build, "EXTENSION_PACKAGE_ROOT", package_root)
+    monkeypatch.setattr(build, "EXTENSION_DIST_ROOT", dist_root)
+
+    CopyPackageInputs()
+
+    assert (dist_root / "theme").is_file()
+    assert (dist_root / "theme").read_text(encoding="utf-8") == "current"
