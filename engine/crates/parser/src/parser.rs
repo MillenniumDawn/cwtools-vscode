@@ -596,11 +596,10 @@ impl<'a> Parser<'a> {
             self.restore(saved_cursor);
         }
 
-        if let Some((value, _)) = self.parse_value(true) {
-            let end = self.pos();
+        if let Some((value, value_pos)) = self.parse_value(true) {
             let lv = LeafValue {
                 value,
-                pos: SourceRange { start: saved, end },
+                pos: value_pos,
             };
             let idx = self.arena.push_leaf_value(lv);
             out.push(Child::LeafValue(idx));
@@ -1086,6 +1085,47 @@ ENG = {
                 start: SourcePos { line: 2, col: 2 },
                 end: SourcePos { line: 2, col: 9 },
             }
+        );
+    }
+
+    #[test]
+    fn leaf_value_position_stops_before_an_own_line_comment() {
+        let table = StringTable::new();
+        let result = parse_string("root = {\n    1\n    # comment\n    2\n}\n", &table);
+        let Child::Leaf(root_idx) = &result.root_children[0] else {
+            panic!("expected root leaf");
+        };
+        let Value::Clause(children) = &result.arena.leaves[*root_idx as usize].value else {
+            panic!("expected root clause");
+        };
+        let Child::LeafValue(value_idx) = &children[0] else {
+            panic!("expected bare leaf value");
+        };
+        assert_eq!(
+            result.arena.leaf_values[*value_idx as usize].pos,
+            SourceRange {
+                start: SourcePos { line: 2, col: 4 },
+                end: SourcePos { line: 2, col: 5 },
+            }
+        );
+    }
+
+    #[test]
+    fn leaf_value_position_preserves_a_blank_line_before_the_next_bare_value() {
+        let table = StringTable::new();
+        let result = parse_string("root = {\n    1\n\n    2\n}\n", &table);
+        let Child::Leaf(root_idx) = &result.root_children[0] else {
+            panic!("expected root leaf");
+        };
+        let Value::Clause(children) = &result.arena.leaves[*root_idx as usize].value else {
+            panic!("expected root clause");
+        };
+        let Child::LeafValue(value_idx) = &children[0] else {
+            panic!("expected bare leaf value");
+        };
+        assert_eq!(
+            result.arena.leaf_values[*value_idx as usize].pos.end,
+            SourcePos { line: 2, col: 5 }
         );
     }
 

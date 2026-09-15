@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Bare values now keep their source range tight to the value, so comments and
+  blank lines are preserved by formatting. (#546)
 #### Tooling
 
 * The CLI now distinguishes usage, discovery, and empty-input failures from

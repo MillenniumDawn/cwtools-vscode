@@ -459,12 +459,15 @@ impl<'a> Printer<'a> {
     }
 
     fn are_bare_values(&self, children: &[Child]) -> bool {
-        children.iter().all(|c| match c {
-            Child::LeafValue(i) => {
-                !matches!(self.arena.leaf_values[*i as usize].value, Value::Clause(_))
-            }
-            _ => false,
-        })
+        children
+            .windows(2)
+            .all(|pair| !self.had_blank_line(&pair[0], &pair[1]))
+            && children.iter().all(|c| match c {
+                Child::LeafValue(i) => {
+                    !matches!(self.arena.leaf_values[*i as usize].value, Value::Clause(_))
+                }
+                _ => false,
+            })
     }
 
     fn rendered_values(&self, children: &[Child]) -> Vec<Cow<'a, str>> {
@@ -755,6 +758,18 @@ mod tests {
         assert!(out.contains("# head"));
         assert!(out.contains("foo = 1 # eol"));
         assert_eq!(dump(src), dump(&out));
+    }
+
+    #[test]
+    fn own_line_comment_after_a_bare_value_stays_on_its_line() {
+        let src = "root = {\n    1\n    # comment\n    2\n}\n";
+        assert_eq!(fmt(src), src);
+    }
+
+    #[test]
+    fn blank_line_between_bare_values_is_preserved() {
+        let src = "root = {\n    1\n\n    2\n}\n";
+        assert_eq!(fmt(src), src);
     }
 
     #[test]

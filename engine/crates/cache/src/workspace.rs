@@ -16,7 +16,8 @@ use cwtools_string_table::string_table::StringTable;
 /// v7: dropped ruleset shape from the fingerprint. A `.cwt` edit cannot change
 /// v8: folded the display locale into the fingerprint. The `.cwe` sidecar holds
 /// language the server was started in, so a cache built under one locale would
-const CACHE_VERSION: u32 = 8;
+/// v9: invalidates cached `LeafValue` ranges after they became tight.
+const CACHE_VERSION: u32 = 9;
 
 pub const PATH_METADATA_CACHE_SUPPORTED: bool = cfg!(unix);
 
