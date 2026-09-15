@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* The CLI now distinguishes usage, discovery, and empty-input failures from
+  validation findings with their documented exit codes. (#493)
 #### Engine
 
 * Ctrl+Click on `localization_key` in scripted localisation jumps to the loc

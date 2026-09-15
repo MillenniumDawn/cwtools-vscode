@@ -6,6 +6,7 @@ use cwtools_string_table::string_table::StringTable;
 use std::path::PathBuf;
 
 use super::rules::print_ruleset_summary;
+use crate::run::{EXIT_DISCOVERY_FAILED, EXIT_USAGE};
 
 pub(super) fn run(file: PathBuf) {
     if file.is_dir() {
@@ -39,12 +40,12 @@ pub(super) fn run(file: PathBuf) {
                     for e in &parsed.errors {
                         eprintln!("  {}", e);
                     }
-                    std::process::exit(1);
+                    std::process::exit(EXIT_USAGE);
                 }
             }
             Err(e) => {
                 eprintln!("Error parsing {}: {}", file.display(), e);
-                std::process::exit(1);
+                std::process::exit(EXIT_DISCOVERY_FAILED);
             }
         }
     }

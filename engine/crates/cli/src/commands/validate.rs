@@ -4,7 +4,6 @@ use cwtools_driver::{
     RulesInput, Session, SessionConfig, VanillaCacheAuto, index_game_dir,
     index_game_dir_with_parse_cache,
 };
-use cwtools_game::constants::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
 
@@ -16,7 +15,8 @@ use crate::diag::{
 use crate::report::ReportType;
 use crate::run::{
     EXIT_USAGE, announce_config, color_enabled, exit_code, exit_if_empty, load_config,
-    load_ignore_hashes, missing_required, note, report_owns_stdout, status, vanilla_notice,
+    load_ignore_hashes, missing_required, note, parse_game, report_owns_stdout, status,
+    vanilla_notice,
 };
 use crate::{codes, config, report, scope};
 
@@ -172,10 +172,7 @@ pub(super) fn run(args: ValidateArgs) {
         }
     }
 
-    let game_id = Game::from_str(&game).unwrap_or_else(|| {
-        eprintln!("Unknown game: {}. Supported: hoi4, stellaris, eu4, ck2, ck3, vic2, vic3, ir, eu5, custom", game);
-        std::process::exit(1);
-    });
+    let game_id = parse_game(&game);
     let parse_cache_game = game_id.to_string();
 
     let rules_label = if rules.is_dir() {

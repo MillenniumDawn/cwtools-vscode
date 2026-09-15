@@ -26,6 +26,16 @@ pub(crate) const EXIT_EMPTY_INPUT: i32 = 4;
 /// since the run never started and so has no validation result to report.
 pub(crate) const EXIT_USAGE: i32 = 2;
 
+/// Parse a supported game identifier, failing as a usage error when it is unknown.
+pub(crate) fn parse_game(game: &str) -> Game {
+    Game::from_str(game).unwrap_or_else(|| {
+        eprintln!(
+            "Unknown game: {game}. Supported: hoi4, stellaris, eu4, ck2, ck3, vic2, vic3, ir, eu5, custom"
+        );
+        std::process::exit(EXIT_USAGE);
+    })
+}
+
 /// Resolve the run's config file, failing loudly on a broken one. `anchor` is
 /// the directory the upward search starts from when `--config` wasn't given.
 pub(crate) fn load_config(
@@ -236,7 +246,7 @@ pub(crate) fn exit_code(failing: usize, discovery_failed: bool, write_failed: bo
     if discovery_failed {
         EXIT_DISCOVERY_FAILED
     } else if write_failed {
-        2
+        EXIT_USAGE
     } else if failing > 0 {
         1
     } else {

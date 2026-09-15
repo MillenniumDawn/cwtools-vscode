@@ -244,6 +244,18 @@ fn test_discover_empty_directory() {
 }
 
 #[test]
+fn test_discover_missing_directory_fails_with_discovery_exit_code() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("no_such_mod");
+    cwtools()
+        .args(["discover", missing.to_str().unwrap()])
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains(missing.to_str().unwrap()));
+}
+
+#[test]
 fn test_discover_multi_mod_workspace_uses_the_layered_file_set() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -426,7 +438,7 @@ fn test_cache_vanilla_unknown_game_fails() {
         ])
         .assert()
         .failure()
-        .code(1)
+        .code(2)
         .stderr(predicate::str::contains("Unknown game: not_a_real_game"));
     assert!(!output.exists(), "an unknown game must not write a cache");
 }
@@ -541,7 +553,9 @@ fn test_validate_bad_game_name_fails() {
             rules_dir.to_str().unwrap(),
         ])
         .assert()
-        .failure();
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("Unknown game: not_a_real_game"));
 }
 
 #[test]
@@ -3071,7 +3085,7 @@ fn test_parse_reports_errors_and_exits_nonzero() {
         .args(["parse", file.to_str().unwrap()])
         .assert()
         .failure()
-        .code(1)
+        .code(2)
         // The summary still goes to stdout unchanged.
         .stdout(predicate::str::contains("Parsed:"))
         .stderr(predicate::str::contains("parse error(s)"))
@@ -3089,7 +3103,7 @@ fn test_parse_reports_the_clause_depth_limit() {
         .args(["parse", file.to_str().unwrap()])
         .assert()
         .failure()
-        .code(1)
+        .code(2)
         .stderr(predicate::str::contains("clause nesting deeper than"));
 }
 
