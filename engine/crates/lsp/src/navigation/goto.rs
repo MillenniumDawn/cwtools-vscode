@@ -35,25 +35,30 @@ impl Backend {
         fallback: &Url,
     ) -> Option<GotoDefinitionResponse> {
         let (key, _, _) = self.loc_ref_at_cursor_doc(uri, pos)?;
-        let key = key.to_lowercase();
+        let locations = self.loc_key_locations(&key.to_lowercase(), fallback).await;
+        (!locations.is_empty()).then_some(GotoDefinitionResponse::Array(locations))
+    }
+
+    async fn loc_key_locations(&self, key: &str, fallback: &Url) -> Vec<Location> {
         let target = {
             let map = self.state.loc_locations.read();
-            map.get(key.as_str()).cloned()
-        }?;
-        let text = self.file_text_for(target.0.as_ref()).await;
+            map.get(key).cloned()
+        };
+        let Some((file_uri, line)) = target else {
+            return Vec::new();
+        };
+        let text = self.file_text_for(file_uri.as_ref()).await;
         let lines = text
             .as_deref()
             .map(|text| DocLines::new(text, self.position_encoding()));
-        Some(GotoDefinitionResponse::Array(vec![
-            self.source_location_with_lines(
-                target.0.as_ref(),
-                target.1,
-                0,
-                &key,
-                fallback,
-                lines.as_ref(),
-            ),
-        ]))
+        vec![self.source_location_with_lines(
+            file_uri.as_ref(),
+            line,
+            0,
+            key,
+            fallback,
+            lines.as_ref(),
+        )]
     }
 
     pub(crate) async fn goto_definition_impl(
@@ -102,27 +107,7 @@ impl Backend {
                     locations_at(self, defs, name, fallback).await
                 }
                 ReferenceHint::LocRef { key } => {
-                    let key = key.to_lowercase();
-                    let target = {
-                        let map = self.state.loc_locations.read();
-                        map.get(key.as_str()).cloned()
-                    };
-                    if let Some((file_uri, line)) = target {
-                        let text = self.file_text_for(file_uri.as_ref()).await;
-                        let lines = text
-                            .as_deref()
-                            .map(|text| DocLines::new(text, self.position_encoding()));
-                        vec![self.source_location_with_lines(
-                            file_uri.as_ref(),
-                            line,
-                            0,
-                            &key,
-                            fallback,
-                            lines.as_ref(),
-                        )]
-                    } else {
-                        Vec::new()
-                    }
+                    self.loc_key_locations(&key.to_lowercase(), fallback).await
                 }
                 ReferenceHint::FileRef { path } => self.file_ref_locations(path, fallback).await,
                 ReferenceHint::EnumRef { enum_name, value } => self
@@ -145,6 +130,18 @@ impl Backend {
 
         // still resolves. (#39)
         if let Some(element) = self.element_at_cursor(&uri, pos) {
+            // HOI4 scripted loc files are often untyped (#725).
+            if let PositionElement::Leaf { key, value } = &element
+                && is_localization_key_field(key)
+                && !value.is_empty()
+            {
+                let locations = self
+                    .loc_key_locations(&unquote(value).to_lowercase(), fallback)
+                    .await;
+                if !locations.is_empty() {
+                    return Ok(Some(GotoDefinitionResponse::Array(locations)));
+                }
+            }
             let candidates: Vec<String> = match &element {
                 PositionElement::Leaf { key, value } if !value.is_empty() => {
                     vec![unquote(value).to_string(), key.clone()]
@@ -281,4 +278,8 @@ impl Backend {
         }
         roots
     }
+}
+
+fn is_localization_key_field(key: &str) -> bool {
+    key.eq_ignore_ascii_case("localization_key") || key.eq_ignore_ascii_case("localisation_key")
 }

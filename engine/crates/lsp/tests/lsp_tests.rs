@@ -3198,6 +3198,29 @@ fn test_goto_localisation_key() {
 }
 
 #[test]
+fn test_goto_scripted_loc_localization_key_without_type() {
+    // #725: untyped localization_key in scripted_localisation still jumps to the yml.
+    let loc = &[("test_l_english.yml", "l_english:\n MY_KEY:0 \"Text\"\n")];
+    let files = &[(
+        "common/scripted_localisation/s.txt",
+        "defined_text = {\n    name = GetFoo\n    text = {\n        localization_key = MY_KEY\n    }\n}\n",
+    )];
+    let locs = goto_def(
+        GOTO_RULES,
+        loc,
+        files,
+        "common/scripted_localisation/s.txt",
+        3,
+        30,
+    );
+    assert!(
+        locs.iter().any(|(u, _)| u.ends_with("test_l_english.yml")),
+        "goto on an untyped localization_key must resolve to the yml, got: {:?}",
+        locs
+    );
+}
+
+#[test]
 fn test_goto_special_project_sp_prefix() {
     // complete_special_project = sp:MY_PROJ — the sp: prefix resolves through the
     // matching link's data_source <special_project>.
