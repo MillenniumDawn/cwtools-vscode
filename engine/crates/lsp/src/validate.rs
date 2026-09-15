@@ -1197,25 +1197,42 @@ impl Backend {
     /// text, so find-references keeps answering closed files from the index
     /// between workspace scans (#474). Open buffers are not recorded here:
     /// the request reads them fresh, so the sweep is not paid per keystroke.
+    /// A language the scan does not parse is skipped here too, so a watched
+    /// file in it does not become a target the next scan takes away again.
     pub(crate) fn update_loc_locations_for_file(
         &self,
         uri: &str,
         files: &[cwtools_localization::LocFile],
     ) {
-        let primary_lang = self
+        let hover_all = self
             .state
-            .config
-            .read()
-            .loc_languages
+            .hover_show_all_languages
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let loc_languages = self.state.config.read().loc_languages.clone();
+        let primary_lang = loc_languages
             .as_deref()
             .and_then(|l| l.first().copied())
             .unwrap_or(cwtools_localization::Lang::English);
+        // The scan's `LocService` filter: every language when hovers show
+        // them all, else only the configured ones (a file with no language
+        // header is kept either way).
+        let parsed_languages = if hover_all {
+            None
+        } else {
+            loc_languages.as_deref()
+        };
         let uri: Arc<str> = Arc::from(uri);
         // Lock order: loc_index -> loc_locations.
         let loc_index = self.state.loc_index.read();
         let mut locations = self.state.loc_locations.write();
         locations.remove_file(&uri);
         for file in files {
+            if let Some(langs) = parsed_languages
+                && let Some(lang) = file.lang
+                && !langs.contains(&lang)
+            {
+                continue;
+            }
             let lang = file.lang.unwrap_or(cwtools_localization::Lang::English);
             let entries = file.entries.iter().map(|entry| {
                 let key = loc_index

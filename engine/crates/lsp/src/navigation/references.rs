@@ -8,9 +8,7 @@ use tower_lsp::lsp_types::*;
 use cwtools_info::PositionElement;
 
 use crate::lines::{DocLines, index_snapshots};
-use crate::navigation::helpers::{
-    code_token_cols_in_line_ignore_case, loc_def_key_col, word_in_line,
-};
+use crate::navigation::helpers::{code_token_cols_in_line_ignore_case, loc_def_site, word_in_line};
 use crate::paths::{loc_ref_at_cursor_with_encoding, logical_path_from_uri, parse_uri};
 use crate::{Backend, FileTextSnapshot};
 use cwtools_info::ReferenceHint;
@@ -251,7 +249,7 @@ impl Backend {
             .into_iter()
             .filter_map(|(uri, line0, key_lower)| {
                 let lines = indexed.get(uri.as_str())?;
-                let col = loc_def_key_col(lines.line(line0), &key_lower)?;
+                let (line0, col) = loc_def_site(lines, line0, &key_lower)?;
                 Some(Location {
                     uri: parse_uri(&uri, fallback),
                     range: lines.token_range(line0, col, &key_lower),

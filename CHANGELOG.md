@@ -21,7 +21,11 @@
   blocking pool that holds only the files in flight. Rename still visits every
   loc file for `$key$` references and unconfigured languages, but streams
   them the same way. Listed definitions follow `localisation.languages`, the
-  scope goto and hover already use. (#474)
+  scope goto and hover already use, also for a file the watcher brings in
+  between scans; a key the base game also defines falls back to that
+  definition when the mod's file is deleted; and a definition whose file
+  changed without a watcher event is found where it is now rather than
+  dropped. Removing a file from the index is O(1). (#474)
 #### Tooling
 
 * The CLI now distinguishes usage, discovery, and empty-input failures from
