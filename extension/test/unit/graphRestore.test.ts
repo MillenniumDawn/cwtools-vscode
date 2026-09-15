@@ -24,16 +24,22 @@ const {
 	readFile,
 	registerWebviewPanelSerializer,
 	serializers,
+	lifecycleEvents,
 	logError,
 } = vi.hoisted(() => {
 	const serializers: SerializerShape[] = [];
 	const registeredCommands = new Map<string, (...args: never[]) => unknown>();
+	const lifecycleEvents: string[] = [];
 	return {
 		executeCommand: vi.fn(),
 		registerCommand: vi.fn(
 			(id: string, handler: (...args: never[]) => unknown) => {
 				registeredCommands.set(id, handler);
-				return { dispose: () => {} };
+				const disposable = {
+					dispose: vi.fn(() => lifecycleEvents.push(`dispose:${id}`)),
+				};
+				lifecycleEvents.push(`register:${id}`);
+				return disposable;
 			},
 		),
 		showWarningMessage: vi.fn(),
@@ -48,6 +54,7 @@ const {
 		),
 		serializers,
 		registeredCommands,
+		lifecycleEvents,
 		logError: vi.fn(),
 	};
 });
@@ -122,9 +129,10 @@ suite("graph panel restore", () => {
 	// A stand-in for the panel the host hands to the serializer: enough of the
 	// WebviewPanel surface for GraphPanel.restore to rebuild the panel, with
 	// postMessage recorded and a way to simulate the webview's "ready" message.
-	function fakePanel() {
+	function fakePanel(name = "panel") {
 		let messageListener: ((message: unknown) => void) | undefined;
 		const postMessage = vi.fn();
+		const dispose = vi.fn(() => lifecycleEvents.push(`${name}:panel-dispose`));
 		const panel = {
 			webview: {
 				html: "",
@@ -140,10 +148,11 @@ suite("graph panel restore", () => {
 			},
 			onDidDispose: () => ({ dispose: () => {} }),
 			onDidChangeViewState: () => ({ dispose: () => {} }),
-			dispose: vi.fn(),
+			dispose,
 		};
 		return {
 			panel: panel as unknown as WebviewPanel,
+			dispose,
 			postMessage,
 			ready: () => messageListener?.({ command: "ready" }),
 		};
@@ -174,6 +183,7 @@ suite("graph panel restore", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		lifecycleEvents.length = 0;
 		client.initializeResult = {
 			capabilities: {
 				executeCommandProvider: { commands: [GRAPH_DATA_COMMAND] },
@@ -375,6 +385,26 @@ suite("graph panel restore", () => {
 					"Run 'CWTools: Show graph' to rebuild the graph.",
 			],
 		]);
+	});
+
+	test("disposes the existing panel and handlers before restoring a replacement", () => {
+		const existing = fakePanel("existing");
+		GraphPanel.restore("/ext", existing.panel);
+
+		const replacement = fakePanel("replacement");
+		const revived = GraphPanel.restore("/ext", replacement.panel);
+
+		assert.strictEqual(existing.dispose.mock.calls.length, 1);
+		assert.deepStrictEqual(lifecycleEvents, [
+			"register:cwtools.saveGraphImage",
+			"register:cwtools.saveGraphJson",
+			"existing:panel-dispose",
+			"dispose:cwtools.saveGraphJson",
+			"dispose:cwtools.saveGraphImage",
+			"register:cwtools.saveGraphImage",
+			"register:cwtools.saveGraphJson",
+		]);
+		assert.strictEqual(GraphPanel.currentPanel, revived);
 	});
 
 	test("logs a restore failure instead of rejecting", async () => {

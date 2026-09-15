@@ -120,6 +120,7 @@ export class GraphPanel {
 		extensionPath: string,
 		panel: vscode.WebviewPanel,
 	): GraphPanel {
+		GraphPanel.currentPanel?.dispose();
 		const revived = new GraphPanel(extensionPath, panel);
 		GraphPanel.currentPanel = revived;
 		return revived;
