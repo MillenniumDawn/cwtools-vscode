@@ -14,6 +14,19 @@ interface SerializerShape {
 	deserializeWebviewPanel(webviewPanel: unknown, state: unknown): Promise<void>;
 }
 
+interface Deferred<T> {
+	promise: Promise<T>;
+	resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((resolvePromise) => {
+		resolve = resolvePromise;
+	});
+	return { promise, resolve };
+}
+
 const {
 	executeCommand,
 	registerCommand,
@@ -134,6 +147,7 @@ suite("graph panel restore", () => {
 		const postMessage = vi.fn();
 		const dispose = vi.fn(() => lifecycleEvents.push(`${name}:panel-dispose`));
 		const panel = {
+			reveal: vi.fn(),
 			webview: {
 				html: "",
 				cspSource: "https://test.webview",
@@ -243,6 +257,49 @@ suite("graph panel restore", () => {
 					data: graphData,
 					settings: { wheelSensitivity: 1 },
 					persist: { source: "server", entityType: "idea", depth: 4 },
+				},
+			],
+		]);
+	});
+
+	test("keeps a newer show graph when restoration finishes later", async () => {
+		const restored = deferred<GraphData>();
+		executeCommand.mockImplementation((command: unknown) =>
+			command === "getGraphData" ? restored.promise : undefined,
+		);
+		const panel = fakePanel();
+		const restore = deserialize(panel.panel, {
+			source: "server",
+			entityType: "idea",
+			depth: 3,
+		});
+		await vi.waitFor(() => assert.strictEqual(graphRequests().length, 1));
+
+		const newerGraphData: GraphData = [
+			{
+				...graphData[0],
+				id: "new",
+				name: "New",
+			},
+		];
+		executeCommand.mockImplementation((command: unknown) =>
+			command === "getGraphData" ? Promise.resolve(newerGraphData) : undefined,
+		);
+		const showGraph = registeredCommands.get("cwtools.showGraph");
+		assert.ok(showGraph);
+		await showGraph();
+
+		restored.resolve(graphData);
+		await restore;
+		panel.ready();
+
+		assert.deepStrictEqual(panel.postMessage.mock.calls, [
+			[
+				{
+					command: "go",
+					data: newerGraphData,
+					settings: { wheelSensitivity: 1 },
+					persist: { source: "server", entityType: "idea", depth: 3 },
 				},
 			],
 		]);

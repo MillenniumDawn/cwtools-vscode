@@ -1,5 +1,10 @@
 ### Unreleased
 
+#### Extension
+
+* Graph restoration no longer overwrites a newer graph request after a delayed
+  response. (#695)
+
 #### Tooling
 
 * Client hot-path benchmarks now use Vitest 5's test-context benchmark API.
