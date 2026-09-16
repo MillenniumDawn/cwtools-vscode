@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
+use crate::Backend;
 use crate::lines::{DocLines, index_snapshots};
 use crate::paths::logical_path_from_uri;
-use crate::{Backend, FileTextSnapshot};
 
 use super::{
     at_var_at_cursor, code_token_cols_in_line, prepare_rename_range, rename_refused,
@@ -144,25 +145,14 @@ impl Backend {
         if uri.parse::<Url>().is_err() {
             return Ok(None);
         }
+        let target_to_new = Arc::new(target_to_new);
         let loc_uris = self.loc_file_uris().await;
-        let loc_texts = if loc_uris.is_empty() {
-            HashMap::new()
-        } else {
-            self.file_text_snapshots_for(&loc_uris).await
-        };
         let loc_edits = self
-            .collect_loc_rename_definitions(&target_to_new, &loc_uris, &loc_texts)
+            .collect_loc_rename_loc_edits(Arc::clone(&target_to_new), loc_uris)
             .await;
-        let script_edits = self.collect_loc_rename_usages(&target_to_new).await;
-        let yml_ref_edits = self
-            .collect_loc_yml_refs(&target_to_new, &loc_uris, &loc_texts)
-            .await;
+        let script_edits = self.collect_loc_rename_usages(target_to_new).await;
         let mut by_uri: HashMap<String, Vec<TextEdit>> = HashMap::new();
-        for (file_uri, edits) in loc_edits
-            .into_iter()
-            .chain(script_edits)
-            .chain(yml_ref_edits)
-        {
+        for (file_uri, edits) in loc_edits.into_iter().chain(script_edits) {
             by_uri.entry(file_uri).or_default().extend(edits);
         }
         if by_uri.is_empty() {
@@ -181,128 +171,103 @@ impl Backend {
         Ok(Some(self.build_workspace_edit(by_uri)))
     }
 
-    async fn collect_loc_rename_definitions(
+    /// The edits inside loc files: each key's definition lines, and every
+    /// `$key$` reference in a value. One streamed pass, each file parsed once
+    /// and dropped; the definitions come from the parser rather than the loc
+    /// index because a rename has to reach every language on disk, and the
+    /// index only holds the configured ones (#474).
+    async fn collect_loc_rename_loc_edits(
         &self,
-        target_to_new: &HashMap<String, String>,
-        loc_uris: &[String],
-        texts: &HashMap<String, FileTextSnapshot>,
+        target_to_new: Arc<HashMap<String, String>>,
+        loc_uris: Vec<String>,
     ) -> Vec<(String, Vec<TextEdit>)> {
         if loc_uris.is_empty() {
             return Vec::new();
         }
-        let encoding = self.state.config.read().position_encoding.clone();
-        let mut by_uri: HashMap<String, Vec<TextEdit>> = HashMap::new();
-        for uri in loc_uris {
-            let Some(snapshot) = texts.get(uri) else {
-                continue;
-            };
-            let text = &snapshot.text;
+        let encoding = self.position_encoding();
+        self.scan_workspace_texts(loc_uris, move |uri, text| {
             let path = crate::paths::uri_to_path_str(uri);
             let files =
                 cwtools_localization::parse_loc_files(&path, text, None).unwrap_or_default();
             let lines = DocLines::new(text, encoding.clone());
-            for file in files {
-                for entry in file.entries {
-                    let lower = entry.key.to_lowercase();
-                    let Some(new_text) = target_to_new.get(&lower) else {
+            let mut edits = Vec::new();
+            for entry in files.iter().flat_map(|file| &file.entries) {
+                let lower = entry.key.to_lowercase();
+                let Some(new_text) = target_to_new.get(&lower) else {
+                    continue;
+                };
+                let line0 = (entry.position.line.saturating_sub(1)) as u32;
+                let line_text = lines.line(line0);
+                let col = line_text
+                    .find(&entry.key)
+                    .map(|b| line_text[..b].chars().count() as u32)
+                    .unwrap_or(0);
+                edits.push(TextEdit {
+                    range: lines.token_range(line0, col, &entry.key),
+                    new_text: new_text.clone(),
+                });
+            }
+            let lower = text.to_ascii_lowercase();
+            for ((line0, line), lower_line) in lines.iter().zip(lower.lines()) {
+                if !lower_line.contains('$') {
+                    continue;
+                }
+                for (key_lower, new_text) in target_to_new.iter() {
+                    if !lower_line.contains(key_lower.as_str()) {
                         continue;
-                    };
-                    let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    let line_text = lines.line(line0);
-                    let col = line_text
-                        .find(&entry.key)
-                        .map(|b| line_text[..b].chars().count() as u32)
-                        .unwrap_or(0);
-                    let range = lines.token_range(line0, col, &entry.key);
-                    by_uri.entry(uri.clone()).or_default().push(TextEdit {
-                        range,
-                        new_text: new_text.clone(),
-                    });
+                    }
+                    for col in loc_ref_key_cols_in_line(line, key_lower) {
+                        edits.push(TextEdit {
+                            range: lines.token_range(line0, col, key_lower),
+                            new_text: new_text.clone(),
+                        });
+                    }
                 }
             }
-        }
-        by_uri.into_iter().collect()
+            if edits.is_empty() {
+                Vec::new()
+            } else {
+                vec![(uri.to_string(), edits)]
+            }
+        })
+        .await
     }
 
+    /// The edits inside script files, from the same streamed scan
+    /// find-references uses for its usage half.
     async fn collect_loc_rename_usages(
         &self,
-        target_to_new: &HashMap<String, String>,
+        target_to_new: Arc<HashMap<String, String>>,
     ) -> Vec<(String, Vec<TextEdit>)> {
-        let mut script_uris: HashSet<String> = HashSet::new();
-        {
-            let info = self.state.info_service.read();
-            for uri in info.files.keys() {
-                if crate::paths::is_script_file(uri) {
-                    script_uris.insert(uri.clone());
-                }
-            }
-        }
-        for uri in self.state.documents.lock().keys() {
-            if crate::paths::is_script_file(uri) {
-                script_uris.insert(uri.clone());
-            }
-        }
+        let script_uris = self.script_uris();
         if script_uris.is_empty() {
             return Vec::new();
         }
-        let script_uris: Vec<String> = script_uris.into_iter().collect();
-        let texts = self.file_text_snapshots_for(&script_uris).await;
-        let encoding = self.state.config.read().position_encoding.clone();
-        let mut by_uri: HashMap<String, Vec<TextEdit>> = HashMap::new();
-        for uri in script_uris {
-            let Some(snapshot) = texts.get(&uri) else {
-                continue;
-            };
-            let text = &snapshot.text;
+        let encoding = self.position_encoding();
+        self.scan_workspace_texts(script_uris, move |uri, text| {
             let lines = DocLines::new(text, encoding.clone());
-            // Over the index rather than a second `text.lines()` pass over
-            // the same text, once per workspace file (#471).
-            for (line0, line) in lines.iter() {
+            let lower = text.to_ascii_lowercase();
+            let mut edits = Vec::new();
+            for ((line0, line), lower_line) in lines.iter().zip(lower.lines()) {
                 for (key_lower, new_text) in target_to_new.iter() {
+                    if !lower_line.contains(key_lower.as_str()) {
+                        continue;
+                    }
                     for col in code_token_cols_in_line_ignore_case(line, key_lower) {
-                        let range = lines.token_range(line0, col, key_lower);
-                        by_uri.entry(uri.clone()).or_default().push(TextEdit {
-                            range,
+                        edits.push(TextEdit {
+                            range: lines.token_range(line0, col, key_lower),
                             new_text: new_text.clone(),
                         });
                     }
                 }
             }
-        }
-        by_uri.into_iter().collect()
-    }
-
-    async fn collect_loc_yml_refs(
-        &self,
-        target_to_new: &HashMap<String, String>,
-        loc_uris: &[String],
-        texts: &HashMap<String, FileTextSnapshot>,
-    ) -> Vec<(String, Vec<TextEdit>)> {
-        if loc_uris.is_empty() {
-            return Vec::new();
-        }
-        let encoding = self.state.config.read().position_encoding.clone();
-        let mut by_uri: HashMap<String, Vec<TextEdit>> = HashMap::new();
-        for uri in loc_uris {
-            let Some(snapshot) = texts.get(uri) else {
-                continue;
-            };
-            let text = &snapshot.text;
-            let lines = DocLines::new(text, encoding.clone());
-            // Over the index rather than a second `text.lines()` pass (#471).
-            for (line0, line) in lines.iter() {
-                for (key_lower, new_text) in target_to_new.iter() {
-                    for col in loc_ref_key_cols_in_line(line, key_lower) {
-                        let range = lines.token_range(line0, col, key_lower);
-                        by_uri.entry(uri.clone()).or_default().push(TextEdit {
-                            range,
-                            new_text: new_text.clone(),
-                        });
-                    }
-                }
+            if edits.is_empty() {
+                Vec::new()
+            } else {
+                vec![(uri.to_string(), edits)]
             }
-        }
-        by_uri.into_iter().collect()
+        })
+        .await
     }
 
     /// install (#160). Dropping those quietly would apply a rename the user

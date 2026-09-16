@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::*;
 use cwtools_info::PositionElement;
 
 use crate::lines::{DocLines, index_snapshots};
-use crate::navigation::helpers::{code_token_cols_in_line_ignore_case, word_in_line};
+use crate::navigation::helpers::{code_token_cols_in_line_ignore_case, loc_def_site, word_in_line};
 use crate::paths::{loc_ref_at_cursor_with_encoding, logical_path_from_uri, parse_uri};
 use crate::{Backend, FileTextSnapshot};
 use cwtools_info::ReferenceHint;
@@ -177,62 +177,90 @@ impl Backend {
         uris.into_iter().collect()
     }
 
+    /// Where `keys` are defined: closed files from `loc_locations`, open loc
+    /// documents from their buffers (the index is not written per keystroke,
+    /// and an edit above the entry moves it). Only the files that hold a
+    /// definition are read back, for the exact token range, instead of the
+    /// whole localisation tree being read and parsed per request (#474).
     pub(crate) async fn collect_loc_definitions(
         &self,
-        keys: &std::collections::HashSet<String>,
+        keys: &HashSet<String>,
         fallback: &Url,
     ) -> Vec<Location> {
         if keys.is_empty() {
             return Vec::new();
         }
-        let loc_uris = self.loc_file_uris().await;
-        if loc_uris.is_empty() {
-            return Vec::new();
-        }
-        let texts = self.file_text_snapshots_for(&loc_uris).await;
-        let encoding = self.state.config.read().position_encoding.clone();
-        let mut out = Vec::new();
-        for uri in loc_uris {
-            let Some(snapshot) = texts.get(&uri) else {
-                continue;
-            };
-            let text = &snapshot.text;
-            let path = crate::paths::uri_to_path_str(&uri);
-            let files =
-                cwtools_localization::parse_loc_files(&path, text, None).unwrap_or_default();
-            let lines = DocLines::new(text, encoding.clone());
-            for file in files {
-                for entry in file.entries {
-                    let lower = entry.key.to_lowercase();
-                    if !keys.contains(&lower) {
-                        continue;
+        let mut sites: Vec<(String, u32, String)> = Vec::new();
+        let open_loc: Vec<(
+            String,
+            Arc<str>,
+            Option<Arc<crate::state::LocDocumentCache>>,
+        )> = {
+            let docs = self.state.documents.lock();
+            docs.iter()
+                .filter(|(uri, _)| crate::paths::is_loc_file(uri))
+                .map(|(uri, doc)| {
+                    let cache = doc
+                        .loc_cache
+                        .clone()
+                        .filter(|cache| cache.version == doc.version);
+                    (uri.clone(), Arc::clone(&doc.text), cache)
+                })
+                .collect()
+        };
+        let open_uris: HashSet<&str> = open_loc.iter().map(|(uri, _, _)| uri.as_str()).collect();
+        {
+            let locations = self.state.loc_locations.read();
+            for key in keys {
+                for (uri, line0) in locations.workspace_sites(key) {
+                    if !open_uris.contains(uri.as_ref()) {
+                        sites.push((uri.to_string(), line0, key.clone()));
                     }
-                    let line0 = (entry.position.line.saturating_sub(1)) as u32;
-                    let line_text = lines.line(line0);
-                    let col = line_text
-                        .find(&entry.key)
-                        .map(|b| line_text[..b].chars().count() as u32)
-                        .unwrap_or(0);
-                    let fallback_url = Url::parse(&uri).unwrap_or_else(|_| fallback.clone());
-                    out.push(Location {
-                        uri: fallback_url,
-                        range: lines.token_range(line0, col, &entry.key),
-                    });
                 }
             }
         }
-        out
-    }
-
-    pub(crate) async fn collect_loc_script_usages(
-        &self,
-        keys: &std::collections::HashSet<String>,
-        fallback: &Url,
-    ) -> Vec<Location> {
-        if keys.is_empty() {
+        for (uri, text, cache) in &open_loc {
+            let parsed;
+            let files = match cache {
+                Some(cache) => cache.files.as_slice(),
+                None => {
+                    let path = crate::paths::uri_to_path_str(uri);
+                    parsed = cwtools_localization::parse_loc_files(&path, text, None)
+                        .unwrap_or_default();
+                    parsed.as_slice()
+                }
+            };
+            for entry in files.iter().flat_map(|file| &file.entries) {
+                let lower = entry.key.to_lowercase();
+                if keys.contains(&lower) {
+                    let line0 = (entry.position.line.saturating_sub(1)) as u32;
+                    sites.push((uri.clone(), line0, lower));
+                }
+            }
+        }
+        if sites.is_empty() {
             return Vec::new();
         }
-        let mut script_uris: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let text_uris: Vec<String> = sites.iter().map(|(uri, _, _)| uri.clone()).collect();
+        let texts = self.file_text_snapshots_for(&text_uris).await;
+        let indexed = index_snapshots(&texts, &self.position_encoding());
+        sites.sort();
+        sites
+            .into_iter()
+            .filter_map(|(uri, line0, key_lower)| {
+                let lines = indexed.get(uri.as_str())?;
+                let (line0, col) = loc_def_site(lines, line0, &key_lower)?;
+                Some(Location {
+                    uri: parse_uri(&uri, fallback),
+                    range: lines.token_range(line0, col, &key_lower),
+                })
+            })
+            .collect()
+    }
+
+    /// Every script file the index or the editor knows.
+    pub(crate) fn script_uris(&self) -> Vec<String> {
+        let mut script_uris: HashSet<String> = HashSet::new();
         {
             let info = self.state.info_service.read();
             for uri in info.files.keys() {
@@ -246,33 +274,91 @@ impl Backend {
                 script_uris.insert(uri.clone());
             }
         }
-        if script_uris.is_empty() {
-            return Vec::new();
-        }
-        let script_uris: Vec<String> = script_uris.into_iter().collect();
-        let texts = self.file_text_snapshots_for(&script_uris).await;
-        let encoding = self.state.config.read().position_encoding.clone();
-        let mut out = Vec::new();
-        for uri in script_uris {
-            let Some(snapshot) = texts.get(&uri) else {
-                continue;
-            };
-            let text = &snapshot.text;
-            let fallback_url = Url::parse(&uri).unwrap_or_else(|_| fallback.clone());
-            let lines = DocLines::new(text, encoding.clone());
-            // Over the index rather than a second `text.lines()` pass over
-            // the same text, once per workspace file (#471).
-            for (line0, line) in lines.iter() {
-                for key_lower in keys.iter() {
-                    for col in code_token_cols_in_line_ignore_case(line, key_lower) {
-                        out.push(Location {
-                            uri: fallback_url.clone(),
-                            range: lines.token_range(line0, col, key_lower),
-                        });
-                    }
+        script_uris.into_iter().collect()
+    }
+
+    /// Runs `scan` over the current text of every `uri` — open buffers as
+    /// they are, closed files read one at a time — on the blocking pool, and
+    /// returns only what `scan` found. No file's text outlives its own `scan`
+    /// call, so the request never holds the workspace's text at once (#474).
+    pub(crate) async fn scan_workspace_texts<T, F>(&self, uris: Vec<String>, scan: F) -> Vec<T>
+    where
+        T: Send + 'static,
+        F: Fn(&str, &str) -> Vec<T> + Send + Sync + 'static,
+    {
+        let mut open: Vec<(String, Arc<str>)> = Vec::new();
+        let mut closed: Vec<String> = Vec::new();
+        {
+            let docs = self.state.documents.lock();
+            for uri in uris {
+                match docs.text_of(&uri) {
+                    Some(text) => open.push((uri, text)),
+                    None => closed.push(uri),
                 }
             }
         }
+        if open.is_empty() && closed.is_empty() {
+            return Vec::new();
+        }
+        let roots = self.state.config.read().authorized_roots.clone();
+        tokio::task::spawn_blocking(move || {
+            use rayon::prelude::*;
+            let mut out: Vec<T> = open
+                .par_iter()
+                .flat_map_iter(|(uri, text)| scan(uri, text))
+                .collect();
+            out.par_extend(closed.into_par_iter().flat_map_iter(|uri| {
+                crate::access::read_authorized_text(&uri, &roots, crate::access::MAX_URI_READ_BYTES)
+                    .map(|text| scan(&uri, &text))
+                    .unwrap_or_default()
+            }));
+            out
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Script-side uses of `keys`, from a streamed scan of every script file.
+    pub(crate) async fn collect_loc_script_usages(
+        &self,
+        keys: &HashSet<String>,
+        fallback: &Url,
+    ) -> Vec<Location> {
+        if keys.is_empty() {
+            return Vec::new();
+        }
+        let script_uris = self.script_uris();
+        if script_uris.is_empty() {
+            return Vec::new();
+        }
+        let keys: Vec<String> = keys.iter().cloned().collect();
+        let encoding = self.position_encoding();
+        let fallback = fallback.clone();
+        let mut out = self
+            .scan_workspace_texts(script_uris, move |uri, text| {
+                let uri = parse_uri(uri, &fallback);
+                let lines = DocLines::new(text, encoding.clone());
+                // Lines without the key skip the per-line char walk the
+                // matcher does; the matcher itself folds ASCII case too.
+                let lower = text.to_ascii_lowercase();
+                let mut hits = Vec::new();
+                for ((line0, line), lower_line) in lines.iter().zip(lower.lines()) {
+                    for key_lower in &keys {
+                        if !lower_line.contains(key_lower.as_str()) {
+                            continue;
+                        }
+                        for col in code_token_cols_in_line_ignore_case(line, key_lower) {
+                            hits.push(Location {
+                                uri: uri.clone(),
+                                range: lines.token_range(line0, col, key_lower),
+                            });
+                        }
+                    }
+                }
+                hits
+            })
+            .await;
+        out.sort_by(|a, b| (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start)));
         out
     }
 
@@ -698,5 +784,63 @@ mod tests {
             Some("foo = { }\n")
         );
         assert_eq!(backend.file_text_for(&stray_uri).await, None);
+    }
+
+    /// The streamed scan sees an open buffer as the editor has it, a closed
+    /// file as it is on disk, and nothing outside the access boundary; each
+    /// hit names the file it came from (#474).
+    #[tokio::test]
+    async fn scan_workspace_texts_covers_open_and_closed_files() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        let on_disk = ws.path().join("closed.txt");
+        std::fs::write(&on_disk, "closed = needle\n").unwrap();
+        let open_path = ws.path().join("open.txt");
+        std::fs::write(&open_path, "stale = needle\n").unwrap();
+        let outside = tempfile::TempDir::new().expect("tmpdir");
+        let stray = outside.path().join("stray.txt");
+        std::fs::write(&stray, "stray = needle\n").unwrap();
+        let uri_of = |path: &std::path::Path| {
+            Url::from_file_path(path)
+                .expect("absolute path")
+                .to_string()
+        };
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        state
+            .documents
+            .lock()
+            .open(
+                uri_of(&open_path),
+                ParsedDoc {
+                    version: 2,
+                    text: Arc::from("edited = needle\n"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts one small doc");
+
+        let mut hits = backend
+            .scan_workspace_texts(
+                vec![uri_of(&on_disk), uri_of(&open_path), uri_of(&stray)],
+                |uri, text| {
+                    text.lines()
+                        .filter(|line| line.contains("needle"))
+                        .map(|line| format!("{}:{}", uri.rsplit('/').next().unwrap(), line))
+                        .collect()
+                },
+            )
+            .await;
+        hits.sort();
+        assert_eq!(
+            hits,
+            vec![
+                "closed.txt:closed = needle".to_string(),
+                "open.txt:edited = needle".to_string(),
+            ]
+        );
     }
 }

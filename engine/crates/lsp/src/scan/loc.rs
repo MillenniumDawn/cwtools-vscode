@@ -8,7 +8,7 @@ use cwtools_localization::Lang;
 use crate::lines::DocLines;
 use crate::paths::{loc_display_text, path_to_uri};
 use crate::validate::{loc_diag_to_validation_error, validation_error_to_diagnostic};
-use crate::{Backend, LocLocationMap, LocTextMap};
+use crate::{Backend, LocLocations, LocTextMap};
 
 use super::{VanillaLoc, stat_signature_for};
 
@@ -41,13 +41,17 @@ fn localisation_paths(
     }
 }
 
+/// `all_sites` keeps every definition of a key in `locations` (the workspace,
+/// whose find-references lists them); off, one site per key (the base game,
+/// where only the goto target is ever asked for) (#474).
 pub(crate) fn collect_loc_display(
     service: &cwtools_localization::LocService,
     index: &cwtools_localization::LocIndex,
     primary_lang: Lang,
     hover_all: bool,
+    all_sites: bool,
     text: &mut LocTextMap,
-    locations: &mut LocLocationMap,
+    locations: &mut LocLocations,
 ) {
     for file in service.files() {
         let lang = file.lang.unwrap_or(Lang::English);
@@ -57,16 +61,11 @@ pub(crate) fn collect_loc_display(
             let key = index
                 .key(&entry.key)
                 .unwrap_or_else(|| Arc::from(entry.key.to_lowercase()));
-            let loc = || {
-                (
-                    Arc::clone(&file_uri),
-                    (entry.position.line.saturating_sub(1)) as u32,
-                )
-            };
-            if lang == primary_lang {
-                locations.insert(Arc::clone(&key), loc());
+            let line0 = (entry.position.line.saturating_sub(1)) as u32;
+            if all_sites {
+                locations.insert(Arc::clone(&key), &file_uri, line0, lang == primary_lang);
             } else {
-                locations.entry(Arc::clone(&key)).or_insert_with(loc);
+                locations.insert_single(Arc::clone(&key), &file_uri, line0, lang == primary_lang);
             }
             if !lang_included {
                 continue;
@@ -229,11 +228,19 @@ impl Backend {
                         .push(validation_error_to_diagnostic(&ve, &DocLines::none()));
                 }
                 let mut lt = LocTextMap::default();
-                let mut ll = LocLocationMap::default();
+                let mut ll = LocLocations::default();
                 for file in service.files() {
                     by_file.entry(file.path.clone()).or_default();
                 }
-                collect_loc_display(&service, &idx, primary_lang, hover_all, &mut lt, &mut ll);
+                collect_loc_display(
+                    &service,
+                    &idx,
+                    primary_lang,
+                    hover_all,
+                    true,
+                    &mut lt,
+                    &mut ll,
+                );
                 let source_hashes = by_file
                     .iter()
                     .filter_map(|(file, diagnostics)| {
@@ -257,8 +264,8 @@ impl Backend {
                             .or_default()
                             .extend(translations.iter().cloned());
                     }
-                    for (key, loc) in &vanilla.locations {
-                        ll.entry(Arc::clone(key)).or_insert_with(|| loc.clone());
+                    for (key, (uri, line0)) in vanilla.locations.iter() {
+                        ll.insert_fallback(key, uri, line0);
                     }
                 }
                 (idx, by_file, lt, ll, source_hashes)
@@ -348,19 +355,20 @@ mod tests {
         assert_eq!(svc.files().len(), 2);
         let idx = LocIndex::build(&svc);
         let mut text = LocTextMap::default();
-        let mut locs = LocLocationMap::default();
-        collect_loc_display(&svc, &idx, Lang::English, false, &mut text, &mut locs);
+        let mut locs = LocLocations::default();
+        collect_loc_display(&svc, &idx, Lang::English, false, true, &mut text, &mut locs);
         let key: std::sync::Arc<str> = "my_key".into();
         let entries = text.get(&key).expect("my_key hover");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, Lang::English);
         assert_eq!(entries[0].1, "Hello");
         let mut text_all = LocTextMap::default();
-        let mut locs_all = LocLocationMap::default();
+        let mut locs_all = LocLocations::default();
         collect_loc_display(
             &svc,
             &idx,
             Lang::English,
+            true,
             true,
             &mut text_all,
             &mut locs_all,
@@ -369,6 +377,28 @@ mod tests {
         assert_eq!(entries_all.len(), 2);
         assert!(locs.contains_key(&key));
         assert!(locs_all.contains_key(&key));
+        // Both definitions are kept, the English one as the goto target; the
+        // one-per-key mode keeps only that target (#474).
+        let sites: Vec<String> = locs
+            .workspace_sites(&key)
+            .map(|(uri, _)| uri.to_string())
+            .collect();
+        assert_eq!(sites.len(), 2, "{sites:?}");
+        assert!(sites[0].contains("a_l_english"), "{sites:?}");
+        assert!(sites[1].contains("a_l_french"), "{sites:?}");
+        let mut single = LocLocations::default();
+        let mut text_single = LocTextMap::default();
+        collect_loc_display(
+            &svc,
+            &idx,
+            Lang::English,
+            false,
+            false,
+            &mut text_single,
+            &mut single,
+        );
+        assert_eq!(single.workspace_sites(&key).count(), 1);
+        assert!(single.get(&key).unwrap().0.contains("a_l_english"));
     }
 
     #[test]
@@ -389,8 +419,8 @@ mod tests {
         let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
         let idx = LocIndex::build(&svc);
         let mut text = LocTextMap::default();
-        let mut locs = LocLocationMap::default();
-        collect_loc_display(&svc, &idx, Lang::English, false, &mut text, &mut locs);
+        let mut locs = LocLocations::default();
+        collect_loc_display(&svc, &idx, Lang::English, false, true, &mut text, &mut locs);
         let key: std::sync::Arc<str> = "dup_key".into();
         let loc = locs.get(&key).unwrap();
         assert!(

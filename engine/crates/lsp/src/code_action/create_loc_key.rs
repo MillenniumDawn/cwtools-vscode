@@ -31,7 +31,7 @@ fn sibling_loc_keys(
 
 fn resolve_sibling_site(
     siblings: &[String],
-    loc_locations: &crate::LocLocationMap,
+    loc_locations: &crate::LocLocations,
     edit_roots: &[PathBuf],
     lang: Lang,
 ) -> Option<(std::sync::Arc<str>, u32)> {
@@ -43,7 +43,7 @@ fn resolve_sibling_site(
             return None;
         }
         crate::access::editable_path(uri, edit_roots).ok()?;
-        Some((std::sync::Arc::clone(uri), *line0))
+        Some((std::sync::Arc::clone(uri), line0))
     })
 }
 
@@ -74,7 +74,7 @@ fn generated_loc_file_path(workspace_root: &Path, lang: Lang) -> PathBuf {
 fn resolve_loc_insert_target(
     lang: Lang,
     siblings: &[String],
-    loc_locations: &crate::LocLocationMap,
+    loc_locations: &crate::LocLocations,
     edit_roots: &[PathBuf],
     discovered_loc_files: &[PathBuf],
     workspace_root: &Path,
@@ -527,7 +527,7 @@ mod tests {
         assert_eq!(siblings, vec!["my_thing", "my_thing_title"]);
     }
 
-    fn loc_locations_with(entries: &[(&str, &str, u32)]) -> crate::LocLocationMap {
+    fn loc_locations_with(entries: &[(&str, &str, u32)]) -> crate::LocLocations {
         entries
             .iter()
             .map(|(key, uri, line)| {
@@ -820,7 +820,7 @@ mod tests {
             }
         );
 
-        let empty_locs = crate::LocLocationMap::default();
+        let empty_locs = crate::LocLocations::default();
         let target = resolve_loc_insert_target(
             Lang::English,
             &siblings,
@@ -865,7 +865,7 @@ mod tests {
             resolve_loc_insert_target(
                 Lang::English,
                 &[],
-                &crate::LocLocationMap::default(),
+                &crate::LocLocations::default(),
                 &edit_roots([ws.path()]),
                 &[],
                 ws.path(),

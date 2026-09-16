@@ -802,6 +802,35 @@ pub(crate) fn loc_ref_key_cols_in_line(line: &str, needle_lower: &str) -> Vec<u3
     out
 }
 
+/// The char column of the key on a loc entry line — ` KEY:0 "text"` — when
+/// that key is `needle_lower` (case-insensitively). The column the old
+/// per-request parse resolved with `line.find(&entry.key)`, now taken
+/// straight from the line the index points at (#474).
+pub(crate) fn loc_def_key_col(line: &str, needle_lower: &str) -> Option<u32> {
+    let trimmed = line.trim_start();
+    let colon = trimmed.find(':')?;
+    let key = trimmed[..colon].trim_end();
+    if key.is_empty() || !key.eq_ignore_ascii_case(needle_lower) {
+        return None;
+    }
+    let leading = line.len() - trimmed.len();
+    Some(line[..leading].chars().count() as u32)
+}
+
+/// `(line, char column)` of the entry defining `key_lower`: the indexed
+/// `line0` when it still holds the key, else the first line that does. The
+/// index goes stale when a file changes without a watcher event reaching the
+/// server, and the file it points at is already read, so the scan costs one
+/// pass over that file instead of a definition dropped from the answer.
+pub(crate) fn loc_def_site(lines: &DocLines, line0: u32, key_lower: &str) -> Option<(u32, u32)> {
+    if let Some(col) = loc_def_key_col(lines.line(line0), key_lower) {
+        return Some((line0, col));
+    }
+    lines
+        .iter()
+        .find_map(|(line, text)| loc_def_key_col(text, key_lower).map(|col| (line, col)))
+}
+
 pub(crate) fn loc_root(key_lower: &str) -> String {
     let mut k = key_lower;
     loop {
@@ -1314,6 +1343,34 @@ mod tests {
             loc_ref_key_cols_in_line("x = \"foo # $my_key$\" # $my_key$", "my_key").len(),
             1
         );
+    }
+
+    #[test]
+    fn loc_def_key_col_matches_the_entry_key_only() {
+        assert_eq!(loc_def_key_col(" my_key:0 \"Hi\"", "my_key"), Some(1));
+        assert_eq!(loc_def_key_col("\t\tMY_KEY: \"Hi\"", "my_key"), Some(2));
+        assert_eq!(loc_def_key_col("my_key:0 \"Hi\"", "my_key"), Some(0));
+        assert_eq!(loc_def_key_col(" my_key :0 \"Hi\"", "my_key"), Some(1));
+        // Another key, the value mentioning the key, and non-entry lines.
+        assert_eq!(loc_def_key_col(" my_key_desc:0 \"x\"", "my_key"), None);
+        assert_eq!(loc_def_key_col(" other:0 \"$my_key$\"", "my_key"), None);
+        assert_eq!(loc_def_key_col("l_english:", "my_key"), None);
+        assert_eq!(loc_def_key_col(" # my_key:0", "my_key"), None);
+        assert_eq!(loc_def_key_col(" :0 \"x\"", ""), None);
+        assert_eq!(loc_def_key_col("", "my_key"), None);
+    }
+
+    #[test]
+    fn loc_def_site_falls_back_to_a_scan_when_the_indexed_line_moved() {
+        let text = "l_english:\n a:0 \"A\"\n my_key:0 \"Hi\"\n b:0 \"B\"\n";
+        let lines = DocLines::new(text, PositionEncodingKind::UTF16);
+        // The indexed line still holds the key: no scan.
+        assert_eq!(loc_def_site(&lines, 2, "my_key"), Some((2, 1)));
+        // A line inserted above moved it: found where it is now.
+        assert_eq!(loc_def_site(&lines, 1, "my_key"), Some((2, 1)));
+        assert_eq!(loc_def_site(&lines, 9, "my_key"), Some((2, 1)));
+        // Gone from the file altogether: no site.
+        assert_eq!(loc_def_site(&lines, 2, "other"), None);
     }
 
     #[test]

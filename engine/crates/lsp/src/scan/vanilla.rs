@@ -10,7 +10,7 @@ use cwtools_rules::rules_types::RuleSet;
 
 use crate::command_progress::CommandProgress;
 use crate::paths::{default_cache_dir, discover_vanilla_dir, path_to_uri};
-use crate::{Backend, LocLocationMap, LocTextMap};
+use crate::{Backend, LocLocations, LocTextMap};
 
 use super::loc::collect_loc_display;
 
@@ -48,7 +48,7 @@ pub(crate) fn index_vanilla_dir(
 pub(crate) struct VanillaLoc {
     pub(crate) index: cwtools_localization::LocIndex,
     pub(crate) text: LocTextMap,
-    pub(crate) locations: LocLocationMap,
+    pub(crate) locations: LocLocations,
 }
 
 pub(crate) type VanillaLocKey = (std::path::PathBuf, Option<Vec<Lang>>, Lang, bool);
@@ -61,12 +61,13 @@ impl VanillaLoc {
     ) -> Self {
         let index = cwtools_localization::LocIndex::build_scoped(service, None);
         let mut text = LocTextMap::default();
-        let mut locations = LocLocationMap::default();
+        let mut locations = LocLocations::default();
         collect_loc_display(
             service,
             &index,
             primary_lang,
             hover_all,
+            false,
             &mut text,
             &mut locations,
         );

@@ -295,6 +295,12 @@ impl Backend {
             }
         }
         {
+            let mut locations = self.state.loc_locations.write();
+            for uri in deletes {
+                locations.remove_file(uri);
+            }
+        }
+        {
             let mut sigs = self.state.watched_signatures.lock();
             for uri in deletes {
                 sigs.remove(uri);

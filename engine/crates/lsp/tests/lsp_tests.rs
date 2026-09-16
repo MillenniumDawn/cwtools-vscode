@@ -17992,6 +17992,435 @@ fn test_loc_rename_updates_dollar_refs_in_yml() {
     );
 }
 
+/// Definitions come from the loc index, one per configured language, and an
+/// open buffer is read as the editor has it: after a line is inserted above
+/// the English entry, its definition moves with it while the closed French
+/// file keeps the indexed line (#474).
+#[test]
+fn test_loc_references_definitions_per_language_from_index() {
+    let yml_en = "l_english:\n my_key:0 \"Hello\"\n";
+    let yml_fr = "l_french:\n my_key:0 \"Bonjour\"\n";
+    let script = "x = {\n    title = my_key\n}\n";
+    let files = &[
+        ("localisation/test_l_english.yml", yml_en),
+        ("localisation/test_l_french.yml", yml_fr),
+        ("common/test/event.txt", script),
+    ];
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    for (rel, content) in files {
+        let p = ws.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, content).unwrap();
+    }
+    let ws_uri = path_uri(ws.path());
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let init = jsonrpc_request(
+        1,
+        "initialize",
+        serde_json::json!({
+            "processId": std::process::id(),
+            "rootUri": ws_uri,
+            "capabilities": {},
+            "initializationOptions": {
+                "language": "hoi4",
+                "rulesCache": rules_dir.path().to_string_lossy(),
+                "vanilla": vanilla.path().to_string_lossy(),
+                "localisationLanguages": ["English", "French"],
+            }
+        }),
+    );
+    write_frame(&mut child, &init).unwrap();
+    let _ = read_response(&mut reader).unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    wait_for_scan_done(&mut reader);
+    let en_rel = "localisation/test_l_english.yml";
+    let en_uri = path_uri(ws.path().join(en_rel));
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({"textDocument": {"uri": en_uri, "languageId": "hoi4", "version": 1, "text": yml_en}}),
+        ),
+    )
+    .unwrap();
+    wait_for_diagnostics(&mut reader, en_rel);
+
+    let definitions = |child: &mut std::process::Child,
+                       reader: &mut BufReader<std::process::ChildStdout>,
+                       id: i64,
+                       line: u32| {
+        let req = jsonrpc_request(
+            id,
+            "textDocument/references",
+            serde_json::json!({
+                "textDocument": {"uri": en_uri},
+                "position": {"line": line, "character": 2},
+                "context": {"includeDeclaration": true}
+            }),
+        );
+        write_frame(child, &req).unwrap();
+        let resp: serde_json::Value =
+            serde_json::from_str(&read_response(reader).unwrap()).unwrap();
+        let locs = resp["result"]
+            .as_array()
+            .unwrap_or_else(|| panic!("references array, got {resp}"))
+            .clone();
+        let mut defs: Vec<(String, u64, u64)> = locs
+            .iter()
+            .filter(|l| l["uri"].as_str().unwrap().contains("_l_"))
+            .map(|l| {
+                (
+                    l["uri"]
+                        .as_str()
+                        .unwrap()
+                        .rsplit('/')
+                        .next()
+                        .unwrap()
+                        .to_string(),
+                    l["range"]["start"]["line"].as_u64().unwrap(),
+                    l["range"]["start"]["character"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        defs.sort();
+        assert!(
+            locs.iter()
+                .any(|l| l["uri"].as_str().unwrap().contains("event.txt")),
+            "script usage missing from {locs:?}"
+        );
+        defs
+    };
+
+    assert_eq!(
+        definitions(&mut child, &mut reader, 10, 1),
+        vec![
+            ("test_l_english.yml".to_string(), 1, 1),
+            ("test_l_french.yml".to_string(), 1, 1),
+        ]
+    );
+
+    // A comment line above the entry. The edit's own validation does not
+    // re-index an open buffer; the request has to read the buffer itself.
+    let edited = "l_english:\n # moved\n my_key:0 \"Hello\"\n";
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didChange",
+            serde_json::json!({
+                "textDocument": {"uri": en_uri, "version": 2},
+                "contentChanges": [{"text": edited}]
+            }),
+        ),
+    )
+    .unwrap();
+    wait_for_diagnostics(&mut reader, en_rel);
+    let after = definitions(&mut child, &mut reader, 11, 2);
+    stop_server(&mut child);
+    assert_eq!(
+        after,
+        vec![
+            ("test_l_english.yml".to_string(), 2, 1),
+            ("test_l_french.yml".to_string(), 1, 1),
+        ]
+    );
+}
+
+/// The per-file index update between scans keeps to the scan's rules: a
+/// watched file in a language that is not configured is not a definition,
+/// the way the scan would not have parsed it. And a closed file edited
+/// without a watcher event still lists its definition, found where the entry
+/// is now rather than dropped because the indexed line moved (#474).
+#[test]
+fn test_loc_references_watched_file_keeps_to_configured_languages_and_finds_a_moved_line() {
+    let yml_en = "l_english:\n my_key:0 \"Hello\"\n";
+    let yml_fr = "l_french:\n my_key:0 \"Bonjour\"\n";
+    let script = "x = {\n    title = my_key\n}\n";
+    let files = &[
+        ("localisation/test_l_english.yml", yml_en),
+        ("localisation/test_l_french.yml", yml_fr),
+        ("common/test/event.txt", script),
+    ];
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    for (rel, content) in files {
+        let p = ws.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, content).unwrap();
+    }
+    let ws_uri = path_uri(ws.path());
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let init = jsonrpc_request(
+        1,
+        "initialize",
+        serde_json::json!({
+            "processId": std::process::id(),
+            "rootUri": ws_uri,
+            "capabilities": {},
+            "initializationOptions": {
+                "language": "hoi4",
+                "rulesCache": rules_dir.path().to_string_lossy(),
+                "vanilla": vanilla.path().to_string_lossy(),
+                "localisationLanguages": ["English", "French"],
+            }
+        }),
+    );
+    write_frame(&mut child, &init).unwrap();
+    let _ = read_response(&mut reader).unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    wait_for_scan_done(&mut reader);
+    let en_rel = "localisation/test_l_english.yml";
+    let en_uri = path_uri(ws.path().join(en_rel));
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({"textDocument": {"uri": en_uri, "languageId": "hoi4", "version": 1, "text": yml_en}}),
+        ),
+    )
+    .unwrap();
+    wait_for_diagnostics(&mut reader, en_rel);
+
+    let definitions = |child: &mut std::process::Child,
+                       reader: &mut BufReader<std::process::ChildStdout>,
+                       id: i64| {
+        let req = jsonrpc_request(
+            id,
+            "textDocument/references",
+            serde_json::json!({
+                "textDocument": {"uri": en_uri},
+                "position": {"line": 1, "character": 2},
+                "context": {"includeDeclaration": true}
+            }),
+        );
+        write_frame(child, &req).unwrap();
+        let resp: serde_json::Value =
+            serde_json::from_str(&read_response(reader).unwrap()).unwrap();
+        let mut defs: Vec<(String, u64, u64)> = resp["result"]
+            .as_array()
+            .unwrap_or_else(|| panic!("references array, got {resp}"))
+            .iter()
+            .filter(|l| l["uri"].as_str().unwrap().contains("_l_"))
+            .map(|l| {
+                (
+                    l["uri"]
+                        .as_str()
+                        .unwrap()
+                        .rsplit('/')
+                        .next()
+                        .unwrap()
+                        .to_string(),
+                    l["range"]["start"]["line"].as_u64().unwrap(),
+                    l["range"]["start"]["character"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        defs.sort();
+        defs
+    };
+
+    // A German file appears on disk: the watcher reports it, the server
+    // validates it, but German is not a configured language.
+    let de_rel = "localisation/test_l_german.yml";
+    let de_uri = write_disk_file(ws.path(), de_rel, "l_german:\n my_key:0 \"Hallo\"\n");
+    write_frame(&mut child, &watched_created(std::slice::from_ref(&de_uri))).unwrap();
+    wait_for_diagnostics(&mut reader, de_rel);
+    assert_eq!(
+        definitions(&mut child, &mut reader, 10),
+        vec![
+            ("test_l_english.yml".to_string(), 1, 1),
+            ("test_l_french.yml".to_string(), 1, 1),
+        ],
+        "a language the scan does not parse must not become a definition"
+    );
+
+    // The closed French file gains a line above its entry with no watcher
+    // event: the index still says line 1, the file says line 2.
+    std::fs::write(
+        ws.path().join("localisation/test_l_french.yml"),
+        "l_french:\n # moved\n my_key:0 \"Bonjour\"\n",
+    )
+    .unwrap();
+    let moved = definitions(&mut child, &mut reader, 11);
+    stop_server(&mut child);
+    assert_eq!(
+        moved,
+        vec![
+            ("test_l_english.yml".to_string(), 1, 1),
+            ("test_l_french.yml".to_string(), 2, 1),
+        ],
+        "a definition whose indexed line moved must be found where it is now"
+    );
+}
+
+/// A key the mod and the base game both define goes to the mod's file; once
+/// the mod's file is deleted under the watcher, goto falls back to the base
+/// game's definition without waiting for a rescan (#474).
+#[test]
+fn test_loc_goto_falls_back_to_the_base_game_after_a_watched_delete() {
+    let ws = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("test_rules.cwt"), GOTO_RULES).unwrap();
+
+    let vanilla_loc = vanilla.path().join("localisation/english");
+    std::fs::create_dir_all(&vanilla_loc).unwrap();
+    std::fs::write(
+        vanilla_loc.join("base_l_english.yml"),
+        "\u{FEFF}l_english:\n SHARED_KEY:0 \"Base text\"\n",
+    )
+    .unwrap();
+    let def_rel = "localisation/english/def_l_english.yml";
+    let def_uri = write_loc_file(ws.path(), def_rel, " SHARED_KEY:0 \"Mod text\"\n");
+    let use_rel = "localisation/english/use_l_english.yml";
+    let use_text = "\u{FEFF}l_english:\n A:0 \"$SHARED_KEY$\"\n".to_string();
+    let use_path = ws.path().join(use_rel);
+    std::fs::write(&use_path, &use_text).unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+                "initializationOptions": {
+                    "language": "hoi4",
+                    "rulesCache": rules_dir.path().to_string_lossy(),
+                    "vanilla": vanilla.path().to_string_lossy(),
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    wait_for_scan_done(&mut reader);
+    let doc_uri = path_uri(&use_path);
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": doc_uri, "languageId": "hoi4", "version": 1, "text": use_text,
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    wait_for_diagnostics(&mut reader, use_rel);
+
+    // `$SHARED_KEY$` on line 1 col 10. Polls until the answer ends in `want`,
+    // since both the scan and the watched batch land asynchronously.
+    let goto_lands_in = |child: &mut std::process::Child,
+                         reader: &mut BufReader<std::process::ChildStdout>,
+                         id_base: i64,
+                         want: &str|
+     -> Vec<String> {
+        let mut last = Vec::new();
+        for attempt in 0..50 {
+            write_frame(
+                child,
+                &jsonrpc_request(
+                    id_base + attempt,
+                    "textDocument/definition",
+                    serde_json::json!({
+                        "textDocument": { "uri": doc_uri },
+                        "position": { "line": 1, "character": 10 },
+                    }),
+                ),
+            )
+            .unwrap();
+            let resp: serde_json::Value =
+                serde_json::from_str(&read_response(reader).expect("no definition response"))
+                    .unwrap();
+            let arr = resp["result"]
+                .as_array()
+                .cloned()
+                .or_else(|| {
+                    resp["result"]
+                        .as_object()
+                        .map(|o| vec![serde_json::Value::Object(o.clone())])
+                })
+                .unwrap_or_default();
+            last = arr
+                .iter()
+                .filter_map(|l| Some(l["uri"].as_str()?.to_string()))
+                .collect();
+            if last.iter().any(|u| u.ends_with(want)) {
+                return last;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        last
+    };
+
+    let before = goto_lands_in(&mut child, &mut reader, 100, "def_l_english.yml");
+    assert_eq!(
+        before.len(),
+        1,
+        "the mod's definition alone should answer, got: {before:?}"
+    );
+
+    std::fs::remove_file(ws.path().join(def_rel)).unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "workspace/didChangeWatchedFiles",
+            serde_json::json!({ "changes": [{ "uri": def_uri, "type": 3 }] }),
+        ),
+    )
+    .unwrap();
+    let after = goto_lands_in(&mut child, &mut reader, 200, "base_l_english.yml");
+    stop_server(&mut child);
+    assert!(
+        after.iter().any(|u| u.ends_with("base_l_english.yml")),
+        "with the mod's definition deleted, goto should fall back to the base game, got: {after:?}"
+    );
+    assert!(
+        !after.iter().any(|u| u.ends_with("def_l_english.yml")),
+        "a deleted file must not stay a goto target, got: {after:?}"
+    );
+}
+
 #[test]
 fn test_ignored_file_close_keeps_server_responsive() {
     let ws = tempfile::tempdir().unwrap();

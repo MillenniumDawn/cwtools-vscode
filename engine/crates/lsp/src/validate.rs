@@ -1193,6 +1193,60 @@ impl Backend {
         }
     }
 
+    /// Re-records where `uri` defines its keys, from a parse of its on-disk
+    /// text, so find-references keeps answering closed files from the index
+    /// between workspace scans (#474). Open buffers are not recorded here:
+    /// the request reads them fresh, so the sweep is not paid per keystroke.
+    /// A language the scan does not parse is skipped here too, so a watched
+    /// file in it does not become a target the next scan takes away again.
+    pub(crate) fn update_loc_locations_for_file(
+        &self,
+        uri: &str,
+        files: &[cwtools_localization::LocFile],
+    ) {
+        let hover_all = self
+            .state
+            .hover_show_all_languages
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let loc_languages = self.state.config.read().loc_languages.clone();
+        let primary_lang = loc_languages
+            .as_deref()
+            .and_then(|l| l.first().copied())
+            .unwrap_or(cwtools_localization::Lang::English);
+        // The scan's `LocService` filter: every language when hovers show
+        // them all, else only the configured ones (a file with no language
+        // header is kept either way).
+        let parsed_languages = if hover_all {
+            None
+        } else {
+            loc_languages.as_deref()
+        };
+        let uri: Arc<str> = Arc::from(uri);
+        // Lock order: loc_index -> loc_locations.
+        let loc_index = self.state.loc_index.read();
+        let mut locations = self.state.loc_locations.write();
+        locations.remove_file(&uri);
+        for file in files {
+            if let Some(langs) = parsed_languages
+                && let Some(lang) = file.lang
+                && !langs.contains(&lang)
+            {
+                continue;
+            }
+            let lang = file.lang.unwrap_or(cwtools_localization::Lang::English);
+            let entries = file.entries.iter().map(|entry| {
+                let key = loc_index
+                    .as_deref()
+                    .and_then(|index| index.key(&entry.key))
+                    .unwrap_or_else(|| Arc::from(entry.key.to_lowercase()));
+                (key, (entry.position.line.saturating_sub(1)) as u32)
+            });
+            for (key, line0) in entries {
+                locations.insert(key, &uri, line0, lang == primary_lang);
+            }
+        }
+    }
+
     fn loc_ref_names(&self) -> Arc<HashSet<String>> {
         let revision = self
             .state
@@ -1431,6 +1485,15 @@ impl Backend {
                 );
                 // edits without waiting for a full workspace rescan (#53).
                 self.update_loc_text_for_file(&parsed_loc);
+                // Only the two triggers whose `text` is the file on disk: a
+                // watched change, or a close reading back what was saved.
+                if matches!(
+                    trigger,
+                    crate::ValidateTrigger::Watched | crate::ValidateTrigger::DidClose
+                ) && !is_open
+                {
+                    self.update_loc_locations_for_file(uri, &parsed_loc);
+                }
                 let cache = cache_version.map(|version| loc_cache(version, text.len(), parsed_loc));
                 (changed_keys, diagnostics, cache)
             });
