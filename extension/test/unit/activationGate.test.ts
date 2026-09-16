@@ -7,7 +7,16 @@ const mocks = vi.hoisted(() => ({
 		fs: { stat: vi.fn() },
 	},
 	executeCommand: vi.fn(),
+	createOutputChannel: vi.fn(() => ({
+		appendLine: vi.fn(),
+		info: vi.fn(),
+		warn: vi.fn(),
+		error: vi.fn(),
+		show: vi.fn(),
+		dispose: vi.fn(),
+	})),
 	detectGameAndVanilla: vi.fn().mockResolvedValue({ languageId: "paradox" }),
+	initializeLogger: vi.fn(),
 	serverExe: vi.fn(),
 	resolveRulesCache: vi.fn(),
 	createLanguageClient: vi.fn(),
@@ -21,7 +30,10 @@ vi.mock("vscode", () => ({
 	Uri: { joinPath: (uri: string, name: string) => `${uri}/${name}` },
 	FileType: { File: 1, Directory: 2 },
 	languages: { setLanguageConfiguration: vi.fn(() => ({ dispose() {} })) },
-	window: { showErrorMessage: vi.fn() },
+	window: {
+		showErrorMessage: vi.fn(),
+		createOutputChannel: mocks.createOutputChannel,
+	},
 	l10n: { t: (message: string) => message },
 }));
 vi.mock("../../src/host/engine", () => ({ serverExe: mocks.serverExe }));
@@ -47,6 +59,7 @@ vi.mock("../../src/host/commands", () => ({
 }));
 vi.mock("../../src/host/trustedPaths", () => ({ setTrustedRoots: vi.fn() }));
 vi.mock("../../src/host/logger", () => ({
+	initializeLogger: mocks.initializeLogger,
 	logInfo: vi.fn(),
 	logError: vi.fn(),
 	errorMessage: vi.fn(),
@@ -61,6 +74,7 @@ suite("descriptor startup gate", () => {
 		vi.clearAllMocks();
 		mocks.workspace.workspaceFolders = [{ uri: "file:///project" }];
 		mocks.workspace.fs.stat.mockRejectedValue(new Error("FileNotFound"));
+		mocks.createOutputChannel.mockClear();
 	});
 
 	test.each([
@@ -86,6 +100,7 @@ suite("descriptor startup gate", () => {
 			false,
 		);
 		expect(mocks.detectGameAndVanilla).not.toHaveBeenCalled();
+		expect(mocks.createOutputChannel).not.toHaveBeenCalled();
 		expect(mocks.serverExe).not.toHaveBeenCalled();
 		expect(mocks.resolveRulesCache).not.toHaveBeenCalled();
 		expect(mocks.createLanguageClient).not.toHaveBeenCalled();
@@ -108,6 +123,7 @@ suite("descriptor startup gate", () => {
 			false,
 		);
 		expect(mocks.detectGameAndVanilla).not.toHaveBeenCalled();
+		expect(mocks.createOutputChannel).not.toHaveBeenCalled();
 		expect(mocks.registerCommands).not.toHaveBeenCalled();
 	});
 
@@ -121,6 +137,7 @@ suite("descriptor startup gate", () => {
 			false,
 		);
 		expect(mocks.detectGameAndVanilla).not.toHaveBeenCalled();
+		expect(mocks.createOutputChannel).not.toHaveBeenCalled();
 		expect(mocks.registerCommands).not.toHaveBeenCalled();
 	});
 
@@ -132,16 +149,24 @@ suite("descriptor startup gate", () => {
 				: Promise.reject(new Error("FileNotFound"));
 		});
 		const { activate } = await import("../../src/host/extension");
-		await activate({
+		const context = {
 			globalStorageUri: { fsPath: "cache" },
 			subscriptions: [],
-		} as unknown as ExtensionContext);
+		} as unknown as ExtensionContext;
+		await activate(context);
 		expect(mocks.executeCommand).toHaveBeenCalledWith(
 			"setContext",
 			"cwtoolsEnabled",
 			true,
 		);
 		expect(mocks.detectGameAndVanilla).toHaveBeenCalledOnce();
+		expect(mocks.createOutputChannel).toHaveBeenCalledOnce();
+		expect(mocks.initializeLogger).toHaveBeenCalledWith(
+			mocks.createOutputChannel.mock.results[0]?.value,
+		);
+		expect(context.subscriptions).toContain(
+			mocks.createOutputChannel.mock.results[0]?.value,
+		);
 		expect(mocks.serverExe).toHaveBeenCalledOnce();
 	});
 });

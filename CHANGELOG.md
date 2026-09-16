@@ -2,6 +2,8 @@
 
 #### Extension
 
+* The CWTools log channel is created only for enabled workspaces and now uses
+  VS Code log levels. (#507)
 * Graph restoration no longer overwrites a newer graph request after a delayed
   response. (#695)
 

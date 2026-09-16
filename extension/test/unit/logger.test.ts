@@ -1,114 +1,91 @@
-import { suite, test, beforeEach, vi } from "vitest";
+import { suite, test, beforeEach } from "vitest";
 import * as assert from "assert";
+import type { LogOutputChannel } from "vscode";
 
-// The logger creates its output channel at module scope, so we must mock
-// vscode.window.createOutputChannel before the first import.
-const lines: string[] = [];
+const messages: Array<{ level: string; message: string }> = [];
+const channel = {
+	appendLine: (message: string) => messages.push({ level: "append", message }),
+	info: (message: string) => messages.push({ level: "info", message }),
+	warn: (message: string) => messages.push({ level: "warn", message }),
+	error: (message: string) => messages.push({ level: "error", message }),
+	show: () => undefined,
+	dispose: () => undefined,
+} as unknown as LogOutputChannel;
 
-vi.mock("vscode", () => ({
-	window: {
-		createOutputChannel: (_name: string) => ({
-			appendLine: (msg: string) => {
-				lines.push(msg);
-			},
-		}),
-	},
-}));
-
-// Static import is safe because vi.mock is hoisted above all imports.
 import {
+	initializeLogger,
 	logInfo,
 	logWarn,
 	logError,
 	outputChannel,
 } from "../../src/host/logger";
 
-suite("logger — outputChannel", () => {
+suite("logger", () => {
 	beforeEach(() => {
-		lines.length = 0;
+		messages.length = 0;
+		initializeLogger(channel);
 	});
 
-	// The language client is handed this same instance; a second channel would
-	// split server output away from where the rules-config popup points.
-	test("exports the channel the log helpers write to", () => {
+	// The channel is supplied by enabled activation, not created while this
+	// module is imported.
+	test("uses the initialized channel for helpers and direct output", () => {
+		assert.strictEqual(outputChannel, channel);
 		logInfo("via helper");
 		outputChannel.appendLine("direct");
-		assert.strictEqual(lines.length, 2);
-		assert.strictEqual(lines[0], "via helper");
-		assert.strictEqual(lines[1], "direct");
-	});
-});
-
-suite("logger — logInfo", () => {
-	beforeEach(() => {
-		lines.length = 0;
+		assert.deepStrictEqual(messages, [
+			{ level: "info", message: "via helper" },
+			{ level: "append", message: "direct" },
+		]);
 	});
 
-	test("writes a plain message to the output channel", () => {
+	test("logs info messages without a hand-written level prefix", () => {
 		logInfo("hello world");
-		assert.strictEqual(lines.length, 1);
-		assert.strictEqual(lines[0], "hello world");
+		assert.deepStrictEqual(messages, [
+			{ level: "info", message: "hello world" },
+		]);
 	});
 
-	test("writes multiple messages in order", () => {
-		logInfo("first");
-		logInfo("second");
-		assert.strictEqual(lines.length, 2);
-		assert.strictEqual(lines[0], "first");
-		assert.strictEqual(lines[1], "second");
-	});
-
-	test("handles an empty string", () => {
-		logInfo("");
-		assert.strictEqual(lines.length, 1);
-		assert.strictEqual(lines[0], "");
-	});
-});
-
-suite("logger — logWarn", () => {
-	beforeEach(() => {
-		lines.length = 0;
-	});
-
-	test("prefixes the message with [WARN]", () => {
+	test("logs warning messages through the warning level", () => {
 		logWarn("something suspicious");
-		assert.strictEqual(lines.length, 1);
-		assert.strictEqual(lines[0], "[WARN] something suspicious");
-	});
-});
-
-suite("logger — logError", () => {
-	beforeEach(() => {
-		lines.length = 0;
+		assert.deepStrictEqual(messages, [
+			{ level: "warn", message: "something suspicious" },
+		]);
 	});
 
-	test("prefixes the message with [ERROR] and no suffix when err is omitted", () => {
+	test("logs errors through the error level", () => {
 		logError("something broke");
-		assert.strictEqual(lines.length, 1);
-		assert.strictEqual(lines[0], "[ERROR] something broke");
+		assert.deepStrictEqual(messages, [
+			{ level: "error", message: "something broke" },
+		]);
 	});
 
-	test("appends the Error message when an Error is passed", () => {
+	test("preserves Error messages", () => {
 		logError("operation failed", new Error("disk full"));
-		assert.strictEqual(lines.length, 1);
-		assert.strictEqual(lines[0], "[ERROR] operation failed: disk full");
+		assert.deepStrictEqual(messages, [
+			{ level: "error", message: "operation failed: disk full" },
+		]);
 	});
 
-	test("appends the stringified value when a non-Error is passed", () => {
+	test("preserves stringified unknown errors", () => {
 		logError("parse error", { code: 42, detail: "unexpected token" });
-		assert.strictEqual(lines.length, 1);
-		assert.strictEqual(lines[0], "[ERROR] parse error: [object Object]");
+		assert.deepStrictEqual(messages, [
+			{ level: "error", message: "parse error: [object Object]" },
+		]);
 	});
 
-	test("appends nothing extra when null is passed as err", () => {
-		logError("something broke", null);
-		assert.strictEqual(lines.length, 1);
-		assert.strictEqual(lines[0], "[ERROR] something broke");
+	test("omits null and undefined error suffixes", () => {
+		logError("null error", null);
+		logError("omitted error");
+		assert.deepStrictEqual(messages, [
+			{ level: "error", message: "null error" },
+			{ level: "error", message: "omitted error" },
+		]);
 	});
 
-	test("appends the string when a string is passed as err", () => {
+	test("preserves string error suffixes", () => {
 		logError("validation failed", "missing field");
-		assert.strictEqual(lines.length, 1);
-		assert.strictEqual(lines[0], "[ERROR] validation failed: missing field");
+		assert.deepStrictEqual(messages, [
+			{ level: "error", message: "validation failed: missing field" },
+		]);
 	});
 });
