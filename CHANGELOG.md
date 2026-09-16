@@ -2,6 +2,8 @@
 
 #### Tooling
 
+* Client hot-path benchmarks now use Vitest 5's test-context benchmark API.
+  (#737)
 * Restoring a graph panel now disposes the existing panel and its command
   handlers before wiring the replacement, so window reloads do not leave
   duplicate save commands behind. (#599)
@@ -26,6 +28,7 @@
   definition when the mod's file is deleted; and a definition whose file
   changed without a watcher event is found where it is now rather than
   dropped. Removing a file from the index is O(1). (#474)
+
 #### Tooling
 
 * The CLI now distinguishes usage, discovery, and empty-input failures from
@@ -47,9 +50,11 @@
   lens stayed at 0. Call sites are cached as non-schema leaf keys and reclassified
   when the instance set changes or after a workspace scan, without walking ASTs
   or reading files on each lens resolve.
+
 #### Extension
 
 * Graph labels now repaint when the VS Code webview theme changes. (#585)
+
 #### Extension
 
 * Changing settings that require startup now prompts to reload the window (#504).
