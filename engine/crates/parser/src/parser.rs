@@ -29,12 +29,17 @@ struct Cursor<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(input: &'a str, table: &'a StringTable, comment_mode: CommentMode) -> Self {
+    fn new(
+        input: &'a str,
+        table: &'a StringTable,
+        comment_mode: CommentMode,
+        initial_col: u16,
+    ) -> Self {
         Self {
             input,
             chars: input.chars(),
             line: 1,
-            col: 0,
+            col: initial_col,
             table,
             arena: Arena::new(),
             errors: Vec::new(),
@@ -735,12 +740,16 @@ fn is_key_char(c: char) -> bool {
 pub const MAX_CLAUSE_DEPTH: u32 = 256;
 
 /// Strip UTF-8 BOM if present, then parse with comments preserved.
+///
+/// Positions retain the BOM's column so they address the original input.
 #[tracing::instrument(skip_all)]
 pub fn parse_string(input: &str, table: &StringTable) -> ParsedFile {
     parse_string_with_comment_mode(input, table, CommentMode::Preserve)
 }
 
 /// Strip UTF-8 BOM if present, then parse without retaining comment text.
+///
+/// Positions retain the BOM's column so they address the original input.
 #[tracing::instrument(skip_all)]
 pub fn parse_string_without_comments(input: &str, table: &StringTable) -> ParsedFile {
     parse_string_with_comment_mode(input, table, CommentMode::Discard)
@@ -751,8 +760,9 @@ fn parse_string_with_comment_mode(
     table: &StringTable,
     comment_mode: CommentMode,
 ) -> ParsedFile {
+    let has_bom = input.starts_with('\u{FEFF}');
     let stripped = input.strip_prefix('\u{FEFF}').unwrap_or(input);
-    Parser::new(stripped, table, comment_mode).parse()
+    Parser::new(stripped, table, comment_mode, u16::from(has_bom)).parse()
 }
 
 #[cfg(test)]
@@ -764,6 +774,27 @@ mod tests {
         let table = StringTable::new();
         let result = parse_string("foo = bar", &table);
         assert_eq!(result.root_children.len(), 1);
+    }
+
+    #[test]
+    fn bom_positions_address_the_original_input_for_both_entry_points() {
+        let input = "\u{FEFF}first = 1\n  second = 2";
+        for parsed in [
+            parse_string(input, &StringTable::new()),
+            parse_string_without_comments(input, &StringTable::new()),
+        ] {
+            let Child::Leaf(first) = &parsed.root_children[0] else {
+                panic!("expected first leaf");
+            };
+            let Child::Leaf(second) = &parsed.root_children[1] else {
+                panic!("expected second leaf");
+            };
+            assert_eq!(parsed.arena.leaves[*first as usize].pos.start.col, 1);
+            assert_eq!(
+                parsed.arena.leaves[*second as usize].pos.start,
+                SourcePos { line: 2, col: 2 }
+            );
+        }
     }
 
     #[test]
