@@ -2,12 +2,16 @@
 //! labels, kept per file so an edit to one loc file can subtract exactly what
 //! that file contributed (#476). Keys are the `LocIndex`'s interned `Arc<str>`s.
 //!
-//! Entries are kept per key with the workspace's ahead of the base game's,
-//! so the first entry is the mod's own text while the mod defines the key
-//! and the base game's once it does not. Removing a file tombstones its id
-//! the way `LocLocations` does: readers skip entries of a dead file, and the
-//! sweep that drops them runs once the dead entries are a noticeable share
-//! of the map, not once per keystroke.
+//! Entries are kept per key in the order the scan first saw their files,
+//! with the base game's behind every workspace one, so the first entry is
+//! the mod's own text while the mod defines the key and the base game's once
+//! it does not. A file keeps its rank across a removal, so an edit that
+//! re-inserts it lands where the scan put it instead of behind the other
+//! files' translations of the same key, which the inlay and graph readers
+//! would show as a label flipping while typing. Removing a file tombstones
+//! its id the way `LocLocations` does: readers skip entries of a dead file,
+//! and the sweep that drops them runs once the dead entries are a noticeable
+//! share of the map, not once per keystroke.
 
 use std::sync::Arc;
 
@@ -30,6 +34,9 @@ struct Entry {
 #[derive(Debug)]
 struct File {
     vanilla: bool,
+    /// Where the file's entries sort among the other files' of a key: the
+    /// order the file was first seen in, kept across removals.
+    rank: u32,
     /// Removed; its entries are skipped by readers until the next sweep.
     dead: bool,
     /// Entries recorded for this file, so a removal knows what it tombstoned.
@@ -40,6 +47,8 @@ struct File {
 pub(crate) struct LocText {
     files: Vec<File>,
     file_ids: FxHashMap<Arc<str>, u32>,
+    /// Never cleared: a removed uri that comes back gets its old rank.
+    ranks: FxHashMap<Arc<str>, u32>,
     by_key: FxHashMap<Arc<str>, Vec<Entry>>,
     total_entries: u32,
     dead_entries: u32,
@@ -51,12 +60,16 @@ impl LocText {
             return id;
         }
         let id = self.files.len() as u32;
+        let uri: Arc<str> = Arc::from(uri);
+        let next_rank = self.ranks.len() as u32;
+        let rank = *self.ranks.entry(Arc::clone(&uri)).or_insert(next_rank);
         self.files.push(File {
             vanilla,
+            rank,
             dead: false,
             entries: 0,
         });
-        self.file_ids.insert(Arc::from(uri), id);
+        self.file_ids.insert(uri, id);
         id
     }
 
@@ -71,14 +84,20 @@ impl LocText {
         !self.files[entry.file as usize].dead
     }
 
-    /// Records a workspace translation, ahead of any base-game one of the key.
+    /// Records a workspace translation at its file's place among the key's
+    /// entries: behind the files seen before it, ahead of the ones seen after
+    /// and of any base-game one.
     pub(crate) fn insert(&mut self, key: Arc<str>, uri: &str, lang: Lang, text: String) {
         let entry = self.entry(uri, false, lang, text);
         let files = &self.files;
+        let rank = files[entry.file as usize].rank;
         let entries = self.by_key.entry(key).or_default();
         let at = entries
             .iter()
-            .position(|e| files[e.file as usize].vanilla)
+            .position(|e| {
+                let file = &files[e.file as usize];
+                file.vanilla || file.rank > rank
+            })
             .unwrap_or(entries.len());
         entries.insert(at, entry);
     }
@@ -203,8 +222,8 @@ mod tests {
         assert_eq!(
             texts(&map, "k"),
             Some(vec![
-                (Lang::French, "Bonjour".to_string()),
-                (Lang::English, "Hi".to_string())
+                (Lang::English, "Hi".to_string()),
+                (Lang::French, "Bonjour".to_string())
             ])
         );
         assert_eq!(
@@ -236,6 +255,39 @@ mod tests {
         // And a re-added workspace translation goes back in front of it.
         map.insert(a("k"), "file:///mod.yml", Lang::English, "Mod again".into());
         assert_eq!(map.get("k").unwrap().next().unwrap().1, "Mod again");
+    }
+
+    #[test]
+    fn reinserted_file_keeps_its_place_among_the_others() {
+        let mut map = LocText::default();
+        for file in ["a", "b", "c"] {
+            map.insert(
+                a("k"),
+                &format!("file:///{file}.yml"),
+                Lang::English,
+                file.into(),
+            );
+        }
+        // An edit re-reads b.yml: its entry goes back between a's and c's,
+        // not behind them, so the first entry does not change under the edit.
+        map.remove_file("file:///b.yml");
+        map.insert(a("k"), "file:///b.yml", Lang::English, "b2".into());
+        let order = |map: &LocText| -> Vec<String> {
+            map.get("k").unwrap().map(|(_, t)| t.to_string()).collect()
+        };
+        assert_eq!(order(&map), ["a", "b2", "c"]);
+        // A file never seen before sorts after every known one, and the base
+        // game after that.
+        map.insert_fallback(&a("k"), Lang::English, "vanilla");
+        map.insert(a("k"), "file:///z.yml", Lang::English, "z".into());
+        assert_eq!(order(&map), ["a", "b2", "c", "z", "vanilla"]);
+        // The rank survives a sweep too.
+        map.remove_file("file:///a.yml");
+        map.remove_file("file:///c.yml");
+        assert_eq!(map.dead_entries, 0, "sweep expected");
+        map.insert(a("k"), "file:///a.yml", Lang::English, "a2".into());
+        map.insert(a("k"), "file:///c.yml", Lang::English, "c2".into());
+        assert_eq!(order(&map), ["a2", "b2", "c2", "z", "vanilla"]);
     }
 
     #[test]
