@@ -539,6 +539,123 @@ fn test_validate_with_rules() {
 }
 
 #[test]
+fn test_validate_warns_when_vanilla_cache_is_for_another_game() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vanilla = fixtures_dir().join("discover").join("mod_a");
+    let rules_dir = fixtures_dir().join("rules");
+    let cache = tmp.path().join("vanilla.cwv");
+
+    cwtools()
+        .args([
+            "cache-vanilla",
+            "--game",
+            "stellaris",
+            "--vanilla",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--output",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    cwtools()
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "vanilla cache was built for game 'stellaris', validating 'hoi4'",
+        ));
+}
+
+#[test]
+fn test_validate_does_not_warn_for_equivalent_vanilla_cache_game_aliases() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vanilla = fixtures_dir().join("discover").join("mod_a");
+    let rules_dir = fixtures_dir().join("rules");
+
+    for (cache_game, validate_game) in [("stl", "stellaris"), ("imperator", "ir")] {
+        let cache = tmp.path().join(format!("{cache_game}.cwv"));
+        cwtools()
+            .args([
+                "cache-vanilla",
+                "--game",
+                cache_game,
+                "--vanilla",
+                vanilla.to_str().unwrap(),
+                "--rules",
+                rules_dir.to_str().unwrap(),
+                "--output",
+                cache.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+
+        cwtools()
+            .args([
+                "validate",
+                "--game",
+                validate_game,
+                "--directory",
+                vanilla.to_str().unwrap(),
+                "--rules",
+                rules_dir.to_str().unwrap(),
+                "--vanilla-cache",
+                cache.to_str().unwrap(),
+            ])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("vanilla cache was built").not());
+    }
+}
+
+#[test]
+fn test_validate_warns_when_vanilla_cache_has_unknown_game_identifier() {
+    let tmp = tempfile::tempdir().unwrap();
+    let vanilla = fixtures_dir().join("discover").join("mod_a");
+    let rules_dir = fixtures_dir().join("rules");
+    let cache = tmp.path().join("unknown.cwv");
+    let empty_index = std::collections::HashMap::new();
+    cwtools_info::vanilla_cache::save_per_type(
+        &empty_index,
+        "not_a_real_game",
+        "test-fingerprint",
+        &cache,
+        Default::default(),
+    )
+    .unwrap();
+
+    cwtools()
+        .args([
+            "validate",
+            "--game",
+            "stellaris",
+            "--directory",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "vanilla cache was built for game 'not_a_real_game', validating 'stellaris'",
+        ));
+}
+
+#[test]
 fn test_validate_bad_game_name_fails() {
     let discover_dir = fixtures_dir().join("discover").join("mod_a");
     let rules_dir = fixtures_dir().join("rules");
