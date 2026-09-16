@@ -4,6 +4,7 @@ use cwtools_driver::{
     RulesInput, Session, SessionConfig, VanillaCacheAuto, index_game_dir,
     index_game_dir_with_parse_cache,
 };
+use cwtools_game::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
 
@@ -206,7 +207,7 @@ pub(super) fn run(args: ValidateArgs) {
     let vanilla_cache_index = vanilla_cache.as_ref().and_then(|cache_path| {
         match vanilla_cache::load(cache_path) {
             Ok((cache_game, cached_fp, data)) => {
-                if cache_game != game {
+                if Game::from_str(&cache_game) != Some(game_id) {
                     eprintln!(
                         "  warn: vanilla cache was built for game '{}', validating '{}'",
                         cache_game, game

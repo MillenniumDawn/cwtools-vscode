@@ -6,6 +6,8 @@
   (#737)
 * Cargo-deny now allows BSD-3-Clause for the existing zstd dependency graph.
   (#743)
+* `validate` now treats equivalent vanilla-cache game aliases as the same game
+  while still warning for different and unknown identifiers. (#738)
 * Restoring a graph panel now disposes the existing panel and its command
   handlers before wiring the replacement, so window reloads do not leave
   duplicate save commands behind. (#599)
