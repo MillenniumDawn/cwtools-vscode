@@ -54,8 +54,11 @@ const {
 	graphNodes,
 	makeNode,
 	messageListener,
+	MutationObserver,
 	postMessage,
 	setState,
+	styleUpdate,
+	themeObservers,
 	tippy,
 	tippyInstances,
 } = vi.hoisted(() => {
@@ -65,6 +68,12 @@ const {
 	const added: FakeElementDefinition[] = [];
 	const createdTags: string[] = [];
 	const tippyInstances: FakeTippyInstance[] = [];
+	const styleUpdate = vi.fn();
+	const themeObservers: Array<{
+		callback: () => void;
+		observe: ReturnType<typeof vi.fn>;
+		disconnect: ReturnType<typeof vi.fn>;
+	}> = [];
 	const graphNodes: { nodes: FakeGraphNode[] } = { nodes: [] };
 	const makeNode = (id: string): FakeGraphNode => {
 		const handlers = new Map<string, () => void>();
@@ -129,9 +138,20 @@ const {
 			},
 		}),
 		on: vi.fn(),
-		style: vi.fn(),
+		style: vi.fn(() => ({ update: styleUpdate })),
 		width: () => 800,
 	});
+	class FakeMutationObserver {
+		callback: () => void;
+		observe = vi.fn();
+		disconnect = vi.fn();
+
+		constructor(callback: () => void) {
+			this.callback = callback;
+			themeObservers.push(this);
+		}
+	}
+	const MutationObserver = vi.fn(FakeMutationObserver);
 	return {
 		added,
 		createdTags,
@@ -139,8 +159,11 @@ const {
 		graphNodes,
 		makeNode,
 		messageListener,
+		MutationObserver,
 		postMessage: vi.fn(),
 		setState: vi.fn(),
+		styleUpdate,
+		themeObservers,
 		tippy,
 		tippyInstances,
 	};
@@ -156,7 +179,9 @@ vi.mock("cytoscape-elk", () => ({ default: {} }));
 vi.mock("cytoscape-popper", () => ({ default: {} }));
 vi.mock("tippy.js", () => ({ default: tippy }));
 vi.mock("merge-images", () => ({ default: vi.fn() }));
-vi.mock("../../src/webview/canvas", () => ({ registerCytoscapeCanvas: vi.fn() }));
+vi.mock("../../src/webview/canvas", () => ({
+	registerCytoscapeCanvas: vi.fn(),
+}));
 
 const createElement = (tagName: string): FakeElement => {
 	createdTags.push(tagName);
@@ -195,6 +220,7 @@ suite("graph webview", () => {
 				messageListener.listener = listener;
 			},
 		});
+		vi.stubGlobal("MutationObserver", MutationObserver);
 		vi.stubGlobal("acquireVsCodeApi", () => ({ postMessage, setState }));
 
 		await import("../../src/webview/graph");
@@ -215,6 +241,8 @@ suite("graph webview", () => {
 		vi.useFakeTimers();
 		setState.mockClear();
 		tippy.mockClear();
+		styleUpdate.mockClear();
+		themeObservers.length = 0;
 		added.length = 0;
 		createdTags.length = 0;
 		tippyInstances.length = 0;
@@ -227,6 +255,46 @@ suite("graph webview", () => {
 
 	const render = (message: unknown) =>
 		messageListener.listener?.({ data: message });
+
+	test("repaints the graph when VS Code changes its theme", () => {
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+
+		const observer = themeObservers[themeObservers.length - 1];
+		assert.ok(observer);
+		assert.strictEqual(observer.observe.mock.calls.length, 1);
+		const elementCount = added.length;
+
+		observer.callback();
+
+		assert.strictEqual(styleUpdate.mock.calls.length, 1);
+		assert.strictEqual(added.length, elementCount);
+	});
+
+	test("disconnects the previous theme observer when rebuilding the graph", () => {
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		const previous = themeObservers[themeObservers.length - 1];
+
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		const current = themeObservers[themeObservers.length - 1];
+
+		assert.ok(previous);
+		assert.ok(current);
+		assert.notStrictEqual(previous, current);
+		assert.strictEqual(previous.disconnect.mock.calls.length, 1);
+		assert.strictEqual(current.disconnect.mock.calls.length, 0);
+	});
 
 	test("persists the request parameters when a server graph renders", () => {
 		render({
