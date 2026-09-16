@@ -4,10 +4,14 @@
 
 * Bare values now keep their source range tight to the value, so comments and
   blank lines are preserved by formatting. (#546)
+* Live vanilla indexing now preserves the real source URI for each base-game
+  instance, matching cache-backed sessions. (#580)
+
 #### Tooling
 
 * The CLI now distinguishes usage, discovery, and empty-input failures from
   validation findings with their documented exit codes. (#493)
+
 #### Engine
 
 * Ctrl+Click on `localization_key` in scripted localisation jumps to the loc
