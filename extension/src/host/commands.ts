@@ -194,7 +194,7 @@ export function registerCommands(
 		}),
 	);
 	let currentGraphDepth = 3;
-	let latestShowGraphRequest = 0;
+	let latestGraphRequest = 0;
 	const wheelSensitivity = (): number =>
 		workspace.getConfiguration("cwtools.graph").get("zoomSensitivity") ?? 1;
 	const reportNoGraph = (): void => {
@@ -218,7 +218,7 @@ export function registerCommands(
 			return;
 		}
 		const depth = currentGraphDepth;
-		const requestId = ++latestShowGraphRequest;
+		const requestId = ++latestGraphRequest;
 		let loaded: [GraphPanelModule, GraphData];
 		try {
 			loaded = await Promise.all([
@@ -226,7 +226,7 @@ export function registerCommands(
 				getGraphData(entityType, depth),
 			]);
 		} catch (err) {
-			if (requestId !== latestShowGraphRequest) {
+			if (requestId !== latestGraphRequest) {
 				return;
 			}
 			// The graph build now runs under a cancellable notification, so
@@ -241,7 +241,7 @@ export function registerCommands(
 			}
 			throw err;
 		}
-		if (requestId !== latestShowGraphRequest) {
+		if (requestId !== latestGraphRequest) {
 			return;
 		}
 		const [gp, graphData] = loaded;
@@ -318,6 +318,7 @@ export function registerCommands(
 								context.extensionPath,
 								webviewPanel,
 							);
+							const requestId = ++latestGraphRequest;
 							if (persisted?.source === "server" && persisted.entityType) {
 								if (!serverProvidesGraphData(client)) {
 									window.showWarningMessage(
@@ -329,6 +330,9 @@ export function registerCommands(
 								}
 								const depth = persisted.depth ?? currentGraphDepth;
 								const data = await getGraphData(persisted.entityType, depth);
+								if (requestId !== latestGraphRequest) {
+									return;
+								}
 								panel.initialiseGraph(data, wheelSensitivity(), {
 									source: "server",
 									entityType: persisted.entityType,
@@ -348,6 +352,9 @@ export function registerCommands(
 								}
 								const bytes = await vscode.workspace.fs.readFile(uri[0]);
 								const data = new TextDecoder("utf-8").decode(bytes);
+								if (requestId !== latestGraphRequest) {
+									return;
+								}
 								panel.initialiseGraph(data, wheelSensitivity(), {
 									source: "json",
 								});
@@ -360,6 +367,9 @@ export function registerCommands(
 									return;
 								}
 								const data = await getGraphData(entityType, currentGraphDepth);
+								if (requestId !== latestGraphRequest) {
+									return;
+								}
 								panel.initialiseGraph(data, wheelSensitivity(), {
 									source: "server",
 									entityType,
