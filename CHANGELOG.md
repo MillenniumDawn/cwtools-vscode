@@ -1,5 +1,11 @@
 ### Unreleased
 
+#### Tooling
+
+* Restoring a graph panel now disposes the existing panel and its command
+  handlers before wiring the replacement, so window reloads do not leave
+  duplicate save commands behind. (#599)
+
 #### Engine
 
 * Bare values now keep their source range tight to the value, so comments and
