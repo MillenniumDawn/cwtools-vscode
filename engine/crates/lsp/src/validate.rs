@@ -12,10 +12,10 @@ use cwtools_validation::{
     InlineScripts, Prepared, ValidationError, validate_prepared, validate_prepared_tracking_uses,
 };
 
+use crate::Backend;
 use crate::lines::DocLines;
 use crate::paths::{logical_path_from_uri, uri_to_path_str};
 use crate::state::LocDocumentCache;
-use crate::{Backend, LocTextMap};
 
 #[cfg(test)]
 mod loc_sweep_test_hook {
@@ -1147,7 +1147,9 @@ impl Backend {
     }
 
     /// workspace rescan (#53). Takes the shared parse of the edited buffer.
-    fn update_loc_text_for_file(&self, files: &[cwtools_localization::LocFile]) {
+    /// Replaces what `uri` contributed before, so a key edited away loses its
+    /// text at once and another file's translation of the same key stays (#476).
+    fn update_loc_text_for_file(&self, uri: &str, files: &[cwtools_localization::LocFile]) {
         let hover_all = self
             .state
             .hover_show_all_languages
@@ -1160,7 +1162,7 @@ impl Backend {
 
         let new_entries = {
             let loc_index = self.state.loc_index.read();
-            let mut new_entries = LocTextMap::default();
+            let mut new_entries = Vec::new();
             for file in files {
                 let lang = file.lang.unwrap_or(cwtools_localization::Lang::English);
                 let lang_included = hover_all || lang == primary_lang;
@@ -1174,10 +1176,7 @@ impl Backend {
                             .as_deref()
                             .and_then(|index| index.key(&entry.key))
                             .unwrap_or_else(|| Arc::from(entry.key.to_lowercase()));
-                        new_entries
-                            .entry(key)
-                            .or_default()
-                            .push((lang, display.to_string()));
+                        new_entries.push((key, lang, display.to_string()));
                     }
                 }
             }
@@ -1185,11 +1184,9 @@ impl Backend {
         };
 
         let mut loc_text = self.state.loc_text.write();
-        for key in new_entries.keys() {
-            loc_text.remove(key);
-        }
-        for (key, translations) in new_entries {
-            loc_text.entry(key).or_default().extend(translations);
+        loc_text.remove_file(uri);
+        for (key, lang, text) in new_entries {
+            loc_text.insert(key, uri, lang, text);
         }
     }
 
@@ -1484,7 +1481,7 @@ impl Backend {
                     &extra,
                 );
                 // edits without waiting for a full workspace rescan (#53).
-                self.update_loc_text_for_file(&parsed_loc);
+                self.update_loc_text_for_file(uri, &parsed_loc);
                 // Only the two triggers whose `text` is the file on disk: a
                 // watched change, or a close reading back what was saved.
                 if matches!(
@@ -2234,6 +2231,71 @@ mod info_revision_tests {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.code == Some(NumberOrString::String("CW259".to_string()))
         }));
+    }
+
+    /// A key edited out of an open loc file loses its hover text on that
+    /// same edit, with no workspace scan in between; another file's
+    /// translation of a key the edit keeps is left alone (#476).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_loc_key_edited_away_drops_its_text_without_a_rescan() {
+        let backend = test_backend();
+        let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
+        let other = format!("{WORKSPACE_URI}/localisation/other_l_english.yml");
+        backend.state.loc_text.write().insert(
+            Arc::from("shared_key"),
+            &other,
+            cwtools_localization::Lang::English,
+            "Elsewhere".to_string(),
+        );
+        let open = |text: &str| {
+            let text: Arc<str> = Arc::from(text);
+            backend
+                .state
+                .documents
+                .lock()
+                .open(
+                    uri.clone(),
+                    crate::state::ParsedDoc {
+                        version: 1,
+                        text: Arc::clone(&text),
+                        ast: None,
+                        ast_version: None,
+                        ast_source_bytes: 0,
+                        loc_cache: None,
+                    },
+                )
+                .unwrap();
+            text
+        };
+        let texts = |key: &str| -> Option<Vec<String>> {
+            backend
+                .state
+                .loc_text
+                .read()
+                .get(key)
+                .map(|it| it.map(|(_, text)| text.to_string()).collect())
+        };
+
+        let text = open("l_english:\n old_key:0 \"Old\"\n shared_key:0 \"Here\"\n");
+        backend
+            .parse_and_validate(&uri, &text, crate::ValidateTrigger::DidChange, Some(1))
+            .await;
+        assert_eq!(texts("old_key"), Some(vec!["Old".to_string()]));
+        assert_eq!(
+            texts("shared_key"),
+            Some(vec!["Elsewhere".to_string(), "Here".to_string()])
+        );
+
+        let text = open("l_english:\n new_key:0 \"New\"\n shared_key:0 \"Here\"\n");
+        backend
+            .parse_and_validate(&uri, &text, crate::ValidateTrigger::DidChange, Some(2))
+            .await;
+        assert_eq!(texts("old_key"), None, "renamed key must lose its text");
+        assert_eq!(texts("new_key"), Some(vec!["New".to_string()]));
+        assert_eq!(
+            texts("shared_key"),
+            Some(vec!["Elsewhere".to_string(), "Here".to_string()])
+        );
     }
 
     #[test]

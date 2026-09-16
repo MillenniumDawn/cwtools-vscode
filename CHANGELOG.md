@@ -19,6 +19,11 @@
 
 #### Engine
 
+* Hover, inlay titles and graph labels keep their localisation text per
+  file, so renaming or deleting a key in an open loc file drops the old text
+  on that edit instead of at the next full scan, editing one file no longer
+  drops another file's (or the base game's) translation of the same key, and a
+  deleted loc file takes its text with it. (#476)
 * Bare values now keep their source range tight to the value, so comments and
   blank lines are preserved by formatting. (#546)
 * Live vanilla indexing now preserves the real source URI for each base-game

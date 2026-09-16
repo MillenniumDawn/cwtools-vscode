@@ -1,7 +1,6 @@
 #[cfg(test)]
 use parking_lot::Condvar;
 use parking_lot::Mutex;
-use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,8 +16,8 @@ use cwtools_validation::{InlineScripts, references};
 
 use crate::scan::ScanSummary;
 
-pub(crate) type LocTextMap = FxHashMap<Arc<str>, Vec<(cwtools_localization::Lang, String)>>;
 pub(crate) use crate::loc_locations::LocLocations;
+pub(crate) use crate::loc_text::LocText;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,8 +204,7 @@ pub(crate) struct DocumentState {
     /// (#259) — the editor's counterpart of the batch driver's
     pub(crate) inline_scripts: parking_lot::RwLock<InlineScripts>,
     pub(crate) loc_key_index: parking_lot::RwLock<Option<Arc<crate::completion::LocKeyIndex>>>,
-    #[allow(clippy::type_complexity)]
-    pub(crate) loc_text: parking_lot::RwLock<LocTextMap>,
+    pub(crate) loc_text: parking_lot::RwLock<LocText>,
     pub(crate) loc_locations: parking_lot::RwLock<LocLocations>,
     /// full rescan (#36). Bounded by the number of open loc files, so it stays
     pub(crate) loc_live_overlay: parking_lot::RwLock<HashMap<String, HashSet<String>>>,
@@ -696,7 +694,7 @@ impl DocumentState {
             loc_index: parking_lot::RwLock::new(None),
             inline_scripts: parking_lot::RwLock::new(InlineScripts::default()),
             loc_key_index: parking_lot::RwLock::new(None),
-            loc_text: parking_lot::RwLock::new(LocTextMap::default()),
+            loc_text: parking_lot::RwLock::new(LocText::default()),
             loc_locations: parking_lot::RwLock::new(LocLocations::default()),
             loc_live_overlay: parking_lot::RwLock::new(HashMap::new()),
             loc_watched_overlay: parking_lot::RwLock::new(HashMap::new()),

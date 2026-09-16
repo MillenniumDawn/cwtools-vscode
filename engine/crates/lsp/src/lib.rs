@@ -28,6 +28,7 @@ mod hover;
 mod inlay;
 mod lines;
 mod loc_locations;
+mod loc_text;
 mod navigation;
 mod paths;
 mod scan;
@@ -41,7 +42,7 @@ pub(crate) use cursor::{RuleCursorInfo, hint_from_rule_right};
 pub(crate) use server::{LoadingBar, UpdateFileList};
 pub(crate) use state::{
     AstSource, Backend, CompletionCacheEntry, DeferredRulesMessage, DocumentState,
-    FileTextSnapshot, FixableEdits, LocLocations, LocTextMap, SemanticCacheEntry, ValidateTrigger,
+    FileTextSnapshot, FixableEdits, LocLocations, LocText, SemanticCacheEntry, ValidateTrigger,
 };
 
 /// Re-exports for this crate's `benches/`, which link it as an external crate

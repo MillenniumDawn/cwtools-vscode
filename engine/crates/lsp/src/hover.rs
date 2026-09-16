@@ -7,7 +7,7 @@ use cwtools_info::{PositionElement, ReferenceHint};
 
 use crate::RuleCursorInfo;
 use crate::paths::{lang_display_name, logical_path_from_uri};
-use crate::{Backend, LocTextMap};
+use crate::{Backend, LocText};
 
 impl Backend {
     pub(crate) async fn hover_impl(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -195,7 +195,7 @@ impl Backend {
         for (lang, text) in translations {
             md.push_str(&format!(
                 "\n- {}: {}",
-                lang_display_name(*lang),
+                lang_display_name(lang),
                 escape_markdown(text),
             ));
         }
@@ -361,11 +361,7 @@ pub(crate) fn build_hover_markdown(
 }
 
 /// `"my_war_flag"` is not a key in the loc map (#317).
-pub(crate) fn append_localisation(
-    md: &mut String,
-    element: &PositionElement,
-    loc_text: &LocTextMap,
-) {
+pub(crate) fn append_localisation(md: &mut String, element: &PositionElement, loc_text: &LocText) {
     let loc_key = |s: &str| {
         let s = s.trim();
         if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
@@ -388,7 +384,7 @@ pub(crate) fn append_localisation(
             for (lang, text) in translations {
                 md.push_str(&format!(
                     "\n- {}: {}",
-                    lang_display_name(*lang),
+                    lang_display_name(lang),
                     escape_markdown(text),
                 ));
             }
@@ -421,7 +417,7 @@ pub(crate) fn append_type_localisation(
     value: &str,
     type_index: &cwtools_info::TypeIndex,
     ruleset: &cwtools_rules::rules_types::RuleSet,
-    loc_text: &LocTextMap,
+    loc_text: &LocText,
 ) {
     let value = value.trim_matches('"');
     let mut keys: Vec<String> = Vec::new();
@@ -441,7 +437,7 @@ pub(crate) fn append_type_localisation(
             for (lang, text) in translations {
                 md.push_str(&format!(
                     "\n- {}: {}",
-                    lang_display_name(*lang),
+                    lang_display_name(lang),
                     escape_markdown(text),
                 ));
             }
@@ -776,12 +772,14 @@ mod tests {
         assert!(!md.contains("**From.From**"), "got: {}", md);
     }
 
-    fn loc_map_with(pairs: &[(&str, &str)]) -> LocTextMap {
-        let mut m = LocTextMap::default();
+    fn loc_map_with(pairs: &[(&str, &str)]) -> LocText {
+        let mut m = LocText::default();
         for (k, v) in pairs {
             m.insert(
                 std::sync::Arc::<str>::from(*k),
-                vec![(cwtools_localization::Lang::English, (*v).to_string())],
+                "file:///test_l_english.yml",
+                cwtools_localization::Lang::English,
+                (*v).to_string(),
             );
         }
         m
@@ -893,10 +891,9 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
             .unwrap();
         state.loc_text.write().insert(
             std::sync::Arc::from("my_idea"),
-            vec![(
-                cwtools_localization::Lang::English,
-                MARKDOWN_LOCALISATION.to_string(),
-            )],
+            "file:///test_l_english.yml",
+            cwtools_localization::Lang::English,
+            MARKDOWN_LOCALISATION.to_string(),
         );
 
         let hover = service
@@ -907,7 +904,17 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
             panic!("expected Markdown hover");
         };
         assert_escaped_localisation(&content.value);
-        assert_eq!(state.loc_text.read()["my_idea"][0].1, MARKDOWN_LOCALISATION);
+        assert_eq!(
+            state
+                .loc_text
+                .read()
+                .get("my_idea")
+                .unwrap()
+                .next()
+                .unwrap()
+                .1,
+            MARKDOWN_LOCALISATION
+        );
     }
 
     #[test]

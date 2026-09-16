@@ -8,7 +8,7 @@ use cwtools_localization::Lang;
 use crate::lines::DocLines;
 use crate::paths::{loc_display_text, path_to_uri};
 use crate::validate::{loc_diag_to_validation_error, validation_error_to_diagnostic};
-use crate::{Backend, LocLocations, LocTextMap};
+use crate::{Backend, LocLocations, LocText};
 
 use super::{VanillaLoc, stat_signature_for};
 
@@ -50,7 +50,7 @@ pub(crate) fn collect_loc_display(
     primary_lang: Lang,
     hover_all: bool,
     all_sites: bool,
-    text: &mut LocTextMap,
+    text: &mut LocText,
     locations: &mut LocLocations,
 ) {
     for file in service.files() {
@@ -72,9 +72,7 @@ pub(crate) fn collect_loc_display(
             }
             let display = loc_display_text(&entry.desc);
             if !display.is_empty() {
-                text.entry(key)
-                    .or_default()
-                    .push((lang, display.to_string()));
+                text.insert(key, &file_uri, lang, display.to_string());
             }
         }
     }
@@ -227,7 +225,7 @@ impl Backend {
                         .or_default()
                         .push(validation_error_to_diagnostic(&ve, &DocLines::none()));
                 }
-                let mut lt = LocTextMap::default();
+                let mut lt = LocText::default();
                 let mut ll = LocLocations::default();
                 for file in service.files() {
                     by_file.entry(file.path.clone()).or_default();
@@ -259,10 +257,8 @@ impl Backend {
                     })
                     .collect::<HashMap<_, _>>();
                 if let Some(vanilla) = &vanilla {
-                    for (key, translations) in &vanilla.text {
-                        lt.entry(Arc::clone(key))
-                            .or_default()
-                            .extend(translations.iter().cloned());
+                    for (key, lang, text) in vanilla.text.entries() {
+                        lt.insert_fallback(key, lang, text);
                     }
                     for (key, (uri, line0)) in vanilla.locations.iter() {
                         ll.insert_fallback(key, uri, line0);
@@ -354,15 +350,15 @@ mod tests {
         let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
         assert_eq!(svc.files().len(), 2);
         let idx = LocIndex::build(&svc);
-        let mut text = LocTextMap::default();
+        let mut text = LocText::default();
         let mut locs = LocLocations::default();
         collect_loc_display(&svc, &idx, Lang::English, false, true, &mut text, &mut locs);
         let key: std::sync::Arc<str> = "my_key".into();
-        let entries = text.get(&key).expect("my_key hover");
+        let entries: Vec<_> = text.get(&key).expect("my_key hover").collect();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, Lang::English);
         assert_eq!(entries[0].1, "Hello");
-        let mut text_all = LocTextMap::default();
+        let mut text_all = LocText::default();
         let mut locs_all = LocLocations::default();
         collect_loc_display(
             &svc,
@@ -373,8 +369,7 @@ mod tests {
             &mut text_all,
             &mut locs_all,
         );
-        let entries_all = text_all.get(&key).unwrap();
-        assert_eq!(entries_all.len(), 2);
+        assert_eq!(text_all.get(&key).unwrap().count(), 2);
         assert!(locs.contains_key(&key));
         assert!(locs_all.contains_key(&key));
         // Both definitions are kept, the English one as the goto target; the
@@ -387,7 +382,7 @@ mod tests {
         assert!(sites[0].contains("a_l_english"), "{sites:?}");
         assert!(sites[1].contains("a_l_french"), "{sites:?}");
         let mut single = LocLocations::default();
-        let mut text_single = LocTextMap::default();
+        let mut text_single = LocText::default();
         collect_loc_display(
             &svc,
             &idx,
@@ -418,7 +413,7 @@ mod tests {
         .unwrap();
         let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
         let idx = LocIndex::build(&svc);
-        let mut text = LocTextMap::default();
+        let mut text = LocText::default();
         let mut locs = LocLocations::default();
         collect_loc_display(&svc, &idx, Lang::English, false, true, &mut text, &mut locs);
         let key: std::sync::Arc<str> = "dup_key".into();
