@@ -13,6 +13,8 @@
   validation findings with their documented exit codes. (#493)
 * Package input copying now removes stale files from `dist/extension` without
   deleting generated build artifacts. (#561)
+* `fix` now warns when a supplied vanilla cache was built for another game.
+  (#499)
 
 #### Engine
 
