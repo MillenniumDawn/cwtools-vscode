@@ -29,6 +29,8 @@
 
 * Parser source positions now account for a leading BOM, so line-1 fixes and
   formatting edits preserve the original file text. (#555)
+* Vanilla cache instances are now accepted only from files inside the configured
+  base-game directory. (#591)
 * Bare values now keep their source range tight to the value, so comments and
   blank lines are preserved by formatting. (#546)
 * Live vanilla indexing now preserves the real source URI for each base-game
