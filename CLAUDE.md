@@ -136,6 +136,7 @@ Three things to know about them:
 3. Debug by launching "Quick update, Build and Launch Extension" in VS Code
 4. Test with sample Paradox game mod files in `extension/test/workspaces/stellaris/`
 5. Run tests with `npm test` before committing changes
+6. For issue-driven work, `/fix-issue <n>` runs the whole loop: fetch the issue, gather context, plan, pause for approval, implement, verify, open the PR (`.claude/skills/fix-issue/SKILL.md`)
 
 ## Conventions
 

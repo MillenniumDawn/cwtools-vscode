@@ -9,6 +9,9 @@
 
 #### Tooling
 
+* Add the `/fix-issue` Claude Code skill (`.claude/skills/fix-issue`): it
+  fetches a GitHub issue, gathers the context it touches, plans the fix,
+  then implements, verifies, and opens the PR after approval.
 * Host tests use the extension-host runner's TDD `suite`/`test` globals
   throughout; importing `describe`/`it` from the top-level mocha package broke
   the smoke suite because those helpers are not bound to the Mocha instance
