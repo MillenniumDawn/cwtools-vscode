@@ -89,15 +89,13 @@ pub fn format_range_edits(
     opts: &FormatOptions,
     range: SourceRange,
 ) -> Vec<SpanEdit> {
-    let bom = input.starts_with('\u{FEFF}');
-    let body = input.strip_prefix('\u{FEFF}').unwrap_or(input);
-    let Some(parsed) = parse_ok(body, table) else {
+    let Some(parsed) = parse_ok(input, table) else {
         return Vec::new();
     };
-    let line_starts = line_start_bytes(body);
-    let range_start = pos_to_byte(body, &line_starts, range.start);
-    let range_end = pos_to_byte(body, &line_starts, range.end);
-    if range_start == 0 && range_end >= body.len() {
+    let line_starts = line_start_bytes(input);
+    let range_start = pos_to_byte(input, &line_starts, range.start);
+    let range_end = pos_to_byte(input, &line_starts, range.end);
+    if range_start == 0 && range_end >= input.len() {
         return format_edits(input, table, opts);
     }
     let (indent, slice) = select_span(
@@ -106,7 +104,7 @@ pub fn format_range_edits(
         0,
         range_start,
         range_end,
-        body,
+        input,
         &line_starts,
     );
     if slice.is_empty() {
@@ -116,11 +114,15 @@ pub fn format_range_edits(
     let last = child_span(&parsed.arena, &slice[slice.len() - 1]);
     let start = SourcePos {
         line: first.start.line,
-        col: 0,
+        col: if input.starts_with('\u{FEFF}') && first.start.line == 1 {
+            1
+        } else {
+            0
+        },
     };
-    let replace_from = pos_to_byte(body, &line_starts, start);
-    let replace_to = pos_to_byte(body, &line_starts, last.end);
-    let mut printer = Printer::new(body, table, &parsed.arena, opts, indent);
+    let replace_from = pos_to_byte(input, &line_starts, start);
+    let replace_to = pos_to_byte(input, &line_starts, last.end);
+    let mut printer = Printer::new(input, table, &parsed.arena, opts, indent);
     printer.emit_children(slice);
     let mut replacement = printer.out;
     if opts.trim_trailing_whitespace {
@@ -128,36 +130,24 @@ pub fn format_range_edits(
             replacement.pop();
         }
     }
-    let original = body.get(replace_from..replace_to).unwrap_or("");
+    let original = input.get(replace_from..replace_to).unwrap_or("");
     if replacement == original {
         return Vec::new();
     }
-    // Positions were measured on the BOM-stripped body. A leading U+FEFF is
     let (kept, _) = plan_file_edits(
         input,
         vec![(
             (),
             SpanEdit {
                 range: SourceRange {
-                    start: shift_col_for_bom(start, bom),
-                    end: shift_col_for_bom(last.end, bom),
+                    start,
+                    end: last.end,
                 },
                 replacement,
             },
         )],
     );
     kept
-}
-
-fn shift_col_for_bom(pos: SourcePos, bom: bool) -> SourcePos {
-    if bom && pos.line == 1 {
-        SourcePos {
-            line: 1,
-            col: pos.col.saturating_add(1),
-        }
-    } else {
-        pos
-    }
 }
 
 fn parse_ok(input: &str, table: &StringTable) -> Option<ParsedFile> {

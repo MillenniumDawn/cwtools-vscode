@@ -2412,6 +2412,37 @@ fn test_fix_apply_writes_and_is_idempotent() {
 }
 
 #[test]
+fn test_fix_apply_preserves_a_leading_bom_and_surrounding_text() {
+    let tmp = fix_mod();
+    let rules_dir = fixtures_dir().join("rules");
+    let file = tmp.path().join("common").join("hint.txt");
+    std::fs::write(&file, "\u{FEFF}x = { if = { } }\n").unwrap();
+
+    cwtools()
+        .args([
+            "fix",
+            "--game",
+            "stellaris",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Applied 1 fix(es) across 1 file(s)",
+        ));
+
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "\u{FEFF}x = { }\n",
+        "fixing line 1 must retain the BOM and surrounding text"
+    );
+}
+
+#[test]
 fn test_fix_apply_read_failure_exits_two() {
     let tmp = fix_mod();
     let rules_dir = fixtures_dir().join("rules");

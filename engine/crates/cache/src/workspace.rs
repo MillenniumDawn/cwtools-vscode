@@ -17,7 +17,9 @@ use cwtools_string_table::string_table::StringTable;
 /// v8: folded the display locale into the fingerprint. The `.cwe` sidecar holds
 /// language the server was started in, so a cache built under one locale would
 /// v9: invalidates cached `LeafValue` ranges after they became tight.
-const CACHE_VERSION: u32 = 9;
+/// v10: invalidates cached source positions after leading BOMs began counting
+/// toward their line-1 columns.
+const CACHE_VERSION: u32 = 10;
 
 pub const PATH_METADATA_CACHE_SUPPORTED: bool = cfg!(unix);
 
