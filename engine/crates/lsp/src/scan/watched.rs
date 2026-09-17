@@ -139,9 +139,9 @@ impl Backend {
                 lost_scan_cas = true;
             }
         } else {
-            let Ok(_validation_permit) = self.state.validation_permits.acquire().await else {
-                return;
-            };
+            // No batch-wide permit: each file below takes its own slot, so a
+            // keystroke validation queued behind this batch waits for one file,
+            // not the whole batch (#477).
             // open-doc edit path's job (#90).
             let mut changed_loc_keys: HashSet<String> = HashSet::new();
             if !deletes.is_empty() {
@@ -164,6 +164,8 @@ impl Backend {
                 }
             }
             for uri in changes {
+                #[cfg(test)]
+                self.hold_from_async(crate::state::HoldPoint::WatchedFile);
                 if self.is_ignored_uri(&uri) {
                     self.clear_ignored_file_state(&uri);
                     if let Ok(uri_obj) = Url::parse(&uri) {
@@ -192,6 +194,9 @@ impl Backend {
                 .await;
                 match read {
                     Ok(Some(text)) => {
+                        let Some(_permit) = self.validation_permit().await else {
+                            return;
+                        };
                         if crate::paths::is_loc_file(&uri) {
                             changed_loc_keys
                                 .extend(self.record_watched_loc_keys(&uri, &path, &text));
@@ -223,16 +228,24 @@ impl Backend {
                     }
                 }
             }
-            if !changed_loc_keys.is_empty() {
-                self.refresh_after_watched_loc_changes(&changed_loc_keys)
-                    .await;
-            }
-            let queued: HashSet<String> =
-                { self.state.pending_changed_names.lock().drain().collect() };
-            if !queued.is_empty() {
-                let generation = self.state.edit_generation.load(Ordering::Relaxed);
-                self.revalidate_open_dependents("", generation, Some(&queued))
-                    .await;
+            let sweep_pending =
+                !changed_loc_keys.is_empty() || !self.state.pending_changed_names.lock().is_empty();
+            if sweep_pending {
+                // The cross-file sweeps are one more unit of work under one slot.
+                let Some(_permit) = self.validation_permit().await else {
+                    return;
+                };
+                if !changed_loc_keys.is_empty() {
+                    self.refresh_after_watched_loc_changes(&changed_loc_keys)
+                        .await;
+                }
+                let queued: HashSet<String> =
+                    { self.state.pending_changed_names.lock().drain().collect() };
+                if !queued.is_empty() {
+                    let generation = self.state.edit_generation.load(Ordering::Relaxed);
+                    self.revalidate_open_dependents("", generation, Some(&queued))
+                        .await;
+                }
             }
             self.invalidate_all_semantic_tokens();
             self.request_semantic_refresh().await;

@@ -132,6 +132,27 @@ impl Drop for ScanGuard {
 const SCAN_PROGRESS_TOKEN: &str = "cwtools/scan";
 
 impl Backend {
+    /// Parks the caller at `point` while a test holds the gate there. Callers
+    /// are inside `block_in_place` or a blocking mapper, never on a bare
+    /// async worker.
+    #[cfg(test)]
+    pub(crate) fn hold(&self, point: crate::state::HoldPoint) {
+        let gate = self.state.hold_gate.lock().clone();
+        if let Some(gate) = gate {
+            gate.hold(point);
+        }
+    }
+
+    /// `hold` for an async caller. Skips the runtime hop when no gate is set,
+    /// so tests on a `current_thread` runtime never reach `block_in_place`.
+    #[cfg(test)]
+    pub(crate) fn hold_from_async(&self, point: crate::state::HoldPoint) {
+        if self.state.hold_gate.lock().is_none() {
+            return;
+        }
+        tokio::task::block_in_place(|| self.hold(point));
+    }
+
     pub(crate) async fn send_loading_bar(&self, enable: bool, value: &str) {
         self.send_loading_bar_pct(None, enable, value, None).await;
     }

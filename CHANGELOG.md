@@ -36,6 +36,10 @@
 * Live vanilla indexing now preserves the real source URI for each base-game
   instance, matching cache-backed sessions. (#580)
 * Modifier key validation now lazily lowercases ASCII keys while preserving Unicode matching. (#598)
+* Watched-file batches, open-document revalidation and `didClose` now take a
+  validation slot per file instead of per batch, so an edit made while a
+  large batch runs (a `git checkout` touching many files) no longer waits for
+  the whole batch before its diagnostics appear. (#477)
 
 * Find-references and rename on a localisation key no longer read and parse
   the whole localisation tree, then every script file, on the pump task for

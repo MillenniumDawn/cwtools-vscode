@@ -20,33 +20,40 @@ use crate::scan::ScanSummary;
 pub(crate) type LocTextMap = FxHashMap<Arc<str>, Vec<(cwtools_localization::Lang, String)>>;
 pub(crate) use crate::loc_locations::LocLocations;
 
+/// Where a test may park a background pipeline mid-flight so it can observe
+/// the state in between. Pass 2 of the workspace scan has three points; the
+/// watched batch has one at the top of every per-file iteration, outside the
+/// validation permit (#477).
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Pass2HoldPoint {
-    Before,
-    Mid,
-    After,
+pub(crate) enum HoldPoint {
+    Pass2Before,
+    Pass2Mid,
+    Pass2After,
+    WatchedFile,
 }
 
+/// A one-shot condvar gate: the first `hold` at the configured point blocks
+/// until `release`; later holds pass through.
 #[cfg(test)]
-pub(crate) struct Pass2Gate {
-    hold_at: Pass2HoldPoint,
-    state: Mutex<Pass2GateState>,
+pub(crate) struct HoldGate {
+    hold_at: HoldPoint,
+    state: Mutex<HoldGateState>,
     cv: Condvar,
 }
 
 #[cfg(test)]
-struct Pass2GateState {
+struct HoldGateState {
     arrived: bool,
     released: bool,
 }
 
 #[cfg(test)]
-impl Pass2Gate {
-    pub(crate) fn new(hold_at: Pass2HoldPoint) -> Arc<Self> {
+impl HoldGate {
+    pub(crate) fn new(hold_at: HoldPoint) -> Arc<Self> {
         Arc::new(Self {
             hold_at,
-            state: Mutex::new(Pass2GateState {
+            state: Mutex::new(HoldGateState {
                 arrived: false,
                 released: false,
             }),
@@ -54,7 +61,7 @@ impl Pass2Gate {
         })
     }
 
-    pub(crate) fn hold(&self, point: Pass2HoldPoint) {
+    pub(crate) fn hold(&self, point: HoldPoint) {
         if self.hold_at != point {
             return;
         }
@@ -267,7 +274,7 @@ pub(crate) struct DocumentState {
         parking_lot::Mutex<Option<(std::path::PathBuf, Vec<std::path::PathBuf>, Option<u64>)>>,
     pub(crate) last_scan_fingerprint: parking_lot::Mutex<Option<(u64, u64)>>,
     #[cfg(test)]
-    pub(crate) pass2_gate: parking_lot::Mutex<Option<Arc<Pass2Gate>>>,
+    pub(crate) hold_gate: parking_lot::Mutex<Option<Arc<HoldGate>>>,
     pub(crate) settings_generation: AtomicU64,
     pub(crate) start: std::time::Instant,
     pub(crate) last_activity_ms: AtomicU64,
@@ -321,6 +328,9 @@ pub(crate) const MAX_DOCUMENT_URI_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_OPEN_DOCUMENTS: usize = 128;
 pub(crate) const MAX_RETAINED_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
+/// Slots in `validation_permits`, each held for one file's parse+validate plus
+/// the sweep it triggers (`Backend::validation_permit`). Two is enough to keep
+/// one keystroke validation moving while a bulk path works through its files.
 const MAX_CONCURRENT_VALIDATIONS: usize = 2;
 
 pub(crate) struct DocumentStore {
@@ -745,7 +755,7 @@ impl DocumentState {
             loc_discovery_cache: parking_lot::Mutex::new(None),
             last_scan_fingerprint: parking_lot::Mutex::new(None),
             #[cfg(test)]
-            pass2_gate: parking_lot::Mutex::new(None),
+            hold_gate: parking_lot::Mutex::new(None),
             settings_generation: AtomicU64::new(0),
             start: std::time::Instant::now(),
             last_activity_ms: AtomicU64::new(0),
