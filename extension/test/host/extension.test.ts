@@ -9,7 +9,6 @@ import {
 	EXTENSION_ID,
 	SAMPLE_ROOT,
 } from "../support/utils";
-import { it, describe } from "mocha";
 import type * as GraphPanelNamespace from "../../src/host/graphPanel";
 type GraphPanelModule = typeof GraphPanelNamespace;
 import type { GraphData } from "../../src/common/graphTypes";
@@ -90,10 +89,10 @@ suite(`Debug Integration Test: `, function () {
 		);
 	});
 
-	describe("fixAllWorkspace gating", function () {
+	suite("fixAllWorkspace gating", function () {
 		this.timeout(1 * 60 * 1000);
 
-		it("runs against the pinned server without a protocol error", async function () {
+		test("runs against the pinned server without a protocol error", async function () {
 			const api = await activate();
 			assert.ok(api, "activation API should be exposed");
 			const advertised = api.serverCommands();
@@ -151,10 +150,10 @@ suite(`Debug Integration Test: `, function () {
 		});
 	});
 
-	describe("formatWorkspace gating", function () {
+	suite("formatWorkspace gating", function () {
 		this.timeout(1 * 60 * 1000);
 
-		it("runs against the pinned server without a protocol error", async function () {
+		test("runs against the pinned server without a protocol error", async function () {
 			const api = await activate();
 			assert.ok(api, "activation API should be exposed");
 			const advertised = api.serverCommands();
@@ -198,10 +197,10 @@ suite(`Debug Integration Test: `, function () {
 		});
 	});
 
-	describe("Diagnostics and Language Features", function () {
+	suite("Diagnostics and Language Features", function () {
 		this.timeout(2 * 60 * 1000);
 
-		it("should handle file diagnostics", async function () {
+		test("should handle file diagnostics", async function () {
 			// Note: In a test environment without the language server,
 			// we mainly test that the diagnostics API is accessible
 			await activate();
@@ -218,7 +217,7 @@ suite(`Debug Integration Test: `, function () {
 			console.log(`Found ${diagnostics.length} diagnostic entries`);
 		});
 
-		it("treats dotted Paradox identifiers as one word", async function () {
+		test("treats dotted Paradox identifiers as one word", async function () {
 			await activate();
 			const document = await vscode.workspace.openTextDocument(
 				path.join(root, "events", "irm.txt"),
@@ -259,7 +258,7 @@ suite("Restart command and status bar", function () {
 	});
 });
 
-describe("GraphPanel Tests", function () {
+suite("GraphPanel Tests", function () {
 	this.timeout(2 * 60 * 1000);
 	const testCyData = {
 		elements: {
@@ -378,14 +377,38 @@ describe("GraphPanel Tests", function () {
 		}
 	});
 
-	it("should create a GraphPanel instance", function () {
+	test("should create a GraphPanel instance", function () {
 		// Act: Create a GraphPanel
 		gp.GraphPanel.create(extension.extensionPath);
 
 		// Assert: Panel should be created
 		assert.ok(gp.GraphPanel.currentPanel, "GraphPanel should be created");
 	});
-	it("should load and render cytoscape from JSON file", async function () {
+	test("should reuse the current panel when create is called twice", function () {
+		// Arrange: create the panel once, then watch for any further panel
+		// creation while the second create() runs.
+		gp.GraphPanel.create(extension.extensionPath);
+		const first = gp.GraphPanel.currentPanel;
+		assert.ok(first, "GraphPanel should be created");
+		const createPanel = sandbox.spy(vscode.window, "createWebviewPanel");
+
+		// Act: create again while a panel already exists
+		gp.GraphPanel.create(extension.extensionPath);
+
+		// Assert: the same instance stays current; a rebuilt panel would
+		// duplicate the webview and the save commands it registers.
+		assert.strictEqual(
+			gp.GraphPanel.currentPanel,
+			first,
+			"create should reuse the existing panel",
+		);
+		assert.strictEqual(
+			createPanel.callCount,
+			0,
+			"no second webview panel should be created",
+		);
+	});
+	test("should load and render cytoscape from JSON file", async function () {
 		this.timeout(30000);
 		// Execute the graphFromJson command
 		// We'll need to simulate the file dialog selection
@@ -402,7 +425,7 @@ describe("GraphPanel Tests", function () {
 		assert.ok(rendered, "Cytoscape should have rendered elements");
 	});
 
-	it("should initialize GraphPanel with data", async function () {
+	test("should initialize GraphPanel with data", async function () {
 		this.timeout(10000); // Increase timeout for this test
 		// Arrange: Create a GraphPanel
 		gp.GraphPanel.create(extension.extensionPath);
@@ -418,7 +441,7 @@ describe("GraphPanel Tests", function () {
 		await assertRenderedGraph(gp.GraphPanel.currentPanel!);
 	});
 
-	it("should dispose GraphPanel properly", function () {
+	test("should dispose GraphPanel properly", function () {
 		// Arrange: Create a GraphPanel
 		gp.GraphPanel.create(extension.extensionPath);
 
@@ -433,7 +456,7 @@ describe("GraphPanel Tests", function () {
 		);
 	});
 
-	it("should restore a GraphPanel around a revived webview panel", async function () {
+	test("should restore a GraphPanel around a revived webview panel", async function () {
 		// The window-reload serializer hands back a live panel whose html the
 		// extension must re-set; restore() adopts it like a fresh panel.
 		const panel = vscode.window.createWebviewPanel(

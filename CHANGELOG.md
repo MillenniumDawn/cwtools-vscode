@@ -7,6 +7,10 @@
 
 #### Tooling
 
+* Host tests use the extension-host runner's TDD `suite`/`test` globals
+  throughout; importing `describe`/`it` from the top-level mocha package broke
+  the smoke suite because those helpers are not bound to the Mocha instance
+  @vscode/test-cli runs. (#754)
 * Client hot-path benchmarks now use Vitest 5's test-context benchmark API.
   (#737)
 * Cargo-deny now allows BSD-3-Clause for the existing zstd dependency graph.
