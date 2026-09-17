@@ -6,20 +6,30 @@
  * OutputChannel named "CWTools" so messages are visible in the Output panel
  * and persist across sessions.
  */
-import { window } from "vscode";
+import type { LogOutputChannel } from "vscode";
 
-const channel = window.createOutputChannel("CWTools", { log: true });
+// Initialized by activation after the extension has confirmed that this
+// workspace is enabled. The language client and commands then share this same
+// channel instance.
+export let outputChannel!: LogOutputChannel;
 
-// Adopted by the language client, so its server output lands here rather than
-// in a second channel named after the client.
-export const outputChannel = channel;
+export function initializeLogger(channel: LogOutputChannel): void {
+	outputChannel = channel;
+}
+
+function getOutputChannel(): LogOutputChannel {
+	if (outputChannel === undefined) {
+		throw new Error("CWTools logger has not been initialized");
+	}
+	return outputChannel;
+}
 
 export function logInfo(message: string): void {
-	channel.appendLine(message);
+	getOutputChannel().info(message);
 }
 
 export function logWarn(message: string): void {
-	channel.appendLine(`[WARN] ${message}`);
+	getOutputChannel().warn(message);
 }
 
 // Best-effort human message for an unknown thrown value. The catch sites in
@@ -36,5 +46,5 @@ export function errorMessage(err: unknown): string {
 
 export function logError(message: string, err?: unknown): void {
 	const suffix = errorMessage(err);
-	channel.appendLine(`[ERROR] ${message}${suffix ? `: ${suffix}` : ""}`);
+	getOutputChannel().error(`${message}${suffix ? `: ${suffix}` : ""}`);
 }

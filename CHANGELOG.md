@@ -2,11 +2,17 @@
 
 #### Extension
 
+* The CWTools log channel is created only for enabled workspaces and now uses
+  VS Code log levels. (#507)
 * Graph restoration no longer overwrites a newer graph request after a delayed
   response. (#695)
 
 #### Tooling
 
+* Host tests use the extension-host runner's TDD `suite`/`test` globals
+  throughout; importing `describe`/`it` from the top-level mocha package broke
+  the smoke suite because those helpers are not bound to the Mocha instance
+  @vscode/test-cli runs. (#754)
 * Client hot-path benchmarks now use Vitest 5's test-context benchmark API.
   (#737)
 * Cargo-deny now allows BSD-3-Clause for the existing zstd dependency graph.
@@ -16,6 +22,8 @@
 * Restoring a graph panel now disposes the existing panel and its command
   handlers before wiring the replacement, so window reloads do not leave
   duplicate save commands behind. (#599)
+* Marketplace publishing now passes the VSCE token through the child environment
+  instead of command arguments. (#513)
 
 #### Engine
 
@@ -26,10 +34,15 @@
   deleted loc file takes its text with it, and an edited file keeps its place
   among the other files' translations of a shared key, so an inlay or graph
   label does not flip to another file's text while typing. (#476)
+* Parser source positions now account for a leading BOM, so line-1 fixes and
+  formatting edits preserve the original file text. (#555)
+* Vanilla cache instances are now accepted only from files inside the configured
+  base-game directory. (#591)
 * Bare values now keep their source range tight to the value, so comments and
   blank lines are preserved by formatting. (#546)
 * Live vanilla indexing now preserves the real source URI for each base-game
   instance, matching cache-backed sessions. (#580)
+* Modifier key validation now lazily lowercases ASCII keys while preserving Unicode matching. (#598)
 
 * Find-references and rename on a localisation key no longer read and parse
   the whole localisation tree, then every script file, on the pump task for

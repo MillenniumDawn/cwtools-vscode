@@ -19,7 +19,7 @@ import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
 import { registerCommands, publishCommandAvailability } from "./commands";
 import { setTrustedRoots } from "./trustedPaths";
-import { logInfo, logError, errorMessage } from "./logger";
+import { initializeLogger, logInfo, logError, errorMessage } from "./logger";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
 import type * as GraphPanelModule from "./graphPanel";
 
@@ -83,6 +83,10 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 	// unset key does not satisfy. Only GraphPanel ever wrote this key, so without a
 	// seed the button could not appear until a panel had opened and closed once.
 	void commands.executeCommand("setContext", "cwtoolsWebview", false);
+
+	const outputChannel = window.createOutputChannel("CWTools", { log: true });
+	context.subscriptions.push(outputChannel);
+	initializeLogger(outputChannel);
 
 	// Writable, per-extension cache dir. globalStorage survives extension
 	// updates and is writable everywhere; the install dir (extensionPath) is

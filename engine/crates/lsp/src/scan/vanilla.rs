@@ -133,23 +133,42 @@ impl Backend {
         let per_type = self.state.vanilla_index.lock().take();
         if let Some(per_type) = per_type {
             // fell back to whatever document the user had open (#62).
-            let mut uri_cache: HashMap<Arc<str>, Arc<str>> = HashMap::new();
+            let vanilla_dir = self.state.config.read().vanilla_dir.clone();
+            let vanilla_root = vanilla_dir
+                .as_deref()
+                .and_then(|root| std::fs::canonicalize(root).ok());
+            let mut uri_cache: HashMap<Arc<str>, Option<Arc<str>>> = HashMap::new();
             let mut converted: HashMap<String, Vec<(Arc<str>, cwtools_info::TypeInstance)>> =
                 HashMap::with_capacity(per_type.len());
             for (type_name, instances) in per_type {
                 let mut out = Vec::with_capacity(instances.len());
                 for (path, inst) in instances {
                     let uri = uri_cache
-                        .entry(path)
-                        .or_insert_with_key(|p| {
-                            Arc::from(path_to_uri(std::path::Path::new(p.as_ref())).as_str())
+                        .entry(Arc::clone(&path))
+                        .or_insert_with(|| {
+                            let root = vanilla_root.as_ref()?;
+                            let vanilla_dir = vanilla_dir.as_ref()?;
+                            let source = std::path::Path::new(path.as_ref());
+                            if !source.starts_with(vanilla_dir) {
+                                return None;
+                            }
+                            let Ok(canonical) = std::fs::canonicalize(source) else {
+                                return None;
+                            };
+                            if !canonical.starts_with(root) {
+                                return None;
+                            }
+                            Some(Arc::from(path_to_uri(&canonical).as_str()))
                         })
                         .clone();
+                    let Some(uri) = uri else {
+                        continue;
+                    };
                     out.push((uri, inst));
                 }
                 converted.insert(type_name, out);
             }
-            let uris: HashSet<Arc<str>> = uri_cache.into_values().collect();
+            let uris: HashSet<Arc<str>> = uri_cache.into_values().flatten().collect();
             let old = {
                 let mut merged = self.state.vanilla_merged_uris.lock();
                 std::mem::replace(&mut *merged, uris)
@@ -451,6 +470,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use cwtools_info::vanilla_cache::{VanillaCacheAux, VanillaCacheData};
+    use cwtools_info::{SourceLocation, TypeInstance};
 
     use crate::state::DocumentState;
 
@@ -514,6 +534,60 @@ mod tests {
                 .var_index
                 .contains("vanilla_var")
         );
+    }
+
+    #[test]
+    fn merge_drops_instances_outside_configured_vanilla_root() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let vanilla_root = tmp.path().join("vanilla");
+        let outside_root = tmp.path().join("outside");
+        std::fs::create_dir_all(vanilla_root.join("nested")).unwrap();
+        std::fs::create_dir_all(&outside_root).unwrap();
+        let in_root = vanilla_root.join("nested").join("..").join("in.txt");
+        let out_of_root = outside_root.join("out.txt");
+        std::fs::write(&in_root, "").unwrap();
+        std::fs::write(&out_of_root, "").unwrap();
+        let canonical_in_root = std::fs::canonicalize(&in_root).unwrap();
+
+        {
+            let mut config = backend.state.config.write();
+            config.vanilla_dir = Some(vanilla_root.clone());
+            config.refresh_roots();
+        }
+
+        let instance = |name: &str| TypeInstance {
+            name: name.to_string(),
+            location: SourceLocation {
+                line: 0,
+                col: 0,
+                end: (0, 1),
+            },
+            primary_loc_key: None,
+            required_loc_keys: Vec::new(),
+        };
+        let mut data = vanilla_data(Vec::new());
+        data.per_type.insert(
+            "foo".to_string(),
+            vec![
+                (
+                    Arc::from(in_root.to_string_lossy().as_ref()),
+                    instance("in_root"),
+                ),
+                (
+                    Arc::from(out_of_root.to_string_lossy().as_ref()),
+                    instance("out_of_root"),
+                ),
+            ],
+        );
+        backend.stage_vanilla_payload(data);
+        backend.merge_pending_vanilla_index();
+
+        let info = backend.state.info_service.read();
+        let entries = info.type_index.map.get("foo").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.name, "in_root");
+        assert_eq!(entries[0].0.as_ref(), path_to_uri(&canonical_in_root));
     }
 
     #[test]

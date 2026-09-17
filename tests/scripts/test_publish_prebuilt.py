@@ -136,20 +136,29 @@ def test_creates_release_when_non_tag_run_does_not_find_existing_release(
 
 def _captured_publish(
     monkeypatch: pytest.MonkeyPatch, vsixes: list[str], pre_release: bool
-) -> list[Command]:
+) -> tuple[list[Command], list[dict[str, str]]]:
     commands: list[Command] = []
+    environments: list[dict[str, str]] = []
+
+    def capture_run(cmd: str, args: list[str], **kwargs: object) -> None:
+        commands.append([cmd, *args])
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        environments.append(env)
+
     monkeypatch.setenv("VSCE_TOKEN", "pat")
-    monkeypatch.setattr(
-        build, "run", lambda cmd, args, **_kwargs: commands.append([cmd, *args])
-    )
+    monkeypatch.setenv("INHERITED_ENV", "inherited")
+    monkeypatch.setattr(build, "run", capture_run)
     publish_to_marketplace(vsixes, pre_release)
-    return commands
+    return commands, environments
 
 
 def test_marketplace_publish_uploads_one_package_at_a_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    commands = _captured_publish(monkeypatch, ["one.vsix", "two.vsix"], True)
+    commands, environments = _captured_publish(
+        monkeypatch, ["one.vsix", "two.vsix"], True
+    )
 
     assert commands == [
         [
@@ -157,8 +166,6 @@ def test_marketplace_publish_uploads_one_package_at_a_time(
             "--no-install",
             "vsce",
             "publish",
-            "--pat",
-            "pat",
             "--skip-duplicate",
             "--pre-release",
             "--packagePath",
@@ -166,12 +173,19 @@ def test_marketplace_publish_uploads_one_package_at_a_time(
         ]
         for vsix in ("one.vsix", "two.vsix")
     ]
+    assert all("--pat" not in command for command in commands)
+    assert all("pat" not in argument for command in commands for argument in command)
+    assert all(environment["VSCE_PAT"] == "pat" for environment in environments)
+    assert all("VSCE_TOKEN" not in environment for environment in environments)
+    assert all(
+        environment["INHERITED_ENV"] == "inherited" for environment in environments
+    )
 
 
 def test_marketplace_publish_leaves_a_stable_package_unflagged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    commands = _captured_publish(monkeypatch, ["one.vsix"], False)
+    commands, _environments = _captured_publish(monkeypatch, ["one.vsix"], False)
 
     assert len(commands) == 1
     assert "--pre-release" not in commands[0]

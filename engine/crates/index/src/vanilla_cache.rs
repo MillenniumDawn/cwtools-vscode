@@ -23,7 +23,8 @@ const FILE_EXT: &str = ".cwv";
 // lack it and restore it as `None` (#141).
 // on every use (#348).
 // so `[!name]` calls can resolve callbacks supplied by vanilla (#350).
-const CACHE_VERSION: u8 = 13;
+// v14: source positions include a leading BOM in line-1 columns.
+const CACHE_VERSION: u8 = 14;
 
 /// Hard caps on a `.cwv` read and on what its body may decompress to. The path
 /// comes from `--vanilla-cache` or an LSP client's `vanillaCache` (#162), so a
