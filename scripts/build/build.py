@@ -460,10 +460,12 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def publish_one_to_marketplace(vsix: str, args: list[str]) -> None:
+def publish_one_to_marketplace(
+    vsix: str, args: list[str], env: Mapping[str, str]
+) -> None:
     for attempt in range(1, MARKETPLACE_ATTEMPTS + 1):
         try:
-            run("npx", [*args, "--packagePath", vsix])
+            run("npx", [*args, "--packagePath", vsix], env=env)
             return
         except RuntimeError as error:
             if attempt == MARKETPLACE_ATTEMPTS:
@@ -484,7 +486,10 @@ def publish_to_marketplace(vsixes: list[str], pre_release: bool = False) -> None
             )
             return
         raise RuntimeError("VSCE_TOKEN is not set; cannot publish to the Marketplace.")
-    args = ["--no-install", "vsce", "publish", "--pat", token, "--skip-duplicate"]
+    env = dict(os.environ)
+    env.pop("VSCE_TOKEN", None)
+    env["VSCE_PAT"] = token
+    args = ["--no-install", "vsce", "publish", "--skip-duplicate"]
     if pre_release:
         args.append("--pre-release")
     # Every vsix is attempted even after one fails, so a single flaky platform
@@ -492,7 +497,7 @@ def publish_to_marketplace(vsixes: list[str], pre_release: bool = False) -> None
     failed: list[str] = []
     for vsix in vsixes:
         try:
-            publish_one_to_marketplace(vsix, args)
+            publish_one_to_marketplace(vsix, args, env)
         except RuntimeError as error:
             print(f"::error::{vsix} failed to publish: {error}")
             failed.append(vsix)

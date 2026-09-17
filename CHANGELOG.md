@@ -22,6 +22,8 @@
 * Restoring a graph panel now disposes the existing panel and its command
   handlers before wiring the replacement, so window reloads do not leave
   duplicate save commands behind. (#599)
+* Marketplace publishing now passes the VSCE token through the child environment
+  instead of command arguments. (#513)
 
 #### Engine
 
