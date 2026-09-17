@@ -761,7 +761,7 @@ impl Backend {
                       source_hash: &Option<u64>,
                       inline_ignored: &InlineIgnoreMap| {
                     #[cfg(test)]
-                    self.hold_pass2(crate::state::Pass2HoldPoint::Mid);
+                    self.hold(crate::state::HoldPoint::Pass2Mid);
                     if cancel.is_cancelled() {
                         return None;
                     }
@@ -787,11 +787,11 @@ impl Backend {
                 },
                 before_chunk: || {
                     #[cfg(test)]
-                    self.hold_pass2(crate::state::Pass2HoldPoint::Before);
+                    self.hold(crate::state::HoldPoint::Pass2Before);
                 },
                 after_chunk: || {
                     #[cfg(test)]
-                    self.hold_pass2(crate::state::Pass2HoldPoint::After);
+                    self.hold(crate::state::HoldPoint::Pass2After);
                 },
             },
         )
@@ -1096,18 +1096,7 @@ impl Backend {
         registry
     }
 
-    #[cfg(test)]
-    fn hold_pass2(&self, point: crate::state::Pass2HoldPoint) {
-        let gate = self.state.pass2_gate.lock().clone();
-        if let Some(gate) = gate {
-            gate.hold(point);
-        }
-    }
-
     pub(crate) async fn revalidate_all_open_docs(&self, trigger: crate::ValidateTrigger) {
-        let Ok(_validation_permit) = self.state.validation_permits.acquire().await else {
-            return;
-        };
         let open_docs: Vec<OpenDocSnapshot> = {
             let docs = self.state.documents.lock();
             docs.iter()
@@ -1156,6 +1145,11 @@ impl Backend {
                 }
                 continue;
             }
+            // One slot per document, not per sweep, so a keystroke validation
+            // queued behind this loop waits for one document (#477).
+            let Some(_permit) = self.validation_permit().await else {
+                return;
+            };
             let diagnostics = match current_ast {
                 Some(ast) => {
                     let lines = DocLines::new(&text, encoding.clone());
@@ -1218,7 +1212,7 @@ mod tests {
     use cwtools_validation::references::UsedInstances;
 
     use crate::command_progress::CommandProgress;
-    use crate::state::{DocumentState, Pass2Gate, Pass2HoldPoint};
+    use crate::state::{DocumentState, HoldGate, HoldPoint};
 
     const SENTINEL_URI: &str = "sentinel://uses";
     const SENTINEL_FP: (u64, u64) = (1, 1);
@@ -1297,7 +1291,7 @@ mod tests {
         );
     }
 
-    fn setup_workspace(gate: Option<Arc<Pass2Gate>>) -> (Backend, tempfile::TempDir) {
+    fn setup_workspace(gate: Option<Arc<HoldGate>>) -> (Backend, tempfile::TempDir) {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let things = tmp.path().join("common/things");
         std::fs::create_dir_all(&things).unwrap();
@@ -1347,7 +1341,7 @@ mod tests {
             .store(SENTINEL_REV, Ordering::Release);
         *backend.state.last_scan_fingerprint.lock() = Some(SENTINEL_FP);
         if let Some(gate) = gate {
-            *backend.state.pass2_gate.lock() = Some(gate);
+            *backend.state.hold_gate.lock() = Some(gate);
         }
         (backend, tmp)
     }
@@ -1369,7 +1363,7 @@ mod tests {
         );
     }
 
-    async fn wait_arrived(gate: &Pass2Gate, point: Pass2HoldPoint) {
+    async fn wait_arrived(gate: &HoldGate, point: HoldPoint) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             if gate.has_arrived() {
@@ -1383,8 +1377,8 @@ mod tests {
         }
     }
 
-    async fn run_cancelled_at(point: Pass2HoldPoint) {
-        let gate = Pass2Gate::new(point);
+    async fn run_cancelled_at(point: HoldPoint) {
+        let gate = HoldGate::new(point);
         let cancel = Arc::new(AtomicBool::new(false));
         let (backend, _tmp) = setup_workspace(Some(gate.clone()));
         let scan_backend = clone_backend(&backend);
@@ -1407,7 +1401,7 @@ mod tests {
         lock_name: &str,
         write: impl FnOnce(&DocumentState) + Send + 'static,
     ) -> Backend {
-        let gate = Pass2Gate::new(Pass2HoldPoint::Before);
+        let gate = HoldGate::new(HoldPoint::Pass2Before);
         let (backend, _tmp) = setup_workspace(Some(gate.clone()));
         let scan_backend = clone_backend(&backend);
         let handle = tokio::spawn(async move {
@@ -1423,7 +1417,7 @@ mod tests {
                 )
                 .await
         });
-        wait_arrived(&gate, Pass2HoldPoint::Before).await;
+        wait_arrived(&gate, HoldPoint::Pass2Before).await;
 
         let state = backend.state.clone();
         let mut writer = tokio::task::spawn_blocking(move || write(&state));
@@ -1510,17 +1504,17 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pass2_cancel_before_first_chunk_skips_merge() {
-        run_cancelled_at(Pass2HoldPoint::Before).await;
+        run_cancelled_at(HoldPoint::Pass2Before).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pass2_cancel_mid_chunk_skips_merge() {
-        run_cancelled_at(Pass2HoldPoint::Mid).await;
+        run_cancelled_at(HoldPoint::Pass2Mid).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pass2_cancel_between_chunks_skips_merge() {
-        run_cancelled_at(Pass2HoldPoint::After).await;
+        run_cancelled_at(HoldPoint::Pass2After).await;
     }
 
     type Row = (usize, usize, u64, u32);

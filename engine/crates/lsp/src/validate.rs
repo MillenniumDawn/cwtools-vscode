@@ -524,6 +524,16 @@ pub(crate) fn collect_doc_tokens(
 }
 
 impl Backend {
+    /// One slot of the validation CPU throttle. The unit is one file's
+    /// parse+validate plus the dependent sweep that file triggers; bulk paths
+    /// (watched batch, open-doc revalidation, `didClose`) take a slot per file
+    /// rather than per batch so a keystroke queued behind them waits for one
+    /// file, not two hundred (#477). `None` only when the semaphore is closed,
+    /// i.e. the server is going away; callers just return.
+    pub(crate) async fn validation_permit(&self) -> Option<tokio::sync::SemaphorePermit<'_>> {
+        self.state.validation_permits.acquire().await.ok()
+    }
+
     /// A handle bound to `ast`'s own overlay region. Validation interns as it goes
     /// — inline-script `$ARG$` substitutions most of all — and those strings are
     /// derived from the document, so they belong in the region that is reclaimed
@@ -939,7 +949,7 @@ impl Backend {
         generation: u64,
         trigger: crate::ValidateTrigger,
     ) {
-        let Ok(_permit) = self.state.validation_permits.acquire().await else {
+        let Some(_permit) = self.validation_permit().await else {
             return;
         };
         let text = {
@@ -3099,6 +3109,57 @@ mod ignored_tests {
         Backend { client, state }
     }
 
+    /// Like `backend_with_ignore`, but the client has passed the `initialize`
+    /// handshake, so `publish_diagnostics` reaches the returned socket:
+    /// tower-lsp suppresses every server-to-client message before that. Only
+    /// the inbound half is stubbed, as in `lib.rs`; the `Backend` under test
+    /// never sees the handshake.
+    async fn handshaken_backend_with_workspace(
+        workspace_uri: &str,
+    ) -> (Backend, tower_lsp::ClientSocket) {
+        use tower::Service;
+        use tower_lsp::jsonrpc;
+        use tower_lsp::lsp_types::{InitializeParams, InitializeResult};
+
+        struct Handshake;
+        #[tower_lsp::async_trait]
+        impl LanguageServer for Handshake {
+            async fn initialize(&self, _: InitializeParams) -> jsonrpc::Result<InitializeResult> {
+                Ok(InitializeResult::default())
+            }
+
+            async fn shutdown(&self) -> jsonrpc::Result<()> {
+                Ok(())
+            }
+        }
+
+        let state = backend_with_ignore(Vec::new(), Some(workspace_uri)).state;
+        let captured = Arc::new(Mutex::new(None));
+        let slot = captured.clone();
+        let (mut service, socket) = LspService::new(move |client| {
+            *slot.lock() = Some(client);
+            Handshake
+        });
+        std::future::poll_fn(|cx| service.poll_ready(cx))
+            .await
+            .expect("the service must accept the handshake");
+        let handshake = service
+            .call(
+                jsonrpc::Request::build("initialize")
+                    .params(serde_json::json!({ "capabilities": {} }))
+                    .id(1_i64)
+                    .finish(),
+            )
+            .await
+            .expect("initialize must route");
+        assert!(
+            handshake.is_some_and(|res| res.is_ok()),
+            "tower-lsp suppresses server-to-client messages until the handshake succeeds"
+        );
+        let client = captured.lock().take().expect("client");
+        (Backend { client, state }, socket)
+    }
+
     fn backend_with_socket() -> (Backend, tower_lsp::ClientSocket) {
         let state = Arc::new(DocumentState::new());
         let captured = Arc::new(Mutex::new(None));
@@ -3797,5 +3858,135 @@ mod ignored_tests {
                 .contains_key(ignored_uri.as_str()),
             "ignored watched file must not retain signature"
         );
+    }
+
+    /// #477: a watched batch must take a validation slot per file, not per
+    /// batch. With one slot already taken (a `didClose` or another sweep), a
+    /// batch-wide permit would leave a keystroke validation queued behind every
+    /// file in the batch. The gate parks the batch at the top of its first
+    /// iteration, outside any permit, and the keystroke has to publish while
+    /// the batch is still there.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn watched_batch_does_not_starve_keystroke_validation() {
+        use crate::state::{HoldGate, HoldPoint};
+
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws_uri = Url::from_file_path(tmp.path()).unwrap().to_string();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&ws_uri).await;
+        backend
+            .state
+            .index_ready
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let ideas = tmp.path().join("common/ideas");
+        std::fs::create_dir_all(&ideas).unwrap();
+        let changes: std::collections::HashSet<String> = (0..50)
+            .map(|i| {
+                let path = ideas.join(format!("f{i}.txt"));
+                std::fs::write(&path, format!("idea_{i} = {{ cost = {i} }}")).unwrap();
+                Url::from_file_path(&path).unwrap().to_string()
+            })
+            .collect();
+
+        let edit_uri = Url::from_file_path(ideas.join("edit.txt"))
+            .unwrap()
+            .to_string();
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                edit_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from("idea = {"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+
+        // The second slot is busy, as it is whenever a close or another sweep
+        // overlaps the batch. Only one permit is left for everything else.
+        let held = backend
+            .state
+            .validation_permits
+            .acquire()
+            .await
+            .expect("semaphore open");
+
+        let gate = HoldGate::new(HoldPoint::WatchedFile);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        let batch_backend = Backend {
+            client: backend.client.clone(),
+            state: backend.state.clone(),
+        };
+        let batch = tokio::spawn(async move {
+            batch_backend.process_watched_batch(changes, vec![]).await;
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !gate.has_arrived() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the watched batch never reached its first file"
+            );
+            tokio::task::yield_now().await;
+        }
+
+        let keystroke_backend = Backend {
+            client: backend.client.clone(),
+            state: backend.state.clone(),
+        };
+        let keystroke_uri = edit_uri.clone();
+        let generation = backend
+            .state
+            .edit_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let keystroke = tokio::spawn(async move {
+            keystroke_backend
+                .debounced_validate(
+                    keystroke_uri,
+                    1,
+                    generation,
+                    crate::ValidateTrigger::DidChange,
+                )
+                .await;
+        });
+
+        let published = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let message = socket.next().await.expect("socket closed");
+                if message.method() != "textDocument/publishDiagnostics" {
+                    continue;
+                }
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(message.params().cloned().unwrap_or_default())
+                        .expect("publishDiagnostics params");
+                if params.uri.as_str() == edit_uri {
+                    return params;
+                }
+            }
+        })
+        .await
+        .expect("keystroke diagnostics must land while the watched batch is still running");
+        assert!(
+            !published.diagnostics.is_empty(),
+            "the open document's parse error must be reported"
+        );
+        assert!(
+            !batch.is_finished(),
+            "the batch must still be parked at its first file when the keystroke publishes"
+        );
+
+        // The client channel holds one message, so keep draining while the
+        // batch publishes its fifty files.
+        let drain = tokio::spawn(async move { while socket.next().await.is_some() {} });
+        gate.release();
+        drop(held);
+        keystroke.await.expect("keystroke validation task");
+        batch.await.expect("watched batch task");
+        drain.abort();
     }
 }

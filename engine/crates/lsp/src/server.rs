@@ -633,10 +633,6 @@ impl Backend {
             self.request_code_lens_refresh().await;
             return;
         }
-        let Ok(_validation_permit) = self.state.validation_permits.acquire().await else {
-            return;
-        };
-
         let disk_loc_text = if crate::paths::is_loc_file(&uri) {
             let roots = self.state.config.read().authorized_roots.clone();
             let uri_for_read = uri.clone();
@@ -729,6 +725,13 @@ impl Backend {
                 info.export_names(&uri),
                 self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1,
             )
+        };
+
+        // The slot covers only the CPU-heavy tail — type-uses refresh, the disk
+        // loc validation and the dependent sweep — not the disk reads and index
+        // write above, so a keystroke queued behind a close waits less (#477).
+        let Some(_permit) = self.validation_permit().await else {
+            return;
         };
 
         // full scan (#133). Queued names land in the sweep below.
