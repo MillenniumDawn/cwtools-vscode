@@ -30,6 +30,13 @@
 
 #### Engine
 
+* Hover, inlay titles and graph labels keep their localisation text per
+  file, so renaming or deleting a key in an open loc file drops the old text
+  on that edit instead of at the next full scan, editing one file no longer
+  drops another file's (or the base game's) translation of the same key, a
+  deleted loc file takes its text with it, and an edited file keeps its place
+  among the other files' translations of a shared key, so an inlay or graph
+  label does not flip to another file's text while typing. (#476)
 * Parser source positions now account for a leading BOM, so line-1 fixes and
   formatting edits preserve the original file text. (#555)
 * Vanilla cache instances are now accepted only from files inside the configured

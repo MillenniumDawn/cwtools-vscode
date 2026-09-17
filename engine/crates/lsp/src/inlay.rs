@@ -11,7 +11,7 @@ use cwtools_string_table::string_table::StringTable;
 
 use crate::lines::DocLines;
 use crate::navigation::{value_col_in_line, value_start_after_eq};
-use crate::{Backend, LocTextMap};
+use crate::{Backend, LocText};
 
 const MAX_HINTS: usize = 200;
 
@@ -126,7 +126,7 @@ pub(crate) fn loc_title_hints(
     lines: &DocLines,
     range: Range,
     type_index: &TypeIndex,
-    loc_text: &LocTextMap,
+    loc_text: &LocText,
 ) -> Vec<InlayHint> {
     let mut hints = Vec::new();
     let cx = Ctx {
@@ -147,7 +147,7 @@ struct Ctx<'a> {
     lines: &'a DocLines<'a>,
     range: Range,
     type_index: &'a TypeIndex,
-    loc_text: &'a LocTextMap,
+    loc_text: &'a LocText,
 }
 
 impl Ctx<'_> {
@@ -304,7 +304,7 @@ fn hint_for_value(value: &Value, cx: &Ctx<'_>, line0: u32, anchor: Anchor) -> Op
                 return None;
             }
             let name_lc = name.to_ascii_lowercase();
-            let title = truncate_title(cx.loc_text.get(name_lc.as_str())?.first()?.1.as_str());
+            let title = truncate_title(cx.loc_text.get(name_lc.as_str())?.next()?.1);
 
             let line = cx.line(line0);
             let from = match anchor {
@@ -373,14 +373,14 @@ mod tests {
         idx
     }
 
-    fn loc(pairs: &[(&str, &str)]) -> LocTextMap {
+    fn loc(pairs: &[(&str, &str)]) -> LocText {
         pairs
             .iter()
             .map(|(k, v)| (Arc::from(*k), vec![(Lang::English, v.to_string())]))
             .collect()
     }
 
-    fn hints_for(text: &str, idx: &TypeIndex, loc: &LocTextMap) -> Vec<InlayHint> {
+    fn hints_for(text: &str, idx: &TypeIndex, loc: &LocText) -> Vec<InlayHint> {
         let table = StringTable::new();
         let ast = cwtools_parser::parser::parse_string(text, &table);
         let range = Range::new(Position::new(0, 0), Position::new(1000, 0));

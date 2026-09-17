@@ -611,7 +611,7 @@ impl Backend {
             node.name = keys
                 .iter()
                 .find_map(|key| loc_text.get(key.as_str()))
-                .and_then(|translations| translations.first())
+                .and_then(|mut translations| translations.next())
                 .map(|(_, text)| truncate_label(text));
         }
     }
