@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.5
+
 #### Extension
 
 * The CWTools log channel is created only for enabled workspaces and now uses
