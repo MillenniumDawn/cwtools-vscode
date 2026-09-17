@@ -435,6 +435,16 @@ fn count_and_validate_children<'r>(
     let ruleset = ctx.ruleset;
     let type_index = ctx.type_index;
     let modifier_keys = ctx.modifier_keys;
+    let key_is_modifier = |key: &str| {
+        modifier_keys.is_some_and(|mk| {
+            let key_lower = if key.is_ascii() {
+                key.to_ascii_lowercase()
+            } else {
+                key.to_lowercase()
+            };
+            mk.contains(key_lower.as_str())
+        })
+    };
 
     let any_keyed = !block.cards.is_empty();
     let any_leafvalue = block.leafvalue;
@@ -490,10 +500,7 @@ fn count_and_validate_children<'r>(
                     continue;
                 }
                 if candidates.is_empty() {
-                    let key_lower = key.to_lowercase();
-                    let is_modifier = modifier_keys
-                        .map(|mk| mk.contains(key_lower.as_str()))
-                        .unwrap_or(false);
+                    let is_modifier = key_is_modifier(key);
                     if is_modifier && value_is_zero(&leaf.value) {
                         push_zero_modifier(file_path, leaf, key, errors);
                     }
@@ -543,7 +550,7 @@ fn count_and_validate_children<'r>(
                 } else {
                     if value_is_zero(&leaf.value)
                         && candidates_are_modifier_alias_only(&candidates)
-                        && modifier_keys.is_some_and(|mk| mk.contains(key.to_lowercase().as_str()))
+                        && key_is_modifier(key)
                     {
                         push_zero_modifier(file_path, leaf, key, errors);
                     }

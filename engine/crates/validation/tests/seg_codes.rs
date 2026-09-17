@@ -531,6 +531,16 @@ fn mixed_case_zero_modifier_still_fires_cw235() {
     );
 }
 
+#[test]
+fn non_ascii_mixed_case_modifier_still_fires_cw235() {
+    let c = modifier_codes(&["mödifier"], "foo = { MÖDIFIER = 0 }");
+    assert!(
+        c.contains(&"CW235".to_string()),
+        "a non-ASCII mixed-case zero modifier must still fire CW235, got: {:?}",
+        c
+    );
+}
+
 /// A `modifier = { ... }` block whose contents are matched through the
 /// `modifier` alias, plus a rule field of the type's own that shares a modifier
 /// name. The shape every real modifier block in the configs has.
