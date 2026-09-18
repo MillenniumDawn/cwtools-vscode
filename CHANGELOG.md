@@ -5,6 +5,9 @@
 * Type-keyed fields such as `<resource> = float` now reject unknown keys once
   the type index is complete, so a fake resource in state history is flagged.
   (#766)
+* Delete the unused `RuleSetBuilder` and the orphaned `alias_exact_for` /
+  `alias_category` accessors; callers use `alias_exact()` /
+  `alias_categories()` directly. (#762)
 
 ### 3.4.5
 
