@@ -470,6 +470,65 @@ mod tests {
     }
 
     #[test]
+    fn type_field_keys_are_lenient_when_the_type_has_no_instances() {
+        let ruleset = RuleSet::default();
+        let mut idx = TypeIndex::new();
+        idx.complete = true;
+        assert!(field_matches_key(
+            &resource_field(),
+            "unobtainium",
+            &ruleset,
+            Some(&idx)
+        ));
+    }
+
+    #[test]
+    fn complex_type_field_keys_reject_an_empty_middle() {
+        let ruleset = RuleSet::default();
+        assert!(!field_matches_key(
+            &local_resources_field(),
+            "local_resources_",
+            &ruleset,
+            None
+        ));
+    }
+
+    #[test]
+    fn complex_type_field_keys_honor_suffix_and_ascii_case() {
+        let ruleset = RuleSet::default();
+        let field = NewField::TypeField(TypeType::Complex {
+            prefix: "GFX_".to_string(),
+            name: "resource".to_string(),
+            suffix: "_icon".to_string(),
+        });
+        let idx = resource_index(true);
+        assert!(field_matches_key(
+            &field,
+            "GFX_steel_icon",
+            &ruleset,
+            Some(&idx)
+        ));
+        assert!(field_matches_key(
+            &field,
+            "gfx_Steel_ICON",
+            &ruleset,
+            Some(&idx)
+        ));
+        assert!(!field_matches_key(
+            &field,
+            "GFX_unobtainium_icon",
+            &ruleset,
+            Some(&idx)
+        ));
+        assert!(!field_matches_key(
+            &field,
+            "GFX_steel",
+            &ruleset,
+            Some(&idx)
+        ));
+    }
+
+    #[test]
     fn type_field_keys_accept_scripted_and_interpolated_names() {
         let ruleset = RuleSet::default();
         let idx = resource_index(true);
