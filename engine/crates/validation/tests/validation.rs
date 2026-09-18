@@ -1681,3 +1681,72 @@ evt = {
         "a truly unknown scope key must still flag, got: {errors_bad:?}",
     );
 }
+
+#[test]
+fn unknown_type_key_is_unexpected_when_index_is_complete() {
+    let cwt = r#"
+types = {
+    type[state] = {
+        path = "game/history/states"
+    }
+    type[resource] = {
+        path = "game/common/resources"
+    }
+}
+state = {
+    resources = {
+        ## cardinality = 0..inf
+        <resource> = float
+    }
+}
+"#;
+    let table = StringTable::new();
+    let ruleset = ast_to_ruleset(&parse_string(cwt, &table), &table);
+
+    let mut idx = TypeIndex::new();
+    let mut map = HashMap::new();
+    map.insert(
+        "resource".to_string(),
+        vec![TypeInstance {
+            name: "steel".to_string(),
+            location: SourceLocation {
+                line: 1,
+                col: 0,
+                end: (1, 0),
+            },
+            primary_loc_key: None,
+            required_loc_keys: Vec::new(),
+        }],
+    );
+    idx.merge("file://resources.txt", map);
+    idx.complete = true;
+
+    let path = "game/history/states/1-test.txt";
+    let valid = parse_string("state = { resources = { steel = 5 } }\n", &table);
+    let errs_valid = validate_ast(&valid, &ruleset, &table, path, None, Some(&idx), None);
+    assert!(
+        errs_valid.is_empty(),
+        "known resource key must validate, got: {errs_valid:?}"
+    );
+
+    let bogus = parse_string("state = { resources = { unobtainium = 3 } }\n", &table);
+    let errs_bogus = validate_ast(&bogus, &ruleset, &table, path, None, Some(&idx), None);
+    assert!(
+        errs_bogus.iter().any(|e| e.code == Some("CW263")),
+        "unknown resource key must be CW263, got: {errs_bogus:?}"
+    );
+
+    let bad_rhs = parse_string("state = { resources = { steel = not_a_number } }\n", &table);
+    let errs_rhs = validate_ast(&bad_rhs, &ruleset, &table, path, None, Some(&idx), None);
+    assert!(
+        errs_rhs.iter().any(|e| e.code == Some("CW240")),
+        "invalid resource amount must still be CW240, got: {errs_rhs:?}"
+    );
+
+    idx.complete = false;
+    let errs_incomplete = validate_ast(&bogus, &ruleset, &table, path, None, Some(&idx), None);
+    assert!(
+        errs_incomplete.iter().all(|e| e.code != Some("CW263")),
+        "unknown resource key must stay quiet without a complete index, got: {errs_incomplete:?}"
+    );
+}

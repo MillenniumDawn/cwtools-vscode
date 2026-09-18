@@ -1,5 +1,11 @@
 ### Unreleased
 
+#### Engine
+
+* Type-keyed fields such as `<resource> = float` now reject unknown keys once
+  the type index is complete, so a fake resource in state history is flagged.
+  (#766)
+
 ### 3.4.5
 
 #### Extension

@@ -193,6 +193,53 @@ pub(super) fn classify_pattern_match(
     }
 }
 
+fn strip_affix_ci<'a>(key: &'a str, prefix: &str, suffix: &str) -> Option<&'a str> {
+    if key.len() <= prefix.len() + suffix.len() {
+        return None;
+    }
+    if !starts_with_ci(key, prefix) || !ends_with_ci(key, suffix) {
+        return None;
+    }
+    Some(&key[prefix.len()..key.len() - suffix.len()])
+}
+
+fn type_instance_known_or_lenient(
+    type_name: &str,
+    lookup: &str,
+    type_index: Option<&cwtools_index::TypeIndex>,
+) -> bool {
+    let Some(idx) = type_index else {
+        return true;
+    };
+    // Same gate as CW500 so missing vanilla does not flood false positives.
+    if !idx.complete || idx.instances(type_name).is_empty() {
+        return true;
+    }
+    idx.contains(type_name, lookup)
+}
+
+fn type_field_matches_key(
+    type_type: &TypeType,
+    key: &str,
+    type_index: Option<&cwtools_index::TypeIndex>,
+) -> bool {
+    if key.starts_with('@') || key.starts_with('[') || key.contains('$') {
+        return true;
+    }
+    let (type_name, lookup) = match type_type {
+        TypeType::Simple(name) => (name.as_str(), key),
+        TypeType::Complex {
+            prefix,
+            name,
+            suffix,
+        } => match strip_affix_ci(key, prefix, suffix) {
+            Some(middle) => (name.as_str(), middle),
+            None => return false,
+        },
+    };
+    type_instance_known_or_lenient(type_name, lookup, type_index)
+}
+
 pub(crate) fn field_matches_key(
     field: &NewField,
     key: &str,
@@ -259,8 +306,8 @@ pub(crate) fn field_matches_key(
         }
         NewField::ValueField(ValueType::Date) => is_date_shape(key),
         NewField::ValueField(ValueType::DateTime) => is_datetime_shape(key),
-        NewField::TypeField(_)
-        | NewField::ScopeField(_)
+        NewField::TypeField(tt) => type_field_matches_key(tt, key, type_index),
+        NewField::ScopeField(_)
         | NewField::VariableField { .. }
         | NewField::VariableGetField(_)
         | NewField::VariableSetField(_)
@@ -299,6 +346,41 @@ fn field_to_key(field: &NewField) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cwtools_index::{SourceLocation, TypeIndex, TypeInstance};
+    use std::collections::HashMap;
+
+    fn resource_index(complete: bool) -> TypeIndex {
+        let mut idx = TypeIndex::new();
+        let mut map = HashMap::new();
+        map.insert(
+            "resource".to_string(),
+            vec![TypeInstance {
+                name: "steel".to_string(),
+                location: SourceLocation {
+                    line: 1,
+                    col: 0,
+                    end: (1, 0),
+                },
+                primary_loc_key: None,
+                required_loc_keys: Vec::new(),
+            }],
+        );
+        idx.merge("file://resources.txt", map);
+        idx.complete = complete;
+        idx
+    }
+
+    fn resource_field() -> NewField {
+        NewField::TypeField(TypeType::Simple("resource".to_string()))
+    }
+
+    fn local_resources_field() -> NewField {
+        NewField::TypeField(TypeType::Complex {
+            prefix: "local_resources_".to_string(),
+            name: "resource".to_string(),
+            suffix: String::new(),
+        })
+    }
 
     #[test]
     fn value_typed_and_marker_fields_never_match_a_key() {
@@ -330,5 +412,80 @@ mod tests {
                 "{field:?} must not match key {key:?}"
             );
         }
+    }
+
+    #[test]
+    fn type_field_keys_match_known_instances_when_index_is_complete() {
+        let ruleset = RuleSet::default();
+        let idx = resource_index(true);
+        let field = resource_field();
+        assert!(field_matches_key(&field, "steel", &ruleset, Some(&idx)));
+        assert!(field_matches_key(&field, "Steel", &ruleset, Some(&idx)));
+        assert!(!field_matches_key(
+            &field,
+            "unobtainium",
+            &ruleset,
+            Some(&idx)
+        ));
+    }
+
+    #[test]
+    fn type_field_keys_are_lenient_without_a_complete_index() {
+        let ruleset = RuleSet::default();
+        let field = resource_field();
+        assert!(field_matches_key(&field, "unobtainium", &ruleset, None));
+        let idx = resource_index(false);
+        assert!(field_matches_key(
+            &field,
+            "unobtainium",
+            &ruleset,
+            Some(&idx)
+        ));
+    }
+
+    #[test]
+    fn complex_type_field_keys_require_the_affix() {
+        let ruleset = RuleSet::default();
+        let field = local_resources_field();
+        assert!(!field_matches_key(&field, "foo", &ruleset, None));
+        assert!(field_matches_key(
+            &field,
+            "local_resources_steel",
+            &ruleset,
+            None
+        ));
+        let idx = resource_index(true);
+        assert!(field_matches_key(
+            &field,
+            "local_resources_steel",
+            &ruleset,
+            Some(&idx)
+        ));
+        assert!(!field_matches_key(
+            &field,
+            "local_resources_unobtainium",
+            &ruleset,
+            Some(&idx)
+        ));
+    }
+
+    #[test]
+    fn type_field_keys_accept_scripted_and_interpolated_names() {
+        let ruleset = RuleSet::default();
+        let idx = resource_index(true);
+        let field = resource_field();
+        assert!(field_matches_key(
+            &field,
+            "@my_resource",
+            &ruleset,
+            Some(&idx)
+        ));
+        assert!(field_matches_key(&field, "$RES$", &ruleset, Some(&idx)));
+        assert!(field_matches_key(
+            &field,
+            "[GetResource]",
+            &ruleset,
+            Some(&idx)
+        ));
     }
 }
