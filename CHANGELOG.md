@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.6
+
 #### Engine
 
 * Type-keyed fields such as `<resource> = float` now reject unknown keys once
