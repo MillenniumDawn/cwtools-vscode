@@ -36,6 +36,9 @@
 * Consolidate CLI config-field selection while preserving flag precedence and
   configuration announcements. (#759)
 * Remove the deprecated workspace walker while retaining discovery coverage for sorting, ignore globs, symlinks, and file budgets. (#758)
+* Delete the unused `RuleSetBuilder` and the orphaned `alias_exact_for` /
+  `alias_category` accessors; callers use `alias_exact()` /
+  `alias_categories()` directly. (#762)
 
 ### 3.4.5
 
