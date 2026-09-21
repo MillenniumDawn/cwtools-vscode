@@ -3,6 +3,7 @@ use tower_lsp::lsp_types::*;
 
 use crate::Backend;
 use crate::lines::DocLines;
+use crate::navigation::helpers::TokenCase;
 use crate::paths::logical_path_from_uri;
 
 use super::{
@@ -105,7 +106,7 @@ impl Backend {
         let highlights: Vec<DocumentHighlight> = lines
             .iter()
             .flat_map(|(line0, line)| {
-                code_token_cols_in_line(line, symbol)
+                code_token_cols_in_line(line, symbol, TokenCase::Sensitive)
                     .into_iter()
                     .map(move |col| DocumentHighlight {
                         range: lines.token_range(line0, col, symbol),

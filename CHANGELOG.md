@@ -5,6 +5,8 @@
 * Type-keyed fields such as `<resource> = float` now reject unknown keys once
   the type index is complete, so a fake resource in state history is flagged.
   (#766)
+* Share one token scanner for rename, references, and highlights while preserving
+  case matching and source columns. (#764)
 
 ### 3.4.5
 
