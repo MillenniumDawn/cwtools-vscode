@@ -1,9 +1,9 @@
 {
 	"schema": 1,
-	"revision": 1,
+	"revision": 2,
 	"pins": {
 		"stellaris": "99147efe8072b331005b50536762dcc0b8573224",
-		"hoi4": "ab1fda2a599ab4318d6f24ecba380e579e37006a",
+		"hoi4": "297dd69c42aabe10078a8b7ab7f2d07ee631d4ef",
 		"eu4": "a85622d368bbb7afca938ed70fdd5eda44aec769",
 		"ck3": "27db56f995af6b73baebae43e04d044f1a0a0bbe",
 		"ck2": "aedc351934035017aff7a4429afae93dad739dd5",
