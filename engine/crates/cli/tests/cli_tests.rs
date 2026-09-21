@@ -2626,12 +2626,20 @@ allow-empty = true\n",
         String::from_utf8_lossy(&output.stderr)
     );
 
+    // macOS's /var is a symlink to /private/var, and the child resolves the
+    // config from its canonical current directory. Keep the exact announcement
+    // assertion while matching that platform's path spelling; Windows keeps
+    // the lexical path because `canonicalize` adds an extended-length prefix.
+    #[cfg(unix)]
+    let config_path = std::fs::canonicalize(tmp.path().join("cwtools.toml")).unwrap();
+    #[cfg(not(unix))]
+    let config_path = tmp.path().join("cwtools.toml");
     let expected = format!(
         "Using config {} (applied: game, directory, rules, no-vanilla-cache, \
          refresh-vanilla-cache, case-sensitive-files, report-type, min-severity, \
          fail-on, ignore-files, ignore-dirs, loc-languages, ignore-codes, \
          only-codes, allow-empty)",
-        tmp.path().join("cwtools.toml").display()
+        config_path.display()
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(
