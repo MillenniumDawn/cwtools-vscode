@@ -170,7 +170,13 @@ pub(crate) fn is_ident_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '.'
 }
 
-pub(crate) fn code_token_cols_in_line(line: &str, name: &str) -> Vec<u32> {
+#[derive(Clone, Copy)]
+pub(crate) enum TokenCase {
+    Sensitive,
+    AsciiInsensitive,
+}
+
+pub(crate) fn code_token_cols_in_line(line: &str, name: &str, case: TokenCase) -> Vec<u32> {
     let chars: Vec<char> = line.chars().collect();
     let needle: Vec<char> = name.chars().collect();
     let mut out = Vec::new();
@@ -185,12 +191,21 @@ pub(crate) fn code_token_cols_in_line(line: &str, name: &str) -> Vec<u32> {
             '#' if !in_string => break,
             _ => {}
         }
-        if i + needle.len() <= chars.len() && chars[i..i + needle.len()] == needle[..] {
-            let before_ok = i == 0 || !is_ident_char(chars[i - 1]);
-            let after = i + needle.len();
-            let after_ok = after >= chars.len() || !is_ident_char(chars[after]);
-            if before_ok && after_ok {
-                out.push(i as u32);
+        if i + needle.len() <= chars.len() {
+            let matches = match case {
+                TokenCase::Sensitive => chars[i..i + needle.len()] == needle[..],
+                TokenCase::AsciiInsensitive => chars[i..i + needle.len()]
+                    .iter()
+                    .zip(needle.iter())
+                    .all(|(a, b)| a.eq_ignore_ascii_case(b)),
+            };
+            if matches {
+                let before_ok = i == 0 || !is_ident_char(chars[i - 1]);
+                let after = i + needle.len();
+                let after_ok = after >= chars.len() || !is_ident_char(chars[after]);
+                if before_ok && after_ok {
+                    out.push(i as u32);
+                }
             }
         }
         i += 1;
@@ -465,7 +480,7 @@ pub(crate) fn member_pos_in_block(
     let lines: Vec<&str> = text.lines().collect();
     (open.0..=close.0).find_map(|line0| {
         let line = lines.get(line0 as usize)?;
-        code_token_cols_in_line(line, member)
+        code_token_cols_in_line(line, member, TokenCase::Sensitive)
             .into_iter()
             .find(|col| (line0 != open.0 || *col > open.1) && (line0 != close.0 || *col < close.1))
             .map(|col| (line0, col))
@@ -725,44 +740,6 @@ pub(crate) fn source_range_without_text(
     )
 }
 
-pub(crate) fn code_token_cols_in_line_ignore_case(line: &str, needle_lower: &str) -> Vec<u32> {
-    let needle: Vec<char> = needle_lower.chars().collect();
-    if needle.is_empty() {
-        return Vec::new();
-    }
-    let chars: Vec<char> = line.chars().collect();
-    if needle.len() > chars.len() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let mut in_string = false;
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '"' => in_string = !in_string,
-            '#' if !in_string => break,
-            _ => {}
-        }
-        if i + needle.len() <= chars.len() {
-            let slice = &chars[i..i + needle.len()];
-            let matches = slice
-                .iter()
-                .zip(needle.iter())
-                .all(|(a, b)| a.to_ascii_lowercase() == *b);
-            if matches {
-                let before_ok = i == 0 || !is_ident_char(chars[i - 1]);
-                let after = i + needle.len();
-                let after_ok = after >= chars.len() || !is_ident_char(chars[after]);
-                if before_ok && after_ok {
-                    out.push(i as u32);
-                }
-            }
-        }
-        i += 1;
-    }
-    out
-}
-
 pub(crate) fn loc_ref_key_cols_in_line(line: &str, needle_lower: &str) -> Vec<u32> {
     let mut out = Vec::new();
     let chars: Vec<char> = line.chars().collect();
@@ -908,16 +885,25 @@ mod tests {
     #[test]
     fn code_token_cols_skip_comment_matches() {
         assert_eq!(
-            code_token_cols_in_line("x = FOO # FOO again", "FOO"),
+            code_token_cols_in_line("x = FOO # FOO again", "FOO", TokenCase::Sensitive,),
             vec![4]
         );
         assert_eq!(
-            code_token_cols_in_line("# only FOO", "FOO"),
+            code_token_cols_in_line("# only FOO", "FOO", TokenCase::Sensitive),
             Vec::<u32>::new()
         );
-        assert_eq!(code_token_cols_in_line("x = \"FOO\" # FOO", "FOO"), vec![5]);
-        assert_eq!(code_token_cols_in_line("x = \"# FOO\"", "FOO"), vec![7]);
-        assert_eq!(code_token_cols_in_line("FOO = FOO", "FOO"), vec![0, 6]);
+        assert_eq!(
+            code_token_cols_in_line("x = \"FOO\" # FOO", "FOO", TokenCase::Sensitive),
+            vec![5]
+        );
+        assert_eq!(
+            code_token_cols_in_line("x = \"# FOO\"", "FOO", TokenCase::Sensitive),
+            vec![7]
+        );
+        assert_eq!(
+            code_token_cols_in_line("FOO = FOO", "FOO", TokenCase::Sensitive),
+            vec![0, 6]
+        );
     }
 
     #[test]
@@ -1295,24 +1281,37 @@ mod tests {
     #[test]
     fn code_token_ignore_case_matches_case_insensitively_and_respects_boundaries() {
         assert_eq!(
-            code_token_cols_in_line_ignore_case("x = MY_KEY y", "my_key"),
+            code_token_cols_in_line("x = MY_KEY y", "my_key", TokenCase::AsciiInsensitive,),
             vec![4]
         );
         assert_eq!(
-            code_token_cols_in_line_ignore_case("x = my_key_extra", "my_key"),
+            code_token_cols_in_line("x = my_key_extra", "my_key", TokenCase::AsciiInsensitive,),
             Vec::<u32>::new()
         );
         assert_eq!(
-            code_token_cols_in_line_ignore_case("x = my_key # MY_KEY", "my_key"),
+            code_token_cols_in_line("x = my_key # MY_KEY", "my_key", TokenCase::AsciiInsensitive,),
             vec![4]
         );
         assert_eq!(
-            code_token_cols_in_line_ignore_case("x = \"MY_KEY\" # MY_KEY", "my_key"),
+            code_token_cols_in_line(
+                "x = \"MY_KEY\" # MY_KEY",
+                "my_key",
+                TokenCase::AsciiInsensitive,
+            ),
             vec![5]
         );
         assert_eq!(
-            code_token_cols_in_line_ignore_case("a = my.key", "my_key"),
+            code_token_cols_in_line("a = my.key", "my_key", TokenCase::AsciiInsensitive,),
             Vec::<u32>::new()
+        );
+    }
+
+    #[test]
+    fn ascii_case_matching_keeps_unicode_columns() {
+        // Lowercasing `İ` expands it, shifting columns in a transformed line.
+        assert_eq!(
+            code_token_cols_in_line("\u{0130} = KEY", "key", TokenCase::AsciiInsensitive,),
+            vec![4]
         );
     }
 

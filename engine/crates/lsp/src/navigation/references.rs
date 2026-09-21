@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::*;
 use cwtools_info::PositionElement;
 
 use crate::lines::{DocLines, index_snapshots};
-use crate::navigation::helpers::{code_token_cols_in_line_ignore_case, loc_def_site, word_in_line};
+use crate::navigation::helpers::{TokenCase, code_token_cols_in_line, loc_def_site, word_in_line};
 use crate::paths::{loc_ref_at_cursor_with_encoding, logical_path_from_uri, parse_uri};
 use crate::{Backend, FileTextSnapshot};
 use cwtools_info::ReferenceHint;
@@ -347,7 +347,9 @@ impl Backend {
                         if !lower_line.contains(key_lower.as_str()) {
                             continue;
                         }
-                        for col in code_token_cols_in_line_ignore_case(line, key_lower) {
+                        for col in
+                            code_token_cols_in_line(line, key_lower, TokenCase::AsciiInsensitive)
+                        {
                             hits.push(Location {
                                 uri: uri.clone(),
                                 range: lines.token_range(line0, col, key_lower),

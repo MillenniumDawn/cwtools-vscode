@@ -12,9 +12,7 @@ use super::{
     at_var_at_cursor, code_token_cols_in_line, prepare_rename_range, rename_refused,
     word_at_position,
 };
-use crate::navigation::helpers::{
-    code_token_cols_in_line_ignore_case, loc_ref_key_cols_in_line, loc_root,
-};
+use crate::navigation::helpers::{TokenCase, loc_ref_key_cols_in_line, loc_root};
 
 impl Backend {
     pub(crate) async fn prepare_rename_impl(
@@ -74,7 +72,7 @@ impl Backend {
         let edits: Vec<TextEdit> = lines
             .iter()
             .flat_map(|(line0, line)| {
-                code_token_cols_in_line(line, name)
+                code_token_cols_in_line(line, name, TokenCase::Sensitive)
                     .into_iter()
                     .map(move |col| TextEdit {
                         range: lines.token_range(line0, col, name),
@@ -253,7 +251,8 @@ impl Backend {
                     if !lower_line.contains(key_lower.as_str()) {
                         continue;
                     }
-                    for col in code_token_cols_in_line_ignore_case(line, key_lower) {
+                    for col in code_token_cols_in_line(line, key_lower, TokenCase::AsciiInsensitive)
+                    {
                         edits.push(TextEdit {
                             range: lines.token_range(line0, col, key_lower),
                             new_text: new_text.clone(),
