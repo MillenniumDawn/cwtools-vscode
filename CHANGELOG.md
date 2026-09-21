@@ -39,6 +39,8 @@
 * Delete the unused `RuleSetBuilder` and the orphaned `alias_exact_for` /
   `alias_category` accessors; callers use `alias_exact()` /
   `alias_categories()` directly. (#762)
+* Requests now observe preceding document notifications without blocking later
+  requests, while cancellation remains prompt. (#775)
 
 ### 3.4.5
 

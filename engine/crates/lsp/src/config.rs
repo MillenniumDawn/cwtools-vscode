@@ -909,12 +909,12 @@ impl Backend {
                 continue;
             }
             if let Ok(uri) = Url::parse(&uri) {
-                tower_lsp::LanguageServer::did_close(
-                    self,
-                    DidCloseTextDocumentParams {
-                        text_document: TextDocumentIdentifier { uri },
-                    },
-                )
+                // We are already inside the serial notification worker. Calling
+                // the trait method here would enqueue a nested job behind this
+                // one and wait for it, so run the body inline.
+                self.did_close_impl(DidCloseTextDocumentParams {
+                    text_document: TextDocumentIdentifier { uri },
+                })
                 .await;
             }
         }

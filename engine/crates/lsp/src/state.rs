@@ -639,6 +639,244 @@ pub(crate) type NotificationJob = std::pin::Pin<Box<dyn std::future::Future<Outp
 /// a client which stops being answered cannot grow the queue without bound.
 const NOTIFICATION_QUEUE_CAPACITY: usize = 1024;
 
+/// A completion point in the notification stream. `Notify` alone is not enough:
+/// a waiter can be created just after the completion signal. The atomic flag
+/// closes that race while keeping the common already-complete path lock-free.
+pub(crate) struct NotificationCompletion {
+    done: AtomicBool,
+    notify: tokio::sync::Notify,
+    skipped_to: parking_lot::Mutex<Option<Arc<NotificationCompletion>>>,
+}
+
+impl NotificationCompletion {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            done: AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+            skipped_to: parking_lot::Mutex::new(None),
+        })
+    }
+
+    fn completed() -> Arc<Self> {
+        let completion = Self::new();
+        completion.complete();
+        completion
+    }
+
+    fn complete(&self) {
+        if !self.done.swap(true, Ordering::Release) {
+            self.notify.notify_waiters();
+        }
+    }
+
+    fn skip_to(&self, previous: Arc<Self>) {
+        if self.done.load(Ordering::Acquire) {
+            return;
+        }
+        let mut skipped_to = self.skipped_to.lock();
+        if self.done.load(Ordering::Acquire) || skipped_to.is_some() {
+            return;
+        }
+        *skipped_to = Some(previous);
+        self.notify.notify_waiters();
+    }
+
+    pub(crate) async fn wait(self: Arc<Self>) {
+        enum Step {
+            Done,
+            Next(Arc<NotificationCompletion>),
+            Wake,
+        }
+
+        let mut current = self;
+        loop {
+            let step = {
+                let notified = current.notify.notified();
+                tokio::pin!(notified);
+                // Register before checking the state. Without `enable`,
+                // completion could signal between the load and the first poll
+                // of `notified`, losing the wake-up and stranding the request.
+                notified.as_mut().enable();
+                if current.done.load(Ordering::Acquire) {
+                    Step::Done
+                } else if let Some(previous) = { current.skipped_to.lock().clone() } {
+                    Step::Next(previous)
+                } else {
+                    notified.await;
+                    Step::Wake
+                }
+            };
+            match step {
+                Step::Done => return,
+                Step::Next(previous) => current = previous,
+                Step::Wake => {}
+            }
+        }
+    }
+}
+
+/// A notification's slot is reserved when the transport sees the notification,
+/// before its handler future is polled. This is what lets a request between two
+/// notifications capture exactly the first one rather than whichever jobs the
+/// executor happened to poll first.
+pub(crate) struct NotificationReservation {
+    queue: NotificationQueue,
+    previous: Arc<NotificationCompletion>,
+    completion: Arc<NotificationCompletion>,
+    claimed: AtomicBool,
+}
+
+impl NotificationReservation {
+    pub(crate) fn claim(&self) -> Option<NotificationJobReservation> {
+        if self.claimed.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        Some(NotificationJobReservation {
+            queue: self.queue.clone(),
+            previous: self.previous.clone(),
+            completion: self.completion.clone(),
+            armed: true,
+        })
+    }
+}
+
+impl Drop for NotificationReservation {
+    fn drop(&mut self) {
+        if !self.claimed.swap(true, Ordering::AcqRel) {
+            self.completion.skip_to(self.previous.clone());
+        }
+    }
+}
+
+pub(crate) struct NotificationJobReservation {
+    queue: NotificationQueue,
+    previous: Arc<NotificationCompletion>,
+    completion: Arc<NotificationCompletion>,
+    armed: bool,
+}
+
+impl Drop for NotificationJobReservation {
+    fn drop(&mut self) {
+        if self.armed {
+            self.completion.skip_to(self.previous.clone());
+        }
+    }
+}
+
+impl NotificationJobReservation {
+    pub(crate) async fn send(self, job: NotificationJob) {
+        self.send_inner(job, None).await;
+    }
+
+    pub(crate) async fn send_background(self, job: NotificationJob) {
+        let permit = self
+            .queue
+            .sender_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("notification sender slots stay open");
+        tokio::spawn(async move { self.send_inner(job, Some(permit)).await });
+    }
+
+    async fn send_inner(
+        mut self,
+        job: NotificationJob,
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) {
+        let queue = self.queue.clone();
+        let previous = self.previous.clone();
+        let completion = self.completion.clone();
+        // A detached sender task can be dropped before its future is first
+        // polled. Once this method owns the fallback guard, that drop path is
+        // covered by the guard instead of this reservation.
+        let mut fallback = ReservationDropGuard::new(completion.clone(), previous.clone());
+        self.armed = false;
+        // Wait before handing the job to the single worker. If a later handler
+        // is polled first, its job must not occupy the worker while waiting for
+        // an earlier job that is still behind it in the channel.
+        previous.clone().wait().await;
+        let job = QueuedNotification {
+            job,
+            completion,
+            previous,
+            permit,
+            finished: false,
+        };
+        if !queue.is_running() {
+            fallback.disarm();
+            job.await;
+            return;
+        }
+        if let Err(returned) = queue.sender.send(Box::pin(job)).await {
+            tracing::warn!("notification worker is gone; running the handler inline");
+            fallback.disarm();
+            returned.0.await;
+        } else {
+            fallback.disarm();
+        }
+    }
+}
+
+struct ReservationDropGuard {
+    completion: Option<Arc<NotificationCompletion>>,
+    previous: Arc<NotificationCompletion>,
+}
+
+impl ReservationDropGuard {
+    fn new(completion: Arc<NotificationCompletion>, previous: Arc<NotificationCompletion>) -> Self {
+        Self {
+            completion: Some(completion),
+            previous,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.completion = None;
+    }
+}
+
+impl Drop for ReservationDropGuard {
+    fn drop(&mut self) {
+        if let Some(completion) = self.completion.take() {
+            completion.skip_to(self.previous.clone());
+        }
+    }
+}
+
+struct QueuedNotification {
+    job: NotificationJob,
+    completion: Arc<NotificationCompletion>,
+    previous: Arc<NotificationCompletion>,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    finished: bool,
+}
+
+impl std::future::Future for QueuedNotification {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let result = self.job.as_mut().poll(cx);
+        if result.is_ready() {
+            self.finished = true;
+            self.completion.complete();
+        }
+        result
+    }
+}
+
+impl Drop for QueuedNotification {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.completion.skip_to(self.previous.clone());
+        }
+        drop(self.permit.take());
+    }
+}
+
 /// One worker draining one bounded queue, so document notifications run off
 /// tower-lsp's message pump without losing their order (#470).
 ///
@@ -651,19 +889,24 @@ const NOTIFICATION_QUEUE_CAPACITY: usize = 1024;
 ///
 /// `enqueue` is backpressured rather than blocking: a full queue makes the pump
 /// *yield*, which is exactly the right behaviour, unlike a parked thread.
+#[derive(Clone)]
 pub(crate) struct NotificationQueue {
     sender: tokio::sync::mpsc::Sender<NotificationJob>,
-    receiver: parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<NotificationJob>>>,
-    started: AtomicBool,
+    receiver: Arc<parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<NotificationJob>>>>,
+    started: Arc<AtomicBool>,
+    tail: Arc<parking_lot::Mutex<Option<Arc<NotificationCompletion>>>>,
+    sender_slots: Arc<tokio::sync::Semaphore>,
 }
 
 impl NotificationQueue {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(NOTIFICATION_QUEUE_CAPACITY);
         Self {
             sender,
-            receiver: parking_lot::Mutex::new(Some(receiver)),
-            started: AtomicBool::new(false),
+            receiver: Arc::new(parking_lot::Mutex::new(Some(receiver))),
+            started: Arc::new(AtomicBool::new(false)),
+            tail: Arc::new(parking_lot::Mutex::new(None)),
+            sender_slots: Arc::new(tokio::sync::Semaphore::new(NOTIFICATION_QUEUE_CAPACITY)),
         }
     }
 
@@ -683,11 +926,30 @@ impl NotificationQueue {
         self.started.load(Ordering::Acquire)
     }
 
-    pub(crate) async fn send(
-        &self,
-        job: NotificationJob,
-    ) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<NotificationJob>> {
-        self.sender.send(job).await
+    /// Reserve a slot in the order in which the transport received a
+    /// notification. Dropping an unclaimed reservation completes it, so a
+    /// notification that is shut down before its handler starts cannot strand
+    /// every request behind it.
+    pub(crate) fn reserve(&self) -> NotificationReservation {
+        let completion = NotificationCompletion::new();
+        let previous = self
+            .tail
+            .lock()
+            .replace(completion.clone())
+            .unwrap_or_else(NotificationCompletion::completed);
+        NotificationReservation {
+            queue: self.clone(),
+            previous,
+            completion,
+            claimed: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn barrier(&self) -> Arc<NotificationCompletion> {
+        self.tail
+            .lock()
+            .clone()
+            .unwrap_or_else(NotificationCompletion::completed)
     }
 }
 

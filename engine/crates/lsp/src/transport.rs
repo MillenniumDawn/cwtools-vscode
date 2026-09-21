@@ -7,6 +7,51 @@ use tokio::io::{AsyncBufRead, AsyncRead, BufReader, ReadBuf};
 use tower::Service;
 use tower_lsp::jsonrpc::{Error, Request, Response};
 
+use crate::state::{
+    NotificationCompletion, NotificationJobReservation, NotificationQueue, NotificationReservation,
+};
+
+/// The transport captures message order before tower-lsp's unordered task
+/// buffer polls a handler. Request handlers consume their snapshot inside the
+/// tower-lsp cancellation future; notification handlers claim their reserved
+/// queue slot when they enqueue their body.
+pub(crate) enum MessageContext {
+    Request(std::sync::Arc<NotificationCompletion>),
+    Notification(NotificationReservation),
+}
+
+tokio::task_local! {
+    pub(crate) static MESSAGE_CONTEXT: MessageContext;
+}
+
+pub(crate) async fn wait_for_notifications(queue: &NotificationQueue) {
+    let barrier = MESSAGE_CONTEXT
+        .try_with(|context| match context {
+            MessageContext::Request(barrier) => Some(barrier.clone()),
+            MessageContext::Notification(_) => None,
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| queue.barrier());
+    barrier.wait().await;
+}
+
+pub(crate) fn claim_notification(queue: &NotificationQueue) -> NotificationJobReservation {
+    MESSAGE_CONTEXT
+        .try_with(|context| match context {
+            MessageContext::Notification(reservation) => reservation.claim(),
+            MessageContext::Request(_) => None,
+        })
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| {
+            queue
+                .reserve()
+                .claim()
+                .expect("a new notification reservation must be claimable")
+        })
+}
+
 pub(crate) const MAX_LSP_HEADER_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_LSP_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
@@ -227,11 +272,20 @@ pub(crate) const CONCURRENCY_LEVEL: usize = 64;
 /// `Backend::enqueue_notification` instead.
 pub(crate) struct SpawnRequests<S> {
     inner: S,
+    notifications: NotificationQueue,
 }
 
 impl<S> SpawnRequests<S> {
+    #[cfg(test)]
     pub(crate) fn new(inner: S) -> Self {
-        Self { inner }
+        Self::with_notifications(inner, NotificationQueue::new())
+    }
+
+    pub(crate) fn with_notifications(inner: S, notifications: NotificationQueue) -> Self {
+        Self {
+            inner,
+            notifications,
+        }
     }
 }
 
@@ -255,6 +309,16 @@ impl Drop for AbortOnDrop {
     }
 }
 
+fn notification_is_ordered(method: &str) -> bool {
+    // These notifications are deliberately not put behind document work. In
+    // particular, tower-lsp's $/cancelRequest must reach Pending immediately,
+    // and exit must be able to finish shutdown even if a queued job is stuck.
+    !matches!(
+        method,
+        "$/cancelRequest" | "window/workDoneProgress/cancel" | "exit"
+    )
+}
+
 impl<S> Service<Request> for SpawnRequests<S>
 where
     S: Service<Request, Response = Option<Response>>,
@@ -270,38 +334,50 @@ where
     }
 
     fn call(&mut self, request: Request) -> Self::Future {
-        let Some(id) = request.id().cloned() else {
-            return Box::pin(self.inner.call(request));
-        };
-        // Only for the panic line below, and only worth the allocation on the
-        // path that can produce one.
+        let id = request.id().cloned();
         let method = request.method().to_string();
+        let context = match id.as_ref() {
+            Some(_) => Some(MessageContext::Request(self.notifications.barrier())),
+            None if notification_is_ordered(&method) => {
+                Some(MessageContext::Notification(self.notifications.reserve()))
+            }
+            None => None,
+        };
         let handler = self.inner.call(request);
 
-        Box::pin(async move {
-            let handle = tokio::spawn(handler);
-            let _abort = AbortOnDrop(handle.abort_handle());
-            match handle.await {
-                Ok(response) => response,
-                // Only reachable through `_abort`, which fires when nobody is
-                // left to read this value; answering with nothing is right
-                // either way.
-                Err(error) if error.is_cancelled() => Ok(None),
-                Err(error) => {
-                    // On the pump a panicking handler unwound into `serve()` and
-                    // took the process with it. Off the pump it is one failed
-                    // request.
-                    tracing::error!(%error, %method, "request handler panicked");
-                    Ok(Some(Response::from_error(id, Error::internal_error())))
-                }
+        if let Some(context) = context {
+            let handler = MESSAGE_CONTEXT.scope(context, handler);
+            if let Some(id) = id {
+                return Box::pin(async move {
+                    let handle = tokio::spawn(handler);
+                    let _abort = AbortOnDrop(handle.abort_handle());
+                    match handle.await {
+                        Ok(response) => response,
+                        // Only reachable through `_abort`, which fires when nobody is
+                        // left to read this value; answering with nothing is right
+                        // either way.
+                        Err(error) if error.is_cancelled() => Ok(None),
+                        Err(error) => {
+                            // On the pump a panicking handler unwound into `serve()` and
+                            // took the process with it. Off it, it is one failed request.
+                            tracing::error!(%error, %method, "request handler panicked");
+                            Ok(Some(Response::from_error(id, Error::internal_error())))
+                        }
+                    }
+                });
             }
-        })
+            return Box::pin(handler);
+        }
+
+        Box::pin(handler)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    use crate::state::NotificationJob;
 
     use super::*;
 
@@ -488,6 +564,370 @@ mod tests {
 
     fn notification() -> Request {
         Request::build("window/workDoneProgress/cancel").finish()
+    }
+
+    async fn run_notification_worker(mut receiver: tokio::sync::mpsc::Receiver<NotificationJob>) {
+        while let Some(job) = receiver.recv().await {
+            job.await;
+        }
+    }
+
+    /// A small service that uses the same queue/context hooks as `Backend`.
+    /// Keeping the notification body behind a pair of barriers makes the
+    /// message-order tests deterministic instead of relying on scheduler luck.
+    struct Ordered {
+        queue: NotificationQueue,
+        first_started: std::sync::Arc<tokio::sync::Notify>,
+        first_release: std::sync::Arc<tokio::sync::Notify>,
+        later_started: std::sync::Arc<tokio::sync::Notify>,
+        later_release: std::sync::Arc<tokio::sync::Notify>,
+        request_started: std::sync::Arc<tokio::sync::Notify>,
+    }
+
+    impl Service<Request> for Ordered {
+        type Response = Option<Response>;
+        type Error = std::convert::Infallible;
+        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, request: Request) -> Self::Future {
+            let method = request.method().to_string();
+            if request.id().is_some() {
+                let queue = self.queue.clone();
+                let started = self.request_started.clone();
+                return Box::pin(async move {
+                    wait_for_notifications(&queue).await;
+                    started.notify_one();
+                    Ok(Some(Response::from_ok(
+                        request.id().cloned().expect("request id"),
+                        serde_json::Value::Null,
+                    )))
+                });
+            }
+
+            let queue = self.queue.clone();
+            let started = if method == "ordered/first" {
+                self.first_started.clone()
+            } else {
+                self.later_started.clone()
+            };
+            let release = if method == "ordered/first" {
+                self.first_release.clone()
+            } else {
+                self.later_release.clone()
+            };
+            Box::pin(async move {
+                let reservation = claim_notification(&queue);
+                reservation
+                    .send(Box::pin(async move {
+                        started.notify_one();
+                        release.notified().await;
+                    }))
+                    .await;
+                Ok(None)
+            })
+        }
+    }
+
+    fn ordered_service(queue: NotificationQueue) -> Ordered {
+        let notify = || std::sync::Arc::new(tokio::sync::Notify::new());
+        Ordered {
+            queue,
+            first_started: notify(),
+            first_release: notify(),
+            later_started: notify(),
+            later_release: notify(),
+            request_started: notify(),
+        }
+    }
+
+    /// A request snapshots the notification prefix at transport dispatch time:
+    /// it waits for the first blocked notification, but not for a later blocked
+    /// notification. This is the regression for stale request state (#775).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn requests_wait_for_preceding_notifications_only() {
+        let queue = NotificationQueue::new();
+        let receiver = queue.take_receiver().expect("one worker");
+        let worker = tokio::spawn(run_notification_worker(receiver));
+        let ordered = ordered_service(queue.clone());
+        let first_started = ordered.first_started.clone();
+        let first_release = ordered.first_release.clone();
+        let later_started = ordered.later_started.clone();
+        let later_release = ordered.later_release.clone();
+        let request_started = ordered.request_started.clone();
+        let mut service = SpawnRequests::with_notifications(ordered, queue);
+
+        let first = service.call(Request::build("ordered/first").finish());
+        let request = service.call(request(10));
+        let later = service.call(Request::build("ordered/later").finish());
+        // Poll the later notification before its predecessor. This used to
+        // deadlock when the later job occupied the only worker while awaiting
+        // the predecessor's completion.
+        let later_task = tokio::spawn(later);
+        tokio::task::yield_now().await;
+        let request_task = tokio::spawn(request);
+        let first_task = tokio::spawn(first);
+        first_started.notified().await;
+
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                request_started.notified()
+            )
+            .await
+            .is_err(),
+            "request must remain behind the blocked preceding notification"
+        );
+
+        // Completing the first notification must release the request even
+        // while the later notification is still blocked.
+        first_release.notify_one();
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            request_started.notified(),
+        )
+        .await
+        .expect("request waited for a later notification");
+        request_task
+            .await
+            .expect("request task panicked")
+            .expect("request failed");
+
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                later_started.notified()
+            )
+            .await
+            .is_ok(),
+            "later notification did not reach the worker"
+        );
+        later_release.notify_one();
+        first_task
+            .await
+            .expect("first notification panicked")
+            .expect("first notification transport error");
+        later_task
+            .await
+            .expect("later notification panicked")
+            .expect("later notification transport error");
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn dropped_reservations_preserve_completion_transitivity() {
+        let queue = NotificationQueue::new();
+        let first = queue.reserve();
+        let second = queue.reserve();
+        let third = queue.reserve();
+        let barrier = queue.barrier();
+        drop(third);
+        drop(second);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), barrier.clone().wait())
+                .await
+                .is_err(),
+            "a dropped suffix must not skip an unfinished predecessor"
+        );
+        drop(first);
+        tokio::time::timeout(std::time::Duration::from_millis(500), barrier.wait())
+            .await
+            .expect("dropped reservation chain did not complete");
+    }
+
+    #[tokio::test]
+    async fn dropping_an_unpolled_sender_releases_waiters() {
+        let queue = NotificationQueue::new();
+        let reservation = queue.reserve().claim().expect("claim");
+        let barrier = queue.barrier();
+        drop(reservation);
+        tokio::time::timeout(std::time::Duration::from_millis(500), barrier.wait())
+            .await
+            .expect("dropping an unpolled sender stranded a waiter");
+    }
+
+    #[tokio::test]
+    async fn dropping_an_unpolled_queued_job_releases_waiters() {
+        let queue = NotificationQueue::new();
+        let receiver = queue.take_receiver().expect("one worker");
+        let first = queue.reserve();
+        let second = queue.reserve();
+        let barrier = queue.barrier();
+        first
+            .claim()
+            .expect("first claim")
+            .send(Box::pin(std::future::pending()))
+            .await;
+        drop(second);
+        drop(receiver);
+        tokio::time::timeout(std::time::Duration::from_millis(500), barrier.wait())
+            .await
+            .expect("dropping an unpolled queue future stranded a waiter");
+    }
+
+    #[tokio::test]
+    async fn panicking_notification_releases_the_next_job() {
+        let queue = NotificationQueue::new();
+        let receiver = queue.take_receiver().expect("one worker");
+        let worker = tokio::spawn(async move {
+            let mut receiver = receiver;
+            while let Some(job) = receiver.recv().await {
+                let _ = tokio::spawn(job).await;
+            }
+        });
+        let first = queue.reserve();
+        first
+            .claim()
+            .expect("first claim")
+            .send(Box::pin(async { panic!("test notification panic") }))
+            .await;
+        let second_started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let second = queue.reserve();
+        let marker = second_started.clone();
+        second
+            .claim()
+            .expect("second claim")
+            .send(Box::pin(async move { marker.notify_one() }))
+            .await;
+        tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            second_started.notified(),
+        )
+        .await
+        .expect("next notification was stranded by a panic");
+        worker.abort();
+    }
+
+    #[derive(Clone)]
+    struct CancellableProbe {
+        queue: NotificationQueue,
+        notification_started: std::sync::Arc<tokio::sync::Notify>,
+        notification_release: std::sync::Arc<tokio::sync::Notify>,
+        request_started: std::sync::Arc<tokio::sync::Notify>,
+    }
+
+    impl CancellableProbe {
+        async fn notification(&self) {
+            let queue = self.queue.clone();
+            let started = self.notification_started.clone();
+            let release = self.notification_release.clone();
+            let reservation = claim_notification(&queue);
+            reservation
+                .send(Box::pin(async move {
+                    started.notify_one();
+                    release.notified().await;
+                }))
+                .await;
+        }
+
+        async fn request(&self, _: serde_json::Value) -> tower_lsp::jsonrpc::Result<i32> {
+            wait_for_notifications(&self.queue).await;
+            self.request_started.notify_one();
+            Ok(1)
+        }
+    }
+
+    #[tower_lsp::async_trait]
+    impl tower_lsp::LanguageServer for CancellableProbe {
+        async fn initialize(
+            &self,
+            _: tower_lsp::lsp_types::InitializeParams,
+        ) -> tower_lsp::jsonrpc::Result<tower_lsp::lsp_types::InitializeResult> {
+            Ok(tower_lsp::lsp_types::InitializeResult::default())
+        }
+
+        async fn shutdown(&self) -> tower_lsp::jsonrpc::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Cancellation must bypass a blocked state notification. The request's
+    /// wait lives inside tower-lsp's Pending future, so aborting it produces a
+    /// prompt response instead of waiting for the notification queue.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancellation_passes_a_blocked_notification() {
+        let queue = NotificationQueue::new();
+        let receiver = queue.take_receiver().expect("one worker");
+        let worker = tokio::spawn(run_notification_worker(receiver));
+        let probe = CancellableProbe {
+            queue: queue.clone(),
+            notification_started: std::sync::Arc::new(tokio::sync::Notify::new()),
+            notification_release: std::sync::Arc::new(tokio::sync::Notify::new()),
+            request_started: std::sync::Arc::new(tokio::sync::Notify::new()),
+        };
+        let notification_started = probe.notification_started.clone();
+        let notification_release = probe.notification_release.clone();
+        let request_started = probe.request_started.clone();
+        let (service, _) = tower_lsp::LspService::build({
+            let probe = probe.clone();
+            move |_| probe
+        })
+        .custom_method("ordered/notification", CancellableProbe::notification)
+        .custom_method("ordered/request", CancellableProbe::request)
+        .finish();
+        let mut service = SpawnRequests::with_notifications(service, queue);
+
+        let initialize = service.call(
+            Request::build("initialize")
+                .id(0)
+                .params(serde_json::json!({"capabilities": {}}))
+                .finish(),
+        );
+        initialize
+            .await
+            .expect("initialize transport error")
+            .expect("initialize response");
+
+        let notification = service.call(Request::build("ordered/notification").finish());
+        let request = service.call(
+            Request::build("ordered/request")
+                .id(1)
+                .params(serde_json::Value::Null)
+                .finish(),
+        );
+        let notification_task = tokio::spawn(notification);
+        notification_started.notified().await;
+        let request_task = tokio::spawn(request);
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                request_started.notified()
+            )
+            .await
+            .is_err(),
+            "request ran before its blocked preceding notification"
+        );
+
+        let cancel = service.call(
+            Request::build("$/cancelRequest")
+                .params(serde_json::json!({"id": 1}))
+                .finish(),
+        );
+        let cancel_response = tokio::time::timeout(std::time::Duration::from_millis(500), cancel)
+            .await
+            .expect("cancel was held behind the blocked notification")
+            .expect("cancel transport error");
+        assert!(cancel_response.is_none(), "cancel is a notification");
+        let response = tokio::time::timeout(std::time::Duration::from_millis(500), request_task)
+            .await
+            .expect("cancelled request did not finish promptly")
+            .expect("request task panicked")
+            .expect("request transport error")
+            .expect("cancelled request had no response");
+        assert!(
+            response.is_error(),
+            "expected a cancellation response: {response:?}"
+        );
+
+        notification_release.notify_one();
+        notification_task
+            .await
+            .expect("notification task panicked")
+            .expect("notification transport error");
+        worker.abort();
     }
 
     /// The whole point of #470: a request that owns its thread must not stop the
