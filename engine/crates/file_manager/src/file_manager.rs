@@ -964,62 +964,6 @@ fn collect_files_recursive(
     }
 }
 
-#[deprecated(note = "use cwtools_driver::{workspace_discovery_config, discover_workspace_files}")]
-pub fn walk_workspace_files(
-    root: &Path,
-    extensions: &[&str],
-    extra_file_globs: &[String],
-    extra_dir_globs: &[String],
-    budget: ScanBudget,
-) -> Vec<PathBuf> {
-    let cfg = FileManagerConfig::default();
-    let root_prefix = normalize_root_prefix(root);
-    let needs_relative =
-        has_path_pattern(&cfg.exclude_patterns) || has_path_pattern(extra_file_globs);
-    // read cap and byte budget are enforced when the LSP reads each file.
-    let mut accept = |path: &Path| -> Option<PathBuf> {
-        let ext = path.extension().and_then(|e| e.to_str())?;
-        if !extensions.contains(&ext) {
-            return None;
-        }
-        let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let relative = if needs_relative {
-            compute_logical_path_with_root(path, &root_prefix)
-        } else {
-            String::new()
-        };
-        if cfg
-            .exclude_patterns
-            .iter()
-            .any(|pat| ignore_glob_match(pat, file_name, &relative))
-            || extra_file_globs
-                .iter()
-                .any(|pat| ignore_glob_match(pat, file_name, &relative))
-        {
-            return None;
-        }
-        Some(path.to_path_buf())
-    };
-    let mut on_err = |_: &Path, _: std::io::Error| {};
-    let mut state = WalkState {
-        out: Vec::new(),
-        remaining_files: budget.max_files,
-    };
-    let _ = walk_dir_generic(
-        root,
-        WalkRoot {
-            prefix: &root_prefix,
-            is_root_level: true,
-        },
-        &cfg,
-        extra_dir_globs,
-        &mut accept,
-        &mut on_err,
-        &mut state,
-    );
-    state.out
-}
-
 /// `state.out`. Symlinks and non-regular files (fifos, sockets, devices) are
 /// rejected outright: a symlink can point outside the root or into a cycle,
 /// and the remaining per-scan file budget.
@@ -1339,7 +1283,6 @@ fn glob_greedy(p: &[char], t: &[char]) -> bool {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -1686,30 +1629,16 @@ mod tests {
         });
         let mut paths = Vec::new();
         fm.collect_paths(root, &mut paths).unwrap();
-        let cli: Vec<String> = paths.iter().map(|(_, lp)| lp.clone()).collect();
+        let files: Vec<String> = paths.iter().map(|(_, lp)| lp.clone()).collect();
         assert!(
-            cli.iter()
+            files
+                .iter()
                 .any(|n| n.ends_with("common/resources/00_resources.txt")),
-            "common/resources must be indexed: {cli:?}"
+            "common/resources must be indexed: {files:?}"
         );
         assert!(
-            !cli.iter().any(|n| n.ends_with("resources/scratch.txt")),
-            "root resources/ must be skipped: {cli:?}"
-        );
-
-        let lsp = walk_workspace_files(root, &["txt"], &[], &[], ScanBudget::default());
-        let lsp: Vec<String> = lsp
-            .iter()
-            .map(|p| normalize_slashes(p.to_string_lossy()).into_owned())
-            .collect();
-        assert!(
-            lsp.iter()
-                .any(|n| n.ends_with("common/resources/00_resources.txt")),
-            "common/resources must be walked: {lsp:?}"
-        );
-        assert!(
-            !lsp.iter().any(|n| n.ends_with("resources/scratch.txt")),
-            "root resources/ must be skipped by whole-tree walk: {lsp:?}"
+            !files.iter().any(|n| n.ends_with("resources/scratch.txt")),
+            "root resources/ must be skipped: {files:?}"
         );
     }
 
@@ -2011,7 +1940,7 @@ mod tests {
     }
 
     #[test]
-    fn walk_workspace_files_returns_sorted_order() {
+    fn collect_paths_returns_sorted_order() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
         for name in ["zebra.txt", "alpha.txt", "middle.txt"] {
@@ -2020,19 +1949,25 @@ mod tests {
         std::fs::create_dir(root.join("sub")).unwrap();
         std::fs::write(root.join("sub").join("aaa.txt"), "").unwrap();
 
-        let files = walk_workspace_files(root, &["txt"], &[], &[], ScanBudget::default());
-        let names: Vec<String> = files
+        let fm = FileManager::new(FileManagerConfig {
+            root: root.to_path_buf(),
+            include_dirs: vec![".".into()],
+            ..Default::default()
+        });
+        let mut paths = Vec::new();
+        fm.collect_paths(root, &mut paths).unwrap();
+        let names: Vec<String> = paths
             .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         let pos = |n: &str| names.iter().position(|x| x == n).expect("file present");
         assert!(pos("alpha.txt") < pos("middle.txt"), "got: {:?}", names);
         assert!(pos("middle.txt") < pos("zebra.txt"), "got: {:?}", names);
     }
 
-    /// #244: the globs the LSP forwards reach the walk, and a `**/`-prefixed one
+    /// #244: path globs are applied to root-relative paths and can prune a subtree.
     #[test]
-    fn walk_workspace_files_honours_path_globs() {
+    fn collect_paths_honours_path_globs() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
         std::fs::create_dir_all(root.join("common/units")).unwrap();
@@ -2041,10 +1976,17 @@ mod tests {
         std::fs::write(root.join("common/units/keep.txt"), "").unwrap();
 
         let names = |globs: &[String], dirs: &[String]| -> Vec<String> {
-            walk_workspace_files(root, &["txt"], globs, dirs, ScanBudget::default())
-                .iter()
-                .map(|p| compute_logical_path(p, root))
-                .collect()
+            let mut config = FileManagerConfig {
+                root: root.to_path_buf(),
+                include_dirs: vec![".".into()],
+                ..Default::default()
+            };
+            config.exclude_patterns.extend(globs.iter().cloned());
+            config.exclude_dir_patterns.extend(dirs.iter().cloned());
+            let fm = FileManager::new(config);
+            let mut paths = Vec::new();
+            fm.collect_paths(root, &mut paths).unwrap();
+            paths.into_iter().map(|(_, logical)| logical).collect()
         };
 
         let all = names(&[], &[]);
@@ -2065,25 +2007,6 @@ mod tests {
 
         let pruned = names(&[], &["common/units".to_string()]);
         assert_eq!(pruned, ["skip.txt"], "got: {pruned:?}");
-    }
-
-    #[test]
-    fn collect_paths_honours_path_globs() {
-        let tmp = tempfile::TempDir::new().expect("tmpdir");
-        let root = tmp.path();
-        std::fs::create_dir_all(root.join("common/units")).unwrap();
-        std::fs::write(root.join("common/units/skip.txt"), "").unwrap();
-        std::fs::write(root.join("common/units/keep.txt"), "").unwrap();
-
-        let fm = FileManager::new(FileManagerConfig {
-            root: root.to_path_buf(),
-            exclude_patterns: vec!["**/skip.txt".to_string()],
-            ..Default::default()
-        });
-        let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
-        let logical: Vec<&str> = paths.iter().map(|(_, lp)| lp.as_str()).collect();
-        assert_eq!(logical, ["common/units/keep.txt"], "got: {logical:?}");
     }
 
     #[test]
@@ -2115,31 +2038,33 @@ mod tests {
 
     // ── symlink / special-file / budget hardening (#161) ───────────────────────
 
-    /// A symlinked directory or file must not be walked: a dir symlink can point
-    /// outside the root or into a cycle, and a file symlink can point at a
+    /// A symlinked directory or file must not be discovered: a dir symlink can
+    /// point outside the root or into a cycle, and a file symlink can point at a
+    /// special file (e.g. `/dev/zero`) that reports length 0 and reads to EOF.
     #[cfg(unix)]
     #[test]
-    fn walk_workspace_files_rejects_symlinks() {
+    fn collect_paths_rejects_symlinks() {
         use std::os::unix::fs::symlink;
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
 
-        // A real file that must be found, plus a dir symlink and a file symlink
         std::fs::write(root.join("real.txt"), "x").unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
         std::fs::write(root.join("sub").join("inside.txt"), "x").unwrap();
         symlink(root.join("sub"), root.join("dir_link")).unwrap();
         symlink(root.join("real.txt"), root.join("file_link.txt")).unwrap();
-        // A symlink to a special file that reports length 0 and would read to EOF.
         symlink("/dev/zero", root.join("zero.txt")).unwrap();
 
-        let files = walk_workspace_files(root, &["txt"], &[], &[], ScanBudget::default());
-        let names: Vec<String> = files
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert!(names.contains(&"real.txt".to_string()));
-        assert!(names.contains(&"inside.txt".to_string()));
+        let fm = FileManager::new(FileManagerConfig {
+            root: root.to_path_buf(),
+            include_dirs: vec![".".into()],
+            ..Default::default()
+        });
+        let mut paths = Vec::new();
+        fm.collect_paths(root, &mut paths).unwrap();
+        let names: Vec<String> = paths.iter().map(|(_, lp)| lp.clone()).collect();
+        assert!(names.iter().any(|n| n.ends_with("real.txt")));
+        assert!(names.iter().any(|n| n.ends_with("inside.txt")));
         assert!(
             !names.iter().any(|n| n.contains("dir_link")),
             "dir symlink must not be followed: {names:?}"
@@ -2154,46 +2079,27 @@ mod tests {
         );
     }
 
-    /// The CLI discovery path must apply the same symlink policy as the LSP walk.
-    #[cfg(unix)]
     #[test]
-    fn collect_paths_rejects_symlinks() {
-        use std::os::unix::fs::symlink;
-        let tmp = tempfile::TempDir::new().expect("tmpdir");
-        let root = tmp.path();
-        std::fs::write(root.join("real.txt"), "x").unwrap();
-        symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
-
-        let fm = FileManager::new(FileManagerConfig {
-            root: root.to_path_buf(),
-            include_dirs: vec![".".into()],
-            ..Default::default()
-        });
-        let mut paths = Vec::new();
-        fm.collect_paths(root, &mut paths).unwrap();
-        let names: Vec<String> = paths.iter().map(|(_, lp)| lp.clone()).collect();
-        assert!(names.iter().any(|n| n.ends_with("real.txt")));
-        assert!(
-            !names.iter().any(|n| n.ends_with("link.txt")),
-            "file symlink must be rejected: {names:?}"
-        );
-    }
-
-    /// The per-scan file-count budget stops a pathological tree from being
-    #[test]
-    fn walk_workspace_files_enforces_file_budget() {
+    fn collect_paths_enforces_file_budget() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
         for i in 0..10 {
             std::fs::write(root.join(format!("f{i}.txt")), "x").unwrap();
         }
-        let budget = ScanBudget {
-            max_files: 3,
-            max_bytes: 0,
-            max_file_size: 0,
+        let config = FileManagerConfig {
+            root: root.to_path_buf(),
+            include_dirs: vec![".".into()],
+            scan_budget: ScanBudget {
+                max_files: 3,
+                max_bytes: 0,
+                max_file_size: 0,
+            },
+            ..Default::default()
         };
-        let files = walk_workspace_files(root, &["txt"], &[], &[], budget);
-        assert_eq!(files.len(), 3, "walk must stop at the file budget");
+        let fm = FileManager::new(config);
+        let mut paths = Vec::new();
+        fm.collect_paths(root, &mut paths).unwrap();
+        assert_eq!(paths.len(), 3, "discovery must stop at the file budget");
     }
 
     /// The multi-mod walk must reject symlinks too.
@@ -2357,7 +2263,7 @@ mod tests {
     }
 
     #[test]
-    fn is_ignored_logical_path_agrees_with_walk_workspace_files() {
+    fn is_ignored_logical_path_matches_discovery() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
         for rel in [
@@ -2375,10 +2281,18 @@ mod tests {
             std::fs::write(root.join(rel), "").unwrap();
         }
         let extra = vec!["ignored.txt".to_string(), "**/skip.txt".to_string()];
-        let walked = walk_workspace_files(root, &["txt", "md"], &extra, &[], ScanBudget::default());
-        let walked_set: std::collections::HashSet<String> = walked
-            .iter()
-            .map(|p| compute_logical_path(p, root))
+        let mut config = FileManagerConfig {
+            root: root.to_path_buf(),
+            include_dirs: vec![".".into()],
+            ..Default::default()
+        };
+        config.exclude_patterns.extend(extra.iter().cloned());
+        let fm = FileManager::new(config);
+        let mut paths = Vec::new();
+        fm.collect_paths(root, &mut paths).unwrap();
+        let discovered: std::collections::HashSet<String> = paths
+            .into_iter()
+            .map(|(_, logical_path)| logical_path)
             .collect();
         for rel in [
             "README.txt",
@@ -2388,8 +2302,8 @@ mod tests {
             "events/skip.txt",
         ] {
             assert!(
-                !walked_set.contains(rel),
-                "walk should have excluded {rel}: {walked_set:?}"
+                !discovered.contains(rel),
+                "discovery should have excluded {rel}: {discovered:?}"
             );
             assert!(
                 is_ignored_logical_path(rel, &extra),
@@ -2398,8 +2312,8 @@ mod tests {
         }
         for rel in ["common/keep.txt", "common/units/keep.txt"] {
             assert!(
-                walked_set.contains(rel),
-                "walk should have kept {rel}: {walked_set:?}"
+                discovered.contains(rel),
+                "discovery should have kept {rel}: {discovered:?}"
             );
             assert!(
                 !is_ignored_logical_path(rel, &extra),
@@ -2475,7 +2389,7 @@ mod tests {
     }
 
     #[test]
-    fn is_ignored_path_agrees_with_walk_workspace_files_for_dirs() {
+    fn is_ignored_path_matches_directory_discovery() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let root = tmp.path();
         for rel in [
@@ -2490,15 +2404,23 @@ mod tests {
             std::fs::write(root.join(rel), "").unwrap();
         }
         let extra_dirs = vec!["scratch".to_string(), "**/skip".to_string()];
-        let walked = walk_workspace_files(root, &["txt"], &[], &extra_dirs, ScanBudget::default());
-        let walked_set: std::collections::HashSet<String> = walked
-            .iter()
-            .map(|p| compute_logical_path(p, root))
+        let config = FileManagerConfig {
+            root: root.to_path_buf(),
+            include_dirs: vec![".".into()],
+            exclude_dir_patterns: extra_dirs.clone(),
+            ..Default::default()
+        };
+        let fm = FileManager::new(config);
+        let mut paths = Vec::new();
+        fm.collect_paths(root, &mut paths).unwrap();
+        let discovered: std::collections::HashSet<String> = paths
+            .into_iter()
+            .map(|(_, logical_path)| logical_path)
             .collect();
         for rel in ["scratch/foo.txt", "common/scratch/foo.txt"] {
             assert!(
-                !walked_set.contains(rel),
-                "walk should have excluded {rel}: {walked_set:?}"
+                !discovered.contains(rel),
+                "discovery should have excluded {rel}: {discovered:?}"
             );
             assert!(
                 is_ignored_path(rel, &[], &extra_dirs),
@@ -2507,8 +2429,8 @@ mod tests {
         }
         for rel in ["common/keep/foo.txt", "events/keep.txt"] {
             assert!(
-                walked_set.contains(rel),
-                "walk should have kept {rel}: {walked_set:?}"
+                discovered.contains(rel),
+                "discovery should have kept {rel}: {discovered:?}"
             );
             assert!(
                 !is_ignored_path(rel, &[], &extra_dirs),

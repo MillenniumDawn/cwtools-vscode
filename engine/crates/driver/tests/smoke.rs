@@ -1905,6 +1905,47 @@ fn scoped_loc_load_still_validates_unrecognised_headers() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn discover_workspace_files_rejects_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("modroot");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("real.txt"), "x = 1\n").unwrap();
+    symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
+
+    let mut cfg = workspace_discovery_config(&root, None);
+    cfg.include_dirs = vec![".".to_string()];
+    let files = discover_workspace_files(cfg).expect("discovery");
+    let logical: Vec<String> = files.iter().map(|f| f.logical_path.clone()).collect();
+    assert!(
+        logical.contains(&"real.txt".to_string()),
+        "got: {logical:?}"
+    );
+    assert!(
+        !logical.contains(&"link.txt".to_string()),
+        "file symlink must be rejected: {logical:?}"
+    );
+}
+
+#[test]
+fn discover_workspace_files_enforces_file_budget() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("modroot");
+    std::fs::create_dir_all(&root).unwrap();
+    for i in 0..10 {
+        std::fs::write(root.join(format!("f{i}.txt")), "x = 1\n").unwrap();
+    }
+
+    let mut cfg = workspace_discovery_config(&root, None);
+    cfg.include_dirs = vec![".".to_string()];
+    cfg.scan_budget.max_files = 3;
+    let files = discover_workspace_files(cfg).expect("discovery");
+    assert_eq!(files.len(), 3, "discovery must stop at the file budget");
+}
+
 /// Discovery order is a contract: the TypeIndex merge order is observable
 /// (goto-def first match, duplicate counts), so a silent reorder is a
 /// behavioral change. Single-mod walks are sorted within each directory and
