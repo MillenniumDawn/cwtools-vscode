@@ -44,70 +44,22 @@ pub(super) fn run(args: LocArgs) {
     let file_cfg = load_config(config.as_deref(), directory.as_deref());
     let mut applied: Vec<&'static str> = Vec::new();
     let fc = file_cfg.as_ref();
-    let game = config::pick(game, fc.and_then(|c| c.game.clone()), "game", &mut applied);
-    let directory = config::pick(
-        directory,
-        fc.and_then(|c| c.directory.clone()),
-        "directory",
-        &mut applied,
+    config::pick_fields!(fc, applied;
+        option game => game "game";
+        option directory => directory "directory";
+        option rules => rules "rules";
+        list ignore_files => ignore_files "ignore-files";
+        list ignore_dirs => ignore_dirs "ignore-dirs";
+        list loc_language => loc_languages "loc-languages";
+        option report_type => report_type "report-type";
+        option min_severity => min_severity "min-severity";
+        option fail_on => fail_on "fail-on";
+        list ignore_codes => ignore_codes "ignore-codes";
+        list only_codes => only_codes "only-codes";
+        flag allow_empty => allow_empty "allow-empty";
     );
-    let rules = config::pick(
-        rules,
-        fc.and_then(|c| c.rules.clone()),
-        "rules",
-        &mut applied,
-    );
-    let ignore_files = config::pick_list(
-        ignore_files,
-        fc.map(|c| c.ignore_files.clone()).unwrap_or_default(),
-        "ignore-files",
-        &mut applied,
-    );
-    let ignore_dirs = config::pick_list(
-        ignore_dirs,
-        fc.map(|c| c.ignore_dirs.clone()).unwrap_or_default(),
-        "ignore-dirs",
-        &mut applied,
-    );
-    let loc_language = config::pick_list(
-        loc_language,
-        fc.map(|c| c.loc_languages.clone()).unwrap_or_default(),
-        "loc-languages",
-        &mut applied,
-    );
-    let report_type = config::pick(
-        report_type,
-        fc.and_then(|c| c.report_type),
-        "report-type",
-        &mut applied,
-    )
-    .unwrap_or(ReportType::Cli);
-    let min_severity = config::pick(
-        min_severity,
-        fc.and_then(|c| c.min_severity),
-        "min-severity",
-        &mut applied,
-    );
-    let fail_on = config::pick(fail_on, fc.and_then(|c| c.fail_on), "fail-on", &mut applied)
-        .unwrap_or_default();
-    let ignore_codes = config::pick_list(
-        ignore_codes,
-        fc.map(|c| c.ignore_codes.clone()).unwrap_or_default(),
-        "ignore-codes",
-        &mut applied,
-    );
-    let only_codes = config::pick_list(
-        only_codes,
-        fc.map(|c| c.only_codes.clone()).unwrap_or_default(),
-        "only-codes",
-        &mut applied,
-    );
-    let allow_empty = config::pick_flag(
-        allow_empty,
-        fc.is_some_and(|c| c.allow_empty),
-        "allow-empty",
-        &mut applied,
-    );
+    let report_type = report_type.unwrap_or(ReportType::Cli);
+    let fail_on = fail_on.unwrap_or_default();
     announce_config("loc", fc, &applied, config::LOC_KEYS);
     let directory =
         directory.unwrap_or_else(|| missing_required("loc", "<DIRECTORY>", "directory", fc));

@@ -24,6 +24,8 @@
 * Consolidate base-game state locking while preserving reload and localization
   fallback behavior. (#761)
 * Share one parser quote-stripping helper across engine crates. (#763)
+* Consolidate CLI config-field selection while preserving flag precedence and
+  configuration announcements. (#759)
 
 ### 3.4.5
 
