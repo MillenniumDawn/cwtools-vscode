@@ -4,6 +4,10 @@
 
 * VSIX packaging now fails when staged server platforms are not in the release
   target list, keeping the release matrix and `VSIX_TARGETS` in sync. (#584)
+#### Extension
+
+* Load the generated graph stylesheet for webview tooltips instead of keeping
+  a copy of the dependency CSS. (#586)
 
 #### Engine
 

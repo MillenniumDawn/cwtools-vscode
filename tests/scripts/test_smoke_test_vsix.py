@@ -22,6 +22,7 @@ PACKAGE = {
 CONTENTS = [
     "bin/client/extension/extension.js",
     "bin/client/webview/graph.js",
+    "bin/client/webview/graph.css",
     "bin/client/webview/site.css",
     "media/icon.png",
     "l10n/bundle.l10n.test.json",
@@ -36,6 +37,7 @@ def write_vsix(
     platforms: list[str],
     *,
     include_entrypoint: bool = True,
+    include_graph_css: bool = True,
     include_flat: bool = False,
 ) -> None:
     with zipfile.ZipFile(path, "w") as archive:
@@ -46,6 +48,8 @@ def write_vsix(
             )
         for relative in CONTENTS:
             if relative.endswith("extension.js") and not include_entrypoint:
+                continue
+            if relative.endswith("graph.css") and not include_graph_css:
                 continue
             archive.writestr(f"extension/{relative}", "x\n")
         for platform in platforms:
@@ -71,6 +75,16 @@ def test_rejects_targeted_only_vsixes(
     write_vsix(tmp_path / "ext-linux-x64-1.0.0.vsix", ["linux-x64"])
 
     assert smoke_test_vsix.main([str(tmp_path), "linux-x64"]) == 1
+
+
+def test_rejects_a_missing_generated_graph_stylesheet(
+    smoke_test_vsix: ModuleType, tmp_path: Path
+) -> None:
+    write_vsix(tmp_path / "ext-1.0.0.vsix", ["linux-x64"], include_graph_css=False)
+
+    with pytest.raises(SystemExit) as caught:
+        smoke_test_vsix.main([str(tmp_path)])
+    assert caught.value.code == 1
 
 
 def test_rejects_a_flat_binary_in_a_universal_vsix(
