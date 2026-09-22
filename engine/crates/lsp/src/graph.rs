@@ -11,6 +11,9 @@ use crate::Backend;
 
 pub(crate) const MAX_GRAPH_NODES: usize = 500;
 
+const MAX_GRAPH_EDGES: usize = MAX_GRAPH_NODES * 8;
+const MAX_GRAPH_USE_SITES_PER_NODE: usize = 64;
+
 const SERVER_NOT_INITIALIZED: i64 = -32002;
 
 const MAX_LABEL_CHARS: usize = 60;
@@ -135,8 +138,14 @@ pub(crate) struct GraphEntity {
 
 pub(crate) trait GraphSource {
     fn instances(&self, type_name: &str) -> Vec<GraphEntity>;
-    fn use_sites(&self, type_name: &str, name: &str) -> Vec<(String, SourceLocation)>;
+    fn use_sites(&self, type_name: &str, name: &str, limit: usize) -> GraphUseSites;
     fn instances_in_file(&self, file_uri: &str) -> Vec<GraphEntity>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GraphUseSites {
+    pub(crate) sites: Vec<(String, SourceLocation)>,
+    pub(crate) omitted: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -145,6 +154,8 @@ pub(crate) struct GraphRequest {
     pub(crate) depth: u32,
     pub(crate) related_types: Vec<String>,
     pub(crate) max_nodes: usize,
+    pub(crate) max_edges: usize,
+    pub(crate) max_use_sites_per_node: usize,
     pub(crate) workspace_prefix: Option<Arc<str>>,
 }
 
@@ -154,26 +165,46 @@ pub(crate) struct GraphBuild {
     pub(crate) seed_total: usize,
     pub(crate) omitted: usize,
     pub(crate) cap: usize,
+    pub(crate) omitted_use_sites: usize,
+    pub(crate) use_site_cap: usize,
+    pub(crate) edge_cap_reached: bool,
+    pub(crate) edge_cap: usize,
 }
 
 impl GraphBuild {
     pub(crate) fn truncated(&self) -> bool {
-        self.omitted > 0
+        self.omitted > 0 || self.omitted_use_sites > 0 || self.edge_cap_reached
     }
 
     pub(crate) fn add_truncation_notice(&mut self, entity_type: &str) {
         if !self.truncated() {
             return;
         }
-        let detail = GraphNodeDetail {
-            key: "truncated".to_string(),
-            values: vec![format!(
+        let mut values = Vec::new();
+        if self.omitted > 0 {
+            values.push(format!(
                 "showing {} of {} nodes (cap {}); {} {entity_type} instance(s) matched",
                 self.nodes.len(),
                 self.nodes.len() + self.omitted,
                 self.cap,
                 self.seed_total,
-            )],
+            ));
+        }
+        if self.omitted_use_sites > 0 {
+            values.push(format!(
+                "omitted {} use site(s) after applying the per-node cap of {}",
+                self.omitted_use_sites, self.use_site_cap,
+            ));
+        }
+        if self.edge_cap_reached {
+            values.push(format!(
+                "edge cap of {} reached; connections beyond it were not included",
+                self.edge_cap,
+            ));
+        }
+        let detail = GraphNodeDetail {
+            key: "truncated".to_string(),
+            values,
         };
         for node in &mut self.nodes {
             node.details.push(detail.clone());
@@ -187,22 +218,33 @@ enum Slot {
     Full,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum EdgeResult {
+    Added,
+    Ignored,
+    Full,
+}
+
 struct GraphBuilder {
     nodes: Vec<GraphNode>,
     entities: Vec<GraphEntity>,
     by_id: HashMap<String, usize>,
     edges: HashSet<(usize, usize)>,
     dropped: HashSet<String>,
+    edge_cap: usize,
+    edge_cap_reached: bool,
 }
 
 impl GraphBuilder {
-    fn new() -> Self {
+    fn new(edge_cap: usize) -> Self {
         Self {
             nodes: Vec::new(),
             entities: Vec::new(),
             by_id: HashMap::new(),
             edges: HashSet::new(),
             dropped: HashSet::new(),
+            edge_cap,
+            edge_cap_reached: false,
         }
     }
 
@@ -242,10 +284,27 @@ impl GraphBuilder {
         Slot::New(idx)
     }
 
-    fn add_edge(&mut self, from: usize, to: usize) {
-        if from == to || !self.edges.insert((from, to)) {
-            return;
+    fn existing_index(&self, entity: &GraphEntity) -> Option<usize> {
+        self.by_id.get(&entity.name.to_ascii_lowercase()).copied()
+    }
+
+    fn has_edge_capacity(&self) -> bool {
+        self.edges.len() < self.edge_cap
+    }
+
+    fn edge_would_add(&self, from: usize, to: usize) -> bool {
+        from != to && !self.edges.contains(&(from, to))
+    }
+
+    fn add_edge(&mut self, from: usize, to: usize) -> EdgeResult {
+        if !self.edge_would_add(from, to) {
+            return EdgeResult::Ignored;
         }
+        if !self.has_edge_capacity() {
+            self.edge_cap_reached = true;
+            return EdgeResult::Full;
+        }
+        self.edges.insert((from, to));
         let label = (self.entities[from].type_name != self.entities[to].type_name)
             .then(|| self.entities[to].type_name.clone());
         let key = self.nodes[to].id.clone();
@@ -254,6 +313,7 @@ impl GraphBuilder {
             is_outgoing: true,
             label,
         });
+        EdgeResult::Added
     }
 }
 
@@ -267,18 +327,77 @@ fn is_whole_file(entity: &GraphEntity) -> bool {
     entity.location.line == 1 && entity.location.col == 0 && entity.location.end == (1, 0)
 }
 
-fn innermost_owner(owners: &[GraphEntity], site: SourceLocation) -> Option<&GraphEntity> {
-    owners
-        .iter()
-        .filter(|e| contains_site(e, site))
-        .max_by_key(|e| (e.location.line, e.location.col))
-        .or_else(|| owners.iter().find(|e| is_whole_file(e)))
+/// Segment tree preserving the latest-start containing owner choice.
+struct OwnerIndex {
+    owners: Vec<GraphEntity>,
+    max_ends: Vec<Option<(u32, u16)>>,
+    leaf_count: usize,
+    whole_file_owner: Option<usize>,
+}
+
+impl OwnerIndex {
+    fn new(owners: Vec<GraphEntity>) -> Self {
+        let whole_file_order = owners.iter().position(is_whole_file);
+        let mut ordered: Vec<(usize, GraphEntity)> = owners.into_iter().enumerate().collect();
+        ordered.sort_by_key(|(order, entity)| (entity.location.line, entity.location.col, *order));
+        let whole_file_owner = whole_file_order
+            .and_then(|order| ordered.iter().position(|(original, _)| *original == order));
+        let owners: Vec<GraphEntity> = ordered.into_iter().map(|(_, entity)| entity).collect();
+        let leaf_count = owners.len().next_power_of_two();
+        let mut max_ends = vec![None; leaf_count * 2];
+        for (idx, owner) in owners.iter().enumerate() {
+            max_ends[leaf_count + idx] = Some(owner.location.end);
+        }
+        for idx in (1..leaf_count).rev() {
+            max_ends[idx] = match (max_ends[idx * 2], max_ends[idx * 2 + 1]) {
+                (Some(left), Some(right)) => Some(left.max(right)),
+                (left, right) => left.or(right),
+            };
+        }
+        Self {
+            owners,
+            max_ends,
+            leaf_count,
+            whole_file_owner,
+        }
+    }
+
+    fn innermost_owner(&self, site: SourceLocation) -> Option<&GraphEntity> {
+        let at = (site.line, site.col);
+        let before_site = self
+            .owners
+            .partition_point(|owner| (owner.location.line, owner.location.col) <= at);
+        self.rightmost_containing(1, 0, self.leaf_count, before_site, site)
+            .map(|idx| &self.owners[idx])
+            .or_else(|| self.whole_file_owner.map(|idx| &self.owners[idx]))
+    }
+
+    fn rightmost_containing(
+        &self,
+        node: usize,
+        start: usize,
+        end: usize,
+        before_site: usize,
+        site: SourceLocation,
+    ) -> Option<usize> {
+        let at = (site.line, site.col);
+        if start >= before_site || self.max_ends[node].is_none_or(|max_end| max_end < at) {
+            return None;
+        }
+        if end - start == 1 {
+            return contains_site(&self.owners[start], site).then_some(start);
+        }
+        let middle = start + (end - start) / 2;
+        self.rightmost_containing(node * 2 + 1, middle, end, before_site, site)
+            .or_else(|| self.rightmost_containing(node * 2, start, middle, before_site, site))
+    }
 }
 
 pub(crate) fn build_graph<S: GraphSource + ?Sized>(src: &S, req: &GraphRequest) -> GraphBuild {
-    let mut builder = GraphBuilder::new();
+    let mut builder = GraphBuilder::new(req.max_edges);
     let mut queue: VecDeque<(usize, u32)> = VecDeque::new();
     let mut seed_total = 0;
+    let mut omitted_use_sites = 0;
     let seed_budget = req.max_nodes.div_ceil(2).max(1);
 
     let mut seed_types = vec![req.entity_type.clone()];
@@ -307,8 +426,8 @@ pub(crate) fn build_graph<S: GraphSource + ?Sized>(src: &S, req: &GraphRequest) 
         }
     }
 
-    let mut file_cache: HashMap<String, Vec<GraphEntity>> = HashMap::new();
-    while let Some((idx, level)) = queue.pop_front() {
+    let mut file_cache: HashMap<String, OwnerIndex> = HashMap::new();
+    'walk: while let Some((idx, level)) = queue.pop_front() {
         if level >= req.depth {
             continue;
         }
@@ -316,23 +435,40 @@ pub(crate) fn build_graph<S: GraphSource + ?Sized>(src: &S, req: &GraphRequest) 
             let e = &builder.entities[idx];
             (e.type_name.clone(), e.name.clone())
         };
-        for (file_uri, site) in src.use_sites(&type_name, &name) {
+        let use_sites = src.use_sites(&type_name, &name, req.max_use_sites_per_node);
+        omitted_use_sites += use_sites.omitted;
+        for (file_uri, site) in use_sites.sites {
             let owners = file_cache
                 .entry(file_uri.clone())
-                .or_insert_with(|| src.instances_in_file(&file_uri));
-            let Some(owner) = innermost_owner(owners, site) else {
+                .or_insert_with(|| OwnerIndex::new(src.instances_in_file(&file_uri)));
+            let Some(owner) = owners.innermost_owner(site) else {
                 continue;
             };
             if !type_allowed(req, &owner.type_name) {
                 continue;
             }
             let owner = owner.clone();
-            match builder.push(owner, req, req.max_nodes) {
-                Slot::New(owner_idx) => {
-                    queue.push_back((owner_idx, level + 1));
-                    builder.add_edge(owner_idx, idx);
+            if let Some(owner_idx) = builder.existing_index(&owner) {
+                if builder.add_edge(owner_idx, idx) == EdgeResult::Full {
+                    break 'walk;
                 }
-                Slot::Existing(owner_idx) => builder.add_edge(owner_idx, idx),
+                continue;
+            }
+            if !builder.has_edge_capacity() {
+                builder.edge_cap_reached = true;
+                break 'walk;
+            }
+            match builder.push(owner, req, req.max_nodes) {
+                Slot::New(owner_idx) => match builder.add_edge(owner_idx, idx) {
+                    EdgeResult::Added => queue.push_back((owner_idx, level + 1)),
+                    EdgeResult::Ignored => {}
+                    EdgeResult::Full => break 'walk,
+                },
+                Slot::Existing(owner_idx) => {
+                    if builder.add_edge(owner_idx, idx) == EdgeResult::Full {
+                        break 'walk;
+                    }
+                }
                 Slot::Full => {}
             }
         }
@@ -343,6 +479,10 @@ pub(crate) fn build_graph<S: GraphSource + ?Sized>(src: &S, req: &GraphRequest) 
         seed_total,
         omitted: builder.dropped.len(),
         cap: req.max_nodes,
+        omitted_use_sites,
+        use_site_cap: req.max_use_sites_per_node,
+        edge_cap_reached: builder.edge_cap_reached,
+        edge_cap: req.max_edges,
     }
 }
 
@@ -427,8 +567,17 @@ impl GraphSource for BackendGraphSource<'_> {
             .collect()
     }
 
-    fn use_sites(&self, type_name: &str, name: &str) -> Vec<(String, SourceLocation)> {
-        crate::navigation::key_sites(self.backend.collect_use_sites(type_name, name))
+    fn use_sites(&self, type_name: &str, name: &str, limit: usize) -> GraphUseSites {
+        let sites = self.backend.collect_use_sites(type_name, name);
+        let omitted = sites.len().saturating_sub(limit);
+        GraphUseSites {
+            sites: sites
+                .into_iter()
+                .take(limit)
+                .map(|site| (site.file.to_string(), site.key))
+                .collect(),
+            omitted,
+        }
     }
 
     fn instances_in_file(&self, file_uri: &str) -> Vec<GraphEntity> {
@@ -544,6 +693,8 @@ impl Backend {
             depth: u32::try_from(depth).unwrap_or(u32::MAX),
             related_types,
             max_nodes: MAX_GRAPH_NODES,
+            max_edges: MAX_GRAPH_EDGES,
+            max_use_sites_per_node: MAX_GRAPH_USE_SITES_PER_NODE,
             workspace_prefix: self.state.config.read().workspace_prefix.clone(),
         };
 
@@ -566,8 +717,14 @@ impl Backend {
                 .log_message(
                     tower_lsp::lsp_types::MessageType::WARNING,
                     format!(
-                        "getGraphData({}, depth {}): capped at {} nodes, {} omitted",
-                        req.entity_type, req.depth, MAX_GRAPH_NODES, build.omitted
+                        "getGraphData({}, depth {}): truncated: {} node(s) omitted, \
+                         {} use site(s) omitted, edge cap {} reached: {}",
+                        req.entity_type,
+                        req.depth,
+                        build.omitted,
+                        build.omitted_use_sites,
+                        build.edge_cap,
+                        build.edge_cap_reached,
                     ),
                 )
                 .await;
@@ -577,6 +734,8 @@ impl Backend {
             depth = req.depth,
             nodes = build.nodes.len(),
             omitted = build.omitted,
+            omitted_use_sites = build.omitted_use_sites,
+            edge_cap_reached = build.edge_cap_reached,
             "getGraphData"
         );
 
@@ -669,11 +828,14 @@ mod tests {
                 .collect()
         }
 
-        fn use_sites(&self, type_name: &str, name: &str) -> Vec<(String, SourceLocation)> {
-            self.sites
-                .get(&(type_name.to_string(), name.to_ascii_lowercase()))
-                .cloned()
-                .unwrap_or_default()
+        fn use_sites(&self, type_name: &str, name: &str, limit: usize) -> GraphUseSites {
+            let sites = self
+                .sites
+                .get(&(type_name.to_string(), name.to_ascii_lowercase()));
+            GraphUseSites {
+                sites: sites.into_iter().flatten().take(limit).cloned().collect(),
+                omitted: sites.map_or(0, |sites| sites.len().saturating_sub(limit)),
+            }
         }
 
         fn instances_in_file(&self, file_uri: &str) -> Vec<GraphEntity> {
@@ -691,6 +853,8 @@ mod tests {
             depth,
             related_types: Vec::new(),
             max_nodes: MAX_GRAPH_NODES,
+            max_edges: MAX_GRAPH_EDGES,
+            max_use_sites_per_node: MAX_GRAPH_USE_SITES_PER_NODE,
             workspace_prefix: None,
         }
     }
@@ -719,6 +883,42 @@ mod tests {
         }
         out.sort();
         out
+    }
+
+    fn edge_builder(edge_cap: usize) -> GraphBuilder {
+        let req = request("focus", 1);
+        let mut builder = GraphBuilder::new(edge_cap);
+        for name in ["a", "b", "c"] {
+            assert!(matches!(
+                builder.push(
+                    entity("focus", name, "file:///f.txt", loc(1, 0, 10, 1)),
+                    &req,
+                    3,
+                ),
+                Slot::New(_)
+            ));
+        }
+        builder
+    }
+
+    #[test]
+    fn test_graph_builder_enforces_edge_cap() {
+        let mut zero = edge_builder(0);
+        assert_eq!(zero.add_edge(0, 1), EdgeResult::Full);
+        assert!(zero.edge_cap_reached);
+        assert!(zero.edges.is_empty());
+        assert!(zero.nodes.iter().all(|node| node.references.is_empty()));
+
+        let mut full = edge_builder(1);
+        assert_eq!(full.add_edge(0, 1), EdgeResult::Added);
+        assert_eq!(full.add_edge(0, 1), EdgeResult::Ignored);
+        assert_eq!(full.add_edge(0, 0), EdgeResult::Ignored);
+        assert!(!full.edge_cap_reached);
+        assert_eq!(full.add_edge(1, 2), EdgeResult::Full);
+        assert!(full.edge_cap_reached);
+        assert_eq!(full.edges.len(), 1);
+        assert_eq!(full.nodes[0].references.len(), 1);
+        assert!(full.nodes[1].references.is_empty());
     }
 
     #[test]
@@ -1011,6 +1211,143 @@ mod tests {
         let build = build_graph(&src, &request("focus", 2));
         assert_eq!(build.nodes.len(), 1);
         assert_eq!(build.seed_total, 2);
+    }
+
+    #[test]
+    fn test_graph_bounds_dense_use_sites_and_reports_truncation() {
+        let mut entities = vec![entity(
+            "focus",
+            "root",
+            "file:///root.txt",
+            loc(1, 0, 10, 1),
+        )];
+        for i in 0..8 {
+            entities.push(entity(
+                "owner",
+                &format!("owner_{i}"),
+                &format!("file:///owners/{i}.txt"),
+                loc(1, 0, 10, 1),
+            ));
+        }
+        let mut src = FakeSource::with_entities(entities);
+        for i in 0..8 {
+            src.add_site(
+                "focus",
+                "root",
+                &format!("file:///owners/{i}.txt"),
+                loc(5, 0, 5, 4),
+            );
+        }
+        let mut req = request("focus", 2);
+        req.max_nodes = 20;
+        req.max_edges = 20;
+        req.max_use_sites_per_node = 3;
+
+        let mut build = build_graph(&src, &req);
+        assert_eq!(build.nodes.len(), 4);
+        assert_eq!(edges(&build).len(), 3);
+        assert_eq!(build.omitted_use_sites, 5);
+        assert!(!build.edge_cap_reached);
+        assert!(build.truncated());
+
+        build.add_truncation_notice("focus");
+        let Some(notice) = build.nodes[0]
+            .details
+            .iter()
+            .find(|detail| detail.key == "truncated")
+        else {
+            panic!("truncation must be visible in graph details");
+        };
+        assert_eq!(
+            notice.values,
+            ["omitted 5 use site(s) after applying the per-node cap of 3"]
+        );
+    }
+
+    #[test]
+    fn test_graph_edge_budget_stops_dense_walk_and_reports_truncation() {
+        let mut entities = vec![entity(
+            "focus",
+            "root",
+            "file:///root.txt",
+            loc(1, 0, 10, 1),
+        )];
+        for i in 0..8 {
+            entities.push(entity(
+                "owner",
+                &format!("owner_{i}"),
+                &format!("file:///owners/{i}.txt"),
+                loc(1, 0, 10, 1),
+            ));
+        }
+        let mut src = FakeSource::with_entities(entities);
+        for i in 0..8 {
+            src.add_site(
+                "focus",
+                "root",
+                &format!("file:///owners/{i}.txt"),
+                loc(5, 0, 5, 4),
+            );
+        }
+        let mut req = request("focus", 2);
+        req.max_nodes = 20;
+        req.max_edges = 3;
+        req.max_use_sites_per_node = 8;
+
+        let mut build = build_graph(&src, &req);
+        assert_eq!(build.nodes.len(), 4);
+        assert_eq!(edges(&build).len(), 3);
+        assert_eq!(build.omitted_use_sites, 0);
+        assert!(build.edge_cap_reached);
+        assert!(build.truncated());
+
+        build.add_truncation_notice("focus");
+        let Some(notice) = build.nodes[0]
+            .details
+            .iter()
+            .find(|detail| detail.key == "truncated")
+        else {
+            panic!("truncation must be visible in graph details");
+        };
+        assert_eq!(
+            notice.values,
+            ["edge cap of 3 reached; connections beyond it were not included"]
+        );
+    }
+
+    #[test]
+    fn test_graph_deduplicates_and_ignores_self_edges_without_spending_edge_budget() {
+        let mut src = FakeSource::with_entities(vec![
+            entity("focus", "a", "file:///f.txt", loc(1, 0, 10, 1)),
+            entity("focus", "b", "file:///f.txt", loc(11, 0, 20, 1)),
+        ]);
+        src.add_site("focus", "a", "file:///f.txt", loc(15, 0, 15, 1));
+        src.add_site("focus", "a", "file:///f.txt", loc(15, 0, 15, 1));
+        src.add_site("focus", "a", "file:///f.txt", loc(5, 0, 5, 1));
+        let mut req = request("focus", 2);
+        req.max_edges = 1;
+
+        let build = build_graph(&src, &req);
+        assert_eq!(edges(&build), [("b".to_string(), "a".to_string())]);
+        assert!(!build.edge_cap_reached);
+        assert!(!build.truncated());
+    }
+
+    #[test]
+    fn test_owner_index_keeps_innermost_overlap_and_whole_file_fallback() {
+        let index = OwnerIndex::new(vec![
+            entity("history", "whole_file", "file:///f.txt", loc(1, 0, 1, 0)),
+            entity("focus", "outer", "file:///f.txt", loc(1, 0, 100, 1)),
+            entity("focus", "overlap", "file:///f.txt", loc(3, 0, 20, 1)),
+            entity("focus", "inner", "file:///f.txt", loc(10, 0, 15, 1)),
+            entity("focus", "later", "file:///f.txt", loc(12, 0, 90, 1)),
+        ]);
+        let owner_at = |site| index.innermost_owner(site).map(|owner| owner.name.as_str());
+
+        assert_eq!(owner_at(loc(11, 0, 11, 1)), Some("inner"));
+        assert_eq!(owner_at(loc(13, 0, 13, 1)), Some("later"));
+        assert_eq!(owner_at(loc(95, 0, 95, 1)), Some("outer"));
+        assert_eq!(owner_at(loc(150, 0, 150, 1)), Some("whole_file"));
     }
 
     #[test]

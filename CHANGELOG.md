@@ -18,6 +18,9 @@
 
 #### Engine
 
+* Graph construction now bounds dense expansion to 4,000 edges and 64 use sites
+  per expanded node, reports resulting omissions in graph details, and indexes
+  per-file owner lookup. (#570)
 * Type-keyed fields such as `<resource> = float` now reject unknown keys once
   the type index is complete, so a fake resource in state history is flagged.
   (#766)
