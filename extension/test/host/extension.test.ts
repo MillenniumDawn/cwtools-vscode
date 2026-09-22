@@ -595,6 +595,60 @@ suite("GraphPanel — UI integration", function () {
 		});
 	});
 
+	for (const [name, json] of [
+		["malformed JSON", "{broken"],
+		["elements without IDs", '{"elements":[{"data":{}}]}'],
+	]) {
+		test(`reports ${name} from the real graph import command`, async function () {
+			await setupPanel();
+			fs.writeFileSync(tempFile, json, "utf8");
+			sandbox.stub(vscode.window, "showOpenDialog").resolves([
+				vscode.Uri.file(tempFile),
+			]);
+			const error = sandbox.stub(vscode.window, "showErrorMessage").resolves();
+
+			await vscode.commands.executeCommand("cwtools.graphFromJson");
+
+			assert.ok(await waitUntil(() => error.called, 30_000));
+			assert.strictEqual(error.callCount, 1);
+			assert.strictEqual(
+				error.firstCall.args[0],
+				'CWTools: couldn\'t import "graph.json": it isn\'t valid Cytoscape graph JSON.',
+			);
+			assert.strictEqual(
+				await gp.GraphPanel.currentPanel!.checkCytoscapeRendered(),
+				false,
+			);
+		});
+	}
+
+	for (const [command, kind] of [
+		["cwtools.saveGraphImage", "an image"],
+		["cwtools.saveGraphJson", "a JSON file"],
+	]) {
+		test(`${command} reports an unavailable graph through the webview`, async function () {
+			await setupPanel();
+			const error = sandbox.stub(vscode.window, "showErrorMessage").resolves();
+			const save = sandbox.stub(vscode.window, "showSaveDialog").resolves();
+			assert.ok(
+				await waitUntil(
+					() => gp.GraphPanel.currentPanel!.getState() === gp.State.ClientReady,
+					30_000,
+				),
+			);
+
+			await vscode.commands.executeCommand(command);
+
+			assert.ok(await waitUntil(() => error.called, 30_000));
+			assert.strictEqual(error.callCount, 1);
+			assert.strictEqual(
+				error.firstCall.args[0],
+				`CWTools: no graph is available to export as ${kind}.`,
+			);
+			assert.strictEqual(save.called, false);
+		});
+	}
+
 	// Whether a CSP source list actually permits a URI. cspSource is a list of
 	// source expressions, not one origin ("'self' https://*.vscode-cdn.net"), and
 	// the resource host is a subdomain of that wildcard, so comparing prefixes is

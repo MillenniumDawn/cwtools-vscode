@@ -4,6 +4,8 @@
 
 * CI Cargo tools are pinned and each executable is cached by version separately
   from the Cargo registry. (#510)
+* Test graph import errors and unavailable exports through the bundled webview.
+  (#565)
 * VSIX packaging now fails when staged server platforms are not in the release
   target list, keeping the release matrix and `VSIX_TARGETS` in sync. (#584)
 
