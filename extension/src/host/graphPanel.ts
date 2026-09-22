@@ -311,11 +311,14 @@ export class GraphPanel {
 		const styleUri = this._panel.webview.asWebviewUri(
 			vscode.Uri.file(path.join(this._webviewRootPath, "site.css")),
 		);
+		const graphStyleUri = this._panel.webview.asWebviewUri(
+			vscode.Uri.file(path.join(this._webviewRootPath, "graph.css")),
+		);
 
 		const nonce = this.getNonce();
 		// cspSource, not the pre-1.55 `vscode-resource:` scheme: asWebviewUri now
 		// returns an https://…vscode-cdn.net origin, which that scheme does not
-		// cover, so site.css was blocked and #cy lost its flex sizing.
+		// cover, so the webview styles were blocked and #cy lost its flex sizing.
 		const cspSource = this._panel.webview.cspSource;
 		return `
         <!DOCTYPE html>
@@ -325,6 +328,7 @@ export class GraphPanel {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
    <meta http-equiv="Content-Security-Policy" content="default-src 'nonce-${nonce}'; img-src ${cspSource} data:; script-src 'nonce-${nonce}' 'strict-dynamic'; base-uri 'self'; object-src 'none'; form-action 'none'; style-src ${cspSource} 'unsafe-inline'">
            <link href="${styleUri.toString()}" rel="stylesheet" type="text/css" nonce="${nonce}" />
+           <link href="${graphStyleUri.toString()}" rel="stylesheet" type="text/css" nonce="${nonce}" />
     </head>
 <body>
     <div class="vbox viewport body-content">

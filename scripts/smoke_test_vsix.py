@@ -63,6 +63,7 @@ def check_package(root: Path, vsix: Path) -> None:
     # vsce normalizes the root README and changelog names in the archive.
     for relative in [
         "bin/client/webview/graph.js",
+        "bin/client/webview/graph.css",
         "bin/client/webview/site.css",
         "readme.md",
         "changelog.md",

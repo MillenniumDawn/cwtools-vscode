@@ -333,16 +333,25 @@ suite("GraphPanel Tests", function () {
 		sandbox.stub(vscode.window, "showSaveDialog").resolves(undefined);
 		try {
 			await vscode.commands.executeCommand("cwtools.saveGraphJson");
-			assert.ok(await waitUntil(() => exported !== undefined), "graph export should arrive");
+			assert.ok(
+				await waitUntil(() => exported !== undefined),
+				"graph export should arrive",
+			);
 			assert.ok(exported);
 			const graph = JSON.parse(exported) as { elements: ElementsDefinition };
-			assert.ok(graph.elements.edges, "exported graph should contain the expected edge");
+			assert.ok(
+				graph.elements.edges,
+				"exported graph should contain the expected edge",
+			);
 			assert.deepStrictEqual(
 				graph.elements.nodes.map((node) => node.data.id).sort(),
 				["test1", "test2"],
 			);
 			assert.deepStrictEqual(
-				graph.elements.edges.map((edge) => [edge.data.source, edge.data.target]),
+				graph.elements.edges.map((edge) => [
+					edge.data.source,
+					edge.data.target,
+				]),
 				[["test1", "test2"]],
 			);
 		} finally {
@@ -603,10 +612,11 @@ suite("GraphPanel — UI integration", function () {
 	};
 
 	// The CSP named the pre-1.55 `vscode-resource:` scheme while asWebviewUri
-	// returns an https://…vscode-cdn.net URI, so site.css was blocked and #cy lost
-	// the flex sizing that gives it height. Check the emitted href against the
-	// policy that is actually served rather than trusting the scheme name.
-	test("the webview CSP permits the stylesheet it links", async function () {
+	// returns an https://…vscode-cdn.net URI, so the webview styles were blocked
+	// and #cy lost the flex sizing that gives it height. Check both emitted hrefs
+	// against the policy that is actually served rather than trusting the scheme
+	// name.
+	test("the webview CSP permits both stylesheets it links", async function () {
 		await setupPanel();
 		const webview = gp.GraphPanel.currentPanel!["_panel"].webview;
 		const html = webview.html;
@@ -619,12 +629,30 @@ suite("GraphPanel — UI integration", function () {
 
 		const styleSrc = /style-src ([^;"]+)/.exec(csp)?.[1];
 		assert.ok(styleSrc, "CSP has no style-src directive");
-		const styleHref = /<link href="([^"]+)"/.exec(html)?.[1];
-		assert.ok(styleHref, "no stylesheet <link> found");
-		assert.ok(
-			cspPermits(styleSrc, styleHref),
-			`style-src "${styleSrc}" does not permit "${styleHref}", so the stylesheet is blocked`,
+		const styleHrefs = [...html.matchAll(/<link href="([^"]+)"/g)].map(
+			(match) => match[1],
 		);
+		assert.strictEqual(
+			styleHrefs.length,
+			2,
+			"webview should link both stylesheets",
+		);
+		assert.deepStrictEqual(
+			styleHrefs.filter((href) => href.endsWith("/site.css")).length,
+			1,
+			"webview should link the site stylesheet",
+		);
+		assert.deepStrictEqual(
+			styleHrefs.filter((href) => href.endsWith("/graph.css")).length,
+			1,
+			"webview should link the generated graph stylesheet",
+		);
+		for (const styleHref of styleHrefs) {
+			assert.ok(
+				cspPermits(styleSrc, styleHref),
+				`style-src "${styleSrc}" does not permit "${styleHref}", so the stylesheet is blocked`,
+			);
+		}
 	});
 
 	// The graph script is allowed by nonce, not by origin, so its own directive
