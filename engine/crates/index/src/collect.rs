@@ -1,4 +1,5 @@
 use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
+use cwtools_parser::unquote;
 use cwtools_rules::rules_types::{RuleSet, SkipRootKey, TypeDefinition};
 use cwtools_string_table::string_table::StringTable;
 use std::collections::{HashMap, HashSet};
@@ -6,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use crate::dynamic_values;
 use crate::{
     DefinedVariable, NormalizedPath, SourceLocation, TypeIndex, TypeInstance, check_path_dir_norm,
-    get_string_or_empty, leaf_value_string, unquote,
+    get_string_or_empty, leaf_value_string,
 };
 
 pub fn skip_root_key_matches(srk: &SkipRootKey, key: &str) -> bool {

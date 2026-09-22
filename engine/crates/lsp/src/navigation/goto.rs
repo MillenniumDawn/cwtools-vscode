@@ -1,6 +1,8 @@
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
+use cwtools_parser::unquote;
+
 use cwtools_info::PositionElement;
 use cwtools_info::ReferenceHint;
 
@@ -8,9 +10,7 @@ use crate::lines::DocLines;
 use crate::paths::{logical_path_from_uri, parse_uri};
 use crate::{Backend, RuleCursorInfo};
 
-use super::{
-    cwt_ref_at, dedup_locations, locations_at, member_pos_in_block, resolve_file_ref, unquote,
-};
+use super::{cwt_ref_at, dedup_locations, locations_at, member_pos_in_block, resolve_file_ref};
 
 impl Backend {
     pub(crate) fn type_ref_at_cursor(

@@ -1,5 +1,8 @@
 use cwtools_game::scope_engine::ScopeContext;
-use cwtools_parser::ast::{Child, Value};
+use cwtools_parser::{
+    ast::{Child, Value},
+    unquote,
+};
 use cwtools_rules::rules_types::*;
 use smallvec::SmallVec;
 use std::sync::LazyLock;
@@ -470,7 +473,7 @@ fn count_and_validate_children<'r>(
                 let leaf = &ast.arena.leaves[*idx as usize];
                 let mut keybuf: SmallVec<[u8; 24]> = SmallVec::new();
                 table.with_string(leaf.key.normal, |s| {
-                    keybuf.extend_from_slice(unquote_key(s).as_bytes())
+                    keybuf.extend_from_slice(unquote(s).as_bytes())
                 });
                 let key: &str = std::str::from_utf8(&keybuf).unwrap_or_default();
                 if key.eq_ignore_ascii_case(INLINE_SCRIPT) {

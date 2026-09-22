@@ -1,5 +1,8 @@
 use cwtools_game::scope_engine::ScopeContext;
-use cwtools_parser::ast::{Child, SourcePos, Value};
+use cwtools_parser::{
+    ast::{Child, SourcePos, Value},
+    unquote,
+};
 use cwtools_rules::rules_types::*;
 use cwtools_string_table::string_table::StringTable;
 use smallvec::SmallVec;
@@ -145,9 +148,7 @@ fn collect_loop_vars(
             let Child::Leaf(idx) = child else { continue };
             let leaf = &ast.arena.leaves[*idx as usize];
             let matches_key = table
-                .with_string(leaf.key.normal, |s| {
-                    unquote_key(s).eq_ignore_ascii_case(key)
-                })
+                .with_string(leaf.key.normal, |s| unquote(s).eq_ignore_ascii_case(key))
                 .unwrap_or(false);
             if matches_key {
                 let norm = with_leaf_value_str(&leaf.value, table, |name| {

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use tower_lsp::lsp_types::*;
 
+use cwtools_parser::unquote;
 use cwtools_string_table::string_table::StringTable;
 
 use crate::Backend;
@@ -666,12 +667,6 @@ pub fn build_doc_symbols(
         }
     }
     syms
-}
-
-pub(crate) fn unquote(s: &str) -> &str {
-    s.strip_prefix('"')
-        .and_then(|x| x.strip_suffix('"'))
-        .unwrap_or(s)
 }
 
 pub(crate) async fn locations_at(

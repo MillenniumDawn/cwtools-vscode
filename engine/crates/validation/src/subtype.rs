@@ -1,4 +1,7 @@
-use cwtools_parser::ast::{Child, ParsedFile, Value};
+use cwtools_parser::{
+    ast::{Child, ParsedFile, Value},
+    unquote,
+};
 use cwtools_rules::rules_types::*;
 use cwtools_string_table::string_table::StringTable;
 use rustc_hash::FxHashMap;
@@ -116,7 +119,7 @@ pub(crate) fn subtype_rules_match(
 
     for (k, group) in &groups {
         // `k` is loop-invariant; unquote it once instead of per child.
-        let k_unq = crate::common::unquote_key(k);
+        let k_unq = unquote(k);
         let mut count: i32 = 0;
         let mut any_match = false;
         for c in children {
@@ -126,7 +129,7 @@ pub(crate) fn subtype_rules_match(
                         let leaf = &ast.arena.leaves[*idx as usize];
                         if table
                             .with_string(leaf.key.normal, |s| {
-                                crate::common::unquote_key(s).eq_ignore_ascii_case(k_unq)
+                                unquote(s).eq_ignore_ascii_case(k_unq)
                             })
                             .unwrap_or(false)
                         {

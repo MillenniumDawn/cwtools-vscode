@@ -1,5 +1,8 @@
 use cwtools_game::scope_engine::ScopeContext;
-use cwtools_parser::ast::{SourcePos, Value};
+use cwtools_parser::{
+    ast::{SourcePos, Value},
+    unquote,
+};
 use cwtools_rules::rules_types::*;
 use cwtools_string_table::string_table::StringTable;
 
@@ -479,7 +482,7 @@ pub(crate) fn field_matches_value(
 
         (NewField::SpecificField(s), Value::String(t))
         | (NewField::SpecificField(s), Value::QString(t)) => table
-            .with_string(t.normal, |text| unquote_key(text).eq_ignore_ascii_case(s))
+            .with_string(t.normal, |text| unquote(text).eq_ignore_ascii_case(s))
             .unwrap_or(false),
         (NewField::SpecificField(s), Value::Bool(b)) => (s == "yes" && *b) || (s == "no" && !*b),
         (NewField::SpecificField(s), Value::Int(i)) => s == &i.to_string(),

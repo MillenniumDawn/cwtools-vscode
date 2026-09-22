@@ -13,7 +13,10 @@ pub(crate) use subtypes::*;
 pub(crate) use types::*;
 
 use crate::rules_types::*;
-use cwtools_parser::ast::{Child, ParsedFile, Value};
+use cwtools_parser::{
+    ast::{Child, ParsedFile, Value},
+    unquote,
+};
 use cwtools_string_table::string_table::StringTable;
 
 const FLOAT_MAX: f64 = 1e12;
@@ -373,19 +376,11 @@ pub(crate) fn extract_bracket_content(full: &str, prefix: &str) -> Option<String
     None
 }
 
-pub(crate) fn strip_quotes(s: &str) -> &str {
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        &s[1..s.len() - 1]
-    } else {
-        s
-    }
-}
-
 pub(crate) fn value_to_string(value: &Value, table: &StringTable) -> String {
     match value {
         Value::String(t) | Value::QString(t) => {
             let s = table.get_string(t.normal).unwrap_or_default();
-            strip_quotes(&s).to_string()
+            unquote(&s).to_string()
         }
         Value::Float(f) => f.to_string(),
         Value::Int(i) => i.to_string(),

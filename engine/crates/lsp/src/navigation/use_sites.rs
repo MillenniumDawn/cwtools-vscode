@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use cwtools_parser::ast::ParsedFile;
+use cwtools_parser::{ast::ParsedFile, unquote};
 use cwtools_rules::rules_types::{NewField, RootRule, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
 
 use crate::paths::logical_path_from_uri;
-
-use super::unquote;
 
 /// Walk open documents' ASTs for use sites of `instance_name`.
 ///

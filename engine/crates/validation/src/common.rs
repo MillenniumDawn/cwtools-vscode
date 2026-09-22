@@ -1,6 +1,7 @@
 use cwtools_game::scope_engine::ScopeContext;
 use cwtools_parser::ast::{Child, Leaf, ParsedFile, SourcePos, SourceRange, Value};
 use cwtools_parser::fix::SuggestedFix;
+use cwtools_parser::unquote;
 use cwtools_rules::rules_types::*;
 use cwtools_string_table::string_table::{StringTable, StringTokens};
 
@@ -162,7 +163,7 @@ pub(crate) fn child_key_matches(
             let leaf = &ast.arena.leaves[*idx as usize];
             table
                 .with_string(leaf.key.normal, |s| {
-                    unquote_key(s).eq_ignore_ascii_case(unquote_key(filter_key))
+                    unquote(s).eq_ignore_ascii_case(unquote(filter_key))
                 })
                 .unwrap_or(false)
         }
@@ -264,14 +265,6 @@ pub(crate) fn starts_with_ci(s: &str, prefix: &str) -> bool {
 pub(crate) fn ends_with_ci(s: &str, suffix: &str) -> bool {
     let (s, suffix) = (s.as_bytes(), suffix.as_bytes());
     s.len() >= suffix.len() && s[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
-}
-
-pub(crate) fn unquote_key(s: &str) -> &str {
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        &s[1..s.len() - 1]
-    } else {
-        s
-    }
 }
 
 pub(crate) fn leaf_value_to_string(value: &Value, table: &StringTable) -> String {

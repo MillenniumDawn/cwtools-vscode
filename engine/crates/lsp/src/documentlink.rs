@@ -1,7 +1,10 @@
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
-use cwtools_parser::ast::{Child, ParsedFile, Value};
+use cwtools_parser::{
+    ast::{Child, ParsedFile, Value},
+    unquote,
+};
 use cwtools_rules::rules_types::{NewField, Options, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::Prepared;
@@ -9,7 +12,7 @@ use cwtools_validation::position::value_rules_for_key;
 
 use crate::Backend;
 use crate::lines::DocLines;
-use crate::navigation::{unquote, value_col_in_line, value_start_after_eq};
+use crate::navigation::{value_col_in_line, value_start_after_eq};
 use crate::semantic::{block_rules_for, node_bodies, valueclause_bodies};
 
 const MAX_LINKS: usize = 200;
