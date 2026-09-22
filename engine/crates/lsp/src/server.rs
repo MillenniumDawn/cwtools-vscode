@@ -108,8 +108,11 @@ impl Backend {
     }
 
     /// Queues one notification body behind every notification already queued,
-    /// off tower-lsp's message pump (#470). Sending backpressures on a full
-    /// queue, which yields the pump rather than parking its thread.
+    /// off tower-lsp's message pump (#470). The transport reserves the slot when
+    /// it reads the notification, so a following request can snapshot the exact
+    /// preceding state even if the executor polls a later handler first.
+    /// Sending backpressures on a full queue, which yields the pump rather than
+    /// parking its thread.
     ///
     /// Runs the job inline when no worker is draining the queue — the unit
     /// tests' bare `DocumentState`, or a shutdown that has already dropped the
@@ -120,14 +123,16 @@ impl Backend {
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         let queue = &self.state.notifications;
-        if !queue.is_running() {
-            job.await;
-            return;
+        let reservation = crate::transport::claim_notification(queue);
+        if queue.is_running() {
+            reservation.send_background(Box::pin(job)).await;
+        } else {
+            reservation.send(Box::pin(job)).await;
         }
-        if let Err(returned) = queue.send(Box::pin(job)).await {
-            tracing::warn!("notification worker is gone; running the handler inline");
-            returned.0.await;
-        }
+    }
+
+    pub(crate) async fn wait_for_notifications(&self) {
+        crate::transport::wait_for_notifications(&self.state.notifications).await;
     }
 
     pub(crate) fn bump_info_revision(&self) {
@@ -790,6 +795,7 @@ impl Backend {
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        self.wait_for_notifications().await;
         self.initialize_impl(params).await
     }
 
@@ -852,6 +858,7 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        self.wait_for_notifications().await;
         Ok(())
     }
 
@@ -891,23 +898,27 @@ impl LanguageServer for Backend {
             .await;
     }
     async fn hover(&self, mut params: HoverParams) -> Result<Option<Hover>> {
+        self.wait_for_notifications().await;
         self.mark_activity();
         canonicalize_url(&mut params.text_document_position_params.text_document.uri);
         self.hover_impl(params).await
     }
 
     async fn code_lens(&self, mut params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        self.wait_for_notifications().await;
         self.mark_activity();
         canonicalize_url(&mut params.text_document.uri);
         self.code_lens_impl(params).await
     }
 
     async fn code_lens_resolve(&self, lens: CodeLens) -> Result<CodeLens> {
+        self.wait_for_notifications().await;
         self.mark_activity();
         self.code_lens_resolve_impl(lens).await
     }
 
     async fn completion(&self, mut params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document_position.text_document.uri);
         let mut response = self.completion_impl(params).await;
         if self
@@ -927,6 +938,7 @@ impl LanguageServer for Backend {
     }
 
     async fn completion_resolve(&self, item: CompletionItem) -> Result<CompletionItem> {
+        self.wait_for_notifications().await;
         Ok(self.completion_resolve_impl(item))
     }
 
@@ -934,12 +946,14 @@ impl LanguageServer for Backend {
         &self,
         mut params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
+        self.wait_for_notifications().await;
         self.mark_activity();
         canonicalize_url(&mut params.text_document_position_params.text_document.uri);
         self.goto_definition_impl(params).await
     }
 
     async fn references(&self, mut params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        self.wait_for_notifications().await;
         self.mark_activity();
         canonicalize_url(&mut params.text_document_position.text_document.uri);
         self.references_impl(params).await
@@ -949,6 +963,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
+        self.wait_for_notifications().await;
         self.mark_activity();
         canonicalize_url(&mut params.text_document.uri);
         self.document_symbol_impl(params).await
@@ -958,6 +973,7 @@ impl LanguageServer for Backend {
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
+        self.wait_for_notifications().await;
         self.mark_activity();
         self.symbol_impl(params).await
     }
@@ -966,6 +982,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: FoldingRangeParams,
     ) -> Result<Option<Vec<FoldingRange>>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.folding_range_impl(params).await
     }
@@ -974,6 +991,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: DocumentFormattingParams,
     ) -> Result<Option<Vec<TextEdit>>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.formatting_impl(params).await
     }
@@ -982,6 +1000,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: DocumentRangeFormattingParams,
     ) -> Result<Option<Vec<TextEdit>>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.range_formatting_impl(params).await
     }
@@ -990,6 +1009,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document_position_params.text_document.uri);
         self.document_highlight_impl(params).await
     }
@@ -998,6 +1018,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.selection_range_impl(params).await
     }
@@ -1006,6 +1027,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: DocumentLinkParams,
     ) -> Result<Option<Vec<DocumentLink>>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.document_link_impl(params).await
     }
@@ -1014,11 +1036,13 @@ impl LanguageServer for Backend {
         &self,
         mut params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.prepare_rename_impl(params).await
     }
 
     async fn rename(&self, mut params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document_position.text_document.uri);
         self.rename_impl(params).await
     }
@@ -1027,12 +1051,14 @@ impl LanguageServer for Backend {
         &self,
         mut params: CodeActionParams,
     ) -> Result<Option<CodeActionResponse>> {
+        self.wait_for_notifications().await;
         self.mark_activity();
         canonicalize_url(&mut params.text_document.uri);
         self.code_action_impl(params).await
     }
 
     async fn inlay_hint(&self, mut params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.inlay_hint_impl(params).await
     }
@@ -1041,6 +1067,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.semantic_tokens_full_impl(params).await
     }
@@ -1049,6 +1076,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: SemanticTokensDeltaParams,
     ) -> Result<Option<SemanticTokensFullDeltaResult>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.semantic_tokens_full_delta_impl(params).await
     }
@@ -1057,6 +1085,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.semantic_tokens_range_impl(params).await
     }
@@ -1065,6 +1094,7 @@ impl LanguageServer for Backend {
         &self,
         mut params: DocumentColorParams,
     ) -> Result<Vec<ColorInformation>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.document_color_impl(params).await
     }
@@ -1073,11 +1103,13 @@ impl LanguageServer for Backend {
         &self,
         mut params: ColorPresentationParams,
     ) -> Result<Vec<ColorPresentation>> {
+        self.wait_for_notifications().await;
         canonicalize_url(&mut params.text_document.uri);
         self.color_presentation_impl(params).await
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
+        self.wait_for_notifications().await;
         self.execute_command_impl(params).await
     }
 

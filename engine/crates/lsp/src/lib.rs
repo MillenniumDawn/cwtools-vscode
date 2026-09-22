@@ -92,7 +92,10 @@ pub fn run() {
             .finish();
             Server::new(stdin, stdout, socket)
                 .concurrency_level(transport::CONCURRENCY_LEVEL)
-                .serve(transport::SpawnRequests::new(service))
+                .serve(transport::SpawnRequests::with_notifications(
+                    service,
+                    state.notifications.clone(),
+                ))
                 .await;
             tracing::info!("LSP server shut down (stdin closed)");
         });
