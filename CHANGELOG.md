@@ -35,6 +35,7 @@
 * Share one parser quote-stripping helper across engine crates. (#763)
 * Consolidate CLI config-field selection while preserving flag precedence and
   configuration announcements. (#759)
+* Remove the deprecated workspace walker while retaining discovery coverage for sorting, ignore globs, symlinks, and file budgets. (#758)
 
 ### 3.4.5
 
