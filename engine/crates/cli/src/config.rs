@@ -222,6 +222,37 @@ pub(crate) fn pick_flag_default(
     true
 }
 
+macro_rules! pick_fields {
+    ($fc:ident, $applied:ident; $( $kind:ident $name:ident => $field:ident $key:literal; )*) => {
+        $( $crate::config::pick_fields!(@$kind $fc, $applied, $name, $field, $key); )*
+    };
+    (@option $fc:ident, $applied:ident, $name:ident, $field:ident, $key:literal) => {
+        let $name = $crate::config::pick(
+            $name, $fc.and_then(|c| c.$field.clone()), $key, &mut $applied,
+        );
+    };
+    (@list $fc:ident, $applied:ident, $name:ident, $field:ident, $key:literal) => {
+        let $name = $crate::config::pick_list(
+            $name,
+            $fc.map(|c| c.$field.clone()).unwrap_or_default(),
+            $key,
+            &mut $applied,
+        );
+    };
+    (@flag $fc:ident, $applied:ident, $name:ident, $field:ident, $key:literal) => {
+        let $name = $crate::config::pick_flag(
+            $name, $fc.is_some_and(|c| c.$field), $key, &mut $applied,
+        );
+    };
+    (@default $fc:ident, $applied:ident, $name:ident, $field:ident, $key:literal) => {
+        let $name = $crate::config::pick_flag_default(
+            $name, $fc.and_then(|c| c.$field), $key, &mut $applied,
+        );
+    };
+}
+
+pub(crate) use pick_fields;
+
 // ── Schema ───────────────────────────────────────────────────────────────────
 
 fn from_entries(path: PathBuf, dir: &Path, entries: Vec<Entry>) -> Result<FileConfig, ConfigError> {
@@ -986,6 +1017,48 @@ allow-empty = true
                 assert!(KEYS.contains(key), "{name} reads unknown key `{key}`");
             }
         }
+    }
+
+    #[test]
+    fn pick_fields_preserves_precedence_order_and_key_names() {
+        let cfg = FileConfig {
+            game: Some("file".to_string()),
+            ignore_files: vec!["from-file".to_string()],
+            case_sensitive_files: Some(false),
+            allow_empty: true,
+            only_codes: vec!["CW107".to_string()],
+            ..FileConfig::default()
+        };
+        let fc = Some(&cfg);
+        let mut applied = Vec::new();
+        let game = Some("from-flag".to_string());
+        let ignore_files = Vec::new();
+        let case_sensitive_files = None;
+        let allow_empty = false;
+        let only_codes = Vec::new();
+
+        pick_fields!(fc, applied;
+            option game => game "game";
+            list ignore_files => ignore_files "ignore-files";
+            default case_sensitive_files => case_sensitive_files "case-sensitive-files";
+            flag allow_empty => allow_empty "allow-empty";
+            list only_codes => only_codes "only-codes";
+        );
+
+        assert_eq!(game.as_deref(), Some("from-flag"));
+        assert_eq!(ignore_files, ["from-file"]);
+        assert!(!case_sensitive_files);
+        assert!(allow_empty);
+        assert_eq!(only_codes, ["CW107"]);
+        assert_eq!(
+            applied,
+            [
+                "ignore-files",
+                "case-sensitive-files",
+                "allow-empty",
+                "only-codes"
+            ]
+        );
     }
 
     #[test]

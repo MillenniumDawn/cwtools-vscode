@@ -27,29 +27,11 @@ pub(super) fn run(args: FormatArgs) {
     let file_cfg = load_config(config.as_deref(), directory.as_deref());
     let mut applied: Vec<&'static str> = Vec::new();
     let fc = file_cfg.as_ref();
-    let directory = crate::config::pick(
-        directory,
-        fc.and_then(|c| c.directory.clone()),
-        "directory",
-        &mut applied,
-    );
-    let ignore_files = crate::config::pick_list(
-        ignore_files,
-        fc.map(|c| c.ignore_files.clone()).unwrap_or_default(),
-        "ignore-files",
-        &mut applied,
-    );
-    let ignore_dirs = crate::config::pick_list(
-        ignore_dirs,
-        fc.map(|c| c.ignore_dirs.clone()).unwrap_or_default(),
-        "ignore-dirs",
-        &mut applied,
-    );
-    let allow_empty = crate::config::pick_flag(
-        allow_empty,
-        fc.is_some_and(|c| c.allow_empty),
-        "allow-empty",
-        &mut applied,
+    crate::config::pick_fields!(fc, applied;
+        option directory => directory "directory";
+        list ignore_files => ignore_files "ignore-files";
+        list ignore_dirs => ignore_dirs "ignore-dirs";
+        flag allow_empty => allow_empty "allow-empty";
     );
     announce_config("format", fc, &applied, crate::config::FORMAT_KEYS);
 

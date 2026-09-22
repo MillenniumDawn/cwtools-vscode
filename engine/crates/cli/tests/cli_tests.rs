@@ -2597,6 +2597,60 @@ fn test_config_supplies_game_directory_and_rules() {
 }
 
 #[test]
+fn test_config_announce_lists_all_applied_keys_in_order() {
+    let body = format!(
+        "{}no-vanilla-cache = true\n\
+refresh-vanilla-cache = true\n\
+report-type = \"csv\"\n\
+min-severity = \"info\"\n\
+fail-on = \"none\"\n\
+ignore-files = [\"never-match\"]\n\
+ignore-dirs = [\"never-match\"]\n\
+loc-languages = [\"english\"]\n\
+case-sensitive-files = false\n\
+ignore-codes = [\"CW107\"]\n\
+only-codes = [\"CW107\"]\n\
+allow-empty = true\n",
+        config_body()
+    );
+    let tmp = config_mod(&body);
+    let output = cwtools()
+        .arg("validate")
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // macOS's /var is a symlink to /private/var, and the child resolves the
+    // config from its canonical current directory. Keep the exact announcement
+    // assertion while matching that platform's path spelling; Windows keeps
+    // the lexical path because `canonicalize` adds an extended-length prefix.
+    #[cfg(unix)]
+    let config_path = std::fs::canonicalize(tmp.path().join("cwtools.toml")).unwrap();
+    #[cfg(not(unix))]
+    let config_path = tmp.path().join("cwtools.toml");
+    let expected = format!(
+        "Using config {} (applied: game, directory, rules, no-vanilla-cache, \
+         refresh-vanilla-cache, case-sensitive-files, report-type, min-severity, \
+         fail-on, ignore-files, ignore-dirs, loc-languages, ignore-codes, \
+         only-codes, allow-empty)",
+        config_path.display()
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        stderr
+            .lines()
+            .find(|line| line.starts_with("Using config ")),
+        Some(expected.as_str())
+    );
+}
+
+#[test]
 fn test_config_is_discovered_by_walking_up_from_the_directory() {
     let tmp = config_mod(&config_body());
     // Run from a directory well below the config, with no --config.
