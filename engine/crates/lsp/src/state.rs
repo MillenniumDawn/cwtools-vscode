@@ -185,7 +185,27 @@ impl RuleData {
     }
 }
 
-/// LOCK ORDER: when holding more than one guard, acquire in this order —
+/// Mutable base-game payload. Its pieces are staged and consumed at different
+/// times, so a merge takes only the pending index while retaining the auxiliary
+/// data for later workspace and localization rebuilds.
+#[derive(Default)]
+pub(crate) struct VanillaState {
+    #[allow(clippy::type_complexity)]
+    pub(crate) index: Option<HashMap<String, Vec<(Arc<str>, TypeInstance)>>>,
+    /// URIs from the most recent merge. Kept through clear/reload so the next
+    /// merge can remove their previous provenance from the type index.
+    pub(crate) merged_uris: HashSet<Arc<str>>,
+    #[allow(clippy::type_complexity)]
+    pub(crate) loc_keys: Option<Vec<(String, Vec<String>)>>,
+    pub(crate) file_paths: Option<Vec<String>>,
+    pub(crate) var_names: Option<Vec<String>>,
+    pub(crate) scripted_loc_names: Option<Vec<String>>,
+    pub(crate) scripted_gui_names: Option<Vec<String>>,
+}
+
+/// LOCK ORDER: snapshot or take `vanilla_state` under its short-lived guard,
+/// then release it before acquiring `config` or `info_service` or doing I/O.
+/// Other multi-lock paths document their order at their use sites.
 pub(crate) struct DocumentState {
     pub(crate) documents: Mutex<DocumentStore>,
     pub(crate) config: parking_lot::RwLock<Config>,
@@ -193,16 +213,7 @@ pub(crate) struct DocumentState {
     pub(crate) rules: parking_lot::RwLock<RuleData>,
     pub(crate) string_table: StringTable,
     pub(crate) info_service: parking_lot::RwLock<cwtools_info::InfoService>,
-    #[allow(clippy::type_complexity)]
-    pub(crate) vanilla_index: Mutex<Option<HashMap<String, Vec<(Arc<str>, TypeInstance)>>>>,
-    pub(crate) vanilla_merged_uris: Mutex<HashSet<Arc<str>>>,
-    #[allow(clippy::type_complexity)]
-    pub(crate) vanilla_loc_keys: Mutex<Option<Vec<(String, Vec<String>)>>>,
-    /// so the two halves have to land in the same write (#283).
-    pub(crate) vanilla_file_paths: Mutex<Option<Vec<String>>>,
-    pub(crate) vanilla_var_names: Mutex<Option<Vec<String>>>,
-    pub(crate) vanilla_scripted_loc_names: Mutex<Option<Vec<String>>>,
-    pub(crate) vanilla_scripted_gui_names: Mutex<Option<Vec<String>>>,
+    pub(crate) vanilla_state: Mutex<VanillaState>,
     /// (#89) — vanilla is ~2000 loc files that cannot change while the editor is
     #[allow(clippy::type_complexity)]
     pub(crate) vanilla_loc:
@@ -693,13 +704,7 @@ impl DocumentState {
             rules: parking_lot::RwLock::new(RuleData::new()),
             string_table,
             info_service: parking_lot::RwLock::new(cwtools_info::InfoService::new()),
-            vanilla_index: Mutex::new(None),
-            vanilla_merged_uris: Mutex::new(HashSet::new()),
-            vanilla_loc_keys: Mutex::new(None),
-            vanilla_file_paths: Mutex::new(None),
-            vanilla_var_names: Mutex::new(None),
-            vanilla_scripted_loc_names: Mutex::new(None),
-            vanilla_scripted_gui_names: Mutex::new(None),
+            vanilla_state: Mutex::new(VanillaState::default()),
             vanilla_loc: Mutex::new(None),
             loc_index: parking_lot::RwLock::new(None),
             inline_scripts: parking_lot::RwLock::new(InlineScripts::default()),

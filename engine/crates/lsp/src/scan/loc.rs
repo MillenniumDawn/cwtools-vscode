@@ -181,10 +181,13 @@ impl Backend {
             tokio::task::block_in_place(|| {
                 // workspace is walked again (#89).
                 let vanilla = self.vanilla_loc(parsed_languages, primary_lang, hover_all);
-                let cached_vanilla_loc = if vanilla.is_some() {
-                    self.state.vanilla_loc_keys.lock().take()
-                } else {
-                    self.state.vanilla_loc_keys.lock().clone()
+                let cached_vanilla_loc = {
+                    let mut cached = self.state.vanilla_state.lock();
+                    if vanilla.is_some() {
+                        cached.loc_keys.take()
+                    } else {
+                        cached.loc_keys.clone()
+                    }
                 };
                 let service = cwtools_localization::LocService::from_paths(
                     localisation_paths(
@@ -328,9 +331,31 @@ impl Backend {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use super::*;
     use cwtools_file_manager::file_manager::ScanBudget;
+    use cwtools_info::vanilla_cache::{VanillaCacheAux, VanillaCacheData};
     use cwtools_localization::{Lang, LocIndex, LocService};
+
+    use crate::state::DocumentState;
+
+    fn test_backend() -> Backend {
+        let state = Arc::new(DocumentState::new());
+        let captured = Arc::new(parking_lot::Mutex::new(None));
+        let slot = captured.clone();
+        let server_state = state.clone();
+        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
+            *slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: server_state.clone(),
+            }
+        });
+        let client = captured.lock().take().unwrap();
+        Backend { client, state }
+    }
 
     #[test]
     fn collect_loc_display_respects_primary_and_hover_all() {
@@ -394,6 +419,49 @@ mod tests {
         );
         assert_eq!(single.workspace_sites(&key).count(), 1);
         assert!(single.get(&key).unwrap().0.contains("a_l_english"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cached_loc_keys_survive_vanilla_merge_until_the_loc_rebuild_consumes_them() {
+        let backend = test_backend();
+        let workspace = tempfile::tempdir().unwrap();
+        let vanilla = tempfile::tempdir().unwrap();
+        let loc_dir = vanilla.path().join("localisation");
+        std::fs::create_dir_all(&loc_dir).unwrap();
+        std::fs::write(
+            loc_dir.join("base_l_english.yml"),
+            "l_english:\n base_key:0 \"Base\"\n",
+        )
+        .unwrap();
+        backend.state.config.write().vanilla_dir = Some(vanilla.path().to_path_buf());
+        backend.stage_vanilla_payload(VanillaCacheData {
+            per_type: HashMap::new(),
+            aux: VanillaCacheAux {
+                loc_keys: vec![("english".into(), vec!["cached_base_game_key".into()])],
+                file_paths: Vec::new(),
+                var_names: Vec::new(),
+                complex_enum_values: Vec::new(),
+                value_set_values: Vec::new(),
+                scripted_loc_names: Vec::new(),
+                scripted_gui_names: Vec::new(),
+            },
+        });
+        backend.merge_pending_vanilla_index();
+
+        backend.rebuild_and_publish_loc(workspace.path()).await;
+
+        let index = backend.state.loc_index.read();
+        assert!(
+            index
+                .as_ref()
+                .expect("loc rebuild installs an index")
+                .union()
+                .contains("cached_base_game_key")
+        );
+        assert!(
+            backend.state.vanilla_state.lock().loc_keys.is_none(),
+            "the full base-game loc index may consume the cached fallback after merging it"
+        );
     }
 
     #[test]

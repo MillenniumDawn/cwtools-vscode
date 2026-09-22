@@ -1023,8 +1023,9 @@ impl Backend {
             let info_summary = self.state.info_service.read().profile_summary();
             let vanilla = self
                 .state
-                .vanilla_index
+                .vanilla_state
                 .lock()
+                .index
                 .as_ref()
                 .map(|m| m.values().map(|v| v.len()).sum::<usize>())
                 .unwrap_or(0);

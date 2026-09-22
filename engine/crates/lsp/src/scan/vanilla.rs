@@ -100,7 +100,8 @@ impl Backend {
         self.bump_info_revision();
     }
 
-    /// error rather than one the editor silently drops (#283).
+    /// Stage the index and its auxiliary payload together so concurrent cache
+    /// loads cannot interleave their two halves (#283).
     pub(crate) fn stage_vanilla_payload(
         &self,
         data: cwtools_info::vanilla_cache::VanillaCacheData,
@@ -117,20 +118,32 @@ impl Backend {
         } = aux;
 
         let total: usize = per_type.values().map(|v| v.len()).sum();
-        *self.state.vanilla_index.lock() = Some(per_type);
-        if !loc_keys.is_empty() {
-            *self.state.vanilla_loc_keys.lock() = Some(loc_keys);
+        {
+            let mut vanilla = self.state.vanilla_state.lock();
+            vanilla.index = Some(per_type);
+            if !loc_keys.is_empty() {
+                vanilla.loc_keys = Some(loc_keys);
+            }
+            vanilla.file_paths = Some(file_paths);
+            vanilla.var_names = Some(var_names);
+            vanilla.scripted_loc_names = Some(scripted_loc_names);
+            vanilla.scripted_gui_names = Some(scripted_gui_names);
         }
-        *self.state.vanilla_file_paths.lock() = Some(file_paths);
-        *self.state.vanilla_var_names.lock() = Some(var_names);
-        *self.state.vanilla_scripted_loc_names.lock() = Some(scripted_loc_names);
-        *self.state.vanilla_scripted_gui_names.lock() = Some(scripted_gui_names);
         self.merge_vanilla_dynamic_values(complex_enum_values, value_set_values);
         total
     }
 
     pub(crate) fn merge_pending_vanilla_index(&self) {
-        let per_type = self.state.vanilla_index.lock().take();
+        let (per_type, var_names, scripted_loc_names, scripted_gui_names, file_paths) = {
+            let mut vanilla = self.state.vanilla_state.lock();
+            (
+                vanilla.index.take(),
+                vanilla.var_names.clone(),
+                vanilla.scripted_loc_names.clone(),
+                vanilla.scripted_gui_names.clone(),
+                vanilla.file_paths.clone(),
+            )
+        };
         if let Some(per_type) = per_type {
             // fell back to whatever document the user had open (#62).
             let vanilla_dir = self.state.config.read().vanilla_dir.clone();
@@ -170,8 +183,8 @@ impl Backend {
             }
             let uris: HashSet<Arc<str>> = uri_cache.into_values().flatten().collect();
             let old = {
-                let mut merged = self.state.vanilla_merged_uris.lock();
-                std::mem::replace(&mut *merged, uris)
+                let mut vanilla = self.state.vanilla_state.lock();
+                std::mem::replace(&mut vanilla.merged_uris, uris)
             };
 
             let mut info_guard = self.state.info_service.write();
@@ -188,7 +201,7 @@ impl Backend {
         }
 
         // (#306). Installed here rather than during the per-type merge so it
-        if let Some(var_names) = self.state.vanilla_var_names.lock().clone() {
+        if let Some(var_names) = var_names {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .var_index
@@ -198,7 +211,7 @@ impl Backend {
         }
 
         // naming one must resolve without the mod having to define it (#348).
-        if let Some(names) = self.state.vanilla_scripted_loc_names.lock().clone() {
+        if let Some(names) = scripted_loc_names {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .scripted_loc_index
@@ -207,7 +220,7 @@ impl Backend {
             self.bump_info_revision();
         }
 
-        if let Some(names) = self.state.vanilla_scripted_gui_names.lock().clone() {
+        if let Some(names) = scripted_gui_names {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .scripted_gui_index
@@ -227,7 +240,7 @@ impl Backend {
                 config.ignore_dir_patterns.clone(),
             )
         };
-        let vanilla_paths = match self.state.vanilla_file_paths.lock().clone() {
+        let vanilla_paths = match file_paths {
             Some(p) => p,
             None => return,
         };
@@ -252,7 +265,7 @@ impl Backend {
         quiet: bool,
     ) {
         if !force_rebuild
-            && (self.state.vanilla_index.lock().is_some()
+            && (self.state.vanilla_state.lock().index.is_some()
                 || self.state.vanilla_merged.load(Ordering::SeqCst))
         {
             return;
@@ -591,9 +604,12 @@ mod tests {
     }
 
     #[test]
-    fn re_merge_replaces_not_accumulates() {
+    fn re_merge_replaces_auxiliary_names() {
         let backend = test_backend();
-        backend.stage_vanilla_payload(vanilla_data(vec!["old_var"]));
+        let mut old = vanilla_data(vec!["old_var"]);
+        old.aux.scripted_loc_names = vec!["old_scripted_loc".into()];
+        old.aux.scripted_gui_names = vec!["old_scripted_gui".into()];
+        backend.stage_vanilla_payload(old);
         backend.merge_pending_vanilla_index();
         assert!(
             backend
@@ -604,14 +620,39 @@ mod tests {
                 .var_index
                 .contains("old_var")
         );
-        backend.stage_vanilla_payload(vanilla_data(vec!["new_var"]));
+
+        let mut new = vanilla_data(vec!["new_var"]);
+        new.aux.scripted_loc_names = vec!["new_scripted_loc".into()];
+        new.aux.scripted_gui_names = vec!["new_scripted_gui".into()];
+        backend.stage_vanilla_payload(new);
         backend.merge_pending_vanilla_index();
+
         let idx = backend.state.info_service.read();
         assert!(
             !idx.type_index.var_index.contains("old_var"),
             "re-merge must replace"
         );
         assert!(idx.type_index.var_index.contains("new_var"));
+        assert!(
+            !idx.type_index
+                .scripted_loc_index
+                .contains("old_scripted_loc")
+        );
+        assert!(
+            idx.type_index
+                .scripted_loc_index
+                .contains("new_scripted_loc")
+        );
+        assert!(
+            !idx.type_index
+                .scripted_gui_index
+                .contains("old_scripted_gui")
+        );
+        assert!(
+            idx.type_index
+                .scripted_gui_index
+                .contains("new_scripted_gui")
+        );
     }
 
     #[test]
@@ -657,7 +698,7 @@ mod tests {
                 .var_index
                 .contains("vanilla_var")
         );
-        *backend.state.vanilla_var_names.lock() = None;
+        backend.state.vanilla_state.lock().var_names = None;
         {
             let mut info = backend.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
