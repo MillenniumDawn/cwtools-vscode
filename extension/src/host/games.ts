@@ -20,7 +20,7 @@ export interface GameDef {
 	contentHint?: string;
 }
 
-export const RULES_MANIFEST_REVISION = 1;
+export const RULES_MANIFEST_REVISION = 2;
 
 // Order matters: more-specific newer game hints sit before older prefixes
 // ("crusader kings iii" contains "crusader kings ii"; EU5 runs before EU4's
@@ -48,7 +48,7 @@ export const GAMES: GameDef[] = [
 			"https://github.com/cwtools/cwtools-hoi4-config",
 		repoRef:
 			process.env.CWTOOLS_TEST_HOI4_REF ||
-			"ab1fda2a599ab4318d6f24ecba380e579e37006a", // 2026-08-05
+			"297dd69c42aabe10078a8b7ab7f2d07ee631d4ef", // 2026-09-21
 		exeName: "hoi4",
 		binariesPrefix: false,
 		folderHint: /(hoi4|hearts)/,
