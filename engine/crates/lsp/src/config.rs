@@ -1133,12 +1133,17 @@ impl Backend {
 
     fn clear_vanilla_state(&self) {
         self.state.vanilla_merged.store(false, Ordering::SeqCst);
-        *self.state.vanilla_index.lock() = None;
-        *self.state.vanilla_loc_keys.lock() = None;
-        *self.state.vanilla_file_paths.lock() = None;
-        *self.state.vanilla_var_names.lock() = None;
-        *self.state.vanilla_scripted_loc_names.lock() = None;
-        *self.state.vanilla_scripted_gui_names.lock() = None;
+        {
+            let mut vanilla = self.state.vanilla_state.lock();
+            vanilla.index = None;
+            vanilla.loc_keys = None;
+            vanilla.file_paths = None;
+            vanilla.var_names = None;
+            vanilla.scripted_loc_names = None;
+            vanilla.scripted_gui_names = None;
+            // The next merge uses this to remove pre-clear base-game entries.
+            // Clearing it here would leave their old provenance in the index.
+        }
         *self.state.vanilla_loc.lock() = None;
         {
             let mut info = self.state.info_service.write();
@@ -1420,9 +1425,68 @@ impl Backend {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use super::*;
+    use cwtools_info::vanilla_cache::{VanillaCacheAux, VanillaCacheData};
+    use cwtools_info::{SourceLocation, TypeInstance};
     use cwtools_localization::Lang;
     use serde_json::json;
+
+    use crate::state::DocumentState;
+
+    fn test_backend() -> Backend {
+        let state = Arc::new(DocumentState::new());
+        let captured = Arc::new(parking_lot::Mutex::new(None));
+        let slot = captured.clone();
+        let server_state = state.clone();
+        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
+            *slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: server_state.clone(),
+            }
+        });
+        let client = captured.lock().take().unwrap();
+        Backend { client, state }
+    }
+
+    fn vanilla_data(
+        file: &std::path::Path,
+        instance_name: &str,
+        var_name: &str,
+        scripted_loc_name: &str,
+        scripted_gui_name: &str,
+    ) -> VanillaCacheData {
+        VanillaCacheData {
+            per_type: HashMap::from([(
+                "test_type".to_string(),
+                vec![(
+                    Arc::from(file.to_string_lossy().as_ref()),
+                    TypeInstance {
+                        name: instance_name.to_string(),
+                        location: SourceLocation {
+                            line: 0,
+                            col: 0,
+                            end: (0, 1),
+                        },
+                        primary_loc_key: None,
+                        required_loc_keys: Vec::new(),
+                    },
+                )],
+            )]),
+            aux: VanillaCacheAux {
+                loc_keys: Vec::new(),
+                file_paths: Vec::new(),
+                var_names: vec![var_name.to_string()],
+                complex_enum_values: Vec::new(),
+                value_set_values: Vec::new(),
+                scripted_loc_names: vec![scripted_loc_name.to_string()],
+                scripted_gui_names: vec![scripted_gui_name.to_string()],
+            },
+        }
+    }
 
     #[test]
     fn locale_tag_prefers_the_protocol_field_over_the_init_option() {
@@ -1716,6 +1780,107 @@ mod tests {
         let (files, dirs) = extract_ignore_patterns(&opts);
         assert_eq!(files, vec!["*.tmp".to_string(), "keep.txt".to_string()]);
         assert_eq!(dirs, vec!["build".to_string()]);
+    }
+
+    #[test]
+    fn clear_then_restage_removes_old_uris_and_replaces_auxiliary_names() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let vanilla_dir = tmp.path().join("vanilla");
+        std::fs::create_dir_all(&vanilla_dir).unwrap();
+        let old_file = vanilla_dir.join("old.txt");
+        let new_file = vanilla_dir.join("new.txt");
+        std::fs::write(&old_file, "").unwrap();
+        std::fs::write(&new_file, "").unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.vanilla_dir = Some(vanilla_dir);
+            config.refresh_roots();
+        }
+
+        backend.stage_vanilla_payload(vanilla_data(
+            &old_file,
+            "old_instance",
+            "old_var",
+            "old_scripted_loc",
+            "old_scripted_gui",
+        ));
+        backend.merge_pending_vanilla_index();
+        let old_uri: Arc<str> =
+            crate::paths::path_to_uri(&std::fs::canonicalize(&old_file).unwrap()).into();
+        {
+            let index = backend.state.info_service.read();
+            assert!(index.type_index.var_index.contains("old_var"));
+            assert!(
+                index
+                    .type_index
+                    .scripted_loc_index
+                    .contains("old_scripted_loc")
+            );
+            assert!(
+                index
+                    .type_index
+                    .scripted_gui_index
+                    .contains("old_scripted_gui")
+            );
+        }
+
+        backend.clear_vanilla_state();
+        assert!(
+            backend
+                .state
+                .vanilla_state
+                .lock()
+                .merged_uris
+                .contains(&old_uri),
+            "the next merge needs the old URI to remove its provenance"
+        );
+
+        backend.stage_vanilla_payload(vanilla_data(
+            &new_file,
+            "new_instance",
+            "new_var",
+            "new_scripted_loc",
+            "new_scripted_gui",
+        ));
+        backend.merge_pending_vanilla_index();
+        let new_uri: Arc<str> =
+            crate::paths::path_to_uri(&std::fs::canonicalize(&new_file).unwrap()).into();
+        let index = backend.state.info_service.read();
+        let entries = index
+            .type_index
+            .map
+            .get("test_type")
+            .expect("restaged base-game instance");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, new_uri);
+        assert_eq!(entries[0].1.name, "new_instance");
+        assert!(!index.type_index.var_index.contains("old_var"));
+        assert!(index.type_index.var_index.contains("new_var"));
+        assert!(
+            !index
+                .type_index
+                .scripted_loc_index
+                .contains("old_scripted_loc")
+        );
+        assert!(
+            index
+                .type_index
+                .scripted_loc_index
+                .contains("new_scripted_loc")
+        );
+        assert!(
+            !index
+                .type_index
+                .scripted_gui_index
+                .contains("old_scripted_gui")
+        );
+        assert!(
+            index
+                .type_index
+                .scripted_gui_index
+                .contains("new_scripted_gui")
+        );
     }
 
     #[test]
