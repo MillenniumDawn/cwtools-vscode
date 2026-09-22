@@ -7,6 +7,8 @@
   (#766)
 * Share one token scanner for rename, references, and highlights while preserving
   case matching and source columns. (#764)
+* Share the LSP's retry-until-scan-finishes loop while preserving command
+  deadlines and cancellation behavior. (#760)
 
 ### 3.4.5
 
