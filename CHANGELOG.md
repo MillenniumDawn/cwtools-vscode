@@ -8,6 +8,8 @@
   (#565)
 * VSIX packaging now fails when staged server platforms are not in the release
   target list, keeping the release matrix and `VSIX_TARGETS` in sync. (#584)
+* Reject VSIX files whose archived version differs from the release version
+  before publishing to GitHub or the Marketplace. (#550)
 
 #### Extension
 

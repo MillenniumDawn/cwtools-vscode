@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+from zipfile import BadZipFile, ZipFile
 
 from changelog import release_notes, top_changelog_version
 from paths import (
@@ -387,9 +388,9 @@ def set_release_version(version: str) -> None:
     print(f"set dist/extension/package.json version to {version}")
 
 
-def find_vsixes() -> list[str]:
+def find_vsixes(expected_version: str) -> list[str]:
     files = (
-        sorted(path.name for path in VSIX_ROOT.iterdir() if path.suffix == ".vsix")
+        sorted(path for path in VSIX_ROOT.iterdir() if path.suffix == ".vsix")
         if VSIX_ROOT.is_dir()
         else []
     )
@@ -397,7 +398,31 @@ def find_vsixes() -> list[str]:
         raise RuntimeError(
             "no .vsix found in artifacts/vsix; run package-prebuilt first"
         )
-    return [str(VSIX_ROOT / name) for name in files]
+    for path in files:
+        try:
+            with ZipFile(path) as archive:
+                manifest = json.loads(archive.read("extension/package.json"))
+        except (
+            BadZipFile,
+            KeyError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as error:
+            raise RuntimeError(
+                f"could not read VSIX manifest from {path}: {error}"
+            ) from error
+        if not isinstance(manifest, dict):
+            raise RuntimeError(
+                f"could not read VSIX manifest from {path}: not an object"
+            )
+        version = manifest.get("version")
+        if version != expected_version:
+            raise RuntimeError(
+                f"VSIX manifest version mismatch: {path} has {version!r}; "
+                f"expected {expected_version!r}"
+            )
+    return [str(path) for path in files]
 
 
 # A pre-release version has no CHANGELOG section to draw notes from, so it gets
@@ -544,7 +569,7 @@ def cmd_package_prebuilt() -> list[str]:
 
 def cmd_publish_prebuilt() -> None:
     resolved = resolve_version()
-    vsixes = find_vsixes()
+    vsixes = find_vsixes(resolved["version"])
     publish_github_release(
         resolved["tag"], resolved["version"], resolved["preRelease"], vsixes
     )
@@ -556,13 +581,16 @@ def cmd_publish_prebuilt() -> None:
 # others; publish-prebuilt stays for the local release-prebuilt path.
 def cmd_publish_marketplace() -> None:
     resolved = resolve_version()
-    publish_to_marketplace(find_vsixes(), resolved["preRelease"])
+    publish_to_marketplace(find_vsixes(resolved["version"]), resolved["preRelease"])
 
 
 def cmd_publish_github() -> None:
     resolved = resolve_version()
     publish_github_release(
-        resolved["tag"], resolved["version"], resolved["preRelease"], find_vsixes()
+        resolved["tag"],
+        resolved["version"],
+        resolved["preRelease"],
+        find_vsixes(resolved["version"]),
     )
 
 

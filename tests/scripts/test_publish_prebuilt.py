@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
+from zipfile import ZipFile
 
 import pytest
 
@@ -14,6 +16,7 @@ cmd_publish_marketplace = cast(
     Callable[[], None], vars(build)["cmd_publish_marketplace"]
 )
 cmd_publish_github = cast(Callable[[], None], vars(build)["cmd_publish_github"])
+find_vsixes = cast(Callable[[str], list[str]], vars(build)["find_vsixes"])
 publish_github_release = cast(
     Callable[[str, str, bool, list[str]], None],
     vars(build)["publish_github_release"],
@@ -31,6 +34,12 @@ CHANGELOG = """### Unreleased
 
 * Added the widget.
 """
+
+
+def _write_vsix(path: Path, version: str) -> str:
+    with ZipFile(path, "w") as archive:
+        archive.writestr("extension/package.json", json.dumps({"version": version}))
+    return str(path)
 
 
 # A re-run of `Publish: GitHub` after a partial failure finds the release its
@@ -67,7 +76,7 @@ def test_an_existing_release_is_skipped_never_deleted(
     monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
     monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
     monkeypatch.setattr(build, "release_notes", lambda _changelog, _version: "notes")
-    monkeypatch.setattr(build, "find_vsixes", lambda: [vsix])
+    monkeypatch.setattr(build, "find_vsixes", lambda _version: [vsix])
     monkeypatch.setattr(build, "publish_to_marketplace", record_marketplace)
     monkeypatch.setattr(build, "run_or_null", run_or_null)
     monkeypatch.setattr(build, "run", run)
@@ -107,7 +116,7 @@ def test_creates_release_when_non_tag_run_does_not_find_existing_release(
     monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
     monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
     monkeypatch.setattr(build, "release_notes", lambda _changelog, _version: "notes")
-    monkeypatch.setattr(build, "find_vsixes", lambda: [vsix])
+    monkeypatch.setattr(build, "find_vsixes", lambda _version: [vsix])
     monkeypatch.setattr(build, "publish_to_marketplace", record_marketplace)
     monkeypatch.setattr(build, "run_or_null", run_or_null)
     monkeypatch.setattr(build, "run", run)
@@ -254,7 +263,7 @@ def test_publish_marketplace_command_skips_the_github_release(
     monkeypatch.setenv("CWTOOLS_BUILD_VERSION", "3.5.42")
     monkeypatch.setenv("CWTOOLS_RELEASE_TAG", "v3.5.42-pre.1")
     monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
-    monkeypatch.setattr(build, "find_vsixes", lambda: [vsix])
+    monkeypatch.setattr(build, "find_vsixes", lambda _version: [vsix])
     monkeypatch.setattr(build, "publish_to_marketplace", publish_to_marketplace_stub)
     monkeypatch.setattr(build, "publish_github_release", fail)
 
@@ -280,13 +289,63 @@ def test_publish_github_command_skips_the_marketplace(
     monkeypatch.setenv("CWTOOLS_BUILD_VERSION", "3.5.42")
     monkeypatch.setenv("CWTOOLS_RELEASE_TAG", "v3.5.42-pre.1")
     monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
-    monkeypatch.setattr(build, "find_vsixes", lambda: [vsix])
+    monkeypatch.setattr(build, "find_vsixes", lambda _version: [vsix])
     monkeypatch.setattr(build, "publish_github_release", publish_github_release_stub)
     monkeypatch.setattr(build, "publish_to_marketplace", fail)
 
     cmd_publish_github()
 
     assert release_calls == [("v3.5.42-pre.1", "3.5.42", True, [vsix])]
+
+
+def test_find_vsixes_keeps_matching_platform_and_universal_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vsix_root = tmp_path / "vsix"
+    vsix_root.mkdir()
+    platform = _write_vsix(vsix_root / "cwtools-3.5.42-linux-x64.vsix", "3.5.42")
+    universal = _write_vsix(vsix_root / "cwtools-3.5.42.vsix", "3.5.42")
+    monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
+
+    assert find_vsixes("3.5.42") == [platform, universal]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [cmd_publish_prebuilt, cmd_publish_marketplace, cmd_publish_github],
+    ids=["prebuilt", "marketplace", "github"],
+)
+def test_standalone_publish_commands_reject_off_version_vsixes_before_publishing(
+    command: Callable[[], None], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vsix_root = tmp_path / "vsix"
+    vsix_root.mkdir()
+    _write_vsix(vsix_root / "cwtools-3.5.42.vsix", "3.5.42")
+    stale = _write_vsix(vsix_root / "cwtools-3.5.42-linux-x64.vsix", "3.4.99")
+    publishers: list[str] = []
+
+    def record_github(
+        _tag: str, _version: str, _pre_release: bool, _vsixes: list[str]
+    ) -> None:
+        publishers.append("github")
+
+    def record_marketplace(_vsixes: list[str], _pre_release: bool) -> None:
+        publishers.append("marketplace")
+
+    monkeypatch.setenv("CWTOOLS_BUILD_VERSION", "3.5.42")
+    monkeypatch.setenv("CWTOOLS_RELEASE_TAG", "v3.5.42-pre.1")
+    monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
+    monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
+    monkeypatch.setattr(build, "publish_github_release", record_github)
+    monkeypatch.setattr(build, "publish_to_marketplace", record_marketplace)
+
+    with pytest.raises(RuntimeError) as error:
+        command()
+
+    assert str(error.value) == (
+        f"VSIX manifest version mismatch: {stale} has '3.4.99'; expected '3.5.42'"
+    )
+    assert not publishers
 
 
 def test_prerelease_notes_replace_the_missing_changelog_section(
