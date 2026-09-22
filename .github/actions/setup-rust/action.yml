@@ -18,6 +18,17 @@ inputs:
   cache-target-path:
     description: Directory to cache as the cargo target dir
     default: engine/target
+  cargo-tool:
+    description: Cargo-installed executable to cache
+    default: ""
+  cargo-tool-version:
+    description: Exact version of the Cargo-installed executable
+    default: ""
+
+outputs:
+  cargo-tool-cache-hit:
+    description: Whether the requested Cargo tool was restored from cache
+    value: ${{ steps.cargo-tool-cache.outputs.cache-hit }}
 
 runs:
   using: composite
@@ -29,8 +40,8 @@ runs:
         toolchain: ${{ inputs.toolchain }}
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
-    # Registry cache is shared across jobs. ~/.cargo/bin rides along so
-    # cargo-machete / cargo-llvm-cov / cargo-fuzz restore instead of rebuild.
+    # Registry sources are shared across jobs. Cargo-installed executables
+    # use an exact, versioned cache below so unrelated jobs never replace one.
     - name: Cache cargo registry
       # v6.1.0
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -38,12 +49,21 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          ~/.cargo/bin
         key: >-
           ${{ runner.os }}-cargo-registry-${{
           hashFiles('engine/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-registry-
+    - name: Cache cargo tool
+      id: cargo-tool-cache
+      if: inputs.cargo-tool != '' && inputs.cargo-tool-version != ''
+      # v6.1.0
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      with:
+        path: ~/.cargo/bin/${{ inputs.cargo-tool }}
+        key: >-
+          ${{ runner.os }}-cargo-tool-${{ inputs.cargo-tool }}-${{
+          inputs.cargo-tool-version }}-${{ inputs.toolchain }}
     - name: Cache cargo target
       # v6.1.0
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9

@@ -2,8 +2,11 @@
 
 #### Tooling
 
+* CI Cargo tools are pinned and each executable is cached by version separately
+  from the Cargo registry. (#510)
 * VSIX packaging now fails when staged server platforms are not in the release
   target list, keeping the release matrix and `VSIX_TARGETS` in sync. (#584)
+
 #### Extension
 
 * Load the generated graph stylesheet for webview tooltips instead of keeping
