@@ -27,15 +27,6 @@ pub use variables::{
     collect_set_variable_names, variable_defining_effects,
 };
 
-/// Strip one layer of surrounding double-quotes, if present. A lone `"` (no
-/// matching pair) is left untouched, since `strip_suffix` finds no closing
-/// quote in the already-stripped remainder.
-pub(crate) fn unquote(s: &str) -> &str {
-    s.strip_prefix('"')
-        .and_then(|t| t.strip_suffix('"'))
-        .unwrap_or(s)
-}
-
 /// Decrement a refcount entry in `map`, removing it when the count reaches 0.
 /// Does nothing if the key is absent. Shared by every refcounted name/value
 /// index so re-indexing a file drops only its last contribution.

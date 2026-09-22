@@ -1,8 +1,11 @@
 use cwtools_game::scope_engine::{ScopeContext, ScopeId};
-use cwtools_parser::ast::{Child, ParsedFile, SourcePos, SourceRange, Value};
+use cwtools_parser::{
+    ast::{Child, ParsedFile, SourcePos, SourceRange, Value},
+    unquote,
+};
 use cwtools_rules::rules_types::*;
 
-use crate::common::{leaf_value_to_string, unquote_key};
+use crate::common::leaf_value_to_string;
 use crate::ctx::{AliasBranchBudget, InlineScriptExpansionBudget, ValidationCtx};
 use crate::resolve::{
     DispatchInput, PathCandidate, ResolvedType, find_rules_by_name, find_type_from_candidates,
@@ -502,7 +505,7 @@ fn collect_scope_children(
             continue;
         };
         let raw_key = ctx.table.get_string(leaf.key.normal).unwrap_or_default();
-        let key = unquote_key(&raw_key);
+        let key = unquote(&raw_key);
         let candidates = matching_candidates(
             rules,
             key,
@@ -766,7 +769,7 @@ fn descend(
                     continue;
                 }
                 let raw_key = ctx.table.get_string(leaf.key.normal).unwrap_or_default();
-                let key = unquote_key(&raw_key).to_string();
+                let key = unquote(&raw_key).to_string();
                 let on_key = line == leaf.pos.start.line
                     && (col as usize) <= leaf.pos.start.col as usize + raw_key.chars().count();
 

@@ -1,8 +1,9 @@
-use crate::{dec_ref, unquote};
+use crate::dec_ref;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use cwtools_parser::ast::{Child, Leaf, ParsedFile, Value};
+use cwtools_parser::unquote;
 use cwtools_rules::rules_types::{ComplexEnumNameTree, ComplexEnumNameTreeEntry, RuleSet};
 use cwtools_string_table::string_table::{StringId, StringTable};
 

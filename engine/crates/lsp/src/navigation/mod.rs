@@ -16,7 +16,7 @@ pub(crate) use helpers::{
     comment_and_region_folds, cwt_ref_at, dedup_locations, highlight_kind, locations_at,
     locations_at_with_lines, make_symbol, member_pos_in_block, prepare_rename_range,
     rename_refused, resolve_file_ref, selection_spans, source_range_without_text, symbol_rank,
-    unquote, value_col_in_line, value_start_after_eq, word_at_position,
+    value_col_in_line, value_start_after_eq, word_at_position,
 };
 pub(crate) use references::key_sites;
 pub(crate) use use_sites::scan_use_sites;

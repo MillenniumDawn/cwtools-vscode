@@ -40,7 +40,7 @@ pub(crate) fn find_directive<'a>(comments: &'a [String], key: &str) -> Option<&'
     directive_bodies(comments).find_map(|rest| {
         let after_key = rest.strip_prefix(key)?.trim_start();
         let rhs = after_key.strip_prefix('=')?;
-        Some(strip_quotes(rhs.trim()))
+        Some(unquote(rhs.trim()))
     })
 }
 
@@ -57,7 +57,7 @@ fn collect_directives(comments: &[String]) -> std::collections::HashMap<&str, &s
         let Some((key, rhs)) = rest.split_once('=') else {
             continue;
         };
-        map.insert(key.trim_end(), strip_quotes(rhs.trim()));
+        map.insert(key.trim_end(), unquote(rhs.trim()));
     }
     map
 }
@@ -174,7 +174,7 @@ pub(crate) fn parse_replace_scopes_from_comments(comments: &[String]) -> Option<
         let Some(value) = tokens.next() else {
             break;
         };
-        let value = strip_quotes(value);
+        let value = unquote(value);
         match key.to_ascii_lowercase().as_str() {
             "this" => this = Some(value.to_string()),
             "root" => root = Some(value.to_string()),
@@ -249,7 +249,7 @@ pub(crate) fn parse_required_scopes(comments: &[String]) -> Vec<String> {
         if rhs.starts_with('{') && rhs.ends_with('}') {
             return rhs[1..rhs.len() - 1]
                 .split_whitespace()
-                .map(|s| strip_quotes(s).to_string())
+                .map(|s| unquote(s).to_string())
                 .collect();
         } else if !rhs.is_empty() {
             return vec![rhs.to_string()];
@@ -286,7 +286,7 @@ pub(crate) fn validate_comment_directives(ast: &ParsedFile, path: &Path) -> Vec<
             continue;
         };
         let key = key.trim_end();
-        let rhs = strip_quotes(rhs.trim());
+        let rhs = unquote(rhs.trim());
         let message = match key {
             "cardinality" if cardinality_spec_is_malformed(rhs) => {
                 Some(format!("malformed `cardinality` bound `{rhs}`"))
