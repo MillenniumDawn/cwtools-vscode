@@ -215,18 +215,22 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
+        id: rust-setup
         with:
           components: rustfmt, clippy
+          cargo-tool: cargo-machete
+          cargo-tool-version: 0.9.2
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
       - name: cargo clippy
         run: >-
           cargo clippy --workspace --all-targets --all-features --
           -D warnings
+      - name: Install cargo-machete
+        if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
+        run: cargo install cargo-machete --locked --version 0.9.2
       - name: cargo machete (unused dependencies)
-        run: |
-          cargo install cargo-machete --locked --force
-          cargo machete
+        run: cargo machete
       # Advisory + license gate. Dependency review catches what a PR adds;
       # this catches what a published advisory turns an already-merged crate
       # into. Runs on the weekly schedule as well as every PR.
@@ -362,19 +366,23 @@ jobs:
       # toolchain regression lands as a red build on an unrelated PR. Bump
       # it deliberately when there's a reason to.
       - uses: ./.github/actions/setup-rust
+        id: rust-setup
         with:
           toolchain: nightly-2026-07-24
           cache-prefix: cargo-fuzz-target
           cache-target-path: engine/fuzz/target
+          cargo-tool: cargo-fuzz
+          cargo-tool-version: 0.13.2
       # Explicit +toolchain throughout: rust-toolchain.toml says stable, and
       # letting it win would make rustup fetch a second toolchain to run
       # cargo-fuzz on, which then can't build the nightly-only targets.
       # Version-pinned: `fuzz run`'s positional-corpus and `-- -runs=0`
       # handling is the whole contract this job depends on.
       - name: Install cargo-fuzz
+        if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
         run: >-
           cargo +nightly-2026-07-24 install cargo-fuzz --version 0.13.2
-          --locked --force
+          --locked
       - name: parse_string over seed corpus
         run: >-
           cargo +nightly-2026-07-24 fuzz run parse_string
@@ -402,10 +410,14 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
+        id: rust-setup
         with:
           components: llvm-tools
           cache-prefix: cargo-coverage-target
+          cargo-tool: cargo-llvm-cov
+          cargo-tool-version: 0.8.7
       - name: Install cargo-llvm-cov
+        if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
         run: cargo install cargo-llvm-cov --locked --version 0.8.7
       - name: Run coverage (91.5% line floor)
         env:
