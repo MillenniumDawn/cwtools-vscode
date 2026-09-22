@@ -11,6 +11,7 @@ import build
 PackageOne = Callable[[str | None], list[str]]
 RunPlatformPackaging = Callable[[Path, Path, list[str], PackageOne], list[str]]
 package_vsix = cast(Callable[[str | None], list[str]], vars(build)["package_vsix"])
+staged_platforms = cast(Callable[[], list[str]], vars(build)["staged_platforms"])
 run_platform_packaging = cast(
     RunPlatformPackaging, vars(build)["run_platform_packaging"]
 )
@@ -35,6 +36,20 @@ def dirs_present(directory: Path) -> list[str]:
 
 def has_binary(directory: Path, platform: str) -> bool:
     return (directory / platform / "cwtools-server").is_file()
+
+
+def test_rejects_unknown_staged_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server_bin_dir = tmp_path / "server" / "cwtools-server"
+    stage(server_bin_dir, ["linux-x64", "future-z", "future-a"])
+    monkeypatch.setattr(build, "SERVER_BIN_DIR", server_bin_dir)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"unknown staged server platform\(s\): future-a, future-z",
+    ):
+        staged_platforms()
 
 
 def test_rejects_flat_binary_without_changing_staged_tree(

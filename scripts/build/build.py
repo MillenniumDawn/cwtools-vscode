@@ -232,11 +232,14 @@ def package_vsix(target: str | None = None) -> list[str]:
 def staged_platforms() -> list[str]:
     if not SERVER_BIN_DIR.is_dir():
         return []
-    return sorted(
-        entry.name
-        for entry in SERVER_BIN_DIR.iterdir()
-        if entry.is_dir() and entry.name in VSIX_TARGETS
+    platforms = sorted(
+        entry.name for entry in SERVER_BIN_DIR.iterdir() if entry.is_dir()
     )
+    unknown = [platform for platform in platforms if platform not in VSIX_TARGETS]
+    if unknown:
+        names = ", ".join(unknown)
+        raise RuntimeError(f"unknown staged server platform(s): {names}")
+    return platforms
 
 
 def run_platform_packaging(

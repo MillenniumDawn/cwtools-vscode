@@ -1,5 +1,10 @@
 ### Unreleased
 
+#### Tooling
+
+* VSIX packaging now fails when staged server platforms are not in the release
+  target list, keeping the release matrix and `VSIX_TARGETS` in sync. (#584)
+
 #### Engine
 
 * Type-keyed fields such as `<resource> = float` now reject unknown keys once
