@@ -37,8 +37,10 @@ const state = vi.hoisted(() => {
 		token,
 		withProgress,
 		showInformationMessage: vi.fn(),
+		showOpenDialog: vi.fn(),
 		executeCommand: vi.fn(),
 		showWarningMessage: vi.fn(),
+		readFile: vi.fn(),
 		showErrorMessage: vi.fn(),
 		showInputBox: vi.fn(),
 		showSaveDialog: vi.fn(),
@@ -67,6 +69,7 @@ vi.mock("vscode", async (importOriginal) => ({
 		createOutputChannel: () => ({ appendLine: () => undefined }),
 		withProgress: state.withProgress,
 		showInformationMessage: state.showInformationMessage,
+		showOpenDialog: state.showOpenDialog,
 		showWarningMessage: state.showWarningMessage,
 		showErrorMessage: state.showErrorMessage,
 		showInputBox: state.showInputBox,
@@ -76,7 +79,7 @@ vi.mock("vscode", async (importOriginal) => ({
 	},
 	workspace: {
 		getConfiguration: () => ({ get: () => undefined }),
-		fs: { writeFile: state.writeFile, readFile: vi.fn() },
+		fs: { writeFile: state.writeFile, readFile: state.readFile },
 		openTextDocument: state.openTextDocument,
 	},
 }));
@@ -193,6 +196,8 @@ suite("registered workspace commands", () => {
 		vi.clearAllMocks();
 		state.executeCommand.mockReset();
 		state.showInputBox.mockReset();
+		state.showOpenDialog.mockReset();
+		state.readFile.mockReset();
 		GraphPanel.currentPanel = undefined;
 		state.registeredCommands.clear();
 		state.token.isCancellationRequested = false;
@@ -318,6 +323,35 @@ suite("registered workspace commands", () => {
 					[{ id: "new" }],
 					1,
 					{ source: "server", entityType: "event", depth: 1 },
+				],
+			]);
+		});
+	});
+
+	suite("cwtools.graphFromJson", () => {
+		test("forwards the selected JSON file name to the graph panel", async () => {
+			const client = fakeClient([]);
+			state.showOpenDialog.mockResolvedValue([
+				{ fsPath: "/tmp/imported-graph.json" },
+			]);
+			state.readFile.mockResolvedValue(
+				new TextEncoder().encode('{"elements":{"nodes":[]}}'),
+			);
+			register(client);
+
+			await handler("cwtools.graphFromJson")();
+
+			assert.deepStrictEqual(state.showOpenDialog.mock.calls, [
+				[{ filters: { Json: ["json"] } }],
+			]);
+			assert.deepStrictEqual(state.readFile.mock.calls, [
+				[{ fsPath: "/tmp/imported-graph.json" }],
+			]);
+			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+				[
+					'{"elements":{"nodes":[]}}',
+					1,
+					{ source: "json", fileName: "imported-graph.json" },
 				],
 			]);
 		});

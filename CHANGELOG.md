@@ -9,6 +9,8 @@
 
 #### Extension
 
+* Malformed or incomplete graph JSON imports and exports before a graph loads
+  now report errors instead of silently failing or throwing. (#565)
 * Load the generated graph stylesheet for webview tooltips instead of keeping
   a copy of the dependency CSS. (#586)
 

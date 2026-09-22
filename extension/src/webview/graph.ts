@@ -160,19 +160,24 @@ const style: StylesheetJsonBlock[] = [
 		style: { opacity: 0.2 },
 	},
 ];
-let _cy: cytoscape.Core;
+let _cy: cytoscape.Core | undefined;
 let _tips: Instance[] = [];
 let _themeObserver: MutationObserver | undefined;
 
-function initCytoscape(settings: settings): cytoscape.Core {
+function disposeCytoscape() {
 	_themeObserver?.disconnect();
 	_themeObserver = undefined;
+	_tips.forEach((t) => t.destroy());
+	_tips = [];
 	if (_cy) {
-		_tips.forEach((t) => t.destroy());
-		_tips = [];
 		_cy.destroy();
+		_cy = undefined;
 		document.getElementById("cy")!.replaceChildren();
 	}
+}
+
+function initCytoscape(settings: settings): cytoscape.Core {
+	disposeCytoscape();
 	const cy = cyM.default({
 		container: document.getElementById("cy"),
 		minZoom: 0.1,
@@ -446,45 +451,93 @@ function setupInteraction(
 	});
 }
 
+type CytoscapeJson = {
+	elements:
+		| {
+				nodes?: cytoscape.ElementDefinition[];
+				edges?: cytoscape.ElementDefinition[];
+		  }
+		| cytoscape.ElementDefinition[];
+} & Record<string, unknown>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCytoscapeElement(value: unknown): boolean {
+	return (
+		isRecord(value) &&
+		isRecord(value.data) &&
+		typeof value.data.id === "string" &&
+		value.data.id.length > 0
+	);
+}
+
+function isCytoscapeElements(value: unknown): boolean {
+	return Array.isArray(value) && value.every(isCytoscapeElement);
+}
+
+function isCytoscapeJson(value: unknown): value is CytoscapeJson {
+	if (!isRecord(value)) {
+		return false;
+	}
+	const elements = value.elements;
+	if (Array.isArray(elements)) {
+		return isCytoscapeElements(elements);
+	}
+	return (
+		isRecord(elements) &&
+		(elements.nodes === undefined || isCytoscapeElements(elements.nodes)) &&
+		(elements.edges === undefined || isCytoscapeElements(elements.edges))
+	);
+}
+
+function reportImportError(fileName: string | undefined) {
+	const source = fileName ? `"${fileName}"` : "the selected JSON file";
+	vscode.postMessage({
+		command: "showError",
+		message: `CWTools: couldn't import ${source}: it isn't valid Cytoscape graph JSON.`,
+	});
+}
+
 function tech(
 	data: techNode[],
 	edges: Array<EdgeInput>,
 	settings: settings,
-	json?: {
-		elements:
-			| {
-					nodes?: cytoscape.ElementDefinition[];
-					edges?: cytoscape.ElementDefinition[];
-			  }
-			| cytoscape.ElementDefinition[];
-	} & Record<string, unknown>,
+	json?: CytoscapeJson,
 ) {
 	const importingJson = json !== undefined;
 	const cy = initCytoscape(settings);
 
-	const layer = cy.cyCanvas({ zIndex: 1, pixelRatio: "auto" });
-	const canvas = layer.getCanvas();
-	const ctx = canvas.getContext("2d")!;
+	try {
+		const layer = cy.cyCanvas({ zIndex: 1, pixelRatio: "auto" });
+		const canvas = layer.getCanvas();
+		const ctx = canvas.getContext("2d")!;
 
-	if (!importingJson) {
-		populateGraph(cy, data, edges);
-	} else {
-		cy.json(json);
+		if (!importingJson) {
+			populateGraph(cy, data, edges);
+		} else {
+			cy.json(json);
+		}
+		cy.style(style);
+		_themeObserver = new MutationObserver(() => cy.style().update());
+		_themeObserver.observe(htmlEl, {
+			attributes: true,
+			attributeFilter: ["style"],
+		});
+
+		setupTooltips(cy);
+
+		if (!importingJson) {
+			runLayout(cy);
+		}
+
+		setupInteraction(cy, layer, ctx);
+	} catch (error) {
+		// An import that Cytoscape rejects must not leave a partial graph behind.
+		disposeCytoscape();
+		throw error;
 	}
-	cy.style(style);
-	_themeObserver = new MutationObserver(() => cy.style().update());
-	_themeObserver.observe(htmlEl, {
-		attributes: true,
-		attributeFilter: ["style"],
-	});
-
-	setupTooltips(cy);
-
-	if (!importingJson) {
-		runLayout(cy);
-	}
-
-	setupInteraction(cy, layer, ctx);
 }
 
 export function goToNode(location: GraphLocation) {
@@ -499,9 +552,22 @@ export function goToNode(location: GraphLocation) {
 	});
 }
 
+function reportUnavailableExport(kind: "an image" | "a JSON file") {
+	vscode.postMessage({
+		command: "showError",
+		message: `CWTools: no graph is available to export as ${kind}.`,
+	});
+}
+
 export async function exportImage(pixelRatio: number) {
-	const png = _cy.png({ full: true, output: "base64uri", scale: pixelRatio });
-	const boundingBox = _cy.elements().boundingBox({});
+	const cy = _cy;
+	if (!cy) {
+		reportUnavailableExport("an image");
+		return;
+	}
+
+	const png = cy.png({ full: true, output: "base64uri", scale: pixelRatio });
+	const boundingBox = cy.elements().boundingBox({});
 	const canvas = new OffscreenCanvas(
 		Math.ceil(boundingBox.x2 - boundingBox.x1) * pixelRatio,
 		Math.ceil(boundingBox.y2 - boundingBox.y1) * pixelRatio,
@@ -512,7 +578,7 @@ export async function exportImage(pixelRatio: number) {
 	ctx.scale(pixelRatio, pixelRatio);
 	ctx.translate(-1 * boundingBox.x1, -1 * boundingBox.y1);
 
-	drawExtra(_cy.nodes(), ctx, 1 / pixelRatio);
+	drawExtra(cy.nodes(), ctx, 1 / pixelRatio);
 
 	const canvasImage = await canvas.convertToBlob({ type: "png" });
 	const bufferImage = await blobToDataURL(canvasImage);
@@ -538,7 +604,13 @@ async function blobToDataURL(blob: Blob): Promise<string> {
 }
 
 export function exportJson() {
-	const json = JSON.stringify(_cy.json());
+	const cy = _cy;
+	if (!cy) {
+		reportUnavailableExport("a JSON file");
+		return;
+	}
+
+	const json = JSON.stringify(cy.json());
 	vscode.postMessage({ command: "saveJson", json: json });
 }
 
@@ -624,16 +696,16 @@ window.addEventListener("message", (event) => {
 			break;
 		case "importJson":
 			try {
-				tech(
-					[],
-					[],
-					message.settings,
-					JSON.parse(message.json) as Parameters<typeof tech>[3],
-				);
+				const json: unknown = JSON.parse(message.json);
+				if (!isCytoscapeJson(json)) {
+					throw new Error("invalid Cytoscape graph JSON");
+				}
+				tech([], [], message.settings, json);
 				persistState(message.persist);
 			} catch {
-				// Malformed import: leave the graph empty rather than take the
-				// whole message handler down.
+				// Parse and validate before replacing a current graph. A Cytoscape
+				// failure after that still disposes the partial replacement in tech.
+				reportImportError(message.persist?.fileName);
 			}
 			break;
 		case "checkCytoscapeRendered": // Check if cytoscape is initialized and has rendered elements

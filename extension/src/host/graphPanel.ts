@@ -29,6 +29,7 @@ type WebviewMessage =
 	| { command: "goToFile"; uri: string; line: number; column: number }
 	| { command: "saveImage"; image: string }
 	| { command: "saveJson"; json: string }
+	| { command: "showError"; message: string }
 	| { command: "ready" }
 	| { command: "cytoscapeRenderedResult"; rendered: boolean; id: number };
 export class GraphPanel {
@@ -193,6 +194,9 @@ export class GraphPanel {
 								}
 								return;
 							}
+							case "showError":
+								vscode.window.showErrorMessage(message.message);
+								return;
 							case "ready":
 								if (this._state === State.DataReady) {
 									this._state = State.Done;

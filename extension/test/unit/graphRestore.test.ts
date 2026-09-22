@@ -374,7 +374,7 @@ suite("graph panel restore", () => {
 					command: "importJson",
 					json: sampleJson,
 					settings: { wheelSensitivity: 1 },
-					persist: { source: "json" },
+					persist: { source: "json", fileName: "graph.json" },
 				},
 			],
 		]);
