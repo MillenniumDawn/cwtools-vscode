@@ -8,7 +8,7 @@ use tower_lsp::lsp_types::*;
 
 use cwtools_validation::build_modifier_keys;
 
-use crate::command_progress::CommandProgress;
+use crate::command_progress::{CommandProgress, ScanOutcome};
 use crate::{Backend, DocumentState, LoadingBar, UpdateFileList};
 
 mod loc;
@@ -32,6 +32,20 @@ pub(crate) struct ScanSummary {
 
 const WATCHED_DEBOUNCE_MS: u64 = 500;
 const WATCHED_BULK_CAP: usize = 200;
+const SCAN_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn retry_duration(raw: Option<&str>, default: std::time::Duration) -> std::time::Duration {
+    raw.and_then(|value| value.parse::<u64>().ok())
+        .map_or(default, std::time::Duration::from_millis)
+}
+
+pub(crate) fn retry_deadline(default: std::time::Duration) -> std::time::Instant {
+    std::time::Instant::now()
+        + retry_duration(
+            std::env::var("CWTOOLS_RETRY_DEADLINE_MS").ok().as_deref(),
+            default,
+        )
+}
 
 /// (#155): fires at most once per server process, so the e2e suite can
 static WATCHED_BATCH_PANIC_ONCE: AtomicBool = AtomicBool::new(true);
@@ -151,6 +165,26 @@ impl Backend {
             return;
         }
         tokio::task::block_in_place(|| self.hold(point));
+    }
+
+    pub(crate) async fn wait_for_scan(
+        &self,
+        deadline: std::time::Instant,
+        progress: Option<&CommandProgress>,
+    ) -> ScanOutcome {
+        let mut outcome = self
+            .validate_entire_workspace_tracked(false, progress)
+            .await;
+        while outcome == ScanOutcome::Busy && std::time::Instant::now() < deadline {
+            tokio::time::sleep(SCAN_RETRY_INTERVAL).await;
+            if progress.is_some_and(CommandProgress::is_cancelled) {
+                return ScanOutcome::Cancelled;
+            }
+            outcome = self
+                .validate_entire_workspace_tracked(false, progress)
+                .await;
+        }
+        outcome
     }
 
     pub(crate) async fn send_loading_bar(&self, enable: bool, value: &str) {
@@ -459,6 +493,22 @@ mod tests {
     use crate::paths::discover_vanilla_dir;
     use cwtools_rules::rules_types::{PathOptions, RuleSet, TypeDefinition};
     use cwtools_string_table::string_table::StringTable;
+
+    #[test]
+    fn retry_duration_preserves_deadline_parse_behavior() {
+        let default = std::time::Duration::from_secs(60);
+        assert_eq!(
+            retry_duration(Some("1250"), default),
+            std::time::Duration::from_millis(1250)
+        );
+        assert_eq!(
+            retry_duration(Some("0"), default),
+            std::time::Duration::ZERO
+        );
+        for raw in [None, Some(""), Some("-1"), Some("not-a-duration")] {
+            assert_eq!(retry_duration(raw, default), default);
+        }
+    }
 
     #[test]
     fn test_discover_vanilla_dir_unknown_game_is_none() {

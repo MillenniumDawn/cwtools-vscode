@@ -242,14 +242,13 @@ impl Backend {
         tokio::spawn(async move {
             spawn_logging_panics("deferred revalidation", async move {
                 let backend = Backend { client, state };
-                let deadline =
-                    std::time::Instant::now() + std::time::Duration::from_secs(180);
-                let mut revalidated = backend.validate_entire_workspace(false).await;
-                while !revalidated && std::time::Instant::now() < deadline {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    revalidated = backend.validate_entire_workspace(false).await;
-                }
-                if !revalidated {
+                let outcome = backend
+                    .wait_for_scan(
+                        std::time::Instant::now() + std::time::Duration::from_secs(180),
+                        None,
+                    )
+                    .await;
+                if outcome != ScanOutcome::Ran {
                     backend
                         .client
                         .log_message(

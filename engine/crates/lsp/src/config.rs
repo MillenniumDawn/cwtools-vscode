@@ -1203,20 +1203,12 @@ impl Backend {
         };
         self.clear_vanilla_state();
         self.reset_scan_publication_state();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
-        let mut outcome = self
-            .validate_entire_workspace_tracked(false, Some(&progress))
+        let outcome = self
+            .wait_for_scan(
+                std::time::Instant::now() + std::time::Duration::from_secs(180),
+                Some(&progress),
+            )
             .await;
-        while outcome == ScanOutcome::Busy && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            if progress.is_cancelled() {
-                outcome = ScanOutcome::Cancelled;
-                break;
-            }
-            outcome = self
-                .validate_entire_workspace_tracked(false, Some(&progress))
-                .await;
-        }
         let status = cwtools_i18n::t(match outcome {
             ScanOutcome::Ran => cwtools_i18n::Key::StatusReindexed,
             ScanOutcome::Busy => cwtools_i18n::Key::StatusReindexPending,
@@ -1258,27 +1250,12 @@ impl Backend {
         let progress =
             CommandProgress::begin(self, token, "CWTools: Reload config rules", true).await;
         let loaded = self.load_rules_config(&dir).await;
-        let deadline = std::time::Instant::now()
-            + std::env::var("CWTOOLS_RETRY_DEADLINE_MS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .map_or(
-                    std::time::Duration::from_secs(60),
-                    std::time::Duration::from_millis,
-                );
-        let mut outcome = self
-            .validate_entire_workspace_tracked(false, Some(&progress))
+        let outcome = self
+            .wait_for_scan(
+                crate::scan::retry_deadline(std::time::Duration::from_secs(60)),
+                Some(&progress),
+            )
             .await;
-        while outcome == ScanOutcome::Busy && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            if progress.is_cancelled() {
-                outcome = ScanOutcome::Cancelled;
-                break;
-            }
-            outcome = self
-                .validate_entire_workspace_tracked(false, Some(&progress))
-                .await;
-        }
         if outcome == ScanOutcome::Busy && loaded {
             self.spawn_deferred_revalidation("reloadrulesconfig");
         }
@@ -1293,27 +1270,12 @@ impl Backend {
     ) -> Result<Option<Value>> {
         let progress =
             CommandProgress::begin(self, token, "CWTools: Re-index workspace", true).await;
-        let deadline = std::time::Instant::now()
-            + std::env::var("CWTOOLS_RETRY_DEADLINE_MS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .map_or(
-                    std::time::Duration::from_secs(60),
-                    std::time::Duration::from_millis,
-                );
-        let mut outcome = self
-            .validate_entire_workspace_tracked(false, Some(&progress))
+        let outcome = self
+            .wait_for_scan(
+                crate::scan::retry_deadline(std::time::Duration::from_secs(60)),
+                Some(&progress),
+            )
             .await;
-        while outcome == ScanOutcome::Busy && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            if progress.is_cancelled() {
-                outcome = ScanOutcome::Cancelled;
-                break;
-            }
-            outcome = self
-                .validate_entire_workspace_tracked(false, Some(&progress))
-                .await;
-        }
         let msg = cwtools_i18n::t(match outcome {
             ScanOutcome::Ran => cwtools_i18n::Key::CommandWorkspaceReindexed,
             ScanOutcome::Busy => cwtools_i18n::Key::CommandReindexInProgress,
@@ -1335,27 +1297,12 @@ impl Backend {
             true,
         )
         .await;
-        let deadline = std::time::Instant::now()
-            + std::env::var("CWTOOLS_RETRY_DEADLINE_MS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .map_or(
-                    std::time::Duration::from_secs(60),
-                    std::time::Duration::from_millis,
-                );
-        let mut outcome = self
-            .validate_entire_workspace_tracked(false, Some(&progress))
+        let outcome = self
+            .wait_for_scan(
+                crate::scan::retry_deadline(std::time::Duration::from_secs(60)),
+                Some(&progress),
+            )
             .await;
-        while outcome == ScanOutcome::Busy && std::time::Instant::now() < deadline {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            if progress.is_cancelled() {
-                outcome = ScanOutcome::Cancelled;
-                break;
-            }
-            outcome = self
-                .validate_entire_workspace_tracked(false, Some(&progress))
-                .await;
-        }
 
         let value = match outcome {
             ScanOutcome::Cancelled => serde_json::json!({ "cancelled": true }),
