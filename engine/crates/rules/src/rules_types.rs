@@ -524,51 +524,6 @@ impl RuleSet {
         self.assert_reindexed();
         &self.pretriggers
     }
-
-    pub fn alias_exact_for(&self, category: &str, key: &str) -> Option<&[usize]> {
-        self.assert_reindexed();
-        self.alias_exact
-            .get(category)
-            .and_then(|m| m.get(key))
-            .map(|v| v.as_slice())
-    }
-
-    pub fn alias_category(&self, category: &str) -> Option<&AliasCategoryIndex> {
-        self.assert_reindexed();
-        self.alias_categories.get(category)
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct RuleSetBuilder {
-    inner: RuleSet,
-}
-
-impl RuleSetBuilder {
-    pub fn new() -> Self {
-        Self {
-            inner: RuleSet::new(),
-        }
-    }
-
-    pub fn from_ruleset(ruleset: RuleSet) -> Self {
-        Self { inner: ruleset }
-    }
-
-    pub fn ruleset_mut(&mut self) -> &mut RuleSet {
-        &mut self.inner
-    }
-
-    pub fn finish(mut self) -> RuleSet {
-        self.inner.reindex();
-        self.inner
-    }
-}
-
-impl From<RuleSet> for RuleSetBuilder {
-    fn from(rs: RuleSet) -> Self {
-        Self::from_ruleset(rs)
-    }
 }
 
 #[cfg(test)]
