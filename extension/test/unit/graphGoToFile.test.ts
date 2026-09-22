@@ -12,6 +12,7 @@ const {
 	registerCommand,
 	showTextDocument,
 	showWarningMessage,
+	showErrorMessage,
 	revealRange,
 	Range,
 	textEditorRevealType,
@@ -22,6 +23,7 @@ const {
 	registerCommand: vi.fn(() => ({ dispose: () => {} })),
 	showTextDocument: vi.fn(),
 	showWarningMessage: vi.fn(),
+	showErrorMessage: vi.fn(),
 	revealRange: vi.fn(),
 	Range: vi.fn(function (
 		startLine: number,
@@ -60,6 +62,7 @@ vi.mock("vscode", async (importOriginal) => ({
 		showSaveDialog: vi.fn(),
 		showTextDocument,
 		showWarningMessage,
+		showErrorMessage,
 	},
 	workspace: {
 		fs: { readFile: vi.fn() },
@@ -129,6 +132,20 @@ suite("graph panel goToFile", () => {
 
 	afterEach(() => {
 		GraphPanel.currentPanel?.dispose();
+	});
+
+	test("shows an error forwarded by the graph webview", async () => {
+		await fake.send({
+			command: "showError",
+			message:
+				"CWTools: couldn't import \"broken-graph.json\": it isn't valid Cytoscape graph JSON.",
+		});
+
+		assert.deepStrictEqual(showErrorMessage.mock.calls, [
+			[
+				"CWTools: couldn't import \"broken-graph.json\": it isn't valid Cytoscape graph JSON.",
+			],
+		]);
 	});
 
 	test("refuses a relative path without opening anything", async () => {

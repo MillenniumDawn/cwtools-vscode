@@ -8,6 +8,7 @@ import {
 	vi,
 } from "vitest";
 import * as assert from "assert";
+import type * as graphModule from "../../src/webview/graph";
 
 // The webview module runs at import time: it grabs the DOM, calls
 // acquireVsCodeApi(), registers a window message listener, and posts "ready".
@@ -43,15 +44,22 @@ interface FakeTippyInstance {
 	props: FakeTippyProps;
 	show: () => void;
 	hide: () => void;
-	destroy: () => void;
+	destroy: ReturnType<typeof vi.fn>;
 	setProps: (props: FakeTippyProps) => void;
+}
+
+interface FakeCytoscapeCore {
+	destroy: ReturnType<typeof vi.fn>;
+	json: ReturnType<typeof vi.fn>;
 }
 
 const {
 	added,
 	createdTags,
+	cytoscapeCores,
 	fakeCy,
 	graphNodes,
+	jsonFailure,
 	makeNode,
 	messageListener,
 	MutationObserver,
@@ -68,6 +76,7 @@ const {
 	const added: FakeElementDefinition[] = [];
 	const createdTags: string[] = [];
 	const tippyInstances: FakeTippyInstance[] = [];
+	const cytoscapeCores: FakeCytoscapeCore[] = [];
 	const styleUpdate = vi.fn();
 	const themeObservers: Array<{
 		callback: () => void;
@@ -75,6 +84,7 @@ const {
 		disconnect: ReturnType<typeof vi.fn>;
 	}> = [];
 	const graphNodes: { nodes: FakeGraphNode[] } = { nodes: [] };
+	const jsonFailure: { error?: Error } = {};
 	const makeNode = (id: string): FakeGraphNode => {
 		const handlers = new Map<string, () => void>();
 		const data: Record<string, unknown> = {
@@ -116,31 +126,40 @@ const {
 		shift: () => {},
 		union: () => fakeCollection(),
 	});
-	const fakeCy = () => ({
-		add: (elements: FakeElementDefinition[]) => {
-			added.push(...elements);
-		},
-		collection: () => fakeCollection(),
-		cyCanvas: () => ({
-			clear: vi.fn(),
-			getCanvas: () => ({ getContext: () => ({}) }),
-			resetTransform: vi.fn(),
-			setTransform: vi.fn(),
-		}),
-		destroy: vi.fn(),
-		elements: () => ({ components: () => [] }),
-		fit: vi.fn(),
-		height: () => 600,
-		json: vi.fn(),
-		nodes: () => ({
-			forEach: (fn: (node: FakeGraphNode) => void) => {
-				graphNodes.nodes.forEach(fn);
+	const fakeCy = () => {
+		const cy = {
+			add: (elements: FakeElementDefinition[]) => {
+				added.push(...elements);
 			},
-		}),
-		on: vi.fn(),
-		style: vi.fn(() => ({ update: styleUpdate })),
-		width: () => 800,
-	});
+			collection: () => fakeCollection(),
+			cyCanvas: () => ({
+				clear: vi.fn(),
+				getCanvas: () => ({ getContext: () => ({}) }),
+				resetTransform: vi.fn(),
+				setTransform: vi.fn(),
+			}),
+			destroy: vi.fn(),
+			elements: () => ({ components: () => [] }),
+			fit: vi.fn(),
+			height: () => 600,
+			json: vi.fn((json?: unknown) => {
+				if (json !== undefined && jsonFailure.error) {
+					throw jsonFailure.error;
+				}
+				return { elements: { nodes: [], edges: [] } };
+			}),
+			nodes: () => ({
+				forEach: (fn: (node: FakeGraphNode) => void) => {
+					graphNodes.nodes.forEach(fn);
+				},
+			}),
+			on: vi.fn(),
+			style: vi.fn(() => ({ update: styleUpdate })),
+			width: () => 800,
+		};
+		cytoscapeCores.push(cy);
+		return cy;
+	};
 	class FakeMutationObserver {
 		callback: () => void;
 		observe = vi.fn();
@@ -155,8 +174,10 @@ const {
 	return {
 		added,
 		createdTags,
+		cytoscapeCores,
 		fakeCy,
 		graphNodes,
+		jsonFailure,
 		makeNode,
 		messageListener,
 		MutationObserver,
@@ -205,6 +226,8 @@ const graphNode = {
 };
 
 suite("graph webview", () => {
+	let graph: typeof graphModule;
+
 	beforeAll(async () => {
 		vi.stubGlobal("document", {
 			documentElement: { style: { getPropertyValue: () => "" } },
@@ -223,7 +246,7 @@ suite("graph webview", () => {
 		vi.stubGlobal("MutationObserver", MutationObserver);
 		vi.stubGlobal("acquireVsCodeApi", () => ({ postMessage, setState }));
 
-		await import("../../src/webview/graph");
+		graph = await import("../../src/webview/graph");
 
 		// The script announces itself the moment it loads.
 		assert.deepStrictEqual(postMessage.mock.calls, [[{ command: "ready" }]]);
@@ -239,6 +262,7 @@ suite("graph webview", () => {
 	// builds a detail table into that test's createdTags.
 	beforeEach(() => {
 		vi.useFakeTimers();
+		postMessage.mockClear();
 		setState.mockClear();
 		tippy.mockClear();
 		styleUpdate.mockClear();
@@ -246,7 +270,9 @@ suite("graph webview", () => {
 		added.length = 0;
 		createdTags.length = 0;
 		tippyInstances.length = 0;
+		cytoscapeCores.length = 0;
 		graphNodes.nodes = [];
+		jsonFailure.error = undefined;
 	});
 
 	afterEach(() => {
@@ -255,6 +281,39 @@ suite("graph webview", () => {
 
 	const render = (message: unknown) =>
 		messageListener.listener?.({ data: message });
+
+	function clearGraph() {
+		jsonFailure.error = new Error("clear graph");
+		render({
+			command: "importJson",
+			json: '{"elements":{"nodes":[{"data":{"id":"clear"}}]}}',
+			settings: { wheelSensitivity: 1 },
+		});
+		jsonFailure.error = undefined;
+		postMessage.mockClear();
+	}
+
+	test("reports unavailable exports before a graph renders", async () => {
+		clearGraph();
+
+		await assert.doesNotReject(() => graph.exportImage(1));
+		assert.doesNotThrow(() => graph.exportJson());
+
+		assert.deepStrictEqual(postMessage.mock.calls, [
+			[
+				{
+					command: "showError",
+					message: "CWTools: no graph is available to export as an image.",
+				},
+			],
+			[
+				{
+					command: "showError",
+					message: "CWTools: no graph is available to export as a JSON file.",
+				},
+			],
+		]);
+	});
 
 	test("repaints the graph when VS Code changes its theme", () => {
 		render({
@@ -309,15 +368,24 @@ suite("graph webview", () => {
 		]);
 	});
 
-	test("persists the import source when a JSON graph renders", () => {
+	test("imports and persists a saved Cytoscape graph", () => {
 		render({
 			command: "importJson",
-			json: '{"elements":{}}',
+			json: '{"elements":{"nodes":[{"data":{"id":"saved"}}],"edges":[]}}',
 			settings: { wheelSensitivity: 1 },
-			persist: { source: "json" },
+			persist: { source: "json", fileName: "saved-graph.json" },
 		});
 
-		assert.deepStrictEqual(setState.mock.calls, [[{ source: "json" }]]);
+		assert.deepStrictEqual(setState.mock.calls, [
+			[{ source: "json", fileName: "saved-graph.json" }],
+		]);
+		assert.deepStrictEqual(cytoscapeCores[0]?.json.mock.calls, [
+			[
+				{
+					elements: { nodes: [{ data: { id: "saved" } }], edges: [] },
+				},
+			],
+		]);
 	});
 
 	test("does not persist when the message carries no request parameters", () => {
@@ -330,18 +398,134 @@ suite("graph webview", () => {
 		assert.deepStrictEqual(setState.mock.calls, []);
 	});
 
-	test("does not persist a JSON import that fails to parse", () => {
+	test("keeps the current graph when a named JSON import fails to parse", () => {
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		const current = cytoscapeCores[0];
+		const observer = themeObservers[themeObservers.length - 1];
+		assert.ok(current);
+		assert.ok(observer);
+
 		render({
 			command: "importJson",
 			json: "{not json",
 			settings: { wheelSensitivity: 1 },
-			persist: { source: "json" },
+			persist: { source: "json", fileName: "broken-graph.json" },
 		});
 
-		// A broken import leaves the graph empty, so claiming "json" state
-		// would make the reload serializer prompt for a file that never
-		// rendered.
 		assert.deepStrictEqual(setState.mock.calls, []);
+		assert.deepStrictEqual(postMessage.mock.calls, [
+			[
+				{
+					command: "showError",
+					message:
+						"CWTools: couldn't import \"broken-graph.json\": it isn't valid Cytoscape graph JSON.",
+				},
+			],
+		]);
+		assert.strictEqual(cytoscapeCores.length, 1);
+		assert.strictEqual(current.destroy.mock.calls.length, 0);
+		assert.strictEqual(observer.disconnect.mock.calls.length, 0);
+
+		graph.exportJson();
+		assert.deepStrictEqual(current.json.mock.calls, [[]]);
+		assert.deepStrictEqual(postMessage.mock.calls[1], [
+			{
+				command: "saveJson",
+				json: '{"elements":{"nodes":[],"edges":[]}}',
+			},
+		]);
+	});
+
+	test("rejects missing-ID elements before replacing a current graph", () => {
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		const current = cytoscapeCores[0];
+		const observer = themeObservers[themeObservers.length - 1];
+		assert.ok(current);
+		assert.ok(observer);
+
+		render({
+			command: "importJson",
+			json: '{"elements":[{"data":{}}]}',
+			settings: { wheelSensitivity: 1 },
+			persist: { source: "json", fileName: "missing-id.json" },
+		});
+
+		assert.deepStrictEqual(setState.mock.calls, []);
+		assert.deepStrictEqual(postMessage.mock.calls, [
+			[
+				{
+					command: "showError",
+					message:
+						"CWTools: couldn't import \"missing-id.json\": it isn't valid Cytoscape graph JSON.",
+				},
+			],
+		]);
+		assert.strictEqual(cytoscapeCores.length, 1);
+		assert.strictEqual(current.destroy.mock.calls.length, 0);
+		assert.strictEqual(observer.disconnect.mock.calls.length, 0);
+	});
+
+	test("cleans up a rejected Cytoscape replacement before exports", async () => {
+		const node = makeNode("a");
+		graphNodes.nodes = [node];
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		node.handlers.get("mouseover")?.();
+		const previous = cytoscapeCores[0];
+		const observer = themeObservers[themeObservers.length - 1];
+		const tip = tippyInstances[0];
+		assert.ok(previous);
+		assert.ok(observer);
+		assert.ok(tip);
+
+		jsonFailure.error = new Error("Cytoscape rejected import");
+		render({
+			command: "importJson",
+			json: '{"elements":{"nodes":[{"data":{"id":"replacement"}}]}}',
+			settings: { wheelSensitivity: 1 },
+			persist: { source: "json", fileName: "rejected.json" },
+		});
+
+		assert.strictEqual(previous.destroy.mock.calls.length, 1);
+		assert.strictEqual(observer.disconnect.mock.calls.length, 1);
+		assert.strictEqual(tip.destroy.mock.calls.length, 1);
+		assert.strictEqual(cytoscapeCores[1]?.destroy.mock.calls.length, 1);
+		assert.deepStrictEqual(setState.mock.calls, []);
+
+		await assert.doesNotReject(() => graph.exportImage(1));
+		assert.doesNotThrow(() => graph.exportJson());
+		assert.deepStrictEqual(postMessage.mock.calls, [
+			[
+				{
+					command: "showError",
+					message:
+						"CWTools: couldn't import \"rejected.json\": it isn't valid Cytoscape graph JSON.",
+				},
+			],
+			[
+				{
+					command: "showError",
+					message: "CWTools: no graph is available to export as an image.",
+				},
+			],
+			[
+				{
+					command: "showError",
+					message: "CWTools: no graph is available to export as a JSON file.",
+				},
+			],
+		]);
 	});
 
 	test("builds no tooltip DOM while rendering the graph", () => {

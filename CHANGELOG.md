@@ -4,11 +4,15 @@
 
 * CI Cargo tools are pinned and each executable is cached by version separately
   from the Cargo registry. (#510)
+* Test graph import errors and unavailable exports through the bundled webview.
+  (#565)
 * VSIX packaging now fails when staged server platforms are not in the release
   target list, keeping the release matrix and `VSIX_TARGETS` in sync. (#584)
 
 #### Extension
 
+* Malformed or incomplete graph JSON imports and exports before a graph loads
+  now report errors instead of silently failing or throwing. (#565)
 * Load the generated graph stylesheet for webview tooltips instead of keeping
   a copy of the dependency CSS. (#586)
 

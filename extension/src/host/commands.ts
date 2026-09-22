@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import type { ExtensionContext } from "vscode";
 import { workspace, window, commands, l10n } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
@@ -301,6 +302,7 @@ export function registerCommands(
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity(), {
 				source: "json",
+				fileName: path.basename(uri[0].fsPath),
 			});
 		}),
 	);
@@ -357,6 +359,7 @@ export function registerCommands(
 								}
 								panel.initialiseGraph(data, wheelSensitivity(), {
 									source: "json",
+									fileName: path.basename(uri[0].fsPath),
 								});
 							} else if (serverProvidesGraphData(client)) {
 								// No persisted state (e.g. a reload before the first render):

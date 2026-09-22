@@ -81,6 +81,8 @@ export type GraphData = GraphNode[];
 export interface GraphPanelState {
 	/** Where the graph's data came from. */
 	source: "server" | "json";
+	/** Name of the JSON export selected by the user, when applicable. */
+	fileName?: string;
 	/** Entity type the graph was requested for. */
 	entityType?: string;
 	/** Connection depth the graph was requested at. */
