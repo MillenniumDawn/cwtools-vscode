@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "unrelated-hoi4",
+			"path": "multiroot-unrelated-hoi4"
+		},
+		{
+			"name": "stellaris-mod",
+			"path": "multiroot-stellaris"
+		}
+	],
+	"settings": {}
+}

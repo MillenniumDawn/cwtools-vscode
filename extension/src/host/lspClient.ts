@@ -1,5 +1,5 @@
 import * as path from "path";
-import type { ExtensionContext } from "vscode";
+import type { ExtensionContext, WorkspaceFolder } from "vscode";
 import {
 	CancellationError,
 	Uri,
@@ -43,6 +43,8 @@ export interface ClientConfig {
 	serverExe: string;
 	cacheDir: string;
 	rulesCache: string;
+	/** The descriptor-bearing root the server must initialize and scan. */
+	workspaceFolder: WorkspaceFolder;
 }
 
 // Settings-to-server mapping lives in reindexSettings.ts (pure, unit-tested);
@@ -412,6 +414,10 @@ export function createLanguageClient(
 		// them ourselves too makes client.start() throw "command already exists",
 		// so the UX (result toasts, opening the generated loc) lives here instead.
 		middleware,
+		// Lock the client to the same descriptor-bearing root selected by
+		// activation. This makes initialize.rootUri/workspaceFolders contain only
+		// that root, so the server's first-root scan cannot drift to another folder.
+		workspaceFolder: cfg.workspaceFolder,
 		errorHandler: createRestartLimitingErrorHandler(onStopped),
 	};
 

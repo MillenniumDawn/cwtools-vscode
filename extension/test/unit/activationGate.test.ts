@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
 	workspace: {
 		workspaceFolders: undefined as { uri: string }[] | undefined,
 		fs: { stat: vi.fn() },
+		getConfiguration: vi.fn(() => ({ get: vi.fn() })),
 	},
 	executeCommand: vi.fn(),
 	createOutputChannel: vi.fn(() => ({
@@ -22,8 +23,27 @@ const mocks = vi.hoisted(() => ({
 	createLanguageClient: vi.fn(),
 	registerCommands: vi.fn(),
 	publishCommandAvailability: vi.fn(),
+	fsStat: vi.fn(),
+	fsChmod: vi.fn(),
+	client: {
+		initializeResult: { capabilities: {} },
+		outputChannel: { appendLine: vi.fn() },
+		registerProposedFeatures: vi.fn(),
+		start: vi.fn(),
+		dispose: vi.fn(),
+	},
+	tracker: { classifyActiveEditor: vi.fn() },
+	notifications: {
+		initialScanDone: Promise.resolve(),
+		statusText: vi.fn(),
+		markStopped: vi.fn(),
+	},
 }));
 
+vi.mock("fs/promises", () => ({
+	stat: mocks.fsStat,
+	chmod: mocks.fsChmod,
+}));
 vi.mock("vscode", () => ({
 	workspace: mocks.workspace,
 	commands: { executeCommand: mocks.executeCommand },
@@ -48,10 +68,10 @@ vi.mock("../../src/host/lspClient", () => ({
 	createLanguageClient: mocks.createLanguageClient,
 }));
 vi.mock("../../src/host/serverNotifications", () => ({
-	registerServerNotifications: vi.fn(),
+	registerServerNotifications: vi.fn(() => mocks.notifications),
 }));
 vi.mock("../../src/host/documentLanguage", () => ({
-	registerDocumentLanguage: vi.fn(),
+	registerDocumentLanguage: vi.fn(() => mocks.tracker),
 }));
 vi.mock("../../src/host/commands", () => ({
 	registerCommands: mocks.registerCommands,
@@ -74,6 +94,15 @@ suite("descriptor startup gate", () => {
 		vi.clearAllMocks();
 		mocks.workspace.workspaceFolders = [{ uri: "file:///project" }];
 		mocks.workspace.fs.stat.mockRejectedValue(new Error("FileNotFound"));
+		mocks.fsStat.mockResolvedValue({ mode: 0o755 });
+		mocks.fsChmod.mockResolvedValue(undefined);
+		mocks.serverExe.mockReturnValue("/bin/cwtools-server");
+		mocks.resolveRulesCache.mockResolvedValue({
+			rulesCache: "/rules",
+			fetchUpstream: false,
+		});
+		mocks.createLanguageClient.mockReturnValue(mocks.client);
+		mocks.client.start.mockResolvedValue(undefined);
 		mocks.createOutputChannel.mockClear();
 	});
 
@@ -141,8 +170,10 @@ suite("descriptor startup gate", () => {
 		expect(mocks.registerCommands).not.toHaveBeenCalled();
 	});
 
-	test("initializes when a workspace root contains a descriptor file", async () => {
-		mocks.workspace.workspaceFolders?.push({ uri: "file:///mod" });
+	test("initializes the first descriptor root and starts its client", async () => {
+		const unrelated = { uri: "file:///project" };
+		const mod = { uri: "file:///mod" };
+		mocks.workspace.workspaceFolders = [unrelated, mod];
 		mocks.workspace.fs.stat.mockImplementation((uri: string) => {
 			return uri === "file:///mod/descriptor.mod"
 				? Promise.resolve({ type: 1 })
@@ -160,6 +191,7 @@ suite("descriptor startup gate", () => {
 			true,
 		);
 		expect(mocks.detectGameAndVanilla).toHaveBeenCalledOnce();
+		expect(mocks.detectGameAndVanilla).toHaveBeenCalledWith(mod);
 		expect(mocks.createOutputChannel).toHaveBeenCalledOnce();
 		expect(mocks.initializeLogger).toHaveBeenCalledWith(
 			mocks.createOutputChannel.mock.results[0]?.value,
@@ -167,6 +199,13 @@ suite("descriptor startup gate", () => {
 		expect(context.subscriptions).toContain(
 			mocks.createOutputChannel.mock.results[0]?.value,
 		);
-		expect(mocks.serverExe).toHaveBeenCalledOnce();
+		expect(mocks.createLanguageClient).toHaveBeenCalledWith(
+			context,
+			expect.objectContaining({ workspaceFolder: mod }),
+			expect.any(Function),
+		);
+		expect(mocks.client.registerProposedFeatures).toHaveBeenCalledOnce();
+		expect(context.subscriptions).toContain(mocks.client);
+		expect(mocks.client.start).toHaveBeenCalledOnce();
 	});
 });

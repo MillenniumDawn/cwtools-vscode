@@ -7,7 +7,7 @@ import * as path from "path";
 import * as os from "os";
 import * as fsPromises from "fs/promises";
 import * as vscode from "vscode";
-import type { ExtensionContext } from "vscode";
+import type { ExtensionContext, WorkspaceFolder } from "vscode";
 import { workspace, window, commands, l10n } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 
@@ -62,21 +62,31 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverStatusText: () => statusText?.(),
 		deactivate,
 	};
-	const descriptors = await Promise.all(
-		(workspace.workspaceFolders ?? []).map(async (folder) => {
-			try {
-				const stat = await workspace.fs.stat(
-					vscode.Uri.joinPath(folder.uri, "descriptor.mod"),
-				);
-				return (stat.type & vscode.FileType.File) !== 0;
-			} catch {
-				return false;
+	// The first workspace folder containing a root descriptor is the one CWTools
+	// serves. Keep this selection together with the gate: otherwise a descriptor
+	// in a later folder could authorize the unrelated first folder, which the
+	// language client and game detection would then select independently.
+	let selectedRoot: WorkspaceFolder | undefined;
+	for (const folder of workspace.workspaceFolders ?? []) {
+		try {
+			const stat = await workspace.fs.stat(
+				vscode.Uri.joinPath(folder.uri, "descriptor.mod"),
+			);
+			if ((stat.type & vscode.FileType.File) !== 0) {
+				selectedRoot = folder;
+				break;
 			}
-		}),
-	);
-	const enabled = descriptors.some(Boolean);
+		} catch {
+			// This folder does not contain a descriptor; try the next root.
+		}
+	}
+	const enabled = selectedRoot !== undefined;
 	void commands.executeCommand("setContext", "cwtoolsEnabled", enabled);
 	if (!enabled) {
+		return api;
+	}
+	const root = selectedRoot;
+	if (!root) {
 		return api;
 	}
 	// The editor/title graph button is gated on `cwtoolsWebview == false`, which an
@@ -94,7 +104,10 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 	const cacheDir = path.join(context.globalStorageUri.fsPath, ".cwtools");
 	rulesCacheRoot = cacheDir;
 
-	const init = async function (language: string) {
+	const init = async function (
+		language: string,
+		workspaceFolder: WorkspaceFolder,
+	) {
 		// Include `.` in the word pattern so a dotted event/decision id
 		// (`namespace.1`) selects whole on double-click and resolves via
 		// go-to-definition, instead of splitting at the dot. (#39)
@@ -149,7 +162,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		// client exists, so this holder lets the client be created first.
 		const client = createLanguageClient(
 			context,
-			{ language, serverExe, cacheDir, rulesCache },
+			{ language, serverExe, cacheDir, rulesCache, workspaceFolder },
 			() => notifyStopped?.(),
 		);
 		defaultClient = client;
@@ -196,9 +209,9 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		}
 	};
 
-	const { languageId } = await detectGameAndVanilla();
+	const { languageId } = await detectGameAndVanilla(root);
 
-	await init(languageId);
+	await init(languageId, root);
 
 	return api;
 }

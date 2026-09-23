@@ -14,7 +14,7 @@ vi.mock("vscode", () => ({
 	},
 	RelativePattern: class RelativePattern {
 		constructor(
-			_root: unknown,
+			public readonly root: unknown,
 			public readonly pattern: string,
 		) {}
 	},
@@ -49,5 +49,25 @@ suite("detectGameAndVanilla", () => {
 			languageId: "hoi4",
 		});
 		assert.strictEqual(mocks.findFiles.mock.calls.length, GAMES.length);
+	});
+
+	test("searches for executables under the selected workspace root", async () => {
+		const selectedRoot = {
+			uri: { fsPath: "/selected-root" },
+			name: "selected-root",
+			index: 1,
+		} as never;
+		mocks.findFiles.mockResolvedValue([]);
+
+		await detectGameAndVanilla(selectedRoot);
+
+		assert.strictEqual(mocks.findFiles.mock.calls.length, GAMES.length);
+		const calls = mocks.findFiles.mock.calls as unknown as Array<
+			[{ root: unknown }]
+		>;
+		assert.ok(
+			calls.every(([pattern]) => pattern.root === selectedRoot),
+			"every executable search should use the selected root",
+		);
 	});
 });

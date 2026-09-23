@@ -3,6 +3,7 @@
 //
 //   unit        fast suites that need the VS Code API but not the language server
 //   smoke       unit + activation, in the sample workspace
+//   multi-root  server-backed descriptor/root selection in a multi-root fixture
 //   live        the live-settings suite, in sample-live (its own workspace
 //               because .vscode/settings.json attempts to set rules_folder)
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
@@ -11,8 +12,8 @@
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
-// Labels are therefore unique here, and `test:smoke` passes both `--label
-// smoke` and `--label live` to cover the two workspaces.
+// Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
+// `--label live`, and `--label multi-root` to cover the host workspaces.
 //
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
@@ -24,6 +25,9 @@
 // binary, so it is gated in ci.yml's `build` job rather than `check`; two of
 // its assertions stay `test.skip` against genuine engine gaps
 // (MillenniumDawn/cwtools#317, #318).
+//
+// The multi-root fixture needs a staged server, so it runs with smoke after the
+// build job has produced one; unit remains server-free for fast client tests.
 //
 // rules-sync exercises the opposite gap: sample-hoi4's folder name and
 // common/ai_strategy dir make it detect as hoi4, so activation's real
@@ -45,9 +49,13 @@ import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";
 
 const sampleWorkspace = "./extension/test/workspaces/stellaris";
+const multiRootWorkspace =
+	"./extension/test/workspaces/multiroot.code-workspace";
 const liveWorkspace = "./extension/test/workspaces/live";
 const rulesSyncWorkspace = "./extension/test/workspaces/hoi4";
 const sampleFile = "./extension/test/workspaces/stellaris/events/irm.txt";
+const multiRootSampleFile =
+	"./extension/test/workspaces/multiroot-stellaris/events/selected.txt";
 const liveSampleFile = "./extension/test/workspaces/live/events/irm.txt";
 const rulesSyncSampleFile = "./extension/test/workspaces/hoi4/events/irm.txt";
 const liveRulesFolder = path.resolve(
@@ -67,6 +75,10 @@ const unitFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/graphTypes.test.js",
 	"./dist/extension/bin/client/test/host/fileExplorer.test.js",
+];
+const multiRootFiles = [
+	abortDiagnostics,
+	"./dist/extension/bin/client/test/host/multiroot.test.js",
 ];
 // Stops the language client to prove deactivate() completes the LSP shutdown
 // handshake (#502), so it goes last in every label that lists it.
@@ -132,6 +144,18 @@ export default defineConfig({
 			workspaceFolder: sampleWorkspace,
 			launchArgs: [
 				sampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
+		},
+		{
+			...base,
+			label: "multi-root",
+			files: multiRootFiles,
+			workspaceFolder: multiRootWorkspace,
+			launchArgs: [
+				multiRootSampleFile,
 				softwareRendering,
 				disableCrashReporter,
 				...headless,

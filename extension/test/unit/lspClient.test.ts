@@ -164,6 +164,11 @@ function create(onStopped: () => void = () => {}): {
 			serverExe: "/bin/cwtools-server",
 			cacheDir: "/cache",
 			rulesCache: "/rules",
+			workspaceFolder: {
+				uri: { fsPath: "/workspace" },
+				name: "workspace",
+				index: 0,
+			} as never,
 		},
 		onStopped,
 	);
@@ -251,6 +256,14 @@ suite("lspClient — watched files", () => {
 			settings: { workspaceWideDiagnostics: boolean };
 		};
 		assert.strictEqual(payload.settings.workspaceWideDiagnostics, false);
+	});
+
+	test("locks the language client to the selected workspace folder", () => {
+		create();
+		const selected = lastClientOptions.value?.workspaceFolder as
+			| { uri: { fsPath: string } }
+			| undefined;
+		assert.strictEqual(selected?.uri.fsPath, "/workspace");
 	});
 
 	test("the globs match every file class the server indexes", () => {
