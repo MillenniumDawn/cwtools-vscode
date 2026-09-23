@@ -2,6 +2,8 @@
 
 #### Tooling
 
+* Update `qs` past the versions affected by the reported denial-of-service
+  advisories.
 * CI Cargo tools are pinned and each executable is cached by version separately
   from the Cargo registry. (#510)
 * Test graph import errors and unavailable exports through the bundled webview.
