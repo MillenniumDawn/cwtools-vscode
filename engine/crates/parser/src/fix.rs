@@ -65,6 +65,71 @@ pub fn line_start_bytes(text: &str) -> Vec<usize> {
     starts
 }
 
+/// Resolves source positions to byte offsets while sharing each line's prefix scan.
+///
+/// Source positions count Unicode scalar values rather than bytes. The parser also
+/// saturates columns at `u16::MAX`, so the cache grows lazily only as far as the
+/// largest requested column on each line. Calls may be out of order after a line has
+/// been scanned; the cached offsets still make those lookups constant time.
+pub(crate) struct PositionLookup<'a> {
+    text: &'a str,
+    line_starts: Vec<usize>,
+    lines: Vec<Option<LineOffsets>>,
+}
+
+struct LineOffsets {
+    offsets: Vec<usize>,
+    complete: bool,
+}
+
+impl<'a> PositionLookup<'a> {
+    pub(crate) fn new(text: &'a str, line_starts: &[usize]) -> Self {
+        Self {
+            text,
+            line_starts: line_starts.to_vec(),
+            lines: (0..line_starts.len()).map(|_| None).collect(),
+        }
+    }
+
+    pub(crate) fn byte_offset(&mut self, pos: SourcePos) -> usize {
+        let line_idx = pos.line.saturating_sub(1) as usize;
+        let Some(&line_start) = self.line_starts.get(line_idx) else {
+            return self.text.len();
+        };
+        let line = self.lines[line_idx].get_or_insert_with(|| LineOffsets {
+            offsets: vec![line_start],
+            complete: false,
+        });
+        line.byte_at(self.text, usize::from(pos.col))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_columns(&self, line: u32) -> Option<usize> {
+        self.lines
+            .get(line.saturating_sub(1) as usize)
+            .and_then(|line| line.as_ref())
+            .map(|line| line.offsets.len())
+    }
+}
+
+impl LineOffsets {
+    fn byte_at(&mut self, text: &str, col: usize) -> usize {
+        while self.offsets.len() <= col && !self.complete {
+            let byte = self.offsets[self.offsets.len() - 1];
+            let Some(ch) = text[byte..].chars().next() else {
+                self.complete = true;
+                break;
+            };
+            if ch == '\n' {
+                self.complete = true;
+                break;
+            }
+            self.offsets.push(byte + ch.len_utf8());
+        }
+        self.offsets[col.min(self.offsets.len() - 1)]
+    }
+}
+
 pub fn pos_to_byte(text: &str, line_starts: &[usize], pos: SourcePos) -> usize {
     let line_idx = pos.line.saturating_sub(1) as usize;
     let Some(&line_start) = line_starts.get(line_idx) else {
@@ -80,24 +145,25 @@ pub fn pos_to_byte(text: &str, line_starts: &[usize], pos: SourcePos) -> usize {
     byte
 }
 
-fn edit_pos_to_byte(text: &str, line_starts: &[usize], pos: SourcePos) -> usize {
+fn edit_pos_to_byte(lookup: &mut PositionLookup<'_>, pos: SourcePos) -> usize {
     if pos == EOF_POS {
-        text.len()
+        lookup.text.len()
     } else {
-        pos_to_byte(text, line_starts, pos)
+        lookup.byte_offset(pos)
     }
 }
 
 pub fn plan_file_edits<T>(text: &str, mut planned: Vec<(T, SpanEdit)>) -> (Vec<SpanEdit>, Vec<T>) {
     let starts = line_start_bytes(text);
-    planned.sort_by_key(|(_, e)| edit_pos_to_byte(text, &starts, e.range.start));
+    let mut lookup = PositionLookup::new(text, &starts);
+    planned.sort_by_key(|(_, e)| edit_pos_to_byte(&mut lookup, e.range.start));
     let mut kept: Vec<SpanEdit> = Vec::new();
     let mut skipped: Vec<T> = Vec::new();
     let mut last_end = 0usize;
     let mut first = true;
     for (tag, edit) in planned {
-        let s = edit_pos_to_byte(text, &starts, edit.range.start);
-        let e = edit_pos_to_byte(text, &starts, edit.range.end);
+        let s = edit_pos_to_byte(&mut lookup, edit.range.start);
+        let e = edit_pos_to_byte(&mut lookup, edit.range.end);
         if !first && s < last_end {
             skipped.push(tag);
             continue;
@@ -111,12 +177,13 @@ pub fn plan_file_edits<T>(text: &str, mut planned: Vec<(T, SpanEdit)>) -> (Vec<S
 
 pub fn apply_edits(text: &str, edits: &[SpanEdit]) -> String {
     let starts = line_start_bytes(text);
+    let mut lookup = PositionLookup::new(text, &starts);
     let mut ranges: Vec<(usize, usize, &str)> = edits
         .iter()
         .map(|e| {
             (
-                edit_pos_to_byte(text, &starts, e.range.start),
-                edit_pos_to_byte(text, &starts, e.range.end),
+                edit_pos_to_byte(&mut lookup, e.range.start),
+                edit_pos_to_byte(&mut lookup, e.range.end),
                 e.replacement.as_str(),
             )
         })
@@ -149,13 +216,25 @@ mod tests {
     }
 
     #[test]
+    fn position_lookup_reuses_cached_unicode_line_offsets() {
+        let text = "aé界z\n";
+        let starts = line_start_bytes(text);
+        let mut lookup = PositionLookup::new(text, &starts);
+
+        assert_eq!(lookup.byte_offset(pos(1, 3)), "aé界".len());
+        assert_eq!(lookup.byte_offset(pos(1, 1)), "a".len());
+        assert_eq!(lookup.byte_offset(pos(1, 4)), "aé界z".len());
+        assert_eq!(lookup.lines[0].as_ref().unwrap().offsets.len(), 5);
+    }
+
+    #[test]
     fn exact_maximum_column_stays_at_that_column() {
         let text = format!("prefix\n{}", "x".repeat(70_000));
         let starts = line_start_bytes(&text);
-        assert_eq!(
-            pos_to_byte(&text, &starts, pos(2, u16::MAX)),
-            starts[1] + usize::from(u16::MAX)
-        );
+        let expected = starts[1] + usize::from(u16::MAX);
+        assert_eq!(pos_to_byte(&text, &starts, pos(2, u16::MAX)), expected);
+        let mut lookup = PositionLookup::new(&text, &starts);
+        assert_eq!(lookup.byte_offset(pos(2, u16::MAX)), expected);
     }
 
     #[test]
