@@ -6,6 +6,68 @@ use cwtools_string_table::string_table::StringTable;
 
 use crate::paths::logical_path_from_uri;
 
+#[derive(Debug, Default)]
+pub(crate) struct BoundedUseSites {
+    pub(crate) sites: Vec<cwtools_info::UseSite>,
+    pub(crate) total: usize,
+    limit: usize,
+}
+
+pub(crate) struct BoundedUseSiteScan<'a> {
+    pub(crate) type_name: &'a str,
+    pub(crate) instance_name: &'a str,
+    pub(crate) docs: &'a [(String, Arc<ParsedFile>)],
+    pub(crate) ruleset: &'a RuleSet,
+    pub(crate) workspace_prefix: &'a Option<Arc<str>>,
+    pub(crate) string_table: &'a StringTable,
+    pub(crate) definitions: &'a [(String, cwtools_info::SourceLocation)],
+}
+
+trait UseSiteSink {
+    fn push(
+        &mut self,
+        file_uri: &str,
+        key: cwtools_info::SourceLocation,
+        value: cwtools_info::SourceLocation,
+    );
+}
+
+impl UseSiteSink for Vec<cwtools_info::UseSite> {
+    fn push(
+        &mut self,
+        file_uri: &str,
+        key: cwtools_info::SourceLocation,
+        value: cwtools_info::SourceLocation,
+    ) {
+        Vec::push(
+            self,
+            cwtools_info::UseSite {
+                file: Arc::from(file_uri),
+                key,
+                value,
+            },
+        );
+    }
+}
+
+impl UseSiteSink for BoundedUseSites {
+    fn push(
+        &mut self,
+        file_uri: &str,
+        key: cwtools_info::SourceLocation,
+        value: cwtools_info::SourceLocation,
+    ) {
+        self.total += 1;
+        if self.sites.len() < self.limit {
+            self.sites.push(cwtools_info::UseSite {
+                file: Arc::from(file_uri),
+                key,
+                value,
+            });
+        }
+    }
+}
+
 /// Walk open documents' ASTs for use sites of `instance_name`.
 ///
 /// `docs` is a snapshot of `(uri, ast)` pairs rather than the document store
@@ -46,6 +108,51 @@ pub(crate) fn scan_use_sites(
     results
 }
 
+/// Walk open documents while retaining only `limit` sites. `total` counts all
+/// matches, so callers can report omissions without building the full vector.
+pub(crate) fn scan_use_sites_bounded(
+    scan: BoundedUseSiteScan<'_>,
+    limit: usize,
+) -> BoundedUseSites {
+    let BoundedUseSiteScan {
+        type_name,
+        instance_name,
+        docs,
+        ruleset,
+        workspace_prefix,
+        string_table,
+        definitions,
+    } = scan;
+    let mut results = BoundedUseSites {
+        sites: Vec::with_capacity(limit),
+        total: 0,
+        limit,
+    };
+    let patterns = cwtools_info::build_type_patterns(ruleset);
+
+    for (file_uri, ast) in docs {
+        let logical_path = logical_path_from_uri(file_uri, workspace_prefix);
+
+        scan_ast_for_type_ref(
+            &ast.root_children,
+            &ast.arena,
+            &TypeRefSearch {
+                type_name,
+                instance_name,
+                file_uri,
+                ruleset,
+                logical_path: &logical_path,
+                table: string_table,
+                patterns: &patterns,
+                definitions,
+            },
+            &mut results,
+        );
+    }
+
+    results
+}
+
 /// rules/table/path needed to classify a candidate. Invariant across the walk of
 struct TypeRefSearch<'a> {
     type_name: &'a str,
@@ -58,11 +165,11 @@ struct TypeRefSearch<'a> {
     definitions: &'a [(String, cwtools_info::SourceLocation)],
 }
 
-fn scan_ast_for_type_ref(
+fn scan_ast_for_type_ref<S: UseSiteSink>(
     children: &[cwtools_parser::ast::Child],
     arena: &cwtools_parser::ast::Arena,
     search: &TypeRefSearch,
-    out: &mut Vec<cwtools_info::UseSite>,
+    out: &mut S,
 ) {
     use cwtools_parser::ast::{Child, Value};
     let &TypeRefSearch {
@@ -99,15 +206,15 @@ fn scan_ast_for_type_ref(
                 })
                 .unwrap_or(false)
         {
-            out.push(cwtools_info::UseSite {
-                file: Arc::from(file_uri),
-                key: cwtools_info::SourceLocation {
+            out.push(
+                file_uri,
+                cwtools_info::SourceLocation {
                     line: leaf.pos.start.line,
                     col: leaf.pos.start.col,
                     end: (leaf.pos.end.line, leaf.pos.end.col),
                 },
-                value: cwtools_info::value_location(&leaf.value_pos, quoted),
-            });
+                cwtools_info::value_location(&leaf.value_pos, quoted),
+            );
         }
         let key_loc = cwtools_info::SourceLocation {
             line: leaf.pos.start.line,
@@ -124,11 +231,7 @@ fn scan_ast_for_type_ref(
                 })
                 .unwrap_or(false)
         {
-            out.push(cwtools_info::UseSite {
-                file: Arc::from(file_uri),
-                key: key_loc,
-                value: key_loc,
-            });
+            out.push(file_uri, key_loc, key_loc);
         }
         if let Value::Clause(ch) = &leaf.value {
             scan_ast_for_type_ref(ch, arena, search, out);
@@ -277,6 +380,35 @@ mod tests {
         // The leaf key `base` starts at column 8, the value at column 15.
         assert_eq!((sites[0].key.line, sites[0].key.col), (1, 8));
         assert_eq!((sites[0].value.line, sites[0].value.col), (1, 15));
+    }
+
+    #[test]
+    fn bounded_scan_counts_high_fanout_without_materializing_matches() {
+        let source: String = (0..64)
+            .map(|idx| format!("foo_{idx} = {{ base = my_instance }}\n"))
+            .collect();
+        let table = StringTable::new();
+        let parsed = parse_string(&source, &table);
+        let docs = vec![("file:///test.txt".to_string(), Arc::new(parsed))];
+        let ws_uri: Option<Arc<str>> = Some("file:///".into());
+        let ruleset = type_ref_ruleset();
+        let bounded = scan_use_sites_bounded(
+            BoundedUseSiteScan {
+                type_name: "my_type",
+                instance_name: "my_instance",
+                docs: &docs,
+                ruleset: &ruleset,
+                workspace_prefix: &ws_uri,
+                string_table: &table,
+                definitions: &[],
+            },
+            3,
+        );
+
+        assert_eq!(bounded.sites.len(), 3);
+        assert_eq!(bounded.total, 64);
+        assert_eq!(bounded.sites[0].key.line, 1);
+        assert_eq!(bounded.sites[2].key.line, 3);
     }
 
     #[test]

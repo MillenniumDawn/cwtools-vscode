@@ -568,12 +568,12 @@ impl GraphSource for BackendGraphSource<'_> {
     }
 
     fn use_sites(&self, type_name: &str, name: &str, limit: usize) -> GraphUseSites {
-        let sites = self.backend.collect_use_sites(type_name, name);
-        let omitted = sites.len().saturating_sub(limit);
+        let (sites, omitted) = self
+            .backend
+            .collect_use_sites_bounded(type_name, name, limit);
         GraphUseSites {
             sites: sites
                 .into_iter()
-                .take(limit)
                 .map(|site| (site.file.to_string(), site.key))
                 .collect(),
             omitted,
@@ -1211,6 +1211,61 @@ mod tests {
         let build = build_graph(&src, &request("focus", 2));
         assert_eq!(build.nodes.len(), 1);
         assert_eq!(build.seed_total, 2);
+    }
+
+    #[test]
+    fn backend_graph_source_bounds_high_fanout_before_graph_walk() {
+        use crate::navigation::test_rules::type_ref_ruleset;
+        use crate::state::DocumentState;
+        use cwtools_parser::parser::parse_string;
+
+        let state = Arc::new(DocumentState::new());
+        let captured = Arc::new(parking_lot::Mutex::new(None));
+        let slot = captured.clone();
+        let server_state = state.clone();
+        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
+            *slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: server_state.clone(),
+            }
+        });
+        let backend = Backend {
+            client: captured.lock().take().expect("the builder ran"),
+            state: state.clone(),
+        };
+        let rules = type_ref_ruleset();
+        state.rules.write().ruleset = Some(Arc::new(rules.clone()));
+        {
+            let mut info = state.info_service.write();
+            let definition = parse_string(
+                "my_type = { id = my_instance kind = alpha active = yes name = title }\n",
+                &state.string_table,
+            );
+            info.index_file_with_path(
+                "file:///definition.txt",
+                &definition,
+                &state.string_table,
+                &rules,
+                "events/definition.txt",
+            );
+            for idx in 0..64 {
+                let source = parse_string("foo = { base = my_instance }\n", &state.string_table);
+                info.index_file_with_path(
+                    &format!("file:///caller-{idx}.txt"),
+                    &source,
+                    &state.string_table,
+                    &rules,
+                    "events/caller.txt",
+                );
+            }
+        }
+
+        let source = BackendGraphSource { backend: &backend };
+        let bounded = source.use_sites("my_type", "my_instance", 3);
+
+        assert_eq!(bounded.sites.len(), 3);
+        assert_eq!(bounded.omitted, 61);
     }
 
     #[test]

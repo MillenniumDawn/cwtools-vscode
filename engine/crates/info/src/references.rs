@@ -111,6 +111,35 @@ impl ReferenceIndex {
         self.references_where(type_name, |n| n.eq_ignore_ascii_case(name))
     }
 
+    /// Return at most `limit` matching sites, together with the total number
+    /// of matches. The total is counted without allocating the complete result
+    /// vector, and `excluded_files` preserves the LSP's open-buffer precedence.
+    pub fn references_bounded(
+        &self,
+        type_name: &str,
+        name: &str,
+        limit: usize,
+        excluded_files: &HashSet<String>,
+    ) -> (Vec<UseSite>, usize) {
+        self.references_where_bounded(type_name, |n| n == name, limit, excluded_files)
+    }
+
+    /// Case-insensitive counterpart to [`Self::references_bounded`].
+    pub fn references_ci_bounded(
+        &self,
+        type_name: &str,
+        name: &str,
+        limit: usize,
+        excluded_files: &HashSet<String>,
+    ) -> (Vec<UseSite>, usize) {
+        self.references_where_bounded(
+            type_name,
+            |n| n.eq_ignore_ascii_case(name),
+            limit,
+            excluded_files,
+        )
+    }
+
     fn references_where(&self, type_name: &str, matches: impl Fn(&str) -> bool) -> Vec<UseSite> {
         self.map
             .get(type_name)
@@ -126,6 +155,33 @@ impl ReferenceIndex {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn references_where_bounded(
+        &self,
+        type_name: &str,
+        matches: impl Fn(&str) -> bool,
+        limit: usize,
+        excluded_files: &HashSet<String>,
+    ) -> (Vec<UseSite>, usize) {
+        let mut sites_out = Vec::new();
+        let mut total = 0;
+        if let Some(sites) = self.map.get(type_name) {
+            for site in sites {
+                if !matches(&site.name) || excluded_files.contains(site.file.as_ref()) {
+                    continue;
+                }
+                total += 1;
+                if sites_out.len() < limit {
+                    sites_out.push(UseSite {
+                        file: Arc::clone(&site.file),
+                        key: site.location,
+                        value: site.value,
+                    });
+                }
+            }
+        }
+        (sites_out, total)
     }
 }
 
@@ -515,6 +571,8 @@ pub(crate) fn classify_alias_key_sites(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use cwtools_parser::parser::parse_string;
     use cwtools_rules::rules_converter::ast_to_ruleset;
     use cwtools_string_table::string_table::StringTable;
@@ -572,6 +630,40 @@ alias[effect:log] = scalar
         assert_eq!(
             (sites[0].value.line, sites[0].value.col),
             (sites[0].key.line, sites[0].key.col)
+        );
+    }
+
+    #[test]
+    fn bounded_references_cap_storage_and_exclude_open_files() {
+        let mut files = vec![(
+            "e.txt",
+            "common/scripted_effects/e.txt",
+            "my_se = { log = hi }\n",
+        )];
+        const CALLER_URIS: [&str; 12] = [
+            "d0.txt", "d1.txt", "d2.txt", "d3.txt", "d4.txt", "d5.txt", "d6.txt", "d7.txt",
+            "d8.txt", "d9.txt", "d10.txt", "d11.txt",
+        ];
+        let callers: Vec<String> = (0..CALLER_URIS.len())
+            .map(|idx| format!("my_dec_{idx} = {{ complete_effect = {{ my_se = yes }} }}\n"))
+            .collect();
+        for (uri, source) in CALLER_URIS.iter().zip(&callers) {
+            files.push((uri, "common/decisions/d.txt", source));
+        }
+        let svc = indexed(&files);
+        let excluded = HashSet::from(["d0.txt".to_string()]);
+        let (sites, total) =
+            svc.alias_key_index
+                .references_ci_bounded("scripted_effect", "MY_SE", 3, &excluded);
+
+        assert_eq!(sites.len(), 3);
+        assert_eq!(total, 11);
+        assert!(sites.iter().all(|site| site.file.as_ref() != "d0.txt"));
+        assert_eq!(
+            svc.alias_key_index
+                .references_ci("scripted_effect", "MY_SE")
+                .len(),
+            12
         );
     }
 
