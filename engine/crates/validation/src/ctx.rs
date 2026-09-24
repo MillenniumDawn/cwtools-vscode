@@ -27,6 +27,13 @@ pub(crate) struct AliasBranchBudgetExhaustion {
 pub(crate) struct AliasBranchBudget {
     remaining: usize,
     exhaustion: Option<AliasBranchBudgetExhaustion>,
+    inline_script_source: Option<InlineScriptAliasBranchSource>,
+}
+
+#[derive(Clone)]
+pub(crate) struct InlineScriptAliasBranchSource {
+    pub(crate) logical_path: String,
+    pub(crate) line: u32,
 }
 
 impl Default for AliasBranchBudget {
@@ -34,6 +41,7 @@ impl Default for AliasBranchBudget {
         Self {
             remaining: ALIAS_BRANCH_BUDGET,
             exhaustion: None,
+            inline_script_source: None,
         }
     }
 }
@@ -204,6 +212,28 @@ impl<'a> ValidationCtx<'a> {
         let newly_exhausted = !accepted && !was_exhausted;
         drop(budget);
         if newly_exhausted {
+            let logical_path = {
+                let stack = self.inline_stack.borrow();
+                stack.last().and_then(|name| {
+                    self.inline_scripts
+                        .and_then(|scripts| scripts.logical_path(name))
+                        .map(str::to_owned)
+                })
+            };
+            if let (Some(logical_path), Some((origin, end))) = (
+                logical_path,
+                self.inline_script_expansion_budget.borrow().origin,
+            ) {
+                let mut budget = self.alias_branch_budget.borrow_mut();
+                if let Some(exhaustion) = &mut budget.exhaustion {
+                    exhaustion.pos = origin;
+                    exhaustion.end = end;
+                }
+                budget.inline_script_source = Some(InlineScriptAliasBranchSource {
+                    logical_path,
+                    line: pos.line,
+                });
+            }
             self.mark_all_tracked_type_uses();
         }
         accepted
@@ -316,6 +346,15 @@ impl<'a> ValidationCtx<'a> {
 
     pub(crate) fn alias_branch_budget_exhausted(&self) -> bool {
         self.alias_branch_budget_exhaustion().is_some()
+    }
+
+    pub(crate) fn alias_branch_budget_inline_script_source(
+        &self,
+    ) -> Option<InlineScriptAliasBranchSource> {
+        self.alias_branch_budget
+            .borrow()
+            .inline_script_source
+            .clone()
     }
 
     pub(crate) fn is_loop_var(&self, name: &str) -> bool {
