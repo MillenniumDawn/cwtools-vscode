@@ -15,6 +15,7 @@ staged_platforms = cast(Callable[[], list[str]], vars(build)["staged_platforms"]
 run_platform_packaging = cast(
     RunPlatformPackaging, vars(build)["run_platform_packaging"]
 )
+package_all_vsixes = cast(Callable[[], list[str]], vars(build)["package_all_vsixes"])
 
 PLATFORMS = ["linux-x64", "osx-arm64", "win32-x64"]
 
@@ -50,6 +51,74 @@ def test_rejects_unknown_staged_platform(
         match=r"unknown staged server platform\(s\): future-a, future-z",
     ):
         staged_platforms()
+
+
+def test_staged_platforms_returns_empty_for_flat_binary_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server_bin_dir = tmp_path / "server" / "cwtools-server"
+    server_bin_dir.mkdir(parents=True)
+    (server_bin_dir / "cwtools-server").write_text("flat", encoding="utf-8")
+    monkeypatch.setattr(build, "SERVER_BIN_DIR", server_bin_dir)
+
+    assert staged_platforms() == []
+
+
+def test_staged_platforms_returns_sorted_recognized_platform_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server_bin_dir = tmp_path / "server" / "cwtools-server"
+    stage(server_bin_dir, ["win-x64", "osx-arm64", "linux-x64"])
+    monkeypatch.setattr(build, "SERVER_BIN_DIR", server_bin_dir)
+
+    assert staged_platforms() == ["linux-x64", "osx-arm64", "win-x64"]
+
+
+def test_package_all_vsixes_uses_single_package_for_flat_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server_bin_dir = tmp_path / "server" / "cwtools-server"
+    server_bin_dir.mkdir(parents=True)
+    flat = server_bin_dir / "cwtools-server"
+    flat.write_text("flat", encoding="utf-8")
+    calls: list[str | None] = []
+
+    def package_one(target: str | None = None) -> list[str]:
+        calls.append(target)
+        return ["universal.vsix"]
+
+    monkeypatch.setattr(build, "SERVER_BIN_DIR", server_bin_dir)
+    monkeypatch.setattr(build, "package_vsix", package_one)
+
+    assert package_all_vsixes() == ["universal.vsix"]
+    assert calls == [None]
+    assert flat.read_text(encoding="utf-8") == "flat"
+
+
+def test_package_all_vsixes_selects_each_platform_and_universal_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server_bin_dir = tmp_path / "server" / "cwtools-server"
+    platforms = ["win-x64", "osx-arm64", "linux-x64"]
+    stage(server_bin_dir, platforms)
+    monkeypatch.setattr(build, "SERVER_BIN_DIR", server_bin_dir)
+    monkeypatch.setattr(build, "ARTIFACTS_ROOT", tmp_path / "artifacts")
+    calls: list[str | None] = []
+
+    def package_one(target: str | None = None) -> list[str]:
+        calls.append(target)
+        return [target or "universal"]
+
+    monkeypatch.setattr(build, "package_vsix", package_one)
+
+    assert package_all_vsixes() == [
+        "linux-x64",
+        "darwin-arm64",
+        "win32-x64",
+        "universal",
+    ]
+    assert calls == ["linux-x64", "darwin-arm64", "win32-x64", None]
+    assert dirs_present(server_bin_dir) == ["linux-x64", "osx-arm64", "win-x64"]
 
 
 def test_rejects_flat_binary_without_changing_staged_tree(
