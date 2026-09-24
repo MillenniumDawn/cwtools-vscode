@@ -22,9 +22,13 @@ foo = {
 const FILE: &str = "game/common/foo/test.txt";
 
 /// Validate `script` with `scripts` registered as the mod's inline scripts.
-fn run(script: &str, scripts: &[(&str, &str)]) -> Vec<ValidationError> {
+fn run_with_rules(
+    rules_text: &str,
+    script: &str,
+    scripts: &[(&str, &str)],
+) -> Vec<ValidationError> {
     let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(RULES, &table), &table);
+    let ruleset = ast_to_ruleset(&parse_string(rules_text, &table), &table);
     let mut registry = InlineScripts::default();
     for (path, body) in scripts {
         assert!(
@@ -50,6 +54,10 @@ fn run(script: &str, scripts: &[(&str, &str)]) -> Vec<ValidationError> {
             var_checks: false,
         },
     )
+}
+
+fn run(script: &str, scripts: &[(&str, &str)]) -> Vec<ValidationError> {
+    run_with_rules(RULES, script, scripts)
 }
 
 /// As [`run`], but with no registry at all — the LSP and single-file paths.
@@ -168,6 +176,40 @@ fn a_nested_call_is_expanded_too() {
         errors[0].message,
         "Unexpected field 'not_a_field' (in common/inline_scripts/inner.txt:1) \
          (in common/inline_scripts/outer.txt:1)"
+    );
+}
+
+#[test]
+fn alias_branch_budget_in_long_inline_body_points_to_the_short_caller() {
+    const ALIAS_RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+foo = { alias_name[effect] = alias_match_left[effect] }
+alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
+## severity = warning
+alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
+"#;
+    let body = "recurse = { }\n".repeat(32_769);
+    let errors = run_with_rules(
+        ALIAS_RULES,
+        "foo = {\n    inline_script = { script = outer }\n}\n",
+        &[
+            (
+                "common/inline_scripts/outer.txt",
+                "inline_script = { script = long }\n",
+            ),
+            ("common/inline_scripts/long.txt", &body),
+        ],
+    );
+
+    assert_eq!(codes(&errors), ["CW277"], "got: {errors:?}");
+    assert_eq!((errors[0].line, errors[0].col), (2, 4), "got: {errors:?}");
+    assert_eq!(errors[0].end, Some((2, 17)), "got: {errors:?}");
+    assert!(
+        errors[0]
+            .message
+            .contains("(in common/inline_scripts/long.txt:32769)"),
+        "the message should identify the expanded body line: {}",
+        errors[0].message
     );
 }
 

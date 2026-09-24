@@ -26,6 +26,8 @@
 
 * Apply parser edits in one pass against the original text, skipping invalid or
   overlapping ranges instead of risking a replacement panic. (#577)
+* Alias-branch budget errors inside expanded inline scripts now point to the
+  caller and name the script line where validation stopped. (#579)
 * Graph construction now bounds dense expansion to 4,000 edges and 64 use sites
   per expanded node, reports resulting omissions in graph details, and indexes
   per-file owner lookup. (#570)

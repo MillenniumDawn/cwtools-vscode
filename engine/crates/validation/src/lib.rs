@@ -270,6 +270,12 @@ fn append_alias_branch_budget_error(ctx: &ValidationCtx, errors: &mut Vec<Valida
     if let Some(end) = exhaustion.end {
         error = error.with_end(end);
     }
+    if let Some(source) = ctx.alias_branch_budget_inline_script_source() {
+        error.message = format!(
+            "{} (in {}:{})",
+            error.message, source.logical_path, source.line
+        );
+    }
     errors.push(error);
 }
 

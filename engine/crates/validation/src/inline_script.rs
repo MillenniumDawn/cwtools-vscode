@@ -53,6 +53,12 @@ impl InlineScripts {
     fn get(&self, name: &str) -> Option<&InlineScript> {
         self.scripts.get(&normalize(name))
     }
+
+    pub(crate) fn logical_path(&self, name: &str) -> Option<&str> {
+        self.scripts
+            .get(name)
+            .map(|script| script.logical_path.as_str())
+    }
 }
 
 fn script_name(logical_path: &str) -> Option<String> {
