@@ -6,11 +6,12 @@ import type {
 } from "vscode-languageclient/node";
 import { State } from "vscode-languageclient/node";
 
+import { commandProgressActive } from "./commandProgress";
+import { clearCommandAvailability } from "./commands";
 import type { FileListItem } from "./fileExplorer";
 import { FileExplorer } from "./fileExplorer";
 import { fileListSignature } from "./fileListSignature";
-import { commandProgressActive } from "./commandProgress";
-import { clearCommandAvailability } from "./commands";
+import { logError } from "./logger";
 
 interface LoadingBarParams {
 	enable: boolean;
@@ -20,6 +21,11 @@ interface LoadingBarParams {
 }
 interface UpdateFileList {
 	fileList: FileListItem[];
+}
+
+interface WorkspaceDiagnosticsBudgetReached {
+	budget: number;
+	heldBack: number;
 }
 
 export interface ServerNotifications {
@@ -40,6 +46,7 @@ export function registerServerNotifications(
 	let lastFileListSignature: string | undefined;
 	let initialScanStarted = false;
 	let initialScanPending = true;
+	let budgetNoticeShown = false;
 	let resolveInitialScan: () => void;
 	const initialScanDone = new Promise<void>(
 		(resolve) => (resolveInitialScan = resolve),
@@ -113,6 +120,40 @@ export function registerServerNotifications(
 			}
 		}
 	});
+	client.onNotification(
+		"workspaceDiagnosticsBudgetReached",
+		(params: WorkspaceDiagnosticsBudgetReached) => {
+			// Every background re-index of a large mod hits the budget again; the
+			// per-scan detail stays in the output log.
+			if (budgetNoticeShown) {
+				return;
+			}
+			budgetNoticeShown = true;
+			const showOutput = l10n.t("Show Output");
+			void Promise.resolve(
+				window.showInformationMessage(
+					l10n.t(
+						"CWTools: workspace diagnostics are limited to {0} closed files per scan; {1} more were held back.",
+						params.budget,
+						params.heldBack,
+					),
+					showOutput,
+				),
+			)
+				.then((choice: string | undefined) => {
+					if (choice === showOutput) {
+						return commands.executeCommand("cwtools.showOutput");
+					}
+					return undefined;
+				})
+				.catch((err: unknown) =>
+					logError(
+						"Failed to open CWTools output after diagnostics budget warning",
+						err,
+					),
+				);
+		},
+	);
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
 		const signature = fileListSignature(params.fileList);
 		if (!fileExplorer) {

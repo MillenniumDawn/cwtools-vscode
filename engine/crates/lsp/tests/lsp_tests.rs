@@ -285,6 +285,74 @@ fn test_lsp_full_lifecycle() {
     assert!(resp["result"].is_null());
 }
 
+#[test]
+fn test_workspace_diagnostics_budget_notifies_once_per_scan() {
+    const CLOSED_FILE_COUNT: usize = 2_001;
+    let tmp = tempfile::tempdir().unwrap();
+    let things = tmp.path().join("common/things");
+    std::fs::create_dir_all(&things).unwrap();
+    for i in 0..CLOSED_FILE_COUNT {
+        std::fs::write(things.join(format!("f{i}.txt")), "thing = yes\n").unwrap();
+    }
+    let uri = path_uri(tmp.path());
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let stdin = child.stdin.take().unwrap();
+    let result = run_child_with_deadline(child, stdin, reader, 45, move |stdin, reader| {
+        let initialize = jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": uri,
+                "capabilities": {}
+            }),
+        );
+        write_frame_to(stdin, &initialize).unwrap();
+        let response: serde_json::Value =
+            serde_json::from_str(&read_response(reader).expect("no init response")).unwrap();
+        assert_eq!(response["id"], 1);
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+
+        let mut budget_notifications = Vec::new();
+        let mut scan_completed = false;
+        for _ in 0..10_000 {
+            let raw = read_frame(reader).expect("server closed before scan completed");
+            if raw.is_empty() {
+                continue;
+            }
+            let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if frame["method"] == "workspaceDiagnosticsBudgetReached" {
+                budget_notifications.push(frame["params"].clone());
+            }
+            if frame["method"] == "window/logMessage"
+                && frame["params"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("Workspace validation complete:"))
+            {
+                scan_completed = true;
+                break;
+            }
+        }
+        assert!(scan_completed, "workspace scan did not complete");
+        budget_notifications
+    });
+    let notifications = result.expect("timed out waiting for workspace budget notification");
+    assert_eq!(notifications.len(), 1, "one notification is sent per scan");
+    assert_eq!(notifications[0]["budget"], 2_000);
+    assert_eq!(notifications[0]["heldBack"], 1);
+}
+
 // ── Unknown notification does not crash ──────────────────────────────────────
 
 #[test]

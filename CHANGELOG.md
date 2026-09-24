@@ -21,9 +21,15 @@
   now report errors instead of silently failing or throwing. (#565)
 * Load the generated graph stylesheet for webview tooltips instead of keeping
   a copy of the dependency CSS. (#586)
+* Add the live `cwtools.diagnostics.workspaceWide` setting (default `true`) to
+  control publishing diagnostics for closed files, and offer **Show Output**
+  the first time a scan reaches the closed-file diagnostics budget. (#608)
 
 #### Engine
 
+* Send one client notification when a workspace scan holds back closed-file
+  diagnostics at the publication budget, and report held-back counts only when
+  the closed-file budget is actually exceeded. (#608)
 * Apply parser edits in one pass against the original text, skipping invalid or
   overlapping ranges instead of risking a replacement panic. (#577)
 * Graph construction now bounds dense expansion to 4,000 edges and 64 use sites

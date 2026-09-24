@@ -66,6 +66,13 @@ Source: `extension/package/package.json` `contributes.configuration`.
   - Default: `["README.txt", "credits.txt", "credits_l_simp_chinese.txt", "reference.txt", "startup_info.txt"]`
   - File names excluded from workspace loading.
 
+- `cwtools.diagnostics.workspaceWide` (boolean)
+  - Default: `true`
+  - Publish closed-file diagnostics during workspace scans, up to 2,000 files
+    per scan. Set to `false` to keep Problems scoped to open files; workspace
+    indexing and validation summaries still include all files. Applies live
+    without a window reload.
+
 - `cwtools.ignore_patterns` (array)
   - Default: `["**/99_README**.txt"]`
   - Glob patterns for files to ignore.

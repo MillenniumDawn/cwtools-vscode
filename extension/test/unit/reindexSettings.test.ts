@@ -93,6 +93,7 @@ suite("reindexSettings — mapIgnoreOptions", () => {
 suite("reindexSettings — buildSettingsPayload", () => {
 	const liveSettings: LiveServerSettings = {
 		localisationLanguages: ["English"],
+		workspaceWideDiagnostics: true,
 		hoverShowAllLanguages: false,
 		hoverDebug: false,
 		hoverScopeDisplay: "context",
@@ -114,6 +115,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 		assert.deepStrictEqual(payload.ignoreFilePatterns, ["**/x.txt"]);
 		assert.deepStrictEqual(payload.ignoredErrorCodes, ["CW100"]);
 		assert.deepStrictEqual(payload.localisationLanguages, ["English"]);
+		assert.strictEqual(payload.workspaceWideDiagnostics, true);
 		assert.strictEqual(payload.hoverShowAllLanguages, false);
 		assert.strictEqual(payload.hoverDebug, false);
 		assert.strictEqual(payload.hoverScopeDisplay, "context");
@@ -141,6 +143,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 		};
 		const live: LiveServerSettings = {
 			localisationLanguages: ["French"],
+			workspaceWideDiagnostics: false,
 			hoverShowAllLanguages: true,
 			hoverDebug: true,
 			hoverScopeDisplay: "resolved",
@@ -155,6 +158,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 10);
 		assert.strictEqual(payload.backgroundReindexIdleSeconds, 20);
 		assert.deepStrictEqual(payload.localisationLanguages, ["French"]);
+		assert.strictEqual(payload.workspaceWideDiagnostics, false);
 		// inputs untouched
 		assert.strictEqual(
 			(ignore as unknown as Record<string, unknown>)
@@ -167,6 +171,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 	test("preserves empty localisation list (server interprets as no language)", () => {
 		const payload = buildSettingsPayload({}, undefined, undefined, {
 			localisationLanguages: [],
+			workspaceWideDiagnostics: true,
 			hoverShowAllLanguages: false,
 			hoverDebug: false,
 			hoverScopeDisplay: "context",
@@ -186,6 +191,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 			15,
 			{
 				localisationLanguages: ["English", "French"],
+				workspaceWideDiagnostics: true,
 				hoverShowAllLanguages: true,
 				hoverDebug: true,
 				hoverScopeDisplay: "resolved",
@@ -200,6 +206,7 @@ suite("reindexSettings — buildSettingsPayload", () => {
 			"English",
 			"French",
 		]);
+		assert.strictEqual(payload.workspaceWideDiagnostics, true);
 		assert.strictEqual(payload.hoverShowAllLanguages, true);
 		assert.strictEqual(payload.hoverScopeDisplay, "resolved");
 		assert.strictEqual(payload.formattingMaxLineWidth, 80);

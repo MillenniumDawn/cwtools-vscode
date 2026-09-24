@@ -13,9 +13,18 @@ const state = vi.hoisted(() => {
 	let stateHandler:
 		| ((event: { oldState: number; newState: number }) => void)
 		| undefined;
+	const notificationHandlers = new Map<string, (params: unknown) => void>();
 	return {
 		status,
 		stateHandler,
+		notificationHandlers,
+		showInformationMessage: vi.fn(),
+		setNotificationHandler: (
+			method: string,
+			handler: (params: unknown) => void,
+		) => notificationHandlers.set(method, handler),
+		getNotificationHandler: (method: string) =>
+			notificationHandlers.get(method),
 		setStateHandler: (
 			handler: (event: { oldState: number; newState: number }) => void,
 		) => {
@@ -39,6 +48,7 @@ vi.mock("vscode", () => ({
 	window: {
 		createOutputChannel: () => ({ appendLine: () => undefined }),
 		createStatusBarItem: () => state.status,
+		showInformationMessage: state.showInformationMessage,
 	},
 }));
 
@@ -55,7 +65,62 @@ suite("server notifications", () => {
 		state.executeCommand.mockClear();
 		state.registerCommand.mockClear();
 		state.status.text = "";
+		state.showInformationMessage.mockReset();
+		state.notificationHandlers.clear();
 		state.setStateHandler(() => undefined);
+	});
+
+	test("offers Show Output when the workspace diagnostics budget is reached", async () => {
+		state.showInformationMessage.mockResolvedValue("Show Output");
+		const context = { subscriptions: [] } as unknown as ExtensionContext;
+		const client = {
+			onDidChangeState: () => ({ dispose: () => undefined }),
+			onNotification: (method: string, handler: (params: unknown) => void) => {
+				state.setNotificationHandler(method, handler);
+				return { dispose: () => undefined };
+			},
+		} as unknown as LanguageClient;
+
+		registerServerNotifications(context, client);
+		const handler = state.getNotificationHandler(
+			"workspaceDiagnosticsBudgetReached",
+		);
+		assert.ok(handler, "budget notification should be registered");
+		handler({ budget: 2000, heldBack: 4 });
+		await vi.waitFor(() =>
+			assert.deepStrictEqual(state.executeCommand.mock.calls, [
+				["cwtools.showOutput"],
+			]),
+		);
+
+		assert.deepStrictEqual(state.showInformationMessage.mock.calls, [
+			[
+				"CWTools: workspace diagnostics are limited to {0} closed files per scan; {1} more were held back.",
+				"Show Output",
+			],
+		]);
+	});
+
+	test("shows the diagnostics budget notice once per client session", () => {
+		state.showInformationMessage.mockResolvedValue(undefined);
+		const context = { subscriptions: [] } as unknown as ExtensionContext;
+		const client = {
+			onDidChangeState: () => ({ dispose: () => undefined }),
+			onNotification: (method: string, handler: (params: unknown) => void) => {
+				state.setNotificationHandler(method, handler);
+				return { dispose: () => undefined };
+			},
+		} as unknown as LanguageClient;
+
+		registerServerNotifications(context, client);
+		const handler = state.getNotificationHandler(
+			"workspaceDiagnosticsBudgetReached",
+		);
+		assert.ok(handler, "budget notification should be registered");
+		handler({ budget: 2000, heldBack: 4 });
+		handler({ budget: 2000, heldBack: 5 });
+
+		assert.strictEqual(state.showInformationMessage.mock.calls.length, 1);
 	});
 
 	test("clears command availability when the client stops", () => {
@@ -67,7 +132,10 @@ suite("server notifications", () => {
 				state.setStateHandler(handler);
 				return { dispose: () => undefined };
 			},
-			onNotification: () => ({ dispose: () => undefined }),
+			onNotification: (method: string, handler: (params: unknown) => void) => {
+				state.setNotificationHandler(method, handler);
+				return { dispose: () => undefined };
+			},
 		} as unknown as LanguageClient;
 
 		const notifications = registerServerNotifications(context, client);

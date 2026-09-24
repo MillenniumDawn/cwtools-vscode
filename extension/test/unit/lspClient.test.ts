@@ -21,6 +21,7 @@ const {
 	showTextDocument,
 	executeCommand,
 	onDidChangeConfiguration,
+	sendNotification,
 	logError,
 } = vi.hoisted(() => {
 	const createdWatchers: { glob: string; dispose: () => void }[] = [];
@@ -60,6 +61,7 @@ const {
 		showTextDocument: vi.fn(),
 		executeCommand: vi.fn(),
 		onDidChangeConfiguration: vi.fn(() => disposable),
+		sendNotification: vi.fn().mockResolvedValue(undefined),
 		logError: vi.fn(),
 	};
 });
@@ -113,6 +115,8 @@ vi.mock("vscode-languageclient/node", () => ({
 			lastClientOptions.value = options;
 			lastClient.value = this;
 		}
+
+		sendNotification = sendNotification;
 
 		onDidChangeState(): { dispose: () => void } {
 			return disposable;
@@ -199,6 +203,8 @@ suite("lspClient — watched files", () => {
 		createFileSystemWatcher.mockClear();
 		lastClientOptions.value = undefined;
 		configurationValues.clear();
+		onDidChangeConfiguration.mockClear();
+		sendNotification.mockClear();
 	});
 
 	test("re-reads initialization settings for each client start", () => {
@@ -225,6 +231,26 @@ suite("lspClient — watched files", () => {
 		assert.strictEqual(first.formattingMaxLineWidth, 80);
 		assert.deepStrictEqual(second.localisationLanguages, ["French"]);
 		assert.strictEqual(second.formattingMaxLineWidth, 80);
+	});
+
+	test("maps workspace-wide diagnostics in initialization and live settings", async () => {
+		create();
+		const initializationOptions = lastClientOptions.value
+			?.initializationOptions as () => { workspaceWideDiagnostics: boolean };
+		assert.strictEqual(initializationOptions().workspaceWideDiagnostics, true);
+
+		configurationValues.set("diagnostics.workspaceWide", false);
+		assert.strictEqual(initializationOptions().workspaceWideDiagnostics, false);
+
+		configurationChangeHandler()(
+			configurationChangeEvent(["cwtools.diagnostics.workspaceWide"]),
+		);
+		await Promise.resolve();
+
+		const payload = sendNotification.mock.calls[0]?.[1] as {
+			settings: { workspaceWideDiagnostics: boolean };
+		};
+		assert.strictEqual(payload.settings.workspaceWideDiagnostics, false);
 	});
 
 	test("the globs match every file class the server indexes", () => {
