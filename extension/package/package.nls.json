@@ -39,6 +39,7 @@
   "configuration.cwtools.localisation.hoverShowAllLanguages.description": "Show hover localisation in every configured language instead of just the first one.",
   "configuration.cwtools.errors.ignore.description": "Diagnostic codes to suppress everywhere, e.g. `CW100` (list of error/warning IDs).",
   "configuration.cwtools.errors.ignorefiles.description": "File names to exclude from the workspace (not load into cwtools, so references into them won't resolve), e.g. `README.txt`, `credits.txt`.",
+  "configuration.cwtools.diagnostics.workspaceWide.description": "Publish diagnostics for closed files during workspace scans (up to 2,000 files per scan). Disable to keep the Problems panel scoped to open files; workspace indexing and validation summaries still include all files.",
   "configuration.cwtools.rules_folder.description": "A folder containing custom rules to use. **Reload the window** after changing this.",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "File paths to ignore (not load into cwtools), list of glob patterns, e.g. `**/99_README**.txt`",

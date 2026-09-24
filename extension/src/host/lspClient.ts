@@ -91,6 +91,8 @@ function readLiveServerSettings(): LiveServerSettings {
 		localisationLanguages: cfg.get<string[]>("localisation.languages") ?? [
 			"English",
 		],
+		workspaceWideDiagnostics:
+			cfg.get<boolean>("diagnostics.workspaceWide") ?? true,
 		hoverShowAllLanguages:
 			cfg.get<boolean>("localisation.hoverShowAllLanguages") ?? false,
 		hoverDebug: cfg.get<boolean>("hover.debug") ?? false,

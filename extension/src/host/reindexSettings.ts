@@ -42,6 +42,7 @@ export type FormattingIndentStyle = "space" | "tab";
 
 export interface LiveServerSettings {
 	localisationLanguages: string[];
+	workspaceWideDiagnostics: boolean;
 	hoverShowAllLanguages: boolean;
 	hoverDebug: boolean;
 	hoverScopeDisplay: HoverScopeDisplay;
@@ -58,6 +59,7 @@ export interface LiveServerSettings {
 export const LIVE_SETTINGS_KEYS = [
 	"cwtools.errors.ignore",
 	"cwtools.errors.ignorefiles",
+	"cwtools.diagnostics.workspaceWide",
 	"cwtools.ignore_patterns",
 	"cwtools.backgroundReindex.intervalMinutes",
 	"cwtools.backgroundReindex.idleSeconds",
@@ -106,8 +108,8 @@ export function isReloadSettingsChange(e: {
 }
 
 // The didChangeConfiguration payload pushed on a live settings edit: mapped
-// ignore/reindex settings plus the localisation and hover settings the server
-// accepts after startup.
+// ignore/reindex settings plus the localisation, diagnostics, and hover settings
+// the server accepts after startup.
 export function buildSettingsPayload<T extends object>(
 	ignoreOptions: T,
 	minutes: number | undefined,

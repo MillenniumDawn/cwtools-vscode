@@ -40,6 +40,12 @@ impl tower_lsp::lsp_types::notification::Notification for UpdateFileList {
     const METHOD: &'static str = "updateFileList";
 }
 
+pub(crate) enum WorkspaceDiagnosticsBudgetReached {}
+impl tower_lsp::lsp_types::notification::Notification for WorkspaceDiagnosticsBudgetReached {
+    type Params = serde_json::Value;
+    const METHOD: &'static str = "workspaceDiagnosticsBudgetReached";
+}
+
 const DEBOUNCE_MS: u64 = 250;
 
 /// Test-only one-shot panic switch for `CWTOOLS_VALIDATE_PANIC_ONCE` (#182),

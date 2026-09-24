@@ -46,6 +46,7 @@
   "CWTools: ready": "CWTools: pronto",
   "CWTools: stopped": "CWTools: fermato",
   "Restart Server": "Riavvia il server",
+  "CWTools: workspace diagnostics are limited to {0} closed files per scan; {1} more were held back.": "CWTools: le diagnostiche dell'area di lavoro sono limitate a {0} file chiusi per scansione; altri {1} sono stati accantonati.",
   "Show Output": "Mostra output",
   "CWTools: failed to restart the language server: {0}": "CWTools: impossibile riavviare il server di linguaggio: {0}",
   "CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.": "CWTools: il server di linguaggio è andato in crash {0} volte negli ultimi 3 minuti e non verrà riavviato. Consulta l'output per i dettagli."

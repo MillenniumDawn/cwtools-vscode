@@ -862,6 +862,10 @@ impl Backend {
             return false;
         }
         let publish_total = results.len();
+        let closed_files_total = results
+            .iter()
+            .filter(|result| !open_uris.contains(&result.0))
+            .count();
 
         let workspace_wide = {
             let cfg = self.state.config.read();
@@ -960,11 +964,8 @@ impl Backend {
             total_hints,
         });
 
-        if workspace_wide
-            && closed_budget_remaining == 0
-            && publish_total > WORKSPACE_DIAGNOSTICS_BUDGET
-        {
-            let held_back = publish_total.saturating_sub(WORKSPACE_DIAGNOSTICS_BUDGET);
+        let held_back = closed_files_total.saturating_sub(WORKSPACE_DIAGNOSTICS_BUDGET);
+        if workspace_wide && held_back > 0 {
             tracing::info!(
                 held_back,
                 clear_held_back = held_back_clears,
@@ -979,6 +980,13 @@ impl Backend {
                         WORKSPACE_DIAGNOSTICS_BUDGET, held_back, held_back_clears
                     ),
                 )
+                .await;
+            self.client
+                .send_notification::<crate::WorkspaceDiagnosticsBudgetReached>(serde_json::json!({
+                    "budget": WORKSPACE_DIAGNOSTICS_BUDGET,
+                    "heldBack": held_back,
+                    "heldBackClears": held_back_clears,
+                }))
                 .await;
         }
 
@@ -1687,13 +1695,28 @@ mod tests {
             backend.state.published_workspace_uris.lock().is_empty(),
             "disabled workspace-wide diagnostics must clear closed-file publishes"
         );
-        let summary_guard = backend.state.last_scan_summary.lock();
-        let summary = summary_guard
-            .as_ref()
-            .expect("summary is still captured when publishing is disabled");
-        assert!(
-            summary.total_errors > 0,
-            "summary must still count errors even when they are not published"
+        {
+            let summary_guard = backend.state.last_scan_summary.lock();
+            let summary = summary_guard
+                .as_ref()
+                .expect("summary is still captured when publishing is disabled");
+            assert!(
+                summary.total_errors > 0,
+                "summary must still count errors even when they are not published"
+            );
+        }
+
+        backend.state.config.write().workspace_wide_diagnostics = true;
+        let progress3 =
+            CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
+        let outcome3 = backend
+            .validate_entire_workspace_tracked(false, Some(&progress3))
+            .await;
+        assert_eq!(outcome3, ScanOutcome::Ran);
+        assert_eq!(
+            backend.state.published_workspace_uris.lock().len(),
+            2,
+            "re-enabling workspace-wide diagnostics must republish closed files"
         );
     }
 

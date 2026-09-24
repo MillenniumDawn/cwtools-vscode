@@ -39,7 +39,7 @@ mod transport;
 mod validate;
 
 pub(crate) use cursor::{RuleCursorInfo, hint_from_rule_right};
-pub(crate) use server::{LoadingBar, UpdateFileList};
+pub(crate) use server::{LoadingBar, UpdateFileList, WorkspaceDiagnosticsBudgetReached};
 pub(crate) use state::{
     AstSource, Backend, CompletionCacheEntry, DeferredRulesMessage, DocumentState,
     FileTextSnapshot, FixableEdits, LocLocations, LocText, SemanticCacheEntry, ValidateTrigger,
