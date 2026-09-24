@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 3.4.6
+
 #### Tooling
 
 * Update `qs` past the versions affected by the reported denial-of-service
