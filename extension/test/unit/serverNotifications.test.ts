@@ -101,6 +101,28 @@ suite("server notifications", () => {
 		]);
 	});
 
+	test("shows the diagnostics budget notice once per client session", () => {
+		state.showInformationMessage.mockResolvedValue(undefined);
+		const context = { subscriptions: [] } as unknown as ExtensionContext;
+		const client = {
+			onDidChangeState: () => ({ dispose: () => undefined }),
+			onNotification: (method: string, handler: (params: unknown) => void) => {
+				state.setNotificationHandler(method, handler);
+				return { dispose: () => undefined };
+			},
+		} as unknown as LanguageClient;
+
+		registerServerNotifications(context, client);
+		const handler = state.getNotificationHandler(
+			"workspaceDiagnosticsBudgetReached",
+		);
+		assert.ok(handler, "budget notification should be registered");
+		handler({ budget: 2000, heldBack: 4 });
+		handler({ budget: 2000, heldBack: 5 });
+
+		assert.strictEqual(state.showInformationMessage.mock.calls.length, 1);
+	});
+
 	test("clears command availability when the client stops", () => {
 		const context = { subscriptions: [] } as unknown as ExtensionContext;
 		const client = {

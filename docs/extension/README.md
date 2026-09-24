@@ -119,8 +119,9 @@ The extension periodically re-scans the whole workspace in the background, so fi
 for closed files (default `true`, capped at 2,000 closed files per scan). Set it
 to `false` to keep the Problems panel focused on open files; workspace indexing
 and validation summaries still cover the full workspace. Changing the setting
-takes effect immediately. If a scan reaches the closed-file diagnostics cap,
-CWTools reports the count and offers **Show Output** for details.
+takes effect immediately. The first time a scan reaches the closed-file
+diagnostics cap, CWTools reports the count and offers **Show Output** for
+details; later scans log it to the output only.
 
 ### Graph view
 

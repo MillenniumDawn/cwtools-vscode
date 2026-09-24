@@ -46,6 +46,7 @@ export function registerServerNotifications(
 	let lastFileListSignature: string | undefined;
 	let initialScanStarted = false;
 	let initialScanPending = true;
+	let budgetNoticeShown = false;
 	let resolveInitialScan: () => void;
 	const initialScanDone = new Promise<void>(
 		(resolve) => (resolveInitialScan = resolve),
@@ -122,6 +123,12 @@ export function registerServerNotifications(
 	client.onNotification(
 		"workspaceDiagnosticsBudgetReached",
 		(params: WorkspaceDiagnosticsBudgetReached) => {
+			// Every background re-index of a large mod hits the budget again; the
+			// per-scan detail stays in the output log.
+			if (budgetNoticeShown) {
+				return;
+			}
+			budgetNoticeShown = true;
 			const showOutput = l10n.t("Show Output");
 			void Promise.resolve(
 				window.showInformationMessage(

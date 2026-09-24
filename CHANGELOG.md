@@ -19,7 +19,7 @@
   a copy of the dependency CSS. (#586)
 * Add the live `cwtools.diagnostics.workspaceWide` setting (default `true`) to
   control publishing diagnostics for closed files, and offer **Show Output**
-  when a scan reaches the closed-file diagnostics budget. (#608)
+  the first time a scan reaches the closed-file diagnostics budget. (#608)
 
 #### Engine
 
