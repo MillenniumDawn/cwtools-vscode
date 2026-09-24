@@ -1,7 +1,7 @@
 import * as assert from "assert";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { activate, waitForServerReady } from "../support/utils";
+import { activate, waitForServerReady, waitUntil } from "../support/utils";
 
 suite("Multi-root descriptor selection", function () {
 	this.timeout(90 * 1000);
@@ -25,11 +25,14 @@ suite("Multi-root descriptor selection", function () {
 			`server never finished its initial scan, last status: ${api.serverStatusText()}`,
 		);
 
+		// `selected.txt` is opened through launchArgs, so its diagnostics come
+		// from didOpen. The unopened file only gets diagnostics if the server
+		// actually scanned the root, which is what this test exists to prove.
 		const unrelated = vscode.Uri.file(
 			path.join(folders[0].uri.fsPath, "events", "unrelated.txt"),
 		);
-		const selected = vscode.Uri.file(
-			path.join(folders[1].uri.fsPath, "events", "selected.txt"),
+		const unopened = vscode.Uri.file(
+			path.join(folders[1].uri.fsPath, "events", "unopened.txt"),
 		);
 		assert.deepStrictEqual(
 			vscode.languages.getDiagnostics(unrelated),
@@ -37,7 +40,7 @@ suite("Multi-root descriptor selection", function () {
 			"the unrelated first root must not be scanned",
 		);
 		assert.ok(
-			vscode.languages.getDiagnostics(selected).length > 0,
+			await waitUntil(() => vscode.languages.getDiagnostics(unopened).length > 0),
 			"the descriptor-bearing root should be scanned",
 		);
 	});
