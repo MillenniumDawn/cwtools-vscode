@@ -2,12 +2,16 @@
 
 #### Tooling
 
+* Update `qs` past the versions affected by the reported denial-of-service
+  advisories.
 * CI Cargo tools are pinned and each executable is cached by version separately
   from the Cargo registry. (#510)
 * Test graph import errors and unavailable exports through the bundled webview.
   (#565)
 * VSIX packaging now fails when staged server platforms are not in the release
   target list, keeping the release matrix and `VSIX_TARGETS` in sync. (#584)
+* Cover flat and per-platform server staging and package target selection in
+  build-tool tests. (#563)
 * Reject VSIX files whose archived version differs from the release version
   before publishing to GitHub or the Marketplace. (#550)
 
@@ -26,9 +30,14 @@
 * Send one client notification when a workspace scan holds back closed-file
   diagnostics at the publication budget, and report held-back counts only when
   the closed-file budget is actually exceeded. (#608)
+* Apply parser edits in one pass against the original text, skipping invalid or
+  overlapping ranges instead of risking a replacement panic. (#577)
 * Graph construction now bounds dense expansion to 4,000 edges and 64 use sites
   per expanded node, reports resulting omissions in graph details, and indexes
   per-file owner lookup. (#570)
+* Graph use-site collection now bounds open-buffer and indexed matches before
+  materializing graph results while preserving complete references and rename
+  results. (#783)
 * Type-keyed fields such as `<resource> = float` now reject unknown keys once
   the type index is complete, so a fake resource in state history is flagged.
   (#766)
@@ -47,6 +56,8 @@
   `alias_categories()` directly. (#762)
 * Requests now observe preceding document notifications without blocking later
   requests, while cancellation remains prompt. (#775)
+* Formatter position lookups now share line-prefix scans, keeping long single-line
+  value lists linear in their source length. (#702)
 
 ### 3.4.5
 
