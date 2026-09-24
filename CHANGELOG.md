@@ -17,6 +17,9 @@
 
 #### Extension
 
+* Multi-root activation now selects the first folder containing `descriptor.mod`
+  for game detection, relative `rules_folder` resolution, and language-server
+  scanning instead of authorizing an unrelated first folder. (#694)
 * Malformed or incomplete graph JSON imports and exports before a graph loads
   now report errors instead of silently failing or throwing. (#565)
 * Load the generated graph stylesheet for webview tooltips instead of keeping

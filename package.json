@@ -13,7 +13,7 @@
     "test": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label unit",
     "test:watch": "npm run compile && concurrently -k \"tsc -w -p ./tsconfig.extension.json\" \"node scripts/build/python.mjs scripts/build/esbuild.py --watch\" \"node scripts/build/python.mjs scripts/build/hosttest.py --label unit --watch --watch-files dist/extension/bin/client\"",
     "test:host": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label host",
-    "test:smoke": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label smoke --label live",
+    "test:smoke": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label smoke --label live --label multi-root",
     "test:rules-sync": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label rules-sync",
     "test:native": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --native",
     "test:coverage": "node scripts/build/python.mjs scripts/build/host_coverage.py && node scripts/build/python.mjs scripts/build/coverage_summary.py --host-only",

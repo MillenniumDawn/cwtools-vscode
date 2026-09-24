@@ -37,6 +37,7 @@ export interface RulesSetup {
 export async function resolveRulesCache(
 	language: string,
 	cacheDir: string,
+	workspaceRoot: string,
 ): Promise<RulesSetup> {
 	const rules = LANGUAGE_REPOS[language];
 	if (!rules) {
@@ -54,7 +55,6 @@ export async function resolveRulesCache(
 	const rawManualRules =
 		process.env.CWTOOLS_TEST_RULES_FOLDER ??
 		workspace.getConfiguration("cwtools").get<string>("rules_folder");
-	const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath;
 	const manualRules = resolveRulesFolder(rawManualRules, { workspaceRoot });
 	const hasManualRules = !!(rawManualRules && rawManualRules.trim() !== "");
 	const effectiveRulesCache = manualRules.existed

@@ -1,62 +1,74 @@
-import * as os from 'os';
-import type { Uri } from 'vscode';
-import { workspace, RelativePattern } from 'vscode';
-import { access } from 'fs/promises';
-import { detectFromFolder } from './engine';
-import { existAndIsExe } from './executable';
-import { GAMES } from './games';
+import * as os from "os";
+import type { Uri, WorkspaceFolder } from "vscode";
+import { workspace, RelativePattern } from "vscode";
+import { access } from "fs/promises";
+import { detectFromFolder } from "./engine";
+import { existAndIsExe } from "./executable";
+import { GAMES } from "./games";
 
-async function findExeInFiles(gameExeName: string, binariesPrefix: boolean): Promise<Uri[]> {
-	if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
-		return [];
-	}
-
-	const root = workspace.workspaceFolders[0];
+async function findExeInFiles(
+	gameExeName: string,
+	binariesPrefix: boolean,
+	root: WorkspaceFolder,
+): Promise<Uri[]> {
 	const isWin = os.platform() === "win32";
 	const ext = isWin ? "*.exe" : "*";
 	const prefix = binariesPrefix ? "binaries/" : "";
-	const names = [...new Set([gameExeName, gameExeName.toUpperCase(), gameExeName.toLowerCase()])];
-	const namePattern = names.length === 1 ? names[0] : `{${names.join(',')}}`;
+	const names = [
+		...new Set([
+			gameExeName,
+			gameExeName.toUpperCase(),
+			gameExeName.toLowerCase(),
+		]),
+	];
+	const namePattern = names.length === 1 ? names[0] : `{${names.join(",")}}`;
 	const pattern = new RelativePattern(root, `${prefix}${namePattern}${ext}`);
 
 	const allFiles = await workspace.findFiles(pattern);
-	const validFiles = (await Promise.all(
-		allFiles.map(async v => (await existAndIsExe(v.fsPath)) ? v : null)
-	)).filter(Boolean) as Uri[];
+	const validFiles = (
+		await Promise.all(
+			allFiles.map(async (v) => ((await existAndIsExe(v.fsPath)) ? v : null)),
+		)
+	).filter(Boolean) as Uri[];
 	return validFiles;
 }
 
-async function detectLanguageId(): Promise<string | null> {
-	if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
-		const root = workspace.workspaceFolders[0].uri.fsPath;
-		const exists = async (p: string): Promise<boolean> => {
-			try { await access(p); return true; } catch { return false; }
-		};
-		return detectFromFolder(root, exists);
-	}
-	return null;
+async function detectLanguageId(root: WorkspaceFolder): Promise<string | null> {
+	const exists = async (p: string): Promise<boolean> => {
+		try {
+			await access(p);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	return detectFromFolder(root.uri.fsPath, exists);
 }
 
 export interface GameDetection {
 	languageId: string;
 }
 
-export async function detectGameAndVanilla(): Promise<GameDetection> {
-	let languageId = (await detectLanguageId()) ?? "paradox";
+export async function detectGameAndVanilla(
+	root: WorkspaceFolder,
+): Promise<GameDetection> {
+	let languageId = (await detectLanguageId(root)) ?? "paradox";
 
 	// Once folder hints pin a specific game we don't need to scan the workspace
 	// for the other exes; the generic "paradox" case still checks all of them.
-	const gamesToCheck = languageId === 'paradox'
-		? GAMES
-		: GAMES.filter((g) => g.id === languageId);
+	const gamesToCheck =
+		languageId === "paradox" ? GAMES : GAMES.filter((g) => g.id === languageId);
 	const promises = gamesToCheck.map(({ exeName, binariesPrefix }) =>
-		findExeInFiles(exeName, binariesPrefix)
+		findExeInFiles(exeName, binariesPrefix, root),
 	);
 	const results = await Promise.all(promises);
 
 	for (let i = 0; i < results.length; i++) {
 		const { id } = gamesToCheck[i];
-		if (results[i].length > 0 && (languageId === "paradox" || languageId === id)) {
+		if (
+			results[i].length > 0 &&
+			(languageId === "paradox" || languageId === id)
+		) {
 			languageId = id;
 		}
 	}
