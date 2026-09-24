@@ -47,6 +47,8 @@
   `alias_categories()` directly. (#762)
 * Requests now observe preceding document notifications without blocking later
   requests, while cancellation remains prompt. (#775)
+* Formatter position lookups now share line-prefix scans, keeping long single-line
+  value lists linear in their source length. (#702)
 
 ### 3.4.5
 

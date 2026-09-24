@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::ast::{Arena, Child, ParsedFile, SourcePos, SourceRange, Value};
-use crate::fix::{EOF_POS, SpanEdit, line_start_bytes, plan_file_edits, pos_to_byte};
+use crate::fix::{EOF_POS, PositionLookup, SpanEdit, line_start_bytes, plan_file_edits};
 use crate::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
 
@@ -92,9 +92,9 @@ pub fn format_range_edits(
     let Some(parsed) = parse_ok(input, table) else {
         return Vec::new();
     };
-    let line_starts = line_start_bytes(input);
-    let range_start = pos_to_byte(input, &line_starts, range.start);
-    let range_end = pos_to_byte(input, &line_starts, range.end);
+    let mut positions = PositionLookup::new(input, &line_start_bytes(input));
+    let range_start = positions.byte_offset(range.start);
+    let range_end = positions.byte_offset(range.end);
     if range_start == 0 && range_end >= input.len() {
         return format_edits(input, table, opts);
     }
@@ -105,7 +105,7 @@ pub fn format_range_edits(
         range_start,
         range_end,
         input,
-        &line_starts,
+        &mut positions,
     );
     if slice.is_empty() {
         return Vec::new();
@@ -120,8 +120,8 @@ pub fn format_range_edits(
             0
         },
     };
-    let replace_from = pos_to_byte(input, &line_starts, start);
-    let replace_to = pos_to_byte(input, &line_starts, last.end);
+    let replace_from = positions.byte_offset(start);
+    let replace_to = positions.byte_offset(last.end);
     let mut printer = Printer::new(input, table, &parsed.arena, opts, indent);
     printer.emit_children(slice);
     let mut replacement = printer.out;
@@ -192,7 +192,7 @@ fn select_span<'a>(
     range_start: usize,
     range_end: usize,
     input: &str,
-    line_starts: &[usize],
+    positions: &mut PositionLookup<'_>,
 ) -> (u32, &'a [Child]) {
     for child in children {
         let Some(clause) = arena.keyed_clause(child) else {
@@ -200,10 +200,10 @@ fn select_span<'a>(
         };
         let Child::Leaf(i) = child else { continue };
         let leaf = &arena.leaves[*i as usize];
-        let Some(open) = find_open_brace(input, leaf.value_pos, line_starts) else {
+        let Some(open) = find_open_brace(input, leaf.value_pos, positions) else {
             continue;
         };
-        let close = pos_to_byte(input, line_starts, leaf.pos.end);
+        let close = positions.byte_offset(leaf.pos.end);
         if range_start > open && range_end <= close {
             return select_span(
                 arena,
@@ -212,7 +212,7 @@ fn select_span<'a>(
                 range_start,
                 range_end,
                 input,
-                line_starts,
+                positions,
             );
         }
     }
@@ -220,8 +220,8 @@ fn select_span<'a>(
     let mut last = 0usize;
     for (i, child) in children.iter().enumerate() {
         let span = child_span(arena, child);
-        let s = pos_to_byte(input, line_starts, span.start);
-        let e = pos_to_byte(input, line_starts, span.end);
+        let s = positions.byte_offset(span.start);
+        let e = positions.byte_offset(span.end);
         if s < range_end && range_start < e {
             if first.is_none() {
                 first = Some(i);
@@ -249,16 +249,24 @@ fn child_span(arena: &Arena, child: &Child) -> SourceRange {
     }
 }
 
-fn find_open_brace(input: &str, value_pos: SourceRange, line_starts: &[usize]) -> Option<usize> {
-    let s = pos_to_byte(input, line_starts, value_pos.start);
-    let e = pos_to_byte(input, line_starts, value_pos.end).min(input.len());
+fn find_open_brace(
+    input: &str,
+    value_pos: SourceRange,
+    positions: &mut PositionLookup<'_>,
+) -> Option<usize> {
+    let s = positions.byte_offset(value_pos.start);
+    let e = positions.byte_offset(value_pos.end).min(input.len());
     let s = s.min(e);
     input[s..e].find('{').map(|i| s + i)
 }
 
-fn source_slice<'a>(input: &'a str, line_starts: &[usize], range: SourceRange) -> Option<&'a str> {
-    let s = pos_to_byte(input, line_starts, range.start);
-    let e = pos_to_byte(input, line_starts, range.end).min(input.len());
+fn source_slice<'a>(
+    input: &'a str,
+    positions: &mut PositionLookup<'_>,
+    range: SourceRange,
+) -> Option<&'a str> {
+    let s = positions.byte_offset(range.start);
+    let e = positions.byte_offset(range.end).min(input.len());
     let s = s.min(e);
     let slice = input[s..e].trim();
     (!slice.is_empty()).then_some(slice)
@@ -289,7 +297,7 @@ struct Printer<'a> {
     out: String,
     indent: u32,
     newline: &'static str,
-    line_starts: Vec<usize>,
+    positions: PositionLookup<'a>,
     unit: String,
     tab_size: usize,
     line_width: usize,
@@ -311,7 +319,7 @@ impl<'a> Printer<'a> {
             out: String::new(),
             indent,
             newline: newline_of(input),
-            line_starts: line_start_bytes(input),
+            positions: PositionLookup::new(input, &line_start_bytes(input)),
             unit: opts.unit(),
             tab_size: opts.indent_size.clamp(1, 16) as usize,
             line_width: 0,
@@ -422,9 +430,9 @@ impl<'a> Printer<'a> {
         self.push_char('}');
     }
 
-    fn clause_prefix(&self, pos: SourceRange) -> Option<String> {
-        let open = find_open_brace(self.input, pos, &self.line_starts)?;
-        let start = pos_to_byte(self.input, &self.line_starts, pos.start);
+    fn clause_prefix(&mut self, pos: SourceRange) -> Option<String> {
+        let open = find_open_brace(self.input, pos, &mut self.positions)?;
+        let start = self.positions.byte_offset(pos.start);
         if start >= open {
             return None;
         }
@@ -460,7 +468,7 @@ impl<'a> Printer<'a> {
             })
     }
 
-    fn rendered_values(&self, children: &[Child]) -> Vec<Cow<'a, str>> {
+    fn rendered_values(&mut self, children: &[Child]) -> Vec<Cow<'a, str>> {
         children
             .iter()
             .map(|child| {
@@ -473,8 +481,8 @@ impl<'a> Printer<'a> {
             .collect()
     }
 
-    fn rendered_value(&self, value: &Value, pos: SourceRange) -> Cow<'a, str> {
-        if let Some(slice) = source_slice(self.input, &self.line_starts, pos) {
+    fn rendered_value(&mut self, value: &Value, pos: SourceRange) -> Cow<'a, str> {
+        if let Some(slice) = source_slice(self.input, &mut self.positions, pos) {
             return Cow::Borrowed(slice);
         }
         match value {
@@ -512,7 +520,7 @@ impl<'a> Printer<'a> {
     }
 
     fn emit_from_range(&mut self, range: SourceRange) -> bool {
-        let Some(slice) = source_slice(self.input, &self.line_starts, range) else {
+        let Some(slice) = source_slice(self.input, &mut self.positions, range) else {
             return false;
         };
         self.out.push_str(slice);
@@ -812,6 +820,52 @@ mod tests {
                 },
             ),
             out
+        );
+    }
+
+    #[test]
+    fn long_bare_value_list_preserves_output_with_shared_position_offsets() {
+        let values = (0..10_000)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        let source_values = values.join(" ");
+        let src = format!("provinces = {{ {source_values} }}\n");
+        let opts = FormatOptions {
+            max_line_width: 80,
+            ..FormatOptions::default()
+        };
+        let out = fmt_opts(&src, opts);
+
+        assert_eq!(dump(&src), dump(&out));
+        assert_eq!(fmt_opts(&out, opts), out);
+
+        let parsed = parse_string(&src, &table());
+        let Child::Leaf(root) = parsed.root_children[0] else {
+            panic!("expected keyed clause");
+        };
+        let Value::Clause(children) = &parsed.arena.leaves[root as usize].value else {
+            panic!("expected value clause");
+        };
+        let mut positions = PositionLookup::new(&src, &line_start_bytes(&src));
+        let rendered = children
+            .iter()
+            .map(|child| {
+                let Child::LeafValue(i) = child else {
+                    panic!("expected bare value");
+                };
+                source_slice(
+                    &src,
+                    &mut positions,
+                    parsed.arena.leaf_values[*i as usize].pos,
+                )
+                .expect("source value")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rendered, values);
+        let last = parsed.arena.leaf_values.last().expect("last value");
+        assert_eq!(
+            positions.cached_columns(1).expect("cached line"),
+            usize::from(last.pos.end.col) + 1
         );
     }
 
