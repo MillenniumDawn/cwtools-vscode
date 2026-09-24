@@ -19,4 +19,4 @@ pub(crate) use helpers::{
     value_col_in_line, value_start_after_eq, word_at_position,
 };
 pub(crate) use references::key_sites;
-pub(crate) use use_sites::scan_use_sites;
+pub(crate) use use_sites::{BoundedUseSiteScan, scan_use_sites, scan_use_sites_bounded};

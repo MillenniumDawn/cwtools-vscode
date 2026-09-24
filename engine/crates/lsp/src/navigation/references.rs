@@ -13,7 +13,7 @@ use crate::paths::{loc_ref_at_cursor_with_encoding, logical_path_from_uri, parse
 use crate::{Backend, FileTextSnapshot};
 use cwtools_info::ReferenceHint;
 
-use super::scan_use_sites;
+use super::{BoundedUseSiteScan, scan_use_sites, scan_use_sites_bounded};
 use super::{
     dedup_locations, locations_at_with_lines, source_range_without_text, value_col_in_line,
     value_start_after_eq,
@@ -525,6 +525,75 @@ impl Backend {
         sites
     }
 
+    /// Collect graph use sites without materializing the complete workspace
+    /// result. Open documents retain precedence over closed index entries, and
+    /// the returned count includes every omitted match for graph diagnostics.
+    pub(crate) fn collect_use_sites_bounded(
+        &self,
+        type_name: &str,
+        instance_name: &str,
+        limit: usize,
+    ) -> (Vec<cwtools_info::UseSite>, usize) {
+        let (asts, open_uris): (Vec<(String, Arc<ParsedFile>)>, HashSet<String>) = {
+            let docs = self.state.documents.lock();
+            (
+                docs.iter()
+                    .filter_map(|(uri, doc)| doc.ast.clone().map(|ast| (uri.clone(), ast)))
+                    .collect(),
+                docs.keys().cloned().collect(),
+            )
+        };
+        let ruleset = self.state.rules.read().ruleset.clone();
+        let ws_prefix = self.state.config.read().workspace_prefix.clone();
+        let definitions = {
+            let info = self.state.info_service.read();
+            info.type_index
+                .instances(type_name)
+                .iter()
+                .filter(|(_, inst)| inst.name.eq_ignore_ascii_case(instance_name))
+                .map(|(file, inst)| (file.to_string(), inst.location))
+                .collect::<Vec<_>>()
+        };
+
+        let open = ruleset.as_ref().map_or_else(Default::default, |rs| {
+            scan_use_sites_bounded(
+                BoundedUseSiteScan {
+                    type_name,
+                    instance_name,
+                    docs: &asts,
+                    ruleset: rs,
+                    workspace_prefix: &ws_prefix,
+                    string_table: &self.state.string_table,
+                    definitions: &definitions,
+                },
+                limit,
+            )
+        });
+        let mut sites = open.sites;
+        let remaining = limit.saturating_sub(sites.len());
+        let (closed, closed_total) = {
+            let info = self.state.info_service.read();
+            let (mut exact, exact_total) = info.reference_index.references_bounded(
+                type_name,
+                instance_name,
+                remaining,
+                &open_uris,
+            );
+            let remaining = remaining.saturating_sub(exact.len());
+            let (alias, alias_total) = info.alias_key_index.references_ci_bounded(
+                type_name,
+                instance_name,
+                remaining,
+                &open_uris,
+            );
+            exact.extend(alias);
+            (exact, exact_total + alias_total)
+        };
+        sites.extend(closed);
+        let total = open.total + closed_total;
+        (sites, total.saturating_sub(limit))
+    }
+
     pub(crate) fn resolve_value_sites(
         &self,
         sites: &[(String, cwtools_info::SourceLocation)],
@@ -718,6 +787,68 @@ mod tests {
             },
             state,
         )
+    }
+
+    #[test]
+    fn complete_use_site_collection_stays_complete_alongside_bounded_graph_path() {
+        use crate::navigation::test_rules::type_ref_ruleset;
+        use cwtools_parser::parser::parse_string;
+
+        let (backend, state) = backend();
+        let rules = type_ref_ruleset();
+        state.rules.write().ruleset = Some(Arc::new(rules.clone()));
+        {
+            let mut info = state.info_service.write();
+            let definition = parse_string(
+                "my_type = { id = my_instance kind = alpha active = yes name = title }\n",
+                &state.string_table,
+            );
+            info.index_file_with_path(
+                "file:///definition.txt",
+                &definition,
+                &state.string_table,
+                &rules,
+                "events/definition.txt",
+            );
+            for idx in 0..12 {
+                let source = parse_string("foo = { base = my_instance }\n", &state.string_table);
+                info.index_file_with_path(
+                    &format!("file:///closed-{idx}.txt"),
+                    &source,
+                    &state.string_table,
+                    &rules,
+                    "events/caller.txt",
+                );
+            }
+        }
+
+        let open_uri = "file:///open.txt";
+        let open_text: Arc<str> = Arc::from("foo = { base = my_instance }\n");
+        let open_ast = Arc::new(parse_string(&open_text, &state.string_table));
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.to_string(),
+                ParsedDoc {
+                    version: 1,
+                    text: open_text,
+                    ast: Some(open_ast),
+                    ast_version: Some(1),
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the open fixture is accepted");
+
+        let complete = backend.collect_use_sites("my_type", "my_instance");
+        let (bounded, omitted) = backend.collect_use_sites_bounded("my_type", "my_instance", 3);
+
+        assert_eq!(complete.len(), 13, "references/rename must remain complete");
+        assert_eq!(bounded.len(), 3);
+        assert_eq!(omitted, 10);
+        assert_eq!(bounded[0].file.as_ref(), open_uri);
+        assert_eq!(bounded[1].file.as_ref(), "file:///closed-0.txt");
     }
 
     /// The open-document path must be a refcount bump. `code_action`,
