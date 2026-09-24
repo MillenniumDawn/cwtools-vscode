@@ -55,9 +55,7 @@ impl InlineScripts {
     }
 
     pub(crate) fn logical_path(&self, name: &str) -> Option<&str> {
-        self.scripts
-            .get(name)
-            .map(|script| script.logical_path.as_str())
+        self.get(name).map(|script| script.logical_path.as_str())
     }
 }
 

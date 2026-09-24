@@ -30,6 +30,7 @@ pub(crate) struct AliasBranchBudget {
     inline_script_source: Option<InlineScriptAliasBranchSource>,
 }
 
+#[derive(Clone)]
 pub(crate) struct InlineScriptAliasBranchSource {
     pub(crate) logical_path: String,
     pub(crate) line: u32,
@@ -353,11 +354,7 @@ impl<'a> ValidationCtx<'a> {
         self.alias_branch_budget
             .borrow()
             .inline_script_source
-            .as_ref()
-            .map(|source| InlineScriptAliasBranchSource {
-                logical_path: source.logical_path.clone(),
-                line: source.line,
-            })
+            .clone()
     }
 
     pub(crate) fn is_loop_var(&self, name: &str) -> bool {
