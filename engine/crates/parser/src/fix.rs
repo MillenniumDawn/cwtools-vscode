@@ -109,6 +109,12 @@ pub fn plan_file_edits<T>(text: &str, mut planned: Vec<(T, SpanEdit)>) -> (Vec<S
     (kept, skipped)
 }
 
+/// Applies edits against the original text in source order.
+///
+/// Invalid ranges and ranges overlapping an earlier accepted edit are skipped.
+/// Edits sharing a start position are ordered by end position, then replacement
+/// text, so the result is independent of input order. Edits touching at a
+/// boundary are both applied.
 pub fn apply_edits(text: &str, edits: &[SpanEdit]) -> String {
     let starts = line_start_bytes(text);
     let mut ranges: Vec<(usize, usize, &str)> = edits
@@ -121,13 +127,26 @@ pub fn apply_edits(text: &str, edits: &[SpanEdit]) -> String {
             )
         })
         .collect();
-    ranges.sort_by_key(|r| std::cmp::Reverse(r.0));
-    let mut out = text.to_string();
-    for (s, e, repl) in ranges {
-        if s <= e && e <= out.len() {
-            out.replace_range(s..e, repl);
+    ranges.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(b.2))
+    });
+
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for (start, end, replacement) in ranges {
+        if start < cursor {
+            continue;
         }
+        let (Some(unchanged), Some(_)) = (text.get(cursor..start), text.get(start..end)) else {
+            continue;
+        };
+        out.push_str(unchanged);
+        out.push_str(replacement);
+        cursor = end;
     }
+    out.push_str(&text[cursor..]);
     out
 }
 
@@ -194,6 +213,36 @@ mod tests {
         };
         assert_eq!(apply_edits(text, &[e1.clone(), e2.clone()]), "X Y\n");
         assert_eq!(apply_edits(text, &[e2, e1]), "X Y\n");
+    }
+
+    #[test]
+    fn apply_overlapping_edits_skips_later_range_without_panicking() {
+        let text = "abcdefghij";
+        let earlier = span(1, 0, 1, 8, "X");
+        let overlapping = span(1, 5, 1, 9, "Y");
+        assert_eq!(
+            apply_edits(text, &[earlier.clone(), overlapping.clone()]),
+            "Xij"
+        );
+        assert_eq!(apply_edits(text, &[overlapping, earlier]), "Xij");
+    }
+
+    #[test]
+    fn apply_adjacent_multibyte_edits_and_eof_edit() {
+        let text = "é中x\n尾🙂";
+        let edits = [
+            span(1, 0, 1, 1, "E"),
+            span(1, 1, 1, 2, "C"),
+            span_to_eof(2, 1, "!"),
+        ];
+        assert_eq!(apply_edits(text, &edits), "ECx\n尾!");
+        assert_eq!(
+            apply_edits(
+                text,
+                &[edits[2].clone(), edits[1].clone(), edits[0].clone()]
+            ),
+            "ECx\n尾!"
+        );
     }
 
     fn span(sl: u32, sc: u16, el: u32, ec: u16, repl: &str) -> SpanEdit {

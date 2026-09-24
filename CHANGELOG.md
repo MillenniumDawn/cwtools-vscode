@@ -24,6 +24,8 @@
 
 #### Engine
 
+* Apply parser edits in one pass against the original text, skipping invalid or
+  overlapping ranges instead of risking a replacement panic. (#577)
 * Graph construction now bounds dense expansion to 4,000 edges and 64 use sites
   per expanded node, reports resulting omissions in graph details, and indexes
   per-file owner lookup. (#570)
