@@ -9,12 +9,8 @@ import { GAMES } from "./games";
 async function findExeInFiles(
 	gameExeName: string,
 	binariesPrefix: boolean,
-	selectedRoot?: WorkspaceFolder,
+	root: WorkspaceFolder,
 ): Promise<Uri[]> {
-	const root = selectedRoot ?? workspace.workspaceFolders?.[0];
-	if (!root) {
-		return [];
-	}
 	const isWin = os.platform() === "win32";
 	const ext = isWin ? "*.exe" : "*";
 	const prefix = binariesPrefix ? "binaries/" : "";
@@ -37,23 +33,16 @@ async function findExeInFiles(
 	return validFiles;
 }
 
-async function detectLanguageId(
-	selectedRoot?: WorkspaceFolder,
-): Promise<string | null> {
-	const rootFolder = selectedRoot ?? workspace.workspaceFolders?.[0];
-	if (rootFolder) {
-		const root = rootFolder.uri.fsPath;
-		const exists = async (p: string): Promise<boolean> => {
-			try {
-				await access(p);
-				return true;
-			} catch {
-				return false;
-			}
-		};
-		return detectFromFolder(root, exists);
-	}
-	return null;
+async function detectLanguageId(root: WorkspaceFolder): Promise<string | null> {
+	const exists = async (p: string): Promise<boolean> => {
+		try {
+			await access(p);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	return detectFromFolder(root.uri.fsPath, exists);
 }
 
 export interface GameDetection {
@@ -61,16 +50,16 @@ export interface GameDetection {
 }
 
 export async function detectGameAndVanilla(
-	selectedRoot?: WorkspaceFolder,
+	root: WorkspaceFolder,
 ): Promise<GameDetection> {
-	let languageId = (await detectLanguageId(selectedRoot)) ?? "paradox";
+	let languageId = (await detectLanguageId(root)) ?? "paradox";
 
 	// Once folder hints pin a specific game we don't need to scan the workspace
 	// for the other exes; the generic "paradox" case still checks all of them.
 	const gamesToCheck =
 		languageId === "paradox" ? GAMES : GAMES.filter((g) => g.id === languageId);
 	const promises = gamesToCheck.map(({ exeName, binariesPrefix }) =>
-		findExeInFiles(exeName, binariesPrefix, selectedRoot),
+		findExeInFiles(exeName, binariesPrefix, root),
 	);
 	const results = await Promise.all(promises);
 

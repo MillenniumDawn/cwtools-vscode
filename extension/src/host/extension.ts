@@ -80,15 +80,15 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			// This folder does not contain a descriptor; try the next root.
 		}
 	}
-	const enabled = selectedRoot !== undefined;
-	void commands.executeCommand("setContext", "cwtoolsEnabled", enabled);
-	if (!enabled) {
+	void commands.executeCommand(
+		"setContext",
+		"cwtoolsEnabled",
+		selectedRoot !== undefined,
+	);
+	if (!selectedRoot) {
 		return api;
 	}
 	const root = selectedRoot;
-	if (!root) {
-		return api;
-	}
 	// The editor/title graph button is gated on `cwtoolsWebview == false`, which an
 	// unset key does not satisfy. Only GraphPanel ever wrote this key, so without a
 	// seed the button could not appear until a panel had opened and closed once.
@@ -147,6 +147,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		const { rulesCache, fetchUpstream } = await resolveRulesCache(
 			language,
 			cacheDir,
+			workspaceFolder.uri.fsPath,
 		);
 
 		// Where a location the server reports is allowed to point. Anything else

@@ -3,7 +3,7 @@ import type { ExtensionContext } from "vscode";
 
 const mocks = vi.hoisted(() => ({
 	workspace: {
-		workspaceFolders: undefined as { uri: string }[] | undefined,
+		workspaceFolders: undefined as { uri: unknown }[] | undefined,
 		fs: { stat: vi.fn() },
 		getConfiguration: vi.fn(() => ({ get: vi.fn() })),
 	},
@@ -172,7 +172,7 @@ suite("descriptor startup gate", () => {
 
 	test("initializes the first descriptor root and starts its client", async () => {
 		const unrelated = { uri: "file:///project" };
-		const mod = { uri: "file:///mod" };
+		const mod = { uri: { fsPath: "/mod", toString: () => "file:///mod" } };
 		mocks.workspace.workspaceFolders = [unrelated, mod];
 		mocks.workspace.fs.stat.mockImplementation((uri: string) => {
 			return uri === "file:///mod/descriptor.mod"
@@ -192,6 +192,11 @@ suite("descriptor startup gate", () => {
 		);
 		expect(mocks.detectGameAndVanilla).toHaveBeenCalledOnce();
 		expect(mocks.detectGameAndVanilla).toHaveBeenCalledWith(mod);
+		expect(mocks.resolveRulesCache).toHaveBeenCalledWith(
+			"paradox",
+			expect.any(String),
+			"/mod",
+		);
 		expect(mocks.createOutputChannel).toHaveBeenCalledOnce();
 		expect(mocks.initializeLogger).toHaveBeenCalledWith(
 			mocks.createOutputChannel.mock.results[0]?.value,

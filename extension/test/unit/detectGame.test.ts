@@ -4,12 +4,10 @@ import * as assert from "assert";
 const mocks = vi.hoisted(() => ({
 	findFiles: vi.fn(),
 	existAndIsExe: vi.fn(),
-	workspaceFolders: [{ uri: { fsPath: "/opaque-cwtools-workspace" } }],
 }));
 
 vi.mock("vscode", () => ({
 	workspace: {
-		workspaceFolders: mocks.workspaceFolders,
 		findFiles: mocks.findFiles,
 	},
 	RelativePattern: class RelativePattern {
@@ -31,6 +29,12 @@ import { detectGameAndVanilla } from "../../src/host/detectGame";
 import { GAMES } from "../../src/host/games";
 
 suite("detectGameAndVanilla", () => {
+	const root = {
+		uri: { fsPath: "/opaque-cwtools-workspace" },
+		name: "opaque-cwtools-workspace",
+		index: 0,
+	} as never;
+
 	beforeEach(() => {
 		mocks.findFiles.mockReset();
 		mocks.existAndIsExe.mockReset();
@@ -45,7 +49,7 @@ suite("detectGameAndVanilla", () => {
 	});
 
 	test("pins generic detection to the discovered game executable", async () => {
-		assert.deepStrictEqual(await detectGameAndVanilla(), {
+		assert.deepStrictEqual(await detectGameAndVanilla(root), {
 			languageId: "hoi4",
 		});
 		assert.strictEqual(mocks.findFiles.mock.calls.length, GAMES.length);
