@@ -26,7 +26,7 @@
   webview export. (#765)
 #### Tooling
 
-* The PR build now smoke-tests the packaged VSIX (required files present; test corpora, build output, and source maps absent) and reports every missing expected platform instead of just the first. (#524)
+* The PR build now smoke-tests the packaged VSIX (required files present; test corpora, build output, and source maps absent) and reports every missing expected platform instead of just the first; a lone flat server binary in the single-platform universal layout passes. (#524)
 
 ### 3.4.6
 
