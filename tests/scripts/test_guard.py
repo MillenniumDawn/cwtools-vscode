@@ -34,6 +34,14 @@ def _config_args(tmp_path: Path, *, bless: bool = False) -> list[str]:
     return args
 
 
+def _compare_args(tmp_path: Path, revision: str | None = None) -> list[str]:
+    args = _config_args(tmp_path)
+    args.append("--compare")
+    if revision is not None:
+        args.append(revision)
+    return args
+
+
 def _stub_subprocess(
     monkeypatch: pytest.MonkeyPatch, guard: ModuleType, raw_report: str
 ) -> None:
@@ -55,6 +63,117 @@ def _fixed_work_dir(
 ) -> None:
     work.mkdir()
     monkeypatch.setattr(guard.tempfile, "mkdtemp", lambda **_kwargs: str(work))
+
+
+def test_resolve_compare_revision_uses_merge_base_by_default(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="merge-base-sha\n")
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+
+    assert guard.resolve_compare_revision(tmp_path, None) == "merge-base-sha"
+    assert commands == [["git", "-C", str(tmp_path), "merge-base", "main", "HEAD"]]
+
+
+def test_run_guard_compare_build_failure_removes_worktree(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = guard.build_config(_compare_args(tmp_path, "old-revision"), {})
+    work = tmp_path / "work"
+    _fixed_work_dir(monkeypatch, guard, work)
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if command[0] == "git":
+            if "worktree" in command and "add" in command:
+                worktree = Path(command[command.index("--detach") + 1])
+                worktree.mkdir()
+            stdout = "resolved-revision\n" if "rev-parse" in command else ""
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        if command[0] == "cargo":
+            return subprocess.CompletedProcess(command, 1)
+        raise AssertionError(command)
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+
+    with pytest.raises(SystemExit, match="2"):
+        guard.run_guard(config)
+
+    output = capsys.readouterr().err
+    assert "comparison release build failed" in output
+    assert any(
+        command[:5]
+        == [
+            "git",
+            "-C",
+            str(guard.REPO_ROOT),
+            "worktree",
+            "remove",
+        ]
+        for command in commands
+    )
+    assert not work.exists()
+
+
+def test_run_guard_compare_prints_drift_table_and_cleans_worktree(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    corpus = tmp_path / "mod"
+    current_binary = tmp_path / "cwtools"
+    current_binary.write_text("current", encoding="utf-8")
+    old_raw = (
+        "file,line,severity,code,message,hash\n"
+        f"{corpus}/common/x.txt,4,Warning,CW100,old,0123456789abcdef\n"
+    )
+    current_raw = (
+        "file,line,severity,code,message,hash\n"
+        f"{corpus}/common/x.txt,4,Warning,CW222,new,0123456789abcdef\n"
+    )
+    config = guard.build_config(_compare_args(tmp_path, "old-revision"), {})
+    work = tmp_path / "work"
+    _fixed_work_dir(monkeypatch, guard, work)
+    monkeypatch.setattr(guard, "describe", lambda _directory: REVISION)
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[0] == "git":
+            if "worktree" in command and "add" in command:
+                worktree = Path(command[command.index("--detach") + 1])
+                binary = worktree / "engine" / "target" / "release" / "cwtools"
+                binary.parent.mkdir(parents=True)
+                binary.write_text("old", encoding="utf-8")
+            stdout = "resolved-revision\n" if "rev-parse" in command else ""
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        if command[0] == "cargo":
+            return subprocess.CompletedProcess(command, 0)
+        output = Path(command[command.index("--output-file") + 1])
+        raw = old_raw if "comparison-worktree" in command[0] else current_raw
+        output.write_text(raw, encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+
+    assert guard.run_guard(config) == 1
+
+    output = capsys.readouterr().out
+    assert "diagnostics drifted from comparison revision" in output
+    assert "by code (gone/new):" in output
+    assert "CW100      -1 +0" in output
+    assert "CW222      -0 +1" in output
+    assert f"guard: artifacts in {work}" in output
+    assert not (work / "comparison-worktree").exists()
+    assert (work / "drift.diff").is_file()
 
 
 def test_run_guard_missing_pins_are_compatible(
