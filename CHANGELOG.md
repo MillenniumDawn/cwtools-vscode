@@ -3,6 +3,8 @@
 #### Engine
 
 * Scripted-localisation completion inside a defined_text block now offers the name/text fields instead of dumping workspace variables; variables are still offered inside text. (#785)
+* Keyed cardinality checks use a map once a block's rule list is wide, instead
+  of scanning every rule for every field. (#582)
 
 #### Tooling
 

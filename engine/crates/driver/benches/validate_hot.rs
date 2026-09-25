@@ -16,6 +16,9 @@
 //! repo. The corpus case prints why and measures nothing when either checkout
 //! is missing. `validate_prepared/fixture` always runs, against an in-repo
 //! ruleset and script, so a machine with no siblings still gets a number.
+//! `validate_prepared/keyed_entity` is the same kind of in-repo case, sized
+//! like a large HOI4 type (many specific fields, a few hundred entities) so
+//! cardinality bookkeeping shows up in the number.
 
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
@@ -26,7 +29,7 @@ use cwtools_game::constants::Game;
 use cwtools_index::{TypeIndex, collect_defined_variables_from_rules, collect_type_instances};
 use cwtools_parser::parser::parse_string;
 use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_rules::rules_types::RuleSet;
+use cwtools_rules::rules_types::{RootRule, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
 
@@ -35,6 +38,9 @@ use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
 const CORPUS_FILE: &str = "common/scripted_effects/RUS effects (Russia).txt";
 
 const FIXTURE_PATH: &str = "common/scripted_effects/bench.txt";
+const KEYED_PATH: &str = "common/keyed/bench.txt";
+const KEYED_FIELDS: usize = 80;
+const KEYED_ENTITIES: usize = 200;
 const FIXTURE_RULES: &str = r#"
 types = { type[scripted_effect] = { path = "common/scripted_effects" } }
 scripted_effect = {
@@ -101,6 +107,29 @@ fn fixture_script() -> String {
              }}\n\
              }}\n"
         ));
+    }
+    body
+}
+
+fn keyed_rules() -> String {
+    let mut rules = String::from(
+        "types = { type[keyed_entity] = { path = \"common/keyed\" } }\nkeyed_entity = {\n",
+    );
+    for i in 0..KEYED_FIELDS {
+        rules.push_str(&format!("    field_{i} = int\n"));
+    }
+    rules.push_str("}\n");
+    rules
+}
+
+fn keyed_script() -> String {
+    let mut body = String::new();
+    for entity in 0..KEYED_ENTITIES {
+        body.push_str(&format!("ent_{entity} = {{\n"));
+        for field in 0..KEYED_FIELDS {
+            body.push_str(&format!("    field_{field} = {entity}\n"));
+        }
+        body.push_str("}\n");
     }
     body
 }
@@ -181,6 +210,59 @@ fn bench_validate_hot(c: &mut Criterion) {
         &fixture_ast,
         FIXTURE_PATH,
         &fixture_prepared,
+    );
+
+    let keyed_ruleset = ast_to_ruleset(&parse_string(&keyed_rules(), &table), &table);
+    let keyed_source = keyed_script();
+    let keyed_ast = parse_string(&keyed_source, &table);
+    assert_eq!(
+        keyed_ast.arena.leaves.len(),
+        KEYED_ENTITIES * (KEYED_FIELDS + 1),
+        "validate_hot: keyed fixture did not parse one leaf per entity plus one per field"
+    );
+    assert!(
+        keyed_ruleset
+            .types
+            .iter()
+            .any(|t| cwtools_index::check_path_dir(&t.path_options, KEYED_PATH)),
+        "validate_hot: keyed fixture path matches no type; the inner loop would not run"
+    );
+    let keyed_rule_idx = keyed_ruleset
+        .type_rules_idx()
+        .get("keyed_entity")
+        .copied()
+        .expect("validate_hot: keyed fixture has no type rules");
+    let RootRule::TypeRule(_, (rule_type, _)) = &keyed_ruleset.root_rules[keyed_rule_idx] else {
+        panic!("validate_hot: keyed fixture root rule is not a type rule");
+    };
+    let RuleType::NodeRule { rules, .. } = rule_type else {
+        panic!("validate_hot: keyed fixture type is not a node rule");
+    };
+    assert_eq!(
+        rules.len(),
+        KEYED_FIELDS,
+        "validate_hot: keyed fixture is not a wide specific-field type"
+    );
+    let keyed_index = index_file(&keyed_ruleset, &keyed_ast, KEYED_PATH, &table);
+    let keyed_prepared = Prepared {
+        ruleset: &keyed_ruleset,
+        table: &table,
+        game: Some(Game::Hoi4),
+        type_index: Some(&keyed_index),
+        modifier_keys: None,
+        loc_index: None,
+        extra_loc_keys: None,
+        inline_scripts: None,
+        registry: None,
+        scope_checks: false,
+        var_checks: false,
+    };
+    bench_one(
+        c,
+        "validate_prepared/keyed_entity",
+        &keyed_ast,
+        KEYED_PATH,
+        &keyed_prepared,
     );
 
     let Some(rules) = rules_dir() else {
