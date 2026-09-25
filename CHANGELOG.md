@@ -18,15 +18,13 @@
   cleans up their tags. This tracks the current Publish workflow shape; the
   superseded `v*-nightly.*` shape is left untouched. (#622)
 * Fuzz the `.cwb`, `.cwe`, and `.cwv` cache readers in the CI smoke job. (#627)
+* The PR build now smoke-tests the packaged VSIX (required files present; test corpora, build output, and source maps absent) and reports every missing expected platform instead of just the first; a lone flat server binary in the single-platform universal layout passes. (#524)
 
 #### Extension
 
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
 * Keep graph commands gated by the live server capability and remove an unused
   webview export. (#765)
-#### Tooling
-
-* The PR build now smoke-tests the packaged VSIX (required files present; test corpora, build output, and source maps absent) and reports every missing expected platform instead of just the first; a lone flat server binary in the single-platform universal layout passes. (#524)
 
 ### 3.4.6
 
