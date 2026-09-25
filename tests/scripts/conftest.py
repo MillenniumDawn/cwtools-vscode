@@ -53,6 +53,11 @@ def stage_release_binaries() -> ModuleType:
 
 
 @pytest.fixture(scope="session")
+def prune_prereleases() -> ModuleType:
+    return _load("prune_prereleases")
+
+
+@pytest.fixture(scope="session")
 def sync_paradox_syntax() -> ModuleType:
     return _load("sync_paradox_syntax")
 
