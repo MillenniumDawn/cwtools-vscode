@@ -219,10 +219,12 @@ wrapped = {
 #[test]
 fn entity_root_validates_the_node_itself() {
     // `plain` has no skip_root_key: the root node IS the instance, so its own
-    // fields are validated. A bad field flags; a good one does not.
+    // fields are validated. A field from the sibling Wrapper schema must flag,
+    // while the Entity's own field must not.
+    let good_script = "my_plain = {\n\tfoo = 5\n}\n";
     let good = validate(
         ENTITY_VS_WRAPPER_RULES,
-        "my_plain = {\n\tfoo = 5\n}\n",
+        good_script,
         "game/common/things/test.txt",
     );
     assert!(
@@ -230,15 +232,43 @@ fn entity_root_validates_the_node_itself() {
         "a valid Entity field must not flag, got: {:?}",
         good.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
+    let context = navigate(
+        ENTITY_VS_WRAPPER_RULES,
+        good_script,
+        "game/common/things/test.txt",
+        "foo = 5",
+    )
+    .expect("navigator must resolve the Entity's own field");
+    let keys = specific_keys(&context.child_rules);
+    assert!(
+        keys.contains(&"foo".to_string()),
+        "Entity schema missing foo: {keys:?}"
+    );
+    assert!(
+        !keys.contains(&"bar".to_string()),
+        "sibling Wrapper schema leaked into Entity: {keys:?}"
+    );
+
     let bad = validate(
         ENTITY_VS_WRAPPER_RULES,
-        "my_plain = {\n\tnope = 5\n}\n",
+        "my_plain = {\n\tbar = 5\n}\n",
         "game/common/things/test.txt",
     );
     assert!(
-        bad.iter().any(|e| e.message.contains("nope")),
-        "the Entity node's own fields must be validated (unknown `nope` flags), got: {:?}",
+        bad.iter().any(|e| e.message.contains("bar")),
+        "the Entity must reject the sibling Wrapper field `bar`, got: {:?}",
         bad.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    let sibling_context = navigate(
+        ENTITY_VS_WRAPPER_RULES,
+        "my_plain = {\n\tbar = 5\n}\n",
+        "game/common/things/test.txt",
+        "bar = 5",
+    )
+    .expect("navigator must return the Entity context for a rejected field");
+    assert!(
+        !specific_keys(&sibling_context.child_rules).contains(&"bar".to_string()),
+        "navigator must not offer the sibling Wrapper field in an Entity"
     );
 }
 
@@ -246,10 +276,12 @@ fn entity_root_validates_the_node_itself() {
 fn wrapper_root_validates_grandchildren_not_the_node() {
     // `wrapper = { ... }` is a skip_root_key wrapper for `wrapped`: the wrapper key
     // itself is not flagged, and the GRANDCHILDREN (instances) are validated
-    // against `wrapped`'s rules. A bad grandchild field flags; a good one does not.
+    // against `wrapped`'s rules. Its own field is accepted, while a field from
+    // the sibling Entity schema is rejected by both validation and navigation.
+    let good_script = "wrapper = {\n\tinst = {\n\t\tbar = 5\n\t}\n}\n";
     let good = validate(
         ENTITY_VS_WRAPPER_RULES,
-        "wrapper = {\n\tinst = {\n\t\tbar = 5\n\t}\n}\n",
+        good_script,
         "game/common/things/test.txt",
     );
     assert!(
@@ -257,16 +289,49 @@ fn wrapper_root_validates_grandchildren_not_the_node() {
         "a valid Wrapper grandchild must not flag, got: {:?}",
         good.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
+    let context = navigate(
+        ENTITY_VS_WRAPPER_RULES,
+        good_script,
+        "game/common/things/test.txt",
+        "bar = 5",
+    )
+    .expect("navigator must resolve the Wrapper's own field");
+    let keys = specific_keys(&context.child_rules);
+    assert!(
+        keys.contains(&"bar".to_string()),
+        "Wrapper schema missing bar: {keys:?}"
+    );
+    assert!(
+        !keys.contains(&"foo".to_string()),
+        "sibling Entity schema leaked into Wrapper: {keys:?}"
+    );
+
+    let bad_script = "wrapper = {\n\tinst = {\n\t\tbar = 5\n\t\tfoo = 5\n\t}\n}\n";
     let bad = validate(
         ENTITY_VS_WRAPPER_RULES,
-        "wrapper = {\n\tinst = {\n\t\tnope = 5\n\t}\n}\n",
+        bad_script,
         "game/common/things/test.txt",
     );
     assert!(
-        bad.iter().any(|e| e.message.contains("nope")),
-        "the Wrapper's grandchildren are validated against `wrapped` (unknown `nope` \
-         flags), got: {:?}",
+        bad.iter().any(|e| e.message.contains("foo")),
+        "the Wrapper must reject the sibling Entity field `foo`, got: {:?}",
         bad.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        !bad.iter().any(|e| e.message.contains("bar")),
+        "the Wrapper's own field `bar` must remain valid, got: {:?}",
+        bad.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    let sibling_context = navigate(
+        ENTITY_VS_WRAPPER_RULES,
+        bad_script,
+        "game/common/things/test.txt",
+        "foo = 5",
+    )
+    .expect("navigator must return the Wrapper context for a rejected field");
+    assert!(
+        !specific_keys(&sibling_context.child_rules).contains(&"foo".to_string()),
+        "navigator must not offer the sibling Entity field in a Wrapper"
     );
 }
 
@@ -428,7 +493,7 @@ outer = {
 
 const GENERIC_FALLBACK_RULES: &str = r#"
 types = {
-    ## type_key_filter = named
+    ## type_key_filter = { named named_thing }
     type[named] = {
         path = "game/common/generic"
         skip_root_key = holder
@@ -449,9 +514,12 @@ generic = {
 "#;
 
 #[test]
-fn generic_grandchild_fallback_still_applies_prefixes() {
+fn grandchild_fallback_requires_both_filter_and_prefix() {
     let script = r#"
 holder = {
+    named_thing = { wrong_named = 1 }
+    named = { wrong_exact = 1 }
+    named_other = { wrong_prefix = 1 }
     generic_good = { wrong_generic = 1 }
     other = { wrong_other = 1 }
 }
@@ -461,25 +529,58 @@ holder = {
         script,
         "game/common/generic/test.txt",
     );
+    let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
     assert!(
-        errors.iter().any(|e| e.message.contains("wrong_generic")),
-        "the generic fallback should validate a matching prefixed instance, got: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        messages.iter().any(|m| m.contains("wrong_named")),
+        "a key in both the filter and prefix must validate against `named`, got: {messages:?}"
     );
+    for field in ["wrong_exact", "wrong_prefix", "wrong_other"] {
+        assert!(
+            !messages.iter().any(|m| m.contains(field)),
+            "rejected instance {field} was validated: {messages:?}"
+        );
+    }
     assert!(
-        !errors.iter().any(|e| e.message.contains("wrong_other")),
-        "the generic fallback must not validate a nonmatching instance, got: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+        messages.iter().any(|m| m.contains("wrong_generic")),
+        "the generic fallback should still validate a matching prefixed instance, got: {messages:?}"
     );
 
-    let context = navigate(
+    let named_context = navigate(
+        GENERIC_FALLBACK_RULES,
+        script,
+        "game/common/generic/test.txt",
+        "wrong_named = 1",
+    )
+    .expect("navigator must resolve a key satisfying the filter and prefix");
+    assert!(specific_keys(&named_context.child_rules).contains(&"named_field".to_string()));
+    assert!(
+        navigate(
+            GENERIC_FALLBACK_RULES,
+            script,
+            "game/common/generic/test.txt",
+            "wrong_exact = 1",
+        )
+        .is_none(),
+        "navigator must reject a filter-only key that misses the prefix"
+    );
+    assert!(
+        navigate(
+            GENERIC_FALLBACK_RULES,
+            script,
+            "game/common/generic/test.txt",
+            "wrong_prefix = 1",
+        )
+        .is_none(),
+        "navigator must reject a prefix-only key that misses the filter"
+    );
+    let generic_context = navigate(
         GENERIC_FALLBACK_RULES,
         script,
         "game/common/generic/test.txt",
         "wrong_generic = 1",
     )
     .expect("navigator must agree with generic grandchild fallback");
-    assert!(specific_keys(&context.child_rules).contains(&"generic_field".to_string()));
+    assert!(specific_keys(&generic_context.child_rules).contains(&"generic_field".to_string()));
 }
 
 const DIRECT_NAME_RULES: &str = r#"

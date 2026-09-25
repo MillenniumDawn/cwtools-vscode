@@ -358,16 +358,38 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_atomic_commit_keeps_the_previous_path() {
+    fn a_failed_atomic_commit_after_writing_keeps_the_previous_bytes() {
         use std::io::Write;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("source.txt");
-        std::fs::create_dir(&path).unwrap();
-        let error = write_atomically(&path, |file| file.write_all(b"new")).unwrap_err();
+        let backup = dir.path().join("source.backup");
+        let original = b"original";
+        std::fs::write(&path, original).unwrap();
+        let mut writer_ran = false;
+        let error = write_atomically(&path, |file| {
+            file.write_all(b"new")?;
+            writer_ran = true;
+            // The destination becomes a directory only after the temporary
+            // file has been written, so the final rename is the failing step.
+            // Move the original aside so the test can restore the path after
+            // exercising that failure without losing the bytes it protects.
+            std::fs::rename(&path, &backup)?;
+            std::fs::create_dir(&path)
+        })
+        .unwrap_err();
 
-        assert!(error.kind() != std::io::ErrorKind::NotFound);
-        assert!(path.is_dir());
+        assert!(writer_ran, "the writer must run before commit fails");
+        assert!(path.is_dir(), "the destination must block the final rename");
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(std::fs::read(&backup).unwrap(), original);
+        // The temporary file was cleaned up even though the destination was
+        // made unreplaceable after the writer ran.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::rename(&backup, &path).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 

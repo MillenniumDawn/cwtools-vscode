@@ -3524,6 +3524,36 @@ fn test_format_apply_read_failure_exits_two() {
     assert_eq!(std::fs::read(&file).unwrap(), original);
 }
 
+// Windows MAX_PATH rejects this fixture during setup before the temp-name failure.
+#[cfg(unix)]
+#[test]
+fn test_format_apply_write_failure_preserves_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let common = tmp.path().join("common");
+    std::fs::create_dir_all(&common).unwrap();
+    // The target fits a filename component; its appended temporary suffix does not.
+    let filename = format!("{}.txt", "a".repeat(251));
+    let file = common.join(&filename);
+    let original = b"root={\n a=1\n}\n";
+    std::fs::write(&file, original).unwrap();
+
+    cwtools()
+        .args([
+            "format",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("Error writing"))
+        .stderr(predicate::str::contains(&filename))
+        .stdout(predicate::str::contains("Formatted 0 file(s)"));
+
+    assert_eq!(std::fs::read(&file).unwrap(), original);
+    assert_eq!(std::fs::read_dir(common).unwrap().count(), 1);
+}
+
 #[test]
 fn test_format_rejects_an_unknown_indent_style() {
     let tmp = format_mod_dir();
