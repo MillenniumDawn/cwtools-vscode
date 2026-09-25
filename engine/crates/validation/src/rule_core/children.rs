@@ -4,7 +4,9 @@ use cwtools_parser::{
     unquote,
 };
 use cwtools_rules::rules_types::*;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
+use std::hash::Hasher;
 use std::sync::LazyLock;
 
 use crate::common::*;
@@ -268,20 +270,36 @@ struct KeyCard<'a> {
     min: i32,
     max: i32,
     strict_min: bool,
+    severity: ErrorSeverity,
     count: i32,
-    reported: bool,
 }
 
 struct BlockRules<'a> {
     cards: SmallVec<[KeyCard<'a>; 8]>,
+    by_key: FxHashMap<u64, SmallVec<[u32; 1]>>,
     leafvalue: bool,
     valueclause: bool,
 }
 
+fn ascii_ci_hash(key: &str) -> u64 {
+    // ASCII fold only, matching eq_ignore_ascii_case, so lookup allocates nothing.
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write_usize(key.len());
+    for &b in key.as_bytes() {
+        hasher.write_u8(b.to_ascii_lowercase());
+    }
+    hasher.finish()
+}
+
+// A map allocation loses to a linear scan until the rule list is wide.
+const KEY_MAP_MIN_RULES: usize = 8;
+
 impl<'a> BlockRules<'a> {
     fn of(rules: &'a [(RuleType, Options)]) -> Self {
+        let use_map = rules.len() > KEY_MAP_MIN_RULES;
         let mut out = BlockRules {
             cards: SmallVec::new(),
+            by_key: FxHashMap::default(),
             leafvalue: false,
             valueclause: false,
         };
@@ -294,30 +312,54 @@ impl<'a> BlockRules<'a> {
             let Some(key) = get_rule_key(rule_type) else {
                 continue;
             };
-            match out.position(key) {
-                Some(i) => {
-                    let c = &mut out.cards[i];
-                    c.min = c.min.min(opts.min);
-                    c.max = c.max.max(opts.max);
-                    c.strict_min = c.strict_min && opts.strict_min;
+            if let Some(i) = out.card_index(key) {
+                let c = &mut out.cards[i];
+                c.min = c.min.min(opts.min);
+                c.max = c.max.max(opts.max);
+                c.strict_min = c.strict_min && opts.strict_min;
+            } else {
+                let i = out.cards.len();
+                if use_map {
+                    if out.by_key.capacity() == 0 {
+                        out.by_key.reserve(rules.len());
+                    }
+                    out.by_key
+                        .entry(ascii_ci_hash(key))
+                        .or_default()
+                        .push(i as u32);
                 }
-                None => out.cards.push(KeyCard {
+                out.cards.push(KeyCard {
                     key,
                     min: opts.min,
                     max: opts.max,
                     strict_min: opts.strict_min,
+                    severity: opts
+                        .severity
+                        .as_ref()
+                        .map(severity_to_error)
+                        .unwrap_or(ErrorSeverity::Warning),
                     count: 0,
-                    reported: false,
-                }),
+                });
             }
         }
         out
     }
 
-    fn position(&self, key: &str) -> Option<usize> {
-        self.cards
-            .iter()
-            .position(|c| c.key.eq_ignore_ascii_case(key))
+    fn card_index(&self, key: &str) -> Option<usize> {
+        if self.by_key.is_empty() {
+            return self
+                .cards
+                .iter()
+                .position(|c| c.key.eq_ignore_ascii_case(key));
+        }
+        let bucket = self.by_key.get(&ascii_ci_hash(key))?;
+        bucket.iter().find_map(|&i| {
+            let i = i as usize;
+            self.cards
+                .get(i)
+                .filter(|c| c.key.eq_ignore_ascii_case(key))
+                .map(|_| i)
+        })
     }
 
     fn any(&self) -> bool {
@@ -490,7 +532,7 @@ fn count_and_validate_children<'r>(
                     );
                     continue;
                 }
-                if any_keyed && let Some(i) = block.position(key) {
+                if any_keyed && let Some(i) = block.card_index(key) {
                     block.cards[i].count += 1;
                 }
                 let candidates =
@@ -797,6 +839,41 @@ fn enforce_cardinality(
             .unwrap_or(block_pos)
     };
 
+    for card in &block.cards {
+        let count = card.count;
+        if count < card.min && card.strict_min {
+            errors.push(ValidationError::from_code_with(
+                &error_codes::CW242_WRONG_NUMBER,
+                card.severity,
+                file_path,
+                block_line,
+                block_col,
+                format!(
+                    "Field '{}' appears {} time(s), expected at least {}",
+                    card.key, count, card.min
+                ),
+            ));
+        }
+        if count > card.max {
+            let (line, col) = children
+                .iter()
+                .find(|c| child_key_matches(c, ast, table, card.key))
+                .and_then(|c| child_start_pos(c, ast))
+                .unwrap_or((block_line, block_col));
+            errors.push(ValidationError::from_code_with(
+                &error_codes::CW242_WRONG_NUMBER,
+                card.severity,
+                file_path,
+                line,
+                col,
+                format!(
+                    "Field '{}' appears {} time(s), expected at most {}",
+                    card.key, count, card.max
+                ),
+            ));
+        }
+    }
+
     for (rule_idx, (rule_type, opts)) in rules.iter().enumerate() {
         let card_sev = opts
             .severity
@@ -807,50 +884,6 @@ fn enforce_cardinality(
         let max_sev = card_sev;
 
         match rule_type {
-            RuleType::LeafRule { .. } | RuleType::NodeRule { .. } => {
-                if let Some(key) = get_rule_key(rule_type) {
-                    let bounds = match block.position(key).map(|i| &mut block.cards[i]) {
-                        Some(c) if !c.reported => {
-                            c.reported = true;
-                            Some((c.min, c.max, c.strict_min, c.count))
-                        }
-                        _ => None,
-                    };
-                    if let Some((kmin, kmax, kstrict, count)) = bounds {
-                        if count < kmin && kstrict {
-                            errors.push(ValidationError::from_code_with(
-                                &error_codes::CW242_WRONG_NUMBER,
-                                missing_sev,
-                                file_path,
-                                block_line,
-                                block_col,
-                                format!(
-                                    "Field '{}' appears {} time(s), expected at least {}",
-                                    key, count, kmin
-                                ),
-                            ));
-                        }
-                        if count > kmax {
-                            let (line, col) = children
-                                .iter()
-                                .find(|c| child_key_matches(c, ast, table, key))
-                                .and_then(|c| child_start_pos(c, ast))
-                                .unwrap_or((block_line, block_col));
-                            errors.push(ValidationError::from_code_with(
-                                &error_codes::CW242_WRONG_NUMBER,
-                                max_sev,
-                                file_path,
-                                line,
-                                col,
-                                format!(
-                                    "Field '{}' appears {} time(s), expected at most {}",
-                                    key, count, kmax
-                                ),
-                            ));
-                        }
-                    }
-                }
-            }
             RuleType::LeafValueRule { right } => {
                 let count = leafvalue_counts[rule_idx] as i32;
                 if count < opts.min && opts.strict_min {
@@ -911,5 +944,40 @@ fn enforce_cardinality(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BlockRules, KEY_MAP_MIN_RULES};
+    use cwtools_rules::rules_types::{NewField, Options, RuleType};
+
+    fn specific(name: &str) -> (RuleType, Options) {
+        (
+            RuleType::LeafRule {
+                left: NewField::SpecificField(name.to_string()),
+                right: NewField::ScalarField,
+            },
+            Options::default(),
+        )
+    }
+
+    #[test]
+    fn wide_rule_list_folds_case_through_the_map() {
+        let rules: Vec<_> = (0..KEY_MAP_MIN_RULES + 1)
+            .map(|i| specific(&format!("field_{i}")))
+            .collect();
+        let block = BlockRules::of(&rules);
+        assert!(!block.by_key.is_empty());
+        assert_eq!(block.card_index("FIELD_0"), Some(0));
+        assert_eq!(block.card_index("no_such_field"), None);
+    }
+
+    #[test]
+    fn short_rule_list_keeps_the_linear_scan() {
+        let rules = vec![specific("icon")];
+        let block = BlockRules::of(&rules);
+        assert!(block.by_key.is_empty());
+        assert_eq!(block.card_index("ICON"), Some(0));
     }
 }

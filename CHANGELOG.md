@@ -7,6 +7,8 @@
 #### Tooling
 
 * guard.py learned --compare [REV] (default: merge-base with main), which builds the CLI from a temporary worktree at that revision and diffs the current validation against it on the same corpus and rules, so input drift cancels out. (#607)
+* Keyed cardinality checks use a map once a block's rule list is wide, instead
+  of scanning every rule for every field. (#582)
 
 ### 3.4.6
 
