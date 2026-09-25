@@ -162,6 +162,10 @@ jobs:
       # an installable extension rather than a client-only shell.
       - name: Test build
         run: npm run build -- package-prebuilt
+      # Open the archive on every PR, not only in the release job. This checks
+      # the .vscodeignore boundary as well as the package's required files.
+      - name: Smoke test VSIX
+        run: python3 scripts/smoke_test_vsix.py artifacts/vsix
       # Host V8 coverage: mocha forces the instrumented host to exit after
       # the host label (a superset of unit's and smoke's files, so this one
       # run measures everything those would, including modules like

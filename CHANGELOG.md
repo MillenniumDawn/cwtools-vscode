@@ -18,6 +18,7 @@
   cleans up their tags. This tracks the current Publish workflow shape; the
   superseded `v*-nightly.*` shape is left untouched. (#622)
 * Fuzz the `.cwb`, `.cwe`, and `.cwv` cache readers in the CI smoke job. (#627)
+* The PR build now smoke-tests the packaged VSIX (required files present; test corpora, build output, and source maps absent) and reports every missing expected platform instead of just the first; a lone flat server binary in the single-platform universal layout passes. (#524)
 
 #### Extension
 

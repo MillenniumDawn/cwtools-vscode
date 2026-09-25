@@ -7,6 +7,7 @@ import re
 import sys
 import tempfile
 import zipfile
+from fnmatch import fnmatch
 from pathlib import Path
 
 TARGET_TO_PLATFORM = {
@@ -17,6 +18,11 @@ TARGET_TO_PLATFORM = {
     "darwin-arm64": "osx-arm64",
 }
 TARGET_RE = re.compile(r"^.*-((win32|linux|darwin|alpine)-[a-z0-9]+)-[0-9].*\.vsix$")
+FORBIDDEN_GLOBS = (
+    "extension/bin/client/test/**",
+    "extension/out/**",
+    "*.map",
+)
 
 
 def gh_error(message: str) -> None:
@@ -44,6 +50,18 @@ def require_file(root: Path, relative: object, vsix: Path) -> None:
     path = root / relative.removeprefix("./")
     if not path.is_file():
         gh_error(f"{vsix.name}: missing packaged file {relative}")
+        raise SystemExit(1)
+
+
+def check_forbidden_content(names: list[str], vsix: Path) -> None:
+    forbidden = sorted(
+        name
+        for name in names
+        if any(fnmatch(name, pattern) for pattern in FORBIDDEN_GLOBS)
+    )
+    if forbidden:
+        carried = " ".join(forbidden)
+        gh_error(f"{vsix.name}: forbidden package content [{carried}]")
         raise SystemExit(1)
 
 
@@ -95,6 +113,7 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
         with zipfile.ZipFile(vsix) as zf:
+            check_forbidden_content(zf.namelist(), vsix)
             zf.extractall(workdir)
         root = workdir / "extension"
         check_package(root, vsix)
@@ -122,7 +141,8 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
                 raise SystemExit(1)
             print(f"  {target}: {platform} only, OK")
             return platform, names
-        if "flat" in names:
+        # engine.ts resolves the flat layout first for single-platform builds.
+        if "flat" in names and names != {"flat"}:
             gh_error(f"{vsix.name}: universal vsix carries a flat server binary")
             raise SystemExit(1)
         carried = " ".join(sorted(names))
@@ -162,10 +182,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     packaged = universal | targeted
-    for platform in expected:
-        if platform not in packaged:
-            gh_error(f"expected platform {platform} was not packaged")
-            return 1
+    missing_expected = [platform for platform in expected if platform not in packaged]
+    for platform in missing_expected:
+        gh_error(f"expected platform {platform} was not packaged")
+    if missing_expected:
+        return 1
 
     print(f"Smoke test passed ({len(vsixes)} vsix)")
     return 0
