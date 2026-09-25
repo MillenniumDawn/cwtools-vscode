@@ -80,6 +80,7 @@ export const LIVE_SETTINGS_KEYS = [
 // list disjoint from LIVE_SETTINGS_KEYS so every contributed setting has one
 // clear change path.
 export const RELOAD_SETTINGS_KEYS = [
+	"cwtools.enable",
 	"cwtools.rules_folder",
 	"cwtools.inlayHints.locTitles",
 	"cwtools.inlayHints.scopes",

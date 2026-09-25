@@ -233,6 +233,12 @@
         "title": "%configuration.title%",
         "order": 1,
         "properties": {
+          "cwtools.enable": {
+            "scope": "window",
+            "type": "boolean",
+            "default": true,
+            "description": "%configuration.cwtools.enable.description%"
+          },
           "cwtools.rules_folder": {
             "scope": "application",
             "type": "string",

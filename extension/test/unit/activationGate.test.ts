@@ -5,7 +5,9 @@ const mocks = vi.hoisted(() => ({
 	workspace: {
 		workspaceFolders: undefined as { uri: unknown }[] | undefined,
 		fs: { stat: vi.fn() },
-		getConfiguration: vi.fn(() => ({ get: vi.fn() })),
+		getConfiguration: vi.fn(() => ({
+			get: vi.fn((_key: string, defaultValue?: unknown) => defaultValue),
+		})),
 	},
 	executeCommand: vi.fn(),
 	createOutputChannel: vi.fn(() => ({
@@ -92,6 +94,9 @@ suite("descriptor startup gate", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		vi.clearAllMocks();
+		mocks.workspace.getConfiguration.mockImplementation(() => ({
+			get: vi.fn((_key: string, defaultValue?: unknown) => defaultValue),
+		}));
 		mocks.workspace.workspaceFolders = [{ uri: "file:///project" }];
 		mocks.workspace.fs.stat.mockRejectedValue(new Error("FileNotFound"));
 		mocks.fsStat.mockResolvedValue({ mode: 0o755 });
@@ -104,6 +109,27 @@ suite("descriptor startup gate", () => {
 		mocks.createLanguageClient.mockReturnValue(mocks.client);
 		mocks.client.start.mockResolvedValue(undefined);
 		mocks.createOutputChannel.mockClear();
+	});
+
+	test("does not initialize when disabled", async () => {
+		const get = vi.fn().mockReturnValue(false);
+		mocks.workspace.getConfiguration.mockReturnValue({ get });
+		const { activate } = await import("../../src/host/extension");
+		const api = await activate({} as ExtensionContext);
+		expect(get).toHaveBeenCalledWith("enable", true);
+		expect(mocks.workspace.fs.stat).not.toHaveBeenCalled();
+		expect(mocks.executeCommand).not.toHaveBeenCalled();
+		expect(mocks.detectGameAndVanilla).not.toHaveBeenCalled();
+		expect(mocks.createOutputChannel).not.toHaveBeenCalled();
+		expect(mocks.serverExe).not.toHaveBeenCalled();
+		expect(mocks.resolveRulesCache).not.toHaveBeenCalled();
+		expect(mocks.createLanguageClient).not.toHaveBeenCalled();
+		expect(mocks.registerCommands).not.toHaveBeenCalled();
+		expect(mocks.publishCommandAvailability).not.toHaveBeenCalled();
+		expect(api.serverCommands()).toEqual([]);
+		expect(api.serverOutputChannel()).toBeUndefined();
+		expect(api.rulesCacheRoot()).toBeUndefined();
+		expect(api.deactivate()).toBeUndefined();
 	});
 
 	test.each([
