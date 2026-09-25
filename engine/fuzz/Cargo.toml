@@ -19,6 +19,9 @@ libfuzzer-sys = "0.4"
 cwtools_parser = { path = "../crates/parser" }
 cwtools_string_table = { path = "../crates/string_table" }
 cwtools_localization = { path = "../crates/localization" }
+cwtools_cache = { path = "../crates/cache" }
+cwtools_index = { path = "../crates/index" }
+tempfile = "3"
 
 # `test`/`doc`/`bench` off: these are libFuzzer entry points, not test targets.
 [[bin]]
@@ -31,6 +34,34 @@ bench = false
 [[bin]]
 name = "parse_loc_text"
 path = "fuzz_targets/parse_loc_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_capped"
+path = "fuzz_targets/decode_capped.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "with_archived_file"
+path = "fuzz_targets/with_archived_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "read_errors_from_file"
+path = "fuzz_targets/read_errors_from_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vanilla_cache_load"
+path = "fuzz_targets/vanilla_cache_load.rs"
 test = false
 doc = false
 bench = false
