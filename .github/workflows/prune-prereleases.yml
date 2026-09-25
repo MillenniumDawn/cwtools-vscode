@@ -1,0 +1,47 @@
+# Keep the newest automated pre-releases so release assets and tags do not
+# accumulate forever. Publish now owns vX.Y.Z-pre.N; the old nightly workflow
+# and its v*-nightly.* tags were superseded and are intentionally untouched.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      confirm_delete:
+        description: "Delete stale pre-releases (otherwise this is a dry run)"
+        required: true
+        default: false
+        type: boolean
+
+name: Prune pre-releases
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prune-pre-releases
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune old pre-releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prune releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Scheduled runs are the automated policy; manual dispatches must
+          # opt in through the explicit confirmation input.
+          CONFIRM_DELETE: >-
+            ${{ github.event_name == 'schedule' || inputs.confirm_delete }}
+        run: |
+          args=()
+          if [ "$CONFIRM_DELETE" = "true" ]; then
+            args+=(--delete)
+          fi
+          python3 scripts/prune_prereleases.py "${args[@]}"

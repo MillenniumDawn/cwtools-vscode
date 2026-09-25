@@ -13,6 +13,12 @@
 #### Extension
 
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
+#### Tooling
+
+* Add a scheduled, dry-run-by-default retention policy that keeps the newest
+  30 automated `v*-pre.*` GitHub releases for roughly a week of rollback and
+  cleans up their tags. This tracks the current Publish workflow shape; the
+  superseded `v*-nightly.*` shape is left untouched. (#622)
 
 ### 3.4.6
 
