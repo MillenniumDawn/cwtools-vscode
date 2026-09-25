@@ -39,6 +39,7 @@ def write_vsix(
     include_entrypoint: bool = True,
     include_graph_css: bool = True,
     include_flat: bool = False,
+    forbidden_paths: list[str] | None = None,
 ) -> None:
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("extension/package.json", json.dumps(PACKAGE))
@@ -57,6 +58,8 @@ def write_vsix(
                 f"extension/bin/server/cwtools-server/{platform}/cwtools-server",
                 "binary\n",
             )
+        for relative in forbidden_paths or []:
+            archive.writestr(f"extension/{relative}", "forbidden\n")
 
 
 def test_accepts_targeted_and_universal_vsixes(
@@ -119,3 +122,37 @@ def test_rejects_a_binary_for_the_wrong_platform(
     with pytest.raises(SystemExit) as caught:
         smoke_test_vsix.main([str(tmp_path)])
     assert caught.value.code == 1
+
+
+@pytest.mark.parametrize(
+    "forbidden_path",
+    [
+        "bin/client/test/workspaces/stellaris/common/example.txt",
+        "out/extension.js",
+        "bin/client/extension/extension.js.map",
+    ],
+)
+def test_rejects_forbidden_package_content(
+    smoke_test_vsix: ModuleType, tmp_path: Path, forbidden_path: str
+) -> None:
+    write_vsix(
+        tmp_path / "ext-1.0.0.vsix",
+        ["linux-x64"],
+        forbidden_paths=[forbidden_path],
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        smoke_test_vsix.main([str(tmp_path)])
+    assert caught.value.code == 1
+
+
+def test_reports_all_missing_expected_platforms(
+    smoke_test_vsix: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_vsix(tmp_path / "ext-1.0.0.vsix", ["linux-x64"])
+
+    assert smoke_test_vsix.main([str(tmp_path), "win-x64", "osx-arm64"]) == 1
+
+    output = capsys.readouterr().out
+    assert "expected platform win-x64 was not packaged" in output
+    assert "expected platform osx-arm64 was not packaged" in output

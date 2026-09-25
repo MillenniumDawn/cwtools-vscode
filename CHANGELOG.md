@@ -24,6 +24,9 @@
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
 * Keep graph commands gated by the live server capability and remove an unused
   webview export. (#765)
+#### Tooling
+
+* The PR build now smoke-tests the packaged VSIX (required files present; test corpora, build output, and source maps absent) and reports every missing expected platform instead of just the first. (#524)
 
 ### 3.4.6
 
