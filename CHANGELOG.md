@@ -1,5 +1,7 @@
 ### Unreleased
 
+* Strengthen atomic-write, dispatch-routing, and activation regression tests. (#693)
+
 #### Engine
 
 * Scripted-localisation completion inside a defined_text block now offers the name/text fields instead of dumping workspace variables; variables are still offered inside text. (#785)
@@ -18,7 +20,6 @@
 #### Extension
 
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
-* Strengthen atomic-write, dispatch-routing, and activation regression tests. (#693)
 
 ### 3.4.6
 
