@@ -3,6 +3,9 @@
 #### Tooling
 
 * guard.py learned --compare [REV] (default: merge-base with main), which builds the CLI from a temporary worktree at that revision and diffs the current validation against it on the same corpus and rules, so input drift cancels out. (#607)
+#### Engine
+
+* Scripted-localisation completion inside a defined_text block now offers the name/text fields instead of dumping workspace variables; variables are still offered inside text. (#785)
 
 ### 3.4.6
 

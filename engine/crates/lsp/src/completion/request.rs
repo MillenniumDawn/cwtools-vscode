@@ -6,7 +6,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
 use cwtools_parser::ast::ParsedFile;
-use cwtools_rules::rules_types::RuleSet;
+use cwtools_rules::rules_types::{RootRule, RuleSet, RuleType};
 use cwtools_validation::position::{rules_at_pos, value_rules_for_key};
 
 use crate::paths::{
@@ -28,6 +28,39 @@ fn completion_request_is_current(
     request_id: u64,
 ) -> bool {
     generations.get(uri).copied() == Some(request_id)
+}
+
+fn scripted_loc_child_rules(
+    ruleset: &RuleSet,
+) -> Option<&[(RuleType, cwtools_rules::rules_types::Options)]> {
+    ruleset.root_rules.iter().find_map(|root| {
+        let RootRule::TypeRule(name, (RuleType::NodeRule { rules, .. }, _)) = root else {
+            return None;
+        };
+        name.eq_ignore_ascii_case("scripted_loc")
+            .then_some(rules.as_ref())
+    })
+}
+
+fn fallback_scripted_loc_items() -> Vec<CompletionItem> {
+    vec![
+        CompletionItem {
+            label: "name".to_string(),
+            kind: Some(CompletionItemKind::FIELD),
+            insert_text: Some("name = $0".to_string()),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            sort_text: Some("1_name".to_string()),
+            ..Default::default()
+        },
+        CompletionItem {
+            label: "text".to_string(),
+            kind: Some(CompletionItemKind::FIELD),
+            insert_text: Some("text = {\n\t$0\n}".to_string()),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            sort_text: Some("1_text".to_string()),
+            ..Default::default()
+        },
+    ]
 }
 
 type RulesSnapshot = (
@@ -253,6 +286,50 @@ impl Backend {
                 AstSource::None.as_str(),
             );
             return Ok(None);
+        }
+
+        if crate::paths::is_scripted_loc_file(&uri)
+            && scope_names::in_scripted_loc_key_context(&doc_text, pos, &position_encoding)
+        {
+            let t_build = Instant::now();
+            let mut items = ruleset_arc
+                .as_deref()
+                .and_then(|ruleset| scripted_loc_child_rules(ruleset).map(|rules| (ruleset, rules)))
+                .map(|(ruleset, rules)| {
+                    let info_guard = self.state.info_service.read();
+                    completions_from_rules(
+                        rules,
+                        ruleset,
+                        &info_guard,
+                        &language,
+                        &modifier_keys_arc,
+                        &modifier_scopes_arc,
+                        scope_registry_arc.as_deref(),
+                        None,
+                        &token,
+                    )
+                    .0
+                })
+                .unwrap_or_else(fallback_scripted_loc_items);
+            build_dur = t_build.elapsed();
+            items = filter_by_token(items, &token);
+            anchor_items(&mut items, replace_range);
+            log_completion_summary(
+                t_start.elapsed(),
+                ast_dur,
+                rules_dur,
+                build_dur,
+                items.len(),
+                if items.is_empty() { "none" } else { "context" },
+                "scripted-loc",
+                AstSource::None.as_str(),
+            );
+            return Ok(
+                (!items.is_empty()).then_some(CompletionResponse::List(CompletionList {
+                    is_incomplete: false,
+                    items,
+                })),
+            );
         }
 
         if crate::paths::is_loc_file(&uri) {

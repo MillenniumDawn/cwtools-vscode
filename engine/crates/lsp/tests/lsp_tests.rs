@@ -495,9 +495,25 @@ fn test_did_open_folds_a_percent_encoded_uri_onto_the_canonical_one() {
 
 // ── Context-aware completion round-trips ─────────────────────────────────────
 
-/// Rules covering both regressions from cwtools-vscode#11: trigger aliases
-/// (`has_completed_focus`) and the MIO `equipment_bonus` typed-key descent
-/// into `alias_name[modifier]`.
+/// Minimal scripted-localisation rules used by the completion regression
+/// test below.
+const SCRIPTED_LOC_COMPLETION_RULES: &str = r#"
+types = {
+    type[scripted_loc] = {
+        path = "game/common/scripted_loc"
+    }
+}
+scripted_loc = {
+    name = scalar
+    text = {
+        localization_key = scalar
+        set_math = {
+            value_set[variable] = math_expr
+        }
+    }
+}
+"#;
+
 const COMPLETION_RULES: &str = r#"
 types = {
     type[focus] = {
@@ -1579,6 +1595,68 @@ focus = {
     id = scalar
 }
 "#;
+
+#[test]
+fn test_completion_scripted_loc_offers_outer_fields_without_variable_dump() {
+    let vars = (
+        "common/decisions/vars.txt",
+        "seed_dec = {\n    set_math = {\n        my_saved_var = 5\n    }\n}\n",
+    );
+
+    let name_labels = completion_labels_custom_rules(
+        SCRIPTED_LOC_COMPLETION_RULES,
+        "common/scripted_loc/test.txt",
+        "defined_text = {\n    n\n}\n",
+        &[vars],
+        1,
+        5,
+    );
+    assert!(
+        name_labels.iter().any(|label| label == "name"),
+        "scripted loc outer fields should offer name, got: {:?}",
+        name_labels
+    );
+    assert!(
+        !name_labels.iter().any(|label| label == "my_saved_var"),
+        "scripted loc outer fields must not dump variables, got: {:?}",
+        name_labels
+    );
+
+    let text_labels = completion_labels_custom_rules(
+        SCRIPTED_LOC_COMPLETION_RULES,
+        "common/scripted_loc/test.txt",
+        "defined_text = {\n    t\n}\n",
+        &[vars],
+        1,
+        5,
+    );
+    assert!(
+        text_labels.iter().any(|label| label == "text"),
+        "scripted loc outer fields should offer text, got: {:?}",
+        text_labels
+    );
+    assert!(
+        !text_labels.iter().any(|label| label == "my_saved_var"),
+        "scripted loc outer fields must not dump variables, got: {:?}",
+        text_labels
+    );
+
+    let nested_labels = completion_labels_custom_rules(
+        SCRIPTED_LOC_COMPLETION_RULES,
+        "common/scripted_loc/test.txt",
+        "defined_text = {\n    text = {\n        \n    }\n}\n",
+        &[vars],
+        2,
+        8,
+    );
+    assert!(
+        nested_labels
+            .iter()
+            .any(|label| label == "localization_key"),
+        "scripted loc text block should keep its own fields, got: {:?}",
+        nested_labels
+    );
+}
 
 #[test]
 fn test_completion_localisation_value_offers_keys_not_variable_dump() {

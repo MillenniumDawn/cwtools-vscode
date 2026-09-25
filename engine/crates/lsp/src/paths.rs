@@ -298,6 +298,21 @@ pub(crate) fn is_loc_file(uri: &str) -> bool {
 }
 
 const LOC_DIR_NAMES: [&str; 3] = ["localisation", "localisation_synced", "localization"];
+const SCRIPTED_LOC_DIR_NAMES: [&str; 3] = [
+    "scripted_loc",
+    "scripted_localisation",
+    "scripted_localization",
+];
+
+pub(crate) fn is_scripted_loc_file(uri: &str) -> bool {
+    if !is_script_file(uri) {
+        return false;
+    }
+    let path = normalize_separators(uri_to_path_str(uri)).to_ascii_lowercase();
+    SCRIPTED_LOC_DIR_NAMES
+        .iter()
+        .any(|dir| cwtools_info::path_contains_segment(&path, dir))
+}
 
 pub(crate) fn has_loc_ext(uri: &str) -> bool {
     std::path::Path::new(uri)
@@ -512,6 +527,25 @@ mod tests {
         assert!(is_loc_file("file:///MOD/Localisation/FOO.YAML"));
         assert!(!is_loc_file("file:///mod/common/ideas/foo.txt"));
         assert!(!is_loc_file("file:///mod/gfx/foo.gfx"));
+    }
+
+    #[test]
+    fn is_scripted_loc_file_matches_scripted_localisation_directories() {
+        assert!(is_scripted_loc_file(
+            "file:///mod/common/scripted_loc/foo.txt"
+        ));
+        assert!(is_scripted_loc_file(
+            "file:///mod/common/scripted_localisation/foo.txt"
+        ));
+        assert!(is_scripted_loc_file(
+            "file:///MOD/COMMON/SCRIPTED_LOCALIZATION/FOO.TXT"
+        ));
+        assert!(!is_scripted_loc_file(
+            "file:///mod/common/scripted_effects/foo.txt"
+        ));
+        assert!(!is_scripted_loc_file(
+            "file:///mod/common/scripted_loc/foo.yml"
+        ));
     }
 
     #[test]
