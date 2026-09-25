@@ -230,13 +230,24 @@ suite("descriptor startup gate", () => {
 		expect(context.subscriptions).toContain(
 			mocks.createOutputChannel.mock.results[0]?.value,
 		);
+		expect(mocks.serverExe).toHaveBeenCalledWith(context);
 		expect(mocks.createLanguageClient).toHaveBeenCalledWith(
 			context,
-			expect.objectContaining({ workspaceFolder: mod }),
+			expect.objectContaining({
+				workspaceFolder: mod,
+				serverExe: "/bin/cwtools-server",
+			}),
 			expect.any(Function),
 		);
 		expect(mocks.client.registerProposedFeatures).toHaveBeenCalledOnce();
+		expect(mocks.registerCommands).toHaveBeenCalledWith(
+			context,
+			mocks.client,
+			mocks.tracker,
+			"/bin/cwtools-server",
+		);
 		expect(context.subscriptions).toContain(mocks.client);
 		expect(mocks.client.start).toHaveBeenCalledOnce();
+		expect(mocks.publishCommandAvailability).toHaveBeenCalledWith(mocks.client);
 	});
 });
