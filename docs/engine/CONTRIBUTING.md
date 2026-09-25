@@ -142,13 +142,17 @@ checkouts. The columns it summarizes are all still in the baseline.
 ## Fuzzing
 
 Both parsers eat files off the Steam Workshop, which means the input is whatever
-someone else's tooling produced. Two targets live in `fuzz/`:
+someone else's tooling produced. Six targets live in `fuzz/`:
 
 - `parse_string` over `cwtools_parser`, the script parser.
 - `parse_loc_text` over `cwtools_localization`. This one reaches further than
   it looks: `parse_loc_text` calls `parse_entry`, which calls
   `parse_loc_elements` on every value, so the `$ref$` and `[...]` Jomini
   command parser is covered too.
+- `decode_capped` over the bounded zstd decoder shared by cache readers.
+- `with_archived_file` over the `.cwb` reader.
+- `read_errors_from_file` over the `.cwe` reader.
+- `vanilla_cache_load` over the `.cwv` reader.
 
 `cargo-fuzz` needs nightly. One-time setup:
 
@@ -160,9 +164,15 @@ cargo +nightly install cargo-fuzz --locked
 Then, from `engine/`:
 
 ```sh
-mkdir -p fuzz/corpus/parse_string fuzz/corpus/parse_loc_text
-cargo +nightly fuzz run parse_string   fuzz/corpus/parse_string   fuzz/seeds/parse_string
-cargo +nightly fuzz run parse_loc_text fuzz/corpus/parse_loc_text fuzz/seeds/parse_loc_text
+mkdir -p fuzz/corpus/parse_string fuzz/corpus/parse_loc_text \
+  fuzz/corpus/decode_capped fuzz/corpus/with_archived_file \
+  fuzz/corpus/read_errors_from_file fuzz/corpus/vanilla_cache_load
+cargo +nightly fuzz run parse_string          fuzz/corpus/parse_string          fuzz/seeds/parse_string
+cargo +nightly fuzz run parse_loc_text        fuzz/corpus/parse_loc_text        fuzz/seeds/parse_loc_text
+cargo +nightly fuzz run decode_capped         fuzz/corpus/decode_capped         fuzz/seeds/decode_capped
+cargo +nightly fuzz run with_archived_file    fuzz/corpus/with_archived_file    fuzz/seeds/with_archived_file
+cargo +nightly fuzz run read_errors_from_file fuzz/corpus/read_errors_from_file fuzz/seeds/read_errors_from_file
+cargo +nightly fuzz run vanilla_cache_load    fuzz/corpus/vanilla_cache_load    fuzz/seeds/vanilla_cache_load
 ```
 
 The `mkdir` is once per clone. `fuzz/corpus/` is gitignored, so it isn't there
@@ -180,8 +190,8 @@ Replay it with `cargo +nightly fuzz run <target> <that-file>`.
 ### Seeds
 
 `fuzz/seeds/` is committed and holds real `.txt`, `.cwt` and `.yml` files
-pulled from `testfiles/`, plus two regression seeds for crashes that already
-happened:
+pulled from `testfiles/`, malformed cache inputs for the reader targets, plus
+two regression seeds for crashes that already happened:
 
 - `parse_string/regression_deep_nesting_300.txt`: clause nesting 300 deep,
   past the 256 `MAX_CLAUSE_DEPTH` cap. Unbounded recursion here used to blow

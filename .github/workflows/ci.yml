@@ -391,6 +391,22 @@ jobs:
         run: >-
           cargo +nightly-2026-07-24 fuzz run parse_loc_text
           fuzz/seeds/parse_loc_text -- -runs=0
+      - name: decode_capped over seed corpus
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run decode_capped
+          fuzz/seeds/decode_capped -- -runs=0
+      - name: with_archived_file over seed corpus
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run with_archived_file
+          fuzz/seeds/with_archived_file -- -runs=0
+      - name: read_errors_from_file over seed corpus
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run read_errors_from_file
+          fuzz/seeds/read_errors_from_file -- -runs=0
+      - name: vanilla_cache_load over seed corpus
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run vanilla_cache_load
+          fuzz/seeds/vanilla_cache_load -- -runs=0
 
   # Coverage is a hard target: the lcov step has `--fail-under-lines`
   # attached so a Rust-side regression fails the gate, and the report step
