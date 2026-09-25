@@ -27,6 +27,7 @@
   "commands.saveGraphJson.title": "Save graph as json",
   "commands.revealActiveFile.title": "Reveal active file in loaded-files tree",
   "configuration.title": "CWTools configuration",
+  "configuration.cwtools.enable.description": "Enable CWTools language services. Disable to prevent the extension from starting a server or watching workspace files.",
   "configuration.title.localisation": "CWTools: Localisation",
   "configuration.title.errors": "CWTools: Errors & diagnostics",
   "configuration.title.cache": "CWTools: Game install paths",

@@ -62,6 +62,11 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverStatusText: () => statusText?.(),
 		deactivate,
 	};
+	if (
+		workspace.getConfiguration("cwtools").get<boolean>("enable", true) === false
+	) {
+		return api;
+	}
 	// The first workspace folder containing a root descriptor is the one CWTools
 	// serves. Keep this selection together with the gate: otherwise a descriptor
 	// in a later folder could authorize the unrelated first folder, which the
