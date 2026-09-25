@@ -52,6 +52,100 @@ pub(crate) fn loc_completion_range(
     )
 }
 
+/// Whether the cursor is in the field-key position of a scripted
+/// localisation's outer `defined_text` block.
+///
+/// Scripted localisation files are script files rather than YAML localisation
+/// files. Their `defined_text` wrapper is not a game type key, so the normal
+/// position resolver cannot descend into the `scripted_loc` rules there. Keep
+/// this narrow: values and nested blocks under `text` must continue through
+/// the regular script completion path (which is where variables are useful).
+pub(crate) fn in_scripted_loc_key_context(
+    text: &str,
+    pos: Position,
+    encoding: &PositionEncodingKind,
+) -> bool {
+    let current_prefix = line_prefix_with_encoding(text, pos.line, pos.character, encoding);
+
+    let mut prefix = String::new();
+    for (line, content) in text.lines().enumerate() {
+        if line >= pos.line as usize {
+            break;
+        }
+        prefix.push_str(content);
+        prefix.push('\n');
+    }
+    prefix.push_str(current_prefix);
+
+    let mut blocks = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut in_comment = false;
+    for (byte, ch) in prefix.char_indices() {
+        if in_comment {
+            if ch == '\n' {
+                in_comment = false;
+            }
+            continue;
+        }
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '#' => in_comment = true,
+            '"' => in_string = true,
+            '{' => blocks.push(assignment_name_before(prefix.as_str(), byte)),
+            '}' => {
+                blocks.pop();
+            }
+            _ => {}
+        }
+    }
+
+    let has_defined_text = blocks
+        .iter()
+        .flatten()
+        .any(|name| name.eq_ignore_ascii_case("defined_text"));
+    let inside_text = blocks
+        .iter()
+        .flatten()
+        .any(|name| name.eq_ignore_ascii_case("text"));
+    if !has_defined_text || inside_text {
+        return false;
+    }
+
+    // `name = ...` and `text = ...` are value positions, not field-key
+    // positions. An assignment followed by `{` is an opener, so it remains a
+    // key position until the block-specific check above handles the `text`
+    // block itself.
+    let current_line = current_prefix.split('#').next().unwrap_or(current_prefix);
+    let last_open = current_line.rfind('{').unwrap_or(0);
+    current_line
+        .rfind('=')
+        .is_none_or(|assignment| assignment <= last_open)
+}
+
+fn assignment_name_before(source: &str, open_byte: usize) -> Option<String> {
+    let before = source[..open_byte].trim_end();
+    let lhs = before.strip_suffix('=')?.trim_end();
+    let start = lhs
+        .char_indices()
+        .rev()
+        .find_map(|(byte, ch)| {
+            (!ch.is_ascii_alphanumeric() && ch != '_').then_some(byte + ch.len_utf8())
+        })
+        .unwrap_or(0);
+    let name = &lhs[start..];
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 pub(crate) fn loc_completions(
     loc_keys: &std::collections::HashSet<String>,
     language: &str,
@@ -124,6 +218,31 @@ pub(crate) fn scope_completion_names(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scripted_loc_key_context_stays_outside_text_values() {
+        let encoding = &PositionEncodingKind::UTF16;
+        let outer = "defined_text = {\n    n\n}\n";
+        assert!(in_scripted_loc_key_context(
+            outer,
+            Position::new(1, 5),
+            encoding
+        ));
+
+        let value = "defined_text = {\n    name = GetName\n}\n";
+        assert!(!in_scripted_loc_key_context(
+            value,
+            Position::new(1, 17),
+            encoding
+        ));
+
+        let nested = "defined_text = {\n    text = {\n        $my_var\n    }\n}\n";
+        assert!(!in_scripted_loc_key_context(
+            nested,
+            Position::new(2, 16),
+            encoding
+        ));
+    }
 
     #[test]
     fn localisation_context_is_cursor_sensitive() {
