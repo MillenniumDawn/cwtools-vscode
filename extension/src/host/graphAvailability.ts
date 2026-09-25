@@ -1,9 +1,6 @@
-// The graph is built from the server's `getGraphData` command. The Rust engine
-// hasn't ported it (techGraph / event-graph are still F#-only), so the commands
-// that build a graph live are hidden rather than failing with a raw
-// "command 'getGraphData' not found". Reading the capability instead of
-// hardcoding the answer means a server that gains the command lights the
-// commands back up with no client change.
+// The graph is built from the server's `getGraphData` command. Reading the
+// capability instead of hardcoding the answer keeps the commands hidden while
+// the server is unavailable and lights them back up when it advertises them.
 export const GRAPH_DATA_COMMAND = 'getGraphData';
 
 export function graphDataAvailable(serverCommands: readonly string[] | undefined): boolean {

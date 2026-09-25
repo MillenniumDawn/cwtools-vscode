@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Value;
 use tower_lsp::jsonrpc::Result;
@@ -20,6 +20,10 @@ use crate::paths::default_cache_dir;
 const MAX_IGNORE_ENTRIES: usize = 200;
 const MAX_IGNORE_PATTERN_LEN: usize = 1024;
 const MAX_IGNORED_ERROR_CODES: usize = 200;
+
+fn store_client_capability(value: Option<bool>, target: &AtomicBool) {
+    target.store(value.unwrap_or(false), Ordering::Relaxed);
+}
 
 pub(crate) fn extract_ignore_patterns(opts: &Value) -> (Vec<String>, Vec<String>) {
     (
@@ -465,71 +469,60 @@ impl Backend {
             .clone()
             .unwrap_or(PositionEncodingKind::UTF16);
 
-        let hierarchical = params
-            .capabilities
-            .text_document
-            .as_ref()
-            .and_then(|td| td.document_symbol.as_ref())
-            .and_then(|ds| ds.hierarchical_document_symbol_support)
-            .unwrap_or(false);
-        self.state
-            .hierarchical_symbols
-            .store(hierarchical, Ordering::Relaxed);
-
-        let label_details = params
-            .capabilities
-            .text_document
-            .as_ref()
-            .and_then(|td| td.completion.as_ref())
-            .and_then(|c| c.completion_item.as_ref())
-            .and_then(|ci| ci.label_details_support)
-            .unwrap_or(false);
-        self.state
-            .completion_label_details
-            .store(label_details, Ordering::Relaxed);
-
-        let document_changes = params
-            .capabilities
-            .workspace
-            .as_ref()
-            .and_then(|w| w.workspace_edit.as_ref())
-            .and_then(|we| we.document_changes)
-            .unwrap_or(false);
-        self.state
-            .workspace_edit_document_changes
-            .store(document_changes, Ordering::Relaxed);
-
-        let work_done_progress = params
-            .capabilities
-            .window
-            .as_ref()
-            .and_then(|w| w.work_done_progress)
-            .unwrap_or(false);
-        self.state
-            .client_work_done_progress
-            .store(work_done_progress, Ordering::Relaxed);
-
-        let semantic_tokens_refresh = params
-            .capabilities
-            .workspace
-            .as_ref()
-            .and_then(|w| w.semantic_tokens.as_ref())
-            .and_then(|s| s.refresh_support)
-            .unwrap_or(false);
-        self.state
-            .semantic_tokens_refresh_support
-            .store(semantic_tokens_refresh, Ordering::Relaxed);
-
-        let code_lens_refresh = params
-            .capabilities
-            .workspace
-            .as_ref()
-            .and_then(|w| w.code_lens.as_ref())
-            .and_then(|c| c.refresh_support)
-            .unwrap_or(false);
-        self.state
-            .code_lens_refresh_support
-            .store(code_lens_refresh, Ordering::Relaxed);
+        store_client_capability(
+            params
+                .capabilities
+                .text_document
+                .as_ref()
+                .and_then(|td| td.document_symbol.as_ref())
+                .and_then(|ds| ds.hierarchical_document_symbol_support),
+            &self.state.hierarchical_symbols,
+        );
+        store_client_capability(
+            params
+                .capabilities
+                .text_document
+                .as_ref()
+                .and_then(|td| td.completion.as_ref())
+                .and_then(|c| c.completion_item.as_ref())
+                .and_then(|ci| ci.label_details_support),
+            &self.state.completion_label_details,
+        );
+        store_client_capability(
+            params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|w| w.workspace_edit.as_ref())
+                .and_then(|we| we.document_changes),
+            &self.state.workspace_edit_document_changes,
+        );
+        store_client_capability(
+            params
+                .capabilities
+                .window
+                .as_ref()
+                .and_then(|w| w.work_done_progress),
+            &self.state.client_work_done_progress,
+        );
+        store_client_capability(
+            params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|w| w.semantic_tokens.as_ref())
+                .and_then(|s| s.refresh_support),
+            &self.state.semantic_tokens_refresh_support,
+        );
+        store_client_capability(
+            params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|w| w.code_lens.as_ref())
+                .and_then(|c| c.refresh_support),
+            &self.state.code_lens_refresh_support,
+        );
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {

@@ -7,6 +7,8 @@
 * Scripted-localisation completion inside a defined_text block now offers the name/text fields instead of dumping workspace variables; variables are still offered inside text. (#785)
 * Keyed cardinality checks use a map once a block's rule list is wide, instead
   of scanning every rule for every field. (#582)
+* Consolidate client capability negotiation and remove redundant UTF-16 test
+  wrappers. (#765)
 
 #### Tooling
 
@@ -20,6 +22,8 @@
 #### Extension
 
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
+* Keep graph commands gated by the live server capability and remove an unused
+  webview export. (#765)
 
 ### 3.4.6
 
