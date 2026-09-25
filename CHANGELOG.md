@@ -20,6 +20,15 @@
 #### Extension
 
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
+#### Extension
+
+* Keep graph commands gated by the live server capability and remove an unused
+  webview export. (#765)
+
+#### Engine
+
+* Consolidate client capability negotiation and remove redundant UTF-16 test
+  wrappers. (#765)
 
 ### 3.4.6
 

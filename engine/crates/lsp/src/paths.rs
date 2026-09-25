@@ -1,5 +1,8 @@
 use tower_lsp::lsp_types::Url;
 
+#[cfg(test)]
+use tower_lsp::lsp_types::PositionEncodingKind;
+
 pub(crate) fn uri_to_path_str(uri: &str) -> String {
     if let Ok(url) = Url::parse(uri)
         && let Ok(path) = url.to_file_path()
@@ -157,16 +160,6 @@ pub(crate) fn source_column_to_lsp(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn line_prefix(text: &str, line0: u32, char0: u32) -> &str {
-    line_prefix_with_encoding(
-        text,
-        line0,
-        char0,
-        &tower_lsp::lsp_types::PositionEncodingKind::UTF16,
-    )
-}
-
 pub(crate) fn line_prefix_with_encoding<'a>(
     text: &'a str,
     line0: u32,
@@ -188,16 +181,6 @@ pub(crate) fn position_byte_index(
     } else {
         utf16_byte_index(text, column)
     }
-}
-
-#[cfg(test)]
-pub(crate) fn line_value_key(text: &str, line0: u32, char0: u32) -> Option<String> {
-    line_value_key_with_encoding(
-        text,
-        line0,
-        char0,
-        &tower_lsp::lsp_types::PositionEncodingKind::UTF16,
-    )
 }
 
 pub(crate) fn line_value_key_with_encoding(
@@ -223,20 +206,6 @@ pub(crate) fn line_value_key_with_encoding(
     Some(key.to_string())
 }
 
-#[cfg(test)]
-pub(crate) fn current_token_range(
-    text: &str,
-    line0: u32,
-    char0: u32,
-) -> tower_lsp::lsp_types::Range {
-    current_token_range_with_encoding(
-        text,
-        line0,
-        char0,
-        &tower_lsp::lsp_types::PositionEncodingKind::UTF16,
-    )
-}
-
 pub(crate) fn current_token_range_with_encoding(
     text: &str,
     line0: u32,
@@ -260,17 +229,6 @@ pub(crate) fn current_token_range_with_encoding(
             character: encoded_position_len(prefix, encoding),
         },
     }
-}
-
-#[cfg(test)]
-pub(crate) fn current_token_text(text: &str, line0: u32, char0: u32, start_char: u32) -> String {
-    current_token_text_with_encoding(
-        text,
-        line0,
-        char0,
-        start_char,
-        &tower_lsp::lsp_types::PositionEncodingKind::UTF16,
-    )
 }
 
 pub(crate) fn current_token_text_with_encoding(
@@ -337,15 +295,6 @@ pub(crate) fn is_script_file(uri: &str) -> bool {
 }
 
 /// line. `col` uses the negotiated LSP position encoding. Returns the
-#[cfg(test)]
-pub(crate) fn loc_ref_at_cursor(line: &str, col: u32) -> Option<(String, u32, u32)> {
-    loc_ref_at_cursor_with_encoding(
-        line,
-        col,
-        &tower_lsp::lsp_types::PositionEncodingKind::UTF16,
-    )
-}
-
 pub(crate) fn loc_ref_at_cursor_with_encoding(
     line: &str,
     col: u32,
@@ -615,38 +564,46 @@ mod tests {
     fn test_line_value_key() {
         let text = "decision = {\n    has_completed_focus = \n}\n";
         assert_eq!(
-            line_value_key(text, 1, 26).as_deref(),
+            line_value_key_with_encoding(text, 1, 26, &PositionEncodingKind::UTF16).as_deref(),
             Some("has_completed_focus")
         );
-        assert_eq!(line_value_key(text, 1, 10), None);
+        assert_eq!(
+            line_value_key_with_encoding(text, 1, 10, &PositionEncodingKind::UTF16),
+            None
+        );
         let text2 = "block = {\n    num > \n}\n";
-        assert_eq!(line_value_key(text2, 1, 10).as_deref(), Some("num"));
+        assert_eq!(
+            line_value_key_with_encoding(text2, 1, 10, &PositionEncodingKind::UTF16).as_deref(),
+            Some("num")
+        );
     }
 
     #[test]
     fn test_line_value_key_handles_comparison_operators_in_value() {
         assert_eq!(
-            line_value_key("has_idea = ==", 0, 12).as_deref(),
+            line_value_key_with_encoding("has_idea = ==", 0, 12, &PositionEncodingKind::UTF16)
+                .as_deref(),
             Some("has_idea"),
             "trailing `==` must still resolve to the key"
         );
         assert_eq!(
-            line_value_key("has_idea = =", 0, 11).as_deref(),
+            line_value_key_with_encoding("has_idea = =", 0, 11, &PositionEncodingKind::UTF16)
+                .as_deref(),
             Some("has_idea"),
             "trailing `= =` (space, single =) must still resolve to the key"
         );
         assert_eq!(
-            line_value_key("num >= ", 0, 6).as_deref(),
+            line_value_key_with_encoding("num >= ", 0, 6, &PositionEncodingKind::UTF16).as_deref(),
             Some("num"),
             "comparison `>=` must still resolve to the key"
         );
         assert_eq!(
-            line_value_key("flag != ", 0, 8).as_deref(),
+            line_value_key_with_encoding("flag != ", 0, 8, &PositionEncodingKind::UTF16).as_deref(),
             Some("flag"),
             "comparison `!=` must still resolve to the key"
         );
         assert_eq!(
-            line_value_key("my_block = {", 0, 12),
+            line_value_key_with_encoding("my_block = {", 0, 12, &PositionEncodingKind::UTF16),
             None,
             "`my_block = {{` is an insert position, not a value position"
         );
@@ -656,7 +613,7 @@ mod tests {
     fn test_current_token_range() {
         let line = "\tset_variable = { gdpc_conv }";
         let cur = "\tset_variable = { gdpc_conv".chars().count() as u32;
-        let r = current_token_range(line, 0, cur);
+        let r = current_token_range_with_encoding(line, 0, cur, &PositionEncodingKind::UTF16);
         assert_eq!(
             r.start.character,
             "\tset_variable = { ".chars().count() as u32
@@ -665,13 +622,13 @@ mod tests {
 
         let line2 = "\tvar = ";
         let cur2 = line2.chars().count() as u32;
-        let r2 = current_token_range(line2, 0, cur2);
+        let r2 = current_token_range_with_encoding(line2, 0, cur2, &PositionEncodingKind::UTF16);
         assert_eq!(r2.start.character, cur2, "no token → empty range at cursor");
         assert_eq!(r2.end.character, cur2);
 
         let line3 = "value = event_target:foo";
         let cur3 = line3.chars().count() as u32;
-        let r3 = current_token_range(line3, 0, cur3);
+        let r3 = current_token_range_with_encoding(line3, 0, cur3, &PositionEncodingKind::UTF16);
         assert_eq!(
             r3.start.character,
             "value = event_target:".chars().count() as u32,
@@ -691,8 +648,14 @@ mod tests {
         );
         assert_eq!(range.start.character, 3);
         assert_eq!(range.end.character, 8);
-        assert_eq!(current_token_text(line, 0, cursor, 3), "value");
-        assert_eq!(line_prefix(line, 0, 2), "😀");
+        assert_eq!(
+            current_token_text_with_encoding(line, 0, cursor, 3, &PositionEncodingKind::UTF16),
+            "value"
+        );
+        assert_eq!(
+            line_prefix_with_encoding(line, 0, 2, &PositionEncodingKind::UTF16),
+            "😀"
+        );
         assert_eq!(
             lsp_pos_to_source_in_text(
                 line,
@@ -731,20 +694,28 @@ mod tests {
         let line = "\tset_variable = { gdpc_conv }";
         let start = "\tset_variable = { ".chars().count() as u32;
         let mid = "\tset_variable = { gdpc".chars().count() as u32;
-        assert_eq!(current_token_text(line, 0, mid, start), "gdpc");
+        assert_eq!(
+            current_token_text_with_encoding(line, 0, mid, start, &PositionEncodingKind::UTF16),
+            "gdpc"
+        );
 
         let line2 = "\tvar = ";
         let cur2 = line2.chars().count() as u32;
-        assert_eq!(current_token_text(line2, 0, cur2, cur2), "");
+        assert_eq!(
+            current_token_text_with_encoding(line2, 0, cur2, cur2, &PositionEncodingKind::UTF16),
+            ""
+        );
     }
 
     #[test]
     fn test_loc_ref_at_cursor() {
         let line = "  k:0 \"a $FOO$ b\"";
-        let (key, start, end) = loc_ref_at_cursor(line, 11).expect("cursor in $FOO$");
+        let (key, start, end) =
+            loc_ref_at_cursor_with_encoding(line, 11, &PositionEncodingKind::UTF16)
+                .expect("cursor in $FOO$");
         assert_eq!(key, "FOO");
         assert_eq!((start, end), (9, 14));
-        assert!(loc_ref_at_cursor(line, 2).is_none());
+        assert!(loc_ref_at_cursor_with_encoding(line, 2, &PositionEncodingKind::UTF16).is_none());
     }
 
     #[test]
@@ -765,7 +736,8 @@ mod tests {
     #[test]
     fn test_loc_ref_at_cursor_colour_suffix() {
         let line = "x:0 \"$MY_KEY|Y$\"";
-        let (key, _, _) = loc_ref_at_cursor(line, 8).expect("cursor in ref");
+        let (key, _, _) = loc_ref_at_cursor_with_encoding(line, 8, &PositionEncodingKind::UTF16)
+            .expect("cursor in ref");
         assert_eq!(key, "MY_KEY", "colour suffix must be stripped from the key");
     }
 
@@ -773,10 +745,11 @@ mod tests {
     fn test_loc_ref_at_cursor_currency_not_a_ref() {
         let line = "x:0 \"costs $5 for $ITEM$\"";
         assert!(
-            loc_ref_at_cursor(line, 11).is_none(),
+            loc_ref_at_cursor_with_encoding(line, 11, &PositionEncodingKind::UTF16).is_none(),
             "currency $5 must not be a ref"
         );
-        let (key, _, _) = loc_ref_at_cursor(line, 20).expect("cursor in $ITEM$");
+        let (key, _, _) = loc_ref_at_cursor_with_encoding(line, 20, &PositionEncodingKind::UTF16)
+            .expect("cursor in $ITEM$");
         assert_eq!(key, "ITEM");
     }
 

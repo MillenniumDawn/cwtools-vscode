@@ -540,7 +540,7 @@ function tech(
 	}
 }
 
-export function goToNode(location: GraphLocation) {
+function goToNode(location: GraphLocation) {
 	const uri = location.filename;
 	const line = location.line;
 	const column = location.column;
