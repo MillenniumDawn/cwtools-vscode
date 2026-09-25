@@ -13,13 +13,11 @@
   30 automated `v*-pre.*` GitHub releases for roughly a week of rollback and
   cleans up their tags. This tracks the current Publish workflow shape; the
   superseded `v*-nightly.*` shape is left untouched. (#622)
+* Fuzz the `.cwb`, `.cwe`, and `.cwv` cache readers in the CI smoke job. (#627)
 
 #### Extension
 
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
-#### Tooling
-
-* Fuzz the `.cwb`, `.cwe`, and `.cwv` cache readers in the CI smoke job. (#627)
 
 ### 3.4.6
 
