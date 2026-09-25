@@ -39,6 +39,7 @@ class Config:
     game: str
     build: bool
     bless: bool
+    compare: str | None
     repo_root: Path
     script_dir: Path
 
@@ -157,6 +158,42 @@ def resolve_bin(bin_path: Path) -> Path:
     return bin_path
 
 
+def resolve_compare_revision(repo_root: Path, revision: str | None) -> str:
+    if revision:
+        command = [
+            "git",
+            "-C",
+            str(repo_root),
+            "rev-parse",
+            "--verify",
+            f"{revision}^{{commit}}",
+        ]
+    else:
+        command = ["git", "-C", str(repo_root), "merge-base", "main", "HEAD"]
+    resolved = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if resolved.returncode != 0 or not resolved.stdout.strip():
+        requested = revision or "the merge-base of main and HEAD"
+        die(f"could not resolve comparison revision {requested}")
+    return resolved.stdout.strip()
+
+
+def remove_compare_worktree(repo_root: Path, worktree: Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(repo_root), "worktree", "remove", "--force", str(worktree)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # git worktree remove normally removes the directory itself. Keep this
+    # fallback for interrupted builds and for files left by a failed checkout.
+    shutil.rmtree(worktree, ignore_errors=True)
+
+
 def default_projects(env: Mapping[str, str]) -> Path:
     raw = env.get("CWTOOLS_PROJECTS")
     if raw:
@@ -206,7 +243,16 @@ def build_config(
         action="store_true",
         help="overwrite the baseline with this run's report",
     )
+    parser.add_argument(
+        "--compare",
+        nargs="?",
+        const="",
+        metavar="REV",
+        help="compare with REV, or the merge-base with main when omitted",
+    )
     args = parser.parse_args(argv)
+    if args.compare is not None and args.bless:
+        parser.error("--compare cannot be combined with --bless")
 
     corpus = Path(
         args.corpus or env.get("CWTOOLS_CORPUS") or (projects / "Millennium-Dawn")
@@ -257,6 +303,7 @@ def build_config(
         game=game,
         build=not args.no_build,
         bless=args.bless,
+        compare=args.compare,
         repo_root=repo_root,
         script_dir=script_dir,
     )
@@ -359,6 +406,7 @@ def run_guard(config: Config) -> int:
         game=config.game,
         build=config.build,
         bless=config.bless,
+        compare=config.compare,
         repo_root=config.repo_root,
         script_dir=config.script_dir,
     )
@@ -375,10 +423,52 @@ def run_guard(config: Config) -> int:
         )
     )
     keep = False
+    compare_worktree: Path | None = None
+    comparison_revision: str | None = None
+    comparison_bin: Path | None = None
     try:
         raw_path = work / "report.csv"
         current_path = work / "current.csv"
         log_path = work / "validate.log"
+
+        if config.compare is not None:
+            comparison_revision = resolve_compare_revision(
+                config.repo_root, config.compare or None
+            )
+            compare_worktree = work / "comparison-worktree"
+            worktree_added = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(config.repo_root),
+                    "worktree",
+                    "add",
+                    "--detach",
+                    str(compare_worktree),
+                    comparison_revision,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if worktree_added.returncode != 0:
+                die(f"could not create comparison worktree at {comparison_revision}")
+
+            print(
+                f"guard: cargo build --release -p cwtools_cli ({comparison_revision})"
+            )
+            comparison_build = subprocess.run(
+                ["cargo", "build", "--release", "-p", "cwtools_cli"],
+                cwd=compare_worktree / "engine",
+                check=False,
+            )
+            if comparison_build.returncode != 0:
+                die("comparison release build failed; nothing to compare with")
+            comparison_bin = resolve_bin(
+                compare_worktree / "engine" / "target" / "release" / "cwtools"
+            )
+            if not comparison_bin.exists():
+                die(f"comparison cwtools binary not found: {comparison_bin}")
 
         print(f"guard: {corpus} [{corpus_rev}]")
         print(f"guard: {rules} [{rules_rev}]")
@@ -439,6 +529,65 @@ def run_guard(config: Config) -> int:
         current = compose_current(rows, config, corpus_rev, rules_rev, vanilla_rev)
         current_path.write_text(current, encoding="utf-8", newline="\n")
 
+        comparison_body: list[str] | None = None
+        if config.compare is not None:
+            if comparison_bin is None or comparison_revision is None:
+                die("comparison binary was not prepared")
+            comparison_raw_path = work / "comparison-report.csv"
+            comparison_log_path = work / "comparison-validate.log"
+            comparison_cmd = [
+                str(comparison_bin),
+                "validate",
+                "--game",
+                config.game,
+                "--directory",
+                str(corpus),
+                "--rules",
+                str(rules),
+                "--report-type",
+                "csv",
+                "--output-file",
+                str(comparison_raw_path),
+            ]
+            if vanilla is not None:
+                comparison_cmd.extend(["--vanilla", str(vanilla), "--no-vanilla-cache"])
+            try:
+                with comparison_log_path.open(
+                    "w", encoding="utf-8", errors="surrogateescape"
+                ) as log:
+                    comparison_status = subprocess.run(
+                        comparison_cmd,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        check=False,
+                        timeout=VALIDATE_TIMEOUT_SECONDS,
+                    ).returncode
+            except subprocess.TimeoutExpired:
+                keep = True
+                die("comparison validate timed out, no report to compare")
+            if comparison_status > 1:
+                keep = True
+                text = comparison_log_path.read_text(encoding="utf-8", errors="replace")
+                print("\n".join(text.splitlines()[:40]), file=sys.stderr)
+                die(
+                    f"comparison validate exited {comparison_status}, "
+                    "no report to compare"
+                )
+            if (
+                not comparison_raw_path.is_file()
+                or comparison_raw_path.stat().st_size == 0
+            ):
+                keep = True
+                die(f"comparison validate wrote no report to {comparison_raw_path}")
+            comparison_raw = comparison_raw_path.read_text(
+                encoding="utf-8", errors="surrogateescape"
+            )
+            comparison_rows = normalize_rows(comparison_raw, corpus)
+            comparison = compose_current(
+                comparison_rows, config, corpus_rev, rules_rev, vanilla_rev
+            )
+            comparison_body = report_body(comparison)
+
         current_body = report_body(current)
 
         if config.bless:
@@ -454,14 +603,20 @@ def run_guard(config: Config) -> int:
             print(f"guard: blessed {config.baseline} ({before} -> {after} diagnostics)")
             return 0
 
-        if not config.baseline.is_file():
-            die(f"no baseline at {config.baseline} (create one with --bless)")
+        if comparison_body is not None:
+            baseline_body = comparison_body
+            pin_mismatches: list[tuple[str, str, str]] = []
+        else:
+            if not config.baseline.is_file():
+                die(f"no baseline at {config.baseline} (create one with --bless)")
 
-        baseline_text = config.baseline.read_text(
-            encoding="utf-8", errors="surrogateescape"
-        )
-        baseline_body = report_body(baseline_text)
-        pin_mismatches = compare_pins(parse_pins(baseline_text), parse_pins(current))
+            baseline_text = config.baseline.read_text(
+                encoding="utf-8", errors="surrogateescape"
+            )
+            baseline_body = report_body(baseline_text)
+            pin_mismatches = compare_pins(
+                parse_pins(baseline_text), parse_pins(current)
+            )
         (work / "baseline.body").write_text(
             "\n".join(baseline_body) + "\n", encoding="utf-8", newline="\n"
         )
@@ -471,7 +626,14 @@ def run_guard(config: Config) -> int:
 
         if baseline_body == current_body:
             n = max(len(current_body) - 1, 0)
-            print(f"guard: OK, {n} diagnostics match the baseline")
+            if comparison_revision is not None:
+                print(
+                    "guard: OK, "
+                    f"{n} diagnostics match comparison revision "
+                    f"{comparison_revision}"
+                )
+            else:
+                print(f"guard: OK, {n} diagnostics match the baseline")
             if pin_mismatches:
                 print(
                     "guard: note: baseline input revisions differ from current "
@@ -484,7 +646,9 @@ def run_guard(config: Config) -> int:
             difflib.unified_diff(
                 baseline_body,
                 current_body,
-                fromfile="baseline",
+                fromfile=(
+                    "comparison" if comparison_revision is not None else "baseline"
+                ),
                 tofile="current",
                 n=0,
                 lineterm="",
@@ -509,9 +673,16 @@ def run_guard(config: Config) -> int:
         curr_n = max(len(current_body) - 1, 0)
 
         print()
-        print("guard: FAIL, diagnostics drifted from the baseline")
-        print(f"  baseline {base_n} diagnostics")
-        print(f"  current  {curr_n} diagnostics")
+        if comparison_revision is not None:
+            print(
+                "guard: FAIL, diagnostics drifted from comparison revision "
+                f"{comparison_revision}"
+            )
+            print(f"  comparison {base_n} diagnostics")
+        else:
+            print("guard: FAIL, diagnostics drifted from the baseline")
+            print(f"  baseline {base_n} diagnostics")
+        print(f"  current    {curr_n} diagnostics")
         print(f"  -{removed} +{added} rows")
         if pin_mismatches:
             print()
@@ -548,12 +719,15 @@ def run_guard(config: Config) -> int:
         print()
         print(f"  full diff:   {drift_path}")
         print(f"  full report: {current_path}")
-        print(
-            "  if the change is intended, re-bless: "
-            f"python3 scripts/guard.py {config.preset} --bless"
-        )
+        if comparison_revision is None:
+            print(
+                "  if the change is intended, re-bless: "
+                f"python3 scripts/guard.py {config.preset} --bless"
+            )
         return 1
     finally:
+        if compare_worktree is not None:
+            remove_compare_worktree(config.repo_root, compare_worktree)
         if keep:
             print(f"guard: artifacts in {work}")
         else:
