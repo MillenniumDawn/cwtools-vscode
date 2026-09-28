@@ -4,6 +4,7 @@ written to fix.
 Text assertions rather than a YAML parse: PyYAML is not a dev dependency.
 """
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +26,11 @@ RELEASE_PATH_JOBS = (
     "open-vsx",
     "github",
 )
+
+
+def _job(workflow: str, job: str) -> str:
+    block = workflow.split(f"\n  {job}:\n", maxsplit=1)[1]
+    return re.split(r"\n  \S", block, maxsplit=1)[0]
 
 
 def test_publish_replaced_the_workflows_it_merged() -> None:
@@ -116,8 +122,35 @@ def test_each_registry_publishes_independently() -> None:
     # timeout used to abort the job before Open VSX was ever reached.
     assert workflow.count("needs: [check, verify, package]") == 2
     # And re-running one of them must not trip over its own earlier upload.
-    assert "skipDuplicate: true" in workflow
+    # The publish commands live in build.py, so the contract lives there too:
+    # one --skip-duplicate per registry.
+    assert "publish-marketplace" in workflow
+    assert "publish-open-vsx" in workflow
+    build = (REPO_ROOT / "scripts" / "build" / "build.py").read_text(encoding="utf-8")
+    assert build.count('"--skip-duplicate"') == 2
     assert "publish-prebuilt" not in workflow
+
+
+def test_each_publish_job_gets_the_build_identity() -> None:
+    # Without these, resolve_version falls back to the top changelog heading,
+    # which never matches a pre-release vsix. The Open VSX job shipped without
+    # them once, and every pre-release publish failed the version check.
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    for job in PUBLISH_JOBS:
+        block = _job(workflow, job)
+        assert "CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}" in block, job
+        assert "CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}" in block, job
+
+
+def test_registry_tokens_reach_only_the_publish_step() -> None:
+    # A job-level token is in the env of every step, including the install
+    # scripts `npm ci` runs.
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    for job, secret in (("marketplace", "VSCE_TOKEN"), ("open-vsx", "OPEN_VSX_TOKEN")):
+        block = _job(workflow, job)
+        assert block.count(f"secrets.{secret}") == 1, job
+        last_step = block.rsplit("      - name:", maxsplit=1)[1]
+        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in last_step, job
 
 
 def test_release_failed_guards_every_job_it_waits_on() -> None:

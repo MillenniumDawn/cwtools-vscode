@@ -425,6 +425,15 @@ def find_vsixes(expected_version: str) -> list[str]:
     return [str(path) for path in files]
 
 
+def find_universal_vsix(expected_version: str) -> str:
+    # Open VSX takes the universal vsix, which carries every platform binary;
+    # the per-platform names all carry a -win32-/-linux-/-darwin- segment.
+    for path in find_vsixes(expected_version):
+        if not any(f"-{target}-" in path for target in ("win32", "linux", "darwin")):
+            return path
+    raise RuntimeError("no universal vsix in artifacts/vsix")
+
+
 # A pre-release version has no CHANGELOG section to draw notes from, so it gets
 # a generated blurb instead. Keeping the branch here rather than in the workflow
 # is what lets one publish job serve both channels.
@@ -476,29 +485,28 @@ def publish_github_release(
     run("gh", args)
 
 
-# One gallery upload per attempt, three attempts, backing off between them. The
-# Marketplace times out on /_apis/gallery often enough that a single batched
-# upload of every platform vsix is a coin flip; --skip-duplicate is what makes
-# the retry (and a re-run of the job) safe.
-MARKETPLACE_ATTEMPTS = 3
-MARKETPLACE_BACKOFF_SECONDS = (15, 45)
+# One upload per attempt, three attempts, backing off between them. The
+# registries time out or answer 503 often enough that a single attempt is a
+# coin flip (the Marketplace on /_apis/gallery, Open VSX on the whole
+# publish); the --skip-duplicate the commands pass is what makes the retry --
+# and a re-run of the publishing job -- safe.
+PUBLISH_ATTEMPTS = 3
+PUBLISH_BACKOFF_SECONDS = (15, 45)
 
 
 def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def publish_one_to_marketplace(
-    vsix: str, args: list[str], env: Mapping[str, str]
-) -> None:
-    for attempt in range(1, MARKETPLACE_ATTEMPTS + 1):
+def publish_one_with_retry(vsix: str, args: list[str], env: Mapping[str, str]) -> None:
+    for attempt in range(1, PUBLISH_ATTEMPTS + 1):
         try:
-            run("npx", [*args, "--packagePath", vsix], env=env)
+            run("npx", [*args, vsix], env=env)
             return
         except RuntimeError as error:
-            if attempt == MARKETPLACE_ATTEMPTS:
+            if attempt == PUBLISH_ATTEMPTS:
                 raise
-            delay = MARKETPLACE_BACKOFF_SECONDS[attempt - 1]
+            delay = PUBLISH_BACKOFF_SECONDS[attempt - 1]
             print(f"{vsix}: {error}; retrying in {delay}s")
             _sleep(delay)
 
@@ -525,12 +533,26 @@ def publish_to_marketplace(vsixes: list[str], pre_release: bool = False) -> None
     failed: list[str] = []
     for vsix in vsixes:
         try:
-            publish_one_to_marketplace(vsix, args, env)
+            publish_one_with_retry(vsix, [*args, "--packagePath"], env)
         except RuntimeError as error:
             print(f"::error::{vsix} failed to publish: {error}")
             failed.append(vsix)
     if failed:
         raise RuntimeError("Marketplace publish failed for: " + ", ".join(failed))
+
+
+def publish_to_open_vsx(vsix: str) -> None:
+    token = os.environ.get("OPEN_VSX_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("OPEN_VSX_TOKEN is not set; cannot publish to Open VSX.")
+    env = dict(os.environ)
+    env.pop("OPEN_VSX_TOKEN", None)
+    # ovsx defaults its -p to OVSX_PAT, so the token rides in the environment
+    # the same way vsce carries VSCE_PAT.
+    env["OVSX_PAT"] = token
+    publish_one_with_retry(
+        vsix, ["--no-install", "ovsx", "publish", "--skip-duplicate"], env
+    )
 
 
 def cmd_prerelease_identity() -> None:
@@ -582,6 +604,11 @@ def cmd_publish_prebuilt() -> None:
 def cmd_publish_marketplace() -> None:
     resolved = resolve_version()
     publish_to_marketplace(find_vsixes(resolved["version"]), resolved["preRelease"])
+
+
+def cmd_publish_open_vsx() -> None:
+    resolved = resolve_version()
+    publish_to_open_vsx(find_universal_vsix(resolved["version"]))
 
 
 def cmd_publish_github() -> None:
@@ -662,6 +689,7 @@ COMMANDS: dict[str, Callable[[], object]] = {
     "package-prebuilt": cmd_package_prebuilt,
     "publish-prebuilt": cmd_publish_prebuilt,
     "publish-marketplace": cmd_publish_marketplace,
+    "publish-open-vsx": cmd_publish_open_vsx,
     "publish-github": cmd_publish_github,
     "release-prebuilt": cmd_release_prebuilt,
     "release": cmd_release,
