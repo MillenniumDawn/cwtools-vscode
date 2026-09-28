@@ -276,7 +276,6 @@ jobs:
         needs.check.outputs.release == 'true' && 'release' || 'pre-release' }}
       cancel-in-progress: false
     env:
-      VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
       CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}
       CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}
       TAG_RELEASE: ${{ needs.check.outputs.release }}
@@ -297,6 +296,9 @@ jobs:
       # --pre-release needs no branching here: resolve_version derives it from
       # the tag, and only a pre-release tag carries a -pre.<attempt> suffix.
       - name: Publish to the VS Code Marketplace
+        # Step-level, so the install scripts `npm ci` ran never saw it.
+        env:
+          VSCE_TOKEN: ${{ secrets.VSCE_TOKEN }}
         run: npm run build -- publish-marketplace
 
   open-vsx:
@@ -311,7 +313,8 @@ jobs:
         needs.check.outputs.release == 'true' && 'release' || 'pre-release' }}
       cancel-in-progress: false
     env:
-      OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
+      CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}
+      CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}
     steps:
       - name: Checkout
         # v7.0.1
@@ -331,6 +334,8 @@ jobs:
       # publish command needs no channel branching, and --skip-duplicate is
       # what makes the retry and a re-run of this job safe.
       - name: Publish to the Open VSX Registry
+        env:
+          OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
         run: npm run build -- publish-open-vsx
 
   github:
