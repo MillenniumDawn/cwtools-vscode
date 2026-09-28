@@ -52,9 +52,11 @@ jobs:
         run: |
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
             echo "A v* tag was pushed by hand; publishing it as a release."
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            {
+              echo "release=true"
+              echo "tag=$GITHUB_REF_NAME"
+              echo "version=${GITHUB_REF_NAME#v}"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           version=$(python3 <<'PY'
@@ -72,16 +74,21 @@ jobs:
           # no tag yet. The tag is created by the GitHub publish job, so a
           # release that failed to publish is retried by the next push.
           if [ "$version" = "$top" ] \
-            && ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            && ! git rev-parse -q \
+              --verify "refs/tags/v$version" >/dev/null; then
             echo "This push cuts release v$version."
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "tag=v$version" >> "$GITHUB_OUTPUT"
+            {
+              echo "release=true"
+              echo "version=$version"
+              echo "tag=v$version"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "Not a release commit; publishing a pre-release."
-          echo "release=false" >> "$GITHUB_OUTPUT"
-          python3 scripts/build/build.py prerelease-identity >> "$GITHUB_OUTPUT"
+          {
+            echo "release=false"
+            python3 scripts/build/build.py prerelease-identity
+          } >> "$GITHUB_OUTPUT"
 
   # Fails the run before the 45-minute matrix rather than after it, and before
   # any target has published. A pre-release skips a registry it has no token
@@ -303,9 +310,16 @@ jobs:
         publish-open-vsx-${{
         needs.check.outputs.release == 'true' && 'release' || 'pre-release' }}
       cancel-in-progress: false
-    # No checkout and no node: the action brings its own ovsx.
-    permissions: {}
+    env:
+      OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
     steps:
+      - name: Checkout
+        # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # ovsx is a devDependency, so `npx --no-install` needs the tree.
+      - uses: ./.github/actions/setup-node-npm
       - name: Download the packaged VSIX files
         # v8.0.1
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -313,28 +327,11 @@ jobs:
           name: vsix-${{ needs.check.outputs.tag }}
           path: artifacts/vsix
       # Open VSX takes the universal vsix, which carries every platform binary.
-      - name: Locate the universal vsix
-        id: universal
-        run: |
-          path=$(find artifacts/vsix -maxdepth 1 -name '*.vsix' \
-            ! -name '*-win32-*' ! -name '*-linux-*' ! -name '*-darwin-*' \
-            -print | sort | head -n 1)
-          [ -n "$path" ] || {
-            echo "::error::no universal vsix in artifacts/vsix"
-            exit 1
-          }
-          echo "Publishing $path to Open VSX"
-          echo "path=$path" >> "$GITHUB_OUTPUT"
+      # ovsx reads the pre-release flag out of the packaged manifest, so the
+      # publish command needs no channel branching, and --skip-duplicate is
+      # what makes the retry and a re-run of this job safe.
       - name: Publish to the Open VSX Registry
-        # v2.0.0
-        uses: >-
-          HaaLeo/publish-vscode-extension@ca5561daa085dee804bf9f37fe0165785a9b14db
-        with:
-          extensionFile: ${{ steps.universal.outputs.path }}
-          pat: ${{ secrets.OPEN_VSX_TOKEN }}
-          preRelease: ${{ needs.check.outputs.release != 'true' }}
-          # Makes re-running just this job safe after a partial failure.
-          skipDuplicate: true
+        run: npm run build -- publish-open-vsx
 
   github:
     name: "Publish: GitHub"
@@ -413,7 +410,11 @@ jobs:
         # v3.2.0
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          # `app-id` is deprecated; GitHub accepts the App ID as a client id
+          # too, so the old secret stays as the fallback.
+          client-id: >-
+            ${{ secrets.RELEASE_PR_APP_CLIENT_ID ||
+            secrets.RELEASE_PR_APP_ID }}
           private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
       - name: Checkout
         # v7.0.1
@@ -428,11 +429,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" \
-            --paginate \
-            --jq '.jobs[] | select(.conclusion == "failure") | "- [\(.name)](\(.html_url))"' \
-            > "$RUNNER_TEMP/failed-jobs.md"
+          url="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          url="$url/attempts/$GITHUB_RUN_ATTEMPT/jobs"
+          gh api --paginate \
+            --jq '.jobs[]
+              | select(.conclusion == "failure")
+              | "- [\(.name)](\(.html_url))"' \
+            "$url" > "$RUNNER_TEMP/failed-jobs.md"
           cat "$RUNNER_TEMP/failed-jobs.md"
       # One empty commit: all the detail is in the pull request body, so there
       # is nothing to delete before merging the fix.

@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* The Open VSX publish job replaces `HaaLeo/publish-vscode-extension` (stuck on a Node 20 target the runner force-upgrades with a deprecation warning) with `ovsx publish` from the dev dependencies through build.py, so the upload retries like the Marketplace publish does. The App token steps pass `client-id` instead of the deprecated `app-id`, with the App ID secret kept as the fallback. (#812)
+
 ### 3.4.7
 
 * Strengthen atomic-write, dispatch-routing, and activation regression tests. (#693)

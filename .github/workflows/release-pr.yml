@@ -55,7 +55,11 @@ jobs:
         # v3.2.0
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
-          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          # `app-id` is deprecated; GitHub accepts the App ID as a client id
+          # too, so the old secret stays as the fallback.
+          client-id: >-
+            ${{ secrets.RELEASE_PR_APP_CLIENT_ID ||
+            secrets.RELEASE_PR_APP_ID }}
           private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
       - name: Checkout
         # v7.0.1

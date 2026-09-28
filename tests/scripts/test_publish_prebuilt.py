@@ -15,8 +15,10 @@ cmd_publish_prebuilt = cast(Callable[[], None], vars(build)["cmd_publish_prebuil
 cmd_publish_marketplace = cast(
     Callable[[], None], vars(build)["cmd_publish_marketplace"]
 )
+cmd_publish_open_vsx = cast(Callable[[], None], vars(build)["cmd_publish_open_vsx"])
 cmd_publish_github = cast(Callable[[], None], vars(build)["cmd_publish_github"])
 find_vsixes = cast(Callable[[str], list[str]], vars(build)["find_vsixes"])
+find_universal_vsix = cast(Callable[[str], str], vars(build)["find_universal_vsix"])
 publish_github_release = cast(
     Callable[[str, str, bool, list[str]], None],
     vars(build)["publish_github_release"],
@@ -24,6 +26,10 @@ publish_github_release = cast(
 publish_to_marketplace = cast(
     Callable[[list[str], bool], None],
     vars(build)["publish_to_marketplace"],
+)
+publish_to_open_vsx = cast(
+    Callable[[str], None],
+    vars(build)["publish_to_open_vsx"],
 )
 
 CHANGELOG = """### Unreleased
@@ -248,6 +254,107 @@ def test_marketplace_publish_reports_only_what_stayed_broken(
     assert sleeps == [15, 45]
 
 
+def test_open_vsx_publish_uploads_the_universal_package_with_the_pat_in_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[Command] = []
+    environments: list[dict[str, str]] = []
+
+    def capture_run(cmd: str, args: list[str], **kwargs: object) -> None:
+        commands.append([cmd, *args])
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        environments.append(env)
+
+    monkeypatch.setenv("OPEN_VSX_TOKEN", "pat")
+    monkeypatch.setenv("INHERITED_ENV", "inherited")
+    monkeypatch.setattr(build, "run", capture_run)
+
+    publish_to_open_vsx("cwtools-3.5.42.vsix")
+
+    assert commands == [
+        [
+            "npx",
+            "--no-install",
+            "ovsx",
+            "publish",
+            "--skip-duplicate",
+            "cwtools-3.5.42.vsix",
+        ]
+    ]
+    assert all("pat" not in argument for command in commands for argument in command)
+    assert all(environment["OVSX_PAT"] == "pat" for environment in environments)
+    assert all("OPEN_VSX_TOKEN" not in environment for environment in environments)
+    assert all(
+        environment["INHERITED_ENV"] == "inherited" for environment in environments
+    )
+
+
+def test_open_vsx_publish_requires_a_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPEN_VSX_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError) as error:
+        publish_to_open_vsx("cwtools-3.5.42.vsix")
+
+    assert str(error.value) == "OPEN_VSX_TOKEN is not set; cannot publish to Open VSX."
+
+
+def test_publish_open_vsx_command_publishes_only_the_universal_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vsix_root = tmp_path / "vsix"
+    vsix_root.mkdir()
+    _write_vsix(vsix_root / "cwtools-3.5.42-linux-x64.vsix", "3.5.42")
+    universal = _write_vsix(vsix_root / "cwtools-3.5.42.vsix", "3.5.42")
+    open_vsx_calls: list[str] = []
+
+    def record_open_vsx(vsix: str) -> None:
+        open_vsx_calls.append(vsix)
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("publish-open-vsx must not touch other targets")
+
+    monkeypatch.setenv("CWTOOLS_BUILD_VERSION", "3.5.42")
+    monkeypatch.setenv("CWTOOLS_RELEASE_TAG", "v3.5.42-pre.1")
+    monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
+    monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
+    monkeypatch.setattr(build, "publish_to_open_vsx", record_open_vsx)
+    monkeypatch.setattr(build, "publish_to_marketplace", fail)
+    monkeypatch.setattr(build, "publish_github_release", fail)
+
+    cmd_publish_open_vsx()
+
+    assert open_vsx_calls == [universal]
+
+
+def test_find_universal_vsix_picks_the_package_without_a_platform_segment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vsix_root = tmp_path / "vsix"
+    vsix_root.mkdir()
+    _write_vsix(vsix_root / "cwtools-3.5.42-linux-x64.vsix", "3.5.42")
+    universal = _write_vsix(vsix_root / "cwtools-3.5.42.vsix", "3.5.42")
+    monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
+
+    assert find_universal_vsix("3.5.42") == universal
+
+
+def test_find_universal_vsix_rejects_platform_only_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vsix_root = tmp_path / "vsix"
+    vsix_root.mkdir()
+    _write_vsix(vsix_root / "cwtools-3.5.42-linux-x64.vsix", "3.5.42")
+    monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
+
+    with pytest.raises(RuntimeError) as error:
+        find_universal_vsix("3.5.42")
+
+    assert str(error.value) == "no universal vsix in artifacts/vsix"
+
+
 def test_publish_marketplace_command_skips_the_github_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -312,8 +419,13 @@ def test_find_vsixes_keeps_matching_platform_and_universal_packages(
 
 @pytest.mark.parametrize(
     "command",
-    [cmd_publish_prebuilt, cmd_publish_marketplace, cmd_publish_github],
-    ids=["prebuilt", "marketplace", "github"],
+    [
+        cmd_publish_prebuilt,
+        cmd_publish_marketplace,
+        cmd_publish_github,
+        cmd_publish_open_vsx,
+    ],
+    ids=["prebuilt", "marketplace", "github", "open-vsx"],
 )
 def test_standalone_publish_commands_reject_off_version_vsixes_before_publishing(
     command: Callable[[], None], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -332,12 +444,16 @@ def test_standalone_publish_commands_reject_off_version_vsixes_before_publishing
     def record_marketplace(_vsixes: list[str], _pre_release: bool) -> None:
         publishers.append("marketplace")
 
+    def record_open_vsx(_vsix: str) -> None:
+        publishers.append("open-vsx")
+
     monkeypatch.setenv("CWTOOLS_BUILD_VERSION", "3.5.42")
     monkeypatch.setenv("CWTOOLS_RELEASE_TAG", "v3.5.42-pre.1")
     monkeypatch.setattr(build, "VSIX_ROOT", vsix_root)
     monkeypatch.setattr(build, "read_changelog", lambda: CHANGELOG)
     monkeypatch.setattr(build, "publish_github_release", record_github)
     monkeypatch.setattr(build, "publish_to_marketplace", record_marketplace)
+    monkeypatch.setattr(build, "publish_to_open_vsx", record_open_vsx)
 
     with pytest.raises(RuntimeError) as error:
         command()

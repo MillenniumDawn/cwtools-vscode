@@ -116,7 +116,12 @@ def test_each_registry_publishes_independently() -> None:
     # timeout used to abort the job before Open VSX was ever reached.
     assert workflow.count("needs: [check, verify, package]") == 2
     # And re-running one of them must not trip over its own earlier upload.
-    assert "skipDuplicate: true" in workflow
+    # The publish commands live in build.py, so the contract lives there too:
+    # one --skip-duplicate per registry.
+    assert "publish-marketplace" in workflow
+    assert "publish-open-vsx" in workflow
+    build = (REPO_ROOT / "scripts" / "build" / "build.py").read_text(encoding="utf-8")
+    assert build.count('"--skip-duplicate"') == 2
     assert "publish-prebuilt" not in workflow
 
 
