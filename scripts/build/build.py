@@ -92,7 +92,8 @@ def run_capture(
         env=None if env is None else dict(env),
         check=False,
         capture_output=True,
-        text=True,
+        # git and gh write UTF-8; the Windows locale codec would reject it.
+        encoding="utf-8",
     )
     if result.returncode != 0:
         display = " ".join([cmd, *args])
