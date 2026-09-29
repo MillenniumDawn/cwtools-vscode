@@ -3,6 +3,7 @@
 #### Engine
 
 * Memoize subtype merges per file and precompute matcher key groups. (#492)
+* Harden cache corruption handling, pin the `.cwb` archive layout with a golden fixture, and benchmark cache serialization and loading. (#520)
 
 #### Tooling
 
