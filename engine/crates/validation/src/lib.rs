@@ -348,6 +348,7 @@ fn validate_prepared_inner(
         inline_script_expansion_budget: &inline_script_expansion_budget,
         inline_stack: &inline_stack,
         alias_memo: std::cell::RefCell::new(ctx::AliasMemo::default()),
+        subtype_merge_memo: std::cell::RefCell::new(ctx::SubtypeMergeMemo::default()),
         type_uses,
     };
 

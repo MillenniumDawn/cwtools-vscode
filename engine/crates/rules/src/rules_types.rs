@@ -5,6 +5,15 @@ pub struct TypeReferenceRule {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[doc(hidden)]
+pub struct SubtypeRuleKeyGroup {
+    pub key: String,
+    pub leaf_rule_indices: Vec<usize>,
+    pub node_rule_indices: Vec<usize>,
+    pub node_rule_groups: Vec<Vec<SubtypeRuleKeyGroup>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct RuleSet {
     pub types: Vec<TypeDefinition>,
     pub aliases: Vec<(String, NewRule)>,
@@ -33,6 +42,7 @@ pub struct RuleSet {
     value_sets: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<String>>,
     builtin_variable_bases: rustc_hash::FxHashSet<String>,
     pretriggers: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<String>>,
+    subtype_rule_key_groups: Vec<Vec<Vec<SubtypeRuleKeyGroup>>>,
     pub def_positions: Vec<CwtDefPosition>,
 }
 
@@ -133,6 +143,55 @@ fn normalize_path_options(opts: &mut PathOptions) {
     });
 }
 
+fn build_subtype_rule_key_groups(rules: &[NewRule]) -> Vec<SubtypeRuleKeyGroup> {
+    let mut groups = Vec::<SubtypeRuleKeyGroup>::new();
+    let mut group_by_key = rustc_hash::FxHashMap::<String, usize>::default();
+    for (rule_index, (rule, _)) in rules.iter().enumerate() {
+        let (key, is_leaf) = match rule {
+            RuleType::LeafRule {
+                left: NewField::SpecificField(key),
+                ..
+            } => (Some(key.as_str()), true),
+            RuleType::NodeRule {
+                left: NewField::SpecificField(key),
+                ..
+            } => (Some(key.as_str()), false),
+            _ => (None, false),
+        };
+        let Some(key) = key else { continue };
+        let group_index = if let Some(&group_index) = group_by_key.get(key) {
+            group_index
+        } else {
+            let group_index = groups.len();
+            groups.push(SubtypeRuleKeyGroup {
+                key: key.to_string(),
+                leaf_rule_indices: Vec::new(),
+                node_rule_indices: Vec::new(),
+                node_rule_groups: Vec::new(),
+            });
+            group_by_key.insert(key.to_string(), group_index);
+            group_index
+        };
+        let group = &mut groups[group_index];
+        if is_leaf {
+            group.leaf_rule_indices.push(rule_index);
+        } else {
+            group.node_rule_indices.push(rule_index);
+        }
+    }
+
+    for group in &mut groups {
+        for &rule_index in &group.node_rule_indices {
+            let nested = match &rules[rule_index].0 {
+                RuleType::NodeRule { rules: inner, .. } => build_subtype_rule_key_groups(inner),
+                _ => Vec::new(),
+            };
+            group.node_rule_groups.push(nested);
+        }
+    }
+    groups
+}
+
 impl Default for RuleSet {
     fn default() -> Self {
         Self::new()
@@ -169,6 +228,7 @@ impl RuleSet {
             value_sets: rustc_hash::FxHashMap::default(),
             builtin_variable_bases: rustc_hash::FxHashSet::default(),
             pretriggers: rustc_hash::FxHashMap::default(),
+            subtype_rule_key_groups: Vec::new(),
             def_positions: Vec::new(),
         }
     }
@@ -369,6 +429,50 @@ impl RuleSet {
                 }
             }
         }
+        self.subtype_rule_key_groups = self
+            .types
+            .iter()
+            .map(|type_def| {
+                type_def
+                    .subtypes
+                    .iter()
+                    .map(|subtype| {
+                        if subtype.type_key_filter.is_empty() && subtype.type_key_field.is_none() {
+                            build_subtype_rule_key_groups(&subtype.rules)
+                        } else {
+                            Vec::new()
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+    }
+
+    #[doc(hidden)]
+    pub fn subtype_rule_key_groups_for(
+        &self,
+        type_def: &TypeDefinition,
+        subtype_index: usize,
+    ) -> Option<&[SubtypeRuleKeyGroup]> {
+        let same_type = |index: usize| {
+            self.types
+                .get(index)
+                .is_some_and(|candidate| std::ptr::eq(candidate, type_def))
+        };
+        let type_index = self
+            .type_by_name
+            .get(&type_def.name)
+            .copied()
+            .filter(|&index| same_type(index))
+            .or_else(|| {
+                self.types
+                    .iter()
+                    .position(|candidate| std::ptr::eq(candidate, type_def))
+            })?;
+        self.subtype_rule_key_groups
+            .get(type_index)?
+            .get(subtype_index)
+            .map(Vec::as_slice)
     }
 
     pub fn type_reference_rules_for_key(&self, key: &str) -> Option<&[TypeReferenceRule]> {
@@ -574,6 +678,37 @@ mod tests {
             ),
         ));
         let _ = ruleset.alias_exact();
+    }
+
+    #[test]
+    fn reindex_precomputes_subtype_key_groups_recursively() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let parsed = cwtools_parser::parser::parse_string(
+            r#"
+                types = { type[thing] = { path = "common/thing" subtype[match] = { marker = yes nested = { enabled = yes } } } }
+            "#,
+            &table,
+        );
+        let ruleset = crate::rules_converter::ast_to_ruleset(&parsed, &table);
+        let type_def = &ruleset.types[0];
+        let groups = ruleset
+            .subtype_rule_key_groups_for(type_def, 0)
+            .expect("reindexed subtype rules have key groups");
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.key.as_str())
+                .collect::<Vec<_>>(),
+            ["marker", "nested"]
+        );
+        assert_eq!(groups[1].node_rule_groups[0][0].key, "enabled");
+
+        let cloned_ruleset = ruleset.clone();
+        let cloned_type = &cloned_ruleset.types[0];
+        assert_eq!(
+            cloned_ruleset.subtype_rule_key_groups_for(cloned_type, 0),
+            Some(groups)
+        );
     }
 
     #[test]

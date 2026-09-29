@@ -2,12 +2,13 @@ use cwtools_game::constants::Game;
 use cwtools_game::scope_engine::{ScopeContext, ScopeId};
 use cwtools_localization::LocIndex;
 use cwtools_parser::ast::{Leaf, ParsedFile, SourcePos};
-use cwtools_rules::rules_types::RuleSet;
+use cwtools_rules::rules_types::{NewRule, RuleSet};
 use cwtools_string_table::string_table::StringTable;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 const ALIAS_BRANCH_BUDGET: usize = 65_536;
 const INLINE_SCRIPT_EXPANSION_BUDGET: usize = 4_096;
@@ -141,6 +142,19 @@ pub(crate) struct AliasMemo {
     entries: FxHashMap<AliasMemoKey, AliasMemoEntry>,
 }
 
+#[derive(PartialEq, Eq, Hash)]
+pub(crate) struct SubtypeMergeMemoKey {
+    pub(crate) type_identity: usize,
+    pub(crate) inner_rules_identity: (usize, usize),
+    pub(crate) matched_subtype_indices: SmallVec<[usize; 4]>,
+    pub(crate) union_all_subtypes: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct SubtypeMergeMemo {
+    pub(crate) entries: FxHashMap<SubtypeMergeMemoKey, Arc<[NewRule]>>,
+}
+
 pub(crate) struct ValidationCtx<'a> {
     pub(crate) ast: &'a ParsedFile,
     pub(crate) ruleset: &'a RuleSet,
@@ -159,6 +173,7 @@ pub(crate) struct ValidationCtx<'a> {
     pub(crate) inline_script_expansion_budget: &'a RefCell<InlineScriptExpansionBudget>,
     pub(crate) inline_stack: &'a RefCell<Vec<String>>,
     pub(crate) alias_memo: RefCell<AliasMemo>,
+    pub(crate) subtype_merge_memo: RefCell<SubtypeMergeMemo>,
     pub(crate) type_uses: Option<&'a RefCell<crate::references::UsedInstances>>,
 }
 
@@ -185,6 +200,7 @@ impl<'a> ValidationCtx<'a> {
             inline_script_expansion_budget: self.inline_script_expansion_budget,
             inline_stack: self.inline_stack,
             alias_memo: RefCell::new(AliasMemo::default()),
+            subtype_merge_memo: RefCell::new(SubtypeMergeMemo::default()),
             type_uses: self.type_uses,
         }
     }
