@@ -48,7 +48,13 @@ Source: `extension/package/package.json` `contributes.configuration`.
 
 - `cwtools.rules_folder` (string)
   - Default: empty
-  - A folder containing custom rules to use.
+  - A folder containing custom rules to use. A valid change applies without a
+    window restart; an invalid path keeps the existing fallback behavior.
+
+- `cwtools.rules.autoReload` (boolean)
+  - Default: `true`
+  - Automatically reload rules after `.cwt` files in the selected rules folder
+    change. Changes are debounced; set to `false` to reload rules manually.
 
 - `cwtools.localisation.languages` (array)
   - Default: `["English"]`

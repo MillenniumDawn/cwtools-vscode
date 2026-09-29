@@ -39,7 +39,8 @@
   "configuration.cwtools.localisation.hoverShowAllLanguages.description": "Mostrar la localización al pasar el cursor en todos los idiomas configurados y no solo en el primero.",
   "configuration.cwtools.errors.ignore.description": "Códigos de diagnóstico que se silencian en todas partes, p. ej. `CW100` (lista de identificadores de error o aviso).",
   "configuration.cwtools.errors.ignorefiles.description": "Nombres de archivo que se excluyen del área de trabajo (no se cargan en cwtools, así que las referencias a ellos no se resuelven), p. ej. `README.txt`, `credits.txt`.",
-  "configuration.cwtools.rules_folder.description": "Una carpeta con reglas propias que usar. **Recarga la ventana** después de cambiar esto.",
+  "configuration.cwtools.rules_folder.description": "Una carpeta con reglas personalizadas. Los cambios se aplican sin recargar la ventana.",
+  "configuration.cwtools.rules.autoReload.description": "Recarga automáticamente las reglas cuando cambian archivos `.cwt` en la carpeta seleccionada. Desactívalo para recargar las reglas manualmente.",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "Rutas de archivo que se ignoran (no se cargan en cwtools), lista de patrones glob, p. ej. `**/99_README**.txt`",
   "configuration.cwtools.cache.eu4.description": "Ruta a una instalación vanilla de EU4. Sirve para resolver las referencias al juego base y que no se marquen como desconocidas. Normalmente se detecta sola desde Steam. **Recarga la ventana** después de cambiar esto.",

@@ -1,6 +1,10 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { minimatch } from "minimatch";
 import { beforeEach, suite, test, vi } from "vitest";
+import type { Mock } from "vitest";
 import { LSPErrorCodes } from "vscode-languageserver-protocol";
 import type { ExtensionContext } from "vscode";
 import type { LanguageClientOptions } from "vscode-languageclient/node";
@@ -9,9 +13,11 @@ const {
 	createdWatchers,
 	createFileSystemWatcher,
 	disposable,
+	stateChangeHandlers,
 	lastClientOptions,
 	lastClient,
 	configurationValues,
+	resolveRulesCache,
 	requestType,
 	progressToken,
 	withProgress,
@@ -22,9 +28,21 @@ const {
 	executeCommand,
 	onDidChangeConfiguration,
 	sendNotification,
+	sendRequest,
 	logError,
 } = vi.hoisted(() => {
-	const createdWatchers: { glob: string; dispose: () => void }[] = [];
+	const createdWatchers: {
+		glob: unknown;
+		dispose: Mock<() => void>;
+		fire: (
+			event: "create" | "change" | "delete",
+			uri: { toString: () => string },
+		) => void;
+	}[] = [];
+	const stateChangeHandlers: ((event: {
+		oldState: number;
+		newState: number;
+	}) => void)[] = [];
 	const configurationValues = new Map<string, unknown>();
 	const lastClient: { value: unknown } = { value: undefined };
 	const progressToken = {
@@ -33,8 +51,38 @@ const {
 	};
 	return {
 		createdWatchers,
-		createFileSystemWatcher: vi.fn((glob: string) => {
-			const watcher = { glob, dispose: () => {} };
+		createFileSystemWatcher: vi.fn((glob: unknown) => {
+			const listeners = {
+				create: [] as ((uri: { toString: () => string }) => void)[],
+				change: [] as ((uri: { toString: () => string }) => void)[],
+				delete: [] as ((uri: { toString: () => string }) => void)[],
+			};
+			const subscribe = (
+				kind: "create" | "change" | "delete",
+				listener: (uri: { toString: () => string }) => void,
+			) => {
+				let active = true;
+				listeners[kind].push((uri) => {
+					if (active) listener(uri);
+				});
+				return { dispose: () => (active = false) };
+			};
+			const watcher = {
+				glob,
+				dispose: vi.fn<() => void>(),
+				onDidCreate: (listener: (uri: { toString: () => string }) => void) =>
+					subscribe("create", listener),
+				onDidChange: (listener: (uri: { toString: () => string }) => void) =>
+					subscribe("change", listener),
+				onDidDelete: (listener: (uri: { toString: () => string }) => void) =>
+					subscribe("delete", listener),
+				fire: (
+					event: "create" | "change" | "delete",
+					uri: { toString: () => string },
+				) => {
+					for (const listener of listeners[event]) listener(uri);
+				},
+			};
 			createdWatchers.push(watcher);
 			return watcher;
 		}),
@@ -44,6 +92,13 @@ const {
 		},
 		lastClient,
 		configurationValues,
+		resolveRulesCache: vi.fn(() =>
+			Promise.resolve({
+				rulesCache: "/rules",
+				fetchUpstream: false,
+			}),
+		),
+		stateChangeHandlers,
 		requestType: {},
 		progressToken,
 		withProgress: vi.fn(
@@ -61,7 +116,12 @@ const {
 		showTextDocument: vi.fn(),
 		executeCommand: vi.fn(),
 		onDidChangeConfiguration: vi.fn(() => disposable),
-		sendNotification: vi.fn().mockResolvedValue(undefined),
+		sendNotification: vi
+			.fn<(type: unknown, params: unknown) => Promise<void>>()
+			.mockResolvedValue(undefined),
+		sendRequest: vi
+			.fn<(type: unknown, params: unknown) => Promise<unknown>>()
+			.mockResolvedValue(undefined),
 		logError: vi.fn(),
 	};
 });
@@ -71,9 +131,17 @@ vi.mock("vscode", async (importOriginal) => ({
 	CancellationError: class extends Error {},
 	ProgressLocation: { Notification: 15 },
 	Uri: {
+		file: (fsPath: string) => ({ fsPath, toString: () => `file://${fsPath}` }),
 		parse: (value: string) => ({
 			fsPath: decodeURIComponent(value.replace(/^file:\/\//, "")),
+			toString: () => value,
 		}),
+	},
+	RelativePattern: class {
+		constructor(
+			readonly baseUri: { fsPath: string },
+			readonly pattern: string,
+		) {}
 	},
 	window: {
 		createOutputChannel: () => ({ appendLine: () => {} }),
@@ -85,6 +153,10 @@ vi.mock("vscode", async (importOriginal) => ({
 	commands: { executeCommand },
 	workspace: {
 		createFileSystemWatcher,
+		getWorkspaceFolder: (uri: { fsPath: string }) =>
+			uri.fsPath.startsWith("/workspace/") || uri.fsPath === "/workspace"
+				? { uri: { fsPath: "/workspace" } }
+				: undefined,
 		getConfiguration: () => ({
 			get: (key: string) => configurationValues.get(key),
 		}),
@@ -117,13 +189,17 @@ vi.mock("vscode-languageclient/node", () => ({
 		}
 
 		sendNotification = sendNotification;
+		sendRequest = sendRequest;
 
-		onDidChangeState(): { dispose: () => void } {
+		onDidChangeState(
+			handler: (event: { oldState: number; newState: number }) => void,
+		): { dispose: () => void } {
+			stateChangeHandlers.push(handler);
 			return disposable;
 		}
 	},
 	RevealOutputChannelOn: { Never: 4 },
-	State: { Running: 2 },
+	State: { Stopped: 0, Starting: 1, Running: 2 },
 	TransportKind: { stdio: 0 },
 }));
 
@@ -153,7 +229,11 @@ const WATCHED: [path: string, watched: boolean][] = [
 	["music/track.ogg", false],
 ];
 
-function create(onStopped: () => void = () => {}): {
+function create(
+	onStopped: () => void = () => {},
+	onRulesCacheChanged?: (rulesCache: string) => void,
+	fetchRules?: () => void,
+): {
 	context: ExtensionContext;
 } {
 	const context = { subscriptions: [] } as unknown as ExtensionContext;
@@ -164,6 +244,9 @@ function create(onStopped: () => void = () => {}): {
 			serverExe: "/bin/cwtools-server",
 			cacheDir: "/cache",
 			rulesCache: "/rules",
+			resolveRulesCache,
+			onRulesCacheChanged,
+			fetchRules,
 			workspaceFolder: {
 				uri: { fsPath: "/workspace" },
 				name: "workspace",
@@ -202,14 +285,66 @@ function configurationChangeHandler(): (
 	return handler;
 }
 
+function rulesWatcherAt(
+	root: string,
+): (typeof createdWatchers)[number] | undefined {
+	const matchingWatchers = createdWatchers.filter((watcher) => {
+		if (typeof watcher.glob !== "object" || watcher.glob === null)
+			return false;
+		return (
+			"baseUri" in watcher.glob &&
+			(watcher.glob as { baseUri: { fsPath: string } }).baseUri.fsPath === root
+		);
+	});
+	return matchingWatchers[matchingWatchers.length - 1];
+}
+
+function isRulesSettingsPayload(
+	value: unknown,
+): value is { settings: { rulesCache?: string } } {
+	if (typeof value !== "object" || value === null || !("settings" in value))
+		return false;
+	const settings = value.settings;
+	return (
+		typeof settings === "object" &&
+		settings !== null &&
+		(!("rulesCache" in settings) ||
+			settings.rulesCache === undefined ||
+			typeof settings.rulesCache === "string")
+	);
+}
+
+function lastSettingsPayload(): { settings: { rulesCache?: string } } {
+	const calls = sendNotification.mock.calls;
+	const call = calls[calls.length - 1];
+	assert.ok(call, "no configuration notification was sent");
+	const payload = call[1];
+	assert.ok(isRulesSettingsPayload(payload), "invalid settings notification");
+	return payload;
+}
+
+function fileUri(fsPath: string): {
+	fsPath: string;
+	toString: () => string;
+} {
+	return { fsPath, toString: () => `file://${fsPath}` };
+}
+
 suite("lspClient — watched files", () => {
 	beforeEach(() => {
 		createdWatchers.length = 0;
 		createFileSystemWatcher.mockClear();
 		lastClientOptions.value = undefined;
 		configurationValues.clear();
+		resolveRulesCache.mockReset();
+		resolveRulesCache.mockResolvedValue({
+			rulesCache: "/rules",
+			fetchUpstream: false,
+		});
+		stateChangeHandlers.length = 0;
 		onDidChangeConfiguration.mockClear();
 		sendNotification.mockClear();
+		sendRequest.mockClear();
 	});
 
 	test("re-reads initialization settings for each client start", () => {
@@ -268,7 +403,9 @@ suite("lspClient — watched files", () => {
 
 	test("the globs match every file class the server indexes", () => {
 		create();
-		const globs = createdWatchers.map((w) => w.glob);
+		const globs = createdWatchers
+			.map((watcher) => watcher.glob)
+			.filter((glob): glob is string => typeof glob === "string");
 		for (const [path, watched] of WATCHED) {
 			assert.strictEqual(
 				globs.some((glob) => minimatch(path, glob)),
@@ -284,15 +421,242 @@ suite("lspClient — watched files", () => {
 		assert.ok(Array.isArray(fileEvents), "fileEvents is not a watcher list");
 		const byGlob = (a: { glob: string }, b: { glob: string }): number =>
 			a.glob.localeCompare(b.glob);
+		const workspaceWatchers = createdWatchers.filter(
+			(watcher): watcher is typeof watcher & { glob: string } =>
+				typeof watcher.glob === "string",
+		);
 		assert.deepStrictEqual(
 			(fileEvents as unknown as { glob: string }[]).slice().sort(byGlob),
-			createdWatchers.slice().sort(byGlob),
+			workspaceWatchers.slice().sort(byGlob),
 		);
-		for (const watcher of createdWatchers) {
+		for (const watcher of workspaceWatchers) {
 			assert.ok(
 				context.subscriptions.includes(watcher),
 				`watcher ${watcher.glob} not registered for disposal`,
 			);
+		}
+		assert.ok(
+			context.subscriptions.some((subscription) => "dispose" in subscription),
+			"rules watcher lifecycle must be registered for disposal",
+		);
+		const rulesPattern = rulesWatcherAt("/rules")?.glob as
+			| { baseUri: { fsPath: string }; pattern: string }
+			| undefined;
+		assert.ok(rulesPattern, "rules watcher has no RelativePattern");
+		assert.strictEqual(rulesPattern?.baseUri.fsPath, "/rules");
+		assert.strictEqual(rulesPattern?.pattern, "**/*.cwt");
+	});
+
+	test("debounces a 50-file rules checkout into one reload command", async () => {
+		vi.useFakeTimers();
+		try {
+			create();
+			const watcher = rulesWatcherAt("/rules");
+			assert.ok(watcher, "selected rules folder has no scoped watcher");
+			for (let index = 0; index < 50; index++) {
+				watcher.fire("change", fileUri(`/rules/part${index}.cwt`));
+			}
+			await vi.advanceTimersByTimeAsync(500);
+			assert.strictEqual(sendRequest.mock.calls.length, 1);
+			assert.deepStrictEqual(sendRequest.mock.calls[0], [
+				requestType,
+				{ command: "reloadrulesconfig", arguments: [] },
+			]);
+			assert.strictEqual(sendNotification.mock.calls.length, 50);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("autoReload false forwards file changes without running a reload", async () => {
+		vi.useFakeTimers();
+		try {
+			configurationValues.set("rules.autoReload", false);
+			create();
+			const watcher = rulesWatcherAt("/rules");
+			assert.ok(watcher);
+			watcher.fire("change", fileUri("/rules/test.cwt"));
+			await vi.advanceTimersByTimeAsync(1_000);
+			assert.strictEqual(sendRequest.mock.calls.length, 0);
+			assert.strictEqual(sendNotification.mock.calls.length, 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("workspace rules reload from the global watcher without duplicate forwarding", async () => {
+		vi.useFakeTimers();
+		try {
+			create();
+			resolveRulesCache.mockResolvedValue({
+				rulesCache: "/workspace/Config",
+				fetchUpstream: false,
+			});
+			configurationChangeHandler()(
+				configurationChangeEvent(["cwtools.rules_folder"]),
+			);
+			await vi.waitFor(() =>
+				assert.strictEqual(lastSettingsPayload().settings.rulesCache, "/workspace/Config"),
+			);
+			assert.strictEqual(rulesWatcherAt("/workspace/Config"), undefined);
+			const forwarded = sendNotification.mock.calls.length;
+			const globalWatcher = createdWatchers.find(
+				(watcher) => watcher.glob === "**/*.cwt",
+			);
+			assert.ok(globalWatcher);
+			globalWatcher.fire("change", fileUri("/workspace/Other/test.cwt"));
+			await vi.advanceTimersByTimeAsync(500);
+			assert.strictEqual(sendRequest.mock.calls.length, 0);
+			globalWatcher.fire("change", fileUri("/workspace/Config/test.cwt"));
+			await vi.advanceTimersByTimeAsync(500);
+			assert.strictEqual(sendRequest.mock.calls.length, 1);
+			assert.strictEqual(sendNotification.mock.calls.length, forwarded);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("rules folder changes swap the external watcher and cancel its pending timer", async () => {
+		vi.useFakeTimers();
+		const rulesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cwtools-rules-"));
+		resolveRulesCache.mockResolvedValue({
+			rulesCache: rulesRoot,
+			fetchUpstream: false,
+		});
+		const changed: string[] = [];
+		try {
+			const { context } = create(
+				() => {},
+				(value) => changed.push(value),
+			);
+			const oldWatcher = rulesWatcherAt("/rules");
+			assert.ok(oldWatcher);
+			oldWatcher.fire("change", fileUri("/rules/pending.cwt"));
+			configurationValues.set("rules_folder", rulesRoot);
+			const initializationOptions = lastClientOptions.value
+				?.initializationOptions as () => { rulesCache: string };
+			configurationChangeHandler()(
+				configurationChangeEvent(["cwtools.rules_folder"]),
+			);
+			await vi.waitFor(() => assert.deepStrictEqual(changed, [rulesRoot]));
+			assert.strictEqual(oldWatcher.dispose.mock.calls.length, 1);
+			const newWatcher = rulesWatcherAt(rulesRoot);
+			assert.ok(newWatcher, "new resolved rules folder is not watched");
+			await vi.advanceTimersByTimeAsync(500);
+			assert.strictEqual(
+				sendRequest.mock.calls.length,
+				0,
+				"old timer survived path change",
+			);
+			const payload = lastSettingsPayload();
+			assert.strictEqual(payload.settings.rulesCache, rulesRoot);
+			assert.strictEqual(initializationOptions().rulesCache, rulesRoot);
+			newWatcher.fire("change", fileUri(`${rulesRoot}/rules.cwt`));
+			await vi.advanceTimersByTimeAsync(500);
+			assert.strictEqual(sendRequest.mock.calls.length, 1);
+
+			stateChangeHandlers[0]?.({ oldState: 2, newState: 0 });
+			assert.strictEqual(newWatcher.dispose.mock.calls.length, 1);
+			stateChangeHandlers[0]?.({ oldState: 0, newState: 1 });
+			const restartedWatcher = rulesWatcherAt(rulesRoot);
+			assert.ok(restartedWatcher && restartedWatcher !== newWatcher);
+			assert.strictEqual(initializationOptions().rulesCache, rulesRoot);
+
+			for (const subscription of context.subscriptions) {
+				subscription.dispose();
+			}
+			assert.strictEqual(restartedWatcher.dispose.mock.calls.length, 1);
+		} finally {
+			vi.useRealTimers();
+			fs.rmSync(rulesRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("clearing custom rules selects an empty upstream cache before fetching it", async () => {
+		const temporaryRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "cwtools-upstream-rules-"),
+		);
+		const fallbackCache = path.join(temporaryRoot, "hoi4");
+		const changed: string[] = [];
+		const fetchRules = vi.fn(() => {
+			const payload = lastSettingsPayload();
+			assert.strictEqual(payload.settings.rulesCache, fallbackCache);
+			assert.deepStrictEqual(fs.readdirSync(fallbackCache), []);
+		});
+		resolveRulesCache.mockImplementation(async () => {
+			await fs.promises.mkdir(fallbackCache, { recursive: true });
+			assert.deepStrictEqual(fs.readdirSync(fallbackCache), []);
+			return { rulesCache: fallbackCache, fetchUpstream: true };
+		});
+		try {
+			configurationValues.set("rules_folder", "/custom-rules");
+			create(
+				() => {},
+				(value) => changed.push(value),
+				fetchRules,
+			);
+			configurationValues.delete("rules_folder");
+			configurationChangeHandler()(
+				configurationChangeEvent(["cwtools.rules_folder"]),
+			);
+			await vi.waitFor(() => assert.deepStrictEqual(changed, [fallbackCache]));
+
+			assert.strictEqual(fetchRules.mock.calls.length, 1);
+			assert.ok(rulesWatcherAt(fallbackCache));
+			const payload = lastSettingsPayload();
+			assert.strictEqual(payload.settings.rulesCache, fallbackCache);
+		} finally {
+			fs.rmSync(temporaryRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("ignores an in-flight rules-folder resolution after disposal", async () => {
+		let finishResolution!: (setup: {
+			rulesCache: string;
+			fetchUpstream: boolean;
+		}) => void;
+		resolveRulesCache.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					finishResolution = resolve;
+				}),
+		);
+		const changed: string[] = [];
+		const fetchRules = vi.fn();
+		const { context } = create(
+			() => {},
+			(value) => changed.push(value),
+			fetchRules,
+		);
+		configurationChangeHandler()(
+			configurationChangeEvent(["cwtools.rules_folder"]),
+		);
+		await vi.waitFor(() =>
+			assert.strictEqual(typeof finishResolution, "function"),
+		);
+		for (const subscription of context.subscriptions) subscription.dispose();
+		finishResolution({ rulesCache: "/upstream", fetchUpstream: true });
+		for (let tick = 0; tick < 4; tick++) await Promise.resolve();
+
+		assert.deepStrictEqual(changed, []);
+		assert.strictEqual(fetchRules.mock.calls.length, 0);
+		assert.strictEqual(sendNotification.mock.calls.length, 0);
+		assert.strictEqual(rulesWatcherAt("/upstream"), undefined);
+	});
+
+	test("server stop disposes the rules watcher and pending reload timer", async () => {
+		vi.useFakeTimers();
+		try {
+			create();
+			const watcher = rulesWatcherAt("/rules");
+			assert.ok(watcher);
+			watcher.fire("change", fileUri("/rules/pending.cwt"));
+			stateChangeHandlers[0]?.({ oldState: 2, newState: 0 });
+			assert.strictEqual(watcher.dispose.mock.calls.length, 1);
+			await vi.advanceTimersByTimeAsync(1_000);
+			assert.strictEqual(sendRequest.mock.calls.length, 0);
+		} finally {
+			vi.useRealTimers();
 		}
 	});
 
@@ -326,6 +690,11 @@ suite("lspClient — reload settings", () => {
 		vi.clearAllMocks();
 		lastClientOptions.value = undefined;
 		configurationValues.clear();
+		resolveRulesCache.mockReset();
+		resolveRulesCache.mockResolvedValue({
+			rulesCache: "/rules",
+			fetchUpstream: false,
+		});
 	});
 
 	test("prompts once for matching changes and reloads when selected", async () => {
@@ -355,7 +724,7 @@ suite("lspClient — reload settings", () => {
 		showInformationMessage.mockResolvedValue(undefined);
 		create();
 		const handler = configurationChangeHandler();
-		handler(configurationChangeEvent(["cwtools.rules_folder"]));
+		handler(configurationChangeEvent(["cwtools.profiling"]));
 		await Promise.resolve();
 
 		assert.strictEqual(showInformationMessage.mock.calls.length, 1);
@@ -368,7 +737,7 @@ suite("lspClient — reload settings", () => {
 		executeCommand.mockRejectedValue(failure);
 		create();
 		const handler = configurationChangeHandler();
-		handler(configurationChangeEvent(["cwtools.rules_folder"]));
+		handler(configurationChangeEvent(["cwtools.profiling"]));
 		await vi.waitFor(() =>
 			assert.deepStrictEqual(logError.mock.calls, [
 				["Failed to reload window after settings change", failure],

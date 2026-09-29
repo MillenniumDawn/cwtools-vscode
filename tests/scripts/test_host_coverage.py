@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import host_coverage
+import hosttest
 
 
 def alive(pid: int) -> bool:
@@ -95,3 +97,61 @@ def test_an_unavailable_display_backend_fails_before_the_compile(
 
     assert not compiled
     assert not coverage_dir.exists()
+
+
+def test_runs_host_and_live_labels_in_one_coverage_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    coverage_dir = tmp_path / "coverage"
+    summary_path = coverage_dir / "coverage-summary.json"
+    labels_seen: list[list[str]] = []
+    coverage_seen: list[bool] = []
+    invoked_command: list[str] = []
+    display = hosttest.Display("native", [], None)
+
+    def make_test_cli_command(
+        labels: list[str], *, coverage: bool = False
+    ) -> list[str]:
+        labels_seen.append(labels.copy())
+        coverage_seen.append(coverage)
+        command = ["node", "test-cli"]
+        for label in labels:
+            command.extend(["--label", label])
+        if coverage:
+            command.append("--coverage")
+        return command
+
+    def record_command(
+        _name: str, command: str, args: list[str], **_kwargs: object
+    ) -> None:
+        invoked_command.extend([command, *args])
+        coverage = {
+            metric: {"total": 1, "covered": 1}
+            for metric in ("lines", "statements", "branches", "functions")
+        }
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(
+            json.dumps({"/repo/extension/src/host/lspClient.ts": coverage}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(host_coverage, "COVERAGE_DIR", coverage_dir)
+    monkeypatch.setattr(host_coverage, "SUMMARY_PATH", summary_path)
+    monkeypatch.setattr(host_coverage, "resolve_display", lambda: display)
+    monkeypatch.setattr(host_coverage, "_npm", lambda: "npm")
+    monkeypatch.setattr(host_coverage, "_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(host_coverage, "test_cli_command", make_test_cli_command)
+    monkeypatch.setattr(host_coverage, "run_with_timeout", record_command)
+
+    assert host_coverage.main() == 0
+    assert labels_seen == [["host", "live"]]
+    assert coverage_seen == [True]
+    assert invoked_command == [
+        "node",
+        "test-cli",
+        "--label",
+        "host",
+        "--label",
+        "live",
+        "--coverage",
+    ]

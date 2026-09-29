@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from coverage_metrics import validate_host_coverage_summary
+from coverage_metrics import HOST_COVERAGE_LABELS, validate_host_coverage_summary
 from hosttest import resolve_display, test_cli_command
 from paths import REPO_ROOT
 
@@ -147,12 +147,13 @@ def main() -> int:
         if display.note is not None:
             sys.stderr.write(f"{display.note}\n")
         _run("extension compilation", _npm(), ["run", "compile"])
-        # host's file list is a superset of unit's and smoke's (see
-        # .vscode-test.mjs), so this one run measures everything those would
-        # and picks up modules (e.g. graphPanel.ts) that only extension.test.ts
-        # exercises. It needs a built cwtools-server binary and network access
-        # for the background rules fetch, same as `npm run test:host`.
-        command = display.prefix + test_cli_command(["host"], coverage=True)
+        # Run the separate live workspace alongside host so both contribute to
+        # one coverage session. Host also exercises modules like graphPanel.ts.
+        # This needs a built cwtools-server binary and network access for the
+        # background rules fetch, same as `npm run test:host`.
+        command = display.prefix + test_cli_command(
+            list(HOST_COVERAGE_LABELS), coverage=True
+        )
         run_with_timeout(
             "extension-host coverage",
             command[0],

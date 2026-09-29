@@ -1,4 +1,7 @@
 import * as assert from "assert";
+import * as fsPromises from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 import { afterEach, beforeEach, suite, test, vi } from "vitest";
 import type { Memento } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
@@ -78,6 +81,10 @@ vi.mock("../../src/host/engine", async () => {
 	return {
 		LANGUAGE_REPOS,
 		GitNotFoundError,
+		resolveRulesFolder: (raw: string | undefined) => ({
+			path: raw?.trim() || undefined,
+			existed: false,
+		}),
 		rulesFetchCommands: (
 			cacheDir: string,
 			rules: { repo: string; ref: string },
@@ -115,7 +122,10 @@ import {
 	RULES_MANIFEST_URL,
 	type RulesManifest,
 } from "../../src/host/rulesManifest";
-import { fetchRulesInBackground } from "../../src/host/rulesSetup";
+import {
+	fetchRulesInBackground,
+	resolveRulesCache,
+} from "../../src/host/rulesSetup";
 
 function manifest(
 	ref: string,
@@ -173,13 +183,15 @@ function client(): { client: LanguageClient; requests: unknown[] } {
 
 function stubManifestFetch(value: RulesManifest | string) {
 	const text = typeof value === "string" ? value : JSON.stringify(value);
-	const fetch = vi.fn().mockResolvedValue(
-		new Response(text, {
-			status: 200,
-			headers: {
-				"content-length": String(new TextEncoder().encode(text).length),
-			},
-		}),
+	const fetch = vi.fn().mockImplementation(() =>
+		Promise.resolve(
+			new Response(text, {
+				status: 200,
+				headers: {
+					"content-length": String(new TextEncoder().encode(text).length),
+				},
+			}),
+		),
 	);
 	vi.stubGlobal("fetch", fetch);
 	return fetch;
@@ -207,6 +219,128 @@ suite("rulesSetup — reviewed manifest sync", () => {
 
 	afterEach(() => vi.unstubAllGlobals());
 
+	test("creates an empty upstream cache when no custom rules folder is selected", async () => {
+		const temporaryRoot = await fsPromises.mkdtemp(
+			path.join(os.tmpdir(), "cwtools-rules-cache-"),
+		);
+		const cacheDir = path.join(temporaryRoot, "cache");
+		const testRulesFolder = process.env.CWTOOLS_TEST_RULES_FOLDER;
+		delete process.env.CWTOOLS_TEST_RULES_FOLDER;
+		try {
+			const setup = await resolveRulesCache("hoi4", cacheDir, temporaryRoot);
+			assert.strictEqual(setup.rulesCache, path.join(cacheDir, "hoi4"));
+			assert.strictEqual(setup.fetchUpstream, true);
+			assert.deepStrictEqual(await fsPromises.readdir(setup.rulesCache), []);
+		} finally {
+			if (testRulesFolder === undefined) {
+				delete process.env.CWTOOLS_TEST_RULES_FOLDER;
+			} else {
+				process.env.CWTOOLS_TEST_RULES_FOLDER = testRulesFolder;
+			}
+			await fsPromises.rm(temporaryRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("invalid custom rules fall back to a provisioned upstream cache", async () => {
+		const temporaryRoot = await fsPromises.mkdtemp(
+			path.join(os.tmpdir(), "cwtools-invalid-rules-"),
+		);
+		const cacheDir = path.join(temporaryRoot, "cache");
+		const invalidRules = path.join(temporaryRoot, "missing-rules");
+		const testRulesFolder = process.env.CWTOOLS_TEST_RULES_FOLDER;
+		process.env.CWTOOLS_TEST_RULES_FOLDER = invalidRules;
+		try {
+			const setup = await resolveRulesCache("hoi4", cacheDir, temporaryRoot);
+			assert.strictEqual(setup.rulesCache, path.join(cacheDir, "hoi4"));
+			assert.strictEqual(setup.fetchUpstream, true);
+			assert.deepStrictEqual(await fsPromises.readdir(setup.rulesCache), []);
+			assert.deepStrictEqual(vscode.showWarningMessage.mock.calls, [
+				[
+					`CWTools: the rules_folder "${invalidRules}" could not be found (tried "${invalidRules}"). Falling back to the bundled/upstream rules.`,
+				],
+			]);
+		} finally {
+			if (testRulesFolder === undefined) {
+				delete process.env.CWTOOLS_TEST_RULES_FOLDER;
+			} else {
+				process.env.CWTOOLS_TEST_RULES_FOLDER = testRulesFolder;
+			}
+			await fsPromises.rm(temporaryRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("shares an in-flight fetch and permits a new request after completion", async () => {
+		const ref = "f".repeat(40);
+		stubManifestFetch(manifest(ref, RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+		let finishInitialScan!: () => void;
+		const initialScanDone = new Promise<void>((resolve) => {
+			finishInitialScan = resolve;
+		});
+
+		const first = fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			initialScanDone,
+			globalState,
+		);
+		const concurrent = fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			initialScanDone,
+			globalState,
+		);
+		assert.strictEqual(concurrent, first);
+		await state.progressStarted;
+		assert.strictEqual(state.rulesFetches.length, 1);
+		finishInitialScan();
+		await Promise.all([first, concurrent]);
+		assert.deepStrictEqual(requests, [
+			{ command: "reloadrulesconfig", arguments: [] },
+		]);
+
+		await fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+		assert.strictEqual(state.rulesFetches.length, 2);
+	});
+
+	test("allows retry after a failed fetch completes", async () => {
+		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
+		const { globalState } = memento();
+		const { client: languageClient, requests } = client();
+		state.gitMissing = true;
+
+		await fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+		assert.strictEqual(state.rulesFetches.length, 1);
+		state.gitMissing = false;
+
+		await fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
+		assert.strictEqual(state.rulesFetches.length, 2);
+		assert.deepStrictEqual(requests, [
+			{ command: "reloadrulesconfig", arguments: [] },
+		]);
+	});
+
 	test("persists a newer manifest, fetches its pin, and reloads after the initial scan", async () => {
 		const ref = "f".repeat(40);
 		const reviewed = manifest(ref, RULES_MANIFEST_REVISION + 1);
@@ -218,7 +352,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 			finishInitialScan = resolve;
 		});
 
-		fetchRulesInBackground(
+		const pendingFetch = fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -240,7 +374,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		assert.deepStrictEqual(requests, []);
 
 		finishInitialScan();
-		await state.progress;
+		await Promise.all([pendingFetch, state.progress]);
 		assert.deepStrictEqual(logger.logError.mock.calls, []);
 		assert.deepStrictEqual(requests, [
 			{ command: "reloadrulesconfig", arguments: [] },
@@ -259,7 +393,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState } = memento();
 		const { client: languageClient, requests } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -293,7 +427,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState, updates } = memento(undefined, new Error("disk full"));
 		const { client: languageClient } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -312,7 +446,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState, updates } = memento(cached);
 		const { client: languageClient, requests } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -335,7 +469,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState, updates } = memento(cached);
 		const { client: languageClient } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -354,7 +488,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState, updates } = memento(cached);
 		const { client: languageClient } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -372,7 +506,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState } = memento();
 		const { client: languageClient } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -413,7 +547,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState } = memento();
 		const { client: languageClient } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -448,7 +582,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 			const { globalState, updates } = memento(cached);
 			const { client: languageClient } = client();
 
-			fetchRulesInBackground(
+			const pendingFetch = fetchRulesInBackground(
 				"hoi4",
 				"/cache",
 				languageClient,
@@ -457,7 +591,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 			);
 
 			await vi.advanceTimersByTimeAsync(RULES_MANIFEST_TIMEOUT_MS);
-			await waitForProgress();
+			await Promise.all([pendingFetch, waitForProgress()]);
 			assert.strictEqual(signal?.aborted, true);
 			assert.deepStrictEqual(updates, []);
 			assert.strictEqual(state.rulesFetches[0]?.ref, cached.pins.hoi4);
@@ -473,7 +607,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState } = memento();
 		const { client: languageClient, requests } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -492,7 +626,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState } = memento();
 		const { client: languageClient, requests } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -519,7 +653,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState } = memento();
 		const { client: languageClient, requests } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -545,7 +679,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState } = memento();
 		const { client: languageClient, requests } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,
@@ -573,7 +707,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		const { globalState } = memento();
 		const { client: languageClient, requests } = client();
 
-		fetchRulesInBackground(
+		await fetchRulesInBackground(
 			"hoi4",
 			"/cache",
 			languageClient,

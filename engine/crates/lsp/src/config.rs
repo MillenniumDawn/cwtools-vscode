@@ -697,6 +697,10 @@ impl Backend {
             }
         };
 
+        if self.state.config.read().rules_dir.as_deref() != Some(cache_path) {
+            return false;
+        }
+
         // handshake gate below (#98). Snapshotting once is sound only while the
         let handshake_complete = self
             .state
@@ -814,6 +818,9 @@ impl Backend {
                     ),
                 )
                 .await;
+            if self.state.config.read().rules_dir.as_deref() != Some(cache_path) {
+                return false;
+            }
             self.set_ruleset(combined_ruleset);
             self.rebuild_modifier_keys();
             // re-request tokens for visible files (#184).
@@ -967,6 +974,28 @@ impl Backend {
         let hover_resolved_scope = extract_hover_scope_display(&params.settings);
         let workspace_wide_diagnostics =
             extract_bool_setting(&params.settings, "workspaceWideDiagnostics");
+        let requested_rules_cache = params
+            .settings
+            .get("rulesCache")
+            .and_then(|value| value.as_str())
+            .map(std::path::PathBuf::from);
+        let current_rules_dir = self.state.config.read().rules_dir.clone();
+        let rules_cache = match requested_rules_cache {
+            Some(path) if current_rules_dir.as_ref() != Some(&path) => {
+                if path.is_dir() {
+                    Some(path)
+                } else {
+                    self.client
+                        .log_message(
+                            MessageType::WARNING,
+                            format!("`rulesCache` dir does not exist: {}", path.display()),
+                        )
+                        .await;
+                    None
+                }
+            }
+            _ => None,
+        };
         {
             let mut cfg = self.state.config.write();
             cfg.formatting = apply_formatting_settings(&params.settings, cfg.formatting);
@@ -1008,12 +1037,14 @@ impl Backend {
             && hover_all_languages.is_none_or(|all| all == current_hover_all)
             && hover_debug.is_none_or(|debug| debug == current_hover_debug)
             && hover_resolved_scope.is_none_or(|resolved| resolved == current_hover_resolved_scope)
-            && workspace_wide_diagnostics.is_none_or(|wide| wide == current_workspace_wide);
+            && workspace_wide_diagnostics.is_none_or(|wide| wide == current_workspace_wide)
+            && rules_cache.is_none();
         if unchanged {
             tracing::debug!("didChangeConfiguration: no relevant change; skipping revalidate");
             return;
         }
 
+        let rules_cache_changed = rules_cache.is_some();
         let ignore_changed = files.as_ref().is_some_and(|files| files != &current_files)
             || dirs.as_ref().is_some_and(|dirs| dirs != &current_dirs);
         let localisation_changed = localisation_languages
@@ -1042,9 +1073,16 @@ impl Backend {
             if let Some(wide) = workspace_wide_diagnostics {
                 cfg.workspace_wide_diagnostics = wide;
             }
+            if let Some(rules_dir) = rules_cache.as_ref() {
+                cfg.rules_dir = Some(rules_dir.clone());
+                cfg.refresh_roots();
+            }
             if let Some(languages) = localisation_languages {
                 cfg.loc_languages = languages;
             }
+        }
+        if let Some(rules_dir) = rules_cache.as_ref() {
+            self.load_rules_config(rules_dir).await;
         }
         if let Some(all) = hover_all_languages {
             self.state
@@ -1074,7 +1112,12 @@ impl Backend {
             reindex_idle_secs = ?reindex_idle_secs,
             "config updated via didChangeConfiguration"
         );
-        if ignore_changed || localisation_changed || hover_all_changed || workspace_wide_changed {
+        if rules_cache_changed
+            || ignore_changed
+            || localisation_changed
+            || hover_all_changed
+            || workspace_wide_changed
+        {
             if !self.validate_entire_workspace(false).await {
                 self.spawn_deferred_revalidation("didChangeConfiguration");
             }
@@ -1443,6 +1486,111 @@ mod tests {
         });
         let client = captured.lock().take().unwrap();
         Backend { client, state }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn did_change_configuration_reloads_rules_and_changes_rule_diagnostics() {
+        let backend = test_backend();
+        let temp = tempfile::tempdir().unwrap();
+        let initial_rules = temp.path().join("initial");
+        let changed_rules = temp.path().join("changed");
+        std::fs::create_dir_all(&initial_rules).unwrap();
+        std::fs::create_dir_all(&changed_rules).unwrap();
+        std::fs::write(
+            initial_rules.join("types.cwt"),
+            "types = { type[custom] = { path = \"common/custom\" } }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            changed_rules.join("types.cwt"),
+            "types = { type[other] = { path = \"common/other\" } }\n",
+        )
+        .unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.language = "hoi4".to_string();
+            config.rules_dir = Some(initial_rules.clone());
+            config.refresh_roots();
+        }
+        assert!(backend.load_rules_config(&initial_rules).await);
+
+        let probe = temp.path().join("probe.cwt");
+        let probe_uri = crate::paths::path_to_uri(&probe);
+        let probe_text = "some_rule = { value = <custom> }\n";
+        let before = backend
+            .parse_and_validate(
+                &probe_uri,
+                probe_text,
+                crate::ValidateTrigger::DidChange,
+                None,
+            )
+            .await
+            .0;
+        assert!(
+            before.is_empty(),
+            "initial rules should define custom: {before:?}"
+        );
+
+        let missing = temp.path().join("missing-rules");
+        backend
+            .did_change_configuration_impl(DidChangeConfigurationParams {
+                settings: json!({ "rulesCache": missing }),
+            })
+            .await;
+        assert_eq!(
+            backend.state.config.read().rules_dir.as_ref(),
+            Some(&initial_rules)
+        );
+
+        backend
+            .did_change_configuration_impl(DidChangeConfigurationParams {
+                settings: json!({ "rulesCache": changed_rules }),
+            })
+            .await;
+        assert_eq!(
+            backend.state.config.read().rules_dir.as_ref(),
+            Some(&changed_rules)
+        );
+        let canonical_changed = std::fs::canonicalize(&changed_rules).unwrap();
+        assert!(
+            backend
+                .state
+                .config
+                .read()
+                .authorized_roots
+                .contains(&canonical_changed)
+        );
+        let after = backend
+            .parse_and_validate(
+                &probe_uri,
+                probe_text,
+                crate::ValidateTrigger::DidChange,
+                None,
+            )
+            .await
+            .0;
+        assert!(
+            after
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("custom")),
+            "new rules should make the now-undefined custom type diagnostic appear: {after:?}"
+        );
+        assert!(!backend.load_rules_config(&initial_rules).await);
+        let after_stale_load = backend
+            .parse_and_validate(
+                &probe_uri,
+                probe_text,
+                crate::ValidateTrigger::DidChange,
+                None,
+            )
+            .await
+            .0;
+        assert!(
+            after_stale_load
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("custom")),
+            "stale rules must not replace the selected folder's rules: {after_stale_load:?}"
+        );
     }
 
     fn vanilla_data(

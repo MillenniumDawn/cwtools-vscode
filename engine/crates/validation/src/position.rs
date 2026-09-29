@@ -95,6 +95,7 @@ pub fn rules_at_pos(
         inline_script_expansion_budget: &inline_script_expansion_budget,
         inline_stack: &inline_stack,
         alias_memo: std::cell::RefCell::new(crate::ctx::AliasMemo::default()),
+        subtype_merge_memo: std::cell::RefCell::new(crate::ctx::SubtypeMergeMemo::default()),
         type_uses: None,
     };
 
@@ -231,6 +232,7 @@ pub fn scope_transitions_with_limit(
         inline_script_expansion_budget: &inline_script_expansion_budget,
         inline_stack: &inline_stack,
         alias_memo: RefCell::new(crate::ctx::AliasMemo::default()),
+        subtype_merge_memo: RefCell::new(crate::ctx::SubtypeMergeMemo::default()),
         type_uses: None,
     };
     let path_candidates = path_candidates_for_file(&file_path.to_lowercase(), prepared.ruleset);
