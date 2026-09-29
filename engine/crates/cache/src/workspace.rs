@@ -854,47 +854,6 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_sidecars_degrade_to_a_miss_and_index_load_still_hits() {
-        const ERRORS_MAGIC: &[u8; 4] = b"CWE\0";
-        const ERRORS_FORMAT_VERSION: u8 = 2;
-
-        let tmp = tempfile::tempdir().unwrap();
-        let table = StringTable::new();
-        let fp = 7;
-        validate_or_clear(tmp.path(), fp).unwrap();
-        let text = "x = 1\n";
-        let mut parsed = parse_string(text, &table);
-        parsed.errors.push(ParseError::Pos(3, 4, "boom".into()));
-        store(tmp.path(), fp, text, &parsed, &table);
-
-        let dir = workspace_cache_dir(tmp.path(), fp);
-        let path = error_cache_path(&dir, content_hash(text));
-        let valid = fs::read(&path).unwrap();
-        let header = [ERRORS_MAGIC.as_slice(), &[ERRORS_FORMAT_VERSION]].concat();
-        let mut bad_magic = valid.clone();
-        bad_magic[0] ^= 0xff;
-        let mut wrong_version = valid.clone();
-        wrong_version[4] = ERRORS_FORMAT_VERSION + 1;
-        let mut garbage = header.clone();
-        garbage.extend_from_slice(b"not an archive");
-        let mut corrupted = header;
-        corrupted.extend(std::iter::repeat_n(0xff, valid.len() - 5));
-
-        for invalid in [
-            bad_magic,
-            wrong_version,
-            valid[..5].to_vec(),
-            valid[..5 + (valid.len() - 5) / 2].to_vec(),
-            garbage,
-            corrupted,
-        ] {
-            fs::write(&path, invalid).unwrap();
-            assert!(load(tmp.path(), fp, text, &table).is_none());
-            assert!(load_for_index(tmp.path(), fp, text, &table).is_some());
-        }
-    }
-
-    #[test]
     fn index_load_skips_parse_error_sidecar() {
         let tmp = tempfile::tempdir().unwrap();
         let table = StringTable::new();

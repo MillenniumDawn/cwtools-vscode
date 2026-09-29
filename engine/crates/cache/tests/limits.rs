@@ -16,7 +16,7 @@ use std::path::Path;
 const MAGIC: [u8; 4] = *b"CWB\x00";
 const FORMAT_VERSION: u8 = 4;
 const ERRORS_MAGIC: [u8; 4] = *b"CWE\x00";
-const ERRORS_FORMAT_VERSION: u8 = 2;
+const ERRORS_FORMAT_VERSION: u8 = 1;
 
 /// A complete frame of `len` zero bytes whose header does not declare how much
 /// it decompresses to. Both cache writers stream, so this is the shape of every
