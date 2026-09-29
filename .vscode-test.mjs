@@ -41,9 +41,9 @@
 // separate from test:smoke because its fixture and network-free environment
 // differ. CI runs it as its own step after the server has been staged.
 //
-// Coverage applies globally when `--coverage` is passed (test:coverage runs the
-// `host` label, since its file list is a superset of `unit`'s and `smoke`'s
-// and it's the only label that exercises modules like graphPanel.ts).
+// Coverage applies globally when `--coverage` is passed. test:coverage runs
+// the `host` and `live` labels together, preserving their separate workspaces
+// while collecting them in one session; host also exercises graphPanel.ts.
 
 import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";

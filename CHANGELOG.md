@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Extension
+
+* Rules in the resolved rules folder now reload automatically after `.cwt` edits, and changing `cwtools.rules_folder` to a valid folder applies without restarting the window. Set `cwtools.rules.autoReload` to `false` to keep manual reloads. (#605)
+
 #### Engine
 
 * Memoize subtype merges per file and precompute matcher key groups. (#492)
