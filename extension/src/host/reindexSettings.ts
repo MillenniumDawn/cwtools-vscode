@@ -74,6 +74,10 @@ export const LIVE_SETTINGS_KEYS = [
 	"cwtools.formatting.insertFinalNewline",
 	"cwtools.graph.zoomSensitivity",
 	"cwtools.trace.server",
+	// Consumed locally by the rules-file watcher; it needs no server setting.
+	"cwtools.rules.autoReload",
+	// Resolved into `rulesCache` and reloaded by the server configuration path.
+	"cwtools.rules_folder",
 ] as const;
 
 // These settings are read only while the extension or server starts. Keep this
@@ -81,7 +85,6 @@ export const LIVE_SETTINGS_KEYS = [
 // clear change path.
 export const RELOAD_SETTINGS_KEYS = [
 	"cwtools.enable",
-	"cwtools.rules_folder",
 	"cwtools.inlayHints.locTitles",
 	"cwtools.inlayHints.scopes",
 	"cwtools.cache.eu4",

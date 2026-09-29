@@ -1,9 +1,12 @@
 import * as assert from "assert";
+import * as fs from "fs/promises";
+import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
 	activate,
 	SAMPLE_ROOT,
+	serverOutputChannel,
 	waitForLanguageServer,
 	waitUntil,
 } from "../support/utils";
@@ -178,6 +181,62 @@ suite("Live settings", function () {
 			"debug classification should appear without restarting the server",
 		);
 		assert.ok(text.includes("**Localisation key** —"));
+	});
+
+	test("switches rules folders and watches external rules files live", async function () {
+		this.timeout(45_000);
+		const cfg = cwtoolsConfig();
+		assert.strictEqual(cfg.get<boolean>("rules.autoReload"), true);
+		const previousFolder = cfg.get<string>("rules_folder");
+		const previousTestFolder = process.env.CWTOOLS_TEST_RULES_FOLDER;
+		const rulesRoot = await fs.mkdtemp(
+			path.join(os.tmpdir(), "cwtools-rules-live-"),
+		);
+		const rulesFile = path.join(rulesRoot, "live.cwt");
+		const output = await serverOutputChannel();
+		const messages: string[] = [];
+		const appendLine = output.appendLine.bind(output);
+		output.appendLine = (message: string) => {
+			messages.push(message);
+			appendLine(message);
+		};
+		const matchingLoads = () =>
+			messages.filter((message) =>
+				message.includes(`Loaded rules from ${rulesRoot}`),
+			);
+		try {
+			await fs.writeFile(
+				rulesFile,
+				'types = { type[first] = { path = "common/first" } }\n',
+			);
+			process.env.CWTOOLS_TEST_RULES_FOLDER = rulesRoot;
+			await cfg.update(
+				"rules_folder",
+				rulesRoot,
+				vscode.ConfigurationTarget.Global,
+			);
+			assert.ok(
+				await waitUntil(() => matchingLoads().length >= 1, 15_000),
+				"a valid rules_folder change should load rules without restarting",
+			);
+			await fs.writeFile(
+				rulesFile,
+				'types = { type[second] = { path = "common/second" } }\n',
+			);
+			assert.ok(
+				await waitUntil(() => matchingLoads().length >= 2, 15_000),
+				"an edit under the external rules folder should trigger one rules reload",
+			);
+		} finally {
+			process.env.CWTOOLS_TEST_RULES_FOLDER = previousTestFolder;
+			await cfg.update(
+				"rules_folder",
+				previousFolder,
+				vscode.ConfigurationTarget.Global,
+			);
+			await fs.rm(rulesRoot, { recursive: true, force: true });
+			output.appendLine = appendLine;
+		}
 	});
 
 	test("updates resolved scope hover output in the running server", async () => {

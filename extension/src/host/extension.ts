@@ -157,18 +157,40 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 
 		// Where a location the server reports is allowed to point. Anything else
 		// needs the user to confirm before it opens (see trustedPaths.ts).
-		setTrustedRoots([
-			cacheDir,
-			rulesCache,
-			workspace.getConfiguration("cwtools").get<string>(`cache.${language}`),
-		]);
+		const trustedRulesRoots = (rulesPath: string) =>
+			setTrustedRoots([
+				cacheDir,
+				rulesPath,
+				workspace.getConfiguration("cwtools").get<string>(`cache.${language}`),
+			]);
+		trustedRulesRoots(rulesCache);
+		let initialScanDone: Promise<void> = Promise.resolve();
+		const fetchRules = (client: LanguageClient) => {
+			void fetchRulesInBackground(
+				language,
+				cacheDir,
+				client,
+				initialScanDone,
+				context.globalState,
+			);
+		};
 
 		// registerServerNotifications (below) owns markStopped, but the
 		// errorHandler that calls it has to be in clientOptions before the
 		// client exists, so this holder lets the client be created first.
 		const client = createLanguageClient(
 			context,
-			{ language, serverExe, cacheDir, rulesCache, workspaceFolder },
+			{
+				language,
+				serverExe,
+				cacheDir,
+				rulesCache,
+				resolveRulesCache: () =>
+					resolveRulesCache(language, cacheDir, workspaceFolder.uri.fsPath),
+				onRulesCacheChanged: trustedRulesRoots,
+				fetchRules,
+				workspaceFolder,
+			},
 			() => notifyStopped?.(),
 		);
 		defaultClient = client;
@@ -176,7 +198,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 
 		const tracker = await registerDocumentLanguage(context, client, "paradox");
 		const notifications = registerServerNotifications(context, client);
-		const initialScanDone = notifications.initialScanDone;
+		initialScanDone = notifications.initialScanDone;
 		statusText = notifications.statusText;
 		notifyStopped = notifications.markStopped;
 
@@ -193,15 +215,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			void tracker.classifyActiveEditor();
 			// Clone/pull the rules repo without blocking activation; the server
 			// reloads its rules once the fetch lands (see rulesSetup.ts).
-			if (fetchUpstream) {
-				fetchRulesInBackground(
-					language,
-					cacheDir,
-					client,
-					initialScanDone,
-					context.globalState,
-				);
-			}
+			if (fetchUpstream) fetchRules(client);
 		} catch (err) {
 			const msg = errorMessage(err);
 			logError("client.start() error", err);

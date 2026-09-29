@@ -39,7 +39,8 @@
   "configuration.cwtools.localisation.hoverShowAllLanguages.description": "停留提示顯示所有已設定語言的本地化文字，而不只是第一種語言。",
   "configuration.cwtools.errors.ignore.description": "在任何位置都要抑制的診斷代碼，例如 `CW100`（錯誤/警告 ID 清單）。",
   "configuration.cwtools.errors.ignorefiles.description": "要從工作區排除的檔名（不載入 cwtools，因此指向它們的參考無法解析），例如 `README.txt`、`credits.txt`。",
-  "configuration.cwtools.rules_folder.description": "包含要使用的自訂規則的資料夾。變更後請**重新載入視窗**。",
+  "configuration.cwtools.rules_folder.description": "包含要使用的自訂規則的資料夾。變更會立即生效，無須重新載入視窗。",
+  "configuration.cwtools.rules.autoReload.description": "選取的規則資料夾中的 `.cwt` 檔案變更後自動重新載入規則。關閉此選項可手動重新載入規則。",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "要忽略的檔案路徑（不載入 cwtools），glob 模式清單，例如 `**/99_README**.txt`",
   "configuration.cwtools.cache.eu4.description": "原版 EU4 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",

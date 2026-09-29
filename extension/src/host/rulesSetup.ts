@@ -60,6 +60,10 @@ export async function resolveRulesCache(
 	const effectiveRulesCache = manualRules.existed
 		? manualRules.path!
 		: languageRulesCache;
+	if (!manualRules.existed) {
+		// LSP configuration only accepts an existing rules cache directory.
+		await fsPromises.mkdir(languageRulesCache, { recursive: true });
+	}
 	if (manualRules.existed) {
 		logInfo(`Using manual rules folder: ${manualRules.path}`);
 	} else if (hasManualRules) {
@@ -85,23 +89,37 @@ export async function resolveRulesCache(
 // Fetch the pinned rules commit in the background. The server starts without
 // the rules (it tolerates a missing/empty rules dir) and we signal it to reload
 // once the fetch lands, so activation is never stalled on the network.
+const inFlightRulesFetches = new WeakMap<LanguageClient, Promise<void>>();
+
 export function fetchRulesInBackground(
 	language: string,
 	cacheDir: string,
 	client: LanguageClient,
 	initialScanDone: Promise<void>,
 	globalState: Memento,
-): void {
+): Promise<void> {
 	if (!LANGUAGE_REPOS[language]) {
-		return;
+		return Promise.resolve();
 	}
-	void syncReviewedRules(
+	const inFlight = inFlightRulesFetches.get(client);
+	if (inFlight) return inFlight;
+
+	let fetchPromise = Promise.resolve();
+	fetchPromise = syncReviewedRules(
 		language,
 		cacheDir,
 		client,
 		initialScanDone,
 		globalState,
-	).catch((err: unknown) => logError(`Rule fetch failed for ${language}`, err));
+	)
+		.catch((err: unknown) => logError(`Rule fetch failed for ${language}`, err))
+		.finally(() => {
+			if (inFlightRulesFetches.get(client) === fetchPromise) {
+				inFlightRulesFetches.delete(client);
+			}
+		});
+	inFlightRulesFetches.set(client, fetchPromise);
+	return fetchPromise;
 }
 
 async function syncReviewedRules(

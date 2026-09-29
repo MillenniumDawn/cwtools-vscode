@@ -273,6 +273,13 @@ suite("reindexSettings — settings change classification", () => {
 		}
 	});
 
+	test("rules folder changes do not request a window reload", () => {
+		assert.strictEqual(
+			isReloadSettingsChange(fakeEvent(["cwtools.rules_folder"])),
+			false,
+		);
+	});
+
 	test("returns false for live and unrelated keys", () => {
 		assert.strictEqual(
 			isReloadSettingsChange(fakeEvent(["cwtools.hover.debug"])),
@@ -314,11 +321,14 @@ suite("reindexSettings — isLiveSettingsChange", () => {
 		);
 	});
 
-	test("returns false for reload and unrelated keys", () => {
-		assert.strictEqual(
-			isLiveSettingsChange(fakeEvent(["cwtools.rules_folder"])),
-			false,
-		);
+	test("routes rules settings live and leaves unrelated keys alone", () => {
+		for (const key of ["cwtools.rules_folder", "cwtools.rules.autoReload"]) {
+			assert.strictEqual(
+				isLiveSettingsChange(fakeEvent([key])),
+				true,
+				`${key} should apply live`,
+			);
+		}
 		assert.strictEqual(
 			isLiveSettingsChange(fakeEvent(["cwtools.cache.hoi4"])),
 			false,

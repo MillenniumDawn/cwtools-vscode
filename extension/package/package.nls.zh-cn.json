@@ -39,7 +39,8 @@
   "configuration.cwtools.localisation.hoverShowAllLanguages.description": "悬停提示显示所有已配置语言的本地化文本，而不仅是第一种语言。",
   "configuration.cwtools.errors.ignore.description": "在任何位置都要抑制的诊断代码，例如 `CW100`（错误/警告 ID 列表）。",
   "configuration.cwtools.errors.ignorefiles.description": "要从工作区中排除的文件名（不加载到 cwtools 中，因此指向它们的引用无法解析），例如 `README.txt`、`credits.txt`。",
-  "configuration.cwtools.rules_folder.description": "包含要使用的自定义规则的文件夹。更改后需**重新加载窗口**。",
+  "configuration.cwtools.rules_folder.description": "包含要使用的自定义规则的文件夹。更改会立即生效，无需重新加载窗口。",
+  "configuration.cwtools.rules.autoReload.description": "选定的规则文件夹中的 `.cwt` 文件更改后自动重新加载规则。关闭此选项可手动重新加载规则。",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "要忽略的文件路径（不加载到 cwtools 中），glob 模式列表，例如 `**/99_README**.txt`",
   "configuration.cwtools.cache.eu4.description": "原版 EU4 安装路径。用于解析基础游戏的引用，避免它们被标记为未知。通常会从 Steam 自动检测。更改后需**重新加载窗口**。",
