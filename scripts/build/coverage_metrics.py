@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-# The host label's file list is a superset of unit's and smoke's (see
-# .vscode-test.mjs), so running it alone measures everything those would.
-HOST_COVERAGE_LABELS = ("host",)
+# Run the host and isolated live-settings labels together so one coverage
+# session measures both workspaces (see .vscode-test.mjs).
+HOST_COVERAGE_LABELS = ("host", "live")
 HOST_COVERAGE_SCOPES = (
     "extension/src/host",
     "extension/src/common",
