@@ -143,7 +143,8 @@ fn normalize_path_options(opts: &mut PathOptions) {
     });
 }
 
-fn build_subtype_rule_key_groups(rules: &[NewRule]) -> Vec<SubtypeRuleKeyGroup> {
+#[doc(hidden)]
+pub fn build_subtype_rule_key_groups(rules: &[NewRule]) -> Vec<SubtypeRuleKeyGroup> {
     let mut groups = Vec::<SubtypeRuleKeyGroup>::new();
     let mut group_by_key = rustc_hash::FxHashMap::<String, usize>::default();
     for (rule_index, (rule, _)) in rules.iter().enumerate() {

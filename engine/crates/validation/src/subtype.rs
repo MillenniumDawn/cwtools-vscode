@@ -4,7 +4,6 @@ use cwtools_parser::{
 };
 use cwtools_rules::rules_types::*;
 use cwtools_string_table::string_table::StringTable;
-use rustc_hash::FxHashMap;
 
 use crate::common::child_key_matches;
 use crate::rule_core::field_matches_value;
@@ -196,54 +195,6 @@ pub(crate) fn subtype_rules_match(
     }
 
     activated
-}
-
-fn build_subtype_rule_key_groups(rules: &[(RuleType, Options)]) -> Vec<SubtypeRuleKeyGroup> {
-    let mut groups = Vec::<SubtypeRuleKeyGroup>::new();
-    let mut group_by_key = FxHashMap::<String, usize>::default();
-    for (rule_index, (rule, _)) in rules.iter().enumerate() {
-        let (key, is_leaf) = match rule {
-            RuleType::LeafRule {
-                left: NewField::SpecificField(key),
-                ..
-            } => (Some(key.as_str()), true),
-            RuleType::NodeRule {
-                left: NewField::SpecificField(key),
-                ..
-            } => (Some(key.as_str()), false),
-            _ => (None, false),
-        };
-        let Some(key) = key else { continue };
-        let group_index = if let Some(&group_index) = group_by_key.get(key) {
-            group_index
-        } else {
-            let group_index = groups.len();
-            groups.push(SubtypeRuleKeyGroup {
-                key: key.to_string(),
-                leaf_rule_indices: Vec::new(),
-                node_rule_indices: Vec::new(),
-                node_rule_groups: Vec::new(),
-            });
-            group_by_key.insert(key.to_string(), group_index);
-            group_index
-        };
-        let group = &mut groups[group_index];
-        if is_leaf {
-            group.leaf_rule_indices.push(rule_index);
-        } else {
-            group.node_rule_indices.push(rule_index);
-        }
-    }
-    for group in &mut groups {
-        for &rule_index in &group.node_rule_indices {
-            let nested = match &rules[rule_index].0 {
-                RuleType::NodeRule { rules: inner, .. } => build_subtype_rule_key_groups(inner),
-                _ => Vec::new(),
-            };
-            group.node_rule_groups.push(nested);
-        }
-    }
-    groups
 }
 
 fn field_activates_on_presence(right: &NewField) -> bool {
