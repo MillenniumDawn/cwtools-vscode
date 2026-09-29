@@ -76,8 +76,8 @@ pub fn archived_to_arena(
     let mut arena = Arena::new();
     for l in cached.leaves.iter() {
         arena.push_leaf(Leaf {
-            key: next_token(&mut tokens),
-            value: archived_value_to_value(&l.value, &mut tokens),
+            key: next_token(&mut tokens)?,
+            value: archived_value_to_value(&l.value, &mut tokens)?,
             op: archived_op_to_op(&l.op),
             pos: cached_to_range(
                 l.start_line.to_native(),
@@ -95,7 +95,7 @@ pub fn archived_to_arena(
     }
     for lv in cached.leaf_values.iter() {
         arena.push_leaf_value(LeafValue {
-            value: archived_value_to_value(&lv.value, &mut tokens),
+            value: archived_value_to_value(&lv.value, &mut tokens)?,
             pos: cached_to_range(
                 lv.start_line.to_native(),
                 lv.start_col.to_native(),
@@ -351,15 +351,15 @@ fn children_from_archived(children: &rkyv::vec::ArchivedVec<ArchivedCachedChild>
 fn archived_value_to_value(
     v: &ArchivedCachedValue,
     tokens: &mut impl Iterator<Item = StringTokens>,
-) -> Value {
-    match v {
-        ArchivedCachedValue::String(_) => Value::String(next_token(tokens)),
-        ArchivedCachedValue::QString(_) => Value::QString(next_token(tokens)),
+) -> Result<Value, CacheError> {
+    Ok(match v {
+        ArchivedCachedValue::String(_) => Value::String(next_token(tokens)?),
+        ArchivedCachedValue::QString(_) => Value::QString(next_token(tokens)?),
         ArchivedCachedValue::Float(f) => Value::Float(f.to_native()),
         ArchivedCachedValue::Int(i) => Value::Int(i.to_native()),
         ArchivedCachedValue::Bool(b) => Value::Bool(*b),
         ArchivedCachedValue::Clause(children) => Value::Clause(children_from_archived(children)),
-    }
+    })
 }
 
 fn archived_op_to_op(op: &ArchivedCachedOperator) -> Operator {
@@ -379,8 +379,11 @@ fn string_token_to_owned(token: &StringTokens, table: &StringResolver<'_>) -> St
     table.get(token.normal).unwrap_or_default().to_string()
 }
 
-fn next_token(tokens: &mut impl Iterator<Item = StringTokens>) -> StringTokens {
-    tokens.next().expect("interned token underrun")
+fn next_token(tokens: &mut impl Iterator<Item = StringTokens>) -> Result<StringTokens, CacheError> {
+    tokens.next().ok_or(CacheError::Deserialize {
+        msg: "interned token underrun",
+        source: None,
+    })
 }
 
 fn range_to_cached(r: &SourceRange) -> (u32, u16, u32, u16) {
@@ -472,5 +475,24 @@ fn op_to_cached(op: &Operator) -> CachedOperator {
         Operator::NotEqual => CachedOperator::NotEqual,
         Operator::EqualEqual => CachedOperator::EqualEqual,
         Operator::QuestionEqual => CachedOperator::QuestionEqual,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_token;
+    use crate::io::CacheError;
+    use cwtools_string_table::string_table::StringTokens;
+
+    #[test]
+    fn missing_interned_token_is_a_cache_error() {
+        let mut tokens = std::iter::empty::<StringTokens>();
+        assert!(matches!(
+            next_token(&mut tokens),
+            Err(CacheError::Deserialize {
+                msg: "interned token underrun",
+                source: None,
+            })
+        ));
     }
 }
