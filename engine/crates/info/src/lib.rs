@@ -125,9 +125,13 @@ impl InfoService {
             logical_path,
             instances,
             HashMap::new(),
+            false,
         );
     }
 
+    /// `base_game` merges the file's definitions with base-game provenance, so
+    /// they resolve but never count as workspace definitions (a parent mod,
+    /// #786).
     #[allow(clippy::too_many_arguments)]
     pub fn index_file_with_precomputed_instances(
         &mut self,
@@ -138,6 +142,7 @@ impl InfoService {
         logical_path: &str,
         instances: HashMap<String, Vec<TypeInstance>>,
         subtype_instances: HashMap<String, Vec<TypeInstance>>,
+        base_game: bool,
     ) {
         let mut info = FileInfo::default();
 
@@ -190,9 +195,17 @@ impl InfoService {
             .flat_map(|v| v.iter())
             .map(|inst| inst.name.to_ascii_lowercase())
             .collect();
-        Arc::make_mut(&mut self.type_index).merge(uri, instances);
-        if !subtype_instances.is_empty() {
-            Arc::make_mut(&mut self.type_index).merge(uri, subtype_instances);
+        let type_index = Arc::make_mut(&mut self.type_index);
+        if base_game {
+            type_index.merge_base_game(uri, instances);
+            if !subtype_instances.is_empty() {
+                type_index.merge_base_game(uri, subtype_instances);
+            }
+        } else {
+            type_index.merge(uri, instances);
+            if !subtype_instances.is_empty() {
+                type_index.merge(uri, subtype_instances);
+            }
         }
 
         let at_vars: Vec<DefinedVariable> = info
@@ -1189,6 +1202,41 @@ alias[effect:set_temp_variable] = {
             "common/decisions/new.txt",
         );
         assert_eq!(service.reference_index.references("focus", "NEW").len(), 1);
+    }
+
+    #[test]
+    fn a_base_game_file_resolves_but_is_not_a_workspace_definition() {
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+
+        let table = StringTable::new();
+        let rules = ast_to_ruleset(
+            &parse_string(
+                "types = { type[decision] = { path = \"common/decisions\" } }",
+                &table,
+            ),
+            &table,
+        );
+        let parsed = parse_string("parent_decision = { }", &table);
+        let logical = "common/decisions/parent.txt";
+        let instances = collect_type_instances(&rules, &parsed, logical, &table);
+        let mut service = InfoService::new();
+        service.index_file_with_precomputed_instances(
+            "file:///parent/common/decisions/parent.txt",
+            &parsed,
+            &table,
+            &rules,
+            logical,
+            instances,
+            HashMap::new(),
+            true,
+        );
+        assert!(service.type_index.contains("decision", "parent_decision"));
+        assert_eq!(
+            service
+                .type_index
+                .workspace_definition_count("decision", "parent_decision"),
+            0
+        );
     }
 
     #[test]

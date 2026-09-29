@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use cwtools_cache::workspace::{self as workspace_cache, SourceCacheKey};
 use cwtools_file_manager::file_manager::{
     DirectoryType, DiscoveredFile, DiscoveredPath, DiscoveryReport, FileError, FileKind,
-    FileManager, FileManagerConfig, ScanBudget, ScanBytes, classify_directory, discover_paths,
-    discover_paths_multi_mod,
+    FileManager, FileManagerConfig, LayerShadow, ScanBudget, ScanBytes, classify_directory,
+    discover_paths, discover_paths_multi_mod, read_root_descriptor,
 };
 use cwtools_file_manager::{read_text, read_text_capped};
 use cwtools_game::constants::Game;
@@ -572,6 +572,7 @@ impl Session {
             }
             type_index.file_index = build_file_index(
                 &directory,
+                &[],
                 ignore_files,
                 ignore_dirs,
                 VanillaFiles::Cached(aux.file_paths),
@@ -647,6 +648,7 @@ impl Session {
                     type_index.merge_base_game_with_uris(vanilla_index.map);
                     type_index.file_index = build_file_index(
                         &directory,
+                        &[],
                         ignore_files,
                         ignore_dirs,
                         VanillaFiles::Install(vanilla_dir),
@@ -1117,8 +1119,11 @@ pub enum VanillaFiles<'a> {
 }
 
 /// so the editor and the CLI answer the same reference the same way (#283).
+/// `parent_roots` are parent mods (#786): a submod may reference any file
+/// they ship, so they index under the same ignore patterns as the workspace.
 pub fn build_file_index(
     workspace_root: &Path,
+    parent_roots: &[PathBuf],
     workspace_ignore_files: &[String],
     workspace_ignore_dirs: &[String],
     vanilla: VanillaFiles<'_>,
@@ -1126,12 +1131,14 @@ pub fn build_file_index(
 ) -> FileIndex {
     let mut index = FileIndex::new();
     index.set_case_sensitive(case_sensitive);
-    index.add_paths(discover_file_index_paths(
-        workspace_root,
-        workspace_ignore_files,
-        workspace_ignore_dirs,
-        DiscoveryPolicy::Workspace,
-    ));
+    for root in std::iter::once(workspace_root).chain(parent_roots.iter().map(PathBuf::as_path)) {
+        index.add_paths(discover_file_index_paths(
+            root,
+            workspace_ignore_files,
+            workspace_ignore_dirs,
+            DiscoveryPolicy::Workspace,
+        ));
+    }
     match vanilla {
         VanillaFiles::Cached(paths) => index.add_paths(paths),
         VanillaFiles::Install(dir) => index.add_paths(discover_file_index_paths(
@@ -1313,6 +1320,115 @@ pub fn discover_workspace_files(
     } else {
         manager.discover_files()
     }
+}
+
+/// The parent-mod files a primary mod still sees (#786), in load order. Each
+/// parent is walked from the last-loaded down, dropping what the primary or
+/// a later parent shadows (see [`LayerShadow`]). `discover` lists one root's
+/// candidate files and `logical_path` names a file's root-relative path, so
+/// scripts and localisation share one layering rule.
+pub fn visible_parent_files<T>(
+    parent_roots: &[PathBuf],
+    primary_root: &Path,
+    primary_logical_paths: &[&str],
+    mut discover: impl FnMut(&Path) -> Vec<T>,
+    logical_path: impl Fn(&T) -> &str,
+) -> Vec<T> {
+    let replace_paths = |root: &Path| {
+        read_root_descriptor(root)
+            .map(|descriptor| descriptor.replace_paths)
+            .unwrap_or_default()
+    };
+    let mut shadow = LayerShadow::default();
+    shadow.claim(
+        primary_logical_paths.iter().copied(),
+        &replace_paths(primary_root),
+    );
+    let mut layers: Vec<Vec<T>> = Vec::with_capacity(parent_roots.len());
+    for root in parent_roots.iter().rev() {
+        let kept: Vec<T> = discover(root)
+            .into_iter()
+            .filter(|file| !shadow.hides(logical_path(file)))
+            .collect();
+        shadow.claim(kept.iter().map(&logical_path), &replace_paths(root));
+        layers.push(kept);
+    }
+    layers.into_iter().rev().flatten().collect()
+}
+
+/// [`visible_parent_files`] over script files, each parent discovered the
+/// way [`workspace_discovery_config`] discovers the primary.
+pub fn discover_parent_script_files(
+    parent_roots: &[PathBuf],
+    primary_root: &Path,
+    primary_files: &[DiscoveredFile],
+    ruleset: Option<&RuleSet>,
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+) -> Vec<DiscoveredFile> {
+    let primary: Vec<&str> = primary_files
+        .iter()
+        .map(|file| file.logical_path.as_str())
+        .collect();
+    visible_parent_files(
+        parent_roots,
+        primary_root,
+        &primary,
+        |root| {
+            let mut config = workspace_discovery_config(root, ruleset);
+            config.exclude_patterns.extend(ignore_files.iter().cloned());
+            config
+                .exclude_dir_patterns
+                .extend(ignore_dirs.iter().cloned());
+            discover_workspace_files(config).unwrap_or_else(|error| {
+                eprintln!(
+                    "warn: parent mod discovery failed for {}: {error}",
+                    root.display()
+                );
+                Vec::new()
+            })
+        },
+        |file| file.logical_path.as_str(),
+    )
+}
+
+/// [`visible_parent_files`] over localisation files.
+pub fn discover_parent_localisation_files(
+    parent_roots: &[PathBuf],
+    primary_root: &Path,
+    primary_files: &[DiscoveredPath],
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+) -> Vec<DiscoveredPath> {
+    let primary: Vec<&str> = primary_files
+        .iter()
+        .map(|file| file.root_relative_path.as_str())
+        .collect();
+    visible_parent_files(
+        parent_roots,
+        primary_root,
+        &primary,
+        |root| match discover_localisation_files(
+            &[root.to_path_buf()],
+            ignore_files,
+            ignore_dirs,
+            DiscoveryPolicy::Workspace,
+        ) {
+            Ok(report) => report
+                .files
+                .into_iter()
+                .filter(|file| file.kind == FileKind::Localisation)
+                .collect(),
+            Err(error) => {
+                eprintln!(
+                    "warn: parent mod localisation discovery failed for {}: {error}",
+                    root.display()
+                );
+                Vec::new()
+            }
+        },
+        |file| file.root_relative_path.as_str(),
+    )
 }
 
 pub fn discover_and_parse_workspace(

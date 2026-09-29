@@ -229,13 +229,14 @@ impl Backend {
             self.bump_info_revision();
         }
 
-        let (workspace_root, ignore_files, ignore_dirs) = {
+        let (workspace_root, parent_roots, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
             let Some(workspace_root) = config.workspace_roots.first().cloned() else {
                 return;
             };
             (
                 workspace_root,
+                config.parent_roots.clone(),
                 config.ignore_file_patterns.clone(),
                 config.ignore_dir_patterns.clone(),
             )
@@ -246,6 +247,7 @@ impl Backend {
         };
         let file_index = cwtools_driver::build_file_index(
             &workspace_root,
+            &parent_roots,
             &ignore_files,
             &ignore_dirs,
             cwtools_driver::VanillaFiles::Cached(vanilla_paths),

@@ -17,6 +17,7 @@ mod vanilla;
 mod watched;
 mod workspace;
 
+pub(crate) use loc::ParentLocKey;
 pub(crate) use vanilla::{VanillaLoc, VanillaLocKey};
 
 #[derive(Debug, Clone, Default)]
@@ -67,6 +68,9 @@ type OpenDocSnapshot = (
 struct ScannedFile {
     path: std::path::PathBuf,
     uri: String,
+    /// Set for a parent mod's file (#786): its path relative to its own mod
+    /// root. Parent files are indexed but never validated.
+    parent_logical_path: Option<String>,
 }
 
 /// `workspace/executeCommand` (#204). `tower-lsp` answers `$/cancelRequest` by

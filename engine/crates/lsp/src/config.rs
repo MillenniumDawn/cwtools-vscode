@@ -20,6 +20,7 @@ use crate::paths::default_cache_dir;
 const MAX_IGNORE_ENTRIES: usize = 200;
 const MAX_IGNORE_PATTERN_LEN: usize = 1024;
 const MAX_IGNORED_ERROR_CODES: usize = 200;
+const MAX_PARENT_MODS: usize = 16;
 
 fn store_client_capability(value: Option<bool>, target: &AtomicBool) {
     target.store(value.unwrap_or(false), Ordering::Relaxed);
@@ -163,6 +164,52 @@ fn extract_hover_scope_display(opts: &Value) -> Option<bool> {
             None
         }
     }
+}
+
+/// The `parentMods` init option (#786), in load order. An entry is kept only
+/// when it is a directory distinct from the workspace root, the base game and
+/// every earlier entry, and neither contains nor sits inside the workspace
+/// root, whose files would otherwise be indexed twice. A relative entry is
+/// resolved against the workspace root. Returns the kept roots and one
+/// message per dropped entry.
+fn resolve_parent_roots(
+    entries: &[String],
+    workspace_root: Option<&std::path::Path>,
+    vanilla_dir: Option<&std::path::Path>,
+) -> (Vec<std::path::PathBuf>, Vec<String>) {
+    let canonical = |path: &std::path::Path| std::fs::canonicalize(path).ok();
+    let workspace = workspace_root.and_then(canonical);
+    let vanilla = vanilla_dir.and_then(canonical);
+    let mut kept: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
+    let mut dropped = Vec::new();
+    for entry in entries {
+        let raw = std::path::Path::new(entry);
+        let path = match workspace_root {
+            Some(root) if raw.is_relative() => root.join(raw),
+            _ => raw.to_path_buf(),
+        };
+        let Some(real) = canonical(&path).filter(|real| real.is_dir()) else {
+            dropped.push(format!("parent mod is not a directory: {entry}"));
+            continue;
+        };
+        let reason = if workspace
+            .as_ref()
+            .is_some_and(|ws| ws.starts_with(&real) || real.starts_with(ws))
+        {
+            Some("overlaps the workspace root")
+        } else if vanilla.as_ref() == Some(&real) {
+            Some("is the base-game dir")
+        } else if kept.iter().any(|(_, seen)| *seen == real) {
+            Some("is listed twice")
+        } else {
+            None
+        };
+        match reason {
+            Some(reason) => dropped.push(format!("parent mod {reason}: {entry}")),
+            None => kept.push((path, real)),
+        }
+    }
+    (kept.into_iter().map(|(path, _)| path).collect(), dropped)
 }
 
 fn folders_to_paths(uris: &[String]) -> Vec<std::path::PathBuf> {
@@ -434,6 +481,37 @@ impl Backend {
         }
 
         if let Some(opts) = &params.initialization_options {
+            let entries = extract_bounded_string_list(
+                opts,
+                "parentMods",
+                MAX_PARENT_MODS,
+                MAX_IGNORE_PATTERN_LEN,
+            );
+            if !entries.is_empty() {
+                let (roots, dropped) = {
+                    let cfg = self.state.config.read();
+                    resolve_parent_roots(
+                        &entries,
+                        cfg.workspace_roots.first().map(std::path::PathBuf::as_path),
+                        cfg.vanilla_dir.as_deref(),
+                    )
+                };
+                for message in dropped {
+                    self.client.log_message(MessageType::WARNING, message).await;
+                }
+                if !roots.is_empty() {
+                    self.client
+                        .log_message(
+                            MessageType::INFO,
+                            format!("Parent mods (load order): {roots:?}"),
+                        )
+                        .await;
+                }
+                let mut cfg = self.state.config.write();
+                cfg.parent_roots = roots;
+                cfg.refresh_roots();
+            }
+
             let (files, dirs) = extract_ignore_patterns(opts);
             let codes = extract_ignored_error_codes(opts);
             if !files.is_empty() || !dirs.is_empty() || !codes.is_empty() {
@@ -1660,6 +1738,45 @@ mod tests {
             ),
             Some(Some(vec![Lang::English, Lang::French]))
         );
+    }
+
+    #[test]
+    fn resolve_parent_roots_keeps_distinct_dirs_in_load_order() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let dir = |name: &str| {
+            let path = tmp.path().join(name);
+            std::fs::create_dir_all(&path).expect("mkdir");
+            path
+        };
+        let workspace = dir("mods/submod");
+        let nested = dir("mods/submod/inner");
+        let vanilla = dir("game");
+        let first = dir("mods/base");
+        let second = dir("mods/compat");
+        let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
+        let entries = vec![
+            text(&second),
+            "../base".to_string(),
+            text(&second),
+            text(&tmp.path().join("mods")),
+            text(&nested),
+            text(&vanilla),
+            text(&tmp.path().join("missing")),
+        ];
+
+        let (kept, dropped) = resolve_parent_roots(&entries, Some(&workspace), Some(&vanilla));
+
+        assert_eq!(kept, vec![second.clone(), workspace.join("../base")]);
+        assert_eq!(
+            std::fs::canonicalize(&kept[1]).unwrap(),
+            std::fs::canonicalize(&first).unwrap()
+        );
+        assert_eq!(dropped.len(), 5, "{dropped:?}");
+        assert!(dropped[0].contains("listed twice"), "{dropped:?}");
+        assert!(dropped[1].contains("overlaps the workspace root"));
+        assert!(dropped[2].contains("overlaps the workspace root"));
+        assert!(dropped[3].contains("base-game"));
+        assert!(dropped[4].contains("not a directory"));
     }
 
     #[test]
