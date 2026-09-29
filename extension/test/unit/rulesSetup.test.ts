@@ -256,7 +256,7 @@ suite("rulesSetup — reviewed manifest sync", () => {
 			assert.deepStrictEqual(await fsPromises.readdir(setup.rulesCache), []);
 			assert.deepStrictEqual(vscode.showWarningMessage.mock.calls, [
 				[
-					`CWTools: the rules_folder "${invalidRules}" could not be found (tried "${invalidRules}"). Falling back to bundled/upstream rules.`,
+					`CWTools: the rules_folder "${invalidRules}" could not be found (tried "${invalidRules}"). Falling back to the bundled/upstream rules.`,
 				],
 			]);
 		} finally {
