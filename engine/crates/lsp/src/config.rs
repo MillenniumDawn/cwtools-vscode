@@ -697,6 +697,10 @@ impl Backend {
             }
         };
 
+        if self.state.config.read().rules_dir.as_deref() != Some(cache_path) {
+            return false;
+        }
+
         // handshake gate below (#98). Snapshotting once is sound only while the
         let handshake_complete = self
             .state
@@ -814,6 +818,9 @@ impl Backend {
                     ),
                 )
                 .await;
+            if self.state.config.read().rules_dir.as_deref() != Some(cache_path) {
+                return false;
+            }
             self.set_ruleset(combined_ruleset);
             self.rebuild_modifier_keys();
             // re-request tokens for visible files (#184).
@@ -1567,6 +1574,22 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message.contains("custom")),
             "new rules should make the now-undefined custom type diagnostic appear: {after:?}"
+        );
+        assert!(!backend.load_rules_config(&initial_rules).await);
+        let after_stale_load = backend
+            .parse_and_validate(
+                &probe_uri,
+                probe_text,
+                crate::ValidateTrigger::DidChange,
+                None,
+            )
+            .await
+            .0;
+        assert!(
+            after_stale_load
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("custom")),
+            "stale rules must not replace the selected folder's rules: {after_stale_load:?}"
         );
     }
 

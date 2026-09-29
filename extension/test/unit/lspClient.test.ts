@@ -153,6 +153,10 @@ vi.mock("vscode", async (importOriginal) => ({
 	commands: { executeCommand },
 	workspace: {
 		createFileSystemWatcher,
+		getWorkspaceFolder: (uri: { fsPath: string }) =>
+			uri.fsPath.startsWith("/workspace/") || uri.fsPath === "/workspace"
+				? { uri: { fsPath: "/workspace" } }
+				: undefined,
 		getConfiguration: () => ({
 			get: (key: string) => configurationValues.get(key),
 		}),
@@ -319,8 +323,11 @@ function lastSettingsPayload(): { settings: { rulesCache?: string } } {
 	return payload;
 }
 
-function fileUri(fsPath: string): { toString: () => string } {
-	return { toString: () => `file://${fsPath}` };
+function fileUri(fsPath: string): {
+	fsPath: string;
+	toString: () => string;
+} {
+	return { fsPath, toString: () => `file://${fsPath}` };
 }
 
 suite("lspClient — watched files", () => {
@@ -472,6 +479,38 @@ suite("lspClient — watched files", () => {
 			await vi.advanceTimersByTimeAsync(1_000);
 			assert.strictEqual(sendRequest.mock.calls.length, 0);
 			assert.strictEqual(sendNotification.mock.calls.length, 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("workspace rules reload from the global watcher without duplicate forwarding", async () => {
+		vi.useFakeTimers();
+		try {
+			create();
+			resolveRulesCache.mockResolvedValue({
+				rulesCache: "/workspace/Config",
+				fetchUpstream: false,
+			});
+			configurationChangeHandler()(
+				configurationChangeEvent(["cwtools.rules_folder"]),
+			);
+			await vi.waitFor(() =>
+				assert.strictEqual(lastSettingsPayload().settings.rulesCache, "/workspace/Config"),
+			);
+			assert.strictEqual(rulesWatcherAt("/workspace/Config"), undefined);
+			const forwarded = sendNotification.mock.calls.length;
+			const globalWatcher = createdWatchers.find(
+				(watcher) => watcher.glob === "**/*.cwt",
+			);
+			assert.ok(globalWatcher);
+			globalWatcher.fire("change", fileUri("/workspace/Other/test.cwt"));
+			await vi.advanceTimersByTimeAsync(500);
+			assert.strictEqual(sendRequest.mock.calls.length, 0);
+			globalWatcher.fire("change", fileUri("/workspace/Config/test.cwt"));
+			await vi.advanceTimersByTimeAsync(500);
+			assert.strictEqual(sendRequest.mock.calls.length, 1);
+			assert.strictEqual(sendNotification.mock.calls.length, forwarded);
 		} finally {
 			vi.useRealTimers();
 		}

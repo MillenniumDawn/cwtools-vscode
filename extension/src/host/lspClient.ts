@@ -245,10 +245,10 @@ export function createLanguageClient(
 		workspace.createFileSystemWatcher(
 			"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
 		),
-		// Preserve structural lint for every workspace .cwt. The scoped watcher
-		// below additionally covers selected rules outside the workspace.
-		workspace.createFileSystemWatcher("**/*.cwt"),
 	];
+	// Preserve structural lint for every workspace .cwt.
+	const cwtWatcher = workspace.createFileSystemWatcher("**/*.cwt");
+	fileEvents.push(cwtWatcher);
 	context.subscriptions.push(...fileEvents);
 
 	let currentRulesCache = cfg.rulesCache;
@@ -275,14 +275,7 @@ export function createLanguageClient(
 		rulesWatcher?.dispose();
 		rulesWatcher = undefined;
 	};
-	const watchRulesFileChange = (uri: Uri, type: 1 | 2 | 3) => {
-		client
-			.sendNotification("workspace/didChangeWatchedFiles", {
-				changes: [{ uri: uri.toString(), type }],
-			})
-			.catch((err) =>
-				logError("Failed to forward a rules-file change to the server", err),
-			);
+	const scheduleRulesReload = () => {
 		if (
 			workspace.getConfiguration("cwtools").get<boolean>("rules.autoReload") ===
 			false
@@ -309,11 +302,44 @@ export function createLanguageClient(
 		}, 500);
 	};
 	const installRulesWatcher = () => {
-		if (rulesWatcherDisposed || rulesWatcherSuspended || rulesWatcher) return;
+		if (
+			rulesWatcherDisposed ||
+			rulesWatcherSuspended ||
+			rulesWatcherSubscriptions.length > 0
+		)
+			return;
+		if (workspace.getWorkspaceFolder(Uri.file(currentRulesCache))) {
+			const reloadSelectedRules = (uri: Uri) => {
+				const relative = path.relative(currentRulesCache, uri.fsPath);
+				if (
+					relative === ".." ||
+					relative.startsWith(`..${path.sep}`) ||
+					path.isAbsolute(relative)
+				)
+					return;
+				scheduleRulesReload();
+			};
+			rulesWatcherSubscriptions = [
+				cwtWatcher.onDidCreate(reloadSelectedRules),
+				cwtWatcher.onDidChange(reloadSelectedRules),
+				cwtWatcher.onDidDelete(reloadSelectedRules),
+			];
+			return;
+		}
 		const watcher = workspace.createFileSystemWatcher(
 			new RelativePattern(Uri.file(currentRulesCache), "**/*.cwt"),
 		);
 		rulesWatcher = watcher;
+		const watchRulesFileChange = (uri: Uri, type: 1 | 2 | 3) => {
+			client
+				.sendNotification("workspace/didChangeWatchedFiles", {
+					changes: [{ uri: uri.toString(), type }],
+				})
+				.catch((err) =>
+					logError("Failed to forward a rules-file change to the server", err),
+				);
+			scheduleRulesReload();
+		};
 		rulesWatcherSubscriptions = [
 			watcher.onDidCreate((uri) => watchRulesFileChange(uri, 1)),
 			watcher.onDidChange((uri) => watchRulesFileChange(uri, 2)),
