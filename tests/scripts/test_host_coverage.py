@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import host_coverage  # pyright: ignore[reportMissingImports]
-import hosttest  # pyright: ignore[reportMissingImports]
+import host_coverage
+import hosttest
 
 
 def alive(pid: int) -> bool:
