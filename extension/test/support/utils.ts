@@ -75,7 +75,7 @@ export async function graphPanelModule(): Promise<typeof GraphPanelNamespace> {
 }
 
 export async function serverOutputChannel(): Promise<
-	Pick<vscode.OutputChannel, "appendLine">
+	Pick<vscode.LogOutputChannel, "appendLine" | "info">
 > {
 	const api = await activate();
 	const outputChannel = api?.serverOutputChannel();

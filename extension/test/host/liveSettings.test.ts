@@ -195,11 +195,13 @@ suite("Live settings", function () {
 		const rulesFile = path.join(rulesRoot, "live.cwt");
 		const output = await serverOutputChannel();
 		const messages: string[] = [];
-		const appendLine = output.appendLine.bind(output);
-		output.appendLine = (message: string) => {
-			messages.push(message);
-			appendLine(message);
-		};
+		const info = output.info;
+		output.info = new Proxy(info, {
+			apply(target, thisArg, args) {
+				if (typeof args[0] === "string") messages.push(args[0]);
+				Reflect.apply(target, thisArg, args);
+			},
+		});
 		const matchingLoads = () =>
 			messages.filter((message) =>
 				message.includes(`Loaded rules from ${rulesRoot}`),
@@ -235,7 +237,7 @@ suite("Live settings", function () {
 				vscode.ConfigurationTarget.Global,
 			);
 			await fs.rm(rulesRoot, { recursive: true, force: true });
-			output.appendLine = appendLine;
+			output.info = info;
 		}
 	});
 

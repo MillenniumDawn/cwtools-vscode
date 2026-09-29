@@ -42,7 +42,9 @@ export interface CwtoolsApi {
 	/** Commands the running server advertised, empty if it never started. */
 	serverCommands(): readonly string[];
 	/** The running client's output, without exposing the client itself. */
-	serverOutputChannel(): Pick<vscode.OutputChannel, "appendLine"> | undefined;
+	serverOutputChannel():
+		| Pick<vscode.LogOutputChannel, "appendLine" | "info">
+		| undefined;
 	/** The rules cache root dir, once activation has resolved it. */
 	rulesCacheRoot(): string | undefined;
 	/** The status bar item's current text, once activation has created it. */
