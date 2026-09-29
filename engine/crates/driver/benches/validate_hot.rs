@@ -18,7 +18,9 @@
 //! ruleset and script, so a machine with no siblings still gets a number.
 //! `validate_prepared/keyed_entity` is the same kind of in-repo case, sized
 //! like a large HOI4 type (many specific fields, a few hundred entities) so
-//! cardinality bookkeeping shows up in the number.
+//! cardinality bookkeeping shows up in the number. `validate_prepared/subtype_entities`
+//! repeats one subtype-bearing type across 300 entities with 24 subtype-specific
+//! fields, covering the merge memo even when the optional corpus is unavailable.
 
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
@@ -41,6 +43,10 @@ const FIXTURE_PATH: &str = "common/scripted_effects/bench.txt";
 const KEYED_PATH: &str = "common/keyed/bench.txt";
 const KEYED_FIELDS: usize = 80;
 const KEYED_ENTITIES: usize = 200;
+const SUBTYPE_DIR: &str = "common/subtype_bench";
+const SUBTYPE_PATH: &str = "common/subtype_bench/bench.txt";
+const SUBTYPE_ENTITIES: usize = 300;
+const SUBTYPE_FIELDS: usize = 24;
 const FIXTURE_RULES: &str = r#"
 types = { type[scripted_effect] = { path = "common/scripted_effects" } }
 scripted_effect = {
@@ -128,6 +134,41 @@ fn keyed_script() -> String {
         body.push_str(&format!("ent_{entity} = {{\n"));
         for field in 0..KEYED_FIELDS {
             body.push_str(&format!("    field_{field} = {entity}\n"));
+        }
+        body.push_str("}\n");
+    }
+    body
+}
+
+fn subtype_rules() -> String {
+    let mut rules = format!(
+        r#"types = {{ type[subtype_entity] = {{ path = "{SUBTYPE_DIR}" subtype[alpha] = {{ kind = alpha }} subtype[beta] = {{ kind = beta }} }} }}
+subtype_entity = {{
+"#
+    );
+    for field in 0..SUBTYPE_FIELDS {
+        rules.push_str(&format!("    shared_{field} = int\n"));
+    }
+    rules.push_str("    subtype[alpha] = {\n");
+    for field in 0..SUBTYPE_FIELDS {
+        rules.push_str(&format!("        alpha_{field} = int\n"));
+    }
+    rules.push_str("    }\n    subtype[beta] = {\n");
+    for field in 0..SUBTYPE_FIELDS {
+        rules.push_str(&format!("        beta_{field} = int\n"));
+    }
+    rules.push_str("    }\n}\n");
+    rules
+}
+
+fn subtype_script() -> String {
+    let mut body = String::new();
+    for entity in 0..SUBTYPE_ENTITIES {
+        body.push_str(&format!("item_{entity} = {{\n    kind = alpha\n"));
+        for field in 0..SUBTYPE_FIELDS {
+            body.push_str(&format!(
+                "    shared_{field} = {entity}\n    alpha_{field} = {entity}\n"
+            ));
         }
         body.push_str("}\n");
     }
@@ -263,6 +304,49 @@ fn bench_validate_hot(c: &mut Criterion) {
         &keyed_ast,
         KEYED_PATH,
         &keyed_prepared,
+    );
+
+    let subtype_ruleset = ast_to_ruleset(&parse_string(&subtype_rules(), &table), &table);
+    let subtype_source = subtype_script();
+    let subtype_ast = parse_string(&subtype_source, &table);
+    assert!(
+        subtype_ruleset
+            .types
+            .iter()
+            .any(|t| t.name == "subtype_entity" && t.subtypes.len() == 2),
+        "validate_hot: subtype fixture did not define both subtype matchers"
+    );
+    assert!(
+        subtype_ast.arena.leaves.len() >= SUBTYPE_ENTITIES * (SUBTYPE_FIELDS * 2 + 1),
+        "validate_hot: subtype fixture did not parse its repeated entities"
+    );
+    assert!(
+        subtype_ruleset
+            .types
+            .iter()
+            .any(|t| cwtools_index::check_path_dir(&t.path_options, SUBTYPE_PATH)),
+        "validate_hot: subtype fixture path matches no type"
+    );
+    let subtype_index = index_file(&subtype_ruleset, &subtype_ast, SUBTYPE_PATH, &table);
+    let subtype_prepared = Prepared {
+        ruleset: &subtype_ruleset,
+        table: &table,
+        game: Some(Game::Hoi4),
+        type_index: Some(&subtype_index),
+        modifier_keys: None,
+        loc_index: None,
+        extra_loc_keys: None,
+        inline_scripts: None,
+        registry: None,
+        scope_checks: false,
+        var_checks: false,
+    };
+    bench_one(
+        c,
+        "validate_prepared/subtype_entities",
+        &subtype_ast,
+        SUBTYPE_PATH,
+        &subtype_prepared,
     );
 
     let Some(rules) = rules_dir() else {

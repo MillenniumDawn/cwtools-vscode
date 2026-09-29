@@ -4,7 +4,6 @@ use cwtools_parser::{
 };
 use cwtools_rules::rules_types::*;
 use cwtools_string_table::string_table::StringTable;
-use rustc_hash::FxHashMap;
 
 use crate::common::child_key_matches;
 use crate::rule_core::field_matches_value;
@@ -44,13 +43,14 @@ pub fn subtype_membership_for_instance(
     out: &mut std::collections::HashMap<String, Vec<cwtools_index::TypeInstance>>,
 ) {
     let mut key = String::new();
-    for st in &node.td.subtypes {
+    for (subtype_index, st) in node.td.subtypes.iter().enumerate() {
+        let match_context = SubtypeMatchContext::for_subtype(ruleset, node.td, st, subtype_index);
         if subtype_matches(
             st,
             node.children,
             file,
             table,
-            ruleset,
+            &match_context,
             Some(node.node_key),
             None,
         ) {
@@ -78,48 +78,24 @@ pub(crate) fn subtype_rules_match(
     ast: &ParsedFile,
     table: &StringTable,
     ruleset: &RuleSet,
+    precomputed_groups: Option<&[SubtypeRuleKeyGroup]>,
     type_index: Option<&cwtools_index::TypeIndex>,
 ) -> bool {
-    #[derive(Default)]
-    struct KeyGroup<'a> {
-        leaf_rights: Vec<(&'a NewField, &'a Options)>,
-        node_inners: Vec<(&'a [(RuleType, Options)], &'a Options)>,
-    }
-    let mut groups: FxHashMap<&str, KeyGroup> =
-        FxHashMap::with_capacity_and_hasher(rules.len(), Default::default());
-    for (rt, opts) in rules {
-        match rt {
-            RuleType::LeafRule {
-                left: NewField::SpecificField(k),
-                right,
-            } => {
-                groups
-                    .entry(k.as_str())
-                    .or_default()
-                    .leaf_rights
-                    .push((right, opts));
-            }
-            RuleType::NodeRule {
-                left: NewField::SpecificField(k),
-                rules: inner,
-            } => {
-                groups
-                    .entry(k.as_str())
-                    .or_default()
-                    .node_inners
-                    .push((inner.as_ref(), opts));
-            }
-            _ => {}
-        }
-    }
+    let fallback_groups;
+    let groups = if let Some(groups) = precomputed_groups {
+        groups
+    } else {
+        fallback_groups = build_subtype_rule_key_groups(rules);
+        &fallback_groups
+    };
     if groups.is_empty() {
         return true;
     }
     let mut activated = false;
 
-    for (k, group) in &groups {
-        // `k` is loop-invariant; unquote it once instead of per child.
-        let k_unq = unquote(k);
+    for group in groups {
+        // `key` is loop-invariant; unquote it once instead of per child.
+        let k_unq = unquote(group.key.as_str());
         let mut count: i32 = 0;
         let mut any_match = false;
         for c in children {
@@ -147,22 +123,40 @@ pub(crate) fn subtype_rules_match(
                 continue;
             }
             count += 1;
-            if let Some(v) = leaf_value {
-                for (right, _) in &group.leaf_rights {
-                    if field_matches_value(right, v, table, ruleset) {
+            if let Some(value) = leaf_value {
+                for &rule_index in &group.leaf_rule_indices {
+                    if let RuleType::LeafRule { right, .. } = &rules[rule_index].0
+                        && field_matches_value(right, value, table, ruleset)
+                    {
                         any_match = true;
                         if field_activates_on_presence(right)
-                            || typefield_value_is_instance(right, v, table, type_index)
+                            || typefield_value_is_instance(right, value, table, type_index)
                         {
                             activated = true;
                         }
                     }
                 }
             }
-            if let Some(ic) = clause
-                && group.node_inners.iter().any(|(inner, _)| {
-                    subtype_rules_match(inner, ic, ast, table, ruleset, type_index)
-                })
+            if let Some(inner_children) = clause
+                && group
+                    .node_rule_indices
+                    .iter()
+                    .enumerate()
+                    .any(|(nested_index, &rule_index)| {
+                        if let RuleType::NodeRule { rules: inner, .. } = &rules[rule_index].0 {
+                            subtype_rules_match(
+                                inner,
+                                inner_children,
+                                ast,
+                                table,
+                                ruleset,
+                                group.node_rule_groups.get(nested_index).map(Vec::as_slice),
+                                type_index,
+                            )
+                        } else {
+                            false
+                        }
+                    })
             {
                 any_match = true;
                 activated = true;
@@ -171,21 +165,30 @@ pub(crate) fn subtype_rules_match(
         if count > 0 && !any_match {
             return false;
         }
-        let all_opts = group
-            .leaf_rights
+        let min_required = group
+            .leaf_rule_indices
             .iter()
-            .map(|(_, o)| *o)
-            .chain(group.node_inners.iter().map(|(_, o)| *o));
-        let min_required = all_opts.clone().map(|o| o.min).max().unwrap_or(0);
-        let max_allowed = all_opts.map(|o| o.max).min().unwrap_or(i32::MAX);
+            .chain(&group.node_rule_indices)
+            .map(|&rule_index| rules[rule_index].1.min)
+            .max()
+            .unwrap_or(0);
+        let max_allowed = group
+            .leaf_rule_indices
+            .iter()
+            .chain(&group.node_rule_indices)
+            .map(|&rule_index| rules[rule_index].1.max)
+            .min()
+            .unwrap_or(i32::MAX);
         if min_required > count || count > max_allowed {
             return false;
         }
         if count == 0
-            && group
-                .leaf_rights
-                .iter()
-                .any(|(r, _)| is_default_satisfied_literal(r))
+            && group.leaf_rule_indices.iter().any(|&rule_index| {
+                matches!(
+                    &rules[rule_index].0,
+                    RuleType::LeafRule { right, .. } if is_default_satisfied_literal(right)
+                )
+            })
         {
             activated = true;
         }
@@ -209,12 +212,37 @@ fn is_default_satisfied_literal(right: &NewField) -> bool {
     matches!(right, NewField::SpecificField(v) if v == "no" || v == "false" || v == "0")
 }
 
+pub(crate) struct SubtypeMatchContext<'a> {
+    ruleset: &'a RuleSet,
+    precomputed_groups: Option<&'a [SubtypeRuleKeyGroup]>,
+}
+
+impl<'a> SubtypeMatchContext<'a> {
+    pub(crate) fn for_subtype(
+        ruleset: &'a RuleSet,
+        type_def: &TypeDefinition,
+        subtype: &SubTypeDefinition,
+        subtype_index: usize,
+    ) -> Self {
+        let precomputed_groups =
+            if subtype.type_key_filter.is_empty() && subtype.type_key_field.is_none() {
+                ruleset.subtype_rule_key_groups_for(type_def, subtype_index)
+            } else {
+                None
+            };
+        Self {
+            ruleset,
+            precomputed_groups,
+        }
+    }
+}
+
 pub(crate) fn subtype_matches(
     subtype: &SubTypeDefinition,
     children: &[Child],
     ast: &ParsedFile,
     table: &StringTable,
-    ruleset: &RuleSet,
+    match_context: &SubtypeMatchContext<'_>,
     node_key: Option<&str>,
     type_index: Option<&cwtools_index::TypeIndex>,
 ) -> bool {
@@ -231,7 +259,15 @@ pub(crate) fn subtype_matches(
             .iter()
             .any(|c| child_key_matches(c, ast, table, fk));
     }
-    subtype_rules_match(&subtype.rules, children, ast, table, ruleset, type_index)
+    subtype_rules_match(
+        &subtype.rules,
+        children,
+        ast,
+        table,
+        match_context.ruleset,
+        match_context.precomputed_groups,
+        type_index,
+    )
 }
 
 pub(crate) fn typefield_value_is_instance(
