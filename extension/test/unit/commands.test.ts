@@ -2,6 +2,7 @@ import { suite, test } from "vitest";
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
+import { SERVER_COMMAND_NAMES } from "../../src/common/serverCommandContract";
 
 // Guards against declaring a command-palette entry with no handler — the class
 // of bug where dead cwtools commands lingered in the manifest, each erroring
@@ -21,23 +22,19 @@ const manifest = JSON.parse(
 	};
 };
 
-// executeCommands the server advertises (config.rs execute_command_provider),
-// including genlocall and reloadrulesconfig, which the server now handles.
-const SERVER_COMMANDS = new Set([
-	"getFileTypes",
-	"exportProfilingLog",
-	"cacheVanilla",
-	"clearAllCaches",
-	"reindexWorkspace",
-	"genlocall",
-	"reloadrulesconfig",
-	"getGraphData",
-]);
+// Client-required executeCommands come from the shared contract also used by
+// dispatch sites; do not keep another list here.
+const SERVER_COMMANDS = new Set<string>(SERVER_COMMAND_NAMES);
 
-// Built-in VS Code commands the manifest references in menus (declared so the
-// extension host doesn't warn, hidden from the palette). They need no client
-// handler and aren't server-advertised.
+// Built-in VS Code commands are not server executeCommands and need no client
+// registration. Client-owned commands stay in their cwtools. namespace.
 const BUILTIN_COMMANDS = new Set(["revealFileInOS", "copyFilePath"]);
+const BUILTIN_VSCODE_COMMANDS = new Set([
+	"setContext",
+	"editor.action.showReferences",
+	"workbench.action.reloadWindow",
+	...BUILTIN_COMMANDS,
+]);
 
 // Command IDs the client registers via registerCommand('...'), scanned from
 // source so the test tracks the code rather than a hand-kept list.
@@ -51,6 +48,75 @@ function registeredClientCommands(): Set<string> {
 		for (const m of src.matchAll(re)) ids.add(m[1]);
 	}
 	return ids;
+}
+
+// Scan both LSP ExecuteCommandRequest values and VS Code executeCommand calls.
+// Raw server names (or unclassified bare ids) bypass the shared server contract;
+// built-ins and namespaced client commands are intentionally distinct.
+function findUncontractedServerCommandDispatches(
+	source: string,
+	file: string,
+): string[] {
+	const uncontracted: string[] = [];
+	const requests = /ExecuteCommandRequest\.type,\s*\{([^}]*)\}/gs;
+	const requestCommand = /\bcommand\s*:\s*([^,\n}]+)/;
+	for (const request of source.matchAll(requests)) {
+		const properties = request[1];
+		const expression = requestCommand.exec(properties)?.[1].trim();
+		const shorthandCommand = /(?:^|,)\s*command\s*(?=,|$)/.test(properties);
+		if (expression !== undefined && !expression.startsWith("serverCommand(")) {
+			uncontracted.push(`${file}: raw ExecuteCommandRequest command ${expression}`);
+		} else if (
+			expression === undefined &&
+			shorthandCommand &&
+			file !== path.join("host", "commandProgress.ts")
+		) {
+			uncontracted.push(`${file}: untyped ExecuteCommandRequest shorthand command`);
+		}
+	}
+
+	const vscodeCommand =
+		/\b(?:vscode\.)?commands\.executeCommand(?:<[^>]+>)?\s*\(\s*([^,\n)]+)/g;
+	for (const match of source.matchAll(vscodeCommand)) {
+		const argument = match[1].trim();
+		if (argument.startsWith("serverCommand(")) continue;
+		const literal = /^(['"])([^'"]+)\1$/.exec(argument);
+		if (!literal) {
+			uncontracted.push(`${file}: nonliteral VS Code executeCommand argument ${argument}`);
+			continue;
+		}
+		const command = literal[2];
+		if (SERVER_COMMANDS.has(command)) {
+			uncontracted.push(
+				`${file}: raw VS Code dispatch of server command ${command}; use serverCommand()`,
+			);
+		} else if (
+			!BUILTIN_VSCODE_COMMANDS.has(command) &&
+			!command.startsWith("cwtools.") &&
+			!command.startsWith("cwtools-files.")
+		) {
+			uncontracted.push(`${file}: unclassified bare VS Code command ${command}`);
+		}
+	}
+	return uncontracted;
+}
+
+function sourceTypeScriptFiles(directory: string): string[] {
+	return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+		const fullPath = path.join(directory, entry.name);
+		if (entry.isDirectory()) return sourceTypeScriptFiles(fullPath);
+		return entry.isFile() && entry.name.endsWith(".ts") ? [fullPath] : [];
+	});
+}
+
+function uncontractedServerCommandDispatches(): string[] {
+	const sourceRoot = path.join(repoRoot, "extension", "src");
+	return sourceTypeScriptFiles(sourceRoot).flatMap((file) =>
+		findUncontractedServerCommandDispatches(
+			fs.readFileSync(file, "utf8"),
+			path.relative(sourceRoot, file),
+		),
+	);
 }
 
 const contributed: string[] = (manifest.contributes.commands ?? []).map(
@@ -72,6 +138,39 @@ suite("manifest — command registration", () => {
 			0,
 			`commands with no handler: ${orphans.join(", ")}`,
 		);
+	});
+
+	test("all server executeCommand dispatches use the shared contract", () => {
+		const uncontracted = uncontractedServerCommandDispatches();
+		assert.deepStrictEqual(
+			uncontracted,
+			[],
+			`server executeCommand identifiers bypass the shared contract: ${uncontracted.join(", ")}`,
+		);
+	});
+
+	test("dispatch guard flags raw server ids but permits client and VS Code commands", () => {
+		const uncontracted = findUncontractedServerCommandDispatches(
+			[
+				'commands.executeCommand("getGraphData");',
+				'commands.executeCommand("unlistedBareCommand");',
+				'commands.executeCommand("setContext");',
+				'commands.executeCommand("cwtools.restartServer");',
+				'commands.executeCommand(dynamicCommand);',
+				'client.sendRequest(ExecuteCommandRequest.type, { command: command });',
+				'client.sendRequest(ExecuteCommandRequest.type, { command });',
+				'client.sendRequest(ExecuteCommandRequest.type, { command: "getGraphData" });',
+			].join("\n"),
+			"fixture.ts",
+		);
+		assert.deepStrictEqual(uncontracted, [
+			"fixture.ts: raw ExecuteCommandRequest command command",
+			"fixture.ts: untyped ExecuteCommandRequest shorthand command",
+			'fixture.ts: raw ExecuteCommandRequest command "getGraphData"',
+			"fixture.ts: raw VS Code dispatch of server command getGraphData; use serverCommand()",
+			"fixture.ts: unclassified bare VS Code command unlistedBareCommand",
+			"fixture.ts: nonliteral VS Code executeCommand argument dynamicCommand",
+		]);
 	});
 
 	// The graph commands go through the server's getGraphData, and the workspace

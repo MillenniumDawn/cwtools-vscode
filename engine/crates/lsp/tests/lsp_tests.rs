@@ -11811,7 +11811,10 @@ fn test_format_workspace_applies_one_edit() {
     let ws = tempfile::tempdir().unwrap();
     let p = ws.path().join("common").join("a.txt");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-    std::fs::write(&p, "root={\n a=1\n}\n").unwrap();
+    let original = "root={\r\n name=\"café 😀\"\r\n}\r\n";
+    let expected = "root = {\r\n    name = \"café 😀\"\r\n}\r\n";
+    std::fs::write(&p, original).unwrap();
+    let uri = path_uri(&p);
 
     let mut child = cwtools_server_cmd()
         .stdin(Stdio::piped())
@@ -11861,6 +11864,23 @@ fn test_format_workspace_applies_one_edit() {
     let edit = applied_edit.expect("the server must call workspace/applyEdit");
     let changes = edit["changes"].as_object().expect("changes map");
     assert_eq!(changes.len(), 1, "one file touched: {edit}");
+    let edits = changes
+        .get(&uri)
+        .unwrap_or_else(|| panic!("no edit for {uri}: {edit}"))
+        .as_array()
+        .unwrap_or_else(|| panic!("file edits must be an array: {edit}"));
+    assert_eq!(edits.len(), 1, "one edit for the file: {edit}");
+    let text_edit = &edits[0];
+    assert_eq!(
+        text_edit["range"],
+        serde_json::json!({
+            "start": { "line": 0, "character": 0 },
+            "end": { "line": 3, "character": 0 },
+        }),
+        "the edit must cover the whole CRLF-terminated document: {edit}"
+    );
+    let new_text = text_edit["newText"].as_str().expect("edit newText");
+    assert_eq!(new_text, expected);
 }
 
 #[test]

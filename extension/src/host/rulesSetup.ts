@@ -5,6 +5,7 @@ import { workspace, window, ProgressLocation, l10n } from "vscode";
 import type { Memento } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
+import { serverCommand } from "../common/serverCommandContract";
 import {
 	LANGUAGE_REPOS,
 	resolveRulesFolder,
@@ -270,7 +271,7 @@ async function syncPinnedRules(
 				// pick them up without a window reload.
 				await client
 					.sendRequest(ExecuteCommandRequest.type, {
-						command: "reloadrulesconfig",
+						command: serverCommand("reloadrulesconfig"),
 						arguments: [],
 					})
 					.catch((err) =>

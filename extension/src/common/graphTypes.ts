@@ -9,6 +9,7 @@
 // webview imports this module with `import type` only, so nothing browser-side
 // pulls vscode in.
 import { commands } from "vscode";
+import { serverCommand } from "./serverCommandContract";
 
 /**
  * Represents a location in a file
@@ -100,7 +101,7 @@ export async function getGraphData(
 	depth: number,
 ): Promise<GraphData> {
 	const result = await commands.executeCommand<unknown[]>(
-		"getGraphData",
+		serverCommand("getGraphData"),
 		entityType,
 		depth,
 	);

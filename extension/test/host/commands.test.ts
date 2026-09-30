@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import * as fs from "fs";
 import * as path from "path";
 import * as sinon from "sinon";
 import * as vscode from "vscode";
@@ -24,6 +25,21 @@ const targetFile = path.join(
 	"irm_planetary_edicts.txt",
 );
 
+function requiredServerCommands(): string[] {
+	// Read the test-safe JSON contract as data; importing the extension module
+	// here would load a second copy beside the running esbuild bundle.
+	const contractPath = path.resolve(
+		__dirname,
+		"../../../../../../extension/src/common/serverCommands.json",
+	);
+	const contract: unknown = JSON.parse(fs.readFileSync(contractPath, "utf8"));
+	assert.ok(
+		typeof contract === "object" && contract !== null && !Array.isArray(contract),
+		"server executeCommand contract must be a JSON object",
+	);
+	return Object.keys(contract);
+}
+
 suite("workspace commands cross the LSP boundary", function () {
 	this.timeout(120000);
 
@@ -42,6 +58,19 @@ suite("workspace commands cross the LSP boundary", function () {
 			// and later suites see the committed fixture text.
 			await vscode.commands.executeCommand("workbench.action.files.revert");
 		}
+	});
+
+	test("running server advertises every client-required executeCommand", async function () {
+		const api = await activate();
+		assert.ok(api, "activation API should be exposed");
+		const required = requiredServerCommands();
+		const advertised = api.serverCommands();
+		const missing = required.filter((command) => !advertised.includes(command));
+		assert.deepStrictEqual(
+			missing,
+			[],
+			`server is missing required executeCommand names: ${missing.join(", ")}; advertised: ${advertised.join(", ")}`,
+		);
 	});
 
 	test("formatWorkspace routes the server's edit through workspace.applyEdit", async function () {
