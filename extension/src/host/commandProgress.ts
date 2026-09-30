@@ -7,6 +7,7 @@ import {
 	WorkDoneProgress,
 	WorkDoneProgressCancelNotification,
 } from "vscode-languageserver-protocol";
+import type { ServerCommandName } from "../common/serverCommandContract";
 import type {
 	WorkDoneProgressBegin,
 	WorkDoneProgressEnd,
@@ -133,7 +134,7 @@ export interface CommandProgressOptions {
  */
 export async function runCancellableExecuteCommand(
 	client: LanguageClient,
-	command: string,
+	command: ServerCommandName,
 	args: unknown[],
 	title: string,
 	options: CommandProgressOptions = {},

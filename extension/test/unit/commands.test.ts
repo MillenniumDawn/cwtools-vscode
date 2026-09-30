@@ -2,6 +2,7 @@ import { suite, test } from "vitest";
 import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
+import { SERVER_COMMAND_NAMES } from "../../src/common/serverCommandContract";
 
 // Guards against declaring a command-palette entry with no handler — the class
 // of bug where dead cwtools commands lingered in the manifest, each erroring
@@ -21,18 +22,9 @@ const manifest = JSON.parse(
 	};
 };
 
-// executeCommands the server advertises (config.rs execute_command_provider),
-// including genlocall and reloadrulesconfig, which the server now handles.
-const SERVER_COMMANDS = new Set([
-	"getFileTypes",
-	"exportProfilingLog",
-	"cacheVanilla",
-	"clearAllCaches",
-	"reindexWorkspace",
-	"genlocall",
-	"reloadrulesconfig",
-	"getGraphData",
-]);
+// Client-required executeCommands come from the shared contract also used by
+// dispatch sites; do not keep another list here.
+const SERVER_COMMANDS = new Set<string>(SERVER_COMMAND_NAMES);
 
 // Built-in VS Code commands the manifest references in menus (declared so the
 // extension host doesn't warn, hidden from the palette). They need no client
@@ -53,6 +45,30 @@ function registeredClientCommands(): Set<string> {
 	return ids;
 }
 
+// A raw string passed to ExecuteCommandRequest bypasses the shared identifier
+// type. The one variable-shaped request is commandProgress's typed boundary.
+function uncontractedExecuteCommandNames(): string[] {
+	const dir = path.join(repoRoot, "extension", "src", "host");
+	const uncontracted: string[] = [];
+	const requests = /ExecuteCommandRequest\.type,\s*\{([^}]*)\}/gs;
+	const command = /\bcommand\s*:\s*([^,\n}]+)/;
+	for (const file of fs.readdirSync(dir)) {
+		if (!file.endsWith(".ts")) continue;
+		const source = fs.readFileSync(path.join(dir, file), "utf8");
+		for (const request of source.matchAll(requests)) {
+			const expression = command.exec(request[1])?.[1].trim();
+			if (
+				expression !== undefined &&
+				expression !== "command" &&
+				!expression.startsWith("serverCommand(")
+			) {
+				uncontracted.push(`${file}: ${expression}`);
+			}
+		}
+	}
+	return uncontracted;
+}
+
 const contributed: string[] = (manifest.contributes.commands ?? []).map(
 	(c: { command: string }) => c.command,
 );
@@ -71,6 +87,15 @@ suite("manifest — command registration", () => {
 			orphans.length,
 			0,
 			`commands with no handler: ${orphans.join(", ")}`,
+		);
+	});
+
+	test("direct executeCommand requests use the shared command contract", () => {
+		const uncontracted = uncontractedExecuteCommandNames();
+		assert.deepStrictEqual(
+			uncontracted,
+			[],
+			`raw executeCommand identifiers bypass the shared contract: ${uncontracted.join(", ")}`,
 		);
 	});
 

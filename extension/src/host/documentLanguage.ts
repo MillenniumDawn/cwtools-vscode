@@ -3,6 +3,7 @@ import type { ExtensionContext } from "vscode";
 import { workspace, window, commands } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
 import type { LanguageClient } from "vscode-languageclient/node";
+import { serverCommand } from "../common/serverCommandContract";
 import { shouldNotifyFocus, pendingProcessDelayMs } from "./focusTracking";
 import { logError, logInfo } from "./logger";
 
@@ -92,7 +93,7 @@ export async function registerDocumentLanguage(
 			try {
 				const data = (await client.sendRequest(
 					ExecuteCommandRequest.type,
-					{ command: "getFileTypes", arguments: [editorPath] },
+					{ command: serverCommand("getFileTypes"), arguments: [editorPath] },
 					cts.token,
 				)) as string[] | undefined;
 				if (data && data[0]) {

@@ -6,6 +6,7 @@
 		"target": "es2020",
 		"module": "commonjs",
 		"moduleResolution": "node",
+		"resolveJsonModule": true,
 		"baseUrl": ".",
 		"paths": {
 			"vscode-languageclient/node": ["node_modules/vscode-languageclient/lib/node/main"],
