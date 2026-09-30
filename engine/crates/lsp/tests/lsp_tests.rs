@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 
@@ -19030,5 +19031,191 @@ fn test_editing_inline_script_revalidates_open_caller() {
     assert!(
         !after_fix.contains(&"CW263".to_string()),
         "editing the script to a clean body should clear the caller's CW263, got: {after_fix:?}"
+    );
+}
+
+// ── Parent mods (#786) ───────────────────────────────────────────────────────
+
+const PARENT_MOD_RULES: &str = r#"
+types = {
+    type[scripted_effect] = {
+        path = "game/common/scripted_effects"
+    }
+    type[decision] = {
+        path = "game/common/decisions"
+        unique = yes
+    }
+}
+decision = {
+    complete_effect = {
+        alias_name[effect] = alias_match_left[effect]
+    }
+    desc = localisation
+}
+alias[effect:<scripted_effect>] = yes
+scripted_effect = {
+    alias_name[effect] = alias_match_left[effect]
+}
+"#;
+
+/// Run one workspace scan of a submod, with or without its parent mod named
+/// in `parentMods`, and return every `publishDiagnostics` the scan sent,
+/// keyed by URI (the last publish for a URI wins).
+fn parent_mod_scan(with_parent: bool) -> (String, HashMap<String, Vec<serde_json::Value>>) {
+    let parent = tempfile::tempdir().unwrap();
+    let child_mod = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("test_rules.cwt"), PARENT_MOD_RULES).unwrap();
+    let write = |root: &std::path::Path, rel: &str, text: &str| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+
+    write(
+        parent.path(),
+        "common/scripted_effects/parent_effects.txt",
+        "parent_eff = {\n}\n",
+    );
+    // The submod overrides this file, so `shadowed_eff` must stay unknown.
+    write(
+        parent.path(),
+        "common/scripted_effects/shared_effects.txt",
+        "shadowed_eff = {\n}\n",
+    );
+    // Same path and same unique id as the submod's copy: the load-order
+    // override, never a duplicate. The bogus field would be a diagnostic if
+    // parent files were validated.
+    write(
+        parent.path(),
+        "common/decisions/shared.txt",
+        "dup_decision = {\n    not_a_field = yes\n}\n",
+    );
+    write(
+        parent.path(),
+        "localisation/english/parent_l_english.yml",
+        "l_english:\n PARENT_KEY:0 \"From the parent\"\n",
+    );
+
+    write(
+        child_mod.path(),
+        "common/scripted_effects/shared_effects.txt",
+        "child_eff = {\n}\n",
+    );
+    write(
+        child_mod.path(),
+        "common/decisions/shared.txt",
+        "dup_decision = {\n    complete_effect = {\n        parent_eff = yes\n        shadowed_eff = yes\n    }\n    desc = PARENT_KEY\n}\n",
+    );
+
+    let mut options = serde_json::json!({
+        "language": "hoi4",
+        "rulesCache": rules_dir.path().to_string_lossy(),
+    });
+    if with_parent {
+        options["parentMods"] = serde_json::json!([parent.path().to_string_lossy()]);
+    }
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let body = jsonrpc_request(
+        1,
+        "initialize",
+        serde_json::json!({
+            "processId": std::process::id(),
+            "rootUri": path_uri(child_mod.path()),
+            "capabilities": {},
+            "initializationOptions": options,
+        }),
+    );
+    write_frame(&mut child, &body).unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+
+    let mut published: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    let mut done = false;
+    for _ in 0..5000 {
+        let raw = match read_frame(&mut reader) {
+            Ok(raw) => raw,
+            Err(e) => panic!("the server exited before its scan finished: {e}"),
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if v["method"] == "textDocument/publishDiagnostics" {
+            let uri = v["params"]["uri"].as_str().unwrap_or_default().to_string();
+            let diags = v["params"]["diagnostics"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            published.insert(uri, diags);
+        } else if v["method"] == "loadingBar"
+            && v["params"]["enable"] == serde_json::Value::Bool(false)
+        {
+            done = true;
+            break;
+        }
+    }
+    stop_server(&mut child);
+    assert!(done, "the scan never finished");
+    (path_uri(parent.path()), published)
+}
+
+fn diagnostic_text(diags: &[serde_json::Value]) -> String {
+    diags
+        .iter()
+        .map(|d| format!("{} {}", d["code"], d["message"]))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn decision_diagnostics(published: &HashMap<String, Vec<serde_json::Value>>) -> String {
+    let (_, diags) = published
+        .iter()
+        .find(|(uri, _)| uri.ends_with("common/decisions/shared.txt"))
+        .expect("the submod decision was never published");
+    diagnostic_text(diags)
+}
+
+#[test]
+fn test_parent_mod_definitions_and_loc_resolve_in_a_submod() {
+    let (_, without) = parent_mod_scan(false);
+    let control = decision_diagnostics(&without);
+    assert!(
+        control.contains("parent_eff") && control.contains("PARENT_KEY"),
+        "without parentMods the parent's effect and loc key must be unknown, got:\n{control}"
+    );
+
+    let (parent_uri, with) = parent_mod_scan(true);
+    let text = decision_diagnostics(&with);
+    assert!(
+        !text.contains("parent_eff") && !text.contains("PARENT_KEY"),
+        "the parent's effect and loc key must resolve, got:\n{text}"
+    );
+    assert!(
+        text.contains("shadowed_eff"),
+        "a parent file the submod overrides by path must not be indexed, got:\n{text}"
+    );
+    assert!(
+        !text.contains("CW261"),
+        "overriding the parent's file is not a duplicate definition, got:\n{text}"
+    );
+    let parent_prefix = parent_uri.trim_end_matches('/');
+    let leaked: Vec<&String> = with
+        .keys()
+        .filter(|uri| uri.starts_with(parent_prefix))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "parent-mod files must never be diagnosed, got publishes for {leaked:?}"
     );
 }

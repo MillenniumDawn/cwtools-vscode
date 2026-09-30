@@ -52,6 +52,7 @@
   "configuration.cwtools.cache.ck3.description": "原版 CK3 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
   "configuration.cwtools.cache.vic3.description": "原版 Victoria 3 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
   "configuration.cwtools.cache.eu5.description": "原版 EU5 安裝路徑。用來解析基礎遊戲的參考，避免被標示為未知。通常會自 Steam 自動偵測。變更後請**重新載入視窗**。",
+  "configuration.cwtools.parentMods.description": "此工作區作為子模組所依賴的父模組，依載入順序排列（先載入的在前）：每個父模組資料夾的絕對路徑，例如你的 Millennium Dawn 副本。它們的定義、變數與本地化會在工作區中解析；工作區中相同路徑的檔案，或位於其 `descriptor.mod` 中 `replace_path` 下的檔案，會取代父模組的副本。父模組檔案只建立索引，從不驗證。變更後請**重新載入視窗**。",
   // zoom sensitivity in the graph
   "configuration.cwtools.graph.zoomSensitivity.description": "控制滾輪縮放靈敏度，<1 降低靈敏度，>1 提高靈敏度",
   // "field", "type" and "scope" are cwtools rule terms

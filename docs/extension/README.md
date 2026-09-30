@@ -73,13 +73,24 @@ the server. If you add a descriptor after activation, reload the VS Code window.
 2. Edit files and watch syntax errors show up when you make mistakes
 3. Wait up to a minute for the extension to scan your mod and find errors
 
-### Multiple mods - workspace
+### Submods
 
-If you have multiple mods that need to be loaded at once, use VS Code's [multi-root workspace](https://code.visualstudio.com/docs/editing/workspaces/workspaces#_untitled-multiroot-workspaces) feature.
+To work on a submod, open the submod's folder and list the mods it builds on in
+`cwtools.parentMods`, in load order, as absolute paths:
 
-1. Open your first mod
-2. Use "File", "Add folder to workspace" to add your next mod
-3. cwtools should reload including both mods and vanilla in context using correct mod load order
+```json
+"cwtools.parentMods": ["C:/Users/name/Documents/Paradox Interactive/Hearts of Iron IV/mod/Millennium-Dawn"]
+```
+
+The parent mods' definitions, variables and localisation then resolve in the
+submod, layered between the base game and the submod. A submod file at the same
+path as a parent file, or under a `replace_path` in the submod's
+`descriptor.mod`, replaces the parent's copy, as it does in game. Parent files
+are indexed but never validated. Edits to a parent mod are picked up on the next
+reindex, not live. Reload the window after changing the setting.
+
+The server scans only the first workspace folder, so adding a parent mod as a
+second folder of a multi-root workspace does not make its definitions visible.
 
 If you want to browse vanilla files, you can use the "CWTOOLS LOADED FILES" section in the Explorer tab.
 
