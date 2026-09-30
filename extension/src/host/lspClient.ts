@@ -1,7 +1,13 @@
 import * as path from "path";
-import type { ExtensionContext, WorkspaceFolder } from "vscode";
+import type {
+	Disposable,
+	ExtensionContext,
+	FileSystemWatcher,
+	WorkspaceFolder,
+} from "vscode";
 import {
 	CancellationError,
+	RelativePattern,
 	Uri,
 	commands,
 	l10n,
@@ -21,6 +27,7 @@ import {
 	ErrorAction,
 	CloseAction,
 	DidChangeConfigurationNotification,
+	ExecuteCommandRequest,
 } from "vscode-languageclient/node";
 import {
 	normalizeBackgroundReindexMinutes,
@@ -34,6 +41,7 @@ import {
 	type LiveServerSettings,
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
+import type { RulesSetup } from "./rulesSetup";
 import { isExcludedWatchedPath } from "./watchedFiles";
 import { logError, errorMessage, outputChannel } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
@@ -43,6 +51,9 @@ export interface ClientConfig {
 	serverExe: string;
 	cacheDir: string;
 	rulesCache: string;
+	resolveRulesCache: () => Promise<RulesSetup>;
+	onRulesCacheChanged?: (rulesCache: string) => void;
+	fetchRules?: (client: LanguageClient) => void;
 	/** The descriptor-bearing root the server must initialize and scan. */
 	workspaceFolder: WorkspaceFolder;
 }
@@ -234,12 +245,122 @@ export function createLanguageClient(
 		workspace.createFileSystemWatcher(
 			"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
 		),
-		// .cwt rule files: the server lints them and builds its ruleset from
-		// them, so an edit made outside the editor (git checkout, another tool)
-		// is otherwise invisible until the user runs reloadrulesconfig.
-		workspace.createFileSystemWatcher("**/*.cwt"),
 	];
+	// Preserve structural lint for every workspace .cwt.
+	const cwtWatcher = workspace.createFileSystemWatcher("**/*.cwt");
+	fileEvents.push(cwtWatcher);
 	context.subscriptions.push(...fileEvents);
+
+	let currentRulesCache = cfg.rulesCache;
+	let rulesWatcher: FileSystemWatcher | undefined;
+	let rulesWatcherSubscriptions: Disposable[] = [];
+	let rulesReloadTimer: ReturnType<typeof setTimeout> | undefined;
+	let rulesWatcherDisposed = false;
+	let rulesWatcherSuspended = false;
+	let rulesFolderChangeVersion = 0;
+	let configurationUpdatesDisposed = false;
+	let configurationUpdateQueue = Promise.resolve();
+	const clearRulesReloadTimer = () => {
+		if (rulesReloadTimer !== undefined) {
+			clearTimeout(rulesReloadTimer);
+			rulesReloadTimer = undefined;
+		}
+	};
+	const disposeRulesWatcher = () => {
+		clearRulesReloadTimer();
+		for (const subscription of rulesWatcherSubscriptions) {
+			subscription.dispose();
+		}
+		rulesWatcherSubscriptions = [];
+		rulesWatcher?.dispose();
+		rulesWatcher = undefined;
+	};
+	const scheduleRulesReload = () => {
+		if (
+			workspace.getConfiguration("cwtools").get<boolean>("rules.autoReload") ===
+			false
+		) {
+			return;
+		}
+		clearRulesReloadTimer();
+		rulesReloadTimer = setTimeout(() => {
+			rulesReloadTimer = undefined;
+			if (
+				rulesWatcherDisposed ||
+				workspace
+					.getConfiguration("cwtools")
+					.get<boolean>("rules.autoReload") === false
+			) {
+				return;
+			}
+			client
+				.sendRequest(ExecuteCommandRequest.type, {
+					command: "reloadrulesconfig",
+					arguments: [],
+				})
+				.catch((err) => logError("Automatic rules reload failed", err));
+		}, 500);
+	};
+	const installRulesWatcher = () => {
+		if (
+			rulesWatcherDisposed ||
+			rulesWatcherSuspended ||
+			rulesWatcherSubscriptions.length > 0
+		)
+			return;
+		if (workspace.getWorkspaceFolder(Uri.file(currentRulesCache))) {
+			const reloadSelectedRules = (uri: Uri) => {
+				const relative = path.relative(currentRulesCache, uri.fsPath);
+				if (
+					relative === ".." ||
+					relative.startsWith(`..${path.sep}`) ||
+					path.isAbsolute(relative)
+				)
+					return;
+				scheduleRulesReload();
+			};
+			rulesWatcherSubscriptions = [
+				cwtWatcher.onDidCreate(reloadSelectedRules),
+				cwtWatcher.onDidChange(reloadSelectedRules),
+				cwtWatcher.onDidDelete(reloadSelectedRules),
+			];
+			return;
+		}
+		const watcher = workspace.createFileSystemWatcher(
+			new RelativePattern(Uri.file(currentRulesCache), "**/*.cwt"),
+		);
+		rulesWatcher = watcher;
+		const watchRulesFileChange = (uri: Uri, type: 1 | 2 | 3) => {
+			client
+				.sendNotification("workspace/didChangeWatchedFiles", {
+					changes: [{ uri: uri.toString(), type }],
+				})
+				.catch((err) =>
+					logError("Failed to forward a rules-file change to the server", err),
+				);
+			scheduleRulesReload();
+		};
+		rulesWatcherSubscriptions = [
+			watcher.onDidCreate((uri) => watchRulesFileChange(uri, 1)),
+			watcher.onDidChange((uri) => watchRulesFileChange(uri, 2)),
+			watcher.onDidDelete((uri) => watchRulesFileChange(uri, 3)),
+		];
+	};
+	const rulesWatcherLifetime: Disposable = {
+		dispose: () => {
+			rulesWatcherDisposed = true;
+			configurationUpdatesDisposed = true;
+			rulesFolderChangeVersion++;
+			disposeRulesWatcher();
+		},
+	};
+	const changeRulesCache = (rulesCache: string) => {
+		if (rulesCache === currentRulesCache) return;
+		disposeRulesWatcher();
+		currentRulesCache = rulesCache;
+		cfg.onRulesCacheChanged?.(rulesCache);
+		installRulesWatcher();
+	};
 
 	const diagnosticsCache = new DiagnosticsSignatureCache();
 
@@ -376,7 +497,7 @@ export function createLanguageClient(
 			const ignoreOptions = readIgnoreOptions();
 			return {
 				language: cfg.language === "eu5" ? "paradox" : cfg.language,
-				rulesCache: cfg.rulesCache,
+				rulesCache: currentRulesCache,
 				...readLiveServerSettings(),
 				// Inlay hints. The server reads both at initialize only — neither key is
 				// in its didChangeConfiguration handler — so a change needs a window
@@ -433,6 +554,8 @@ export function createLanguageClient(
 		serverOptions,
 		clientOptions,
 	);
+	installRulesWatcher();
+	context.subscriptions.push(rulesWatcherLifetime);
 
 	// Client clears the DiagnosticCollection on stop; drop the cache too or the
 	// re-publish after restart looks unchanged and squiggles don't return.
@@ -444,6 +567,13 @@ export function createLanguageClient(
 		client.onDidChangeState((e: { oldState: State; newState: State }) => {
 			if (e.oldState === State.Running) {
 				diagnosticsCache.clear();
+			}
+			if (e.newState === State.Stopped) {
+				rulesWatcherSuspended = true;
+				disposeRulesWatcher();
+			} else if (e.newState === State.Starting) {
+				rulesWatcherSuspended = false;
+				installRulesWatcher();
 			}
 		}),
 	);
@@ -475,18 +605,46 @@ export function createLanguageClient(
 						logError("Failed to reload window after settings change", err),
 					);
 			}
-			if (!isLiveSettingsChange(e)) {
+			const rulesFolderChanged = e.affectsConfiguration("cwtools.rules_folder");
+			if (!isLiveSettingsChange(e) && !rulesFolderChanged) {
 				return;
 			}
-			const settings = buildSettingsPayload(
-				readIgnoreOptions(),
-				readBackgroundReindexMinutes(),
-				readBackgroundReindexIdleSeconds(),
-				readLiveServerSettings(),
-			);
-			client
-				.sendNotification(DidChangeConfigurationNotification.type, { settings })
-				.catch((err) =>
+			const version = rulesFolderChanged
+				? ++rulesFolderChangeVersion
+				: rulesFolderChangeVersion;
+			const updateSettings = async () => {
+				const rulesSetup = rulesFolderChanged
+					? await cfg.resolveRulesCache()
+					: undefined;
+				if (
+					configurationUpdatesDisposed ||
+					(rulesFolderChanged && version !== rulesFolderChangeVersion)
+				)
+					return;
+				const settings = {
+					...buildSettingsPayload(
+						readIgnoreOptions(),
+						readBackgroundReindexMinutes(),
+						readBackgroundReindexIdleSeconds(),
+						readLiveServerSettings(),
+					),
+					...(rulesSetup ? { rulesCache: rulesSetup.rulesCache } : {}),
+				};
+				await client.sendNotification(DidChangeConfigurationNotification.type, {
+					settings,
+				});
+				if (
+					!configurationUpdatesDisposed &&
+					rulesSetup &&
+					version === rulesFolderChangeVersion
+				) {
+					changeRulesCache(rulesSetup.rulesCache);
+					if (rulesSetup.fetchUpstream) cfg.fetchRules?.(client);
+				}
+			};
+			configurationUpdateQueue = configurationUpdateQueue
+				.then(updateSettings)
+				.catch((err: unknown) =>
 					logError("Failed to push updated settings to the server", err),
 				);
 		}),

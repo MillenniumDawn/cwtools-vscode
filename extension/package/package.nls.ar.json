@@ -39,7 +39,8 @@
   "configuration.cwtools.localisation.hoverShowAllLanguages.description": "إظهار الترجمة عند التحويم بكل اللغات المضبوطة بدلًا من اللغة الأولى فقط.",
   "configuration.cwtools.errors.ignore.description": "رموز التشخيص التي تُكتَم في كل مكان، مثل `CW100` (قائمة معرّفات الأخطاء والتحذيرات).",
   "configuration.cwtools.errors.ignorefiles.description": "أسماء الملفات التي تُستثنى من مساحة العمل (لا تُحمَّل في cwtools، فلا تُحَل الإشارات إليها)، مثل `README.txt` و`credits.txt`.",
-  "configuration.cwtools.rules_folder.description": "مجلد يحتوي على قواعد مخصصة للاستخدام. **أعد تحميل النافذة** بعد التغيير.",
+  "configuration.cwtools.rules_folder.description": "مجلد يحتوي على قواعد مخصصة. تُطبّق التغييرات دون إعادة تحميل النافذة.",
+  "configuration.cwtools.rules.autoReload.description": "إعادة تحميل القواعد تلقائيًا عند تغيير ملفات `.cwt` في مجلد القواعد المحدد. عطّل هذا الخيار لإعادة تحميل القواعد يدويًا.",
   // Glob pattern is a technical term
   "configuration.cwtools.ignore_patterns.description": "مسارات الملفات التي تُتجاهل (لا تُحمَّل في cwtools)، قائمة بأنماط glob، مثل `**/99_README**.txt`",
   "configuration.cwtools.cache.eu4.description": "مسار تثبيت أصلي للعبة EU4. يُستخدم لحل الإشارات إلى اللعبة الأساسية حتى لا تُعلَّم كغير معروفة. يُكتشف عادةً من Steam تلقائيًا. **أعد تحميل النافذة** بعد التغيير.",

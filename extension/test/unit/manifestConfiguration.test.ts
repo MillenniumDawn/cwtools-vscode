@@ -49,4 +49,13 @@ suite("manifest — configuration scopes", () => {
 			description: "%configuration.cwtools.enable.description%",
 		});
 	});
+
+	test("automatic rules reload is enabled by default", () => {
+		assert.deepStrictEqual(configurationProperty("cwtools.rules.autoReload"), {
+			scope: "window",
+			type: "boolean",
+			default: true,
+			description: "%configuration.cwtools.rules.autoReload.description%",
+		});
+	});
 });
