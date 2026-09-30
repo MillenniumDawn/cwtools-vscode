@@ -11881,11 +11881,6 @@ fn test_format_workspace_applies_one_edit() {
     );
     let new_text = text_edit["newText"].as_str().expect("edit newText");
     assert_eq!(new_text, expected);
-
-    // The asserted full-document range resolves to byte offsets 0..original.len().
-    let mut applied = original.to_string();
-    applied.replace_range(.., new_text);
-    assert_eq!(applied, expected);
 }
 
 #[test]
