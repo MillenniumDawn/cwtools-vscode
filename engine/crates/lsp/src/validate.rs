@@ -610,25 +610,47 @@ impl Backend {
         }
     }
 
-    #[tracing::instrument(skip_all, fields(uri = %uri))]
     pub(crate) fn index_parsed_file(
         &self,
         uri: &str,
         parsed: &ParsedFile,
         parsed_version: Option<i32>,
     ) {
-        if self.is_ignored_uri(uri) {
+        let ws_prefix = self.state.config.read().workspace_prefix.clone();
+        let logical_path = logical_path_from_uri(uri, &ws_prefix);
+        self.index_parsed_file_as(uri, parsed, parsed_version, &logical_path, false);
+    }
+
+    /// Index a file under an explicit root-relative `logical_path`: a parent
+    /// mod's file sits outside the workspace root, and `base_game` keeps its
+    /// definitions out of the workspace's own counts (#786).
+    #[tracing::instrument(skip_all, fields(uri = %uri))]
+    pub(crate) fn index_parsed_file_as(
+        &self,
+        uri: &str,
+        parsed: &ParsedFile,
+        parsed_version: Option<i32>,
+        logical_path: &str,
+        base_game: bool,
+    ) {
+        let ignored = {
+            let cfg = self.state.config.read();
+            cwtools_file_manager::file_manager::is_ignored_path(
+                logical_path,
+                &cfg.ignore_file_patterns,
+                &cfg.ignore_dir_patterns,
+            )
+        };
+        if ignored {
             self.clear_ignored_file_state(uri);
             return;
         }
-        let ws_prefix = self.state.config.read().workspace_prefix.clone();
-        let logical_path = logical_path_from_uri(uri, &ws_prefix);
         let ruleset = self.state.rules.read().ruleset.clone();
         let collected = ruleset.as_ref().map(|ruleset| {
             cwtools_info::collect_type_instances_with_subtypes(
                 ruleset,
                 parsed,
-                &logical_path,
+                logical_path,
                 &self.state.string_table,
                 cwtools_validation::subtype_membership_for_instance,
             )
@@ -652,9 +674,10 @@ impl Backend {
                 parsed,
                 &self.state.string_table,
                 ruleset,
-                &logical_path,
+                logical_path,
                 collected.instances,
                 collected.subtype_instances,
+                base_game,
             );
         }
         let exports_changed = info.export_fingerprint(uri) != exports_before;
@@ -1883,6 +1906,7 @@ mod perf_bench {
                     logical_path,
                     collected.instances,
                     collected.subtype_instances,
+                    false,
                 );
                 info.export_fingerprint(&uri) as usize
             });

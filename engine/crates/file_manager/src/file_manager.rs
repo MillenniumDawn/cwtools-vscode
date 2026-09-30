@@ -887,16 +887,10 @@ pub fn discover_files_multi_mod(
     for (i, m) in mods.iter().enumerate().rev() {
         let mod_priority = i + 1;
         for rp in &m.descriptor.replace_paths {
-            // Normalize: backslash → slash (Windows-authored .mod files), trim
-            let prefix_lower = rp.replace('\\', "/").trim_matches('/').to_ascii_lowercase();
-            let prefix_lower_slash = format!("{}/", prefix_lower);
+            let prefix_lower = replace_path_prefix(rp);
             best.retain(|logical, (_path, file_prio)| {
                 let ll = &logical_lower[logical.as_str()];
-                let under_prefix = *ll == prefix_lower || ll.starts_with(&prefix_lower_slash);
-                if under_prefix && *file_prio < mod_priority {
-                    return false;
-                }
-                true
+                !(replace_path_covers(&prefix_lower, ll) && *file_prio < mod_priority)
             });
         }
     }
@@ -907,6 +901,68 @@ pub fn discover_files_multi_mod(
         .collect();
     result.sort_by(|a, b| a.1.cmp(&b.1));
     result
+}
+
+/// Normalize a descriptor `replace_path` for matching: backslash → slash
+/// (Windows-authored .mod files), no leading/trailing slash, lowercase.
+fn replace_path_prefix(replace_path: &str) -> String {
+    replace_path
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_ascii_lowercase()
+}
+
+/// Whether a normalized `replace_path` prefix covers a lowercase logical path:
+/// the directory itself or anything under it, never a sibling that merely
+/// shares the prefix (`common/ideas` does not cover `common/ideas_extra`).
+fn replace_path_covers(prefix_lower: &str, logical_lower: &str) -> bool {
+    logical_lower
+        .strip_prefix(prefix_lower)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// The descriptor at a mod root (`<root>/descriptor.mod`), if it has one.
+pub fn read_root_descriptor(root: &Path) -> Option<ModDescriptor> {
+    parse_mod_descriptor(&root.join("descriptor.mod")).ok()
+}
+
+/// Load-order shadowing across mod layers (#786), highest priority first:
+/// claim the primary mod's files, then walk the parents from last-loaded to
+/// first, keeping only what [`LayerShadow::hides`] lets through and claiming
+/// each layer before moving down. A file is hidden when a higher layer has
+/// the same root-relative path (case-insensitively, as the game resolves it)
+/// or a higher layer's descriptor `replace_path` covers it.
+#[derive(Debug, Default)]
+pub struct LayerShadow {
+    claimed: std::collections::HashSet<String>,
+    replaced: Vec<String>,
+}
+
+impl LayerShadow {
+    pub fn hides(&self, logical_path: &str) -> bool {
+        let lower = logical_path.replace('\\', "/").to_ascii_lowercase();
+        self.claimed.contains(&lower)
+            || self
+                .replaced
+                .iter()
+                .any(|prefix| replace_path_covers(prefix, &lower))
+    }
+
+    /// Record a layer's files and its `replace_path`s so every lower layer is
+    /// shadowed by them.
+    pub fn claim<'a>(
+        &mut self,
+        logical_paths: impl IntoIterator<Item = &'a str>,
+        replace_paths: &[String],
+    ) {
+        self.claimed.extend(
+            logical_paths
+                .into_iter()
+                .map(|path| path.replace('\\', "/").to_ascii_lowercase()),
+        );
+        self.replaced
+            .extend(replace_paths.iter().map(|rp| replace_path_prefix(rp)));
+    }
 }
 
 fn collect_files_recursive(
@@ -1771,6 +1827,57 @@ mod tests {
         let (_, enc, len) = read_text_capped_with_encoding(plain.path(), 1024).expect("read");
         assert_eq!(enc, FileEncoding::Utf8NoBom);
         assert_eq!(len, body.len() as u64);
+    }
+
+    #[test]
+    fn layer_shadow_hides_a_same_path_file_case_insensitively() {
+        let mut shadow = LayerShadow::default();
+        shadow.claim(["common/ideas/X.txt"], &[]);
+        assert!(shadow.hides("common/ideas/x.txt"));
+        assert!(shadow.hides("common\\ideas\\X.TXT"));
+        assert!(!shadow.hides("common/ideas/y.txt"));
+    }
+
+    #[test]
+    fn layer_shadow_replace_path_hides_the_directory_but_not_a_sibling() {
+        let mut shadow = LayerShadow::default();
+        shadow.claim([], &["common\\Ideas/".to_string()]);
+        assert!(shadow.hides("common/ideas/a.txt"));
+        assert!(shadow.hides("common/ideas/nested/b.txt"));
+        assert!(!shadow.hides("common/ideas_extra/c.txt"));
+        assert!(!shadow.hides("common/national_focus/d.txt"));
+    }
+
+    #[test]
+    fn layer_shadow_later_parent_hides_an_earlier_one_but_not_the_primary() {
+        // Walk order is primary, then parents last-loaded first. A parent's
+        // replace_path is claimed after the primary's files were kept, so it
+        // only reaches the parents below it.
+        let mut shadow = LayerShadow::default();
+        shadow.claim(["common/ideas/primary.txt"], &[]);
+        let later_parent = ["common/ideas/primary.txt", "common/ideas/shared.txt"];
+        let kept: Vec<&str> = later_parent
+            .into_iter()
+            .filter(|path| !shadow.hides(path))
+            .collect();
+        assert_eq!(kept, vec!["common/ideas/shared.txt"]);
+        shadow.claim(kept, &["common/ideas".to_string()]);
+        assert!(shadow.hides("common/ideas/shared.txt"));
+        assert!(shadow.hides("common/ideas/earlier_only.txt"));
+    }
+
+    #[test]
+    fn read_root_descriptor_reads_replace_paths_and_tolerates_a_missing_file() {
+        let dir = tempfile::TempDir::new().expect("tmpdir");
+        assert!(read_root_descriptor(dir.path()).is_none());
+        std::fs::write(
+            dir.path().join("descriptor.mod"),
+            "name=\"Parent\"\nreplace_path=\"common/ideas\"\n",
+        )
+        .unwrap();
+        let descriptor = read_root_descriptor(dir.path()).expect("descriptor");
+        assert_eq!(descriptor.name, "Parent");
+        assert_eq!(descriptor.replace_paths, vec!["common/ideas".to_string()]);
     }
 
     #[test]

@@ -518,6 +518,12 @@ export function createLanguageClient(
 				vanilla: workspace
 					.getConfiguration("cwtools")
 					.get("cache." + cfg.language),
+				// Parent mods of a submod, in load order (#786). The server indexes
+				// them between the base game and the workspace at startup only.
+				parentMods:
+					workspace
+						.getConfiguration("cwtools")
+						.get<string[]>("parentMods") ?? [],
 				ignoreFilePatterns: ignoreOptions.ignoreFilePatterns,
 				ignoredErrorCodes: ignoreOptions.ignoredErrorCodes,
 				backgroundReindexIntervalMinutes: readBackgroundReindexMinutes(),

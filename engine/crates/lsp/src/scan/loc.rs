@@ -41,6 +41,38 @@ fn localisation_paths(
     }
 }
 
+/// Parent-mod loc files the workspace does not shadow (#786), in load order.
+fn parent_localisation_paths(
+    parent_roots: &[std::path::PathBuf],
+    root_path: &std::path::Path,
+    ignore_files: &[String],
+    ignore_dirs: &[String],
+) -> Vec<std::path::PathBuf> {
+    if parent_roots.is_empty() {
+        return Vec::new();
+    }
+    let primary = cwtools_driver::discover_localisation_files(
+        &[root_path.to_path_buf()],
+        ignore_files,
+        ignore_dirs,
+        cwtools_driver::DiscoveryPolicy::Workspace,
+    )
+    .map(|discovery| discovery.files)
+    .unwrap_or_default();
+    cwtools_driver::discover_parent_localisation_files(
+        parent_roots,
+        root_path,
+        &primary,
+        ignore_files,
+        ignore_dirs,
+    )
+    .into_iter()
+    .map(|file| file.path)
+    .collect()
+}
+
+pub(crate) type ParentLocKey = (Vec<std::path::PathBuf>, Option<Vec<Lang>>, Lang, bool, u64);
+
 /// `all_sites` keeps every definition of a key in `locations` (the workspace,
 /// whose find-references lists them); off, one site per key (the base game,
 /// where only the goto target is ever asked for) (#474).
@@ -80,20 +112,77 @@ pub(crate) fn collect_loc_display(
 
 impl Backend {
     pub(crate) fn compute_loc_signature(&self, root_path: &std::path::Path) -> u64 {
-        let (ignore_files, ignore_dirs) = {
+        let (parent_roots, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
             (
+                config.parent_roots.clone(),
                 config.ignore_file_patterns.clone(),
                 config.ignore_dir_patterns.clone(),
             )
         };
-        let files = localisation_paths(
+        let mut files = localisation_paths(
             &[root_path.to_path_buf()],
             &ignore_files,
             &ignore_dirs,
             cwtools_driver::DiscoveryPolicy::Workspace,
         );
+        files.extend(parent_localisation_paths(
+            &parent_roots,
+            root_path,
+            &ignore_files,
+            &ignore_dirs,
+        ));
         stat_signature_for(&files)
+    }
+
+    /// The parent mods' loc, layered under the workspace and over the base
+    /// game (#786). Kept until a parent loc file changes.
+    fn parent_loc(
+        &self,
+        root_path: &std::path::Path,
+        loc_languages: Option<&[Lang]>,
+        primary_lang: Lang,
+        hover_all: bool,
+    ) -> Option<Arc<VanillaLoc>> {
+        let (parent_roots, ignore_files, ignore_dirs) = {
+            let config = self.state.config.read();
+            (
+                config.parent_roots.clone(),
+                config.ignore_file_patterns.clone(),
+                config.ignore_dir_patterns.clone(),
+            )
+        };
+        let paths =
+            parent_localisation_paths(&parent_roots, root_path, &ignore_files, &ignore_dirs);
+        if paths.is_empty() {
+            *self.state.parent_loc.lock() = None;
+            return None;
+        }
+        let key = (
+            parent_roots,
+            loc_languages.map(<[_]>::to_vec),
+            primary_lang,
+            hover_all,
+            stat_signature_for(&paths),
+        );
+        if let Some((cached_key, loc)) = self.state.parent_loc.lock().as_ref()
+            && *cached_key == key
+        {
+            return Some(Arc::clone(loc));
+        }
+        let service = cwtools_localization::LocService::from_paths(
+            paths,
+            cwtools_file_manager::file_manager::ScanBudget::default(),
+            loc_languages,
+        );
+        let built = Arc::new(VanillaLoc::build(&service, primary_lang, hover_all));
+        tracing::info!(
+            "[loc] indexed parent-mod loc: {} files, {} keys",
+            service.files().len(),
+            built.index.union().len(),
+        );
+        *self.state.parent_loc.lock() = Some((key, Arc::clone(&built)));
+        Some(built)
     }
 
     /// definition sites and the same keys (#89).
@@ -180,6 +269,7 @@ impl Backend {
         let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) =
             tokio::task::block_in_place(|| {
                 // workspace is walked again (#89).
+                let parent = self.parent_loc(root_path, parsed_languages, primary_lang, hover_all);
                 let vanilla = self.vanilla_loc(parsed_languages, primary_lang, hover_all);
                 let cached_vanilla_loc = {
                     let mut cached = self.state.vanilla_state.lock();
@@ -203,8 +293,8 @@ impl Backend {
                     &service,
                     loc_languages.as_deref(),
                 );
-                if let Some(vanilla) = &vanilla {
-                    idx.merge_from(&vanilla.index, loc_languages.as_deref());
+                for layer in parent.iter().chain(&vanilla) {
+                    idx.merge_from(&layer.index, loc_languages.as_deref());
                 }
                 if let Some(cached) = cached_vanilla_loc {
                     let typed: Vec<(cwtools_localization::Lang, Vec<String>)> = cached
@@ -259,11 +349,11 @@ impl Backend {
                         Some((file.clone(), cwtools_cache::workspace::content_hash(&text)))
                     })
                     .collect::<HashMap<_, _>>();
-                if let Some(vanilla) = &vanilla {
-                    for (key, lang, text) in vanilla.text.entries() {
+                for layer in parent.iter().chain(&vanilla) {
+                    for (key, lang, text) in layer.text.entries() {
                         lt.insert_fallback(key, lang, text);
                     }
-                    for (key, (uri, line0)) in vanilla.locations.iter() {
+                    for (key, (uri, line0)) in layer.locations.iter() {
                         ll.insert_fallback(key, uri, line0);
                     }
                 }

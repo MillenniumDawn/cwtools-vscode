@@ -96,6 +96,7 @@ export const RELOAD_SETTINGS_KEYS = [
 	"cwtools.cache.ck3",
 	"cwtools.cache.vic3",
 	"cwtools.cache.eu5",
+	"cwtools.parentMods",
 	"cwtools.profiling",
 ] as const;
 

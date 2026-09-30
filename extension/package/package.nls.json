@@ -54,6 +54,7 @@
   "configuration.cwtools.cache.ck3.description": "Path to a vanilla CK3 install. Used to resolve base-game references so they aren't flagged as unknown. Usually auto-detected from Steam. **Reload the window** after changing this.",
   "configuration.cwtools.cache.vic3.description": "Path to a vanilla Victoria 3 install. Used to resolve base-game references so they aren't flagged as unknown. Usually auto-detected from Steam. **Reload the window** after changing this.",
   "configuration.cwtools.cache.eu5.description": "Path to a vanilla EU5 install. Used to resolve base-game references so they aren't flagged as unknown. Usually auto-detected from Steam. **Reload the window** after changing this.",
+  "configuration.cwtools.parentMods.description": "Parent mods this workspace is a submod of, in load order (first loaded first): the absolute path to each parent mod's folder, e.g. your Millennium Dawn checkout. Their definitions, variables and localisation resolve in the workspace, and a workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, replaces the parent's copy. Parent files are indexed but never validated. **Reload the window** after changing this.",
   // zoom sensitivity in the graph
   "configuration.cwtools.graph.zoomSensitivity.description": "Control scroll wheel zoom sensitivity, <1 reduces sensitivity, >1 increases sensitivity",
   // "field", "type" and "scope" are cwtools rule terms

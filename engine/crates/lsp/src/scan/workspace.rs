@@ -305,6 +305,7 @@ impl Backend {
             )
         };
         let ruleset = self.state.rules.read().ruleset.clone();
+        let parent_roots = self.state.config.read().parent_roots.clone();
 
         // layering in one place (#284).
         let discovery = tokio::task::block_in_place(|| {
@@ -318,8 +319,8 @@ impl Backend {
                 .extend(extra_dir_globs.iter().cloned());
             cwtools_driver::discover_workspace_files(fm_config)
         });
-        let files_to_validate = match discovery {
-            Ok(files) => files.into_iter().map(|f| f.path).collect(),
+        let primary_files = match discovery {
+            Ok(files) => files,
             Err(error) => {
                 tracing::error!(path = %root_path.display(), error = %error, "workspace discovery failed");
                 self.client
@@ -335,9 +336,29 @@ impl Backend {
                 Vec::new()
             }
         };
+        let parent_files = if parent_roots.is_empty() {
+            Vec::new()
+        } else {
+            tokio::task::block_in_place(|| {
+                cwtools_driver::discover_parent_script_files(
+                    &parent_roots,
+                    &root_path,
+                    &primary_files,
+                    ruleset.as_deref(),
+                    &extra_file_globs,
+                    &extra_dir_globs,
+                )
+            })
+        };
+        let files_to_validate: Vec<std::path::PathBuf> =
+            primary_files.into_iter().map(|f| f.path).collect();
+        let primary_len = files_to_validate.len();
 
-        let scan_fingerprint =
-            tokio::task::block_in_place(|| stat_signature_for(&files_to_validate));
+        let scan_fingerprint = tokio::task::block_in_place(|| {
+            let mut all: Vec<std::path::PathBuf> = files_to_validate.clone();
+            all.extend(parent_files.iter().map(|f| f.path.clone()));
+            stat_signature_for(&all)
+        });
         let scan_generation = self
             .state
             .settings_generation
@@ -359,12 +380,19 @@ impl Backend {
             return false;
         }
 
-        let scan_files: Vec<ScannedFile> = files_to_validate
+        let parent_count = parent_files.len();
+        let mut scan_files: Vec<ScannedFile> = files_to_validate
             .into_iter()
             .map(|path| ScannedFile {
                 uri: path_to_uri(&path),
                 path,
+                parent_logical_path: None,
             })
+            .chain(parent_files.into_iter().map(|file| ScannedFile {
+                uri: path_to_uri(&file.path),
+                path: file.path,
+                parent_logical_path: Some(file.logical_path),
+            }))
             .collect();
 
         self.client
@@ -372,11 +400,21 @@ impl Backend {
                 MessageType::INFO,
                 format!(
                     "Validating {} workspace files under {:?} ...",
-                    scan_files.len(),
-                    root_path
+                    primary_len, root_path
                 ),
             )
             .await;
+        if !parent_roots.is_empty() {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!(
+                        "Indexing {} parent-mod files not overridden by the workspace",
+                        parent_count
+                    ),
+                )
+                .await;
+        }
 
         let (cache_info, cache_status) = {
             let (cache_dir, language) = {
@@ -545,7 +583,12 @@ impl Backend {
         for (i, (file, outcome)) in scan_files.iter().zip(outcomes).enumerate() {
             let parsed = match outcome {
                 Some((cache_hit, parsed, source_hash, inline_ignored)) => {
-                    self.index_parsed_file(&file.uri, &parsed, None);
+                    match &file.parent_logical_path {
+                        Some(logical) => {
+                            self.index_parsed_file_as(&file.uri, &parsed, None, logical, true)
+                        }
+                        None => self.index_parsed_file(&file.uri, &parsed, None),
+                    }
                     if cache_hit {
                         cache_hits += 1;
                     } else {
@@ -669,6 +712,13 @@ impl Backend {
                 self.rebuild_inline_scripts(&scan_files)
             }))
         };
+
+        // Parent-mod files were only needed for the index and inline scripts;
+        // they are never validated or listed as workspace files (#786).
+        scan_files.truncate(primary_len);
+        parsed_files.truncate(primary_len);
+        source_hashes.truncate(primary_len);
+        inline_ignores.truncate(primary_len);
 
         self.state
             .index_ready
@@ -1071,7 +1121,10 @@ impl Backend {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let mut registry = cwtools_validation::InlineScripts::default();
         for file in scan_files {
-            let logical_path = logical_path_from_uri(&file.uri, &ws_prefix);
+            let logical_path = match &file.parent_logical_path {
+                Some(logical) => logical.clone(),
+                None => logical_path_from_uri(&file.uri, &ws_prefix),
+            };
             if !cwtools_validation::InlineScripts::is_script_path(&logical_path) {
                 continue;
             }

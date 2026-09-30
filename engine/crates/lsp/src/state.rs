@@ -94,6 +94,9 @@ pub(crate) struct Config {
     pub(crate) authorized_roots: Arc<[std::path::PathBuf]>,
     pub(crate) editable_roots: Arc<[std::path::PathBuf]>,
     pub(crate) vanilla_dir: Option<std::path::PathBuf>,
+    /// Parent mods in load order (#786): indexed between the base game and
+    /// the workspace, readable but never edited or diagnosed.
+    pub(crate) parent_roots: Vec<std::path::PathBuf>,
     pub(crate) cache_dir: Option<std::path::PathBuf>,
     pub(crate) loc_languages: Option<Vec<cwtools_localization::Lang>>,
     pub(crate) ignore_file_patterns: Vec<String>,
@@ -121,6 +124,7 @@ impl Config {
             authorized_roots: Arc::from([]),
             editable_roots: Arc::from([]),
             vanilla_dir: None,
+            parent_roots: Vec::new(),
             cache_dir: None,
             loc_languages: None,
             ignore_file_patterns: Vec::new(),
@@ -151,6 +155,10 @@ impl Config {
             .vanilla_dir
             .iter()
             .filter_map(|root| std::fs::canonicalize(root).ok());
+        let parents = self
+            .parent_roots
+            .iter()
+            .filter_map(|root| std::fs::canonicalize(root).ok());
         let rules = self
             .rules_dir
             .iter()
@@ -160,6 +168,7 @@ impl Config {
             .iter()
             .cloned()
             .chain(vanilla)
+            .chain(parents)
             .chain(rules)
             .collect();
         self.editable_roots = editable.into();
@@ -218,6 +227,10 @@ pub(crate) struct DocumentState {
     #[allow(clippy::type_complexity)]
     pub(crate) vanilla_loc:
         Mutex<Option<(crate::scan::VanillaLocKey, Arc<crate::scan::VanillaLoc>)>>,
+    /// Parent-mod loc (#786), rebuilt only when the parent files themselves
+    /// change, not on every workspace loc edit.
+    #[allow(clippy::type_complexity)]
+    pub(crate) parent_loc: Mutex<Option<(crate::scan::ParentLocKey, Arc<crate::scan::VanillaLoc>)>>,
     pub(crate) loc_index: parking_lot::RwLock<Option<Arc<cwtools_localization::LocIndex>>>,
     /// (#259) — the editor's counterpart of the batch driver's
     pub(crate) inline_scripts: parking_lot::RwLock<InlineScripts>,
@@ -968,6 +981,7 @@ impl DocumentState {
             info_service: parking_lot::RwLock::new(cwtools_info::InfoService::new()),
             vanilla_state: Mutex::new(VanillaState::default()),
             vanilla_loc: Mutex::new(None),
+            parent_loc: Mutex::new(None),
             loc_index: parking_lot::RwLock::new(None),
             inline_scripts: parking_lot::RwLock::new(InlineScripts::default()),
             loc_key_index: parking_lot::RwLock::new(None),

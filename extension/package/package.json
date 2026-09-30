@@ -421,6 +421,15 @@
             "scope": "application",
             "type": "string",
             "markdownDescription": "%configuration.cwtools.cache.eu5.description%"
+          },
+          "cwtools.parentMods": {
+            "scope": "window",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": [],
+            "markdownDescription": "%configuration.cwtools.parentMods.description%"
           }
         }
       },

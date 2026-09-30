@@ -131,16 +131,18 @@ mod tests {
         let ws = tempfile::TempDir::new().expect("tmpdir");
         let vanilla = tempfile::TempDir::new().expect("tmpdir");
         let rules = tempfile::TempDir::new().expect("tmpdir");
+        let parent_mod = tempfile::TempDir::new().expect("tmpdir");
         let canonical = |dir: &std::path::Path| std::fs::canonicalize(dir).expect("canonical");
 
         let mut cfg = Config::new();
         cfg.workspace_roots = vec![ws.path().to_path_buf()];
         cfg.vanilla_dir = Some(vanilla.path().to_path_buf());
         cfg.rules_dir = Some(rules.path().to_path_buf());
+        cfg.parent_roots = vec![parent_mod.path().to_path_buf()];
         cfg.refresh_roots();
 
         assert_eq!(cfg.editable_roots.as_ref(), [canonical(ws.path())]);
-        for root in [ws.path(), vanilla.path(), rules.path()] {
+        for root in [ws.path(), vanilla.path(), rules.path(), parent_mod.path()] {
             assert!(
                 cfg.authorized_roots.contains(&canonical(root)),
                 "{} must stay readable",
