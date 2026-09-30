@@ -689,11 +689,16 @@ impl Backend {
         &self,
         uris: &[String],
     ) -> Result<HashMap<String, FileTextSnapshot>> {
-        self.file_text_snapshots_for_navigation_with_limit(
-            uris,
-            crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES,
-        )
-        .await
+        #[cfg(test)]
+        let limit = self
+            .state
+            .navigation_snapshot_budget_override
+            .lock()
+            .unwrap_or(crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES);
+        #[cfg(not(test))]
+        let limit = crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES;
+        self.file_text_snapshots_for_navigation_with_limit(uris, limit)
+            .await
     }
 
     async fn file_text_snapshots_for_navigation_with_limit(
@@ -888,6 +893,185 @@ mod tests {
         )
     }
 
+    struct IndexedTypeNavigationFixture {
+        backend: Backend,
+        definition_uri: String,
+        source_text: String,
+        source_uri: Url,
+        state: Arc<DocumentState>,
+        _workspace: tempfile::TempDir,
+        use_text: String,
+        use_uris: Vec<String>,
+    }
+
+    impl IndexedTypeNavigationFixture {
+        fn source_position(&self) -> Position {
+            let column = self
+                .source_text
+                .find("my_instance")
+                .expect("source contains the type instance") as u32;
+            Position::new(0, column + 2)
+        }
+
+        fn references_params(&self, include_declaration: bool) -> ReferenceParams {
+            ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: self.source_uri.clone(),
+                    },
+                    position: self.source_position(),
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+                context: ReferenceContext {
+                    include_declaration,
+                },
+            }
+        }
+
+        fn rename_params(&self) -> RenameParams {
+            RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: self.source_uri.clone(),
+                    },
+                    position: self.source_position(),
+                },
+                new_name: "renamed_instance".to_string(),
+                work_done_progress_params: Default::default(),
+            }
+        }
+
+        fn one_closed_file_budget(&self) -> usize {
+            let definition_len = std::fs::metadata(
+                Url::parse(&self.definition_uri)
+                    .expect("definition URI")
+                    .to_file_path()
+                    .expect("definition path"),
+            )
+            .expect("definition metadata")
+            .len() as usize;
+            let use_len = self.use_text.len();
+            self.source_text.len() + (definition_len.max(use_len) + 1) * 5
+        }
+    }
+
+    fn indexed_type_navigation_fixture(closed_use_count: usize) -> IndexedTypeNavigationFixture {
+        use crate::navigation::test_rules::type_ref_ruleset;
+        use cwtools_parser::parser::parse_string;
+
+        let (backend, state) = backend();
+        let workspace = tempfile::TempDir::new().expect("tmpdir");
+        let events = workspace.path().join("events");
+        std::fs::create_dir(&events).expect("events directory");
+        let uri_of = |path: &std::path::Path| {
+            Url::from_file_path(path)
+                .expect("absolute path")
+                .to_string()
+        };
+        let definition_path = events.join("definition.txt");
+        let definition_uri = uri_of(&definition_path);
+        let definition_text =
+            "my_type = { id = my_instance kind = alpha active = yes name = title }\n";
+        std::fs::write(&definition_path, definition_text).unwrap();
+        let use_text = "my_type = { base = my_instance }\n".to_string();
+        let use_uris = (0..closed_use_count)
+            .map(|idx| {
+                let path = events.join(format!("use-{idx}.txt"));
+                std::fs::write(&path, &use_text).unwrap();
+                uri_of(&path)
+            })
+            .collect::<Vec<_>>();
+        let source_path = events.join("query.txt");
+        let source_uri = Url::parse(&uri_of(&source_path)).expect("source URI");
+        let source_text = "my_type = { base = my_instance }\n".to_string();
+        let source_ast = Arc::new(parse_string(&source_text, &state.string_table));
+        let mut rules = type_ref_ruleset();
+        {
+            let body = rules
+                .root_rules
+                .iter_mut()
+                .find_map(|root| match root {
+                    cwtools_rules::rules_types::RootRule::TypeRule(
+                        name,
+                        (cwtools_rules::rules_types::RuleType::NodeRule { rules, .. }, _),
+                    ) if name == "my_type" => Some(rules),
+                    _ => None,
+                })
+                .expect("my_type root rule exists");
+            let mut children = body.to_vec();
+            children.push((
+                cwtools_rules::rules_types::RuleType::LeafRule {
+                    left: cwtools_rules::rules_types::NewField::SpecificField("base".to_string()),
+                    right: cwtools_rules::rules_types::NewField::TypeField(
+                        cwtools_rules::rules_types::TypeType::Simple("my_type".to_string()),
+                    ),
+                },
+                cwtools_rules::rules_types::Options::default(),
+            ));
+            *body = children.into();
+        }
+        rules.reindex();
+        state.rules.write().ruleset = Some(Arc::new(rules.clone()));
+        let root = std::fs::canonicalize(workspace.path()).expect("canonical root");
+        let workspace_uri = Url::from_directory_path(workspace.path()).expect("workspace URI");
+        {
+            let mut config = state.config.write();
+            config.authorized_roots = Arc::from([root.clone()]);
+            config.editable_roots = Arc::from([root.clone()]);
+            config.workspace_roots = vec![root];
+            config.workspace_prefix =
+                Some(crate::paths::workspace_prefix_of(workspace_uri.as_str()));
+        }
+        {
+            let mut info = state.info_service.write();
+            let definition = parse_string(definition_text, &state.string_table);
+            info.index_file_with_path(
+                &definition_uri,
+                &definition,
+                &state.string_table,
+                &rules,
+                "events/definition.txt",
+            );
+            for (idx, uri) in use_uris.iter().enumerate() {
+                let source = parse_string(&use_text, &state.string_table);
+                info.index_file_with_path(
+                    uri,
+                    &source,
+                    &state.string_table,
+                    &rules,
+                    &format!("events/use-{idx}.txt"),
+                );
+            }
+        }
+        state
+            .documents
+            .lock()
+            .open(
+                source_uri.to_string(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(source_text.as_str()),
+                    ast: Some(source_ast),
+                    ast_version: Some(1),
+                    ast_source_bytes: source_text.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("source document opens");
+
+        IndexedTypeNavigationFixture {
+            backend,
+            definition_uri,
+            source_text,
+            source_uri,
+            state,
+            _workspace: workspace,
+            use_text,
+            use_uris,
+        }
+    }
+
     #[test]
     fn complete_use_site_collection_stays_complete_alongside_bounded_graph_path() {
         use crate::navigation::test_rules::type_ref_ruleset;
@@ -1073,6 +1257,130 @@ mod tests {
                 "closed.txt:closed = needle".to_string(),
                 "open.txt:edited = needle".to_string(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn references_impl_returns_complete_results_or_budget_error() {
+        let fixture = indexed_type_navigation_fixture(20);
+        let logical_path = crate::paths::logical_path_from_uri(
+            fixture.source_uri.as_str(),
+            &fixture.state.config.read().workspace_prefix,
+        );
+        assert!(
+            fixture
+                .backend
+                .resolve_at_cursor(
+                    fixture.source_uri.as_str(),
+                    fixture.source_position(),
+                    &logical_path,
+                )
+                .is_some(),
+            "cursor resolution must find the indexed open document at {logical_path}"
+        );
+        let hint = fixture
+            .backend
+            .rule_info_at_cursor(
+                fixture.source_uri.as_str(),
+                fixture.source_position(),
+                &logical_path,
+            )
+            .expect("cursor resolves to a rule context")
+            .hint;
+        assert!(
+            matches!(hint, ReferenceHint::TypeRef { .. }),
+            "source must produce a type-reference hint, got {hint:?}"
+        );
+        let params = fixture.references_params(false);
+        let complete = fixture
+            .backend
+            .references_impl(params.clone())
+            .await
+            .expect("under-cap references succeed")
+            .expect("the indexed type reference resolves");
+        let mut expected_uris = fixture.use_uris.iter().cloned().collect::<HashSet<_>>();
+        expected_uris.insert(fixture.source_uri.to_string());
+        assert_eq!(complete.len(), expected_uris.len());
+        assert_eq!(
+            complete
+                .iter()
+                .map(|location| location.uri.to_string())
+                .collect::<HashSet<_>>(),
+            expected_uris,
+            "the result contains the open reference and every indexed closed reference"
+        );
+
+        let limit = fixture.one_closed_file_budget();
+        *fixture.state.navigation_snapshot_budget_override.lock() = Some(limit);
+        let one_site = fixture
+            .backend
+            .file_text_snapshots_for_navigation(&[
+                fixture.source_uri.to_string(),
+                fixture.use_uris[0].clone(),
+            ])
+            .await
+            .expect("one closed indexed reference fits after the open buffer");
+        assert_eq!(one_site.len(), 2);
+
+        let error = fixture
+            .backend
+            .references_impl(params)
+            .await
+            .expect_err("multiple valid indexed references exceed the cumulative budget");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32002)
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_impl_returns_complete_edits_or_budget_error() {
+        let fixture = indexed_type_navigation_fixture(20);
+        let edit = fixture
+            .backend
+            .rename_impl(fixture.rename_params())
+            .await
+            .expect("under-cap rename succeeds")
+            .expect("the indexed type instance is renameable");
+        let changes = edit.changes.expect("legacy workspace edits are enabled");
+        let mut expected_uris = fixture.use_uris.iter().cloned().collect::<HashSet<_>>();
+        expected_uris.insert(fixture.source_uri.to_string());
+        expected_uris.insert(fixture.definition_uri.clone());
+        assert_eq!(changes.len(), expected_uris.len());
+        assert_eq!(
+            changes.keys().map(Url::to_string).collect::<HashSet<_>>(),
+            expected_uris,
+            "the rename includes the definition and every indexed use"
+        );
+        assert_eq!(
+            changes.values().map(Vec::len).sum::<usize>(),
+            expected_uris.len()
+        );
+        assert!(
+            changes
+                .values()
+                .flatten()
+                .all(|edit| edit.new_text == "renamed_instance")
+        );
+
+        let limit = fixture.one_closed_file_budget();
+        *fixture.state.navigation_snapshot_budget_override.lock() = Some(limit);
+        for uri in [&fixture.definition_uri, &fixture.use_uris[0]] {
+            let one_site = fixture
+                .backend
+                .file_text_snapshots_for_navigation(&[fixture.source_uri.to_string(), uri.clone()])
+                .await
+                .expect("an individual indexed rename target fits");
+            assert_eq!(one_site.len(), 2);
+        }
+        let error = fixture
+            .backend
+            .rename_impl(fixture.rename_params())
+            .await
+            .expect_err("rename refuses exhaustion rather than returning a partial edit");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32002)
         );
     }
 

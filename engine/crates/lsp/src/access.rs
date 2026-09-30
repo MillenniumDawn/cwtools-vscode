@@ -280,8 +280,6 @@ pub(crate) fn read_authorized_text_with_budget(
     max_file_bytes: u64,
     budget: &ReadBudget,
 ) -> Result<Option<String>, ReadBudgetExceeded> {
-    use std::io::Read as _;
-
     let Some(path) = authorized_path(uri, roots) else {
         return Ok(None);
     };
@@ -297,6 +295,16 @@ pub(crate) fn read_authorized_text_with_budget(
     if !metadata.is_file() || source_bytes > max_file_bytes {
         return Ok(None);
     }
+    read_text_with_budget(file, source_bytes, budget)
+}
+
+fn read_text_with_budget(
+    reader: impl std::io::Read,
+    source_bytes: u64,
+    budget: &ReadBudget,
+) -> Result<Option<String>, ReadBudgetExceeded> {
+    use std::io::Read as _;
+
     let Some(read_limit) = source_bytes.checked_add(1) else {
         return Ok(None);
     };
@@ -311,7 +319,7 @@ pub(crate) fn read_authorized_text_with_budget(
     };
 
     let mut bytes = Vec::with_capacity(read_capacity);
-    let Ok(read) = file.take(read_limit).read_to_end(&mut bytes) else {
+    let Ok(read) = reader.take(read_limit).read_to_end(&mut bytes) else {
         return Ok(None);
     };
     if read as u64 > source_bytes {
@@ -393,6 +401,22 @@ fn read_capped(path: &Path, max_bytes: u64) -> FileRead {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FailsAfterByte(bool);
+
+    impl std::io::Read for FailsAfterByte {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.0 {
+                return Err(std::io::Error::other("injected read failure"));
+            }
+            let Some(first) = buffer.first_mut() else {
+                return Ok(0);
+            };
+            *first = b'x';
+            self.0 = true;
+            Ok(1)
+        }
+    }
 
     fn roots(dirs: [&Path; 1]) -> Vec<PathBuf> {
         dirs.iter()
@@ -661,6 +685,67 @@ mod tests {
             budget.reserve_retained(5),
             "neither refusal consumed budget"
         );
+    }
+
+    #[test]
+    fn post_reservation_read_failure_releases_the_full_allowance() {
+        let budget = ReadBudget::new(25);
+        assert_eq!(
+            read_text_with_budget(FailsAfterByte(false), 4, &budget),
+            Ok(None),
+            "the injected read error occurs after reservation and one byte"
+        );
+        assert!(budget.reserve_retained(25));
+    }
+
+    #[test]
+    fn file_growth_after_metadata_releases_the_full_allowance() {
+        let budget = ReadBudget::new(10);
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(b"ab"), 1, &budget),
+            Ok(None),
+            "the reader returns one byte beyond its metadata size"
+        );
+        assert!(budget.reserve_retained(10));
+    }
+
+    #[test]
+    fn read_budget_handles_empty_input_at_exact_boundary() {
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(b""), 0, &ReadBudget::new(5)),
+            Ok(Some(String::new()))
+        );
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(b""), 0, &ReadBudget::new(4)),
+            Err(ReadBudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn read_budget_enforces_exact_closed_file_boundary() {
+        let exact = b"0123456789";
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(exact), 10, &ReadBudget::new(54)),
+            Err(ReadBudgetExceeded)
+        );
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(exact), 10, &ReadBudget::new(55)),
+            Ok(Some(String::from_utf8_lossy(exact).into_owned()))
+        );
+    }
+
+    #[test]
+    fn read_budget_accepts_zero_byte_reservation_at_zero_limit() {
+        let budget = ReadBudget::new(0);
+        assert!(budget.reserve_retained(0));
+        assert!(!budget.reserve_retained(1));
+    }
+
+    #[test]
+    fn read_budget_rejects_arithmetic_overflow() {
+        let budget = ReadBudget::new(usize::MAX);
+        assert!(budget.reserve_retained(usize::MAX));
+        assert!(!budget.reserve_retained(1));
     }
 
     #[test]

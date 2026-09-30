@@ -297,6 +297,8 @@ pub(crate) struct DocumentState {
     pub(crate) last_scan_fingerprint: parking_lot::Mutex<Option<(u64, u64)>>,
     #[cfg(test)]
     pub(crate) hold_gate: parking_lot::Mutex<Option<Arc<HoldGate>>>,
+    #[cfg(test)]
+    pub(crate) navigation_snapshot_budget_override: parking_lot::Mutex<Option<usize>>,
     pub(crate) settings_generation: AtomicU64,
     pub(crate) start: std::time::Instant,
     pub(crate) last_activity_ms: AtomicU64,
@@ -1035,6 +1037,8 @@ impl DocumentState {
             last_scan_fingerprint: parking_lot::Mutex::new(None),
             #[cfg(test)]
             hold_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            navigation_snapshot_budget_override: parking_lot::Mutex::new(None),
             settings_generation: AtomicU64::new(0),
             start: std::time::Instant::now(),
             last_activity_ms: AtomicU64::new(0),
