@@ -377,7 +377,7 @@ impl Backend {
         let sites = super::key_sites(self.collect_use_sites(&type_name, &instance_name));
         let mut text_uris: Vec<String> = edits.iter().map(|(uri, _, _)| uri.clone()).collect();
         text_uris.extend(sites.iter().map(|(uri, _)| uri.clone()));
-        let texts = self.file_text_snapshots_for(&text_uris).await;
+        let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
         let resolved = self.resolve_value_sites(&sites, &instance_name, &texts);
         let unresolved = resolved.iter().filter(|(_, _, _, ok)| !ok).count();
         if unresolved > 0 {

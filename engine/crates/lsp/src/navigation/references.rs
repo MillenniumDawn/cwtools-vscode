@@ -32,6 +32,22 @@ pub(crate) fn key_sites(
         .collect()
 }
 
+fn navigation_snapshot_budget_error() -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
+        message: "Navigation cancelled: total text read budget exceeded.".into(),
+        data: None,
+    }
+}
+
+fn navigation_snapshot_read_error() -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
+        message: "Navigation cancelled: could not read text snapshots.".into(),
+        data: None,
+    }
+}
+
 impl Backend {
     pub(crate) fn is_known_loc_key(&self, lower: &str) -> bool {
         if let Some(idx) = self.state.loc_index.read().as_deref()
@@ -186,9 +202,9 @@ impl Backend {
         &self,
         keys: &HashSet<String>,
         fallback: &Url,
-    ) -> Vec<Location> {
+    ) -> Result<Vec<Location>> {
         if keys.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let mut sites: Vec<(String, u32, String)> = Vec::new();
         let open_loc: Vec<(
@@ -239,13 +255,13 @@ impl Backend {
             }
         }
         if sites.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let text_uris: Vec<String> = sites.iter().map(|(uri, _, _)| uri.clone()).collect();
-        let texts = self.file_text_snapshots_for(&text_uris).await;
+        let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
         let indexed = index_snapshots(&texts, &self.position_encoding());
         sites.sort();
-        sites
+        let locations = sites
             .into_iter()
             .filter_map(|(uri, line0, key_lower)| {
                 let lines = indexed.get(uri.as_str())?;
@@ -255,7 +271,8 @@ impl Backend {
                     range: lines.token_range(line0, col, &key_lower),
                 })
             })
-            .collect()
+            .collect();
+        Ok(locations)
     }
 
     /// Every script file the index or the editor knows.
@@ -381,7 +398,7 @@ impl Backend {
             keys.insert(key_lower.clone());
             let mut all_locs: Vec<Location> = Vec::new();
             if include_declaration {
-                all_locs.extend(self.collect_loc_definitions(&keys, fallback).await);
+                all_locs.extend(self.collect_loc_definitions(&keys, fallback).await?);
             }
             all_locs.extend(self.collect_loc_script_usages(&keys, fallback).await);
             let all_locs = dedup_locations(all_locs);
@@ -414,7 +431,7 @@ impl Backend {
                 .map(|(file_uri, _)| file_uri.clone())
                 .collect();
             text_uris.extend(sites.iter().map(|(file_uri, _)| file_uri.clone()));
-            let texts = self.file_text_snapshots_for(&text_uris).await;
+            let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
             let indexed = index_snapshots(&texts, &self.position_encoding());
             let mut all_locs: Vec<Location> =
                 locations_at_with_lines(self, definitions, &instance_name, fallback, &indexed);
@@ -459,7 +476,7 @@ impl Backend {
             pairs.extend(references);
             let text_uris: Vec<String> =
                 pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
-            let texts = self.file_text_snapshots_for(&text_uris).await;
+            let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
             let indexed = index_snapshots(&texts, &self.position_encoding());
             let all_locs = locations_at_with_lines(self, pairs, &symbol, fallback, &indexed);
             if !all_locs.is_empty() {
@@ -663,6 +680,88 @@ impl Backend {
         .ok()
         .flatten()
         .map(Arc::from)
+    }
+
+    /// Snapshots navigation text under one cumulative memory budget. Unlike
+    /// `file_text_snapshots_for`, this fails the whole request rather than
+    /// returning an incomplete set of texts that could produce partial edits.
+    pub(crate) async fn file_text_snapshots_for_navigation(
+        &self,
+        uris: &[String],
+    ) -> Result<HashMap<String, FileTextSnapshot>> {
+        self.file_text_snapshots_for_navigation_with_limit(
+            uris,
+            crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES,
+        )
+        .await
+    }
+
+    async fn file_text_snapshots_for_navigation_with_limit(
+        &self,
+        uris: &[String],
+        limit: usize,
+    ) -> Result<HashMap<String, FileTextSnapshot>> {
+        let budget = crate::access::ReadBudget::new(limit);
+        let mut snapshots = HashMap::new();
+        let mut closed = Vec::new();
+        let mut seen = HashSet::with_capacity(uris.len());
+        {
+            let docs = self.state.documents.lock();
+            for uri in uris {
+                if !seen.insert(uri.as_str()) {
+                    continue;
+                }
+                if let Some(doc) = docs.get(uri) {
+                    if !budget.reserve_retained(doc.text.len()) {
+                        return Err(navigation_snapshot_budget_error());
+                    }
+                    let text = doc.text.to_string();
+                    snapshots.insert(
+                        uri.clone(),
+                        FileTextSnapshot {
+                            content_hash: cwtools_cache::workspace::content_hash(&text),
+                            text,
+                            version: Some(doc.version),
+                        },
+                    );
+                } else {
+                    closed.push(uri.clone());
+                }
+            }
+        }
+        if closed.is_empty() {
+            return Ok(snapshots);
+        }
+        let roots = self.state.config.read().authorized_roots.clone();
+        let read = tokio::task::spawn_blocking(move || {
+            use rayon::prelude::*;
+            closed
+                .into_par_iter()
+                .map(|uri| {
+                    let text = crate::access::read_authorized_text_with_budget(
+                        &uri,
+                        &roots,
+                        crate::access::MAX_URI_READ_BYTES,
+                        &budget,
+                    )
+                    .map_err(|_| navigation_snapshot_budget_error())?;
+                    Ok(text.map(|text| {
+                        (
+                            uri,
+                            FileTextSnapshot {
+                                content_hash: cwtools_cache::workspace::content_hash(&text),
+                                text,
+                                version: None,
+                            },
+                        )
+                    }))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .await
+        .map_err(|_| navigation_snapshot_read_error())??;
+        snapshots.extend(read.into_iter().flatten());
+        Ok(snapshots)
     }
 
     pub(crate) async fn file_text_snapshots_for(
@@ -974,6 +1073,130 @@ mod tests {
                 "closed.txt:closed = needle".to_string(),
                 "open.txt:edited = needle".to_string(),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn navigation_snapshots_deduplicate_and_allow_exact_budget_boundary() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        let open_path = ws.path().join("open.txt");
+        let second_open_path = ws.path().join("second-open.txt");
+        let closed_path = ws.path().join("closed.txt");
+        std::fs::write(&closed_path, "c").unwrap();
+        let uri_of = |path: &std::path::Path| {
+            Url::from_file_path(path)
+                .expect("absolute path")
+                .to_string()
+        };
+        let open_uri = uri_of(&open_path);
+        let second_open_uri = uri_of(&second_open_path);
+        let closed_uri = uri_of(&closed_path);
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from("open"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts one small doc");
+        state
+            .documents
+            .lock()
+            .open(
+                second_open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from("more"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts another small doc");
+
+        let uris = vec![
+            open_uri.clone(),
+            open_uri.clone(),
+            closed_uri.clone(),
+            closed_uri.clone(),
+        ];
+        let snapshots = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, 14)
+            .await
+            .expect("4 open bytes + 10 bytes peak closed-read allowance");
+        assert_eq!(snapshots.len(), 2, "duplicate URIs get one snapshot");
+        assert_eq!(snapshots[&open_uri].text, "open");
+        assert_eq!(snapshots[&closed_uri].text, "c");
+
+        let error = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, 13)
+            .await
+            .err()
+            .expect("one byte below the required peak must refuse the request");
+        assert!(error.message.contains("total text read budget exceeded"));
+
+        let open_uris = vec![
+            open_uri.clone(),
+            open_uri.clone(),
+            second_open_uri.clone(),
+            second_open_uri.clone(),
+        ];
+        let open_snapshots = backend
+            .file_text_snapshots_for_navigation_with_limit(&open_uris, 8)
+            .await
+            .expect("the two unique four-byte open buffers fit exactly");
+        assert_eq!(open_snapshots.len(), 2);
+        assert!(
+            backend
+                .file_text_snapshots_for_navigation_with_limit(&open_uris, 7)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn navigation_snapshot_budget_covers_many_closed_files() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        let uris = (0..10)
+            .map(|idx| {
+                let path = ws.path().join(format!("{idx}.txt"));
+                std::fs::write(&path, "0123456789").unwrap();
+                Url::from_file_path(path)
+                    .expect("absolute path")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        let single = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris[..1], 55)
+            .await
+            .expect("one ten-byte file fits its 55-byte peak reservation");
+        assert_eq!(single.len(), 1);
+
+        let snapshots = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, 550)
+            .await
+            .expect("all ten peak reservations fit");
+        assert_eq!(snapshots.len(), 10);
+        assert!(
+            backend
+                .file_text_snapshots_for_navigation_with_limit(&uris, 55)
+                .await
+                .is_err()
         );
     }
 }
