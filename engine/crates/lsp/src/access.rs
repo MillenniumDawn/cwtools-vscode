@@ -2,7 +2,6 @@
 //!   Not-indexed is the resting state #161 chose; the flip is the price of
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tower_lsp::lsp_types::Url;
 
@@ -12,17 +11,29 @@ pub(crate) const MAX_URI_READ_BYTES: u64 = 64 * 1024 * 1024;
 pub(crate) const MAX_NAVIGATION_SNAPSHOT_BYTES: usize = 128 * 1024 * 1024;
 
 /// A per-request memory allowance for retained navigation text snapshots.
+///
+/// A reservation that does not fit beside in-flight reads waits for them to
+/// settle, so the answer does not depend on how many reads run at once. It is
+/// refused only when the retained bytes plus its own peak exceed the limit.
 #[derive(Debug)]
 pub(crate) struct ReadBudget {
     limit: usize,
-    reserved: AtomicUsize,
+    used: parking_lot::Mutex<BudgetUse>,
+    released: parking_lot::Condvar,
+}
+
+#[derive(Debug, Default)]
+struct BudgetUse {
+    retained: usize,
+    in_flight: usize,
 }
 
 impl ReadBudget {
     pub(crate) fn new(limit: usize) -> Self {
         Self {
             limit,
-            reserved: AtomicUsize::new(0),
+            used: parking_lot::Mutex::new(BudgetUse::default()),
+            released: parking_lot::Condvar::new(),
         }
     }
 
@@ -35,52 +46,51 @@ impl ReadBudget {
     }
 
     fn reserve(&self, bytes: usize) -> Option<ReadReservation<'_>> {
-        let mut current = self.reserved.load(Ordering::Relaxed);
+        let mut used = self.used.lock();
         loop {
-            let next = current.checked_add(bytes)?;
-            if next > self.limit {
-                return None;
+            let alone = used
+                .retained
+                .checked_add(bytes)
+                .filter(|&total| total <= self.limit)?;
+            if alone
+                .checked_add(used.in_flight)
+                .is_some_and(|total| total <= self.limit)
+            {
+                used.in_flight += bytes;
+                return Some(ReadReservation {
+                    budget: self,
+                    bytes,
+                    retained: 0,
+                });
             }
-            match self.reserved.compare_exchange_weak(
-                current,
-                next,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    return Some(ReadReservation {
-                        budget: self,
-                        bytes,
-                        active: true,
-                    });
-                }
-                Err(actual) => current = actual,
-            }
+            self.released.wait(&mut used);
         }
+    }
+
+    fn release(&self, reserved: usize, retained: usize) {
+        let mut used = self.used.lock();
+        used.in_flight -= reserved;
+        used.retained += retained;
+        self.released.notify_all();
     }
 }
 
 struct ReadReservation<'budget> {
     budget: &'budget ReadBudget,
     bytes: usize,
-    active: bool,
+    retained: usize,
 }
 
 impl ReadReservation<'_> {
     fn retain(mut self, bytes: usize) {
         debug_assert!(bytes <= self.bytes);
-        self.budget
-            .reserved
-            .fetch_sub(self.bytes.saturating_sub(bytes), Ordering::AcqRel);
-        self.active = false;
+        self.retained = bytes;
     }
 }
 
 impl Drop for ReadReservation<'_> {
     fn drop(&mut self) {
-        if self.active {
-            self.budget.reserved.fetch_sub(self.bytes, Ordering::AcqRel);
-        }
+        self.budget.release(self.bytes, self.retained);
     }
 }
 

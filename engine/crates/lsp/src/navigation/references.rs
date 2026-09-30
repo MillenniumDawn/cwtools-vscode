@@ -1507,4 +1507,32 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[tokio::test]
+    async fn navigation_snapshot_budget_does_not_refuse_overlapping_reads_that_fit_in_turn() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        let file_bytes = 64 * 1024;
+        let count = rayon::current_num_threads() * 4;
+        let uris = (0..count)
+            .map(|idx| {
+                let path = ws.path().join(format!("{idx}.txt"));
+                std::fs::write(&path, "x".repeat(file_bytes)).unwrap();
+                Url::from_file_path(path)
+                    .expect("absolute path")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        // Read one at a time, the last file's peak lands on the rest retained.
+        let retained = file_bytes + 1;
+        let limit = (count - 1) * retained + 5 * retained;
+
+        let snapshots = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, limit)
+            .await
+            .expect("more files than rayon threads still fit when read in turn");
+        assert_eq!(snapshots.len(), count);
+    }
 }
