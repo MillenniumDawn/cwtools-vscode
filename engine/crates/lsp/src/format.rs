@@ -6,7 +6,7 @@ use tower_lsp::lsp_types::*;
 
 use cwtools_parser::ast::SourcePos;
 use cwtools_parser::fix::{EOF_POS, SpanEdit};
-use cwtools_parser::format::{format_edits, format_range_edits};
+use cwtools_parser::format::{format_edits, format_edits_from_formatted_text, format_range_edits};
 
 use crate::command_progress::CommandProgress;
 use crate::lines::DocLines;
@@ -194,9 +194,8 @@ impl Backend {
                 };
                 match cwtools_parser::format::format_text(&snapshot.text, &table, &formatting) {
                     None => skipped += 1,
-                    Some(formatted) if formatted == snapshot.text => {}
-                    Some(_) => {
-                        let edits = format_edits(&snapshot.text, &table, &formatting);
+                    Some(formatted) => {
+                        let edits = format_edits_from_formatted_text(&snapshot.text, formatted);
                         if !edits.is_empty() {
                             changed.push((uri, snapshot.text.clone(), edits));
                         }
