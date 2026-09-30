@@ -76,11 +76,14 @@ pub fn format_edits(input: &str, table: &StringTable, opts: &FormatOptions) -> V
     let Some(formatted) = format_text(input, table, opts) else {
         return Vec::new();
     };
+    format_edits_from_formatted_text(input, formatted)
+}
+
+pub fn format_edits_from_formatted_text(input: &str, formatted: String) -> Vec<SpanEdit> {
     if formatted == input {
         return Vec::new();
     }
-    let (kept, _) = plan_file_edits(input, vec![((), whole_file_edit(formatted))]);
-    kept
+    vec![whole_file_edit(formatted)]
 }
 
 pub fn format_range_edits(
@@ -783,6 +786,36 @@ mod tests {
         let table = table();
         let src = "foo = 1\n";
         assert!(format_edits(src, &table, &FormatOptions::default()).is_empty());
+        assert!(format_edits_from_formatted_text(src, src.to_string()).is_empty());
+    }
+
+    #[test]
+    fn formatted_text_edits_match_normal_format_edits() {
+        let table = table();
+        let src = "foo={\nbar=1\n}\n";
+        let opts = FormatOptions::default();
+        let formatted = format_text(src, &table, &opts).expect("parse");
+        let expected = vec![whole_file_edit(formatted.clone())];
+
+        assert_eq!(format_edits_from_formatted_text(src, formatted), expected);
+        assert_eq!(format_edits(src, &table, &opts), expected);
+    }
+
+    #[test]
+    fn formatted_text_edit_preserves_unicode_bom_and_crlf_when_applied() {
+        let table = table();
+        let opts = FormatOptions::default();
+        for src in [
+            "title = \"café 世界\"\nfoo=1\n",
+            "\u{FEFF}foo={\r\n bar=1\r\n}\r\n",
+        ] {
+            let formatted = format_text(src, &table, &opts).expect("parse");
+            let edits = format_edits_from_formatted_text(src, formatted.clone());
+            assert_eq!(edits, vec![whole_file_edit(formatted.clone())]);
+            let applied = crate::fix::apply_edits(src, &edits);
+            assert_eq!(applied, formatted);
+            assert!(format_edits(&applied, &table, &opts).is_empty());
+        }
     }
 
     #[test]
