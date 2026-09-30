@@ -98,6 +98,16 @@ def test_release_pr_yields_when_main_moved_and_closes_a_stale_pr() -> None:
     assert "tag-release.yml" not in workflow
 
 
+def test_release_pr_body_lists_the_merged_pull_requests() -> None:
+    # The body used to be inline boilerplate that named no PR (#794).
+    workflow = RELEASE_PR.read_text(encoding="utf-8")
+    step = workflow.split("Open or update the release pull request", maxsplit=1)[1]
+    step = step.split("Close a stale release pull request", maxsplit=1)[0]
+    assert "scripts/build/release_pr_body.py" in step
+    assert "GH_TOKEN:" in step
+    assert "echo" not in step
+
+
 def test_no_workflow_calls_another_workflow() -> None:
     # tag-release.yml called release.yml, which asked for contents: write from
     # a caller capped at contents: read -- every run died at startup. Nothing
