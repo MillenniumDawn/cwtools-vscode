@@ -8,6 +8,91 @@ use tower_lsp::lsp_types::Url;
 use crate::Backend;
 
 pub(crate) const MAX_URI_READ_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_NAVIGATION_SNAPSHOT_BYTES: usize = 128 * 1024 * 1024;
+
+/// A per-request memory allowance for retained navigation text snapshots.
+///
+/// A reservation that does not fit beside in-flight reads waits for them to
+/// settle, so the answer does not depend on how many reads run at once. It is
+/// refused only when the retained bytes plus its own peak exceed the limit.
+#[derive(Debug)]
+pub(crate) struct ReadBudget {
+    limit: usize,
+    used: parking_lot::Mutex<BudgetUse>,
+    released: parking_lot::Condvar,
+}
+
+#[derive(Debug, Default)]
+struct BudgetUse {
+    retained: usize,
+    in_flight: usize,
+}
+
+impl ReadBudget {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            used: parking_lot::Mutex::new(BudgetUse::default()),
+            released: parking_lot::Condvar::new(),
+        }
+    }
+
+    pub(crate) fn reserve_retained(&self, bytes: usize) -> bool {
+        let Some(reservation) = self.reserve(bytes) else {
+            return false;
+        };
+        reservation.retain(bytes);
+        true
+    }
+
+    fn reserve(&self, bytes: usize) -> Option<ReadReservation<'_>> {
+        let mut used = self.used.lock();
+        loop {
+            let alone = used
+                .retained
+                .checked_add(bytes)
+                .filter(|&total| total <= self.limit)?;
+            if alone
+                .checked_add(used.in_flight)
+                .is_some_and(|total| total <= self.limit)
+            {
+                used.in_flight += bytes;
+                return Some(ReadReservation {
+                    budget: self,
+                    bytes,
+                    retained: 0,
+                });
+            }
+            self.released.wait(&mut used);
+        }
+    }
+
+    fn release(&self, reserved: usize, retained: usize) {
+        let mut used = self.used.lock();
+        used.in_flight -= reserved;
+        used.retained += retained;
+        self.released.notify_all();
+    }
+}
+
+struct ReadReservation<'budget> {
+    budget: &'budget ReadBudget,
+    bytes: usize,
+    retained: usize,
+}
+
+impl ReadReservation<'_> {
+    fn retain(mut self, bytes: usize) {
+        debug_assert!(bytes <= self.bytes);
+        self.retained = bytes;
+    }
+}
+
+impl Drop for ReadReservation<'_> {
+    fn drop(&mut self) {
+        self.budget.release(self.bytes, self.retained);
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum FileRead {
@@ -190,6 +275,73 @@ pub(crate) fn read_authorized_text(uri: &str, roots: &[PathBuf], max_bytes: u64)
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReadBudgetExceeded;
+
+/// Reads one authorized file after reserving its peak snapshot memory.
+///
+/// The reservation covers the bounded input buffer and up to four bytes of
+/// decoded `String` capacity per input byte (the `decode_bytes` fallback
+/// collects Windows-1252 characters). On success it is reduced to the
+/// retained string capacity; failed and changed files release the reservation.
+pub(crate) fn read_authorized_text_with_budget(
+    uri: &str,
+    roots: &[PathBuf],
+    max_file_bytes: u64,
+    budget: &ReadBudget,
+) -> Result<Option<String>, ReadBudgetExceeded> {
+    let Some(path) = authorized_path(uri, roots) else {
+        return Ok(None);
+    };
+    #[cfg(test)]
+    RECORDED_READS.lock().push(path.clone());
+    let Ok(file) = std::fs::File::open(path) else {
+        return Ok(None);
+    };
+    let Ok(metadata) = file.metadata() else {
+        return Ok(None);
+    };
+    let source_bytes = metadata.len();
+    if !metadata.is_file() || source_bytes > max_file_bytes {
+        return Ok(None);
+    }
+    read_text_with_budget(file, source_bytes, budget)
+}
+
+fn read_text_with_budget(
+    reader: impl std::io::Read,
+    source_bytes: u64,
+    budget: &ReadBudget,
+) -> Result<Option<String>, ReadBudgetExceeded> {
+    use std::io::Read as _;
+
+    let Some(read_limit) = source_bytes.checked_add(1) else {
+        return Ok(None);
+    };
+    let Ok(read_capacity) = usize::try_from(read_limit) else {
+        return Ok(None);
+    };
+    let Some(peak_bytes) = read_capacity.checked_mul(5) else {
+        return Err(ReadBudgetExceeded);
+    };
+    let Some(reservation) = budget.reserve(peak_bytes) else {
+        return Err(ReadBudgetExceeded);
+    };
+
+    let mut bytes = Vec::with_capacity(read_capacity);
+    let Ok(read) = reader.take(read_limit).read_to_end(&mut bytes) else {
+        return Ok(None);
+    };
+    if read as u64 > source_bytes {
+        return Ok(None);
+    }
+    let (text, _) = cwtools_file_manager::file_manager::decode_bytes(bytes);
+    let retained_bytes = text.capacity();
+    debug_assert!(retained_bytes <= peak_bytes);
+    reservation.retain(retained_bytes);
+    Ok(Some(text))
+}
+
 pub(crate) fn read_authorized(uri: &str, roots: &[PathBuf], max_bytes: u64) -> FileRead {
     let Some(path) = authorized_path(uri, roots) else {
         return FileRead::Refused;
@@ -259,6 +411,22 @@ fn read_capped(path: &Path, max_bytes: u64) -> FileRead {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FailsAfterByte(bool);
+
+    impl std::io::Read for FailsAfterByte {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.0 {
+                return Err(std::io::Error::other("injected read failure"));
+            }
+            let Some(first) = buffer.first_mut() else {
+                return Ok(0);
+            };
+            *first = b'x';
+            self.0 = true;
+            Ok(1)
+        }
+    }
 
     fn roots(dirs: [&Path; 1]) -> Vec<PathBuf> {
         dirs.iter()
@@ -454,6 +622,140 @@ mod tests {
             None,
             "one byte over the cap is refused, not truncated"
         );
+    }
+
+    #[test]
+    fn read_budget_reservations_are_cumulative_under_concurrency() {
+        use std::sync::{Arc, Barrier};
+
+        let workers = 8;
+        let budget = Arc::new(ReadBudget::new(3));
+        let barrier = Arc::new(Barrier::new(workers));
+        let reserved = std::thread::scope(|scope| {
+            let handles = (0..workers)
+                .map(|_| {
+                    let budget = Arc::clone(&budget);
+                    let barrier = Arc::clone(&barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        budget.reserve_retained(1)
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("reservation thread completes"))
+                .filter(|reserved| *reserved)
+                .count()
+        });
+        assert_eq!(reserved, 3);
+    }
+
+    #[test]
+    fn budgeted_reads_reserve_decode_expansion_before_allocating() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let file = tmp.path().join("cp1252.txt");
+        std::fs::write(&file, [0x81; 4]).unwrap();
+        let roots = roots([tmp.path()]);
+        let uri = uri(&file);
+
+        let budget = ReadBudget::new(25);
+        let text = read_authorized_text_with_budget(&uri, &roots, MAX_URI_READ_BYTES, &budget)
+            .expect("budget fits")
+            .expect("authorized file is readable");
+        assert_eq!(text, "\u{FFFD}".repeat(4));
+
+        let budget = ReadBudget::new(24);
+        assert_eq!(
+            read_authorized_text_with_budget(&uri, &roots, MAX_URI_READ_BYTES, &budget,),
+            Err(ReadBudgetExceeded),
+            "the five-byte read allowance includes decoding expansion"
+        );
+    }
+
+    #[test]
+    fn missing_and_over_cap_budgeted_reads_release_their_reservations() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let gone = tmp.path().join("gone.txt");
+        let large = tmp.path().join("large.txt");
+        std::fs::write(&large, "ab").unwrap();
+        let roots = roots([tmp.path()]);
+        let budget = ReadBudget::new(5);
+
+        assert_eq!(
+            read_authorized_text_with_budget(&uri(&gone), &roots, MAX_URI_READ_BYTES, &budget,),
+            Ok(None)
+        );
+        assert_eq!(
+            read_authorized_text_with_budget(&uri(&large), &roots, 1, &budget),
+            Ok(None),
+            "an over-cap file is refused before reserving or reading it"
+        );
+        assert!(
+            budget.reserve_retained(5),
+            "neither refusal consumed budget"
+        );
+    }
+
+    #[test]
+    fn post_reservation_read_failure_releases_the_full_allowance() {
+        let budget = ReadBudget::new(25);
+        assert_eq!(
+            read_text_with_budget(FailsAfterByte(false), 4, &budget),
+            Ok(None),
+            "the injected read error occurs after reservation and one byte"
+        );
+        assert!(budget.reserve_retained(25));
+    }
+
+    #[test]
+    fn file_growth_after_metadata_releases_the_full_allowance() {
+        let budget = ReadBudget::new(10);
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(b"ab"), 1, &budget),
+            Ok(None),
+            "the reader returns one byte beyond its metadata size"
+        );
+        assert!(budget.reserve_retained(10));
+    }
+
+    #[test]
+    fn read_budget_handles_empty_input_at_exact_boundary() {
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(b""), 0, &ReadBudget::new(5)),
+            Ok(Some(String::new()))
+        );
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(b""), 0, &ReadBudget::new(4)),
+            Err(ReadBudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn read_budget_enforces_exact_closed_file_boundary() {
+        let exact = b"0123456789";
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(exact), 10, &ReadBudget::new(54)),
+            Err(ReadBudgetExceeded)
+        );
+        assert_eq!(
+            read_text_with_budget(std::io::Cursor::new(exact), 10, &ReadBudget::new(55)),
+            Ok(Some(String::from_utf8_lossy(exact).into_owned()))
+        );
+    }
+
+    #[test]
+    fn read_budget_accepts_zero_byte_reservation_at_zero_limit() {
+        let budget = ReadBudget::new(0);
+        assert!(budget.reserve_retained(0));
+        assert!(!budget.reserve_retained(1));
+    }
+
+    #[test]
+    fn read_budget_rejects_arithmetic_overflow() {
+        let budget = ReadBudget::new(usize::MAX);
+        assert!(budget.reserve_retained(usize::MAX));
+        assert!(!budget.reserve_retained(1));
     }
 
     #[test]

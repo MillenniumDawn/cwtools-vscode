@@ -32,6 +32,22 @@ pub(crate) fn key_sites(
         .collect()
 }
 
+fn navigation_snapshot_budget_error() -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
+        message: "Navigation cancelled: total text read budget exceeded.".into(),
+        data: None,
+    }
+}
+
+fn navigation_snapshot_read_error() -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
+        message: "Navigation cancelled: could not read text snapshots.".into(),
+        data: None,
+    }
+}
+
 impl Backend {
     pub(crate) fn is_known_loc_key(&self, lower: &str) -> bool {
         if let Some(idx) = self.state.loc_index.read().as_deref()
@@ -186,9 +202,9 @@ impl Backend {
         &self,
         keys: &HashSet<String>,
         fallback: &Url,
-    ) -> Vec<Location> {
+    ) -> Result<Vec<Location>> {
         if keys.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let mut sites: Vec<(String, u32, String)> = Vec::new();
         let open_loc: Vec<(
@@ -239,13 +255,13 @@ impl Backend {
             }
         }
         if sites.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let text_uris: Vec<String> = sites.iter().map(|(uri, _, _)| uri.clone()).collect();
-        let texts = self.file_text_snapshots_for(&text_uris).await;
+        let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
         let indexed = index_snapshots(&texts, &self.position_encoding());
         sites.sort();
-        sites
+        let locations = sites
             .into_iter()
             .filter_map(|(uri, line0, key_lower)| {
                 let lines = indexed.get(uri.as_str())?;
@@ -255,7 +271,8 @@ impl Backend {
                     range: lines.token_range(line0, col, &key_lower),
                 })
             })
-            .collect()
+            .collect();
+        Ok(locations)
     }
 
     /// Every script file the index or the editor knows.
@@ -381,7 +398,7 @@ impl Backend {
             keys.insert(key_lower.clone());
             let mut all_locs: Vec<Location> = Vec::new();
             if include_declaration {
-                all_locs.extend(self.collect_loc_definitions(&keys, fallback).await);
+                all_locs.extend(self.collect_loc_definitions(&keys, fallback).await?);
             }
             all_locs.extend(self.collect_loc_script_usages(&keys, fallback).await);
             let all_locs = dedup_locations(all_locs);
@@ -414,7 +431,7 @@ impl Backend {
                 .map(|(file_uri, _)| file_uri.clone())
                 .collect();
             text_uris.extend(sites.iter().map(|(file_uri, _)| file_uri.clone()));
-            let texts = self.file_text_snapshots_for(&text_uris).await;
+            let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
             let indexed = index_snapshots(&texts, &self.position_encoding());
             let mut all_locs: Vec<Location> =
                 locations_at_with_lines(self, definitions, &instance_name, fallback, &indexed);
@@ -459,7 +476,7 @@ impl Backend {
             pairs.extend(references);
             let text_uris: Vec<String> =
                 pairs.iter().map(|(file_uri, _)| file_uri.clone()).collect();
-            let texts = self.file_text_snapshots_for(&text_uris).await;
+            let texts = self.file_text_snapshots_for_navigation(&text_uris).await?;
             let indexed = index_snapshots(&texts, &self.position_encoding());
             let all_locs = locations_at_with_lines(self, pairs, &symbol, fallback, &indexed);
             if !all_locs.is_empty() {
@@ -665,6 +682,93 @@ impl Backend {
         .map(Arc::from)
     }
 
+    /// Snapshots navigation text under one cumulative memory budget. Unlike
+    /// `file_text_snapshots_for`, this fails the whole request rather than
+    /// returning an incomplete set of texts that could produce partial edits.
+    pub(crate) async fn file_text_snapshots_for_navigation(
+        &self,
+        uris: &[String],
+    ) -> Result<HashMap<String, FileTextSnapshot>> {
+        #[cfg(test)]
+        let limit = self
+            .state
+            .navigation_snapshot_budget_override
+            .lock()
+            .unwrap_or(crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES);
+        #[cfg(not(test))]
+        let limit = crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES;
+        self.file_text_snapshots_for_navigation_with_limit(uris, limit)
+            .await
+    }
+
+    async fn file_text_snapshots_for_navigation_with_limit(
+        &self,
+        uris: &[String],
+        limit: usize,
+    ) -> Result<HashMap<String, FileTextSnapshot>> {
+        let budget = crate::access::ReadBudget::new(limit);
+        let mut snapshots = HashMap::new();
+        let mut closed = Vec::new();
+        let mut seen = HashSet::with_capacity(uris.len());
+        {
+            let docs = self.state.documents.lock();
+            for uri in uris {
+                if !seen.insert(uri.as_str()) {
+                    continue;
+                }
+                if let Some(doc) = docs.get(uri) {
+                    if !budget.reserve_retained(doc.text.len()) {
+                        return Err(navigation_snapshot_budget_error());
+                    }
+                    let text = doc.text.to_string();
+                    snapshots.insert(
+                        uri.clone(),
+                        FileTextSnapshot {
+                            content_hash: cwtools_cache::workspace::content_hash(&text),
+                            text,
+                            version: Some(doc.version),
+                        },
+                    );
+                } else {
+                    closed.push(uri.clone());
+                }
+            }
+        }
+        if closed.is_empty() {
+            return Ok(snapshots);
+        }
+        let roots = self.state.config.read().authorized_roots.clone();
+        let read = tokio::task::spawn_blocking(move || {
+            use rayon::prelude::*;
+            closed
+                .into_par_iter()
+                .map(|uri| {
+                    let text = crate::access::read_authorized_text_with_budget(
+                        &uri,
+                        &roots,
+                        crate::access::MAX_URI_READ_BYTES,
+                        &budget,
+                    )
+                    .map_err(|_| navigation_snapshot_budget_error())?;
+                    Ok(text.map(|text| {
+                        (
+                            uri,
+                            FileTextSnapshot {
+                                content_hash: cwtools_cache::workspace::content_hash(&text),
+                                text,
+                                version: None,
+                            },
+                        )
+                    }))
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+        .await
+        .map_err(|_| navigation_snapshot_read_error())??;
+        snapshots.extend(read.into_iter().flatten());
+        Ok(snapshots)
+    }
+
     pub(crate) async fn file_text_snapshots_for(
         &self,
         uris: &[String],
@@ -787,6 +891,185 @@ mod tests {
             },
             state,
         )
+    }
+
+    struct IndexedTypeNavigationFixture {
+        backend: Backend,
+        definition_uri: String,
+        source_text: String,
+        source_uri: Url,
+        state: Arc<DocumentState>,
+        _workspace: tempfile::TempDir,
+        use_text: String,
+        use_uris: Vec<String>,
+    }
+
+    impl IndexedTypeNavigationFixture {
+        fn source_position(&self) -> Position {
+            let column = self
+                .source_text
+                .find("my_instance")
+                .expect("source contains the type instance") as u32;
+            Position::new(0, column + 2)
+        }
+
+        fn references_params(&self, include_declaration: bool) -> ReferenceParams {
+            ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: self.source_uri.clone(),
+                    },
+                    position: self.source_position(),
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+                context: ReferenceContext {
+                    include_declaration,
+                },
+            }
+        }
+
+        fn rename_params(&self) -> RenameParams {
+            RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: self.source_uri.clone(),
+                    },
+                    position: self.source_position(),
+                },
+                new_name: "renamed_instance".to_string(),
+                work_done_progress_params: Default::default(),
+            }
+        }
+
+        fn one_closed_file_budget(&self) -> usize {
+            let definition_len = std::fs::metadata(
+                Url::parse(&self.definition_uri)
+                    .expect("definition URI")
+                    .to_file_path()
+                    .expect("definition path"),
+            )
+            .expect("definition metadata")
+            .len() as usize;
+            let use_len = self.use_text.len();
+            self.source_text.len() + (definition_len.max(use_len) + 1) * 5
+        }
+    }
+
+    fn indexed_type_navigation_fixture(closed_use_count: usize) -> IndexedTypeNavigationFixture {
+        use crate::navigation::test_rules::type_ref_ruleset;
+        use cwtools_parser::parser::parse_string;
+
+        let (backend, state) = backend();
+        let workspace = tempfile::TempDir::new().expect("tmpdir");
+        let events = workspace.path().join("events");
+        std::fs::create_dir(&events).expect("events directory");
+        let uri_of = |path: &std::path::Path| {
+            Url::from_file_path(path)
+                .expect("absolute path")
+                .to_string()
+        };
+        let definition_path = events.join("definition.txt");
+        let definition_uri = uri_of(&definition_path);
+        let definition_text =
+            "my_type = { id = my_instance kind = alpha active = yes name = title }\n";
+        std::fs::write(&definition_path, definition_text).unwrap();
+        let use_text = "my_type = { base = my_instance }\n".to_string();
+        let use_uris = (0..closed_use_count)
+            .map(|idx| {
+                let path = events.join(format!("use-{idx}.txt"));
+                std::fs::write(&path, &use_text).unwrap();
+                uri_of(&path)
+            })
+            .collect::<Vec<_>>();
+        let source_path = events.join("query.txt");
+        let source_uri = Url::parse(&uri_of(&source_path)).expect("source URI");
+        let source_text = "my_type = { base = my_instance }\n".to_string();
+        let source_ast = Arc::new(parse_string(&source_text, &state.string_table));
+        let mut rules = type_ref_ruleset();
+        {
+            let body = rules
+                .root_rules
+                .iter_mut()
+                .find_map(|root| match root {
+                    cwtools_rules::rules_types::RootRule::TypeRule(
+                        name,
+                        (cwtools_rules::rules_types::RuleType::NodeRule { rules, .. }, _),
+                    ) if name == "my_type" => Some(rules),
+                    _ => None,
+                })
+                .expect("my_type root rule exists");
+            let mut children = body.to_vec();
+            children.push((
+                cwtools_rules::rules_types::RuleType::LeafRule {
+                    left: cwtools_rules::rules_types::NewField::SpecificField("base".to_string()),
+                    right: cwtools_rules::rules_types::NewField::TypeField(
+                        cwtools_rules::rules_types::TypeType::Simple("my_type".to_string()),
+                    ),
+                },
+                cwtools_rules::rules_types::Options::default(),
+            ));
+            *body = children.into();
+        }
+        rules.reindex();
+        state.rules.write().ruleset = Some(Arc::new(rules.clone()));
+        let root = std::fs::canonicalize(workspace.path()).expect("canonical root");
+        let workspace_uri = Url::from_directory_path(workspace.path()).expect("workspace URI");
+        {
+            let mut config = state.config.write();
+            config.authorized_roots = Arc::from([root.clone()]);
+            config.editable_roots = Arc::from([root.clone()]);
+            config.workspace_roots = vec![root];
+            config.workspace_prefix =
+                Some(crate::paths::workspace_prefix_of(workspace_uri.as_str()));
+        }
+        {
+            let mut info = state.info_service.write();
+            let definition = parse_string(definition_text, &state.string_table);
+            info.index_file_with_path(
+                &definition_uri,
+                &definition,
+                &state.string_table,
+                &rules,
+                "events/definition.txt",
+            );
+            for (idx, uri) in use_uris.iter().enumerate() {
+                let source = parse_string(&use_text, &state.string_table);
+                info.index_file_with_path(
+                    uri,
+                    &source,
+                    &state.string_table,
+                    &rules,
+                    &format!("events/use-{idx}.txt"),
+                );
+            }
+        }
+        state
+            .documents
+            .lock()
+            .open(
+                source_uri.to_string(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(source_text.as_str()),
+                    ast: Some(source_ast),
+                    ast_version: Some(1),
+                    ast_source_bytes: source_text.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("source document opens");
+
+        IndexedTypeNavigationFixture {
+            backend,
+            definition_uri,
+            source_text,
+            source_uri,
+            state,
+            _workspace: workspace,
+            use_text,
+            use_uris,
+        }
     }
 
     #[test]
@@ -975,5 +1258,281 @@ mod tests {
                 "open.txt:edited = needle".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn references_impl_returns_complete_results_or_budget_error() {
+        let fixture = indexed_type_navigation_fixture(20);
+        let logical_path = crate::paths::logical_path_from_uri(
+            fixture.source_uri.as_str(),
+            &fixture.state.config.read().workspace_prefix,
+        );
+        assert!(
+            fixture
+                .backend
+                .resolve_at_cursor(
+                    fixture.source_uri.as_str(),
+                    fixture.source_position(),
+                    &logical_path,
+                )
+                .is_some(),
+            "cursor resolution must find the indexed open document at {logical_path}"
+        );
+        let hint = fixture
+            .backend
+            .rule_info_at_cursor(
+                fixture.source_uri.as_str(),
+                fixture.source_position(),
+                &logical_path,
+            )
+            .expect("cursor resolves to a rule context")
+            .hint;
+        assert!(
+            matches!(hint, ReferenceHint::TypeRef { .. }),
+            "source must produce a type-reference hint, got {hint:?}"
+        );
+        let params = fixture.references_params(false);
+        let complete = fixture
+            .backend
+            .references_impl(params.clone())
+            .await
+            .expect("under-cap references succeed")
+            .expect("the indexed type reference resolves");
+        let mut expected_uris = fixture.use_uris.iter().cloned().collect::<HashSet<_>>();
+        expected_uris.insert(fixture.source_uri.to_string());
+        assert_eq!(complete.len(), expected_uris.len());
+        assert_eq!(
+            complete
+                .iter()
+                .map(|location| location.uri.to_string())
+                .collect::<HashSet<_>>(),
+            expected_uris,
+            "the result contains the open reference and every indexed closed reference"
+        );
+
+        let limit = fixture.one_closed_file_budget();
+        *fixture.state.navigation_snapshot_budget_override.lock() = Some(limit);
+        let one_site = fixture
+            .backend
+            .file_text_snapshots_for_navigation(&[
+                fixture.source_uri.to_string(),
+                fixture.use_uris[0].clone(),
+            ])
+            .await
+            .expect("one closed indexed reference fits after the open buffer");
+        assert_eq!(one_site.len(), 2);
+
+        let error = fixture
+            .backend
+            .references_impl(params)
+            .await
+            .expect_err("multiple valid indexed references exceed the cumulative budget");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32002)
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_impl_returns_complete_edits_or_budget_error() {
+        let fixture = indexed_type_navigation_fixture(20);
+        let edit = fixture
+            .backend
+            .rename_impl(fixture.rename_params())
+            .await
+            .expect("under-cap rename succeeds")
+            .expect("the indexed type instance is renameable");
+        let changes = edit.changes.expect("legacy workspace edits are enabled");
+        let mut expected_uris = fixture.use_uris.iter().cloned().collect::<HashSet<_>>();
+        expected_uris.insert(fixture.source_uri.to_string());
+        expected_uris.insert(fixture.definition_uri.clone());
+        assert_eq!(changes.len(), expected_uris.len());
+        assert_eq!(
+            changes.keys().map(Url::to_string).collect::<HashSet<_>>(),
+            expected_uris,
+            "the rename includes the definition and every indexed use"
+        );
+        assert_eq!(
+            changes.values().map(Vec::len).sum::<usize>(),
+            expected_uris.len()
+        );
+        assert!(
+            changes
+                .values()
+                .flatten()
+                .all(|edit| edit.new_text == "renamed_instance")
+        );
+
+        let limit = fixture.one_closed_file_budget();
+        *fixture.state.navigation_snapshot_budget_override.lock() = Some(limit);
+        for uri in [&fixture.definition_uri, &fixture.use_uris[0]] {
+            let one_site = fixture
+                .backend
+                .file_text_snapshots_for_navigation(&[fixture.source_uri.to_string(), uri.clone()])
+                .await
+                .expect("an individual indexed rename target fits");
+            assert_eq!(one_site.len(), 2);
+        }
+        let error = fixture
+            .backend
+            .rename_impl(fixture.rename_params())
+            .await
+            .expect_err("rename refuses exhaustion rather than returning a partial edit");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32002)
+        );
+    }
+
+    #[tokio::test]
+    async fn navigation_snapshots_deduplicate_and_allow_exact_budget_boundary() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        let open_path = ws.path().join("open.txt");
+        let second_open_path = ws.path().join("second-open.txt");
+        let closed_path = ws.path().join("closed.txt");
+        std::fs::write(&closed_path, "c").unwrap();
+        let uri_of = |path: &std::path::Path| {
+            Url::from_file_path(path)
+                .expect("absolute path")
+                .to_string()
+        };
+        let open_uri = uri_of(&open_path);
+        let second_open_uri = uri_of(&second_open_path);
+        let closed_uri = uri_of(&closed_path);
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from("open"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts one small doc");
+        state
+            .documents
+            .lock()
+            .open(
+                second_open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from("more"),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts another small doc");
+
+        let uris = vec![
+            open_uri.clone(),
+            open_uri.clone(),
+            closed_uri.clone(),
+            closed_uri.clone(),
+        ];
+        let snapshots = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, 14)
+            .await
+            .expect("4 open bytes + 10 bytes peak closed-read allowance");
+        assert_eq!(snapshots.len(), 2, "duplicate URIs get one snapshot");
+        assert_eq!(snapshots[&open_uri].text, "open");
+        assert_eq!(snapshots[&closed_uri].text, "c");
+
+        let error = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, 13)
+            .await
+            .err()
+            .expect("one byte below the required peak must refuse the request");
+        assert!(error.message.contains("total text read budget exceeded"));
+
+        let open_uris = vec![
+            open_uri.clone(),
+            open_uri.clone(),
+            second_open_uri.clone(),
+            second_open_uri.clone(),
+        ];
+        let open_snapshots = backend
+            .file_text_snapshots_for_navigation_with_limit(&open_uris, 8)
+            .await
+            .expect("the two unique four-byte open buffers fit exactly");
+        assert_eq!(open_snapshots.len(), 2);
+        assert!(
+            backend
+                .file_text_snapshots_for_navigation_with_limit(&open_uris, 7)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn navigation_snapshot_budget_covers_many_closed_files() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        let uris = (0..10)
+            .map(|idx| {
+                let path = ws.path().join(format!("{idx}.txt"));
+                std::fs::write(&path, "0123456789").unwrap();
+                Url::from_file_path(path)
+                    .expect("absolute path")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        let single = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris[..1], 55)
+            .await
+            .expect("one ten-byte file fits its 55-byte peak reservation");
+        assert_eq!(single.len(), 1);
+
+        let snapshots = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, 550)
+            .await
+            .expect("all ten peak reservations fit");
+        assert_eq!(snapshots.len(), 10);
+        assert!(
+            backend
+                .file_text_snapshots_for_navigation_with_limit(&uris, 55)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn navigation_snapshot_budget_does_not_refuse_overlapping_reads_that_fit_in_turn() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        let file_bytes = 64 * 1024;
+        let count = rayon::current_num_threads() * 4;
+        let uris = (0..count)
+            .map(|idx| {
+                let path = ws.path().join(format!("{idx}.txt"));
+                std::fs::write(&path, "x".repeat(file_bytes)).unwrap();
+                Url::from_file_path(path)
+                    .expect("absolute path")
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        // Read one at a time, the last file's peak lands on the rest retained.
+        let retained = file_bytes + 1;
+        let limit = (count - 1) * retained + 5 * retained;
+
+        let snapshots = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, limit)
+            .await
+            .expect("more files than rayon threads still fit when read in turn");
+        assert_eq!(snapshots.len(), count);
     }
 }
