@@ -44,6 +44,11 @@ import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import type { RulesSetup } from "./rulesSetup";
 import { isExcludedWatchedPath } from "./watchedFiles";
 import { logError, errorMessage, outputChannel } from "./logger";
+import {
+	isServerCommand,
+	serverCommand,
+	type ServerCommandName,
+} from "../common/serverCommandContract";
 import { runCancellableExecuteCommand } from "./commandProgress";
 
 export interface ClientConfig {
@@ -122,12 +127,14 @@ function readLiveServerSettings(): LiveServerSettings {
 
 // Built per call rather than once at module scope: l10n.t is resolved eagerly,
 // and the notification title has to be in the language the window is running in.
-function commandProgressTitle(command: string): string | undefined {
-	const titles: Readonly<Record<string, string>> = {
-		cacheVanilla: l10n.t("CWTools: Regenerate game vanilla cache file"),
-		clearAllCaches: l10n.t("CWTools: Clear all caches and reindex"),
-		reloadrulesconfig: l10n.t("CWTools: Reload config rules"),
-		reindexWorkspace: l10n.t("CWTools: Re-index workspace"),
+function commandProgressTitle(
+	command: ServerCommandName,
+): string | undefined {
+	const titles: Partial<Record<ServerCommandName, string>> = {
+		[serverCommand("cacheVanilla")]: l10n.t("CWTools: Regenerate game vanilla cache file"),
+		[serverCommand("clearAllCaches")]: l10n.t("CWTools: Clear all caches and reindex"),
+		[serverCommand("reloadrulesconfig")]: l10n.t("CWTools: Reload config rules"),
+		[serverCommand("reindexWorkspace")]: l10n.t("CWTools: Re-index workspace"),
 	};
 	return titles[command];
 }
@@ -295,7 +302,7 @@ export function createLanguageClient(
 			}
 			client
 				.sendRequest(ExecuteCommandRequest.type, {
-					command: "reloadrulesconfig",
+					command: serverCommand("reloadrulesconfig"),
 					arguments: [],
 				})
 				.catch((err) => logError("Automatic rules reload failed", err));
@@ -389,7 +396,7 @@ export function createLanguageClient(
 			// keeps Cancel on the `$/cancelRequest` path: the server has no
 			// graceful cancel for this one, so a token would give the
 			// notification a Cancel button that stops nothing.
-			if (command === "getGraphData") {
+			if (command === serverCommand("getGraphData")) {
 				return await runCancellableExecuteCommand(
 					client,
 					command,
@@ -399,7 +406,7 @@ export function createLanguageClient(
 				);
 			}
 			// genlocall returns generated loc stubs to open, not a toast string.
-			if (command === "genlocall") {
+			if (command === serverCommand("genlocall")) {
 				try {
 					const result = await runCancellableExecuteCommand(
 						client,
@@ -426,6 +433,10 @@ export function createLanguageClient(
 					);
 					return undefined;
 				}
+			}
+			if (!isServerCommand(command)) {
+				const result: unknown = await next(command, args);
+				return result;
 			}
 			const title = commandProgressTitle(command);
 			if (title === undefined) {

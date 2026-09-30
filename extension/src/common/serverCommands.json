@@ -1,0 +1,13 @@
+{
+  "getFileTypes": true,
+  "exportProfilingLog": true,
+  "cacheVanilla": true,
+  "clearAllCaches": true,
+  "reindexWorkspace": true,
+  "genlocall": true,
+  "reloadrulesconfig": true,
+  "getGraphData": true,
+  "fixAllWorkspace": true,
+  "formatWorkspace": true,
+  "validateWorkspace": true
+}

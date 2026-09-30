@@ -8,6 +8,7 @@ import {
 	type GraphData,
 	type GraphPanelState,
 } from "../common/graphTypes";
+import { serverCommand } from "../common/serverCommandContract";
 import {
 	graphDataAvailable,
 	fixAllWorkspaceAvailable,
@@ -409,7 +410,7 @@ export function registerCommands(
 			try {
 				log = await runCancellableExecuteCommand(
 					client,
-					"exportProfilingLog",
+					serverCommand("exportProfilingLog"),
 					[],
 					l10n.t("CWTools: Export profiling log"),
 				);
@@ -461,7 +462,7 @@ export function registerCommands(
 			try {
 				const result = await runCancellableExecuteCommand(
 					client,
-					"fixAllWorkspace",
+					serverCommand("fixAllWorkspace"),
 					[],
 					l10n.t("CWTools: Fix all auto-fixable problems in workspace"),
 					// Lands as a single workspace edit from an already-computed
@@ -504,7 +505,7 @@ export function registerCommands(
 			try {
 				const result = await runCancellableExecuteCommand(
 					client,
-					"formatWorkspace",
+					serverCommand("formatWorkspace"),
 					[],
 					l10n.t("CWTools: Format workspace"),
 				);
