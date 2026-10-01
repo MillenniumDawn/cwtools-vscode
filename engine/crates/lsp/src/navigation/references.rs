@@ -8,7 +8,9 @@ use tower_lsp::lsp_types::*;
 use cwtools_info::PositionElement;
 
 use crate::lines::{DocLines, index_snapshots};
-use crate::navigation::helpers::{TokenCase, code_token_cols_in_line, loc_def_site, word_in_line};
+use crate::navigation::helpers::{
+    REQUEST_FAILED, TokenCase, code_token_cols_in_line, loc_def_site, word_in_line,
+};
 use crate::paths::{loc_ref_at_cursor_with_encoding, logical_path_from_uri, parse_uri};
 use crate::{Backend, FileTextSnapshot};
 use cwtools_info::ReferenceHint;
@@ -34,7 +36,7 @@ pub(crate) fn key_sites(
 
 fn navigation_snapshot_budget_error() -> tower_lsp::jsonrpc::Error {
     tower_lsp::jsonrpc::Error {
-        code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED),
         message: "Navigation cancelled: total text read budget exceeded.".into(),
         data: None,
     }
@@ -42,7 +44,7 @@ fn navigation_snapshot_budget_error() -> tower_lsp::jsonrpc::Error {
 
 fn navigation_snapshot_read_error() -> tower_lsp::jsonrpc::Error {
     tower_lsp::jsonrpc::Error {
-        code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED),
         message: "Navigation cancelled: could not read text snapshots.".into(),
         data: None,
     }
@@ -1329,7 +1331,7 @@ mod tests {
             .expect_err("multiple valid indexed references exceed the cumulative budget");
         assert_eq!(
             error.code,
-            tower_lsp::jsonrpc::ErrorCode::ServerError(-32002)
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32803)
         );
     }
 
@@ -1380,7 +1382,63 @@ mod tests {
             .expect_err("rename refuses exhaustion rather than returning a partial edit");
         assert_eq!(
             error.code,
-            tower_lsp::jsonrpc::ErrorCode::ServerError(-32002)
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32803)
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_impl_refuses_unresolvable_references_with_request_failed() {
+        let fixture = indexed_type_navigation_fixture(1);
+        let use_path = Url::parse(&fixture.use_uris[0])
+            .expect("use URI")
+            .to_file_path()
+            .expect("use path");
+        std::fs::remove_file(&use_path).expect("the closed use file is removed");
+        let error = fixture
+            .backend
+            .rename_impl(fixture.rename_params())
+            .await
+            .expect_err("a rename whose references are unresolvable in text is refused");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32803)
+        );
+        assert!(
+            error
+                .message
+                .contains("reference(s) to 'my_instance' could not be located in text"),
+            "got {:?}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_impl_refuses_edits_outside_the_editable_roots_with_request_failed() {
+        let fixture = indexed_type_navigation_fixture(1);
+        fixture.state.config.write().editable_roots = Arc::from([]);
+        let error = fixture
+            .backend
+            .rename_impl(fixture.rename_params())
+            .await
+            .expect_err("a rename touching files outside the editable roots is refused");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32803)
+        );
+        assert!(
+            error
+                .message
+                .contains("cwtools only edits files in the workspace folders"),
+            "got {:?}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn navigation_snapshot_read_error_is_request_failed() {
+        assert_eq!(
+            navigation_snapshot_read_error().code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32803)
         );
     }
 
