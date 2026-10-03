@@ -39,6 +39,7 @@ def write_vsix(
     include_entrypoint: bool = True,
     include_graph_css: bool = True,
     include_flat: bool = False,
+    server_files: dict[str, str] | None = None,
     forbidden_paths: list[str] | None = None,
 ) -> None:
     with zipfile.ZipFile(path, "w") as archive:
@@ -54,10 +55,12 @@ def write_vsix(
                 continue
             archive.writestr(f"extension/{relative}", "x\n")
         for platform in platforms:
+            exe = "cwtools-server.exe" if platform == "win-x64" else "cwtools-server"
             archive.writestr(
-                f"extension/bin/server/cwtools-server/{platform}/cwtools-server",
-                "binary\n",
+                f"extension/bin/server/cwtools-server/{platform}/{exe}", "binary\n"
             )
+        for relative, content in (server_files or {}).items():
+            archive.writestr(f"extension/bin/server/cwtools-server/{relative}", content)
         for relative in forbidden_paths or []:
             archive.writestr(f"extension/{relative}", "forbidden\n")
 
@@ -78,6 +81,83 @@ def test_accepts_a_lone_universal_vsix_with_only_a_flat_binary(
     write_vsix(tmp_path / "ext-1.0.0.vsix", [], include_flat=True)
 
     assert smoke_test_vsix.main([str(tmp_path)]) == 0
+
+
+def test_accepts_a_flat_windows_binary(
+    smoke_test_vsix: ModuleType, tmp_path: Path
+) -> None:
+    write_vsix(
+        tmp_path / "ext-1.0.0.vsix",
+        [],
+        server_files={"cwtools-server.exe": "binary\n"},
+    )
+
+    assert smoke_test_vsix.main([str(tmp_path)]) == 0
+
+
+@pytest.mark.parametrize(
+    ("server_files", "message"),
+    [
+        pytest.param(
+            {"linux-x64/README.txt": "readme\n"},
+            "missing server executable "
+            "bin/server/cwtools-server/linux-x64/cwtools-server",
+            id="readme-only-platform-directory",
+        ),
+        pytest.param(
+            {"linux-x64/cwtools-server": ""},
+            "server executable "
+            "bin/server/cwtools-server/linux-x64/cwtools-server is empty",
+            id="empty-executable",
+        ),
+        pytest.param(
+            {"win-x64/cwtools-server.exe": ""},
+            "server executable "
+            "bin/server/cwtools-server/win-x64/cwtools-server.exe is empty",
+            id="empty-windows-executable",
+        ),
+        pytest.param(
+            {"linux-x64/cwtools-server": "binary\n", "win-x64/cwtools-server": "x\n"},
+            "missing server executable "
+            "bin/server/cwtools-server/win-x64/cwtools-server.exe",
+            id="windows-executable-without-exe-suffix",
+        ),
+        pytest.param(
+            {"linux-x64/cwtools-server.exe": "binary\n"},
+            "missing server executable "
+            "bin/server/cwtools-server/linux-x64/cwtools-server",
+            id="posix-executable-with-exe-suffix",
+        ),
+        pytest.param(
+            {"cwtools-server": ""},
+            "server executable bin/server/cwtools-server/cwtools-server is empty",
+            id="empty-flat-executable",
+        ),
+        pytest.param(
+            {"cwtools-server.exe": ""},
+            "server executable bin/server/cwtools-server/cwtools-server.exe is empty",
+            id="empty-flat-windows-executable",
+        ),
+        pytest.param(
+            {"README.txt": "readme\n"},
+            "no server binaries at all",
+            id="readme-only-flat-directory",
+        ),
+    ],
+)
+def test_rejects_a_server_directory_without_its_executable(
+    smoke_test_vsix: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    server_files: dict[str, str],
+    message: str,
+) -> None:
+    write_vsix(tmp_path / "ext-1.0.0.vsix", [], server_files=server_files)
+
+    with pytest.raises(SystemExit) as caught:
+        smoke_test_vsix.main([str(tmp_path)])
+    assert caught.value.code == 1
+    assert f"::error::ext-1.0.0.vsix: {message}\n" in capsys.readouterr().out
 
 
 def test_rejects_a_flat_universal_alongside_targeted(

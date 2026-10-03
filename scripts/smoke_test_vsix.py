@@ -29,17 +29,22 @@ def gh_error(message: str) -> None:
     print(f"::error::{message}")
 
 
-def platform_files(root: Path) -> dict[str, int]:
+def server_exe(platform: str) -> str:
+    # Mirrors serverExe in extension/src/host/engine.ts.
+    return "cwtools-server.exe" if platform == "win-x64" else "cwtools-server"
+
+
+def server_binaries(root: Path) -> dict[str, Path]:
     base = root / "bin" / "server" / "cwtools-server"
-    present: dict[str, int] = {}
+    present: dict[str, Path] = {}
     if not base.is_dir():
         return present
-    flat = sum(1 for path in base.iterdir() if path.is_file())
-    if flat:
+    flat_names = (server_exe("linux-x64"), server_exe("win-x64"))
+    flat = next((base / name for name in flat_names if (base / name).is_file()), None)
+    if flat is not None:
         present["flat"] = flat
     for directory in sorted(p for p in base.iterdir() if p.is_dir()):
-        count = sum(1 for path in directory.rglob("*") if path.is_file())
-        present[directory.name] = count
+        present[directory.name] = directory / server_exe(directory.name)
     return present
 
 
@@ -118,13 +123,17 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
         root = workdir / "extension"
         check_package(root, vsix)
 
-        present = platform_files(root)
+        present = server_binaries(root)
         if not present:
             gh_error(f"{vsix.name}: no server binaries at all")
             raise SystemExit(1)
-        for platform, count in present.items():
-            if count == 0:
-                gh_error(f"{vsix.name}: no files in server binary directory {platform}")
+        for binary in present.values():
+            relative = binary.relative_to(root).as_posix()
+            if not binary.is_file():
+                gh_error(f"{vsix.name}: missing server executable {relative}")
+                raise SystemExit(1)
+            if binary.stat().st_size == 0:
+                gh_error(f"{vsix.name}: server executable {relative} is empty")
                 raise SystemExit(1)
 
         match = TARGET_RE.match(vsix.name)
