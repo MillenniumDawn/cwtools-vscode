@@ -8,7 +8,6 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 from coverage_metrics import HOST_COVERAGE_LABELS, validate_host_coverage_summary
 from hosttest import resolve_display, test_cli_command
@@ -19,38 +18,6 @@ HOST_COVERAGE_KILL_GRACE_MS = 5_000
 
 COVERAGE_DIR = REPO_ROOT / "coverage"
 SUMMARY_PATH = COVERAGE_DIR / "coverage-summary.json"
-
-
-def _parse_pids(text: str) -> list[int]:
-    pids: list[int] = []
-    for part in text.split():
-        try:
-            value = int(part, 10)
-        except ValueError:
-            continue
-        if value > 0:
-            pids.append(value)
-    return pids
-
-
-def child_pids(pid: int) -> list[int]:
-    children = Path(f"/proc/{pid}/task/{pid}/children")
-    try:
-        return _parse_pids(children.read_text(encoding="utf-8"))
-    except OSError:
-        pass
-    pgrep = shutil.which("pgrep")
-    if pgrep is None:
-        return []
-    result = subprocess.run(
-        [pgrep, "-P", str(pid)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode not in {0, 1}:
-        return []
-    return _parse_pids(result.stdout)
 
 
 def kill_process_tree(pid: int, sig: str) -> None:
@@ -65,19 +32,36 @@ def kill_process_tree(pid: int, sig: str) -> None:
             stderr=subprocess.DEVNULL,
         )
         return
-    for child in child_pids(pid):
-        kill_process_tree(child, sig)
-    signo = (
-        signal.SIGKILL
-        if sig == "SIGKILL" and hasattr(signal, "SIGKILL")
-        else signal.SIGTERM
-    )
+    # The root leads its own session, so its pid names the group of descendants.
+    signo = signal.SIGKILL if sig == "SIGKILL" else signal.SIGTERM
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pid, signo)
+
+
+def tree_alive(proc: subprocess.Popen[bytes]) -> bool:
+    if proc.poll() is None:
+        return True
+    # taskkill finds the tree through the root's pid, which Windows reuses.
+    if os.name == "nt":
+        return False
     try:
-        os.kill(pid, signo)
+        os.killpg(proc.pid, 0)
     except ProcessLookupError:
-        return
+        return False
     except PermissionError:
-        return
+        pass
+    return True
+
+
+def stop_process_tree(proc: subprocess.Popen[bytes], grace_ms: int) -> None:
+    if tree_alive(proc):
+        kill_process_tree(proc.pid, "SIGTERM")
+    grace_deadline = time.monotonic() + (grace_ms / 1000)
+    while tree_alive(proc) and time.monotonic() < grace_deadline:
+        time.sleep(0.05)
+    if tree_alive(proc):
+        kill_process_tree(proc.pid, "SIGKILL")
+    proc.wait()
 
 
 def run_with_timeout(
@@ -98,20 +82,20 @@ def run_with_timeout(
         stdout=stdout,
         stderr=stdout,
         env=env,
+        start_new_session=os.name != "nt",
     ) as proc:
         if proc.pid is None:
             raise RuntimeError(f"{name} failed to start")
         deadline = time.monotonic() + (timeout_ms / 1000)
-        while proc.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.05)
-        if proc.poll() is None:
-            kill_process_tree(proc.pid, "SIGTERM")
-            grace_deadline = time.monotonic() + (grace_ms / 1000)
-            while proc.poll() is None and time.monotonic() < grace_deadline:
+        # The new session does not get the terminal's Ctrl-C.
+        try:
+            while proc.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.05)
-            if proc.poll() is None:
-                kill_process_tree(proc.pid, "SIGKILL")
-                proc.wait()
+        except BaseException:
+            stop_process_tree(proc, grace_ms)
+            raise
+        if proc.poll() is None:
+            stop_process_tree(proc, grace_ms)
             raise RuntimeError(f"{name} timed out after {timeout_ms}ms")
         if proc.returncode == 0:
             return

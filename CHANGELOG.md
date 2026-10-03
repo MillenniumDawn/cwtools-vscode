@@ -19,6 +19,7 @@
 
 * The Open VSX publish job replaces `HaaLeo/publish-vscode-extension` (stuck on a Node 20 target the runner force-upgrades with a deprecation warning) with `ovsx publish` from the dev dependencies through build.py, so the upload retries like the Marketplace publish does. The App token steps pass `client-id` instead of the deprecated `app-id`, with the App ID secret kept as the fallback. Both registry tokens now reach only their publish step, not the `npm ci` before it. (#812)
 * The release PR body lists every pull request merged since the last stable tag, as the Utility Tool's release PR does. Dependabot bumps are left out. (#794)
+* The extension-host coverage run now starts in its own process group on POSIX and the timeout kills the whole group, so a child that ignores SIGTERM no longer outlives a parent that exits on it. Ctrl-C and other errors during the wait stop the group too. (#851)
 
 ### 3.4.7
 
