@@ -142,7 +142,7 @@ export default defineConfig({
 			label: "watched",
 			files: [abortDiagnostics, "./dist/extension/bin/client/test/host/watchedFiles.test.js"],
 			workspaceFolder: "./extension/test/workspaces/watched/watched.code-workspace",
-			launchArgs: ["./extension/test/workspaces/watched/target/stellaris/events/open.txt", softwareRendering, disableCrashReporter, ...headless],
+			launchArgs: ["./extension/test/workspaces/watched/obj/stellaris/events/open.txt", softwareRendering, disableCrashReporter, ...headless],
 			env: { CWTOOLS_TEST_RULES_FOLDER: path.resolve(import.meta.dirname, "extension/test/workspaces/watched/.claude/rules") },
 		},
 		{
