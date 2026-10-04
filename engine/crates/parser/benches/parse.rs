@@ -38,10 +38,52 @@ focus_tree = {
 }
 "#;
 
+const STATE_FILE: &str = r#"state={
+    id=1024
+    name="STATE_1024"
+    manpower=8150200
+    state_category=pastoral
+    victory_points={
+        1024 10
+        1025 5
+    }
+    history={
+        owner=GER
+        1936.1.1={
+            buildings={
+                infrastructure=2
+                arms_factory=1
+                industrial_complex=4
+                air_base=2
+            }
+            division={
+                "1. Division"={
+                    location=1024
+                    division_template="1. Division"
+                    start_experience_factor=0.25
+                    start_strength=1
+                }
+            }
+        }
+    }
+    provinces={
+        3072 3073 3074 3075 3076 3077 3078 3079 3080 3081 3082 3083
+    }
+}
+"#;
+
 fn bench_parse(c: &mut Criterion) {
     let table = StringTable::new();
     c.bench_function("parse_string/focus_tree", |b| {
         b.iter(|| parse_string(black_box(SAMPLE), black_box(&table)))
+    });
+
+    let base = StringTable::new();
+    c.bench_function("parse_string/state_file", |b| {
+        b.iter(|| {
+            let table = base.with_overlay();
+            parse_string(black_box(STATE_FILE), black_box(&table))
+        })
     });
 }
 
