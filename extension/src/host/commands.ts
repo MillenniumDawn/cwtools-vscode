@@ -86,6 +86,16 @@ function requireRunningServer(client: LanguageClient): boolean {
 	return false;
 }
 
+// The server rejects any depth below 1, so the prompt and the stored depth share this.
+function parseGraphDepth(value: string | undefined): number | undefined {
+	const text = value?.trim();
+	if (!text || !/^\d+$/.test(text)) {
+		return undefined;
+	}
+	const depth = Number(text);
+	return Number.isSafeInteger(depth) && depth >= 1 ? depth : undefined;
+}
+
 function protocolRecord(value: unknown): Record<string, unknown> | undefined {
 	return value !== null && typeof value === "object"
 		? (value as Record<string, unknown>)
@@ -281,12 +291,13 @@ export function registerCommands(
 				),
 				value: currentGraphDepth.toString(),
 				validateInput: (v: string) =>
-					Number.isInteger(Number(v))
-						? undefined
-						: l10n.t("Please enter a number"),
+					parseGraphDepth(v) === undefined
+						? l10n.t("Please enter a whole number of at least 1")
+						: undefined,
 			});
-			if (Number.isInteger(Number(res))) {
-				currentGraphDepth = Number(res);
+			const depth = parseGraphDepth(res);
+			if (depth !== undefined) {
+				currentGraphDepth = depth;
 				await showGraph();
 			}
 		}),
