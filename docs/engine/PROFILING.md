@@ -150,3 +150,56 @@ read. The CLI caches both indexing and validation, but still drops the first
 AST set before localisation indexing to keep the large-workspace memory bound.
 A stale `.cwv` rebuild reuses the base-game install's entries, parsing only its
 new or changed source files.
+
+## Localisation file-record churn (#846)
+
+`LocLocations` releases a removed file's URI immediately and keeps its ID
+retired until the old sites have been swept. Only then can another file reuse
+that ID. Files with no sites can be recycled on removal without a sweep.
+The site sweep threshold remains one eighth; retired-record count also counts
+against that threshold because `insert_single` can discard tombstoned sites.
+This avoids retaining records indefinitely when their sites disappear that way.
+Reclamation visits retired IDs rather than scanning all live file records.
+Buffers retain their high-water capacity for reuse; this is not shrink-to-fit.
+
+Run the deterministic storage regressions from `engine/`:
+
+```sh
+cargo test -p cwtools_lsp churn -- --nocapture
+cargo test -p cwtools_lsp loc_locations
+```
+
+Measured on Linux x86-64 with stable Rust 1.99.0, debug test binaries, against
+`ea647d32afe1241bf87369f0a0b58b077d58c4ac` with the same two churn workloads.
+Each workload inserts/removes one key at the same URI 100,000 times; the second
+also keeps 10,000 distinct files and keys alive throughout. The baseline fails
+the new bounds after printing its measurements; the fixed version passes.
+
+| Workload | Before file slots | After file slots | Before file-vector capacity bytes | After file-vector + ID-queue capacity bytes | Sweeps before / after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Empty after each removal | 100,000 | 1 | 3,145,728 | 96 + 32 | 100,000 / 100,000 |
+| 10,000 mostly-live files | 110,000 | 11,429 | 3,145,728 | 393,216 + 16,384 | 69 / 69 |
+
+File-vector capacities were 131,072 slots before, and 4 / 16,384 after;
+`size_of::<File>()` was 24 bytes in both versions. Queue capacities after
+were 4 / 2,048 `u32`s each for the free and retired queues. These numbers
+measure reserved element storage, excluding allocator headers, hash maps,
+site vectors, and URI allocations. The tests reuse one caller-owned URI Arc;
+its strong-reference count after churn falls from 100,001 to 1. Real refreshes
+can allocate a new Arc for each read, so this fixture understates their old
+URI allocation retention. A separate weak-reference regression verifies that
+removal releases the URI even before its retired ID is eligible for reuse.
+
+Peak process RSS was sampled with Linux `os.wait4(pid, 0)[2].ru_maxrss` (KiB)
+for direct executions of the saved before/after test binaries, one exact test
+per fresh child process. Three interleaved before/after pairs gave:
+
+| Workload | Before peak RSS range (KiB) | After peak RSS range (KiB) |
+| --- | ---: | ---: |
+| Empty churn | 10,624–10,972 | 8,896–8,960 |
+| Mostly-live churn | 13,776–14,072 | 12,080–12,200 |
+
+Build processes were excluded. RSS includes the test harness and allocator
+behavior, and the baseline exits with the expected failing assertion. These
+small synthetic process measurements are not a heap-allocation profile or an
+estimate of a real editing session's RSS. No timing improvement is claimed.
