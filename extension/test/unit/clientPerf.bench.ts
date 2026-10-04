@@ -1,4 +1,4 @@
-import { test } from "vitest";
+import { expect, test } from "vitest";
 import { fileListSignature } from "../../src/host/fileListSignature";
 import { diagnosticsSignature } from "../../src/host/diagnosticsSignature";
 import type { DiagnosticLike } from "../../src/host/diagnosticsSignature";
@@ -37,16 +37,24 @@ const diagnostics: DiagnosticLike[] = Array.from(
 	}),
 );
 
-test("client hot-path functions", ({ bench }) => {
-	bench("fileListSignature (7,400 files)", () => {
-		fileListSignature(fileList);
-	});
-
-	bench("diagnosticsSignature (7,400 diagnostics)", () => {
-		diagnosticsSignature(diagnostics);
-	});
-
-	bench("filesToTreeNodes (7,400 files)", () => {
-		filesToTreeNodes(fileList);
-	});
+// Vitest 5 hands `bench` in through the test context, and a registration
+// only measures once it is `.run()` (or passed to `bench.compare()`). Without
+// that the file "passes" in a few hundred milliseconds having timed nothing
+// (#878), so each run's result is asserted on as well.
+test("client hot-path functions", async ({ bench }) => {
+	const results = [
+		await bench("fileListSignature (7,400 files)", () => {
+			fileListSignature(fileList);
+		}).run(),
+		await bench("diagnosticsSignature (7,400 diagnostics)", () => {
+			diagnosticsSignature(diagnostics);
+		}).run(),
+		await bench("filesToTreeNodes (7,400 files)", () => {
+			filesToTreeNodes(fileList);
+		}).run(),
+	];
+	for (const result of results) {
+		expect(result.state, result.name).toBe("completed");
+		expect(result.latency.mean, result.name).toBeGreaterThan(0);
+	}
 });
