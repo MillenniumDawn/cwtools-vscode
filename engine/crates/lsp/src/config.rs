@@ -1671,6 +1671,64 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rules_syntax_error_published_at_startup_matches_the_live_cwt_lint() {
+        let backend = test_backend();
+        let temp = tempfile::tempdir().unwrap();
+        let rules = temp.path().join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        let broken = rules.join("broken.cwt");
+        let text = "types = {\n    type[thing] = { path = \"game/thing }\n}\n";
+        std::fs::write(&broken, text).unwrap();
+        std::fs::write(
+            rules.join("good.cwt"),
+            "types = { type[ok] = { path = \"game/ok\" } }\n",
+        )
+        .unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.language = "hoi4".to_string();
+            config.rules_dir = Some(rules.clone());
+            config.refresh_roots();
+        }
+        assert!(backend.load_rules_config(&rules).await);
+
+        let published = backend.state.deferred_rule_diagnostics.lock().clone();
+        let uri = crate::paths::path_to_uri(&broken);
+        assert_eq!(
+            published.iter().map(|(uri, _)| uri).collect::<Vec<_>>(),
+            [&uri],
+            "only the broken file gets startup diagnostics"
+        );
+        let startup = &published[0].1;
+        let live = backend
+            .parse_and_validate(&uri, text, crate::ValidateTrigger::DidChange, None)
+            .await
+            .0;
+
+        let shape = |diagnostics: &[Diagnostic]| {
+            diagnostics
+                .iter()
+                .map(|d| {
+                    (
+                        d.code.clone(),
+                        d.source.clone(),
+                        d.severity,
+                        d.message.clone(),
+                        d.range.start,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(startup.len(), 1, "startup: {startup:?}");
+        assert_eq!(shape(startup), shape(&live), "live: {live:?}");
+        assert_eq!(
+            startup[0].code,
+            Some(NumberOrString::String("CW604".to_string()))
+        );
+        assert_eq!(startup[0].range.start, Position::new(1, 27));
+    }
+
     fn vanilla_data(
         file: &std::path::Path,
         instance_name: &str,
