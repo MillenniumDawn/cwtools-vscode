@@ -35,8 +35,12 @@ suite("served-root file watchers", function () {
 					await fs.mkdir(path.dirname(excluded), { recursive: true });
 					await fs.writeFile(excluded, 'name = "unterminated');
 					assert.ok(await waitUntil(() => observedEvents.has(`create:${excluded}`), 15_000), `VS Code dropped excluded create event: ${excluded}`);
-					await fs.writeFile(excluded, 'name = "valid"\n');
+					await wait(1_500);
+					assert.deepStrictEqual(vscode.languages.getDiagnostics(excludedUri), [], "invalid excluded create must not produce diagnostics");
+					await fs.writeFile(excluded, 'name = "another unterminated string');
 					assert.ok(await waitUntil(() => observedEvents.has(`change:${excluded}`), 15_000), `VS Code dropped excluded change event: ${excluded}`);
+					await wait(1_500);
+					assert.deepStrictEqual(vscode.languages.getDiagnostics(excludedUri), [], "invalid excluded change must not produce diagnostics");
 					await fs.unlink(excluded);
 					assert.ok(await waitUntil(() => observedEvents.has(`delete:${excluded}`), 15_000), `VS Code dropped excluded delete event: ${excluded}`);
 					await fs.writeFile(file, 'name = "unterminated');
