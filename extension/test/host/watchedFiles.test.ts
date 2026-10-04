@@ -15,9 +15,11 @@ suite("served-root file watchers", function () {
 		assert.strictEqual(folders.length, 3);
 		const observedEvents = new Set<string>();
 		const hostWatchers = folders.map((folder, index) => {
-			const suffix = index === 2 ? "cwt" : "txt";
+			// Observe the exact probe path; the server's production extension globs
+			// are independently covered by the diagnostic assertions below.
+			const relativePath = index === 2 ? "probe.cwt" : "events/probe.txt";
 			const watcher = vscode.workspace.createFileSystemWatcher(
-				new vscode.RelativePattern(folder, `**/*.${suffix}`),
+				new vscode.RelativePattern(folder, relativePath),
 			);
 			watcher.onDidCreate((uri) => { observedEvents.add(`create:${uri.fsPath}`); });
 			watcher.onDidChange((uri) => { observedEvents.add(`change:${uri.fsPath}`); });
