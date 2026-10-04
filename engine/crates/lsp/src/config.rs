@@ -1720,7 +1720,8 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        assert_eq!(startup.len(), 1, "startup: {startup:?}");
+        // The unclosed quote swallows the closing brace, so the clause is unclosed too.
+        assert_eq!(startup.len(), 2, "startup: {startup:?}");
         assert_eq!(shape(startup), shape(&live), "live: {live:?}");
         assert_eq!(
             startup[0].code,

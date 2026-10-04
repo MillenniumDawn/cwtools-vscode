@@ -224,7 +224,7 @@ CW501 (duplicate type) and CW502 (unused type) were Rust-invented IDs that have 
 
 ---
 
-## CW600-CW603 -- Rules config (Rust-only)
+## CW600-CW604 -- Rules config (Rust-only)
 
 Problems in the `.cwt` ruleset itself rather than in the script it checks. Emitted from `crates/rules` as the config loads and reported against the `.cwt` file that carries them, so a broken ruleset surfaces in `cwtools rules`, in a `validate` report and in the editor's Problems panel instead of degrading every later check in silence. F# only ever printed these as text, so there is no ID to converge on.
 
@@ -234,6 +234,7 @@ Problems in the `.cwt` ruleset itself rather than in the script it checks. Emitt
 | <a id="cw601"></a>CW601 | Error | Rule references undefined {} `{}` | A rule names a type, enum or single_alias that no `.cwt` file defines. Resolved after every file is merged, so a cross-file definition counts; alias categories are deliberately out of scope. | Emitted |
 | <a id="cw602"></a>CW602 | Error | {} | A `single_alias_right[...]` the post-processor refused to expand: a reference cycle, a chain past the depth limit, or the node budget. Reported on the `single_alias` definition it names, which is where the fix goes. | Emitted |
 | <a id="cw603"></a>CW603 | Warning | {} | A `##` directive whose value the loader can't parse (a malformed `cardinality` bound, an unrecognised `severity`), so the option silently falls back to its default. One rule under-checks; the ruleset still loads. | Emitted |
+| <a id="cw604"></a>CW604 | Error | {} | A syntax error in a `.cwt` file, such as an unclosed clause or quote. The loader still builds a ruleset from what the parser recovered, so the rules that did parse keep working. The live lint of an open `.cwt` file reports the same error with the same code. | Emitted |
 
 ---
 
@@ -329,7 +330,7 @@ hits and Kaiserreich 1, all genuine unset variables.
 
 - **CW283** — a `[!name]` localisation call whose scripted-GUI callback does not exist.
 - **CW500** — an `<type>` reference that resolves to no known instance (the event-specific case is F#'s CW222).
-- **CW600-CW603** — problems in the `.cwt` ruleset itself, which F# only ever printed as text.
+- **CW600-CW604** — problems in the `.cwt` ruleset itself, which F# only ever printed as text.
 
 CW301 (pre-trigger at event root) was a Rust-invented ID that duplicated F#'s
 CW120 on the same leaf; it has been retired in favour of CW120.

@@ -359,6 +359,18 @@ fn test_rules_reports_coded_problems_and_fails() {
         ));
 }
 
+#[test]
+fn test_rules_reports_a_syntax_error_and_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("broken.cwt"), "types = {\n").unwrap();
+    cwtools()
+        .args(["rules", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CW604"))
+        .stdout(predicate::str::contains("unclosed clause"));
+}
+
 /// A machine-readable report owns stdout: the ruleset summary moves to stderr
 /// so `cwtools rules --report-type csv > out.csv` is a usable CSV.
 #[test]
