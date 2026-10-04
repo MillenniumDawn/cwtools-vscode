@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => ({
 	resolveRulesCache: vi.fn(),
 	createLanguageClient: vi.fn(),
 	registerCommands: vi.fn(),
-	publishCommandAvailability: vi.fn(),
 	fsStat: vi.fn(),
 	fsChmod: vi.fn(),
 	client: {
@@ -77,7 +76,6 @@ vi.mock("../../src/host/documentLanguage", () => ({
 }));
 vi.mock("../../src/host/commands", () => ({
 	registerCommands: mocks.registerCommands,
-	publishCommandAvailability: mocks.publishCommandAvailability,
 }));
 vi.mock("../../src/host/trustedPaths", () => ({ setTrustedRoots: vi.fn() }));
 vi.mock("../../src/host/logger", () => ({
@@ -125,7 +123,6 @@ suite("descriptor startup gate", () => {
 		expect(mocks.resolveRulesCache).not.toHaveBeenCalled();
 		expect(mocks.createLanguageClient).not.toHaveBeenCalled();
 		expect(mocks.registerCommands).not.toHaveBeenCalled();
-		expect(mocks.publishCommandAvailability).not.toHaveBeenCalled();
 		expect(api.serverCommands()).toEqual([]);
 		expect(api.serverOutputChannel()).toBeUndefined();
 		expect(api.rulesCacheRoot()).toBeUndefined();
@@ -160,7 +157,6 @@ suite("descriptor startup gate", () => {
 		expect(mocks.resolveRulesCache).not.toHaveBeenCalled();
 		expect(mocks.createLanguageClient).not.toHaveBeenCalled();
 		expect(mocks.registerCommands).not.toHaveBeenCalled();
-		expect(mocks.publishCommandAvailability).not.toHaveBeenCalled();
 		expect(api.serverCommands()).toEqual([]);
 		expect(api.serverOutputChannel()).toBeUndefined();
 		expect(api.rulesCacheRoot()).toBeUndefined();
@@ -248,6 +244,5 @@ suite("descriptor startup gate", () => {
 		);
 		expect(context.subscriptions).toContain(mocks.client);
 		expect(mocks.client.start).toHaveBeenCalledOnce();
-		expect(mocks.publishCommandAvailability).toHaveBeenCalledWith(mocks.client);
 	});
 });
