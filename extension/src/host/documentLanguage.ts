@@ -131,11 +131,11 @@ export async function registerDocumentLanguage(
 			} finally {
 				clearTimeout(timeoutTimer);
 				cts.dispose();
-				// After a timeout, cool down before draining pendingEditor so a
+				// After a timeout, cool down before draining pendingSwitch so a
 				// stalled server isn't re-hit once per timeout window. The in-flight
 				// guard stays held through the wait, so switches during the cooldown
-				// coalesce into pendingSwitch (freshest wins). A settled response
-				// drains immediately.
+				// coalesce into pendingSwitch (freshest wins, a superseded one is
+				// dropped when drained). A settled response drains immediately.
 				const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
 				if (delay > 0) {
 					await new Promise<void>((resolve) => setTimeout(resolve, delay));

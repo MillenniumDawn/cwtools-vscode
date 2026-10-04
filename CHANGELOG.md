@@ -14,6 +14,7 @@
 * Classify the shipped graph webview libraries as runtime dependencies and make dependency review fail for both runtime and development scopes. (#572)
 * Add the `cwtools.parentMods` setting: the parent mods of a submod workspace, in load order. The docs replace the multi-root advice, which never gave a second folder's definitions to the first. (#786)
 * Rules in the resolved rules folder now reload automatically after `.cwt` edits, and changing `cwtools.rules_folder` to a valid folder applies without restarting the window. Set `cwtools.rules.autoReload` to `false` to keep manual reloads. (#605)
+* A late file type reply no longer marks the wrong editor, or no editor, as a graph file. Closing the last editor or switching tabs clears the graph state at once, a queued switch is dropped once a newer one supersedes it, and the pending tab-switch timer is cleared on shutdown. (#837)
 
 #### Tooling
 
