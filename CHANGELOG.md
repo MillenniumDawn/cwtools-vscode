@@ -25,6 +25,7 @@
 
 * The Open VSX publish job replaces `HaaLeo/publish-vscode-extension` (stuck on a Node 20 target the runner force-upgrades with a deprecation warning) with `ovsx publish` from the dev dependencies through build.py, so the upload retries like the Marketplace publish does. The App token steps pass `client-id` instead of the deprecated `app-id`, with the App ID secret kept as the fallback. Both registry tokens now reach only their publish step, not the `npm ci` before it. (#812)
 * The release PR body lists every pull request merged since the last stable tag, as the Utility Tool's release PR does. Dependabot bumps are left out. (#794)
+* The VSIX smoke test now requires a nonempty `cwtools-server.exe` in the `win-x64` directory and a nonempty `cwtools-server` in every other platform directory, as the extension's resolver does. Flat layouts check each executable name present. A directory holding only other files, an empty binary, or the wrong suffix fails the package gate. (#850)
 
 ### 3.4.7
 
