@@ -68,11 +68,18 @@ def write_vsix(
 def test_accepts_targeted_and_universal_vsixes(
     smoke_test_vsix: ModuleType, tmp_path: Path
 ) -> None:
-    write_vsix(tmp_path / "ext-linux-x64-1.0.0.vsix", ["linux-x64"])
-    write_vsix(tmp_path / "ext-1.0.0.vsix", ["linux-x64", "win-x64"])
-    write_vsix(tmp_path / "ext-win32-x64-1.0.0.vsix", ["win-x64"])
+    targets = {
+        "linux-x64": "linux-x64",
+        "linux-arm64": "linux-arm64",
+        "win32-x64": "win-x64",
+        "darwin-x64": "osx-x64",
+        "darwin-arm64": "osx-arm64",
+    }
+    for target, platform in targets.items():
+        write_vsix(tmp_path / f"ext-{target}-1.0.0.vsix", [platform])
+    write_vsix(tmp_path / "ext-1.0.0.vsix", list(targets.values()))
 
-    assert smoke_test_vsix.main([str(tmp_path), "linux-x64", "win-x64"]) == 0
+    assert smoke_test_vsix.main([str(tmp_path), *targets.values()]) == 0
 
 
 def test_accepts_a_lone_universal_vsix_with_only_a_flat_binary(
@@ -93,6 +100,30 @@ def test_accepts_a_flat_windows_binary(
     )
 
     assert smoke_test_vsix.main([str(tmp_path)]) == 0
+
+
+@pytest.mark.parametrize("empty_name", [None, "cwtools-server", "cwtools-server.exe"])
+def test_checks_both_flat_executables(
+    smoke_test_vsix: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    empty_name: str | None,
+) -> None:
+    files = {"cwtools-server": "binary\n", "cwtools-server.exe": "binary\n"}
+    if empty_name is not None:
+        files[empty_name] = ""
+    write_vsix(tmp_path / "ext-1.0.0.vsix", [], server_files=files)
+
+    if empty_name is None:
+        assert smoke_test_vsix.main([str(tmp_path)]) == 0
+    else:
+        with pytest.raises(SystemExit) as caught:
+            smoke_test_vsix.main([str(tmp_path)])
+        assert caught.value.code == 1
+        assert (
+            "::error::ext-1.0.0.vsix: server executable "
+            f"bin/server/cwtools-server/{empty_name} is empty\n"
+        ) in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import zipfile
 from fnmatch import fnmatch
+from itertools import chain
 from pathlib import Path
 
 TARGET_TO_PLATFORM = {
@@ -34,17 +35,17 @@ def server_exe(platform: str) -> str:
     return "cwtools-server.exe" if platform == "win-x64" else "cwtools-server"
 
 
-def server_binaries(root: Path) -> dict[str, Path]:
+def server_binaries(root: Path) -> dict[str, list[Path]]:
     base = root / "bin" / "server" / "cwtools-server"
-    present: dict[str, Path] = {}
+    present: dict[str, list[Path]] = {}
     if not base.is_dir():
         return present
     flat_names = (server_exe("linux-x64"), server_exe("win-x64"))
-    flat = next((base / name for name in flat_names if (base / name).is_file()), None)
-    if flat is not None:
+    flat = [base / name for name in flat_names if (base / name).is_file()]
+    if flat:
         present["flat"] = flat
     for directory in sorted(p for p in base.iterdir() if p.is_dir()):
-        present[directory.name] = directory / server_exe(directory.name)
+        present[directory.name] = [directory / server_exe(directory.name)]
     return present
 
 
@@ -127,7 +128,7 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
         if not present:
             gh_error(f"{vsix.name}: no server binaries at all")
             raise SystemExit(1)
-        for binary in present.values():
+        for binary in chain.from_iterable(present.values()):
             relative = binary.relative_to(root).as_posix()
             if not binary.is_file():
                 gh_error(f"{vsix.name}: missing server executable {relative}")
