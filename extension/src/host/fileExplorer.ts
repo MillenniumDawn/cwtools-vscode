@@ -96,9 +96,10 @@ export class FilesProvider
 		children: [],
 		uri: "",
 	};
-	// Leaf nodes by normalised URI, rebuilt with the tree, so a reveal is one
-	// lookup instead of a `Uri.parse` per file node (#876).
-	private _byUri = new Map<string, TreeNode>();
+	// Leaf nodes by normalised URI, built on the first reveal after each
+	// refresh so a reveal is one lookup instead of a `Uri.parse` per file node,
+	// while a refresh that is never followed by a reveal parses nothing (#876).
+	private _byUri: Map<string, TreeNode> | undefined;
 	constructor(files: FileListItem[]) {
 		this.parseTree(files);
 	}
@@ -109,6 +110,13 @@ export class FilesProvider
 
 	private parseTree(files: FileListItem[]): void {
 		this._tree.children = filesToTreeNodes(files);
+		this._byUri = undefined;
+	}
+
+	private uriIndex(): Map<string, TreeNode> {
+		if (this._byUri) {
+			return this._byUri;
+		}
 		const byUri = new Map<string, TreeNode>();
 		const stack = [...this._tree.children];
 		while (stack.length > 0) {
@@ -125,6 +133,7 @@ export class FilesProvider
 			}
 		}
 		this._byUri = byUri;
+		return byUri;
 	}
 
 	getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -152,7 +161,7 @@ export class FilesProvider
 		return element.parent;
 	}
 	findNodeByUri(uri: vscode.Uri): TreeNode | undefined {
-		return this._byUri.get(uriKey(uri));
+		return this.uriIndex().get(uriKey(uri));
 	}
 	refresh(files: FileListItem[]) {
 		this.parseTree(files);

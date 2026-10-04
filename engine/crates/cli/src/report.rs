@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn github_row_renders_the_workflow_command() {
-        let base = PathBuf::from(abs("repo"));
+        let base = repo();
         let d = diag(
             &abs("repo/common/x.txt"),
             12,
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn github_row_encodes_separators_in_the_file_property() {
-        let base = PathBuf::from(abs("repo"));
+        let base = repo();
         let d = diag(&abs("repo/od,d:name.txt"), 1, 1, "", "m");
         let row = github_row(&d, &base);
         assert!(row.contains("file=od%2Cd%3Aname.txt,line=1"), "got: {row}");
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn paths_outside_the_root_stay_absolute() {
-        let base = PathBuf::from(abs("repo"));
+        let base = repo();
         let file = abs("elsewhere/x.txt");
         let d = diag(&file, 1, 1, "CW100", "m");
         let row = github_row(&d, &base);
@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn sarif_locations_are_relative_to_the_source_root() {
         let d = diag(&abs("repo/common/x.txt"), 7, 3, "CW100", "m");
-        let out = sarif_report(&[&d], Path::new(&abs("repo")), None);
+        let out = sarif_report(&[&d], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let loc = &v["runs"][0]["results"][0]["locations"][0]["physicalLocation"];
         assert_eq!(loc["artifactLocation"]["uri"], "common/x.txt");
@@ -723,7 +723,7 @@ mod tests {
     #[test]
     fn sarif_encodes_spaces_in_uris() {
         let d = diag(&abs("games/Hearts of Iron IV/x.txt"), 1, 1, "CW100", "m");
-        let out = sarif_report(&[&d], Path::new(&abs("repo")), None);
+        let out = sarif_report(&[&d], &repo(), None);
         assert!(
             out.contains(&format!(
                 "\"uri\": \"{URI}games/Hearts%20of%20Iron%20IV/x.txt\""
@@ -799,7 +799,7 @@ mod tests {
             col: 3,
             end: (4, 9),
         }];
-        let out = sarif_report(&[&d], Path::new(&abs("repo")), None);
+        let out = sarif_report(&[&d], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let related = &v["runs"][0]["results"][0]["relatedLocations"][0];
         assert_eq!(related["message"]["text"], "the if this else belongs to");

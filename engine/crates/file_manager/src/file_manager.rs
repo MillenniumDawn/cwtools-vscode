@@ -1215,13 +1215,10 @@ pub fn ignore_glob_match(pattern: &str, name: &str, relative: &str) -> bool {
 }
 
 pub fn is_ignored_logical_path(logical_path: &str, extra_file_globs: &[String]) -> bool {
-    // Handle Windows separators without copying a path that has none.
-    let normalized: std::borrow::Cow<'_, str> = if logical_path.contains('\\') {
-        std::borrow::Cow::Owned(logical_path.replace('\\', "/"))
-    } else {
-        std::borrow::Cow::Borrowed(logical_path)
-    };
-    let file_name = normalized.rsplit('/').next().unwrap_or(&normalized);
+    let normalized = normalize_slashes(std::borrow::Cow::Borrowed(logical_path));
+    let file_name = normalized
+        .rsplit_once('/')
+        .map_or(&*normalized, |(_, name)| name);
     DEFAULT_EXCLUDE_PATTERNS
         .iter()
         .any(|pat| ignore_glob_match(pat, file_name, &normalized))

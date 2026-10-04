@@ -67,27 +67,38 @@ suite("filesToTreeNodes", () => {
 });
 
 suite("FilesProvider.findNodeByUri", () => {
-	test("answers from an index built with the tree, not a parse per node", () => {
+	test("parses each node URI at most once across reveals, and not on refresh", () => {
 		const files = Array.from({ length: 200 }, (_, i) =>
 			item(`common/dir_${i % 7}/file_${i}.txt`),
 		);
+		uriParse.mockClear();
 		const provider = new FilesProvider(files);
-		const parsesAfterBuild = uriParse.mock.calls.length;
-		assert.strictEqual(parsesAfterBuild, files.length);
+		assert.strictEqual(
+			uriParse.mock.calls.length,
+			0,
+			"building the tree must not parse node URIs",
+		);
 
 		const target = { toString: () => files[123].uri } as unknown as Uri;
 		const node = provider.findNodeByUri(target);
 		assert.ok(node, "node for an indexed file");
 		assert.strictEqual(node.uri, files[123].uri);
 		assert.strictEqual(node.fileName, "file_123.txt");
-		assert.strictEqual(
-			uriParse.mock.calls.length,
-			parsesAfterBuild,
-			"a reveal lookup must not parse any node URI",
+		const parsesAfterFirstReveal = uriParse.mock.calls.length;
+		assert.ok(
+			parsesAfterFirstReveal <= files.length,
+			`first reveal may index every node once, got ${parsesAfterFirstReveal}`,
 		);
 
+		const other = { toString: () => files[7].uri } as unknown as Uri;
+		assert.strictEqual(provider.findNodeByUri(other)?.fileName, "file_7.txt");
 		const missing = { toString: () => "file:///ws/mod/nowhere.txt" } as Uri;
 		assert.strictEqual(provider.findNodeByUri(missing), undefined);
+		assert.strictEqual(
+			uriParse.mock.calls.length,
+			parsesAfterFirstReveal,
+			"later reveals must not parse any node URI",
+		);
 	});
 
 	test("refresh rebuilds the index", () => {

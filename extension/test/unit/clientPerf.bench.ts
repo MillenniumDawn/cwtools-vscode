@@ -40,21 +40,43 @@ const diagnostics: DiagnosticLike[] = Array.from(
 // Vitest 5 hands `bench` in through the test context, and a registration
 // only measures once it is `.run()` (or passed to `bench.compare()`). Without
 // that the file "passes" in a few hundred milliseconds having timed nothing
-// (#878), so each run's result is asserted on as well.
-test("client hot-path functions", async ({ bench }) => {
-	const results = [
-		await bench("fileListSignature (7,400 files)", () => {
-			fileListSignature(fileList);
-		}).run(),
-		await bench("diagnosticsSignature (7,400 diagnostics)", () => {
-			diagnosticsSignature(diagnostics);
-		}).run(),
-		await bench("filesToTreeNodes (7,400 files)", () => {
-			filesToTreeNodes(fileList);
-		}).run(),
-	];
-	for (const result of results) {
-		expect(result.state, result.name).toBe("completed");
-		expect(result.latency.mean, result.name).toBeGreaterThan(0);
-	}
+// (#878), so each run's result is asserted on as well. One test per bench
+// keeps each under its own timeout; tinybench's default one-second sample
+// window plus warmup would otherwise approach vitest's 5 s default for three.
+const BENCH_TIMEOUT_MS = 60_000;
+
+function assertRan(
+	result: { state: string; latency: { mean: number } },
+	name: string,
+): void {
+	expect(result.state, name).toBe("completed");
+	expect(result.latency.mean, name).toBeGreaterThan(0);
+}
+
+test("fileListSignature", { timeout: BENCH_TIMEOUT_MS }, async ({ bench }) => {
+	const result = await bench("fileListSignature (7,400 files)", () => {
+		fileListSignature(fileList);
+	}).run();
+	assertRan(result, result.name);
+});
+
+test(
+	"diagnosticsSignature",
+	{ timeout: BENCH_TIMEOUT_MS },
+	async ({ bench }) => {
+		const result = await bench(
+			"diagnosticsSignature (7,400 diagnostics)",
+			() => {
+				diagnosticsSignature(diagnostics);
+			},
+		).run();
+		assertRan(result, result.name);
+	},
+);
+
+test("filesToTreeNodes", { timeout: BENCH_TIMEOUT_MS }, async ({ bench }) => {
+	const result = await bench("filesToTreeNodes (7,400 files)", () => {
+		filesToTreeNodes(fileList);
+	}).run();
+	assertRan(result, result.name);
 });

@@ -35,14 +35,14 @@ pub struct FileInfo {
     pub export_instance_names: HashSet<String>,
 }
 
-/// One definition of a variable, as `find_variable_definitions` and
-/// `variable_values` answer it: the file, where in it, and the value if the
-/// defining effect gave one.
+/// One definition of a variable, as `find_variable_definitions` answers it:
+/// the file and where in it. The value stays in that file's
+/// `defined_variables_ns`, so it is stored once; `variable_values` reads it
+/// back through the file record.
 #[derive(Debug, Clone)]
 struct VariableDef {
     uri: Arc<str>,
     location: SourceLocation,
-    value: Option<String>,
 }
 
 pub struct InfoService {
@@ -278,7 +278,6 @@ impl InfoService {
                     .push(VariableDef {
                         uri: Arc::clone(&uri_arc),
                         location: v.location,
-                        value: v.value.clone(),
                     });
                 if ns != "@" {
                     Arc::make_mut(&mut self.type_index)
@@ -503,14 +502,28 @@ impl InfoService {
         let mut values: Vec<String> = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
         let mut truncated = false;
+        // The index names the files that define `name`; each file's own
+        // variable list is short, so the value lookup stays local to them.
+        let mut files_seen: HashSet<&str> = HashSet::new();
         for d in self.variable_defs_for(name) {
-            if let Some(val) = &d.value
-                && seen.insert(val.as_str())
-            {
-                if values.len() >= limit {
-                    truncated = true;
-                } else {
-                    values.push(val.clone());
+            if !files_seen.insert(&d.uri) {
+                continue;
+            }
+            let Some(fi) = self.files.get(&*d.uri) else {
+                continue;
+            };
+            for v in fi.defined_variables_ns.values().flatten() {
+                if !v.name.eq_ignore_ascii_case(name) {
+                    continue;
+                }
+                if let Some(val) = &v.value
+                    && seen.insert(val.as_str())
+                {
+                    if values.len() >= limit {
+                        truncated = true;
+                    } else {
+                        values.push(val.clone());
+                    }
                 }
             }
         }
