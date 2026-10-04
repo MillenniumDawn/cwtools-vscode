@@ -21,11 +21,14 @@ interface TreeNodeInternal {
 	fileName?: string;
 	isDirectory?: boolean;
 	uri?: string;
-	children: Record<string, TreeNodeInternal>;
+	children: Map<string, TreeNodeInternal>;
 }
 
+// A `Map`, not a plain object: a segment named `constructor`, `toString` or
+// `__proto__` would otherwise resolve through `Object.prototype`, and
+// integer-like names such as `10` would sort ahead of `9` in `Object.values`.
 export function filesToTreeNodes(arr: FileListItem[]): TreeNode[] {
-	const tree: Record<string, TreeNodeInternal> = {};
+	const tree = new Map<string, TreeNodeInternal>();
 
 	function addnode(obj: FileListItem): void {
 		const splitpath = (obj.scope + "/" + obj.logicalpath)
@@ -37,23 +40,24 @@ export function filesToTreeNodes(arr: FileListItem[]): TreeNode[] {
 			const segment = splitpath[i];
 			const isLastSegment = i === splitpath.length - 1;
 
-			if (!ptr[segment]) {
-				ptr[segment] = {
+			let node = ptr.get(segment);
+			if (!node) {
+				node = {
 					fileName: segment,
 					isDirectory: !isLastSegment,
-					children: {},
+					children: new Map(),
 				};
-
 				if (isLastSegment) {
-					ptr[segment].uri = obj.uri;
+					node.uri = obj.uri;
 				}
+				ptr.set(segment, node);
 			} else if (!isLastSegment) {
 				// A node that first arrived as a leaf now has children; make
 				// it a directory so they aren't hidden.
-				ptr[segment].isDirectory = true;
+				node.isDirectory = true;
 			}
 
-			ptr = ptr[segment].children;
+			ptr = node.children;
 		}
 	}
 
@@ -68,14 +72,19 @@ export function filesToTreeNodes(arr: FileListItem[]): TreeNode[] {
 			children: [],
 			parent,
 		};
-		result.children = Object.values(node.children).map((c) =>
+		result.children = Array.from(node.children.values(), (c) =>
 			convertToTreeNode(c, result),
 		);
 		return result;
 	}
 
 	arr.forEach(addnode);
-	return Object.values(tree).map((n) => convertToTreeNode(n));
+	return Array.from(tree.values(), (n) => convertToTreeNode(n));
+}
+
+/** The spelling `findNodeByUri` matches on, for both the index and the query. */
+function uriKey(uri: string | vscode.Uri): string {
+	return (typeof uri === "string" ? vscode.Uri.parse(uri) : uri).toString();
 }
 
 export class FilesProvider
@@ -87,6 +96,9 @@ export class FilesProvider
 		children: [],
 		uri: "",
 	};
+	// Leaf nodes by normalised URI, rebuilt with the tree, so a reveal is one
+	// lookup instead of a `Uri.parse` per file node (#876).
+	private _byUri = new Map<string, TreeNode>();
 	constructor(files: FileListItem[]) {
 		this.parseTree(files);
 	}
@@ -97,6 +109,22 @@ export class FilesProvider
 
 	private parseTree(files: FileListItem[]): void {
 		this._tree.children = filesToTreeNodes(files);
+		const byUri = new Map<string, TreeNode>();
+		const stack = [...this._tree.children];
+		while (stack.length > 0) {
+			const node = stack.pop()!;
+			if (node.isDirectory) {
+				for (const child of node.children) {
+					stack.push(child);
+				}
+			} else {
+				const key = uriKey(node.uri);
+				if (!byUri.has(key)) {
+					byUri.set(key, node);
+				}
+			}
+		}
+		this._byUri = byUri;
 	}
 
 	getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -124,19 +152,7 @@ export class FilesProvider
 		return element.parent;
 	}
 	findNodeByUri(uri: vscode.Uri): TreeNode | undefined {
-		const target = uri.toString();
-		const stack = [...this._tree.children];
-		while (stack.length > 0) {
-			const node = stack.pop()!;
-			if (
-				!node.isDirectory &&
-				vscode.Uri.parse(node.uri).toString() === target
-			) {
-				return node;
-			}
-			stack.push(...node.children);
-		}
-		return undefined;
+		return this._byUri.get(uriKey(uri));
 	}
 	refresh(files: FileListItem[]) {
 		this.parseTree(files);

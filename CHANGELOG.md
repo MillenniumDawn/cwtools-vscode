@@ -23,6 +23,7 @@
 * Discard delayed plaintext language upgrades after editor focus changes or teardown, before sending stale focus notifications. (#837)
 * Exercise automatic server crash/restart recovery in real extension-host tests, including all command contexts and a request to the replacement process. (#838)
 * Extend the graph unit tests to cover exportImage's data-URI strip and the panel's saveImage and saveJson writes to the chosen file. (#523)
+* The loaded-files tree is built on a `Map`, so a folder or file named `constructor`, `toString` or `__proto__` shows up instead of vanishing, integer-like names keep the server's order, and "Reveal active file" is one lookup in a URI index instead of a `Uri.parse` per node. (#876)
 * Pin the client-required server executeCommand names in a shared contract and verify the live server advertises each one. (#522)
 * Classify the shipped graph webview libraries as runtime dependencies and make dependency review fail for both runtime and development scopes. (#572)
 * Add the `cwtools.parentMods` setting: the parent mods of a submod workspace, in load order. The docs replace the multi-root advice, which never gave a second folder's definitions to the first. (#786)
