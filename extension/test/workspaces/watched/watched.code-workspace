@@ -1,10 +1,10 @@
 {
   "folders": [
     {
-      "path": "obj/stellaris"
+      "path": ".claude/workspaces/stellaris"
     },
     {
-      "path": "obj/parent"
+      "path": ".claude/workspaces/parent"
     },
     {
       "path": ".claude/rules"
