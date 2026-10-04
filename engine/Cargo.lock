@@ -584,6 +584,7 @@ dependencies = [
  "cwtools_string_table",
  "rustc-hash",
  "smallvec",
+ "tempfile",
  "tracing",
 ]
 

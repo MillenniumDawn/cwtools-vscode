@@ -521,6 +521,11 @@ mod tests {
         }
     }
 
+    /// The repository root every row is made relative to.
+    fn repo() -> PathBuf {
+        PathBuf::from(abs("repo"))
+    }
+
     /// `file_uri` of an `abs` path, up to and including the first slash.
     const URI: &str = if cfg!(windows) {
         "file:///C:/"
@@ -559,8 +564,8 @@ mod tests {
 
     #[test]
     fn github_row_maps_severity_to_the_three_annotation_levels() {
-        let base = Path::new("/repo");
-        let mut d = diag("/repo/x.txt", 1, 1, "CW100", "m");
+        let base = &repo();
+        let mut d = diag(&abs("repo/x.txt"), 1, 1, "CW100", "m");
         for (sev, want) in [
             (ErrorSeverity::Error, "::error "),
             (ErrorSeverity::Warning, "::warning "),
@@ -575,8 +580,8 @@ mod tests {
     /// A raw newline would terminate the command and swallow the rest.
     #[test]
     fn github_row_encodes_newlines_and_percent_in_the_message() {
-        let base = Path::new("/repo");
-        let d = diag("/repo/x.txt", 1, 1, "CW100", "one\r\ntwo 50% off");
+        let base = &repo();
+        let d = diag(&abs("repo/x.txt"), 1, 1, "CW100", "one\r\ntwo 50% off");
         let row = github_row(&d, base);
         assert!(row.contains("::one%0D%0Atwo 50%25 off\n"), "got: {row}");
         assert_eq!(row.matches('\n').count(), 1, "one physical line: {row}");
@@ -594,8 +599,8 @@ mod tests {
     /// Whole-file diagnostics report line 0, which GitHub can't anchor.
     #[test]
     fn github_row_clamps_line_zero() {
-        let base = Path::new("/repo");
-        let d = diag("/repo/x.yml", 0, 0, "", "bad file");
+        let base = &repo();
+        let d = diag(&abs("repo/x.yml"), 0, 0, "", "bad file");
         assert!(github_row(&d, base).contains("line=1,col=1"));
     }
 
@@ -613,7 +618,7 @@ mod tests {
 
     #[test]
     fn sarif_has_the_2_1_0_envelope() {
-        let out = sarif_report(&[], Path::new("/repo"), None);
+        let out = sarif_report(&[], &repo(), None);
         assert!(out.contains("\"version\": \"2.1.0\""));
         assert!(out.contains("sarif-schema-2.1.0.json"));
         assert!(out.contains("\"name\": \"cwtools\""));
@@ -631,8 +636,8 @@ mod tests {
 
     #[test]
     fn sarif_rules_come_from_the_error_code_catalog() {
-        let d = diag("/repo/x.txt", 3, 2, "CW113", "missing file");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(&abs("repo/x.txt"), 3, 2, "CW113", "missing file");
+        let out = sarif_report(&[&d], &repo(), None);
         assert!(out.contains("\"id\": \"CW113\""), "got: {out}");
         assert!(out.contains("\"name\": \"MissingFile\""), "got: {out}");
         // shortDescription is the catalog's message template.
@@ -644,19 +649,19 @@ mod tests {
     /// Pass-through templates ("{}") would render as a useless description.
     #[test]
     fn sarif_describes_pass_through_templates_by_name() {
-        let d = diag("/repo/x.txt", 1, 1, "CW240", "value is wrong");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(&abs("repo/x.txt"), 1, 1, "CW240", "value is wrong");
+        let out = sarif_report(&[&d], &repo(), None);
         assert!(out.contains("\"text\": \"Unexpected value\""), "got: {out}");
     }
 
     #[test]
     fn sarif_rule_indexes_are_sorted_and_shared() {
         let ds = [
-            diag("/repo/a.txt", 1, 1, "CW282", "b"),
-            diag("/repo/b.txt", 2, 1, "CW113", "a"),
-            diag("/repo/c.txt", 3, 1, "CW282", "c"),
+            diag(&abs("repo/a.txt"), 1, 1, "CW282", "b"),
+            diag(&abs("repo/b.txt"), 2, 1, "CW113", "a"),
+            diag(&abs("repo/c.txt"), 3, 1, "CW282", "c"),
         ];
-        let out = sarif_report(&ds.iter().collect::<Vec<_>>(), Path::new("/repo"), None);
+        let out = sarif_report(&ds.iter().collect::<Vec<_>>(), &repo(), None);
         // CW113 sorts first, so it is rule 0 and CW282 is rule 1.
         assert_eq!(out.matches("\"ruleIndex\": 0").count(), 1);
         assert_eq!(out.matches("\"ruleIndex\": 1").count(), 2);
@@ -669,8 +674,8 @@ mod tests {
     /// `ruleIndex` for exactly these rows.
     #[test]
     fn sarif_rule_index_resolves_a_non_canonical_code_spelling() {
-        let d = diag("/repo/x.txt", 3, 2, "cw113", "missing file");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(&abs("repo/x.txt"), 3, 2, "cw113", "missing file");
+        let out = sarif_report(&[&d], &repo(), None);
         assert!(out.contains("\"id\": \"CW113\""), "got: {out}");
         assert!(out.contains("\"ruleIndex\": 0"), "got: {out}");
     }
@@ -706,8 +711,8 @@ mod tests {
     /// `{}` are substitution points, not text a reader wants in a description.
     #[test]
     fn sarif_description_replaces_template_placeholders() {
-        let d = diag("/repo/x.txt", 1, 1, "CW100", "m");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(&abs("repo/x.txt"), 1, 1, "CW100", "m");
+        let out = sarif_report(&[&d], &repo(), None);
         assert!(
             out.contains("\"text\": \"Localisation key … is not defined for …\""),
             "got: {out}"
@@ -730,8 +735,8 @@ mod tests {
 
     #[test]
     fn sarif_omits_the_rule_id_when_a_diagnostic_has_no_code() {
-        let d = diag("/repo/x.yml", 0, 0, "", "could not parse");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(&abs("repo/x.yml"), 0, 0, "", "could not parse");
+        let out = sarif_report(&[&d], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(v["runs"][0]["results"][0].get("ruleId").is_none());
         assert_eq!(
@@ -749,9 +754,9 @@ mod tests {
     /// exclusive end.
     #[test]
     fn sarif_regions_carry_the_end_position_when_there_is_one() {
-        let mut d = diag("/repo/x.txt", 7, 3, "CW282", "redundant default");
+        let mut d = diag(&abs("repo/x.txt"), 7, 3, "CW282", "redundant default");
         d.end = Some((7, 19));
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let out = sarif_report(&[&d], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let region = &v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"];
         assert_eq!(region["startLine"], 7);
@@ -764,8 +769,8 @@ mod tests {
     /// text the check never looked at.
     #[test]
     fn sarif_omits_the_end_when_the_emit_site_gave_no_range() {
-        let d = diag("/repo/x.txt", 7, 3, "CW282", "m");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(&abs("repo/x.txt"), 7, 3, "CW282", "m");
+        let out = sarif_report(&[&d], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let region = &v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"];
         assert!(region.get("endLine").is_none(), "got: {out}");
@@ -776,9 +781,9 @@ mod tests {
     /// before that would invert the region.
     #[test]
     fn sarif_drops_an_end_that_precedes_the_clamped_start() {
-        let mut d = diag("/repo/x.yml", 0, 0, "", "bad file");
+        let mut d = diag(&abs("repo/x.yml"), 0, 0, "", "bad file");
         d.end = Some((0, 4));
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let out = sarif_report(&[&d], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let region = &v["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"];
         assert_eq!(region["startLine"], 1);
@@ -816,8 +821,8 @@ mod tests {
 
     #[test]
     fn sarif_omits_related_locations_when_there_are_none() {
-        let d = diag("/repo/x.txt", 1, 1, "CW100", "m");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(&abs("repo/x.txt"), 1, 1, "CW100", "m");
+        let out = sarif_report(&[&d], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(
             v["runs"][0]["results"][0].get("relatedLocations").is_none(),
@@ -827,8 +832,8 @@ mod tests {
 
     #[test]
     fn sarif_carries_the_diagnostic_hash_as_a_fingerprint() {
-        let d = diag("/repo/x.txt", 1, 1, "CW100", "m");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(&abs("repo/x.txt"), 1, 1, "CW100", "m");
+        let out = sarif_report(&[&d], &repo(), None);
         assert!(
             out.contains("\"cwtoolsDiagHash/v1\": \"0123456789abcdef\""),
             "got: {out}"
@@ -846,7 +851,7 @@ mod tests {
 
     #[test]
     fn sarif_carries_a_run_notice_outside_the_results() {
-        let out = sarif_report(&[], Path::new("/repo"), Some("CW113, CW500 report nothing"));
+        let out = sarif_report(&[], &repo(), Some("CW113, CW500 report nothing"));
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let notification = &v["runs"][0]["invocations"][0]["toolConfigurationNotifications"][0];
         assert_eq!(notification["level"], "note");
@@ -862,15 +867,21 @@ mod tests {
 
     #[test]
     fn sarif_omits_invocations_without_a_notice() {
-        let out = sarif_report(&[], Path::new("/repo"), None);
+        let out = sarif_report(&[], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(v["runs"][0].get("invocations").is_none(), "got: {out}");
     }
 
     #[test]
     fn sarif_escapes_json_in_messages() {
-        let d = diag("/repo/x.txt", 1, 1, "CW100", "he said \"no\"\nthen left");
-        let out = sarif_report(&[&d], Path::new("/repo"), None);
+        let d = diag(
+            &abs("repo/x.txt"),
+            1,
+            1,
+            "CW100",
+            "he said \"no\"\nthen left",
+        );
+        let out = sarif_report(&[&d], &repo(), None);
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(
             v["runs"][0]["results"][0]["message"]["text"],

@@ -1178,21 +1178,15 @@ mod tests {
         use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
         use cwtools_string_table::string_table::StringTable;
         let table = StringTable::new();
-        let dir = std::path::PathBuf::from(format!(
-            "/tmp/cwtools_position_test_{}_{}",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path();
         std::fs::write(
             dir.join("focus.cwt"),
             "types = { type[focus] = { path = \"common/national_focus\" } }\n\
              focus = { id = scalar x = int }\n",
         )
-        .unwrap();
-        let (ruleset, _) = load_ruleset_from_dir(&dir, &table, ScanBudget::default());
-        let _ = std::fs::remove_dir_all(&dir);
+        .expect("write focus.cwt");
+        let (ruleset, _) = load_ruleset_from_dir(dir, &table, ScanBudget::default());
         let prepared = crate::Prepared {
             ruleset: &ruleset,
             table: &table,

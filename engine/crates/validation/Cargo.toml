@@ -25,6 +25,7 @@ smallvec = { workspace = true }
 [dev-dependencies]
 cwtools_file_manager = { workspace = true }
 criterion = { workspace = true }
+tempfile = { workspace = true }
 
 [[bench]]
 name = "cw246"
