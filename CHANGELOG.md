@@ -3,18 +3,23 @@
 #### Engine
 
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
+* Avoid interning speculative parser keys, removing discarded numeric and boolean entries from bare clause values. (#547)
+* Return `RequestFailed` instead of `ServerNotInitialized` for navigation and rename refusals. (#828)
 * Cap cumulative text snapshots for references and rename requests, refusing incomplete navigation when the request budget is exhausted. The conservative 5× peak-memory reservation means a closed UTF-8 file larger than 25.6 MiB cannot fit within the 128 MiB request budget. (#569)
 * Reuse formatted text when constructing whole-file format edits, avoiding reparsing and the multi-edit planner. (#557)
 * Memoize subtype merges per file and precompute matcher key groups. (#492)
 * Harden cache corruption handling, pin the `.cwb` archive layout with a golden fixture, and benchmark cache serialization and loading. (#520)
 * A submod can name its parent mods (`parentMods` init option, in load order). The server indexes them between the base game and the workspace with base-game provenance, so their scripted effects, triggers, variables, ideas, flags and localisation resolve and complete, and they never count toward CW261. A workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, shadows the parent's copy. Parent files are never validated or diagnosed, and are readable but not editable through the server. (#786)
+* Alias `value[...]` patterns now resolve regardless of ASCII case, like the `enum[...]` arm, so `political_power` on rules side matches any casing of a value-set member. (#483)
 
 #### Extension
 
+* Extend the graph unit tests to cover exportImage's data-URI strip and the panel's saveImage and saveJson writes to the chosen file. (#523)
 * Pin the client-required server executeCommand names in a shared contract and verify the live server advertises each one. (#522)
 * Classify the shipped graph webview libraries as runtime dependencies and make dependency review fail for both runtime and development scopes. (#572)
 * Add the `cwtools.parentMods` setting: the parent mods of a submod workspace, in load order. The docs replace the multi-root advice, which never gave a second folder's definitions to the first. (#786)
 * Rules in the resolved rules folder now reload automatically after `.cwt` edits, and changing `cwtools.rules_folder` to a valid folder applies without restarting the window. Set `cwtools.rules.autoReload` to `false` to keep manual reloads. (#605)
+* The Set graph depth prompt now accepts only a whole number of at least 1. Blank, zero, negative, fractional and unsafe values are rejected with a message naming the minimum, so they no longer replace the remembered depth or send a request the server refuses. (#841)
 
 #### Tooling
 
