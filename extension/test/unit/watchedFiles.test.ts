@@ -67,7 +67,11 @@ const NESTED_CASES: [root: string, path: string, excluded: boolean][] = [
 	["/home/u/target/mod", "/home/u/target/mod/Changelog.txt", true],
 	["C:\\build\\target\\mod", "C:\\build\\target\\mod\\common\\a.txt", false],
 	["c:\\build\\target\\mod", "C:\\Build\\Target\\Mod\\common\\a.txt", false],
-	["C:\\u\\.claude\\worktrees\\mod", "C:\\u\\.claude\\worktrees\\mod\\events\\a.txt", false],
+	[
+		"C:\\u\\.claude\\worktrees\\mod",
+		"C:\\u\\.claude\\worktrees\\mod\\events\\a.txt",
+		false,
+	],
 	["C:\\build\\target\\mod", "C:\\build\\target\\mod\\bin\\a.txt", true],
 	["C:\\build\\target\\mod", "C:\\build\\target\\mod\\README.txt", true],
 	// A trailing separator on the root changes nothing.
@@ -80,20 +84,20 @@ const NESTED_CASES: [root: string, path: string, excluded: boolean][] = [
 	["C:\\", "C:\\obj\\x.txt", true],
 ];
 
-// Outside every served root there is nothing to measure directories from, so
-// only the file-name check applies and the server's access boundary decides.
+// Outside the root, every directory segment counts, as the whole-path check did
+// before the root was known.
 const OUTSIDE_CASES: [root: string, path: string, excluded: boolean][] = [
-	["/mod", "/other/common/ideas/x.txt", false],
-	["/mod", "/other/dist/x.txt", false],
-	["/mod", "/other/.claude/rules/x.cwt", false],
+	["/mod", "/other/dist/x.txt", true],
+	["/mod", "/other/.claude/rules/x.cwt", true],
+	// A sibling that merely shares the root's name as a prefix is outside it.
+	["/mod", "/mod2/target/x.txt", true],
+	["C:\\mod", "D:\\mod\\target\\x.txt", true],
+	["C:\\mod", "C:\\other\\dist\\x.txt", true],
 	["/mod", "/other/Changelog.txt", true],
 	["/mod", "/other/docs/notes.md", true],
-	// A sibling that merely shares the root's name as a prefix is outside it.
-	["/mod", "/mod2/target/x.txt", false],
-	["/mod", "/x.txt", false],
-	["C:\\mod", "D:\\mod\\target\\x.txt", false],
-	["C:\\mod", "C:\\other\\dist\\x.txt", false],
 	["C:\\mod", "C:\\other\\README.txt", true],
+	["/mod", "/other/common/ideas/x.txt", false],
+	["/mod", "/x.txt", false],
 ];
 
 suite("watchedFiles", () => {
@@ -121,7 +125,7 @@ suite("watchedFiles", () => {
 		}
 	});
 
-	test("applies file names alone to a path outside the root", () => {
+	test("counts every directory of a path outside the root", () => {
 		for (const [root, path, expected] of OUTSIDE_CASES) {
 			assert.strictEqual(
 				createWatchedPathExcluder(root)(path),

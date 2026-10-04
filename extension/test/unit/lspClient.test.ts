@@ -710,14 +710,15 @@ suite("lspClient — watched files", () => {
 		);
 	});
 
-	test("applies only the file-name check outside the served root", async () => {
+	test("keeps the whole-path check outside the served root", async () => {
 		create();
 		assert.deepStrictEqual(
 			await forwardedWatchedEvents([
 				"file:///other/dist/common/x.txt",
 				"file:///other/Changelog.txt",
+				"file:///other/common/x.txt",
 			]),
-			["file:///other/dist/common/x.txt"],
+			["file:///other/common/x.txt"],
 		);
 	});
 
