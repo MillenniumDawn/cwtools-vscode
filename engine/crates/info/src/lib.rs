@@ -35,12 +35,28 @@ pub struct FileInfo {
     pub export_instance_names: HashSet<String>,
 }
 
+/// One definition of a variable, as `find_variable_definitions` and
+/// `variable_values` answer it: the file, where in it, and the value if the
+/// defining effect gave one.
+#[derive(Debug, Clone)]
+struct VariableDef {
+    uri: Arc<str>,
+    location: SourceLocation,
+    value: Option<String>,
+}
+
 pub struct InfoService {
     pub files: HashMap<String, FileInfo>,
     pub all_type_defs: HashMap<String, Vec<(String, SourceLocation)>>,
     pub type_index: Arc<TypeIndex>,
     pub event_target_counts: HashMap<String, usize>,
     pub variable_counts: HashMap<String, usize>,
+    /// Lower-cased variable name → every definition in the workspace, so a
+    /// hover or goto on a variable is one lookup rather than a scan of every
+    /// file's `defined_variables_ns` (#872). Maintained next to
+    /// `variable_counts` in `index_file_with_precomputed_instances` and
+    /// `clear_file`.
+    variable_defs: HashMap<String, Vec<VariableDef>>,
     pub inline_script_counts: HashMap<String, usize>,
     var_effects: HashSet<String>,
     pub reference_index: ReferenceIndex,
@@ -65,6 +81,7 @@ impl InfoService {
             type_index: Arc::new(TypeIndex::new()),
             event_target_counts: HashMap::new(),
             variable_counts: HashMap::new(),
+            variable_defs: HashMap::new(),
             inline_script_counts: HashMap::new(),
             var_effects: HashSet::new(),
             reference_index: ReferenceIndex::default(),
@@ -251,9 +268,18 @@ impl InfoService {
         for et in &info.saved_event_targets {
             *self.event_target_counts.entry(et.clone()).or_insert(0) += 1;
         }
+        let uri_arc: Arc<str> = Arc::from(uri);
         for (ns, vars) in &info.defined_variables_ns {
             for v in vars {
                 *self.variable_counts.entry(v.name.clone()).or_insert(0) += 1;
+                self.variable_defs
+                    .entry(v.name.to_ascii_lowercase())
+                    .or_default()
+                    .push(VariableDef {
+                        uri: Arc::clone(&uri_arc),
+                        location: v.location,
+                        value: v.value.clone(),
+                    });
                 if ns != "@" {
                     Arc::make_mut(&mut self.type_index)
                         .var_index
@@ -420,12 +446,22 @@ impl InfoService {
                     }
                 }
             }
+            let mut cleared_defs: HashSet<String> = HashSet::new();
             for (ns, vars) in &info.defined_variables_ns {
                 for v in vars {
                     if let Some(count) = self.variable_counts.get_mut(&v.name) {
                         *count -= 1;
                         if *count == 0 {
                             self.variable_counts.remove(&v.name);
+                        }
+                    }
+                    let lower = v.name.to_ascii_lowercase();
+                    if cleared_defs.insert(lower.clone())
+                        && let Some(defs) = self.variable_defs.get_mut(&lower)
+                    {
+                        defs.retain(|d| &*d.uri != uri);
+                        if defs.is_empty() {
+                            self.variable_defs.remove(&lower);
                         }
                     }
                     if ns != "@" {
@@ -450,39 +486,31 @@ impl InfoService {
         self.all_type_defs.get(name)
     }
 
+    fn variable_defs_for(&self, name: &str) -> &[VariableDef] {
+        self.variable_defs
+            .get(&name.to_ascii_lowercase())
+            .map_or(&[], Vec::as_slice)
+    }
+
     pub fn find_variable_definitions(&self, name: &str) -> Vec<(String, SourceLocation)> {
-        let mut out = Vec::new();
-        for (uri, fi) in &self.files {
-            for vars in fi.defined_variables_ns.values() {
-                for v in vars {
-                    if v.name.eq_ignore_ascii_case(name) {
-                        out.push((uri.clone(), v.location));
-                    }
-                }
-            }
-        }
-        out
+        self.variable_defs_for(name)
+            .iter()
+            .map(|d| (d.uri.to_string(), d.location))
+            .collect()
     }
 
     pub fn variable_values(&self, name: &str, limit: usize) -> (Vec<String>, bool) {
         let mut values: Vec<String> = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
         let mut truncated = false;
-        for fi in self.files.values() {
-            for vars in fi.defined_variables_ns.values() {
-                for v in vars {
-                    if !v.name.eq_ignore_ascii_case(name) {
-                        continue;
-                    }
-                    if let Some(val) = &v.value
-                        && seen.insert(val.as_str())
-                    {
-                        if values.len() >= limit {
-                            truncated = true;
-                        } else {
-                            values.push(val.clone());
-                        }
-                    }
+        for d in self.variable_defs_for(name) {
+            if let Some(val) = &d.value
+                && seen.insert(val.as_str())
+            {
+                if values.len() >= limit {
+                    truncated = true;
+                } else {
+                    values.push(val.clone());
                 }
             }
         }
@@ -1335,6 +1363,50 @@ alias[effect:set_variable] = {
             !svc.type_index.var_index.contains("my_explicit"),
             "clear_file must drop the name from var_index"
         );
+    }
+
+    #[test]
+    fn variable_definitions_are_keyed_case_insensitively_and_cleared_per_file() {
+        let table = StringTable::new();
+        let ruleset = set_variable_ruleset(&table);
+        let mut svc = InfoService::new();
+        svc.update_ruleset_data(variable_defining_effects(&ruleset));
+        index_set_variable(&mut svc, "a.txt", "My_Var", &table, &ruleset);
+        index_set_variable(&mut svc, "b.txt", "my_var", &table, &ruleset);
+        index_set_variable(&mut svc, "c.txt", "other", &table, &ruleset);
+
+        let mut defs = svc.find_variable_definitions("MY_VAR");
+        defs.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            defs.iter().map(|(uri, _)| uri.as_str()).collect::<Vec<_>>(),
+            ["a.txt", "b.txt"]
+        );
+        let (values, truncated) = svc.variable_values("my_var", 8);
+        assert_eq!(values, ["3"]);
+        assert!(!truncated);
+        assert!(svc.find_variable_definitions("missing").is_empty());
+
+        // A re-index goes through clear_file first, like the LSP does, and
+        // leaves one entry per definition rather than stacking them.
+        svc.clear_file("a.txt");
+        index_set_variable(&mut svc, "a.txt", "My_Var", &table, &ruleset);
+        assert_eq!(svc.find_variable_definitions("my_var").len(), 2);
+
+        svc.clear_file("a.txt");
+        assert_eq!(
+            svc.find_variable_definitions("my_var")
+                .iter()
+                .map(|(uri, _)| uri.as_str())
+                .collect::<Vec<_>>(),
+            ["b.txt"]
+        );
+        svc.clear_file("b.txt");
+        assert!(svc.find_variable_definitions("my_var").is_empty());
+        assert!(
+            !svc.variable_defs.contains_key("my_var"),
+            "an emptied bucket is dropped"
+        );
+        assert_eq!(svc.find_variable_definitions("other").len(), 1);
     }
 
     #[test]
