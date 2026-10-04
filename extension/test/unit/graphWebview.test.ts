@@ -51,24 +51,44 @@ interface FakeTippyInstance {
 interface FakeCytoscapeCore {
 	destroy: ReturnType<typeof vi.fn>;
 	json: ReturnType<typeof vi.fn>;
+	png: ReturnType<typeof vi.fn>;
+}
+
+interface FakeOverlayCanvas {
+	width: number;
+	height: number;
+	ctx: {
+		scale: ReturnType<typeof vi.fn>;
+		translate: ReturnType<typeof vi.fn>;
+	};
+	convertToBlob: ReturnType<typeof vi.fn>;
 }
 
 const {
 	added,
+	bounds,
 	createdTags,
 	cytoscapeCores,
 	fakeCy,
+	FileReader,
 	graphNodes,
 	jsonFailure,
 	makeNode,
+	mergeImages,
 	messageListener,
 	MutationObserver,
+	offscreenCanvases,
+	pngSignature,
+	GRAPH_BODY,
+	OVERLAY_BODY,
+	MERGED_BODY,
 	postMessage,
 	setState,
 	styleUpdate,
 	themeObservers,
 	tippy,
 	tippyInstances,
+	OffscreenCanvas,
 } = vi.hoisted(() => {
 	const messageListener: {
 		listener?: (event: { data: unknown }) => void;
@@ -101,6 +121,58 @@ const {
 			handlers,
 		};
 	};
+	const pngSignature = Buffer.from([
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+	]);
+	const GRAPH_BODY =
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+	const OVERLAY_BODY = Buffer.concat([
+		pngSignature,
+		Buffer.from("overlay"),
+	]).toString("base64");
+	const MERGED_BODY = Buffer.concat([
+		pngSignature,
+		Buffer.from("merged"),
+	]).toString("base64");
+	const bounds = { x1: 0, y1: 0, x2: 0, y2: 0 };
+	const offscreenCanvases: FakeOverlayCanvas[] = [];
+	const OffscreenCanvas = class {
+		constructor(width: number, height: number) {
+			const record: FakeOverlayCanvas = {
+				width: width,
+				height: height,
+				ctx: { scale: vi.fn(), translate: vi.fn() },
+				convertToBlob: vi.fn(() =>
+					Promise.resolve(
+						new Blob([Buffer.from(OVERLAY_BODY, "base64")], {
+							type: "image/png",
+						}),
+					),
+				),
+			};
+			offscreenCanvases.push(record);
+			Object.assign(this, record);
+		}
+		getContext(_type: string): unknown {
+			return offscreenCanvases[offscreenCanvases.length - 1]?.ctx;
+		}
+	};
+	const FileReader = class {
+		result = "";
+		onloadend: (() => void) | null = null;
+		onerror: (() => void) | null = null;
+		async readAsDataURL(blob: Blob): Promise<void> {
+			try {
+				const bytes = Buffer.from(await blob.arrayBuffer());
+				this.result = `data:${blob.type || "application/octet-stream"};base64,${bytes.toString("base64")}`;
+				this.onloadend?.();
+			} catch {
+				this.onerror?.();
+			}
+		}
+	};
+	const mergeImages = vi.fn();
+
 	// tippy v6 evaluates the content prop eagerly, both when the instance is
 	// created and on every setProps (tippy.cjs.js evaluateProps, called from
 	// createTippy and setProps). The fake does the same, so these tests see the
@@ -139,7 +211,15 @@ const {
 				setTransform: vi.fn(),
 			}),
 			destroy: vi.fn(),
-			elements: () => ({ components: () => [] }),
+			elements: () => ({
+				components: () => [],
+				boundingBox: () => ({
+					x1: bounds.x1,
+					y1: bounds.y1,
+					x2: bounds.x2,
+					y2: bounds.y2,
+				}),
+			}),
 			fit: vi.fn(),
 			height: () => 600,
 			json: vi.fn((json?: unknown) => {
@@ -148,6 +228,7 @@ const {
 				}
 				return { elements: { nodes: [], edges: [] } };
 			}),
+			png: vi.fn(() => `data:image/png;base64,${GRAPH_BODY}`),
 			nodes: () => ({
 				forEach: (fn: (node: FakeGraphNode) => void) => {
 					graphNodes.nodes.forEach(fn);
@@ -173,20 +254,29 @@ const {
 	const MutationObserver = vi.fn(FakeMutationObserver);
 	return {
 		added,
+		bounds,
 		createdTags,
 		cytoscapeCores,
 		fakeCy,
+		FileReader,
 		graphNodes,
 		jsonFailure,
 		makeNode,
+		mergeImages,
 		messageListener,
 		MutationObserver,
+		offscreenCanvases,
+		pngSignature,
+		GRAPH_BODY,
+		OVERLAY_BODY,
+		MERGED_BODY,
 		postMessage: vi.fn(),
 		setState: vi.fn(),
 		styleUpdate,
 		themeObservers,
 		tippy,
 		tippyInstances,
+		OffscreenCanvas,
 	};
 });
 
@@ -199,7 +289,7 @@ vi.mock("cytoscape", () => ({
 vi.mock("cytoscape-elk", () => ({ default: {} }));
 vi.mock("cytoscape-popper", () => ({ default: {} }));
 vi.mock("tippy.js", () => ({ default: tippy }));
-vi.mock("merge-images", () => ({ default: vi.fn() }));
+vi.mock("merge-images", () => ({ default: mergeImages }));
 vi.mock("../../src/webview/canvas", () => ({
 	registerCytoscapeCanvas: vi.fn(),
 }));
@@ -229,6 +319,8 @@ suite("graph webview", () => {
 	let graph: typeof graphModule;
 
 	beforeAll(async () => {
+		vi.stubGlobal("OffscreenCanvas", OffscreenCanvas);
+		vi.stubGlobal("FileReader", FileReader);
 		vi.stubGlobal("document", {
 			documentElement: { style: { getPropertyValue: () => "" } },
 			getElementById: () => ({ replaceChildren: () => {} }),
@@ -273,6 +365,12 @@ suite("graph webview", () => {
 		cytoscapeCores.length = 0;
 		graphNodes.nodes = [];
 		jsonFailure.error = undefined;
+		bounds.x1 = 0;
+		bounds.y1 = 0;
+		bounds.x2 = 0;
+		bounds.y2 = 0;
+		offscreenCanvases.length = 0;
+		mergeImages.mockClear();
 	});
 
 	afterEach(() => {
@@ -313,6 +411,77 @@ suite("graph webview", () => {
 				},
 			],
 		]);
+	});
+
+	test("saves the merged image with the data-URI prefix stripped", async () => {
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		const cy = cytoscapeCores[0];
+		assert.ok(cy);
+		bounds.x1 = -40;
+		bounds.y1 = -25;
+		bounds.x2 = 120;
+		bounds.y2 = 75;
+		mergeImages.mockResolvedValueOnce(`data:image/png;base64,${MERGED_BODY}`);
+
+		await graph.exportImage(1);
+
+		assert.deepStrictEqual(cy.png.mock.calls, [
+			[{ full: true, output: "base64uri", scale: 1 }],
+		]);
+		const canvas = offscreenCanvases[0];
+		assert.ok(canvas);
+		assert.strictEqual(canvas.width, 160);
+		assert.strictEqual(canvas.height, 100);
+		assert.deepStrictEqual(canvas.ctx.scale.mock.calls, [[1, 1]]);
+		assert.deepStrictEqual(canvas.ctx.translate.mock.calls, [[40, 25]]);
+		assert.deepStrictEqual(canvas.convertToBlob.mock.calls, [[{ type: "png" }]]);
+		assert.deepStrictEqual(mergeImages.mock.calls, [
+			[
+				[
+					`data:image/png;base64,${GRAPH_BODY}`,
+					`data:image/png;base64,${OVERLAY_BODY}`,
+				],
+			],
+		]);
+		assert.deepStrictEqual(postMessage.mock.calls, [
+			[{ command: "saveImage", image: MERGED_BODY }],
+		]);
+		const posted = (postMessage.mock.calls[0][0] as { image: string }).image;
+		assert.ok(
+			Buffer.from(posted, "base64").subarray(0, 8).equals(pngSignature),
+			"the posted body must decode to PNG bytes",
+		);
+	});
+
+	test("scales the overlay canvas by the export pixel ratio", async () => {
+		render({
+			command: "go",
+			data: [graphNode],
+			settings: { wheelSensitivity: 1 },
+		});
+		const cy = cytoscapeCores[0];
+		assert.ok(cy);
+		bounds.x1 = -40;
+		bounds.y1 = -25;
+		bounds.x2 = 120;
+		bounds.y2 = 75;
+		mergeImages.mockResolvedValueOnce(`data:image/png;base64,${MERGED_BODY}`);
+
+		await graph.exportImage(2);
+
+		assert.deepStrictEqual(cy.png.mock.calls, [
+			[{ full: true, output: "base64uri", scale: 2 }],
+		]);
+		const canvas = offscreenCanvases[0];
+		assert.ok(canvas);
+		assert.strictEqual(canvas.width, 320);
+		assert.strictEqual(canvas.height, 200);
+		assert.deepStrictEqual(canvas.ctx.scale.mock.calls, [[2, 2]]);
+		assert.deepStrictEqual(canvas.ctx.translate.mock.calls, [[40, 25]]);
 	});
 
 	test("repaints the graph when VS Code changes its theme", () => {

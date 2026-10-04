@@ -12,7 +12,7 @@ use super::{
     at_var_at_cursor, code_token_cols_in_line, prepare_rename_range, rename_refused,
     word_at_position,
 };
-use crate::navigation::helpers::{TokenCase, loc_ref_key_cols_in_line, loc_root};
+use crate::navigation::helpers::{REQUEST_FAILED, TokenCase, loc_ref_key_cols_in_line, loc_root};
 
 impl Backend {
     pub(crate) async fn prepare_rename_impl(
@@ -382,7 +382,7 @@ impl Backend {
         let unresolved = resolved.iter().filter(|(_, _, _, ok)| !ok).count();
         if unresolved > 0 {
             return Err(tower_lsp::jsonrpc::Error {
-                code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
+                code: tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED),
                 message: format!(
                     "Rename cancelled: {} reference(s) to '{}' could not be located in text; \
                      rename is limited to indexed references.",

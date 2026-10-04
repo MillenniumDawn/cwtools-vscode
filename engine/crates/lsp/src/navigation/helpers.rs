@@ -21,12 +21,14 @@ pub(crate) async fn resolve_file_ref(
     crate::access::contained_search_path(roots, rel).await
 }
 
+pub(crate) const REQUEST_FAILED: i64 = -32803;
+
 pub(crate) fn rename_refused(
     uri: &str,
     refusal: crate::access::EditRefusal,
 ) -> tower_lsp::jsonrpc::Error {
     tower_lsp::jsonrpc::Error {
-        code: tower_lsp::jsonrpc::ErrorCode::ServerError(-32002),
+        code: tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED),
         message: format!(
             "Rename cancelled: '{uri}' {}; cwtools only edits files in the workspace folders.",
             refusal.reason()
@@ -854,6 +856,25 @@ mod tests {
                 },
             },
         }
+    }
+
+    #[test]
+    fn rename_refused_is_request_failed() {
+        let error = rename_refused(
+            "file:///ws/stray.txt",
+            crate::access::EditRefusal::OutsideWorkspace,
+        );
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(-32803)
+        );
+        assert!(
+            error
+                .message
+                .contains("Rename cancelled: 'file:///ws/stray.txt' is outside the workspace"),
+            "got {:?}",
+            error.message
+        );
     }
 
     /// The goto side of #176: the `FilepathField` value is mod content, so one
