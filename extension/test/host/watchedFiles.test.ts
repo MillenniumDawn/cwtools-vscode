@@ -28,7 +28,7 @@ suite("served-root file watchers", function () {
 			for (const [index, folder] of folders.entries()) {
 				const suffix = index === 2 ? "cwt" : "txt";
 				const file = path.join(folder.uri.fsPath, index === 2 ? "probe.cwt" : "events/probe.txt");
-				const excluded = path.join(folder.uri.fsPath, "node_modules", `excluded.${suffix}`);
+				const excluded = path.join(folder.uri.fsPath, ".claude", `excluded.${suffix}`);
 				const uri = vscode.Uri.file(file);
 				const excludedUri = vscode.Uri.file(excluded);
 				try {
