@@ -102,6 +102,26 @@ def test_accepts_a_flat_windows_binary(
     assert smoke_test_vsix.main([str(tmp_path)]) == 0
 
 
+def test_rejects_an_unexpected_flat_file_in_a_targeted_vsix(
+    smoke_test_vsix: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_vsix(
+        tmp_path / "ext-linux-x64-1.0.0.vsix",
+        ["linux-x64"],
+        server_files={"cwtools-server.pdb": "debug symbols\n"},
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        smoke_test_vsix.main([str(tmp_path)])
+    assert caught.value.code == 1
+    assert (
+        "::error::ext-linux-x64-1.0.0.vsix: unexpected flat server files "
+        "[cwtools-server.pdb] in bin/server/cwtools-server\n"
+    ) in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("empty_name", [None, "cwtools-server", "cwtools-server.exe"])
 def test_checks_both_flat_executables(
     smoke_test_vsix: ModuleType,

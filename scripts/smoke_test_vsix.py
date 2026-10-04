@@ -128,6 +128,20 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
         if not present:
             gh_error(f"{vsix.name}: no server binaries at all")
             raise SystemExit(1)
+        server_root = root / "bin" / "server" / "cwtools-server"
+        expected_flat_names = {server_exe("linux-x64"), server_exe("win-x64")}
+        unexpected_flat_files = sorted(
+            path.name
+            for path in server_root.iterdir()
+            if path.is_file() and path.name not in expected_flat_names
+        )
+        if unexpected_flat_files:
+            carried = " ".join(unexpected_flat_files)
+            gh_error(
+                f"{vsix.name}: unexpected flat server files [{carried}] "
+                "in bin/server/cwtools-server"
+            )
+            raise SystemExit(1)
         for binary in chain.from_iterable(present.values()):
             relative = binary.relative_to(root).as_posix()
             if not binary.is_file():

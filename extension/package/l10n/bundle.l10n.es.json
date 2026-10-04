@@ -27,7 +27,7 @@
   "CWTools: this language server doesn't provide graph data, so the graph depth can't be changed.": "CWTools: este servidor de lenguaje no aporta datos de grafo, así que no se puede cambiar la profundidad del grafo.",
   "default: 3": "predeterminado: 3",
   "Set graph depth (how many connections to go back from this file)": "Establecer la profundidad del grafo (cuántas conexiones se siguen desde este archivo)",
-  "Please enter a number": "Introduce un número",
+  "Please enter a whole number of at least 1": "Introduce un número entero de al menos 1",
   "CWTools: this language server doesn't provide graph data, so the graph can't be restored.": "CWTools: este servidor de lenguaje no aporta datos de grafo, así que el grafo no se puede restaurar.",
   "CWTools: graph data from a JSON export isn't persisted across reloads. Run 'CWTools: Recreate graph from json' to rebuild it.": "CWTools: los datos de grafo de una exportación JSON no sobreviven a una recarga. Ejecuta «CWTools: Recrear el grafo desde un JSON» para reconstruirlo.",
   "CWTools: graph data isn't persisted across reloads. Run 'CWTools: Show graph' to rebuild the graph.": "CWTools: los datos de grafo no sobreviven a una recarga. Ejecuta «CWTools: Mostrar el grafo» para reconstruirlo.",
