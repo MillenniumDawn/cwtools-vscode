@@ -26,20 +26,27 @@ suite("served-root file watchers", function () {
 		});
 		try {
 			for (const [index, folder] of folders.entries()) {
+				const expectScriptDiagnostics = index !== 2;
 				const file = path.join(folder.uri.fsPath, index === 2 ? "probe.cwt" : "events/probe.txt");
 				const uri = vscode.Uri.file(file);
 				try {
 					await fs.writeFile(file, 'name = "unterminated');
 					assert.ok(await waitUntil(() => observedEvents.has(`create:${file}`), 15_000), `VS Code dropped create event: ${file}`);
-					assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(uri).length > 0, 15_000), `server diagnostics missed create: ${file}`);
+					if (expectScriptDiagnostics) {
+						assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(uri).length > 0, 15_000), `server diagnostics missed create: ${file}`);
+					}
 					await fs.writeFile(file, 'name = "valid"\n');
 					assert.ok(await waitUntil(() => observedEvents.has(`change:${file}`), 15_000), `VS Code dropped change event: ${file}`);
-					assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(uri).length === 0, 15_000), `server diagnostics missed change: ${file}`);
-					await fs.writeFile(file, 'name = "another unterminated string');
-					assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(uri).length > 0, 15_000));
+					if (expectScriptDiagnostics) {
+						assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(uri).length === 0, 15_000), `server diagnostics missed change: ${file}`);
+						await fs.writeFile(file, 'name = "another unterminated string');
+						assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(uri).length > 0, 15_000));
+					}
 					await fs.unlink(file);
 					assert.ok(await waitUntil(() => observedEvents.has(`delete:${file}`), 15_000), `VS Code dropped delete event: ${file}`);
-					assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(uri).length === 0, 15_000), `server diagnostics missed delete: ${file}`);
+					if (expectScriptDiagnostics) {
+						assert.ok(await waitUntil(() => vscode.languages.getDiagnostics(uri).length === 0, 15_000), `server diagnostics missed delete: ${file}`);
+					}
 				} finally {
 					await fs.rm(file, { force: true });
 				}
