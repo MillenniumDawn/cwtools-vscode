@@ -6,6 +6,7 @@ use tower_lsp::lsp_types::*;
 use cwtools_parser::ast::{ParseError, ParsedFile};
 use cwtools_parser::parser::{parse_string, parse_string_without_comments};
 use cwtools_rules::rules_types::RuleSet;
+use cwtools_rules::ruleset_loader::RuleParseError;
 use cwtools_string_table::string_table::StringId;
 use cwtools_validation::references::{UsedInstances, check_unused_instances, needs_use_tracking};
 use cwtools_validation::{
@@ -1575,15 +1576,12 @@ impl Backend {
         // flag every rule field as unknown). See #43.
         if crate::paths::is_cwt_file(uri) {
             let parsed = parse_string(text, &self.state.string_table);
-            diagnostics.extend(
-                parsed
-                    .errors
-                    .iter()
-                    .map(|e| parse_error_to_diagnostic(e, &lines)),
-            );
+            let path = std::path::PathBuf::from(uri_to_path_str(uri));
+            diagnostics.extend(parsed.errors.iter().map(|e| {
+                rule_parse_error_to_diagnostic(&RuleParseError::syntax(&path, e), &lines)
+            }));
             let rules_guard = self.state.rules.read();
             if let Some(ruleset) = rules_guard.ruleset.as_ref() {
-                let path = std::path::PathBuf::from(uri_to_path_str(uri));
                 let files = [(path, parsed)];
                 for err in cwtools_rules::config_validation::validate_ruleset_references(
                     &files,

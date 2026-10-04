@@ -17,7 +17,7 @@ import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
 import { createLanguageClient } from "./lspClient";
 import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
-import { registerCommands, publishCommandAvailability } from "./commands";
+import { registerCommands } from "./commands";
 import { setTrustedRoots } from "./trustedPaths";
 import { initializeLogger, logInfo, logError, errorMessage } from "./logger";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
@@ -49,6 +49,8 @@ export interface CwtoolsApi {
 	rulesCacheRoot(): string | undefined;
 	/** The status bar item's current text, once activation has created it. */
 	serverStatusText(): string | undefined;
+	/** PID of the child owned by this client, for lifecycle diagnostics. */
+	serverProcessId(): number | undefined;
 	/** This module's deactivate(), which no VS Code API lets a test call. */
 	deactivate(): Thenable<void> | undefined;
 }
@@ -62,6 +64,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverOutputChannel: () => defaultClient?.outputChannel,
 		rulesCacheRoot: () => rulesCacheRoot,
 		serverStatusText: () => statusText?.(),
+		serverProcessId: () => defaultClient?.serverProcess?.pid,
 		deactivate,
 	};
 	if (
@@ -210,8 +213,6 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		context.subscriptions.push(client);
 		try {
 			await client.start();
-			// Capabilities are only known once the server has answered initialize.
-			publishCommandAvailability(client);
 			// Classify the already-focused editor now that getFileTypes can be
 			// answered. Not awaited: activation shouldn't wait on a server round-trip.
 			void tracker.classifyActiveEditor();
