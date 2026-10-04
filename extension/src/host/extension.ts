@@ -17,7 +17,7 @@ import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
 import { createLanguageClient } from "./lspClient";
 import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
-import { registerCommands, publishCommandAvailability } from "./commands";
+import { registerCommands } from "./commands";
 import { setTrustedRoots } from "./trustedPaths";
 import { initializeLogger, logInfo, logError, errorMessage } from "./logger";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
@@ -210,8 +210,6 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		context.subscriptions.push(client);
 		try {
 			await client.start();
-			// Capabilities are only known once the server has answered initialize.
-			publishCommandAvailability(client);
 			// Classify the already-focused editor now that getFileTypes can be
 			// answered. Not awaited: activation shouldn't wait on a server round-trip.
 			void tracker.classifyActiveEditor();

@@ -43,8 +43,9 @@ function serverProvidesFormatWorkspace(client: LanguageClient): boolean {
 	);
 }
 
-// Gates the palette entries and the editor-title button; call once the server
-// has started and its capabilities are known.
+// Gates the palette entries and the editor-title button. The client state
+// handler calls it whenever the client reaches Running, when the server's
+// capabilities are known.
 export function publishCommandAvailability(client: LanguageClient): void {
 	void commands.executeCommand(
 		"setContext",
@@ -181,7 +182,6 @@ export function registerCommands(
 				} else {
 					await client.start();
 				}
-				publishCommandAvailability(client);
 			} catch (err) {
 				if (showServerBlockedDialog(err, serverExe)) {
 					return;
