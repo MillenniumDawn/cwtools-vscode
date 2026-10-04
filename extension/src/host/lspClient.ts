@@ -365,14 +365,30 @@ export function createLanguageClient(
 		if (rulesCache === currentRulesCache) return;
 		disposeRulesWatcher();
 		currentRulesCache = rulesCache;
+		isExcludedWatchedPath = createWatchedPathExcluder([...startupRoots, currentRulesCache]);
 		cfg.onRulesCacheChanged?.(rulesCache);
 		installRulesWatcher();
 	};
 
 	const diagnosticsCache = new DiagnosticsSignatureCache();
-	const isExcludedWatchedPath = createWatchedPathExcluder(
-		cfg.workspaceFolder.uri.fsPath,
-	);
+	const workspaceRoot = cfg.workspaceFolder.uri.fsPath;
+	const readStartupRoots = () => {
+		const settings = workspace.getConfiguration("cwtools");
+		const parents = (settings.get<string[]>("parentMods") ?? [])
+			.map((root) => path.resolve(workspaceRoot, root))
+			// The server rejects parent mods overlapping its selected workspace.
+			.filter((root) => {
+				const relative = path.relative(workspaceRoot, root);
+				const reverse = path.relative(root, workspaceRoot);
+				const outside = (value: string) => value === ".." || value.startsWith(`..${path.sep}`) || path.isAbsolute(value);
+				return outside(relative) && outside(reverse);
+			});
+		const vanilla = settings.get<string>("cache." + cfg.language);
+		return [workspaceRoot, ...parents, ...(vanilla ? [vanilla] : [])];
+	};
+	let startupRoots = readStartupRoots();
+	let isExcludedWatchedPath = createWatchedPathExcluder([...startupRoots, currentRulesCache]);
+
 
 	const middleware: LanguageClientOptions["middleware"] = {
 		workspace: {
@@ -508,6 +524,8 @@ export function createLanguageClient(
 			fileEvents: fileEvents,
 		},
 		initializationOptions: () => {
+			startupRoots = readStartupRoots();
+			isExcludedWatchedPath = createWatchedPathExcluder([...startupRoots, currentRulesCache]);
 			const ignoreOptions = readIgnoreOptions();
 			return {
 				language: cfg.language === "eu5" ? "paradox" : cfg.language,

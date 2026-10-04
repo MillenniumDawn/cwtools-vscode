@@ -710,6 +710,43 @@ suite("lspClient — watched files", () => {
 		);
 	});
 
+	test("forwards configured served roots under excluded ancestors", async () => {
+		configurationValues.set("parentMods", ["../target/parent"]);
+		configurationValues.set("cache.hoi4", "/other/dist/vanilla");
+		create(undefined, undefined, undefined, { rulesCache: "/workspace/.claude/rules" });
+		assert.deepStrictEqual(await forwardedWatchedEvents([
+			"file:///target/parent/events/a.txt",
+			"file:///target/parent/node_modules/a.txt",
+			"file:///other/dist/vanilla/events/a.txt",
+			"file:///workspace/.claude/rules/a.cwt",
+			"file:///workspace/.claude/rules/target/a.cwt",
+		]), [
+			"file:///target/parent/events/a.txt",
+			"file:///other/dist/vanilla/events/a.txt",
+			"file:///workspace/.claude/rules/a.cwt",
+		]);
+	});
+
+	test("keeps startup roots until restart and rejects overlapping parents", async () => {
+		configurationValues.set("parentMods", ["/workspace/target/overlap"]);
+		create();
+		configurationValues.set("parentMods", ["/other/target/new-parent"]);
+		const uris = ["file:///workspace/target/overlap/a.txt", "file:///other/target/new-parent/a.txt"];
+		assert.deepStrictEqual(await forwardedWatchedEvents(uris), []);
+		const initialize = lastClientOptions.value?.initializationOptions as () => unknown;
+		initialize();
+		assert.deepStrictEqual(await forwardedWatchedEvents(uris), [uris[1]]);
+	});
+
+	test("replaces the rules root after a live settings change", async () => {
+		create(undefined, undefined, undefined, { rulesCache: "/workspace/.claude/old" });
+		const uris = ["file:///workspace/.claude/old/a.cwt", "file:///workspace/target/new/a.cwt"];
+		assert.deepStrictEqual(await forwardedWatchedEvents(uris), [uris[0]]);
+		resolveRulesCache.mockResolvedValue({ rulesCache: "/workspace/target/new", fetchUpstream: false });
+		configurationChangeHandler()(configurationChangeEvent(["cwtools.rules_folder"]));
+		await vi.waitFor(async () => assert.deepStrictEqual(await forwardedWatchedEvents(uris), [uris[1]]));
+	});
+
 	test("keeps the whole-path check outside the served root", async () => {
 		create();
 		assert.deepStrictEqual(

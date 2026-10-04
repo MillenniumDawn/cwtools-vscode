@@ -1,0 +1,20 @@
+{
+  "folders": [
+    {
+      "path": "target/stellaris"
+    },
+    {
+      "path": "dist/parent"
+    },
+    {
+      "path": ".claude/rules"
+    }
+  ],
+  "settings": {
+    "cwtools.parentMods": [
+      "../../dist/parent"
+    ],
+    "cwtools.backgroundReindex.intervalMinutes": 0,
+    "cwtools.rules.autoReload": false
+  }
+}

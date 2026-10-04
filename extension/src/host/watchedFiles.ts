@@ -30,30 +30,26 @@ const EXCLUDED_DIRS = [
 	".vscode",
 ];
 
-// The server's walk starts at the workspace root, so the root's own ancestors
-// never exclude anything. A path outside the root keeps the whole-path check.
+// Each served root starts its own walk. Prefer the deepest root when the rules
+// directory is inside the workspace; outside known roots keep the whole-path check.
 export function createWatchedPathExcluder(
-	root: string,
+	roots: string | readonly string[],
 ): (fsPath: string) => boolean {
-	const rootSegments = root.toLowerCase().split(/[\\/]/);
-	while (
-		rootSegments.length > 1 &&
-		rootSegments[rootSegments.length - 1] === ""
-	) {
-		rootSegments.pop();
-	}
+	const rootSegments = (typeof roots === "string" ? [roots] : roots).map((root) => {
+		const parts = root.toLowerCase().split(/[\\/]/);
+		while (parts.length > 1 && parts[parts.length - 1] === "") parts.pop();
+		return parts;
+	}).sort((a, b) => b.length - a.length);
 	return (fsPath) => {
 		const segments = fsPath.split(/[\\/]/);
 		const fileName = segments.pop() ?? "";
 		if (EXCLUDED_FILE_NAMES.includes(fileName) || fileName.endsWith(".md")) {
 			return true;
 		}
-		const underRoot =
-			segments.length >= rootSegments.length &&
-			rootSegments.every(
-				(segment, i) => segments[i].toLowerCase() === segment,
-			);
-		const first = underRoot ? rootSegments.length : 0;
+		const matchingRoot = rootSegments.find((root) =>
+			segments.length >= root.length && root.every((segment, i) => segments[i].toLowerCase() === segment),
+		);
+		const first = matchingRoot?.length ?? 0;
 		return segments.some(
 			(segment, i) =>
 				i >= first && EXCLUDED_DIRS.includes(segment.toLowerCase()),
