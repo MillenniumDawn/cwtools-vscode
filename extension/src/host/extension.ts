@@ -49,6 +49,8 @@ export interface CwtoolsApi {
 	rulesCacheRoot(): string | undefined;
 	/** The status bar item's current text, once activation has created it. */
 	serverStatusText(): string | undefined;
+	/** PID of the child owned by this client, for lifecycle diagnostics. */
+	serverProcessId(): number | undefined;
 	/** This module's deactivate(), which no VS Code API lets a test call. */
 	deactivate(): Thenable<void> | undefined;
 }
@@ -62,6 +64,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverOutputChannel: () => defaultClient?.outputChannel,
 		rulesCacheRoot: () => rulesCacheRoot,
 		serverStatusText: () => statusText?.(),
+		serverProcessId: () => defaultClient?.serverProcess?.pid,
 		deactivate,
 	};
 	if (
