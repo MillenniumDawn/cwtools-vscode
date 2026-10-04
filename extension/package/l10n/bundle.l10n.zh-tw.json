@@ -27,7 +27,7 @@
   "CWTools: this language server doesn't provide graph data, so the graph depth can't be changed.": "CWTools：此語言伺服器不提供圖表資料，因此無法變更圖表深度。",
   "default: 3": "預設值：3",
   "Set graph depth (how many connections to go back from this file)": "設定圖表深度（從這個檔案往外追溯幾層連結）",
-  "Please enter a number": "請輸入數字",
+  "Please enter a whole number of at least 1": "請輸入不小於 1 的整數",
   "CWTools: this language server doesn't provide graph data, so the graph can't be restored.": "CWTools：此語言伺服器不提供圖表資料，因此無法還原圖表。",
   "CWTools: graph data from a JSON export isn't persisted across reloads. Run 'CWTools: Recreate graph from json' to rebuild it.": "CWTools：來自 JSON 匯出的圖表資料不會在重新載入後保留。請執行「CWTools: 從 JSON 重新建立圖表」重新產生。",
   "CWTools: graph data isn't persisted across reloads. Run 'CWTools: Show graph' to rebuild the graph.": "CWTools：圖表資料不會在重新載入後保留。請執行「CWTools: 顯示圖表」重新產生。",
