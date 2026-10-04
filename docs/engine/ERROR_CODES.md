@@ -226,6 +226,8 @@ CW501 (duplicate type) and CW502 (unused type) were Rust-invented IDs that have 
 
 ## CW600-CW604 -- Rules config (Rust-only)
 
+Both a rules directory and a single `.cwt` file passed to `rules` or `validate --rules` use these checks. Syntax recovery keeps successfully parsed rules; a single file that cannot be read still fails discovery.
+
 Problems in the `.cwt` ruleset itself rather than in the script it checks. Emitted from `crates/rules` as the config loads and reported against the `.cwt` file that carries them, so a broken ruleset surfaces in `cwtools rules`, in a `validate` report and in the editor's Problems panel instead of degrading every later check in silence. F# only ever printed these as text, so there is no ID to converge on.
 
 | ID | Severity | Message | Meaning | Status |

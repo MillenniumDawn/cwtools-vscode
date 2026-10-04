@@ -21,10 +21,11 @@ use cwtools_index::{
 };
 use cwtools_localization::{Lang, LocDiagnostic, LocIndex, LocService};
 use cwtools_parser::ast::{ParseError, ParsedFile};
-use cwtools_parser::parser::{parse_string, parse_string_without_comments};
-use cwtools_rules::rules_converter::ast_to_ruleset;
+use cwtools_parser::parser::parse_string_without_comments;
 use cwtools_rules::rules_types::RuleSet;
-use cwtools_rules::ruleset_loader::{RuleParseError, load_ruleset_from_dir};
+use cwtools_rules::ruleset_loader::{
+    RuleParseError, load_ruleset_from_dir, load_ruleset_from_file,
+};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::references::{UsedInstances, check_unused_instances, needs_use_tracking};
 use cwtools_validation::{
@@ -1613,14 +1614,7 @@ pub fn load_rules(
 ) -> Result<(RuleSet, Vec<RuleParseError>), String> {
     match rules {
         RulesInput::Dir(dir) => Ok(load_ruleset_from_dir(dir, table, ScanBudget::default())),
-        RulesInput::File(file) => {
-            let rules_str = std::fs::read_to_string(file)
-                .map_err(|e| format!("could not read rules {}: {}", file.display(), e))?;
-            Ok((
-                ast_to_ruleset(&parse_string(&rules_str, table), table),
-                Vec::new(),
-            ))
-        }
+        RulesInput::File(file) => load_ruleset_from_file(file, table, ScanBudget::default()),
     }
 }
 

@@ -243,6 +243,24 @@ fn load_cwt_file(
     out
 }
 
+/// Load a single rules file through the same parser and checks as a directory.
+/// Unreadable input remains a fatal discovery failure for single-file callers.
+pub fn load_ruleset_from_file(
+    path: &Path,
+    table: &StringTable,
+    budget: ScanBudget,
+) -> Result<(RuleSet, Vec<RuleParseError>), String> {
+    let file = load_cwt_file(path, table, budget, &ScanBytes::new());
+    if let Some(error) = file
+        .errors
+        .iter()
+        .find(|error| error.code == CW600_RULES_FILE_UNREADABLE.id)
+    {
+        return Err(error.to_string());
+    }
+    Ok(combine_file_rules(path, vec![file], Vec::new()))
+}
+
 pub fn load_ruleset_from_dir(
     dir: &Path,
     table: &StringTable,
@@ -261,6 +279,14 @@ pub fn load_ruleset_from_dir(
         .map(|path| load_cwt_file(path, table, budget, &bytes))
         .collect();
 
+    combine_file_rules(dir, per_file, errors)
+}
+
+fn combine_file_rules(
+    dir: &Path,
+    per_file: Vec<FileRules>,
+    mut errors: Vec<RuleParseError>,
+) -> (RuleSet, Vec<RuleParseError>) {
     let mut combined = RuleSet::new();
     let mut ref_candidates: Vec<crate::config_validation::RefCandidate> = Vec::new();
     for file in per_file {
@@ -290,6 +316,51 @@ pub fn load_ruleset_from_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_file_matches_directory_diagnostics_and_recovered_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("broken.cwt");
+        std::fs::write(&file, "types = { type[kept] = { path = game/events } }\n## cardinality = 0..x\nr = { a = <missing> }\nbroken = {\n").unwrap();
+        let table = StringTable::new();
+        let (single, errors) =
+            load_ruleset_from_file(&file, &table, ScanBudget::default()).unwrap();
+        let (directory, dir_errors) =
+            load_ruleset_from_dir(tmp.path(), &table, ScanBudget::default());
+        assert_eq!(single.types.len(), 1);
+        assert_eq!(single.types[0].name, "kept");
+        assert_eq!(directory.types.len(), single.types.len());
+        let describe = |errors: &[RuleParseError]| {
+            errors
+                .iter()
+                .map(|e| {
+                    (
+                        e.file.clone(),
+                        e.line,
+                        e.col,
+                        e.code,
+                        e.severity,
+                        e.message.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(describe(&errors), describe(&dir_errors));
+        for code in ["CW601", "CW603", "CW604"] {
+            assert!(errors.iter().any(|e| e.code == code), "missing {code}");
+        }
+    }
+
+    #[test]
+    fn single_folders_file_keeps_line_list_semantics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("folders.cwt");
+        std::fs::write(&file, "# folders\nevents\ncommon/ideas\n").unwrap();
+        let (rules, errors) =
+            load_ruleset_from_file(&file, &StringTable::new(), ScanBudget::default()).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(rules.folders, ["events", "common/ideas"]);
+    }
 
     #[test]
     fn merge_preserves_scope_links() {
