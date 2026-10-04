@@ -27,7 +27,7 @@
   "CWTools: this language server doesn't provide graph data, so the graph depth can't be changed.": "CWTools: هذا الخادم لا يوفّر بيانات المخطط، لذا لا يمكن تغيير عمق المخطط.",
   "default: 3": "الافتراضي: 3",
   "Set graph depth (how many connections to go back from this file)": "تحديد عمق المخطط (كم عدد الروابط التي يتتبعها انطلاقًا من هذا الملف)",
-  "Please enter a number": "أدخل رقمًا",
+  "Please enter a whole number of at least 1": "أدخل عددًا صحيحًا لا يقل عن 1",
   "CWTools: this language server doesn't provide graph data, so the graph can't be restored.": "CWTools: هذا الخادم لا يوفّر بيانات المخطط، لذا لا يمكن استعادة المخطط.",
   "CWTools: graph data from a JSON export isn't persisted across reloads. Run 'CWTools: Recreate graph from json' to rebuild it.": "CWTools: بيانات المخطط المأخوذة من ملف JSON مُصدَّر لا تبقى بعد إعادة التحميل. شغّل «CWTools: إعادة إنشاء المخطط من ملف JSON» لإعادة بنائه.",
   "CWTools: graph data isn't persisted across reloads. Run 'CWTools: Show graph' to rebuild the graph.": "CWTools: بيانات المخطط لا تبقى بعد إعادة التحميل. شغّل «CWTools: عرض المخطط» لإعادة بناء المخطط.",
