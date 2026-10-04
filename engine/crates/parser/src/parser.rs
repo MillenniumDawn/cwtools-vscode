@@ -1,5 +1,6 @@
 use crate::ast::*;
-use cwtools_string_table::string_table::{StringTable, StringTokens};
+use cwtools_string_table::string_table::StringTable;
+use std::borrow::Cow;
 use std::str::Chars;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,12 +189,13 @@ impl<'a> Parser<'a> {
         op
     }
 
-    fn parse_key(&mut self) -> Option<StringTokens> {
+    fn read_key(&mut self) -> Option<Cow<'a, str>> {
         if self.peek() == Some('"') {
-            let key = self.scan_quoted(true);
+            let raw = self.read_quoted(true);
             self.skip_whitespace();
-            Some(key)
+            Some(raw)
         } else {
+            let input = self.input;
             let start = self.byte_pos();
             while let Some(c) = self.peek() {
                 if c == '?' && self.peek2() == Some('=') {
@@ -205,12 +207,12 @@ impl<'a> Parser<'a> {
                     break;
                 }
             }
-            let s = &self.input[start..self.byte_pos()];
+            let s = &input[start..self.byte_pos()];
             if s.is_empty() {
                 return None;
             }
             self.skip_whitespace();
-            Some(self.table.intern(s))
+            Some(Cow::Borrowed(s))
         }
     }
 
@@ -304,14 +306,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_quoted_value(&mut self, leafvalue: bool) -> Value {
-        Value::QString(self.scan_quoted(!leafvalue))
+        let raw = self.read_quoted(!leafvalue);
+        Value::QString(self.table.intern(&raw))
     }
 
-    fn scan_quoted(&mut self, report_unclosed: bool) -> StringTokens {
+    fn read_quoted(&mut self, report_unclosed: bool) -> Cow<'a, str> {
+        let input = self.input;
         let quote_start = self.pos();
         let start_byte = self.byte_pos();
         self.advance(); // opening '"'
-        let mut owned: Option<String> = None;
+        let mut unescaped: Option<String> = None;
         let mut seg_start = self.byte_pos();
         let mut closed = false;
         while let Some(c) = self.peek() {
@@ -322,8 +326,8 @@ impl<'a> Parser<'a> {
                 let esc_start = self.byte_pos();
                 self.advance(); // consume '\'
                 if let Some(e @ ('"' | '\\')) = self.peek() {
-                    let buf = owned.get_or_insert_with(|| String::from('"'));
-                    buf.push_str(&self.input[seg_start..esc_start]);
+                    let buf = unescaped.get_or_insert_with(|| String::from('"'));
+                    buf.push_str(&input[seg_start..esc_start]);
                     buf.push(e);
                     self.advance();
                     seg_start = self.byte_pos();
@@ -348,18 +352,18 @@ impl<'a> Parser<'a> {
         }
         let end_byte = self.byte_pos();
         let body_end = if closed { end_byte - 1 } else { end_byte };
-        match owned {
+        match unescaped {
             Some(mut buf) => {
-                buf.push_str(&self.input[seg_start..body_end]);
+                buf.push_str(&input[seg_start..body_end]);
                 buf.push('"');
-                self.table.intern(&buf)
+                Cow::Owned(buf)
             }
-            None if closed => self.table.intern(&self.input[start_byte..end_byte]),
+            None if closed => Cow::Borrowed(&input[start_byte..end_byte]),
             None => {
                 let mut buf = String::with_capacity(body_end - start_byte + 1);
-                buf.push_str(&self.input[start_byte..body_end]);
+                buf.push_str(&input[start_byte..body_end]);
                 buf.push('"');
-                self.table.intern(&buf)
+                Cow::Owned(buf)
             }
         }
     }
@@ -541,8 +545,9 @@ impl<'a> Parser<'a> {
 
         let saved = self.pos();
         let saved_cursor = self.save();
-        if let Some(key) = self.parse_key() {
+        if let Some(raw_key) = self.read_key() {
             if let Some(op) = self.parse_operator() {
+                let key = self.table.intern(&raw_key);
                 if let Some((value, value_pos)) = self.parse_value(false) {
                     let end = self.pos();
                     let leaf = Leaf {
@@ -578,6 +583,7 @@ impl<'a> Parser<'a> {
             }
             self.skip_whitespace();
             if let Some('{') = self.peek() {
+                let key = self.table.intern(&raw_key);
                 let value_start = self.pos();
                 if let Some(value) = self.parse_clause() {
                     let value_end = self.pos();
@@ -1072,6 +1078,100 @@ ENG = {
             vec!["light_armor", "medium_armor", "heavy_armor"],
             "space-separated quoted strings must remain separate"
         );
+    }
+
+    #[test]
+    fn numeric_leafvalues_are_not_interned_as_keys() {
+        let table = StringTable::new();
+        let result = parse_string("n = { 1 2 3 }", &table);
+        let Child::Leaf(root_idx) = &result.root_children[0] else {
+            panic!("expected root leaf");
+        };
+        let Value::Clause(children) = &result.arena.leaves[*root_idx as usize].value else {
+            panic!("expected clause");
+        };
+        let values: Vec<Value> = children
+            .iter()
+            .map(|c| match c {
+                Child::LeafValue(i) => result.arena.leaf_values[*i as usize].value.clone(),
+                other => panic!("expected bare leaf values, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            values,
+            vec![Value::Int(1), Value::Int(2), Value::Int(3)],
+            "bare numbers must parse as ints, not strings"
+        );
+        assert_eq!(table.len(), 1, "only the key `n` is interned");
+    }
+
+    #[test]
+    fn reparsed_leafvalues_do_not_grow_the_table() {
+        let table = StringTable::new();
+        let input = "n = { 1 2 3 }";
+        for _ in 0..2 {
+            assert_eq!(parse_string(input, &table).root_children.len(), 1);
+        }
+        assert_eq!(table.len(), 1, "no numeric entries across repeats");
+    }
+
+    #[test]
+    fn boolean_leafvalues_are_not_interned_as_keys() {
+        let table = StringTable::new();
+        let result = parse_string("n = { yes no }", &table);
+        let Child::Leaf(root_idx) = &result.root_children[0] else {
+            panic!("expected root leaf");
+        };
+        let Value::Clause(children) = &result.arena.leaves[*root_idx as usize].value else {
+            panic!("expected clause");
+        };
+        let values: Vec<Value> = children
+            .iter()
+            .map(|c| match c {
+                Child::LeafValue(i) => result.arena.leaf_values[*i as usize].value.clone(),
+                other => panic!("expected bare leaf values, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            values,
+            vec![Value::Bool(true), Value::Bool(false)],
+            "bare bools must parse as bools, not strings"
+        );
+        assert_eq!(table.len(), 1, "only the key `n` is interned");
+    }
+
+    #[test]
+    fn numeric_key_still_interns_and_binds_its_value() {
+        let table = StringTable::new();
+        let result = parse_string("123 = 456", &table);
+        match &result.root_children[0] {
+            Child::Leaf(i) => {
+                let leaf = &result.arena.leaves[*i as usize];
+                assert_eq!(table.get_string(leaf.key.normal).as_deref(), Some("123"));
+                assert_eq!(leaf.value, Value::Int(456));
+            }
+            other => panic!("expected a keyed leaf, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn quoted_keys_and_values_still_intern_after_commit() {
+        let table = StringTable::new();
+        let result = parse_string(r#""first" = "second""#, &table);
+        match &result.root_children[0] {
+            Child::Leaf(i) => {
+                let leaf = &result.arena.leaves[*i as usize];
+                let key = table.get_string(leaf.key.normal).unwrap_or_default();
+                let Value::QString(value) = &leaf.value else {
+                    panic!("expected a quoted value, got {:?}", leaf.value);
+                };
+                let value = table.get_string(value.normal).unwrap_or_default();
+                assert_eq!(key, r#""first""#);
+                assert_eq!(value, r#""second""#);
+                assert_eq!(table.len(), 2, "both quoted tokens interned once");
+            }
+            other => panic!("expected a keyed leaf, got {other:?}"),
+        }
     }
 
     #[test]
