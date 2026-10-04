@@ -14,27 +14,21 @@ suite("served-root file watchers", function () {
 		const folders = vscode.workspace.workspaceFolders ?? [];
 		assert.strictEqual(folders.length, 3);
 		const observedEvents = new Set<string>();
-		const hostWatchers = folders.flatMap((folder, index) => {
+		const hostWatchers = folders.map((folder, index) => {
 			const suffix = index === 2 ? "cwt" : "txt";
-			const watch = (pattern: string) => {
-				const watcher = vscode.workspace.createFileSystemWatcher(
-					new vscode.RelativePattern(folder, pattern),
-				);
-				watcher.onDidCreate((uri) => { observedEvents.add(`create:${uri.fsPath}`); });
-				watcher.onDidChange((uri) => { observedEvents.add(`change:${uri.fsPath}`); });
-				watcher.onDidDelete((uri) => { observedEvents.add(`delete:${uri.fsPath}`); });
-				return watcher;
-			};
-			// The broad glob does not match hidden path segments consistently in
-			// VS Code. Add an explicit watcher for the hidden excluded fixture so
-			// its events are observed before asserting the server ignores them.
-			return [watch(`**/*.${suffix}`), watch(`.claude/excluded.${suffix}`)];
+			const watcher = vscode.workspace.createFileSystemWatcher(
+				new vscode.RelativePattern(folder, `**/*.${suffix}`),
+			);
+			watcher.onDidCreate((uri) => { observedEvents.add(`create:${uri.fsPath}`); });
+			watcher.onDidChange((uri) => { observedEvents.add(`change:${uri.fsPath}`); });
+			watcher.onDidDelete((uri) => { observedEvents.add(`delete:${uri.fsPath}`); });
+			return watcher;
 		});
 		try {
 			for (const [index, folder] of folders.entries()) {
 				const suffix = index === 2 ? "cwt" : "txt";
 				const file = path.join(folder.uri.fsPath, index === 2 ? "probe.cwt" : "events/probe.txt");
-				const excluded = path.join(folder.uri.fsPath, ".claude", `excluded.${suffix}`);
+				const excluded = path.join(folder.uri.fsPath, "target", `excluded.${suffix}`);
 				const uri = vscode.Uri.file(file);
 				const excludedUri = vscode.Uri.file(excluded);
 				try {

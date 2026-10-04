@@ -1,13 +1,13 @@
 {
   "folders": [
     {
-      "path": ".claude/workspaces/stellaris"
+      "path": "served/workspaces/stellaris"
     },
     {
-      "path": ".claude/workspaces/parent"
+      "path": "served/workspaces/parent"
     },
     {
-      "path": ".claude/rules"
+      "path": "served/rules"
     }
   ],
   "settings": {
@@ -15,6 +15,9 @@
       "../parent"
     ],
     "cwtools.backgroundReindex.intervalMinutes": 0,
-    "cwtools.rules.autoReload": false
+    "cwtools.rules.autoReload": false,
+    "files.watcherExclude": {
+      "**/target/**": false
+    }
   }
 }
