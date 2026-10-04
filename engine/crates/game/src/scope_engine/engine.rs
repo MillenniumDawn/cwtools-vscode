@@ -117,8 +117,8 @@ impl ScopeContext {
             reg.id_of(name)
                 .or_else(|| name.trim().parse::<u32>().ok().map(ScopeId))
         };
-        let root_id = root.and_then(&resolve);
-        let this_id = this.and_then(&resolve);
+        let root_id = root.and_then(resolve);
+        let this_id = this.and_then(resolve);
         let from_ids: Vec<ScopeId> = froms.iter().filter_map(|n| resolve(n)).collect();
         let prev_ids: Vec<ScopeId> = prevs.iter().filter_map(|n| resolve(n)).collect();
 
