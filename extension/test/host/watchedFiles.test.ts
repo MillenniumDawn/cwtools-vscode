@@ -19,13 +19,15 @@ suite("served-root file watchers", function () {
 			// are independently covered by the diagnostic assertions below.
 			const relativePath = index === 2 ? "probe.cwt" : "events/probe.txt";
 			const watcher = vscode.workspace.createFileSystemWatcher(
-				new vscode.RelativePattern(folder, relativePath),
+				new vscode.RelativePattern(folder.uri, relativePath),
 			);
 			watcher.onDidCreate((uri) => { observedEvents.add(`create:${uri.fsPath}`); });
 			watcher.onDidChange((uri) => { observedEvents.add(`change:${uri.fsPath}`); });
 			watcher.onDidDelete((uri) => { observedEvents.add(`delete:${uri.fsPath}`); });
 			return watcher;
 		});
+		// Let VS Code finish registering the observers before writing probes.
+		await new Promise((resolve) => setTimeout(resolve, 250));
 		try {
 			for (const [index, folder] of folders.entries()) {
 				const expectScriptDiagnostics = index !== 2;
