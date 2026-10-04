@@ -4,9 +4,11 @@ use crate::rules_converter::ast_to_ruleset;
 use crate::rules_converter::{ast_to_ruleset_raw, validate_comment_directives};
 use crate::rules_types::{CwtDefKind, CwtDefPosition, RuleSet};
 use cwtools_error_codes::{
-    CW600_RULES_FILE_UNREADABLE, CW602_RULES_UNEXPANDED_ALIAS, ErrorCode, ErrorSeverity,
+    CW600_RULES_FILE_UNREADABLE, CW602_RULES_UNEXPANDED_ALIAS, CW604_RULES_SYNTAX_ERROR, ErrorCode,
+    ErrorSeverity,
 };
 use cwtools_file_manager::file_manager::{ScanBudget, ScanBytes, read_text_capped};
+use cwtools_parser::ast::ParseError;
 use cwtools_parser::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
 use std::path::Path;
@@ -37,6 +39,19 @@ impl RuleParseError {
             severity: code.severity,
             message,
         }
+    }
+
+    /// The error to report for a syntax error the parser recovered from in the
+    /// rules file `file`, on the line and column the parser gave.
+    pub fn syntax(file: &Path, error: &ParseError) -> Self {
+        let ParseError::Pos(line, col, message) = error;
+        Self::new(
+            &CW604_RULES_SYNTAX_ERROR,
+            file.to_path_buf(),
+            *line,
+            *col,
+            message.clone(),
+        )
     }
 }
 
@@ -200,6 +215,12 @@ fn load_cwt_file(
                 out.ruleset.folders = parse_folders_list(&content);
             } else {
                 let parsed = parse_string(&content, table);
+                out.errors.extend(
+                    parsed
+                        .errors
+                        .iter()
+                        .map(|error| RuleParseError::syntax(path, error)),
+                );
                 out.errors
                     .extend(validate_comment_directives(&parsed, path));
                 out.ruleset = ast_to_ruleset_raw(&parsed, table);
@@ -222,6 +243,24 @@ fn load_cwt_file(
     out
 }
 
+/// Load a single rules file through the same parser and checks as a directory.
+/// Unreadable input remains a fatal discovery failure for single-file callers.
+pub fn load_ruleset_from_file(
+    path: &Path,
+    table: &StringTable,
+    budget: ScanBudget,
+) -> Result<(RuleSet, Vec<RuleParseError>), String> {
+    let file = load_cwt_file(path, table, budget, &ScanBytes::new());
+    if let Some(error) = file
+        .errors
+        .iter()
+        .find(|error| error.code == CW600_RULES_FILE_UNREADABLE.id)
+    {
+        return Err(error.to_string());
+    }
+    Ok(combine_file_rules(path, vec![file], Vec::new()))
+}
+
 pub fn load_ruleset_from_dir(
     dir: &Path,
     table: &StringTable,
@@ -240,6 +279,14 @@ pub fn load_ruleset_from_dir(
         .map(|path| load_cwt_file(path, table, budget, &bytes))
         .collect();
 
+    combine_file_rules(dir, per_file, errors)
+}
+
+fn combine_file_rules(
+    dir: &Path,
+    per_file: Vec<FileRules>,
+    mut errors: Vec<RuleParseError>,
+) -> (RuleSet, Vec<RuleParseError>) {
     let mut combined = RuleSet::new();
     let mut ref_candidates: Vec<crate::config_validation::RefCandidate> = Vec::new();
     for file in per_file {
@@ -269,6 +316,51 @@ pub fn load_ruleset_from_dir(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_file_matches_directory_diagnostics_and_recovered_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("broken.cwt");
+        std::fs::write(&file, "types = { type[kept] = { path = game/events } }\n## cardinality = 0..x\nr = { a = <missing> }\nbroken = {\n").unwrap();
+        let table = StringTable::new();
+        let (single, errors) =
+            load_ruleset_from_file(&file, &table, ScanBudget::default()).unwrap();
+        let (directory, dir_errors) =
+            load_ruleset_from_dir(tmp.path(), &table, ScanBudget::default());
+        assert_eq!(single.types.len(), 1);
+        assert_eq!(single.types[0].name, "kept");
+        assert_eq!(directory.types.len(), single.types.len());
+        let describe = |errors: &[RuleParseError]| {
+            errors
+                .iter()
+                .map(|e| {
+                    (
+                        e.file.clone(),
+                        e.line,
+                        e.col,
+                        e.code,
+                        e.severity,
+                        e.message.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(describe(&errors), describe(&dir_errors));
+        for code in ["CW601", "CW603", "CW604"] {
+            assert!(errors.iter().any(|e| e.code == code), "missing {code}");
+        }
+    }
+
+    #[test]
+    fn single_folders_file_keeps_line_list_semantics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("folders.cwt");
+        std::fs::write(&file, "# folders\nevents\ncommon/ideas\n").unwrap();
+        let (rules, errors) =
+            load_ruleset_from_file(&file, &StringTable::new(), ScanBudget::default()).unwrap();
+        assert!(errors.is_empty());
+        assert_eq!(rules.folders, ["events", "common/ideas"]);
+    }
 
     #[test]
     fn merge_preserves_scope_links() {
@@ -400,6 +492,67 @@ thing = { second = any }
         assert_eq!(
             (cycle.code, cycle.severity),
             ("CW602", ErrorSeverity::Error)
+        );
+    }
+
+    fn load_with_good_file(
+        name: &str,
+        text: &str,
+    ) -> (tempfile::TempDir, RuleSet, Vec<RuleParseError>) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("good.cwt"),
+            "types = { type[ok] = { path = \"game/ok\" } }\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join(name), text).unwrap();
+        let table = StringTable::new();
+        let (ruleset, errors) = load_ruleset_from_dir(tmp.path(), &table, ScanBudget::default());
+        (tmp, ruleset, errors)
+    }
+
+    #[test]
+    fn load_ruleset_from_dir_reports_an_unclosed_clause_and_keeps_the_recovered_rules() {
+        let (_tmp, ruleset, errors) = load_with_good_file(
+            "broken.cwt",
+            "types = {\n    type[thing] = { path = \"game/thing\" }\n",
+        );
+
+        let [error] = errors.as_slice() else {
+            panic!("expected one error, got {errors:?}");
+        };
+        assert!(error.file.ends_with("broken.cwt"), "error: {error}");
+        assert_eq!((error.line, error.col), (3, 0), "error: {error}");
+        assert_eq!(
+            (error.code, error.severity),
+            ("CW604", ErrorSeverity::Error)
+        );
+        assert!(error.message.contains("unclosed clause"), "error: {error}");
+        let names: Vec<&str> = ruleset.types.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"thing"), "recovered rules lost: {names:?}");
+        assert!(names.contains(&"ok"), "good file lost: {names:?}");
+    }
+
+    #[test]
+    fn load_ruleset_from_dir_reports_an_unclosed_quote_at_its_start() {
+        let (_tmp, _, errors) = load_with_good_file(
+            "broken.cwt",
+            "types = {\n    type[thing] = { path = \"game/thing }\n}\n",
+        );
+
+        let quote = errors
+            .iter()
+            .find(|e| e.message.contains("unclosed quoted string"))
+            .unwrap_or_else(|| panic!("no unclosed-quote diagnostic in {errors:?}"));
+        assert!(quote.file.ends_with("broken.cwt"), "error: {quote}");
+        assert_eq!((quote.line, quote.col), (2, 27), "error: {quote}");
+        assert_eq!(
+            (quote.code, quote.severity),
+            ("CW604", ErrorSeverity::Error)
+        );
+        assert!(
+            errors.iter().all(|e| e.file.ends_with("broken.cwt")),
+            "good.cwt must stay clean: {errors:?}"
         );
     }
 

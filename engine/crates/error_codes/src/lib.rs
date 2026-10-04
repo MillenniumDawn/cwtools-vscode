@@ -708,6 +708,15 @@ pub const CW603_RULES_INVALID_DIRECTIVE: ErrorCode = ErrorCode {
     message_template: "{}",
 };
 
+/// A syntax error in a `.cwt` file, such as an unclosed clause or quote. The
+/// loader still builds a ruleset from what the parser recovered. The message
+/// is the parser's.
+pub const CW604_RULES_SYNTAX_ERROR: ErrorCode = ErrorCode {
+    id: "CW604",
+    severity: ErrorSeverity::Error,
+    message_template: "{}",
+};
+
 // error_code_hash deleted: no callers, and it wasn't actually a hash.
 
 // ── The catalog as a list ──────────────────────────────
@@ -804,6 +813,7 @@ catalog![
     CW601_RULES_UNDEFINED_REFERENCE,
     CW602_RULES_UNEXPANDED_ALIAS,
     CW603_RULES_INVALID_DIRECTIVE,
+    CW604_RULES_SYNTAX_ERROR,
 ];
 
 #[cfg(test)]
