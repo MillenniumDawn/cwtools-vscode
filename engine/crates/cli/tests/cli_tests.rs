@@ -359,6 +359,57 @@ fn test_rules_reports_coded_problems_and_fails() {
         ));
 }
 
+#[test]
+fn test_rules_reports_a_syntax_error_and_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("broken.cwt"), "types = {\n").unwrap();
+    cwtools()
+        .args(["rules", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CW604"))
+        .stdout(predicate::str::contains("unclosed clause"));
+}
+
+#[test]
+fn test_single_rules_file_reports_syntax_and_directive_errors() {
+    for (source, code) in [
+        ("types = {\n", "CW604"),
+        ("## cardinality = 0..x\nr = { a = bool }\n", "CW603"),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("broken.cwt");
+        std::fs::write(&file, source).unwrap();
+        for input in [&file, &tmp.path().to_path_buf()] {
+            cwtools()
+                .args(["rules", input.to_str().unwrap(), "--fail-on", "warning"])
+                .assert()
+                .failure()
+                .stdout(predicate::str::contains(code))
+                .stdout(predicate::str::contains("broken.cwt"));
+            cwtools()
+                .args([
+                    "validate",
+                    "--game",
+                    "stellaris",
+                    "--directory",
+                    fixtures_dir().join("discover/mod_a").to_str().unwrap(),
+                    "--rules",
+                    input.to_str().unwrap(),
+                    "--fail-on",
+                    "warning",
+                    "--allow-empty",
+                    "--report-type",
+                    "csv",
+                ])
+                .assert()
+                .failure()
+                .stdout(predicate::str::contains(code))
+                .stdout(predicate::str::contains("broken.cwt"));
+        }
+    }
+}
+
 /// A machine-readable report owns stdout: the ruleset summary moves to stderr
 /// so `cwtools rules --report-type csv > out.csv` is a usable CSV.
 #[test]
