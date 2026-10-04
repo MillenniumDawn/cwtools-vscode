@@ -328,6 +328,108 @@ suite("registered workspace commands", () => {
 		});
 	});
 
+	suite("cwtools.setGraphDepth", () => {
+		interface InputBoxOptions {
+			value: string;
+			validateInput: (value: string) => string | undefined;
+		}
+		const MINIMUM_MESSAGE = "Please enter a whole number of at least 1";
+		const REJECTED = ["", " ", "0", "-2", "1.5", "abc", "9007199254740993"];
+
+		function promptedValues(): string[] {
+			return state.showInputBox.mock.calls.map(
+				([options]) => (options as InputBoxOptions).value,
+			);
+		}
+
+		async function redrawAt(
+			requests: GraphRequest[],
+			answer: string,
+		): Promise<void> {
+			const before = requests.length;
+			state.showInputBox.mockResolvedValueOnce(answer);
+			const pending = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, before + 1));
+			requests[before].result.resolve([]);
+			await pending;
+		}
+
+		test("tells the user the minimum depth is 1 for every rejected input", async () => {
+			register(fakeClient(["getGraphData"]), "event");
+
+			await handler("cwtools.setGraphDepth")();
+
+			const { validateInput } = state.showInputBox.mock
+				.calls[0][0] as InputBoxOptions;
+			for (const input of REJECTED) {
+				assert.strictEqual(
+					validateInput(input),
+					MINIMUM_MESSAGE,
+					`validateInput(${JSON.stringify(input)})`,
+				);
+			}
+			for (const input of ["1", "3", "12"]) {
+				assert.strictEqual(
+					validateInput(input),
+					undefined,
+					`validateInput(${JSON.stringify(input)})`,
+				);
+			}
+		});
+
+		for (const input of REJECTED) {
+			test(`sends no request and keeps the remembered depth for ${JSON.stringify(input)}`, async () => {
+				const requests = mockGraphRequests();
+				register(fakeClient(["getGraphData"]), "event");
+				await redrawAt(requests, "2");
+
+				state.showInputBox.mockResolvedValueOnce(input);
+				await handler("cwtools.setGraphDepth")();
+				await handler("cwtools.setGraphDepth")();
+
+				assert.strictEqual(requests.length, 1);
+				assert.strictEqual(state.graphPanel.initialiseGraph.mock.calls.length, 1);
+				assert.deepStrictEqual(promptedValues(), ["3", "2", "2"]);
+			});
+		}
+
+		test("sends no request and keeps the remembered depth when the prompt is cancelled", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			await redrawAt(requests, "2");
+
+			state.showInputBox.mockResolvedValueOnce(undefined);
+			await handler("cwtools.setGraphDepth")();
+			await handler("cwtools.setGraphDepth")();
+
+			assert.strictEqual(requests.length, 1);
+			assert.strictEqual(state.graphPanel.initialiseGraph.mock.calls.length, 1);
+			assert.deepStrictEqual(promptedValues(), ["3", "2", "2"]);
+		});
+
+		for (const [input, depth] of [
+			["1", 1],
+			["3", 3],
+		] as const) {
+			test(`redraws at depth ${depth} and remembers it for ${JSON.stringify(input)}`, async () => {
+				const requests = mockGraphRequests();
+				register(fakeClient(["getGraphData"]), "event");
+
+				await redrawAt(requests, input);
+				await handler("cwtools.setGraphDepth")();
+
+				assert.deepStrictEqual(
+					requests.map((request) => [request.entityType, request.depth]),
+					[["event", depth]],
+				);
+				assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+					[[], 1, { source: "server", entityType: "event", depth }],
+				]);
+				assert.deepStrictEqual(promptedValues(), ["3", String(depth)]);
+			});
+		}
+	});
+
 	suite("cwtools.graphFromJson", () => {
 		test("forwards the selected JSON file name to the graph panel", async () => {
 			const client = fakeClient([]);

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, suite, test, vi } from "vitest";
 import * as assert from "assert";
+import * as fs from "fs/promises";
+import * as os from "os";
+import * as path from "path";
 import type { WebviewPanel } from "vscode";
 
 // The goToFile trust gate has no host coverage: a real webview only posts
@@ -13,10 +16,12 @@ const {
 	showTextDocument,
 	showWarningMessage,
 	showErrorMessage,
+	showSaveDialog,
 	revealRange,
 	Range,
 	textEditorRevealType,
 	logWarn,
+	logError,
 	roots,
 } = vi.hoisted(() => ({
 	executeCommand: vi.fn(),
@@ -24,6 +29,7 @@ const {
 	showTextDocument: vi.fn(),
 	showWarningMessage: vi.fn(),
 	showErrorMessage: vi.fn(),
+	showSaveDialog: vi.fn(),
 	revealRange: vi.fn(),
 	Range: vi.fn(function (
 		startLine: number,
@@ -40,6 +46,7 @@ const {
 		AtTop: 3,
 	},
 	logWarn: vi.fn(),
+	logError: vi.fn(),
 	roots: { folders: [] as { uri: { fsPath: string } }[] },
 }));
 
@@ -59,7 +66,7 @@ vi.mock("vscode", async (importOriginal) => ({
 	window: {
 		activeTextEditor: undefined,
 		showInformationMessage: vi.fn(),
-		showSaveDialog: vi.fn(),
+		showSaveDialog,
 		showTextDocument,
 		showWarningMessage,
 		showErrorMessage,
@@ -74,7 +81,7 @@ vi.mock("vscode", async (importOriginal) => ({
 }));
 
 vi.mock("../../src/host/logger", () => ({
-	logError: vi.fn(),
+	logError,
 	logInfo: vi.fn(),
 	logWarn,
 	errorMessage: (err: unknown) => (err instanceof Error ? err.message : ""),
@@ -82,38 +89,38 @@ vi.mock("../../src/host/logger", () => ({
 
 import { GraphPanel } from "../../src/host/graphPanel";
 
+// Enough of the WebviewPanel surface for the GraphPanel constructor, with
+// a way to play webview messages straight into the real handler. The
+// handler is async, so awaiting the send waits for the whole branch.
+function fakePanel() {
+	let messageListener: ((message: unknown) => unknown) | undefined;
+	const panel = {
+		webview: {
+			html: "",
+			cspSource: "https://test.webview",
+			asWebviewUri: () => ({
+				toString: () => "https://test.webview/graph.js",
+			}),
+			postMessage: vi.fn(),
+			onDidReceiveMessage: (listener: (message: unknown) => unknown) => {
+				messageListener = listener;
+				return { dispose: () => {} };
+			},
+		},
+		onDidDispose: () => ({ dispose: () => {} }),
+		onDidChangeViewState: () => ({ dispose: () => {} }),
+		dispose: vi.fn(),
+	};
+	return {
+		panel: panel as unknown as WebviewPanel,
+		send: (message: unknown) => messageListener?.(message),
+	};
+}
+
 suite("graph panel goToFile", () => {
 	const workspaceFile = "/roots/mod/events/a.txt";
 	const outsideFile = "/etc/passwd";
 	let fake: ReturnType<typeof fakePanel>;
-
-	// Enough of the WebviewPanel surface for the GraphPanel constructor, with
-	// a way to play webview messages straight into the real handler. The
-	// handler is async, so awaiting the send waits for the whole branch.
-	function fakePanel() {
-		let messageListener: ((message: unknown) => unknown) | undefined;
-		const panel = {
-			webview: {
-				html: "",
-				cspSource: "https://test.webview",
-				asWebviewUri: () => ({
-					toString: () => "https://test.webview/graph.js",
-				}),
-				postMessage: vi.fn(),
-				onDidReceiveMessage: (listener: (message: unknown) => unknown) => {
-					messageListener = listener;
-					return { dispose: () => {} };
-				},
-			},
-			onDidDispose: () => ({ dispose: () => {} }),
-			onDidChangeViewState: () => ({ dispose: () => {} }),
-			dispose: vi.fn(),
-		};
-		return {
-			panel: panel as unknown as WebviewPanel,
-			send: (message: unknown) => messageListener?.(message),
-		};
-	}
 
 	const send = (uri: string, line: number, column: number) =>
 		fake.send({ command: "goToFile", uri, line, column });
@@ -219,5 +226,100 @@ suite("graph panel goToFile", () => {
 			revealRange.mock.calls[0][0],
 			Range.mock.results[0]?.value,
 		);
+	});
+});
+
+suite("graph panel save handlers", () => {
+	const exportImageBody = Buffer.concat([
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		Buffer.from("merged"),
+	]).toString("base64");
+	const pngSignature = Buffer.from([
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+	]);
+	let tempRoot: string;
+	let fake: ReturnType<typeof fakePanel>;
+
+	beforeEach(async () => {
+		vi.clearAllMocks();
+		roots.folders = [{ uri: { fsPath: "/roots/mod" } }];
+		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cwtools-graph-save-"));
+		fake = fakePanel();
+		GraphPanel.restore("/ext", fake.panel);
+	});
+
+	afterEach(async () => {
+		GraphPanel.currentPanel?.dispose();
+		await fs.rm(path.join(tempRoot, "graph.png"), { force: true });
+		await fs.rm(path.join(tempRoot, "graph.json"), { force: true });
+		await fs.rmdir(tempRoot);
+	});
+
+	test("writes the webview's base64 image body as decoded PNG bytes", async () => {
+		const dest = path.join(tempRoot, "graph.png");
+		showSaveDialog.mockResolvedValueOnce({ fsPath: dest });
+
+		await fake.send({ command: "saveImage", image: exportImageBody });
+
+		assert.deepStrictEqual(showSaveDialog.mock.calls, [
+			[{ filters: { Image: ["png"] } }],
+		]);
+		const written = await fs.readFile(dest);
+		assert.ok(
+			written.equals(Buffer.from(exportImageBody, "base64")),
+			"the file must hold the decoded image body, not the base64 text",
+		);
+		assert.ok(
+			written.subarray(0, pngSignature.length).equals(pngSignature),
+			"the written PNG must start with the PNG signature",
+		);
+	});
+
+	test("writes nothing when the image save dialog is cancelled", async () => {
+		showSaveDialog.mockResolvedValueOnce(undefined);
+
+		await fake.send({ command: "saveImage", image: exportImageBody });
+
+		assert.strictEqual(showSaveDialog.mock.calls.length, 1);
+		assert.deepStrictEqual(logError.mock.calls, []);
+		assert.deepStrictEqual(await fs.readdir(tempRoot), []);
+	});
+
+	test("writes the webview's json as text to the chosen file", async () => {
+		const dest = path.join(tempRoot, "graph.json");
+		showSaveDialog.mockResolvedValueOnce({ fsPath: dest });
+		const json = JSON.stringify({
+			elements: { nodes: [{ data: { id: "a" } }] },
+		});
+
+		await fake.send({ command: "saveJson", json });
+
+		assert.deepStrictEqual(showSaveDialog.mock.calls, [
+			[{ filters: { Json: ["json"] } }],
+		]);
+		assert.strictEqual(await fs.readFile(dest, "utf-8"), json);
+	});
+
+	test("writes nothing when the json save dialog is cancelled", async () => {
+		showSaveDialog.mockResolvedValueOnce(undefined);
+
+		await fake.send({ command: "saveJson", json: "{}" });
+
+		assert.strictEqual(showSaveDialog.mock.calls.length, 1);
+		assert.deepStrictEqual(logError.mock.calls, []);
+		assert.deepStrictEqual(await fs.readdir(tempRoot), []);
+	});
+
+	test("logs a failed save instead of letting the handler throw", async () => {
+		showSaveDialog.mockResolvedValueOnce({ fsPath: tempRoot });
+
+		await fake.send({ command: "saveImage", image: exportImageBody });
+
+		assert.strictEqual(logError.mock.calls.length, 1);
+		assert.strictEqual(
+			logError.mock.calls[0][0],
+			"graph webview message handler failed",
+		);
+		assert.ok(logError.mock.calls[0][1] instanceof Error);
 	});
 });
