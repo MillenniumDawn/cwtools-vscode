@@ -1,3 +1,4 @@
+import { languages } from "vscode";
 import * as assert from "assert";
 import { afterEach, beforeEach, suite, test, vi } from "vitest";
 import type { ExtensionContext } from "vscode";
@@ -275,12 +276,12 @@ suite("documentLanguage", () => {
 
 	suite("stale editor classification", () => {
 		interface Editor {
-			document: { languageId: string; uri: { toString(): string } };
+			document: { languageId: string; uri: { toString(): string; scheme: string; fsPath: string } };
 		}
 		const editorFor = (name: string): Editor => ({
 			document: {
 				languageId: "paradox",
-				uri: { toString: () => `file:///workspace/events/${name}.txt` },
+				uri: { toString: () => `file:///workspace/events/${name}.txt`, scheme: "file", fsPath: `/workspace/events/${name}.txt` },
 			},
 		});
 		const editorA = editorFor("a");
@@ -328,6 +329,29 @@ suite("documentLanguage", () => {
 		afterEach(() => {
 			vi.useRealTimers();
 		});
+
+		for (const dispose of [false, true]) {
+			test(`drops a pending language upgrade after ${dispose ? "disposal" : "focus changes"}`, async () => {
+				const { subscriptions, requests, sendNotification, listener } = await register();
+				let finish!: () => void;
+				const plaintext = { document: { ...editorA.document, languageId: "plaintext" } };
+				vi.mocked(languages.setTextDocumentLanguage).mockImplementationOnce(() => new Promise((resolve) => { finish = () => { plaintext.document.languageId = "paradox"; resolve(undefined as never); }; }));
+				listener(plaintext);
+				await vi.advanceTimersByTimeAsync(200);
+				if (dispose) {
+					for (const subscription of subscriptions) subscription.dispose();
+				} else {
+					listener(editorB);
+					await vi.advanceTimersByTimeAsync(200);
+					requests[0].resolve(["focus"]);
+					await flush();
+				}
+				finish();
+				await flush();
+				assert.deepStrictEqual(sendNotification.mock.calls, dispose ? [] : [["didFocusFile", { uri: editorB.document.uri.toString() }]]);
+				assert.strictEqual(requests.length, dispose ? 0 : 1);
+			});
+		}
 
 		test("applies the reply for the only focused editor", async () => {
 			const { tracker, requests, listener } = await register();

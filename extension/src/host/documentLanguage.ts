@@ -76,6 +76,7 @@ export async function registerDocumentLanguage(
 			if (!editor) return;
 			const editorPath = editor.document.uri.toString();
 			await upgradePlaintextDocument(editor.document);
+			if (gen !== generation) return;
 			if (
 				editor.document.languageId === languageId &&
 				shouldNotifyFocus(editorPath, lastFocusUri)
