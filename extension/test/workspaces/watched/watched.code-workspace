@@ -15,9 +15,6 @@
       "../parent"
     ],
     "cwtools.backgroundReindex.intervalMinutes": 0,
-    "cwtools.rules.autoReload": false,
-    "files.watcherExclude": {
-      "**/target/**": false
-    }
+    "cwtools.rules.autoReload": false
   }
 }

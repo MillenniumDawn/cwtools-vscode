@@ -42,7 +42,7 @@ import {
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import type { RulesSetup } from "./rulesSetup";
-import { createWatchedPathExcluder } from "./watchedFiles";
+import { createWatchedPathExcluder, forwardWatchedFileEvent } from "./watchedFiles";
 import { logError, errorMessage, outputChannel } from "./logger";
 import {
 	isServerCommand,
@@ -396,10 +396,12 @@ export function createLanguageClient(
 			// walk skips, and its watched-file path doesn't re-apply that skip
 			// list, so hold those events here.
 			didChangeWatchedFile: async (event, next) => {
-				if (isExcludedWatchedPath(Uri.parse(event.uri).fsPath)) {
-					return;
-				}
-				await next(event);
+				await forwardWatchedFileEvent(
+					event,
+					isExcludedWatchedPath,
+					(uri) => Uri.parse(uri).fsPath,
+					next,
+				);
 			},
 		},
 		handleDiagnostics: (uri, diagnostics, next) => {

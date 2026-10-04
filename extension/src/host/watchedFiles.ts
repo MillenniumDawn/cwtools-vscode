@@ -30,6 +30,19 @@ const EXCLUDED_DIRS = [
 	".vscode",
 ];
 
+// Keep filtering separate from VS Code's FileSystemWatcher so it can be
+// exercised with synthetic file events even when the host suppresses events
+// from ignored directories such as target/.
+export async function forwardWatchedFileEvent<T extends { uri: string }>(
+	event: T,
+	isExcluded: (fsPath: string) => boolean,
+	fileUriToPath: (uri: string) => string,
+	next: (event: T) => Promise<void>,
+): Promise<void> {
+	if (isExcluded(fileUriToPath(event.uri))) return;
+	await next(event);
+}
+
 // Each served root starts its own walk. Prefer the deepest root when the rules
 // directory is inside the workspace; outside known roots keep the whole-path check.
 export function createWatchedPathExcluder(

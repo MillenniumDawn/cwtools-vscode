@@ -1,6 +1,9 @@
 import * as assert from "assert";
 import { suite, test } from "vitest";
-import { createWatchedPathExcluder } from "../../src/host/watchedFiles";
+import {
+	createWatchedPathExcluder,
+	forwardWatchedFileEvent,
+} from "../../src/host/watchedFiles";
 
 // Mirrors cwtools_file_manager's exclude_patterns and EXCLUDED_DIRS, so the
 // cases below are the engine's rules: file names are case-sensitive, directory
@@ -133,5 +136,30 @@ suite("watchedFiles", () => {
 				`${root} :: ${path}`,
 			);
 		}
+	});
+
+	test("filters excluded watched-file events before forwarding to the server", async () => {
+		const excluded = createWatchedPathExcluder(POSIX_ROOT);
+		const checkedPaths: string[] = [];
+		const forwardedUris: string[] = [];
+		const isExcluded = (fsPath: string) => {
+			checkedPaths.push(fsPath);
+			return excluded(fsPath);
+		};
+		const fileUriToPath = (uri: string) => new URL(uri).pathname;
+		const next = (event: { uri: string }) => {
+			forwardedUris.push(event.uri);
+			return Promise.resolve();
+		};
+
+		const excludedEvent = { uri: "file:///mod/target/probe.txt" };
+		await forwardWatchedFileEvent(excludedEvent, isExcluded, fileUriToPath, next);
+		assert.deepStrictEqual(checkedPaths, ["/mod/target/probe.txt"]);
+		assert.deepStrictEqual(forwardedUris, [], "excluded event must not reach the server");
+
+		const includedEvent = { uri: "file:///mod/common/probe.txt" };
+		await forwardWatchedFileEvent(includedEvent, isExcluded, fileUriToPath, next);
+		assert.deepStrictEqual(checkedPaths, ["/mod/target/probe.txt", "/mod/common/probe.txt"]);
+		assert.deepStrictEqual(forwardedUris, [includedEvent.uri]);
 	});
 });
