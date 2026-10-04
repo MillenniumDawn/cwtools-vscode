@@ -58,7 +58,71 @@ vi.mock("vscode-languageclient/node", () => ({
 }));
 
 import { State } from "vscode-languageclient/node";
+import {
+	FIX_ALL_WORKSPACE_COMMAND,
+	FORMAT_WORKSPACE_COMMAND,
+	GRAPH_DATA_COMMAND,
+} from "../../src/host/graphAvailability";
 import { registerServerNotifications } from "../../src/host/serverNotifications";
+
+const allAdvertised = [
+	GRAPH_DATA_COMMAND,
+	FIX_ALL_WORKSPACE_COMMAND,
+	FORMAT_WORKSPACE_COMMAND,
+];
+
+function registerStatefulClient() {
+	let current: number = State.Stopped;
+	const fake = {
+		initializeResult: undefined as
+			| { capabilities: { executeCommandProvider: { commands: string[] } } }
+			| undefined,
+		onDidChangeState: (
+			handler: (event: { oldState: number; newState: number }) => void,
+		) => {
+			state.setStateHandler(handler);
+			return { dispose: () => undefined };
+		},
+		onNotification: () => ({ dispose: () => undefined }),
+	};
+	registerServerNotifications(
+		{ subscriptions: [] } as unknown as ExtensionContext,
+		fake as unknown as LanguageClient,
+	);
+	const enter = (newState: number): void => {
+		const handler = state.getStateHandler();
+		assert.ok(handler, "state change handler should be registered");
+		handler({ oldState: current, newState });
+		current = newState;
+	};
+	// The library stores the initialize result just before it fires Running.
+	const run = (commands: string[]): void => {
+		fake.initializeResult = {
+			capabilities: { executeCommandProvider: { commands } },
+		};
+		enter(State.Running);
+	};
+	return { enter, run };
+}
+
+function contextKeys(): Record<string, unknown> {
+	const keys: Record<string, unknown> = {};
+	for (const [command, key, value] of state.executeCommand.mock
+		.calls as unknown[][]) {
+		if (command === "setContext") {
+			keys[String(key)] = value;
+		}
+	}
+	return keys;
+}
+
+function keysFor(graph: boolean, fixAll: boolean, format: boolean) {
+	return {
+		cwtoolsGraphAvailable: graph,
+		cwtoolsFixAllAvailable: fixAll,
+		cwtoolsFormatWorkspaceAvailable: format,
+	};
+}
 
 suite("server notifications", () => {
 	beforeEach(() => {
@@ -150,4 +214,61 @@ suite("server notifications", () => {
 		]);
 		assert.strictEqual(notifications.statusText(), "CWTools: stopped");
 	});
+
+	test("publishes command availability when the client starts running", () => {
+		const client = registerStatefulClient();
+		client.enter(State.Starting);
+		assert.deepStrictEqual(state.executeCommand.mock.calls, []);
+
+		client.run(allAdvertised);
+
+		assert.deepStrictEqual(contextKeys(), keysFor(true, true, true));
+	});
+
+	test("restores command availability after an automatic restart", () => {
+		const client = registerStatefulClient();
+		client.enter(State.Starting);
+		client.run(allAdvertised);
+
+		client.enter(State.Stopped);
+		assert.deepStrictEqual(contextKeys(), keysFor(false, false, false));
+		client.enter(State.Starting);
+		client.run(allAdvertised);
+
+		assert.deepStrictEqual(contextKeys(), keysFor(true, true, true));
+		assert.ok(
+			state.executeCommand.mock.calls.every(([command]) => command === "setContext"),
+			"no restart command should be needed",
+		);
+	});
+
+	test("hides commands the restarted server does not advertise", () => {
+		const client = registerStatefulClient();
+		client.enter(State.Starting);
+		client.run(allAdvertised);
+
+		client.enter(State.Stopped);
+		client.enter(State.Starting);
+		client.run([GRAPH_DATA_COMMAND]);
+
+		assert.deepStrictEqual(contextKeys(), keysFor(true, false, false));
+	});
+
+	test.each([
+		["stopped", State.Stopped],
+		["failed to start", State.StartFailed],
+	])(
+		"leaves commands hidden when the restart ends %s",
+		(_label: string, finalState: number) => {
+			const client = registerStatefulClient();
+			client.enter(State.Starting);
+			client.run(allAdvertised);
+
+			client.enter(State.Stopped);
+			client.enter(State.Starting);
+			client.enter(finalState);
+
+			assert.deepStrictEqual(contextKeys(), keysFor(false, false, false));
+		},
+	);
 });

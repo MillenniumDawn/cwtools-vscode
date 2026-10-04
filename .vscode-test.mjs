@@ -87,6 +87,7 @@ const deactivateFile =
 const smokeFiles = [
 	...unitFiles,
 	"./dist/extension/bin/client/test/host/extension.test.js",
+	"./dist/extension/bin/client/test/host/restart.test.js",
 	deactivateFile,
 ];
 // Live-settings fixture is isolated: its .vscode/settings.json attempts to set
@@ -112,6 +113,7 @@ const hostFiles = [
 	"./dist/extension/bin/client/test/host/completion.test.js",
 	"./dist/extension/bin/client/test/host/codeLens.test.js",
 	"./dist/extension/bin/client/test/host/commands.test.js",
+	"./dist/extension/bin/client/test/host/restart.test.js",
 	deactivateFile,
 ];
 

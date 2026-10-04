@@ -7,7 +7,10 @@ import type {
 import { State } from "vscode-languageclient/node";
 
 import { commandProgressActive } from "./commandProgress";
-import { clearCommandAvailability } from "./commands";
+import {
+	clearCommandAvailability,
+	publishCommandAvailability,
+} from "./commands";
 import type { FileListItem } from "./fileExplorer";
 import { FileExplorer } from "./fileExplorer";
 import { fileListSignature } from "./fileListSignature";
@@ -87,6 +90,10 @@ export function registerServerNotifications(
 		client.onDidChangeState((e: StateChangeEvent) => {
 			if (e.newState === State.Starting) {
 				status.text = l10n.t("CWTools: starting");
+			} else if (e.newState === State.Running) {
+				// The library sets initializeResult just before this event fires,
+				// so this covers activation, manual restarts and automatic ones.
+				publishCommandAvailability(client);
 			} else if (
 				e.newState === State.Stopped ||
 				e.newState === State.StartFailed
