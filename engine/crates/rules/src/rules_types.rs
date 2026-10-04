@@ -385,7 +385,12 @@ impl RuleSet {
         self.value_sets = self
             .values
             .iter()
-            .map(|(k, vs)| (k.clone(), vs.iter().cloned().collect()))
+            .map(|(k, vs)| {
+                (
+                    k.clone(),
+                    vs.iter().map(|v| v.to_ascii_lowercase()).collect(),
+                )
+            })
             .collect();
         self.builtin_variable_bases = self
             .values
@@ -512,10 +517,14 @@ impl RuleSet {
         if let Some(set) = self.value_sets.get(name)
             && !set.is_empty()
         {
-            return Some(set.contains(value));
+            return Some(if value.bytes().any(|b| b.is_ascii_uppercase()) {
+                set.contains(&value.to_ascii_lowercase() as &str)
+            } else {
+                set.contains(value)
+            });
         }
         match self.values.get(name) {
-            Some(vs) if !vs.is_empty() => Some(vs.iter().any(|v| v == value)),
+            Some(vs) if !vs.is_empty() => Some(vs.iter().any(|v| v.eq_ignore_ascii_case(value))),
             _ => None,
         }
     }
@@ -558,7 +567,8 @@ impl RuleSet {
                 && self.enums.len() == self.enum_by_name.len()
                 && (self.aliases.is_empty() || !self.alias_exact.is_empty())
                 && self.enums.len() == self.enum_values_lower.len()
-                && self.enums.len() == self.enum_has_at.len(),
+                && self.enums.len() == self.enum_has_at.len()
+                && self.values.len() == self.value_sets.len(),
             "RuleSet used without reindex: derived indexes are stale"
         );
     }
@@ -663,6 +673,106 @@ mod tests {
         );
         assert!(ruleset.is_builtin_variable_base("party_popularity"));
         assert!(!ruleset.is_builtin_variable_base("unrelated_var"));
+    }
+
+    #[test]
+    fn value_set_lookup_matches_members_regardless_of_ascii_case() {
+        let mut ruleset = RuleSet::new();
+        ruleset.values.insert(
+            "idea_slot".to_string(),
+            vec![
+                "political_power".to_string(),
+                "UPPER_SLOT".to_string(),
+                "Mixed_Case".to_string(),
+                "étape".to_string(),
+            ],
+        );
+        ruleset.values.insert("empty_set".to_string(), Vec::new());
+        ruleset.reindex();
+
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "political_power"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "POLITICAL_POWER"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "upper_slot"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "UPPER_SLOT"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "mixed_case"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "Mixed_Case"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "MIXED_case"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "stability_cost"),
+            Some(false)
+        );
+        assert_eq!(ruleset.value_set_lookup("idea_slot", "ÉTAPE"), Some(false));
+        assert_eq!(
+            ruleset.value_set_lookup("unknown_slot", "political_power"),
+            None
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("empty_set", "political_power"),
+            None
+        );
+
+        let expected = vec![
+            "political_power".to_string(),
+            "UPPER_SLOT".to_string(),
+            "Mixed_Case".to_string(),
+            "étape".to_string(),
+        ];
+        assert_eq!(ruleset.values.get("idea_slot"), Some(&expected));
+    }
+
+    #[test]
+    fn value_set_lookup_fallback_without_reindex_is_case_insensitive() {
+        let mut ruleset = RuleSet::new();
+        ruleset
+            .values
+            .insert("idea_slot".to_string(), vec!["Political_Power".to_string()]);
+        ruleset.values.insert("empty_set".to_string(), Vec::new());
+
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "political_power"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "Political_Power"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "POLITICAL_POWER"),
+            Some(true)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("idea_slot", "unrelated"),
+            Some(false)
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("empty_set", "political_power"),
+            None
+        );
+        assert_eq!(
+            ruleset.value_set_lookup("unknown_set", "political_power"),
+            None
+        );
     }
 
     #[test]
