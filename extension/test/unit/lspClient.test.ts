@@ -233,6 +233,10 @@ function create(
 	onStopped: () => void = () => {},
 	onRulesCacheChanged?: (rulesCache: string) => void,
 	fetchRules?: () => void,
+	{
+		workspaceRoot = "/workspace",
+		rulesCache = "/rules",
+	}: { workspaceRoot?: string; rulesCache?: string } = {},
 ): {
 	context: ExtensionContext;
 } {
@@ -243,12 +247,12 @@ function create(
 			language: "hoi4",
 			serverExe: "/bin/cwtools-server",
 			cacheDir: "/cache",
-			rulesCache: "/rules",
+			rulesCache,
 			resolveRulesCache,
 			onRulesCacheChanged,
 			fetchRules,
 			workspaceFolder: {
-				uri: { fsPath: "/workspace" },
+				uri: { fsPath: workspaceRoot },
 				name: "workspace",
 				index: 0,
 			} as never,
@@ -660,8 +664,7 @@ suite("lspClient — watched files", () => {
 		}
 	});
 
-	test("holds back events for files the server's own walk skips", async () => {
-		create();
+	async function forwardedWatchedEvents(uris: string[]): Promise<string[]> {
 		const forwarded: string[] = [];
 		const next = (event: { uri: string }): Promise<void> => {
 			forwarded.push(event.uri);
@@ -670,17 +673,70 @@ suite("lspClient — watched files", () => {
 		const middleware =
 			lastClientOptions.value?.middleware?.workspace?.didChangeWatchedFile;
 		assert.ok(middleware, "no didChangeWatchedFile middleware");
-		for (const uri of [
-			"file:///mod/Changelog.txt",
-			"file:///mod/dist/bundle.js.map",
-			"file:///mod/common/ideas/x.txt",
-			"file:///mod/My%20Mod/events/y.txt",
-		]) {
+		for (const uri of uris) {
 			await middleware(watchedFileEvent(uri), next);
 		}
-		assert.deepStrictEqual(forwarded, [
-			"file:///mod/common/ideas/x.txt",
-			"file:///mod/My%20Mod/events/y.txt",
+		return forwarded;
+	}
+
+	test("holds back events for files the server's own walk skips", async () => {
+		create();
+		assert.deepStrictEqual(
+			await forwardedWatchedEvents([
+				"file:///workspace/Changelog.txt",
+				"file:///workspace/dist/bundle.js.map",
+				"file:///workspace/common/ideas/x.txt",
+				"file:///workspace/My%20Mod/events/y.txt",
+			]),
+			[
+				"file:///workspace/common/ideas/x.txt",
+				"file:///workspace/My%20Mod/events/y.txt",
+			],
+		);
+	});
+
+	test("measures excluded directories from the served root, not above it (#835)", async () => {
+		create(undefined, undefined, undefined, {
+			workspaceRoot: "/home/u/.claude/worktrees/mod",
+		});
+		assert.deepStrictEqual(
+			await forwardedWatchedEvents([
+				"file:///home/u/.claude/worktrees/mod/common/ideas/x.txt",
+				"file:///home/u/.claude/worktrees/mod/target/x.txt",
+				"file:///home/u/.claude/worktrees/mod/.git/x.txt",
+				"file:///home/u/.claude/worktrees/mod/Changelog.txt",
+			]),
+			["file:///home/u/.claude/worktrees/mod/common/ideas/x.txt"],
+		);
+	});
+
+	test("applies only the file-name check outside the served root", async () => {
+		create();
+		assert.deepStrictEqual(
+			await forwardedWatchedEvents([
+				"file:///other/dist/common/x.txt",
+				"file:///other/Changelog.txt",
+			]),
+			["file:///other/dist/common/x.txt"],
+		);
+	});
+
+	test("forwards rules-folder changes under an excluded directory name", () => {
+		create(undefined, undefined, undefined, {
+			rulesCache: "/home/u/.claude/rules",
+		});
+		const watcher = rulesWatcherAt("/home/u/.claude/rules");
+		assert.ok(watcher, "external rules folder has no scoped watcher");
+		watcher.fire("change", fileUri("/home/u/.claude/rules/a.cwt"));
+		assert.deepStrictEqual(sendNotification.mock.calls, [
+			[
+				"workspace/didChangeWatchedFiles",
+				{
+					changes: [
+						{ uri: "file:///home/u/.claude/rules/a.cwt", type: 2 },
+					],
+				},
+			],
 		]);
 	});
 });

@@ -42,7 +42,7 @@ import {
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import type { RulesSetup } from "./rulesSetup";
-import { isExcludedWatchedPath } from "./watchedFiles";
+import { createWatchedPathExcluder } from "./watchedFiles";
 import { logError, errorMessage, outputChannel } from "./logger";
 import {
 	isServerCommand,
@@ -370,6 +370,9 @@ export function createLanguageClient(
 	};
 
 	const diagnosticsCache = new DiagnosticsSignatureCache();
+	const isExcludedWatchedPath = createWatchedPathExcluder(
+		cfg.workspaceFolder.uri.fsPath,
+	);
 
 	const middleware: LanguageClientOptions["middleware"] = {
 		workspace: {
