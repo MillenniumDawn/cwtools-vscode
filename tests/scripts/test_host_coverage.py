@@ -76,6 +76,31 @@ def root_and_child_script(marker: Path, *, root_ignores_term: bool) -> str:
     return "\n".join(lines)
 
 
+def signalled_runner(tmp_path: Path, script: str) -> str:
+    return "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(Path(host_coverage.__file__).parent)!r})",
+            "import host_coverage",
+            "host_coverage.run_with_timeout(",
+            "    'signalled',",
+            "    sys.executable,",
+            f"    ['-c', {script!r}],",
+            f"    cwd={str(tmp_path)!r},",
+            "    timeout_ms=60_000,",
+            "    grace_ms=300,",
+            "    stdio='ignore',",
+            ")",
+        ]
+    )
+
+
+def wait_for(ready: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + 10
+    while not ready() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
 def interrupt_once(monkeypatch: pytest.MonkeyPatch, ready: Callable[[], bool]) -> None:
     real_sleep = time.sleep
 
@@ -201,33 +226,50 @@ def test_a_termination_signal_during_the_wait_stops_the_whole_group(
 ) -> None:
     marker = tmp_path / "pids"
     script = root_and_child_script(marker, root_ignores_term=False)
-    runner = "\n".join(
-        [
-            "import sys",
-            f"sys.path.insert(0, {str(Path(host_coverage.__file__).parent)!r})",
-            "import host_coverage",
-            "host_coverage.run_with_timeout(",
-            "    'signalled',",
-            "    sys.executable,",
-            f"    ['-c', {script!r}],",
-            f"    cwd={str(tmp_path)!r},",
-            "    timeout_ms=60_000,",
-            "    grace_ms=300,",
-            "    stdio='ignore',",
-            ")",
-        ]
-    )
+    runner = signalled_runner(tmp_path, script)
     signo = getattr(signal, signame)
 
     try:
         with subprocess.Popen([sys.executable, "-c", runner]) as proc:
-            deadline = time.monotonic() + 10
-            while len(read_pids(marker)) != 2 and time.monotonic() < deadline:
-                time.sleep(0.01)
+            wait_for(lambda: len(read_pids(marker)) == 2)
             proc.send_signal(signo)
             assert proc.wait(timeout=10) == 128 + signo
         pids = read_pids(marker)
         assert len(pids) == 2
+        assert all(exited_within(pid) for pid in pids)
+    finally:
+        kill_strays(read_pids(marker))
+
+
+@requires_proc
+@pytest.mark.parametrize("signame", ["SIGINT", "SIGTERM", "SIGHUP"])
+def test_a_second_signal_during_the_grace_wait_still_kills_the_group(
+    tmp_path: Path, signame: str
+) -> None:
+    marker = tmp_path / "pids"
+    termed = tmp_path / "termed"
+    # The root outlives SIGTERM and records it, so the test knows the grace
+    # wait has started before it sends the second signal.
+    script = "\n".join(
+        [
+            "import os, pathlib, signal, time",
+            f"termed = pathlib.Path({str(termed)!r})",
+            "signal.signal(signal.SIGTERM, lambda *_: termed.touch())",
+            f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))",
+            "time.sleep(30)",
+        ]
+    )
+    runner = signalled_runner(tmp_path, script)
+
+    try:
+        with subprocess.Popen([sys.executable, "-c", runner]) as proc:
+            wait_for(lambda: len(read_pids(marker)) == 1)
+            proc.send_signal(signal.SIGTERM)
+            wait_for(termed.is_file)
+            proc.send_signal(getattr(signal, signame))
+            assert proc.wait(timeout=10) == 128 + signal.SIGTERM
+        pids = read_pids(marker)
+        assert len(pids) == 1
         assert all(exited_within(pid) for pid in pids)
     finally:
         kill_strays(read_pids(marker))

@@ -8,7 +8,8 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from types import FrameType
 from typing import NoReturn
 
 from coverage_metrics import HOST_COVERAGE_LABELS, validate_host_coverage_summary
@@ -20,6 +21,12 @@ HOST_COVERAGE_KILL_GRACE_MS = 5_000
 
 COVERAGE_DIR = REPO_ROOT / "coverage"
 SUMMARY_PATH = COVERAGE_DIR / "coverage-summary.json"
+
+TERMINATION_SIGNALS: list[int] = [signal.SIGTERM]
+if hasattr(signal, "SIGHUP"):
+    TERMINATION_SIGNALS.append(signal.SIGHUP)
+
+_Handler = Callable[[int, FrameType | None], object] | signal.Handlers
 
 
 def kill_process_tree(pid: int, sig: str) -> None:
@@ -55,32 +62,31 @@ def tree_alive(proc: subprocess.Popen[bytes]) -> bool:
     return True
 
 
-def stop_process_tree(proc: subprocess.Popen[bytes], grace_ms: int) -> None:
-    if tree_alive(proc):
-        kill_process_tree(proc.pid, "SIGTERM")
-    grace_deadline = time.monotonic() + (grace_ms / 1000)
-    while tree_alive(proc) and time.monotonic() < grace_deadline:
-        time.sleep(0.05)
-    if tree_alive(proc):
-        kill_process_tree(proc.pid, "SIGKILL")
-    proc.wait()
-
-
 def _exit_on_signal(signo: int, _frame: object) -> NoReturn:
     raise SystemExit(128 + signo)
 
 
 @contextlib.contextmanager
-def termination_raises() -> Iterator[None]:
-    signals = [signal.SIGTERM]
-    if hasattr(signal, "SIGHUP"):
-        signals.append(signal.SIGHUP)
-    previous = {signo: signal.signal(signo, _exit_on_signal) for signo in signals}
+def signals_handled(handler: _Handler, signals: list[int]) -> Iterator[None]:
+    previous = {signo: signal.signal(signo, handler) for signo in signals}
     try:
         yield
     finally:
-        for signo, handler in previous.items():
-            signal.signal(signo, handler)
+        for signo, old in previous.items():
+            signal.signal(signo, old)
+
+
+def stop_process_tree(proc: subprocess.Popen[bytes], grace_ms: int) -> None:
+    # A second signal must not end the cleanup before the SIGKILL step.
+    with signals_handled(signal.SIG_IGN, [signal.SIGINT, *TERMINATION_SIGNALS]):
+        if tree_alive(proc):
+            kill_process_tree(proc.pid, "SIGTERM")
+        grace_deadline = time.monotonic() + (grace_ms / 1000)
+        while tree_alive(proc) and time.monotonic() < grace_deadline:
+            time.sleep(0.05)
+        if tree_alive(proc):
+            kill_process_tree(proc.pid, "SIGKILL")
+        proc.wait()
 
 
 def run_with_timeout(
@@ -108,7 +114,7 @@ def run_with_timeout(
         deadline = time.monotonic() + (timeout_ms / 1000)
         # The new session gets neither the terminal's Ctrl-C nor its hangup.
         try:
-            with termination_raises():
+            with signals_handled(_exit_on_signal, TERMINATION_SIGNALS):
                 while proc.poll() is None and time.monotonic() < deadline:
                     time.sleep(0.05)
         except BaseException:
