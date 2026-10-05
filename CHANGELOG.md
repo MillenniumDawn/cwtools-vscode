@@ -3,6 +3,7 @@
 #### Engine
 
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
+* Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
 * Reclaim removed localisation URI references and recycle file records after sweeping their old sites, bounding metadata growth across repeated refreshes. (#846)
 * Avoid interning speculative parser keys, removing discarded numeric and boolean entries from bare clause values. (#547)
 * Return `RequestFailed` instead of `ServerNotInitialized` for navigation and rename refusals. (#828)
@@ -16,7 +17,7 @@
 
 #### Extension
 
-* Measure watched-file exclusions from configured parent, vanilla and rules roots as well as the workspace, refreshing roots on restart or rules-folder changes. Add a real create/change/delete watcher regression. (#862)
+* Measure watched-file exclusions from configured parent, vanilla and rules roots as well as the workspace (the rules root for `.cwt` files only), refreshing roots on restart or rules-folder changes. Add a real create/change/delete watcher regression. (#862)
 * When the client drops watched-file events, skipped directory names (`.git`, `.claude`, `target`, `dist`, `out` and the rest) no longer count in the folders above the served workspace root. A mod checked out under a folder with one of those names, such as `.claude/worktrees/<mod>`, used to index at startup but ignore later external edits, checkouts and deletes. (#835)
 * Report graph image export failures in the webview instead of leaving rejected promises unhandled, and allow a later export to succeed. (#834)
 * Discard delayed plaintext language upgrades after editor focus changes or teardown, before sending stale focus notifications. (#837)

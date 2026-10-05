@@ -365,7 +365,7 @@ export function createLanguageClient(
 		if (rulesCache === currentRulesCache) return;
 		disposeRulesWatcher();
 		currentRulesCache = rulesCache;
-		isExcludedWatchedPath = createWatchedPathExcluder([...startupRoots, currentRulesCache]);
+		isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
 		cfg.onRulesCacheChanged?.(rulesCache);
 		installRulesWatcher();
 	};
@@ -387,7 +387,7 @@ export function createLanguageClient(
 		return [workspaceRoot, ...parents, ...(vanilla ? [vanilla] : [])];
 	};
 	let startupRoots = readStartupRoots();
-	let isExcludedWatchedPath = createWatchedPathExcluder([...startupRoots, currentRulesCache]);
+	let isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
 
 
 	const middleware: LanguageClientOptions["middleware"] = {
@@ -527,7 +527,7 @@ export function createLanguageClient(
 		},
 		initializationOptions: () => {
 			startupRoots = readStartupRoots();
-			isExcludedWatchedPath = createWatchedPathExcluder([...startupRoots, currentRulesCache]);
+			isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
 			const ignoreOptions = readIgnoreOptions();
 			return {
 				language: cfg.language === "eu5" ? "paradox" : cfg.language,

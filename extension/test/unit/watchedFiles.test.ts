@@ -138,6 +138,27 @@ suite("watchedFiles", () => {
 		}
 	});
 
+	test("measures only .cwt files from the rules root", () => {
+		const cases: [rulesRoot: string, path: string, excluded: boolean][] = [
+			["/mod/.claude/rules", "/mod/.claude/rules/a.cwt", false],
+			["/mod/.claude/rules", "/mod/.claude/rules/target/a.cwt", true],
+			["/mod/.claude/rules", "/mod/.claude/rules/a.txt", true],
+			["/mod/.claude/rules", "/mod/.claude/rules/localisation/a.yml", true],
+			["/other/dist/rules", "/other/dist/rules/a.cwt", false],
+			["/other/dist/rules", "/other/dist/rules/a.txt", true],
+			["C:\\mod\\.claude\\rules", "c:\\mod\\.claude\\rules\\A.CWT", false],
+			["C:\\mod\\.claude\\rules", "c:\\mod\\.claude\\rules\\a.txt", true],
+		];
+		for (const [rulesRoot, path, expected] of cases) {
+			const root = rulesRoot.startsWith("C:") ? WINDOWS_ROOT : POSIX_ROOT;
+			assert.strictEqual(
+				createWatchedPathExcluder([root], rulesRoot)(path),
+				expected,
+				`${rulesRoot} :: ${path}`,
+			);
+		}
+	});
+
 	test("filters excluded watched-file events before forwarding to the server", async () => {
 		const excluded = createWatchedPathExcluder(POSIX_ROOT);
 		const checkedPaths: string[] = [];

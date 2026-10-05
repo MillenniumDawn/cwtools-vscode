@@ -720,6 +720,9 @@ suite("lspClient — watched files", () => {
 			"file:///other/dist/vanilla/events/a.txt",
 			"file:///workspace/.claude/rules/a.cwt",
 			"file:///workspace/.claude/rules/target/a.cwt",
+			// The rules root serves .cwt only; script below it is measured from
+			// the workspace, whose walk skips .claude.
+			"file:///workspace/.claude/rules/a.txt",
 		]), [
 			"file:///home/u/target/parent/events/a.txt",
 			"file:///other/dist/vanilla/events/a.txt",
