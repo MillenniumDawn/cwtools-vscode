@@ -28,7 +28,7 @@
     "cytoscape-popper": "^2.0.0",
     "merge-images": "2.0.0",
     "tippy.js": "^6.3.7",
-    "vscode-languageclient": "^10.1.1"
+    "vscode-languageclient": "^10.1.2"
   },
   "devDependencies": {
     "@eslint/compat": "^2.1.1",
@@ -40,7 +40,7 @@
     "@types/node": "^26.6",
     "@types/sinon": "22.0.0",
     "@types/vscode": "^1.138.0",
-    "@vitest/coverage-v8": "^5.0.1",
+    "@vitest/coverage-v8": "^5.0.2",
     "@vscode/test-cli": "^0.0.15",
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.0.0",
@@ -54,7 +54,7 @@
     "ovsx": "^1.2.0",
     "sinon": "22.1.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.70.0",
+    "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.0"
   },
   "overrides": {
