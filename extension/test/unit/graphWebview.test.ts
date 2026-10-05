@@ -72,6 +72,7 @@ const {
 	fakeCy,
 	FileReader,
 	graphNodes,
+	fileReaderFailure,
 	jsonFailure,
 	makeNode,
 	mergeImages,
@@ -105,6 +106,7 @@ const {
 	}> = [];
 	const graphNodes: { nodes: FakeGraphNode[] } = { nodes: [] };
 	const jsonFailure: { error?: Error } = {};
+	const fileReaderFailure: { error?: Error } = {};
 	const makeNode = (id: string): FakeGraphNode => {
 		const handlers = new Map<string, () => void>();
 		const data: Record<string, unknown> = {
@@ -159,9 +161,15 @@ const {
 	};
 	const FileReader = class {
 		result = "";
+		error: Error | null = null;
 		onloadend: (() => void) | null = null;
 		onerror: (() => void) | null = null;
 		async readAsDataURL(blob: Blob): Promise<void> {
+			if (fileReaderFailure.error) {
+				this.error = fileReaderFailure.error;
+				this.onerror?.();
+				return;
+			}
 			try {
 				const bytes = Buffer.from(await blob.arrayBuffer());
 				this.result = `data:${blob.type || "application/octet-stream"};base64,${bytes.toString("base64")}`;
@@ -261,6 +269,7 @@ const {
 		FileReader,
 		graphNodes,
 		jsonFailure,
+		fileReaderFailure,
 		makeNode,
 		mergeImages,
 		messageListener,
@@ -365,6 +374,7 @@ suite("graph webview", () => {
 		cytoscapeCores.length = 0;
 		graphNodes.nodes = [];
 		jsonFailure.error = undefined;
+		fileReaderFailure.error = undefined;
 		bounds.x1 = 0;
 		bounds.y1 = 0;
 		bounds.x2 = 0;
@@ -455,6 +465,34 @@ suite("graph webview", () => {
 			Buffer.from(posted, "base64").subarray(0, 8).equals(pngSignature),
 			"the posted body must decode to PNG bytes",
 		);
+	});
+
+	test.each([
+		["image merge", "merge failed", () => mergeImages.mockRejectedValueOnce(new Error("merge failed"))],
+		["blob read", "read failed", () => { fileReaderFailure.error = new Error("read failed"); }],
+	])("reports %s export failures through the message dispatcher and allows retry", async (_kind, errorMessage, fail) => {
+		render({ command: "go", data: [graphNode], settings: { wheelSensitivity: 1 } });
+		fail();
+
+		vi.useRealTimers();
+		const unhandledRejections: unknown[] = [];
+		const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+		process.on("unhandledRejection", onUnhandledRejection);
+		render({ command: "exportImage" });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		process.off("unhandledRejection", onUnhandledRejection);
+
+		assert.deepStrictEqual(unhandledRejections, []);
+		assert.deepStrictEqual(postMessage.mock.calls, [
+			[{ command: "showError", message: `CWTools: couldn't export graph image: ${errorMessage}.` }],
+		]);
+		assert.strictEqual(postMessage.mock.calls.some(([message]) => (message as { command: string }).command === "saveImage"), false);
+
+		fileReaderFailure.error = undefined;
+		mergeImages.mockResolvedValueOnce(`data:image/png;base64,${MERGED_BODY}`);
+		render({ command: "exportImage" });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.deepStrictEqual(postMessage.mock.calls[1], [{ command: "saveImage", image: MERGED_BODY }]);
 	});
 
 	test("scales the overlay canvas by the export pixel ratio", async () => {

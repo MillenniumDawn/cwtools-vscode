@@ -28,8 +28,12 @@ export async function registerDocumentLanguage(
 	const didFocusFile = "didFocusFile";
 	let latestType: string = "";
 	let getFileTypesInFlight = false;
-	let pendingEditor: vscode.TextEditor | undefined;
+	let pendingSwitch: { editor: vscode.TextEditor; gen: number } | undefined;
 	let lastFocusUri: string | undefined;
+	// Bumped on every active-editor change. A reply or queued switch from an
+	// older generation belongs to an editor that is no longer focused.
+	let generation = 0;
+	let graphFileContext: boolean | undefined;
 	const getFileTypesTimeoutMs = 5000;
 	const getFileTypesBackoffMs = 2000;
 
@@ -56,14 +60,23 @@ export async function registerDocumentLanguage(
 		await vscode.languages.setTextDocumentLanguage(doc, languageId);
 	}
 
+	async function setGraphFile(value: boolean): Promise<void> {
+		if (graphFileContext === value) return;
+		graphFileContext = value;
+		await commands.executeCommand("setContext", "cwtoolsGraphFile", value);
+	}
+
 	async function didChangeActiveTextEditor(
 		editor: vscode.TextEditor | undefined,
+		gen: number,
 	): Promise<void> {
+		if (gen !== generation) return;
 		latestType = "";
 		try {
 			if (!editor) return;
 			const editorPath = editor.document.uri.toString();
 			await upgradePlaintextDocument(editor.document);
+			if (gen !== generation) return;
 			if (
 				editor.document.languageId === languageId &&
 				shouldNotifyFocus(editorPath, lastFocusUri)
@@ -71,13 +84,14 @@ export async function registerDocumentLanguage(
 				await client.sendNotification(didFocusFile, { uri: editorPath });
 				lastFocusUri = editorPath;
 			}
+			if (gen !== generation) return;
 			// Guard against rapid tab switches piling up requests to a busy server.
 			// Only one getFileTypes request runs at a time; a switch that arrives
 			// mid-flight is remembered and processed once the in-flight one settles,
 			// so latestType and the cwtoolsGraphFile context can't stay stale on the
 			// editor the user actually landed on.
 			if (getFileTypesInFlight) {
-				pendingEditor = editor;
+				pendingSwitch = { editor, gen };
 				return;
 			}
 			getFileTypesInFlight = true;
@@ -96,15 +110,13 @@ export async function registerDocumentLanguage(
 					{ command: serverCommand("getFileTypes"), arguments: [editorPath] },
 					cts.token,
 				)) as string[] | undefined;
-				if (data && data[0]) {
-					latestType = data[0];
-					await commands.executeCommand("setContext", "cwtoolsGraphFile", true);
-				} else {
-					await commands.executeCommand(
-						"setContext",
-						"cwtoolsGraphFile",
-						false,
-					);
+				if (gen === generation) {
+					if (data && data[0]) {
+						latestType = data[0];
+						await setGraphFile(true);
+					} else {
+						await setGraphFile(false);
+					}
 				}
 			} catch (err) {
 				timedOut = cts.token.isCancellationRequested;
@@ -116,25 +128,25 @@ export async function registerDocumentLanguage(
 				} else {
 					logError("didChangeActiveTextEditor getFileTypes failed", err);
 				}
-				await commands.executeCommand("setContext", "cwtoolsGraphFile", false);
+				if (gen === generation) await setGraphFile(false);
 			} finally {
 				clearTimeout(timeoutTimer);
 				cts.dispose();
-				// After a timeout, cool down before draining pendingEditor so a
+				// After a timeout, cool down before draining pendingSwitch so a
 				// stalled server isn't re-hit once per timeout window. The in-flight
 				// guard stays held through the wait, so switches during the cooldown
-				// coalesce into pendingEditor (freshest wins). A settled response
-				// drains immediately.
+				// coalesce into pendingSwitch (freshest wins, a superseded one is
+				// dropped when drained). A settled response drains immediately.
 				const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
 				if (delay > 0) {
 					await new Promise<void>((resolve) => setTimeout(resolve, delay));
 				}
 				getFileTypesInFlight = false;
 			}
-			if (pendingEditor) {
-				const next = pendingEditor;
-				pendingEditor = undefined;
-				await didChangeActiveTextEditor(next);
+			if (pendingSwitch) {
+				const next = pendingSwitch;
+				pendingSwitch = undefined;
+				await didChangeActiveTextEditor(next.editor, next.gen);
 			}
 		} catch (err) {
 			logError("didChangeActiveTextEditor failed", err);
@@ -144,13 +156,21 @@ export async function registerDocumentLanguage(
 	let debounceTimer: NodeJS.Timeout | undefined;
 	context.subscriptions.push(
 		window.onDidChangeActiveTextEditor((editor) => {
+			const gen = ++generation;
 			latestType = "";
+			void setGraphFile(false);
 			if (debounceTimer) clearTimeout(debounceTimer);
 			debounceTimer = setTimeout(
-				() => void didChangeActiveTextEditor(editor),
+				() => void didChangeActiveTextEditor(editor, gen),
 				ACTIVE_EDITOR_DEBOUNCE_MS,
 			);
 		}),
+		{
+			dispose: () => {
+				clearTimeout(debounceTimer);
+				generation++;
+			},
+		},
 	);
 
 	await Promise.all(workspace.textDocuments.map(upgradePlaintextDocument));
@@ -161,6 +181,6 @@ export async function registerDocumentLanguage(
 	return {
 		getLatestType: () => latestType,
 		classifyActiveEditor: () =>
-			didChangeActiveTextEditor(window.activeTextEditor),
+			didChangeActiveTextEditor(window.activeTextEditor, ++generation),
 	};
 }

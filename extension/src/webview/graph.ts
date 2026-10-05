@@ -559,6 +559,14 @@ function reportUnavailableExport(kind: "an image" | "a JSON file") {
 	});
 }
 
+function reportImageExportError(error: unknown) {
+	const detail = error instanceof Error ? error.message : String(error);
+	vscode.postMessage({
+		command: "showError",
+		message: `CWTools: couldn't export graph image: ${detail}.`,
+	});
+}
+
 export async function exportImage(pixelRatio: number) {
 	const cy = _cy;
 	if (!cy) {
@@ -689,7 +697,7 @@ window.addEventListener("message", (event) => {
 			persistState(message.persist);
 			break;
 		case "exportImage":
-			void exportImage(1);
+			void exportImage(1).catch(reportImageExportError);
 			break;
 		case "exportJson":
 			exportJson();
