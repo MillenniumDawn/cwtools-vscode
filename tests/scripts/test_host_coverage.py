@@ -1,14 +1,24 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import signal
+import subprocess
 import sys
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
 
 import host_coverage
 import hosttest
+
+requires_proc = pytest.mark.skipif(
+    not Path("/proc/self/stat").is_file(),
+    reason="needs /proc to tell a zombie from a running process",
+)
 
 
 def alive(pid: int) -> bool:
@@ -17,6 +27,91 @@ def alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def running(pid: int) -> bool:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return stat.rpartition(")")[2].split()[0] != "Z"
+
+
+def exited_within(pid: int, seconds: float = 2.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while running(pid) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    return not running(pid)
+
+
+def read_pids(marker: Path) -> list[int]:
+    try:
+        return [int(part) for part in marker.read_text(encoding="utf-8").split()]
+    except FileNotFoundError:
+        return []
+
+
+def kill_strays(pids: Sequence[int]) -> None:
+    for pid in pids:
+        if running(pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+
+
+def root_and_child_script(marker: Path, *, root_ignores_term: bool) -> str:
+    # The child inherits the ignored SIGTERM across exec, so it cannot die
+    # before it has had the chance to install a handler.
+    lines = [
+        "import os, pathlib, signal, subprocess, sys, time",
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+        "sleeper = ['-c', 'import time; time.sleep(30)']",
+        "child = subprocess.Popen([sys.executable, *sleeper])",
+    ]
+    if not root_ignores_term:
+        lines.append("signal.signal(signal.SIGTERM, signal.SIG_DFL)")
+    lines += [
+        f"pathlib.Path({str(marker)!r}).write_text(f'{{os.getpid()}} {{child.pid}}')",
+        "time.sleep(30)",
+    ]
+    return "\n".join(lines)
+
+
+def signalled_runner(tmp_path: Path, script: str) -> str:
+    return "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(Path(host_coverage.__file__).parent)!r})",
+            "import host_coverage",
+            "host_coverage.run_with_timeout(",
+            "    'signalled',",
+            "    sys.executable,",
+            f"    ['-c', {script!r}],",
+            f"    cwd={str(tmp_path)!r},",
+            "    timeout_ms=60_000,",
+            "    grace_ms=300,",
+            "    stdio='ignore',",
+            ")",
+        ]
+    )
+
+
+def wait_for(ready: Callable[[], bool]) -> None:
+    deadline = time.monotonic() + 10
+    while not ready() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def interrupt_once(monkeypatch: pytest.MonkeyPatch, ready: Callable[[], bool]) -> None:
+    real_sleep = time.sleep
+
+    def interrupt(_seconds: float) -> None:
+        monkeypatch.setattr(time, "sleep", real_sleep)
+        deadline = time.monotonic() + 10
+        while not ready() and time.monotonic() < deadline:
+            real_sleep(0.01)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", interrupt)
 
 
 def test_resolves_when_the_process_exits_0(tmp_path: Path) -> None:
@@ -67,6 +162,163 @@ def test_kills_a_process_that_does_not_exit(tmp_path: Path) -> None:
         pid = int(marker.read_text(encoding="utf-8"), 10)
         assert pid > 0
         assert not alive(pid)
+
+
+@requires_proc
+@pytest.mark.parametrize(
+    "root_ignores_term",
+    [False, True],
+    ids=["root exits on SIGTERM", "root ignores SIGTERM"],
+)
+def test_timeout_kills_a_child_that_ignores_sigterm(
+    tmp_path: Path, *, root_ignores_term: bool
+) -> None:
+    marker = tmp_path / "pids"
+    script = root_and_child_script(marker, root_ignores_term=root_ignores_term)
+
+    try:
+        with pytest.raises(RuntimeError, match="hang timed out after 1000ms"):
+            host_coverage.run_with_timeout(
+                "hang",
+                sys.executable,
+                ["-c", script],
+                cwd=str(tmp_path),
+                timeout_ms=1_000,
+                grace_ms=300,
+                stdio="ignore",
+            )
+        pids = read_pids(marker)
+        assert len(pids) == 2
+        assert all(exited_within(pid) for pid in pids)
+    finally:
+        kill_strays(read_pids(marker))
+
+
+@requires_proc
+def test_an_interrupt_during_the_wait_stops_the_whole_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "pids"
+    interrupt_once(monkeypatch, lambda: len(read_pids(marker)) == 2)
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            host_coverage.run_with_timeout(
+                "interrupted",
+                sys.executable,
+                ["-c", root_and_child_script(marker, root_ignores_term=False)],
+                cwd=str(tmp_path),
+                timeout_ms=60_000,
+                grace_ms=300,
+                stdio="ignore",
+            )
+        pids = read_pids(marker)
+        assert len(pids) == 2
+        assert all(exited_within(pid) for pid in pids)
+    finally:
+        kill_strays(read_pids(marker))
+
+
+@requires_proc
+@pytest.mark.parametrize("signame", ["SIGTERM", "SIGHUP"])
+def test_a_termination_signal_during_the_wait_stops_the_whole_group(
+    tmp_path: Path, signame: str
+) -> None:
+    marker = tmp_path / "pids"
+    script = root_and_child_script(marker, root_ignores_term=False)
+    runner = signalled_runner(tmp_path, script)
+    signo = getattr(signal, signame)
+
+    try:
+        with subprocess.Popen([sys.executable, "-c", runner]) as proc:
+            wait_for(lambda: len(read_pids(marker)) == 2)
+            proc.send_signal(signo)
+            assert proc.wait(timeout=10) == 128 + signo
+        pids = read_pids(marker)
+        assert len(pids) == 2
+        assert all(exited_within(pid) for pid in pids)
+    finally:
+        kill_strays(read_pids(marker))
+
+
+@requires_proc
+@pytest.mark.parametrize("signame", ["SIGINT", "SIGTERM", "SIGHUP"])
+def test_a_second_signal_during_the_grace_wait_still_kills_the_group(
+    tmp_path: Path, signame: str
+) -> None:
+    marker = tmp_path / "pids"
+    termed = tmp_path / "termed"
+    # The root outlives SIGTERM and records it, so the test knows the grace
+    # wait has started before it sends the second signal.
+    script = "\n".join(
+        [
+            "import os, pathlib, signal, time",
+            f"termed = pathlib.Path({str(termed)!r})",
+            "signal.signal(signal.SIGTERM, lambda *_: termed.touch())",
+            f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))",
+            "time.sleep(30)",
+        ]
+    )
+    runner = signalled_runner(tmp_path, script)
+
+    try:
+        with subprocess.Popen([sys.executable, "-c", runner]) as proc:
+            wait_for(lambda: len(read_pids(marker)) == 1)
+            proc.send_signal(signal.SIGTERM)
+            wait_for(termed.is_file)
+            proc.send_signal(getattr(signal, signame))
+            assert proc.wait(timeout=10) == 128 + signal.SIGTERM
+        pids = read_pids(marker)
+        assert len(pids) == 1
+        assert all(exited_within(pid) for pid in pids)
+    finally:
+        kill_strays(read_pids(marker))
+
+
+@requires_proc
+def test_a_child_that_exits_on_sigterm_gets_the_grace_period(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    marker = tmp_path / "pids"
+    ready = tmp_path / "ready"
+    done = tmp_path / "done"
+    child = "\n".join(
+        [
+            "import pathlib, signal, sys, time",
+            "def finish(*_):",
+            "    time.sleep(0.2)",
+            f"    pathlib.Path({str(done)!r}).touch()",
+            "    sys.exit(0)",
+            "signal.signal(signal.SIGTERM, finish)",
+            f"pathlib.Path({str(ready)!r}).touch()",
+            "time.sleep(30)",
+        ]
+    )
+    root = "\n".join(
+        [
+            "import os, pathlib, subprocess, sys, time",
+            f"child = subprocess.Popen([sys.executable, '-c', {child!r}])",
+            "pids = f'{os.getpid()} {child.pid}'",
+            f"pathlib.Path({str(marker)!r}).write_text(pids)",
+            "time.sleep(30)",
+        ]
+    )
+    interrupt_once(monkeypatch, lambda: ready.is_file() and len(read_pids(marker)) == 2)
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            host_coverage.run_with_timeout(
+                "interrupted",
+                sys.executable,
+                ["-c", root],
+                cwd=str(tmp_path),
+                timeout_ms=60_000,
+                grace_ms=5_000,
+                stdio="ignore",
+            )
+        assert done.is_file()
+    finally:
+        kill_strays(read_pids(marker))
 
 
 def test_killing_a_pid_that_is_already_gone_does_not_throw() -> None:

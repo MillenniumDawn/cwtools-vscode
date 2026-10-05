@@ -8,7 +8,9 @@ import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
+from collections.abc import Callable, Iterator
+from types import FrameType
+from typing import NoReturn
 
 from coverage_metrics import HOST_COVERAGE_LABELS, validate_host_coverage_summary
 from hosttest import resolve_display, test_cli_command
@@ -20,37 +22,11 @@ HOST_COVERAGE_KILL_GRACE_MS = 5_000
 COVERAGE_DIR = REPO_ROOT / "coverage"
 SUMMARY_PATH = COVERAGE_DIR / "coverage-summary.json"
 
+TERMINATION_SIGNALS: list[int] = [signal.SIGTERM]
+if hasattr(signal, "SIGHUP"):
+    TERMINATION_SIGNALS.append(signal.SIGHUP)
 
-def _parse_pids(text: str) -> list[int]:
-    pids: list[int] = []
-    for part in text.split():
-        try:
-            value = int(part, 10)
-        except ValueError:
-            continue
-        if value > 0:
-            pids.append(value)
-    return pids
-
-
-def child_pids(pid: int) -> list[int]:
-    children = Path(f"/proc/{pid}/task/{pid}/children")
-    try:
-        return _parse_pids(children.read_text(encoding="utf-8"))
-    except OSError:
-        pass
-    pgrep = shutil.which("pgrep")
-    if pgrep is None:
-        return []
-    result = subprocess.run(
-        [pgrep, "-P", str(pid)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode not in {0, 1}:
-        return []
-    return _parse_pids(result.stdout)
+_Handler = Callable[[int, FrameType | None], object] | signal.Handlers
 
 
 def kill_process_tree(pid: int, sig: str) -> None:
@@ -65,19 +41,52 @@ def kill_process_tree(pid: int, sig: str) -> None:
             stderr=subprocess.DEVNULL,
         )
         return
-    for child in child_pids(pid):
-        kill_process_tree(child, sig)
-    signo = (
-        signal.SIGKILL
-        if sig == "SIGKILL" and hasattr(signal, "SIGKILL")
-        else signal.SIGTERM
-    )
+    # The root leads its own session, so its pid names the group of descendants.
+    signo = signal.SIGKILL if sig == "SIGKILL" else signal.SIGTERM
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pid, signo)
+
+
+def tree_alive(proc: subprocess.Popen[bytes]) -> bool:
+    if proc.poll() is None:
+        return True
+    # taskkill finds the tree through the root's pid, which Windows reuses.
+    if os.name == "nt":
+        return False
     try:
-        os.kill(pid, signo)
+        os.killpg(proc.pid, 0)
     except ProcessLookupError:
-        return
+        return False
     except PermissionError:
-        return
+        pass
+    return True
+
+
+def _exit_on_signal(signo: int, _frame: object) -> NoReturn:
+    raise SystemExit(128 + signo)
+
+
+@contextlib.contextmanager
+def signals_handled(handler: _Handler, signals: list[int]) -> Iterator[None]:
+    previous = {signo: signal.signal(signo, handler) for signo in signals}
+    try:
+        yield
+    finally:
+        for signo, old in previous.items():
+            signal.signal(signo, old)
+
+
+def stop_process_tree(proc: subprocess.Popen[bytes], grace_ms: int) -> None:
+    # A second signal must not end the cleanup before the SIGKILL step.
+    with signals_handled(signal.SIG_IGN, [signal.SIGINT, *TERMINATION_SIGNALS]):
+        if tree_alive(proc):
+            kill_process_tree(proc.pid, "SIGTERM")
+        grace_deadline = time.monotonic() + (grace_ms / 1000)
+        while tree_alive(proc) and time.monotonic() < grace_deadline:
+            time.sleep(0.05)
+        if tree_alive(proc):
+            kill_process_tree(proc.pid, "SIGKILL")
+        proc.wait()
 
 
 def run_with_timeout(
@@ -98,20 +107,21 @@ def run_with_timeout(
         stdout=stdout,
         stderr=stdout,
         env=env,
+        start_new_session=os.name != "nt",
     ) as proc:
         if proc.pid is None:
             raise RuntimeError(f"{name} failed to start")
         deadline = time.monotonic() + (timeout_ms / 1000)
-        while proc.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.05)
+        # The new session gets neither the terminal's Ctrl-C nor its hangup.
+        try:
+            with signals_handled(_exit_on_signal, TERMINATION_SIGNALS):
+                while proc.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
+        except BaseException:
+            stop_process_tree(proc, grace_ms)
+            raise
         if proc.poll() is None:
-            kill_process_tree(proc.pid, "SIGTERM")
-            grace_deadline = time.monotonic() + (grace_ms / 1000)
-            while proc.poll() is None and time.monotonic() < grace_deadline:
-                time.sleep(0.05)
-            if proc.poll() is None:
-                kill_process_tree(proc.pid, "SIGKILL")
-                proc.wait()
+            stop_process_tree(proc, grace_ms)
             raise RuntimeError(f"{name} timed out after {timeout_ms}ms")
         if proc.returncode == 0:
             return
