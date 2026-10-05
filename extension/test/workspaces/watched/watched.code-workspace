@@ -1,0 +1,20 @@
+{
+  "folders": [
+    {
+      "path": "served/workspaces/stellaris"
+    },
+    {
+      "path": "served/workspaces/parent"
+    },
+    {
+      "path": "served/rules"
+    }
+  ],
+  "settings": {
+    "cwtools.parentMods": [
+      "../parent"
+    ],
+    "cwtools.backgroundReindex.intervalMinutes": 0,
+    "cwtools.rules.autoReload": false
+  }
+}

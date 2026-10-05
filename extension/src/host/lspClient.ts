@@ -42,7 +42,7 @@ import {
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import type { RulesSetup } from "./rulesSetup";
-import { isExcludedWatchedPath } from "./watchedFiles";
+import { createWatchedPathExcluder, forwardWatchedFileEvent } from "./watchedFiles";
 import { logError, errorMessage, outputChannel } from "./logger";
 import {
 	isServerCommand,
@@ -365,11 +365,30 @@ export function createLanguageClient(
 		if (rulesCache === currentRulesCache) return;
 		disposeRulesWatcher();
 		currentRulesCache = rulesCache;
+		isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
 		cfg.onRulesCacheChanged?.(rulesCache);
 		installRulesWatcher();
 	};
 
 	const diagnosticsCache = new DiagnosticsSignatureCache();
+	const workspaceRoot = cfg.workspaceFolder.uri.fsPath;
+	const readStartupRoots = () => {
+		const settings = workspace.getConfiguration("cwtools");
+		const parents = (settings.get<string[]>("parentMods") ?? [])
+			.map((root) => path.resolve(workspaceRoot, root))
+			// The server rejects parent mods overlapping its selected workspace.
+			.filter((root) => {
+				const relative = path.relative(workspaceRoot, root);
+				const reverse = path.relative(root, workspaceRoot);
+				const outside = (value: string) => value === ".." || value.startsWith(`..${path.sep}`) || path.isAbsolute(value);
+				return outside(relative) && outside(reverse);
+			});
+		const vanilla = settings.get<string>("cache." + cfg.language);
+		return [workspaceRoot, ...parents, ...(vanilla ? [vanilla] : [])];
+	};
+	let startupRoots = readStartupRoots();
+	let isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
+
 
 	const middleware: LanguageClientOptions["middleware"] = {
 		workspace: {
@@ -377,10 +396,12 @@ export function createLanguageClient(
 			// walk skips, and its watched-file path doesn't re-apply that skip
 			// list, so hold those events here.
 			didChangeWatchedFile: async (event, next) => {
-				if (isExcludedWatchedPath(Uri.parse(event.uri).fsPath)) {
-					return;
-				}
-				await next(event);
+				await forwardWatchedFileEvent(
+					event,
+					isExcludedWatchedPath,
+					(uri) => Uri.parse(uri).fsPath,
+					next,
+				);
 			},
 		},
 		handleDiagnostics: (uri, diagnostics, next) => {
@@ -505,6 +526,8 @@ export function createLanguageClient(
 			fileEvents: fileEvents,
 		},
 		initializationOptions: () => {
+			startupRoots = readStartupRoots();
+			isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
 			const ignoreOptions = readIgnoreOptions();
 			return {
 				language: cfg.language === "eu5" ? "paradox" : cfg.language,
