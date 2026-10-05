@@ -176,6 +176,18 @@ pub const EXCLUDED_DIRS: &[&str] = &[
 
 pub const EXCLUDED_ROOT_DIRS: &[&str] = &["resources"];
 
+/// File names and globs that are never scanned or validated. Shared by
+/// `FileManagerConfig::default` and `is_ignored_logical_path`, which runs
+/// several times per edit and must not rebuild a config to read six strings.
+pub const DEFAULT_EXCLUDE_PATTERNS: &[&str] = &[
+    "Changelog.txt",
+    "README.txt",
+    "LICENSE.txt",
+    "README.md",
+    "LICENSE.md",
+    "*.md",
+];
+
 pub fn is_excluded_dir(name: &str) -> bool {
     EXCLUDED_DIRS.iter().any(|d| name.eq_ignore_ascii_case(d))
 }
@@ -358,14 +370,10 @@ impl Default for FileManagerConfig {
                 "music".into(),
             ],
             file_patterns: SCRIPT_EXTENSIONS.iter().map(|e| format!("*.{e}")).collect(),
-            exclude_patterns: vec![
-                "Changelog.txt".into(),
-                "README.txt".into(),
-                "LICENSE.txt".into(),
-                "README.md".into(),
-                "LICENSE.md".into(),
-                "*.md".into(),
-            ],
+            exclude_patterns: DEFAULT_EXCLUDE_PATTERNS
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             exclude_dirs: EXCLUDED_DIRS.iter().map(|s| s.to_string()).collect(),
             exclude_dir_patterns: vec![],
             exclude_root_dirs: EXCLUDED_ROOT_DIRS.iter().map(|s| s.to_string()).collect(),
@@ -1207,16 +1215,11 @@ pub fn ignore_glob_match(pattern: &str, name: &str, relative: &str) -> bool {
 }
 
 pub fn is_ignored_logical_path(logical_path: &str, extra_file_globs: &[String]) -> bool {
-    let cfg = FileManagerConfig::default();
-    // Handle Windows separators.
-
-    let normalized = if logical_path.contains('\\') {
-        logical_path.replace('\\', "/")
-    } else {
-        logical_path.to_string()
-    };
-    let file_name = normalized.rsplit(['/', '\\']).next().unwrap_or(&normalized);
-    cfg.exclude_patterns
+    let normalized = normalize_slashes(std::borrow::Cow::Borrowed(logical_path));
+    let file_name = normalized
+        .rsplit_once('/')
+        .map_or(&*normalized, |(_, name)| name);
+    DEFAULT_EXCLUDE_PATTERNS
         .iter()
         .any(|pat| ignore_glob_match(pat, file_name, &normalized))
         || extra_file_globs
@@ -1574,6 +1577,26 @@ mod tests {
         let cfg = FileManagerConfig::default();
         assert!(cfg.exclude_patterns.iter().any(|p| p == "Changelog.txt"));
         assert!(cfg.exclude_patterns.iter().any(|p| p == "*.md"));
+    }
+
+    /// `is_ignored_logical_path` reads the static directly instead of building
+    /// a config per call, so the two must not drift apart.
+    #[test]
+    fn default_excludes_match_the_shared_static() {
+        let cfg = FileManagerConfig::default();
+        assert_eq!(cfg.exclude_patterns, DEFAULT_EXCLUDE_PATTERNS);
+        for pat in DEFAULT_EXCLUDE_PATTERNS {
+            let sample = pat.replace('*', "notes");
+            assert!(
+                is_ignored_logical_path(&format!("common/{sample}"), &[]),
+                "{sample} should be ignored"
+            );
+            assert!(
+                is_ignored_logical_path(&format!("common\\{sample}"), &[]),
+                "{sample} should be ignored behind a backslash too"
+            );
+        }
+        assert!(!is_ignored_logical_path("common/ideas/usa.txt", &[]));
     }
 
     #[test]

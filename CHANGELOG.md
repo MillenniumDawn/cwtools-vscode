@@ -7,6 +7,9 @@
 * Reclaim removed localisation URI references and recycle file records after sweeping their old sites, bounding metadata growth across repeated refreshes. (#846)
 * Avoid interning speculative parser keys, removing discarded numeric and boolean entries from bare clause values. (#547)
 * Return `RequestFailed` instead of `ServerNotInitialized` for navigation and rename refusals. (#828)
+* Hover and go-to-definition on a variable look its definitions up in a name-keyed index instead of scanning every file's defined variables under the info lock. (#872)
+* Test fixtures stop assuming Unix paths: the position-resolver test writes its rules into a `tempfile` directory instead of a hard-coded `/tmp`, and every report test builds its repository root through the existing `abs()` helper. (#885)
+* The per-edit ignored-file check reads the default exclude patterns from a shared static instead of building a whole `FileManagerConfig` per call. (#873)
 * Cap cumulative text snapshots for references and rename requests, refusing incomplete navigation when the request budget is exhausted. The conservative 5× peak-memory reservation means a closed UTF-8 file larger than 25.6 MiB cannot fit within the 128 MiB request budget. (#569)
 * Reuse formatted text when constructing whole-file format edits, avoiding reparsing and the multi-edit planner. (#557)
 * Memoize subtype merges per file and precompute matcher key groups. (#492)
@@ -23,6 +26,7 @@
 * Discard delayed plaintext language upgrades after editor focus changes or teardown, before sending stale focus notifications. (#837)
 * Exercise automatic server crash/restart recovery in real extension-host tests, including all command contexts and a request to the replacement process. (#838)
 * Extend the graph unit tests to cover exportImage's data-URI strip and the panel's saveImage and saveJson writes to the chosen file. (#523)
+* The loaded-files tree is built on a `Map`, so a folder or file named `constructor`, `toString` or `__proto__` shows up instead of vanishing, integer-like names keep the server's order, and "Reveal active file" is one lookup in a URI index instead of a `Uri.parse` per node. (#876)
 * Pin the client-required server executeCommand names in a shared contract and verify the live server advertises each one. (#522)
 * Classify the shipped graph webview libraries as runtime dependencies and make dependency review fail for both runtime and development scopes. (#572)
 * Add the `cwtools.parentMods` setting: the parent mods of a submod workspace, in load order. The docs replace the multi-root advice, which never gave a second folder's definitions to the first. (#786)
@@ -34,6 +38,7 @@
 #### Tooling
 
 * Host coverage now launches in a dedicated POSIX process group and terminates descendants on timeout or interruption, including children whose parent exits on SIGTERM. A SIGTERM or SIGHUP sent to the script itself gets the same cleanup, and a second signal during it no longer stops it before the kill step. (#851)
+* `npm run bench:node` measures again: the client hot-path benchmark registered its three benches under Vitest 5 without running them, so it passed in a few hundred milliseconds with no results. Each bench is now run and its result asserted. (#878)
 * The Open VSX publish job replaces `HaaLeo/publish-vscode-extension` (stuck on a Node 20 target the runner force-upgrades with a deprecation warning) with `ovsx publish` from the dev dependencies through build.py, so the upload retries like the Marketplace publish does. The App token steps pass `client-id` instead of the deprecated `app-id`, with the App ID secret kept as the fallback. Both registry tokens now reach only their publish step, not the `npm ci` before it. (#812)
 * The release PR body lists every pull request merged since the last stable tag, as the Utility Tool's release PR does. Dependabot bumps are left out. (#794)
 * The VSIX smoke test now requires a nonempty `cwtools-server.exe` in the `win-x64` directory and a nonempty `cwtools-server` in every other platform directory, as the extension's resolver does. Flat layouts check each executable name present. A directory holding only other files, an empty binary, or the wrong suffix fails the package gate. (#850)
