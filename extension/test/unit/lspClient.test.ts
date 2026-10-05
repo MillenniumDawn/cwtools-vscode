@@ -2,6 +2,7 @@ import * as assert from "assert";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { minimatch } from "minimatch";
 import { beforeEach, suite, test, vi } from "vitest";
 import type { Mock } from "vitest";
@@ -131,9 +132,12 @@ vi.mock("vscode", async (importOriginal) => ({
 	CancellationError: class extends Error {},
 	ProgressLocation: { Notification: 15 },
 	Uri: {
-		file: (fsPath: string) => ({ fsPath, toString: () => `file://${fsPath}` }),
+		file: (fsPath: string) => ({
+			fsPath,
+			toString: () => pathToFileURL(fsPath).toString(),
+		}),
 		parse: (value: string) => ({
-			fsPath: decodeURIComponent(value.replace(/^file:\/\//, "")),
+			fsPath: fileURLToPath(value),
 			toString: () => value,
 		}),
 	},
@@ -680,61 +684,84 @@ suite("lspClient — watched files", () => {
 	}
 
 	test("holds back events for files the server's own walk skips", async () => {
-		create();
+		const workspaceRoot = path.resolve(os.tmpdir(), "cwtools-skipped-files", "workspace");
+		const eventUri = (...parts: string[]) =>
+			pathToFileURL(path.join(workspaceRoot, ...parts)).toString();
+		create(undefined, undefined, undefined, { workspaceRoot });
 		assert.deepStrictEqual(
 			await forwardedWatchedEvents([
-				"file:///workspace/Changelog.txt",
-				"file:///workspace/dist/bundle.js.map",
-				"file:///workspace/common/ideas/x.txt",
-				"file:///workspace/My%20Mod/events/y.txt",
+				eventUri("Changelog.txt"),
+				eventUri("dist", "bundle.js.map"),
+				eventUri("common", "ideas", "x.txt"),
+				eventUri("My Mod", "events", "y.txt"),
 			]),
 			[
-				"file:///workspace/common/ideas/x.txt",
-				"file:///workspace/My%20Mod/events/y.txt",
+				eventUri("common", "ideas", "x.txt"),
+				eventUri("My Mod", "events", "y.txt"),
 			],
 		);
 	});
 
 	test("measures excluded directories from the served root, not above it (#835)", async () => {
+		const workspaceRoot = path.resolve(
+			os.tmpdir(), "cwtools-served-root", ".claude", "worktrees", "mod",
+		);
+		const eventUri = (...parts: string[]) =>
+			pathToFileURL(path.join(workspaceRoot, ...parts)).toString();
 		create(undefined, undefined, undefined, {
-			workspaceRoot: "/home/u/.claude/worktrees/mod",
+			workspaceRoot,
 		});
 		assert.deepStrictEqual(
 			await forwardedWatchedEvents([
-				"file:///home/u/.claude/worktrees/mod/common/ideas/x.txt",
-				"file:///home/u/.claude/worktrees/mod/target/x.txt",
-				"file:///home/u/.claude/worktrees/mod/.git/x.txt",
-				"file:///home/u/.claude/worktrees/mod/Changelog.txt",
+				eventUri("common", "ideas", "x.txt"),
+				eventUri("target", "x.txt"),
+				eventUri(".git", "x.txt"),
+				eventUri("Changelog.txt"),
 			]),
-			["file:///home/u/.claude/worktrees/mod/common/ideas/x.txt"],
+			[eventUri("common", "ideas", "x.txt")],
 		);
 	});
 
 	test("forwards configured served roots under excluded ancestors", async () => {
-		configurationValues.set("parentMods", ["/home/u/target/parent"]);
-		configurationValues.set("cache.hoi4", "/other/dist/vanilla");
-		create(undefined, undefined, undefined, { rulesCache: "/workspace/.claude/rules" });
+		const fixtureRoot = path.resolve(os.tmpdir(), "cwtools-watched-roots");
+		const workspaceRoot = path.join(fixtureRoot, "workspace");
+		const parentRoot = path.join(fixtureRoot, "target", "parent");
+		const vanillaRoot = path.join(fixtureRoot, "dist", "vanilla");
+		const rulesRoot = path.join(workspaceRoot, ".claude", "rules");
+		const eventUri = (root: string, ...parts: string[]) =>
+			pathToFileURL(path.join(root, ...parts)).toString();
+		configurationValues.set("parentMods", [parentRoot]);
+		configurationValues.set("cache.hoi4", vanillaRoot);
+		create(undefined, undefined, undefined, { workspaceRoot, rulesCache: rulesRoot });
 		assert.deepStrictEqual(await forwardedWatchedEvents([
-			"file:///home/u/target/parent/events/a.txt",
-			"file:///home/u/target/parent/node_modules/a.txt",
-			"file:///other/dist/vanilla/events/a.txt",
-			"file:///workspace/.claude/rules/a.cwt",
-			"file:///workspace/.claude/rules/target/a.cwt",
+			eventUri(parentRoot, "events", "a.txt"),
+			eventUri(parentRoot, "node_modules", "a.txt"),
+			eventUri(vanillaRoot, "events", "a.txt"),
+			eventUri(rulesRoot, "a.cwt"),
+			eventUri(rulesRoot, "target", "a.cwt"),
 			// The rules root serves .cwt only; script below it is measured from
 			// the workspace, whose walk skips .claude.
-			"file:///workspace/.claude/rules/a.txt",
+			eventUri(rulesRoot, "a.txt"),
 		]), [
-			"file:///home/u/target/parent/events/a.txt",
-			"file:///other/dist/vanilla/events/a.txt",
-			"file:///workspace/.claude/rules/a.cwt",
+			eventUri(parentRoot, "events", "a.txt"),
+			eventUri(vanillaRoot, "events", "a.txt"),
+			eventUri(rulesRoot, "a.cwt"),
 		]);
 	});
 
 	test("keeps startup roots until restart and rejects overlapping parents", async () => {
-		configurationValues.set("parentMods", ["/workspace/target/overlap"]);
-		create();
-		configurationValues.set("parentMods", ["/other/target/new-parent"]);
-		const uris = ["file:///workspace/target/overlap/a.txt", "file:///other/target/new-parent/a.txt"];
+		const fixtureRoot = path.resolve(os.tmpdir(), "cwtools-watched-overlap");
+		const workspaceRoot = path.join(fixtureRoot, "workspace");
+		const overlappingParent = path.join(workspaceRoot, "target", "overlap");
+		const newParent = path.join(fixtureRoot, "target", "new-parent");
+		const toUri = (fsPath: string) => pathToFileURL(fsPath).toString();
+		configurationValues.set("parentMods", [overlappingParent]);
+		create(undefined, undefined, undefined, { workspaceRoot });
+		configurationValues.set("parentMods", [newParent]);
+		const uris = [
+			toUri(path.join(overlappingParent, "a.txt")),
+			toUri(path.join(newParent, "a.txt")),
+		];
 		assert.deepStrictEqual(await forwardedWatchedEvents(uris), []);
 		const initialize = lastClientOptions.value?.initializationOptions as () => unknown;
 		initialize();
@@ -742,23 +769,32 @@ suite("lspClient — watched files", () => {
 	});
 
 	test("replaces the rules root after a live settings change", async () => {
-		create(undefined, undefined, undefined, { rulesCache: "/workspace/.claude/old" });
-		const uris = ["file:///workspace/.claude/old/a.cwt", "file:///workspace/target/new/a.cwt"];
+		const workspaceRoot = path.resolve(os.tmpdir(), "cwtools-live-rules", "workspace");
+		const oldRulesRoot = path.join(workspaceRoot, ".claude", "old");
+		const newRulesRoot = path.join(workspaceRoot, "target", "new");
+		const uris = [oldRulesRoot, newRulesRoot].map((root) =>
+			pathToFileURL(path.join(root, "a.cwt")).toString(),
+		);
+		create(undefined, undefined, undefined, { workspaceRoot, rulesCache: oldRulesRoot });
 		assert.deepStrictEqual(await forwardedWatchedEvents(uris), [uris[0]]);
-		resolveRulesCache.mockResolvedValue({ rulesCache: "/workspace/target/new", fetchUpstream: false });
+		resolveRulesCache.mockResolvedValue({ rulesCache: newRulesRoot, fetchUpstream: false });
 		configurationChangeHandler()(configurationChangeEvent(["cwtools.rules_folder"]));
 		await vi.waitFor(async () => assert.deepStrictEqual(await forwardedWatchedEvents(uris), [uris[1]]));
 	});
 
 	test("keeps the whole-path check outside the served root", async () => {
-		create();
+		const fixtureRoot = path.resolve(os.tmpdir(), "cwtools-outside-root");
+		const workspaceRoot = path.join(fixtureRoot, "workspace");
+		const eventUri = (...parts: string[]) =>
+			pathToFileURL(path.join(fixtureRoot, ...parts)).toString();
+		create(undefined, undefined, undefined, { workspaceRoot });
 		assert.deepStrictEqual(
 			await forwardedWatchedEvents([
-				"file:///other/dist/common/x.txt",
-				"file:///other/Changelog.txt",
-				"file:///other/common/x.txt",
+				eventUri("dist", "common", "x.txt"),
+				eventUri("Changelog.txt"),
+				eventUri("common", "x.txt"),
 			]),
-			["file:///other/common/x.txt"],
+			[eventUri("common", "x.txt")],
 		);
 	});
 
