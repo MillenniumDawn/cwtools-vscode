@@ -4,6 +4,7 @@ import contextlib
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -186,6 +187,45 @@ def test_an_interrupt_during_the_wait_stops_the_whole_group(
                 grace_ms=300,
                 stdio="ignore",
             )
+        pids = read_pids(marker)
+        assert len(pids) == 2
+        assert all(exited_within(pid) for pid in pids)
+    finally:
+        kill_strays(read_pids(marker))
+
+
+@requires_proc
+@pytest.mark.parametrize("signame", ["SIGTERM", "SIGHUP"])
+def test_a_termination_signal_during_the_wait_stops_the_whole_group(
+    tmp_path: Path, signame: str
+) -> None:
+    marker = tmp_path / "pids"
+    script = root_and_child_script(marker, root_ignores_term=False)
+    runner = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(Path(host_coverage.__file__).parent)!r})",
+            "import host_coverage",
+            "host_coverage.run_with_timeout(",
+            "    'signalled',",
+            "    sys.executable,",
+            f"    ['-c', {script!r}],",
+            f"    cwd={str(tmp_path)!r},",
+            "    timeout_ms=60_000,",
+            "    grace_ms=300,",
+            "    stdio='ignore',",
+            ")",
+        ]
+    )
+    signo = getattr(signal, signame)
+
+    try:
+        with subprocess.Popen([sys.executable, "-c", runner]) as proc:
+            deadline = time.monotonic() + 10
+            while len(read_pids(marker)) != 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            proc.send_signal(signo)
+            assert proc.wait(timeout=10) == 128 + signo
         pids = read_pids(marker)
         assert len(pids) == 2
         assert all(exited_within(pid) for pid in pids)

@@ -8,6 +8,8 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
+from typing import NoReturn
 
 from coverage_metrics import HOST_COVERAGE_LABELS, validate_host_coverage_summary
 from hosttest import resolve_display, test_cli_command
@@ -64,6 +66,23 @@ def stop_process_tree(proc: subprocess.Popen[bytes], grace_ms: int) -> None:
     proc.wait()
 
 
+def _exit_on_signal(signo: int, _frame: object) -> NoReturn:
+    raise SystemExit(128 + signo)
+
+
+@contextlib.contextmanager
+def termination_raises() -> Iterator[None]:
+    signals = [signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        signals.append(signal.SIGHUP)
+    previous = {signo: signal.signal(signo, _exit_on_signal) for signo in signals}
+    try:
+        yield
+    finally:
+        for signo, handler in previous.items():
+            signal.signal(signo, handler)
+
+
 def run_with_timeout(
     name: str,
     command: str,
@@ -87,10 +106,11 @@ def run_with_timeout(
         if proc.pid is None:
             raise RuntimeError(f"{name} failed to start")
         deadline = time.monotonic() + (timeout_ms / 1000)
-        # The new session does not get the terminal's Ctrl-C.
+        # The new session gets neither the terminal's Ctrl-C nor its hangup.
         try:
-            while proc.poll() is None and time.monotonic() < deadline:
-                time.sleep(0.05)
+            with termination_raises():
+                while proc.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
         except BaseException:
             stop_process_tree(proc, grace_ms)
             raise
