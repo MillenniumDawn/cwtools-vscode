@@ -17,12 +17,14 @@
 
 #### Extension
 
+* Discard delayed plaintext language upgrades after editor focus changes or teardown, before sending stale focus notifications. (#837)
 * Exercise automatic server crash/restart recovery in real extension-host tests, including all command contexts and a request to the replacement process. (#838)
 * Extend the graph unit tests to cover exportImage's data-URI strip and the panel's saveImage and saveJson writes to the chosen file. (#523)
 * Pin the client-required server executeCommand names in a shared contract and verify the live server advertises each one. (#522)
 * Classify the shipped graph webview libraries as runtime dependencies and make dependency review fail for both runtime and development scopes. (#572)
 * Add the `cwtools.parentMods` setting: the parent mods of a submod workspace, in load order. The docs replace the multi-root advice, which never gave a second folder's definitions to the first. (#786)
 * Rules in the resolved rules folder now reload automatically after `.cwt` edits, and changing `cwtools.rules_folder` to a valid folder applies without restarting the window. Set `cwtools.rules.autoReload` to `false` to keep manual reloads. (#605)
+* A late file type reply no longer marks the wrong editor, or no editor, as a graph file. Closing the last editor or switching tabs clears the graph state at once, a queued switch is dropped once a newer one supersedes it, and the pending tab-switch timer is cleared on shutdown. (#837)
 * The graph, Fix All and Format Workspace commands now come back after the language server crashes and restarts on its own. They stayed hidden until a manual restart. (#838)
 * The Set graph depth prompt now accepts only a whole number of at least 1. Blank, zero, negative, fractional and unsafe values are rejected with a message naming the minimum, so they no longer replace the remembered depth or send a request the server refuses. (#841)
 
