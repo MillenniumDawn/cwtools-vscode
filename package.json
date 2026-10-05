@@ -28,7 +28,7 @@
     "cytoscape-popper": "^2.0.0",
     "merge-images": "2.0.0",
     "tippy.js": "^6.3.7",
-    "vscode-languageclient": "^10.1.1"
+    "vscode-languageclient": "^10.1.2"
   },
   "devDependencies": {
     "@eslint/compat": "^2.1.1",
