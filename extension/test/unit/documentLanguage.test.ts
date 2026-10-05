@@ -1,5 +1,6 @@
+import { languages } from "vscode";
 import * as assert from "assert";
-import { beforeEach, suite, test, vi } from "vitest";
+import { afterEach, beforeEach, suite, test, vi } from "vitest";
 import type { ExtensionContext } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 
@@ -271,5 +272,173 @@ suite("documentLanguage", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	suite("stale editor classification", () => {
+		interface Editor {
+			document: { languageId: string; uri: { toString(): string; scheme: string; fsPath: string } };
+		}
+		const editorFor = (name: string): Editor => ({
+			document: {
+				languageId: "paradox",
+				uri: { toString: () => `file:///workspace/events/${name}.txt`, scheme: "file", fsPath: `/workspace/events/${name}.txt` },
+			},
+		});
+		const editorA = editorFor("a");
+		const editorB = editorFor("b");
+		const flush = () => vi.advanceTimersByTimeAsync(0);
+		const graphFileValues = (): unknown[] => {
+			const calls: unknown[][] = executeCommand.mock.calls;
+			return calls
+				.filter(([id, key]) => id === "setContext" && key === "cwtoolsGraphFile")
+				.map((call) => call[2]);
+		};
+		const lastGraphFile = (): unknown => {
+			const values = graphFileValues();
+			return values[values.length - 1];
+		};
+
+		async function register() {
+			const subscriptions: Array<{ dispose(): void }> = [];
+			const requests: Array<{
+				uri: string;
+				resolve: (types: string[]) => void;
+			}> = [];
+			const sendNotification = vi.fn().mockResolvedValue(undefined);
+			const sendRequest = vi.fn(
+				(_type: unknown, params: { arguments: string[] }) =>
+					new Promise<string[]>((resolve) => {
+						requests.push({ uri: params.arguments[0], resolve });
+					}),
+			);
+			const tracker = await registerDocumentLanguage(
+				{ subscriptions } as unknown as ExtensionContext,
+				{ sendNotification, sendRequest } as unknown as LanguageClient,
+				"paradox",
+			);
+			const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
+				| ((editor: Editor | undefined) => void)
+				| undefined;
+			assert.ok(listener);
+			return { tracker, subscriptions, requests, sendNotification, listener };
+		}
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+		});
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		for (const dispose of [false, true]) {
+			test(`drops a pending language upgrade after ${dispose ? "disposal" : "focus changes"}`, async () => {
+				const { subscriptions, requests, sendNotification, listener } = await register();
+				let finish!: () => void;
+				const plaintext = { document: { ...editorA.document, languageId: "plaintext" } };
+				vi.mocked(languages.setTextDocumentLanguage).mockImplementationOnce(() => new Promise((resolve) => { finish = () => { plaintext.document.languageId = "paradox"; resolve(undefined as never); }; }));
+				listener(plaintext);
+				await vi.advanceTimersByTimeAsync(200);
+				if (dispose) {
+					for (const subscription of subscriptions) subscription.dispose();
+				} else {
+					listener(editorB);
+					await vi.advanceTimersByTimeAsync(200);
+					requests[0].resolve(["focus"]);
+					await flush();
+				}
+				finish();
+				await flush();
+				assert.deepStrictEqual(sendNotification.mock.calls, dispose ? [] : [["didFocusFile", { uri: editorB.document.uri.toString() }]]);
+				assert.strictEqual(requests.length, dispose ? 0 : 1);
+			});
+		}
+
+		test("applies the reply for the only focused editor", async () => {
+			const { tracker, requests, listener } = await register();
+
+			listener(editorA);
+			await vi.advanceTimersByTimeAsync(200);
+			requests[0].resolve(["focus"]);
+			await flush();
+
+			assert.strictEqual(tracker.getLatestType(), "focus");
+			assert.strictEqual(lastGraphFile(), true);
+		});
+
+		test("drops a late reply after the active editor goes away", async () => {
+			const { tracker, requests, listener } = await register();
+
+			listener(editorA);
+			await vi.advanceTimersByTimeAsync(200);
+			assert.strictEqual(requests.length, 1);
+			listener(undefined);
+			await vi.advanceTimersByTimeAsync(200);
+			requests[0].resolve(["focus"]);
+			await flush();
+
+			assert.strictEqual(tracker.getLatestType(), "");
+			assert.strictEqual(lastGraphFile(), false);
+		});
+
+		test("drops a late reply for the previous editor and applies the new one", async () => {
+			const { tracker, requests, listener } = await register();
+
+			listener(editorA);
+			await vi.advanceTimersByTimeAsync(200);
+			listener(editorB);
+			await vi.advanceTimersByTimeAsync(200);
+			requests[0].resolve(["focus"]);
+			await flush();
+
+			assert.strictEqual(tracker.getLatestType(), "");
+			assert.strictEqual(lastGraphFile(), false);
+			assert.deepStrictEqual(
+				requests.map((request) => request.uri),
+				["file:///workspace/events/a.txt", "file:///workspace/events/b.txt"],
+			);
+
+			requests[1].resolve(["idea"]);
+			await flush();
+
+			assert.strictEqual(tracker.getLatestType(), "idea");
+			assert.strictEqual(lastGraphFile(), true);
+		});
+
+		test("never classifies a queued editor once nothing is focused", async () => {
+			const { tracker, requests, listener } = await register();
+
+			listener(editorA);
+			await vi.advanceTimersByTimeAsync(200);
+			listener(editorB);
+			await vi.advanceTimersByTimeAsync(200);
+			listener(undefined);
+			await vi.advanceTimersByTimeAsync(200);
+			requests[0].resolve(["focus"]);
+			await flush();
+
+			assert.strictEqual(requests.length, 1);
+			assert.strictEqual(tracker.getLatestType(), "");
+			assert.strictEqual(lastGraphFile(), false);
+		});
+
+		test("writes nothing after teardown", async () => {
+			const { tracker, subscriptions, requests, sendNotification, listener } =
+				await register();
+
+			listener(editorA);
+			await vi.advanceTimersByTimeAsync(200);
+			listener(editorB);
+			for (const subscription of subscriptions) subscription.dispose();
+			requests[0].resolve(["focus"]);
+			await vi.advanceTimersByTimeAsync(1000);
+
+			assert.strictEqual(tracker.getLatestType(), "");
+			assert.deepStrictEqual(sendNotification.mock.calls, [
+				["didFocusFile", { uri: "file:///workspace/events/a.txt" }],
+			]);
+			assert.strictEqual(requests.length, 1);
+			assert.ok(!graphFileValues().includes(true));
+			assert.strictEqual(vi.getTimerCount(), 0);
+		});
 	});
 });
