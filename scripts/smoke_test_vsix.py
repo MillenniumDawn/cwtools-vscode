@@ -35,18 +35,23 @@ def server_exe(platform: str) -> str:
     return "cwtools-server.exe" if platform == "win-x64" else "cwtools-server"
 
 
-def server_binaries(root: Path) -> dict[str, list[Path]]:
-    base = root / "bin" / "server" / "cwtools-server"
-    present: dict[str, list[Path]] = {}
-    if not base.is_dir():
-        return present
+def server_binaries(root: Path) -> tuple[dict[str, list[Path]], list[str]]:
+    server = root / "bin" / "server"
     flat_names = (server_exe("linux-x64"), server_exe("win-x64"))
-    flat = [base / name for name in flat_names if (base / name).is_file()]
-    if flat:
-        present["flat"] = flat
-    for directory in sorted(p for p in base.iterdir() if p.is_dir()):
-        present[directory.name] = [directory / server_exe(directory.name)]
-    return present
+    present: dict[str, list[Path]] = {}
+    unexpected: list[str] = []
+    # Sorted, so a platform directory is seen before the files inside it.
+    for path in sorted(server.rglob("*")):
+        match path.relative_to(server).parts:
+            case ("cwtools-server", platform) if path.is_dir():
+                present[platform] = [path / server_exe(platform)]
+            case ("cwtools-server", name) if name in flat_names:
+                present.setdefault("flat", []).append(path)
+            case ("cwtools-server", platform, name) if name == server_exe(platform):
+                pass
+            case _ if path.is_file():
+                unexpected.append(path.relative_to(root).as_posix())
+    return present, unexpected
 
 
 def require_file(root: Path, relative: object, vsix: Path) -> None:
@@ -124,32 +129,22 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
         root = workdir / "extension"
         check_package(root, vsix)
 
-        present = server_binaries(root)
+        present, unexpected = server_binaries(root)
+        errors = []
         if not present:
-            gh_error(f"{vsix.name}: no server binaries at all")
-            raise SystemExit(1)
-        server_root = root / "bin" / "server" / "cwtools-server"
-        expected_flat_names = {server_exe("linux-x64"), server_exe("win-x64")}
-        unexpected_flat_files = sorted(
-            path.name
-            for path in server_root.iterdir()
-            if path.is_file() and path.name not in expected_flat_names
-        )
-        if unexpected_flat_files:
-            carried = " ".join(unexpected_flat_files)
-            gh_error(
-                f"{vsix.name}: unexpected flat server files [{carried}] "
-                "in bin/server/cwtools-server"
-            )
-            raise SystemExit(1)
+            errors.append("no server binaries at all")
+        if unexpected:
+            errors.append(f"unexpected server files [{' '.join(unexpected)}]")
         for binary in chain.from_iterable(present.values()):
             relative = binary.relative_to(root).as_posix()
             if not binary.is_file():
-                gh_error(f"{vsix.name}: missing server executable {relative}")
-                raise SystemExit(1)
-            if binary.stat().st_size == 0:
-                gh_error(f"{vsix.name}: server executable {relative} is empty")
-                raise SystemExit(1)
+                errors.append(f"missing server executable {relative}")
+            elif binary.stat().st_size == 0:
+                errors.append(f"server executable {relative} is empty")
+        for error in errors:
+            gh_error(f"{vsix.name}: {error}")
+        if errors:
+            raise SystemExit(1)
 
         match = TARGET_RE.match(vsix.name)
         target = match.group(1) if match else ""

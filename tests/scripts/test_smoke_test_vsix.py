@@ -102,24 +102,95 @@ def test_accepts_a_flat_windows_binary(
     assert smoke_test_vsix.main([str(tmp_path)]) == 0
 
 
-def test_rejects_an_unexpected_flat_file_in_a_targeted_vsix(
+@pytest.mark.parametrize(
+    ("name", "platforms", "include_flat", "stray"),
+    [
+        pytest.param(
+            "ext-1.0.0.vsix",
+            [],
+            True,
+            "bin/server/cwtools-server/cwtools-server.pdb",
+            id="flat-only-universal",
+        ),
+        pytest.param(
+            "ext-linux-x64-1.0.0.vsix",
+            ["linux-x64"],
+            False,
+            "bin/server/cwtools-server/cwtools-server.pdb",
+            id="flat-file-in-a-targeted-vsix",
+        ),
+        pytest.param(
+            "ext-win32-x64-1.0.0.vsix",
+            ["win-x64"],
+            False,
+            "bin/server/cwtools-server/win-x64/cwtools_server.pdb",
+            id="platform-directory",
+        ),
+        pytest.param(
+            "ext-1.0.0.vsix",
+            ["linux-x64"],
+            False,
+            "bin/server/cwtools-server/linux-x64/debug/cwtools-server",
+            id="below-a-platform-directory",
+        ),
+        pytest.param(
+            "ext-1.0.0.vsix",
+            ["linux-x64"],
+            False,
+            "bin/server/notes.txt",
+            id="beside-the-server-directory",
+        ),
+    ],
+)
+def test_rejects_an_unexpected_server_file(
     smoke_test_vsix: ModuleType,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    *,
+    name: str,
+    platforms: list[str],
+    include_flat: bool,
+    stray: str,
 ) -> None:
     write_vsix(
-        tmp_path / "ext-linux-x64-1.0.0.vsix",
-        ["linux-x64"],
-        server_files={"cwtools-server.pdb": "debug symbols\n"},
+        tmp_path / name,
+        platforms,
+        include_flat=include_flat,
+        forbidden_paths=[stray],
     )
 
     with pytest.raises(SystemExit) as caught:
         smoke_test_vsix.main([str(tmp_path)])
     assert caught.value.code == 1
     assert (
-        "::error::ext-linux-x64-1.0.0.vsix: unexpected flat server files "
-        "[cwtools-server.pdb] in bin/server/cwtools-server\n"
-    ) in capsys.readouterr().out
+        f"::error::{name}: unexpected server files [{stray}]\n"
+        in capsys.readouterr().out
+    )
+
+
+def test_reports_an_unexpected_file_and_an_empty_executable_together(
+    smoke_test_vsix: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_vsix(
+        tmp_path / "ext-1.0.0.vsix",
+        [],
+        server_files={"cwtools-server": "", "cwtools-server.pdb": "debug symbols\n"},
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        smoke_test_vsix.main([str(tmp_path)])
+    assert caught.value.code == 1
+    output = capsys.readouterr().out
+    assert (
+        "::error::ext-1.0.0.vsix: unexpected server files "
+        "[bin/server/cwtools-server/cwtools-server.pdb]\n"
+    ) in output
+    assert (
+        "::error::ext-1.0.0.vsix: server executable "
+        "bin/server/cwtools-server/cwtools-server is empty\n"
+    ) in output
 
 
 @pytest.mark.parametrize("empty_name", [None, "cwtools-server", "cwtools-server.exe"])

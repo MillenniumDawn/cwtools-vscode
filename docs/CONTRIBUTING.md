@@ -219,7 +219,8 @@ The structural package gate, `python3 scripts/smoke_test_vsix.py artifacts/vsix`
 requires the exact nonempty executable the host resolves in each platform
 directory: `cwtools-server.exe` for `win-x64`, and `cwtools-server` for Linux
 and macOS. A lone flat-layout package may contain either name; if both are
-present, both must be nonempty. Targeted packages must contain only their
+present, both must be nonempty. Any other file under `bin/server` fails the
+gate. Targeted packages must contain only their
 platform directory, and the universal fallback must cover every targeted
 platform. Optional platform arguments require those platforms to be packaged.
 These checks establish file presence and size, not executable architecture or
