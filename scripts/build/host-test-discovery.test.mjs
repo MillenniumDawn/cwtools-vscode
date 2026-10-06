@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { test } from "node:test";
 
 import { checkHostTestDiscovery } from "./host-test-discovery.mjs";
+
+const execFileAsync = promisify(execFile);
 
 test("rejects a new host test missing from the label file lists", async () => {
 	const root = await mkdtemp(path.join(os.tmpdir(), "cwtools-host-discovery-"));
@@ -26,6 +30,35 @@ test("rejects a new host test missing from the label file lists", async () => {
 		);
 	} finally {
 		await rm(root, { recursive: true, force: true });
+	}
+});
+
+test("runs the discovery guard when invoked through a directory symlink", async () => {
+	const parent = await mkdtemp(path.join(os.tmpdir(), "cwtools-host-link-test-"));
+	const root = path.join(parent, "repo");
+	const linkedRoot = path.join(parent, "repo-link");
+	const scriptDirectory = path.join(root, "scripts/build");
+	const hostDirectory = path.join(root, "extension/test/host");
+
+	try {
+		await mkdir(scriptDirectory, { recursive: true });
+		await mkdir(hostDirectory, { recursive: true });
+		await copyFile(
+			new URL("./host-test-discovery.mjs", import.meta.url),
+			path.join(scriptDirectory, "host-test-discovery.mjs"),
+		);
+		await writeFile(path.join(hostDirectory, "unassigned.test.ts"), "", "utf8");
+		await writeFile(path.join(root, ".vscode-test.mjs"), "export default { tests: [] };\n", "utf8");
+		await symlink(root, linkedRoot, process.platform === "win32" ? "junction" : "dir");
+		const linkedScript = path.join(linkedRoot, "scripts/build/host-test-discovery.mjs");
+		await assert.rejects(
+			execFileAsync(process.execPath, [linkedScript]),
+			(error) =>
+				error.code === 1 &&
+				error.stderr.includes("extension/test/host/unassigned.test.ts"),
+		);
+	} finally {
+		await rm(parent, { recursive: true, force: true });
 	}
 });
 

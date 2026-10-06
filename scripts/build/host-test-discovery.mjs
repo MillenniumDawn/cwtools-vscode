@@ -1,17 +1,16 @@
 import { readdir } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
- * Return host test source names that are not referenced by a vscode-test
- * config's file lists. The runner config uses matching emitted JavaScript
- * paths, so adding a source test without a label is a check failure.
- *
- * @param {string[]} sourceNames Host test basenames, including `.test.ts`.
+ * Return source names assigned to a vscode-test config's file lists. The
+ * runner config uses emitted JavaScript paths corresponding to `.test.ts`
+ * source basenames.
  * @param {{ files: string[] }[]} testConfigs Configs returned by vscode-test.
- * @returns {string[]}
+ * @returns {Set<string>} Assigned host test basenames, including `.test.ts`.
  */
 function configuredHostTests(testConfigs) {
 	return new Set(
@@ -26,6 +25,13 @@ function configuredHostTests(testConfigs) {
 	);
 }
 
+/**
+ * Return host test source names that are not referenced by a vscode-test
+ * config's file lists. Adding a source test without a label is a check failure.
+ * @param {string[]} sourceNames Host test basenames, including `.test.ts`.
+ * @param {{ files: string[] }[]} testConfigs Configs returned by vscode-test.
+ * @returns {string[]} Unassigned host test basenames.
+ */
 export function findUnassignedHostTests(sourceNames, testConfigs) {
 	const assigned = configuredHostTests(testConfigs);
 	return sourceNames.filter((name) => !assigned.has(name)).sort();
@@ -73,7 +79,10 @@ export async function checkHostTestDiscovery(root = repoRoot) {
 	}
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+	process.argv[1] &&
+	realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
 	try {
 		await checkHostTestDiscovery();
 	} catch (error) {
