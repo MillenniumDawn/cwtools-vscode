@@ -27,6 +27,7 @@ struct Cursor<'a> {
     chars: Chars<'a>,
     line: u32,
     col: u16,
+    errors_len: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -65,10 +66,12 @@ impl<'a> Parser<'a> {
             chars: self.chars.clone(),
             line: self.line,
             col: self.col,
+            errors_len: self.errors.len(),
         }
     }
 
     fn restore(&mut self, c: Cursor<'a>) {
+        self.errors.truncate(c.errors_len);
         self.chars = c.chars;
         self.line = c.line;
         self.col = c.col;
@@ -1389,10 +1392,10 @@ shorthand { nested = value }
     #[test]
     fn unclosed_quoted_key_terminates_at_newline_with_error() {
         let table = StringTable::new();
-        let result = parse_string("\"foo\nbar = 1\n\" = 5\n", &table);
+        let result = parse_string("\"foo\n= 5\nbar = 1\n", &table);
         assert!(
             !result.errors.is_empty(),
-            "expected an unclosed quoted string error, got none"
+            "the committed quoted key should report its unclosed string"
         );
         let bar = result
             .root_children
@@ -1410,12 +1413,23 @@ shorthand { nested = value }
     }
 
     #[test]
-    fn unclosed_quoted_key_at_eof_produces_error() {
+    fn unclosed_quoted_key_followed_by_operator_produces_error() {
         let table = StringTable::new();
-        let result = parse_string("\"unterminated = 5", &table);
+        let result = parse_string("\"unterminated\n= 5", &table);
         assert!(
             !result.errors.is_empty(),
-            "expected a parse error for an unclosed quoted key at EOF"
+            "the committed quoted key should report its unclosed string"
+        );
+    }
+
+    #[test]
+    fn unclosed_quote_leafvalue_does_not_leak_speculative_key_error() {
+        let table = StringTable::new();
+        let result = parse_string("n = { \"Falke\n Adler }", &table);
+        assert!(
+            result.errors.is_empty(),
+            "leaf-value quote recovery should discard speculative key errors: {:?}",
+            result.errors
         );
     }
 

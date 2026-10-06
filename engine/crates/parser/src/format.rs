@@ -616,6 +616,12 @@ mod tests {
         format_text(input, &table(), &opts).expect("parse")
     }
 
+    #[test]
+    fn unclosed_quote_leafvalue_remains_formatable() {
+        let input = "n = { \"Falke\n Adler }";
+        assert!(format_text(input, &table(), &FormatOptions::default()).is_some());
+    }
+
     fn display_width(line: &str, tab_size: usize) -> usize {
         line.chars()
             .fold(0, |width, ch| advance_char(width, ch, tab_size))
