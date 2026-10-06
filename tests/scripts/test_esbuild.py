@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -8,6 +10,7 @@ from typing import Self, cast
 import pytest
 
 import esbuild
+from paths import EXTENSION_SOURCE_ROOT
 
 
 # wait_for_watcher_exit only ever calls poll(), so a stub keeps the test from
@@ -24,29 +27,56 @@ def procs(*codes: int | None) -> list[subprocess.Popen[bytes]]:
     return cast("list[subprocess.Popen[bytes]]", [FakeProcess(code) for code in codes])
 
 
-TEST_ENV_DEFINES = (
-    "--define:process.env.CWTOOLS_TEST_HOI4_REPO=undefined",
-    "--define:process.env.CWTOOLS_TEST_HOI4_REF=undefined",
-    "--define:process.env.CWTOOLS_TEST_RULES_MANIFEST_URL=undefined",
-    "--define:process.env.CWTOOLS_TEST_RULES_FOLDER=undefined",
+_TEST_ENV_READ = re.compile(r"\bprocess\.env\.(CWTOOLS_TEST_[A-Z0-9_]+)\b")
+_TEST_ENV_DEFINE = re.compile(
+    r"--define:process\.env\.(CWTOOLS_TEST_[A-Z0-9_]+)=(.*)"
 )
 
 
+def _source_test_env_names() -> set[str]:
+    return {
+        name
+        for path in EXTENSION_SOURCE_ROOT.rglob("*")
+        if path.is_file() and path.suffix in {".ts", ".tsx"}
+        for name in _TEST_ENV_READ.findall(path.read_text(encoding="utf-8"))
+    }
+
+
+def _test_env_defines(args: list[str]) -> dict[str, str]:
+    defines: dict[str, str] = {}
+    for arg in args:
+        match = _TEST_ENV_DEFINE.fullmatch(arg)
+        if match:
+            defines[match.group(1)] = match.group(2)
+    return defines
+
+
+def _esbuild_test_args(source: Path, outfile: Path, *, release: bool) -> list[str]:
+    args = esbuild.bundle_commands(watch=False, dev=False, release=release)[0]
+    entrypoint = str(esbuild.EXTENSION_HOST_ROOT / "extension.ts")
+    args[args.index(entrypoint)] = str(source)
+    outfile_index = next(
+        index for index, arg in enumerate(args) if arg.startswith("--outfile=")
+    )
+    args[outfile_index] = f"--outfile={outfile}"
+    return args
+
+
 def test_extension_bundle_is_node_cjs() -> None:
-    args = " ".join(esbuild.extension_args(watch=False))
+    extension_args = esbuild.extension_args(watch=False)
+    args = " ".join(extension_args)
     assert "--platform=node" in args
     assert "--format=cjs" in args
     assert "--external:vscode" in args
     assert "extension.ts" in args
     assert "--watch" not in args
-    for define in TEST_ENV_DEFINES:
-        assert define not in args
+    assert _test_env_defines(extension_args) == {}
 
 
-def test_release_folds_test_env_overrides() -> None:
-    args = " ".join(esbuild.extension_args(watch=False, release=True))
-    for define in TEST_ENV_DEFINES:
-        assert define in args
+def test_release_defines_match_test_env_reads() -> None:
+    expected = {name: "undefined" for name in _source_test_env_names()}
+    release_args = esbuild.extension_args(watch=False, release=True)
+    assert _test_env_defines(release_args) == expected
 
 
 def test_webview_bundle_is_browser_iife() -> None:
@@ -110,8 +140,7 @@ def test_dev_flag_sets_development_without_watch(
     )
     assert "--watch" not in " ".join(commands[0])
     assert "--watch" not in " ".join(commands[1])
-    for define in TEST_ENV_DEFINES:
-        assert define not in " ".join(commands[0])
+    assert _test_env_defines(commands[0]) == {}
 
 
 def test_release_flag_defines_test_env(
@@ -123,10 +152,10 @@ def test_release_flag_defines_test_env(
     commands: list[list[str]] = []
     monkeypatch.setattr(esbuild, "_run", commands.append)
     assert esbuild.main(["--release"]) == 0
-    extension = " ".join(commands[0])
-    for define in TEST_ENV_DEFINES:
-        assert define in extension
-    assert "--watch" not in extension
+    assert _test_env_defines(commands[0]) == _test_env_defines(
+        esbuild.extension_args(watch=False, release=True)
+    )
+    assert "--watch" not in " ".join(commands[0])
 
 
 def test_bundle_commands_use_the_platform_esbuild_entrypoint() -> None:
@@ -148,6 +177,10 @@ def test_watch_treats_an_early_clean_exit_as_failure() -> None:
 def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
     binary = esbuild.esbuild_bin()
     if not binary.is_file():
+        if os.environ.get("CI"):
+            pytest.fail(
+                "esbuild is not installed in CI; real-esbuild smoke must run"
+            )
         pytest.skip("esbuild is not installed")
 
     source = tmp_path / "repo.ts"
@@ -157,14 +190,8 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
     )
     dropped = tmp_path / "dropped.js"
     kept = tmp_path / "kept.js"
-    common = [str(binary), str(source), "--bundle", "--format=cjs"]
-
     folded = subprocess.run(
-        [
-            *common,
-            f"--outfile={dropped}",
-            "--define:process.env.CWTOOLS_TEST_RULES_FOLDER=undefined",
-        ],
+        _esbuild_test_args(source, dropped, release=True),
         check=False,
         capture_output=True,
         text=True,
@@ -172,7 +199,7 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
     assert folded.returncode == 0, folded.stderr
 
     live = subprocess.run(
-        [*common, f"--outfile={kept}"],
+        _esbuild_test_args(source, kept, release=False),
         check=False,
         capture_output=True,
         text=True,

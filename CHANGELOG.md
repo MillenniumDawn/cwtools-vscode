@@ -43,6 +43,7 @@
 * The release PR body lists every pull request merged since the last stable tag, as the Utility Tool's release PR does. Dependabot bumps are left out. (#794)
 * The VSIX smoke test now requires a nonempty `cwtools-server.exe` in the `win-x64` directory and a nonempty `cwtools-server` in every other platform directory, as the extension's resolver does. Flat layouts check each executable name present. A directory holding only other files, an empty binary, or the wrong suffix fails the package gate. (#850)
 * The VSIX smoke test rejects any file under `bin/server` that is not one of those executables, such as a stray `.pdb` in the flat directory or in a platform directory, even if earlier build checks are bypassed. It reports unexpected files and missing or empty executables in one run. (#852)
+* Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
 
 ### 3.4.7
 
