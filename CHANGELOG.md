@@ -37,6 +37,8 @@
 
 #### Tooling
 
+* Run the extension-host coverage label once, retain the distinct live-settings, multi-root, watched-file and rules-sync suites, and reuse the build output instead of recompiling it in each test step. Skip npm installation in the Python-only coverage-report job. (#509)
+
 * Host coverage now launches in a dedicated POSIX process group and terminates descendants on timeout or interruption, including children whose parent exits on SIGTERM. A SIGTERM or SIGHUP sent to the script itself gets the same cleanup, and a second signal during it no longer stops it before the kill step. (#851)
 * `npm run bench:node` measures again: the client hot-path benchmark registered its three benches under Vitest 5 without running them, so it passed in a few hundred milliseconds with no results. Each bench is now run and its result asserted. (#878)
 * The Open VSX publish job replaces `HaaLeo/publish-vscode-extension` (stuck on a Node 20 target the runner force-upgrades with a deprecation warning) with `ovsx publish` from the dev dependencies through build.py, so the upload retries like the Marketplace publish does. The App token steps pass `client-id` instead of the deprecated `app-id`, with the App ID secret kept as the fallback. Both registry tokens now reach only their publish step, not the `npm ci` before it. (#812)
