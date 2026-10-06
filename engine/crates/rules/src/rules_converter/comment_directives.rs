@@ -26,6 +26,27 @@ fn directive_bodies(comments: &[String]) -> impl Iterator<Item = &str> {
     })
 }
 
+fn directive_value(value: &str) -> &str {
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut previous_was_whitespace = false;
+    for (index, ch) in value.char_indices() {
+        if ch == '#' && !quoted && previous_was_whitespace {
+            return value[..index].trim_end();
+        }
+        if ch == '"' && !escaped {
+            quoted = !quoted;
+        }
+        if ch == '\\' && quoted {
+            escaped = !escaped;
+        } else {
+            escaped = false;
+        }
+        previous_was_whitespace = ch.is_whitespace();
+    }
+    value.trim()
+}
+
 pub(crate) fn has_directive(comments: &[String], key: &str) -> bool {
     directive_bodies(comments).any(|rest| {
         rest.strip_prefix(key).is_some_and(|after| {
@@ -40,7 +61,7 @@ pub(crate) fn find_directive<'a>(comments: &'a [String], key: &str) -> Option<&'
     directive_bodies(comments).find_map(|rest| {
         let after_key = rest.strip_prefix(key)?.trim_start();
         let rhs = after_key.strip_prefix('=')?;
-        Some(unquote(rhs.trim()))
+        Some(unquote(directive_value(rhs.trim())))
     })
 }
 
@@ -57,7 +78,7 @@ fn collect_directives(comments: &[String]) -> std::collections::HashMap<&str, &s
         let Some((key, rhs)) = rest.split_once('=') else {
             continue;
         };
-        map.insert(key.trim_end(), unquote(rhs.trim()));
+        map.insert(key.trim_end(), unquote(directive_value(rhs.trim())));
     }
     map
 }
@@ -286,7 +307,7 @@ pub(crate) fn validate_comment_directives(ast: &ParsedFile, path: &Path) -> Vec<
             continue;
         };
         let key = key.trim_end();
-        let rhs = unquote(rhs.trim());
+        let rhs = unquote(directive_value(rhs.trim()));
         let message = match key {
             "cardinality" if cardinality_spec_is_malformed(rhs) => {
                 Some(format!("malformed `cardinality` bound `{rhs}`"))
@@ -436,6 +457,29 @@ mod tests {
     }
 
     #[test]
+    fn directive_values_ignore_trailing_comments() {
+        let comments = s(&[
+            "## cardinality = 0..inf # no upper bound",
+            "## severity = warning # keep the rule visible",
+        ]);
+        let opts = options_from_comments(&comments, false);
+
+        assert_eq!((opts.min, opts.max), (0, i32::MAX));
+        assert_eq!(opts.severity, Some(Severity::Warning));
+    }
+
+    #[test]
+    fn quoted_directive_values_keep_hashes_before_trailing_comments() {
+        assert_eq!(
+            find_directive(
+                &s(&[r#"## error_if_only_match = "effect # literal" # explanation"#]),
+                "error_if_only_match"
+            ),
+            Some("effect # literal")
+        );
+    }
+
+    #[test]
     fn quoted_cardinality_parses_like_unquoted() {
         let opts = options_from_comments(&s(&[r#"## cardinality = "~0..inf""#]), false);
         assert_eq!((opts.min, opts.max, opts.strict_min), (0, i32::MAX, false));
@@ -516,6 +560,24 @@ mod tests {
         assert_eq!(errors.len(), 1, "got: {:?}", errors);
         assert!(errors[0].message.contains("cardinality"));
         assert!(errors[0].message.contains("0..n"));
+    }
+
+    #[test]
+    fn valid_directives_with_trailing_comments_are_not_flagged() {
+        let ast = parse(
+            "## cardinality = 1..1 # required\n## severity = warning # visible\nfoo = bar\n",
+        );
+        let errors = validate_comment_directives(&ast, std::path::Path::new("t.cwt"));
+        assert!(errors.is_empty(), "got: {:?}", errors);
+    }
+
+    #[test]
+    fn malformed_cardinality_with_trailing_comment_is_still_flagged() {
+        let ast = parse("## cardinality = 0..n # explain the bound\nfoo = bar\n");
+        let errors = validate_comment_directives(&ast, std::path::Path::new("t.cwt"));
+        assert_eq!(errors.len(), 1, "got: {:?}", errors);
+        assert!(errors[0].message.contains("0..n"));
+        assert!(!errors[0].message.contains("explain the bound"));
     }
 
     #[test]
