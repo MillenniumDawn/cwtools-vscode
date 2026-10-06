@@ -345,20 +345,24 @@ def test_an_unavailable_display_backend_fails_before_the_compile(
     monkeypatch.setattr(host_coverage, "_run", compile_step)
 
     with pytest.raises(RuntimeError, match="xvfb-run is not on PATH"):
-        host_coverage.main()
+        host_coverage.main([])
 
     assert not compiled
     assert not coverage_dir.exists()
 
 
+@pytest.mark.parametrize("skip_compile", [False, True])
 def test_runs_host_and_live_labels_in_one_coverage_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_compile: bool,
 ) -> None:
     coverage_dir = tmp_path / "coverage"
     summary_path = coverage_dir / "coverage-summary.json"
     labels_seen: list[list[str]] = []
     coverage_seen: list[bool] = []
     invoked_command: list[str] = []
+    compile_commands: list[tuple[object, ...]] = []
     display = hosttest.Display("native", [], None)
 
     def make_test_cli_command(
@@ -391,11 +395,20 @@ def test_runs_host_and_live_labels_in_one_coverage_command(
     monkeypatch.setattr(host_coverage, "SUMMARY_PATH", summary_path)
     monkeypatch.setattr(host_coverage, "resolve_display", lambda: display)
     monkeypatch.setattr(host_coverage, "_npm", lambda: "npm")
-    monkeypatch.setattr(host_coverage, "_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        host_coverage,
+        "_run",
+        lambda *args, **_kwargs: compile_commands.append(args),
+    )
     monkeypatch.setattr(host_coverage, "test_cli_command", make_test_cli_command)
     monkeypatch.setattr(host_coverage, "run_with_timeout", record_command)
 
-    assert host_coverage.main() == 0
+    argv = ["--skip-compile"] if skip_compile else []
+    assert host_coverage.main(argv) == 0
+    expected_compile_commands = (
+        [] if skip_compile else [("extension compilation", "npm", ["run", "compile"])]
+    )
+    assert compile_commands == expected_compile_commands
     assert labels_seen == [["host", "live"]]
     assert coverage_seen == [True]
     assert invoked_command == [
