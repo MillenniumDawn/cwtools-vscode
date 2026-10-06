@@ -145,29 +145,24 @@ jobs:
       # Exercises activation-triggered rules sync against the checked-in local
       # fixture, without reaching the network (see .vscode-test.mjs).
       - name: Host tests (rules sync)
+        id: host-rules-sync
         timeout-minutes: 10
         run: node scripts/build/python.mjs scripts/build/hosttest.py --label rules-sync
       # Keep the suites with distinct workspace/configuration coverage. The
       # smoke files are a subset of hostFiles and run once under host coverage.
       - name: Host tests (live settings, multi-root, watched files)
+        id: host-configurations
         timeout-minutes: 10
         run: >-
           node scripts/build/python.mjs scripts/build/hosttest.py
           --label live --label multi-root --label watched
-      # Packages what was just built, server included, so the PR artifact is
-      # an installable extension rather than a client-only shell.
-      - name: Test build
-        run: npm run build -- package-prebuilt
-      # Open the archive on every PR, not only in the release job. This checks
-      # the .vscodeignore boundary as well as the package's required files.
-      - name: Smoke test VSIX
-        run: python3 scripts/smoke_test_vsix.py artifacts/vsix
       # Host V8 coverage runs the host label, which includes every smoke file,
       # plus the isolated live-settings workspace for its separate coverage
-      # configuration. host_coverage.py kills a leftover process tree if
-      # Electron still hangs under xvfb. The build already compiled the client,
-      # so skip recompiling it here. Gated on the build step because this needs
-      # the built server binary.
+      # configuration. Run it before package-prebuilt: that command compiles a
+      # release client with CWTOOLS_TEST_* overrides removed, while these host
+      # configurations need the development build made above. The build already
+      # compiled the client, so skip recompiling it here. Gated on the build
+      # step because this needs the built server binary.
       - name: Host coverage
         if: always() && steps.build-engine.outcome == 'success'
         timeout-minutes: 15
@@ -184,6 +179,20 @@ jobs:
           name: coverage-html
           path: coverage
           retention-days: 5
+      # Packages what was just built, server included, so the PR artifact is
+      # an installable extension rather than a client-only shell.
+      - name: Test build
+        id: test-build
+        if: >-
+          always() && steps.build-engine.outcome == 'success' &&
+          steps.host-rules-sync.outcome == 'success' &&
+          steps.host-configurations.outcome == 'success'
+        run: npm run build -- package-prebuilt
+      # Open the archive on every PR, not only in the release job. This checks
+      # the .vscodeignore boundary as well as the package's required files.
+      - name: Smoke test VSIX
+        if: always() && steps.test-build.outcome == 'success'
+        run: python3 scripts/smoke_test_vsix.py artifacts/vsix
       - name: Node unit tests (with coverage)
         if: always()
         run: npm run test:node:coverage
