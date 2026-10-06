@@ -23,6 +23,7 @@ const {
 	progressToken,
 	withProgress,
 	showInformationMessage,
+	showWarningMessage,
 	showErrorMessage,
 	openTextDocument,
 	showTextDocument,
@@ -112,6 +113,7 @@ const {
 			): Promise<unknown> => task({ report: () => undefined }, progressToken),
 		),
 		showInformationMessage: vi.fn(),
+		showWarningMessage: vi.fn(),
 		showErrorMessage: vi.fn(),
 		openTextDocument: vi.fn(),
 		showTextDocument: vi.fn(),
@@ -151,6 +153,7 @@ vi.mock("vscode", async (importOriginal) => ({
 		createOutputChannel: () => ({ appendLine: () => {} }),
 		withProgress,
 		showInformationMessage,
+		showWarningMessage,
 		showErrorMessage,
 		showTextDocument,
 	},
@@ -1196,6 +1199,86 @@ suite("lspClient — executeCommand middleware", () => {
 				"CWTools: Reload config rules",
 			],
 		);
+	});
+
+	test("validateWorkspace shows the exact diagnostic summary and opens Problems on request", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["validateWorkspace"]);
+		client.sendRequest.mockResolvedValue({
+			totalFiles: 10,
+			validatedFiles: 7,
+			filesWithErrors: 2,
+			totalErrors: 3,
+			totalWarnings: 4,
+			totalInfos: 5,
+			totalHints: 6,
+		});
+		showInformationMessage.mockResolvedValue("Show Problems");
+		const next = vi.fn();
+
+		const result: unknown = await middleware("validateWorkspace", [], next);
+
+		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
+		assert.deepStrictEqual(result, {
+			totalFiles: 10,
+			validatedFiles: 7,
+			filesWithErrors: 2,
+			totalErrors: 3,
+			totalWarnings: 4,
+			totalInfos: 5,
+			totalHints: 6,
+		});
+		assert.deepStrictEqual(withProgress.mock.calls[0]?.[0], {
+			location: 15,
+			title: "CWTools: Validate workspace",
+			cancellable: true,
+		});
+		assert.deepStrictEqual(client.sendRequest.mock.calls, [
+			[
+				requestType,
+				{ command: "validateWorkspace", arguments: [] },
+				progressToken,
+			],
+		]);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			[
+				"CWTools: validated 7 of 10 files; 2 with errors, 3 errors, 4 warnings, 5 infos, 6 hints.",
+				"Show Problems",
+			],
+		]);
+		assert.deepStrictEqual(executeCommand.mock.calls, [
+			["workbench.actions.view.problems"],
+		]);
+		assert.deepStrictEqual(next.mock.calls, []);
+	});
+
+	test("validateWorkspace cancellation result is silent", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["validateWorkspace"]);
+		client.sendRequest.mockResolvedValue({ cancelled: true });
+
+		const result: unknown = await middleware("validateWorkspace", [], vi.fn());
+
+		assert.deepStrictEqual(result, { cancelled: true });
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		assert.deepStrictEqual(showWarningMessage.mock.calls, []);
+		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
+	});
+
+	test("validateWorkspace busy result warns that another scan is running", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["validateWorkspace"]);
+		client.sendRequest.mockResolvedValue({ busy: true });
+
+		const result: unknown = await middleware("validateWorkspace", [], vi.fn());
+
+		assert.deepStrictEqual(result, { busy: true });
+		assert.deepStrictEqual(showWarningMessage.mock.calls, [
+			[
+				"CWTools: workspace validation could not start because another scan is still running. Try again shortly.",
+			],
+		]);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
 	});
 
 	test("known commands without a string result show no toast", async () => {

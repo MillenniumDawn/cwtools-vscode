@@ -68,6 +68,8 @@
 
 #### Extension
 
+* Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. (#603)
+
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
 * Keep graph commands gated by the live server capability and remove an unused
   webview export. (#765)
