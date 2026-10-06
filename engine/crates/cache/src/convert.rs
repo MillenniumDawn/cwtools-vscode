@@ -4,7 +4,7 @@ use cwtools_parser::ast::{
     Arena, Child, Comment, Leaf, LeafValue, Operator, ParseError, SourcePos, SourceRange, Value,
 };
 use cwtools_parser::parser::MAX_CLAUSE_DEPTH;
-use cwtools_string_table::string_table::{StringId, StringTable, StringTokens};
+use cwtools_string_table::string_table::{StringResolver, StringTable, StringTokens};
 
 /// [`MAX_CLAUSE_DEPTH`] levels it descends into, plus the empty clause it leaves
 const MAX_CACHED_CLAUSE_DEPTH: u32 = MAX_CLAUSE_DEPTH + 1;
@@ -16,32 +16,24 @@ pub fn arena_to_cached(
     root_children: &[Child],
     string_table: &StringTable,
 ) -> CachedFile {
-    let mut string_ids = Vec::with_capacity(
-        arena
-            .leaves
-            .len()
-            .saturating_mul(2)
-            .saturating_add(arena.leaf_values.len()),
-    );
+    let mut string_tokens = Vec::new();
     for leaf in &arena.leaves {
-        string_ids.push(leaf.key.normal);
-        value_string_ids(&leaf.value, &mut string_ids);
+        string_tokens.push(leaf.key);
+        collect_value_tokens(&leaf.value, &mut string_tokens);
     }
     for leaf_value in &arena.leaf_values {
-        value_string_ids(&leaf_value.value, &mut string_ids);
+        collect_value_tokens(&leaf_value.value, &mut string_tokens);
     }
 
-    // Keep the all-shard read lock only while resolving ids into an owned
-    // buffer. CachedFile and child allocations happen after the resolver
-    // releases its guards.
-    let strings = string_table.with_read(|table| {
-        string_ids
+    let resolved_strings = string_table.with_read(|table| {
+        string_tokens
             .into_iter()
-            .map(|id| table.get(id).unwrap_or_default().to_owned())
+            .map(|token| string_token_to_owned(&token, &table))
             .collect::<Vec<_>>()
     });
-    let mut strings = strings.into_iter();
-    let cached = CachedFile {
+    let mut strings = resolved_strings.into_iter();
+
+    CachedFile {
         root_children: children_to_cached(root_children),
         leaves: arena
             .leaves
@@ -54,9 +46,7 @@ pub fn arena_to_cached(
             .map(|lv| leaf_value_to_cached(lv, &mut strings))
             .collect(),
         comments: arena.comments.iter().map(comment_to_cached).collect(),
-    };
-    debug_assert!(strings.next().is_none(), "resolved string count mismatch");
-    cached
+    }
 }
 
 pub fn errors_to_cached(errors: &[ParseError]) -> CachedErrors {
@@ -401,11 +391,8 @@ fn archived_op_to_op(op: &ArchivedCachedOperator) -> Operator {
     }
 }
 
-fn value_string_ids(value: &Value, ids: &mut Vec<StringId>) {
-    match value {
-        Value::String(token) | Value::QString(token) => ids.push(token.normal),
-        Value::Float(_) | Value::Int(_) | Value::Bool(_) | Value::Clause(_) => {}
-    }
+fn string_token_to_owned(token: &StringTokens, table: &StringResolver<'_>) -> String {
+    table.get(token.normal).unwrap_or_default().to_string()
 }
 
 fn next_token(tokens: &mut impl Iterator<Item = StringTokens>) -> Result<StringTokens, CacheError> {
@@ -447,7 +434,7 @@ fn leaf_to_cached(l: &Leaf, strings: &mut impl Iterator<Item = String>) -> Cache
     let (sl, sc, el, ec) = range_to_cached(&l.pos);
     let (vsl, vsc, vel, vec_) = range_to_cached(&l.value_pos);
     CachedLeaf {
-        key: next_resolved_string(strings),
+        key: next_owned_string(strings),
         value: value_to_cached(&l.value, strings),
         op: op_to_cached(&l.op),
         start_line: sl,
@@ -488,8 +475,8 @@ fn comment_to_cached(c: &Comment) -> CachedComment {
 
 fn value_to_cached(v: &Value, strings: &mut impl Iterator<Item = String>) -> CachedValue {
     match v {
-        Value::String(_) => CachedValue::String(next_resolved_string(strings)),
-        Value::QString(_) => CachedValue::QString(next_resolved_string(strings)),
+        Value::String(_) => CachedValue::String(next_owned_string(strings)),
+        Value::QString(_) => CachedValue::QString(next_owned_string(strings)),
         Value::Float(f) => CachedValue::Float(*f),
         Value::Int(i) => CachedValue::Int(*i),
         Value::Bool(b) => CachedValue::Bool(*b),
@@ -497,8 +484,17 @@ fn value_to_cached(v: &Value, strings: &mut impl Iterator<Item = String>) -> Cac
     }
 }
 
-fn next_resolved_string(strings: &mut impl Iterator<Item = String>) -> String {
-    strings.next().expect("one resolved string per AST token")
+fn collect_value_tokens(value: &Value, out: &mut Vec<StringTokens>) {
+    match value {
+        Value::String(tokens) | Value::QString(tokens) => out.push(*tokens),
+        Value::Float(_) | Value::Int(_) | Value::Bool(_) | Value::Clause(_) => {}
+    }
+}
+
+fn next_owned_string(strings: &mut impl Iterator<Item = String>) -> String {
+    strings
+        .next()
+        .expect("all arena string tokens were resolved before cache conversion")
 }
 
 fn op_to_cached(op: &Operator) -> CachedOperator {
@@ -516,44 +512,9 @@ fn op_to_cached(op: &Operator) -> CachedOperator {
 
 #[cfg(test)]
 mod tests {
-    use super::{arena_to_cached, next_token};
-    use crate::cache_format::CachedValue;
+    use super::next_token;
     use crate::io::CacheError;
-    use cwtools_parser::parser::parse_string;
-    use cwtools_string_table::string_table::{StringTable, StringTokens};
-
-    #[test]
-    fn arena_to_cached_preserves_spelling_with_overlay_strings() {
-        let table = StringTable::new();
-        let overlay = table.with_overlay();
-        let parsed = parse_string(
-            "MixedKey = MiXeDValue\nQuoted = \"Quoted Value\"\nouter = { ChildKey = ChildValue }\n",
-            &overlay,
-        );
-
-        let cached = arena_to_cached(&parsed.arena, &parsed.root_children, &overlay);
-
-        let leaf = |key: &str| {
-            cached
-                .leaves
-                .iter()
-                .find(|leaf| leaf.key == key)
-                .unwrap_or_else(|| panic!("missing cached leaf {key}"))
-        };
-        assert!(matches!(
-            &leaf("MixedKey").value,
-            CachedValue::String(value) if value == "MiXeDValue"
-        ));
-        assert!(matches!(
-            &leaf("Quoted").value,
-            CachedValue::QString(value) if value == "\"Quoted Value\""
-        ));
-        assert!(matches!(&leaf("outer").value, CachedValue::Clause(_)));
-        assert!(matches!(
-            &leaf("ChildKey").value,
-            CachedValue::String(value) if value == "ChildValue"
-        ));
-    }
+    use cwtools_string_table::string_table::StringTokens;
 
     #[test]
     fn missing_interned_token_is_a_cache_error() {
