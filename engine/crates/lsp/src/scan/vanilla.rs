@@ -28,9 +28,41 @@ pub(crate) fn index_vanilla_dir(
     ),
     FileError,
 > {
+    index_vanilla_dir_with_shadow(dir, ruleset, table, parse_cache_dir, game, None)
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn index_vanilla_dir_with_shadow(
+    dir: &std::path::Path,
+    ruleset: &RuleSet,
+    table: &cwtools_string_table::string_table::StringTable,
+    parse_cache_dir: Option<&std::path::Path>,
+    game: &str,
+    replacement_shadow: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+) -> Result<
+    (
+        HashMap<String, Vec<(Arc<str>, cwtools_info::TypeInstance)>>,
+        cwtools_info::vanilla_cache::VanillaCacheAux,
+    ),
+    FileError,
+> {
     let var_effects = cwtools_info::variable_defining_effects(ruleset);
-    let index = match parse_cache_dir {
-        Some(cache_dir) => cwtools_driver::index_game_dir_with_parse_cache(
+    let index = match (parse_cache_dir, replacement_shadow) {
+        (Some(cache_dir), Some(shadow)) => {
+            cwtools_driver::index_game_dir_with_parse_cache_and_shadow(
+                dir,
+                ruleset,
+                table,
+                &var_effects,
+                cache_dir,
+                game,
+                shadow,
+            )
+        }
+        (None, Some(shadow)) => {
+            cwtools_driver::index_game_dir_with_shadow(dir, ruleset, table, &var_effects, shadow)
+        }
+        (Some(cache_dir), None) => cwtools_driver::index_game_dir_with_parse_cache(
             dir,
             ruleset,
             table,
@@ -38,9 +70,12 @@ pub(crate) fn index_vanilla_dir(
             cache_dir,
             game,
         ),
-        None => cwtools_driver::index_game_dir(dir, ruleset, table, &var_effects),
+        (None, None) => cwtools_driver::index_game_dir(dir, ruleset, table, &var_effects),
     }?;
-    let aux = cwtools_driver::build_vanilla_cache_aux(dir, &index);
+    let aux = match replacement_shadow {
+        Some(shadow) => cwtools_driver::build_vanilla_cache_aux_with_shadow(dir, &index, shadow),
+        None => cwtools_driver::build_vanilla_cache_aux(dir, &index),
+    };
     let per_type = index.map.into_iter().collect();
     Ok((per_type, aux))
 }
@@ -144,9 +179,23 @@ impl Backend {
                 vanilla.file_paths.clone(),
             )
         };
+        let (vanilla_dir, replacement_shadow) = {
+            let config = self.state.config.read();
+            (
+                config.vanilla_dir.clone(),
+                config.workspace_roots.first().map(|primary| {
+                    cwtools_driver::vanilla_replacement_shadow(primary, &config.parent_roots)
+                }),
+            )
+        };
         if let Some(per_type) = per_type {
             // fell back to whatever document the user had open (#62).
-            let vanilla_dir = self.state.config.read().vanilla_dir.clone();
+            let per_type = match (&vanilla_dir, &replacement_shadow) {
+                (Some(vanilla_root), Some(shadow)) => {
+                    cwtools_driver::filter_vanilla_index(per_type, vanilla_root, shadow)
+                }
+                _ => per_type,
+            };
             let vanilla_root = vanilla_dir
                 .as_deref()
                 .and_then(|root| std::fs::canonicalize(root).ok());
@@ -160,11 +209,7 @@ impl Backend {
                         .entry(Arc::clone(&path))
                         .or_insert_with(|| {
                             let root = vanilla_root.as_ref()?;
-                            let vanilla_dir = vanilla_dir.as_ref()?;
                             let source = std::path::Path::new(path.as_ref());
-                            if !source.starts_with(vanilla_dir) {
-                                return None;
-                            }
                             let Ok(canonical) = std::fs::canonicalize(source) else {
                                 return None;
                             };
@@ -245,6 +290,14 @@ impl Backend {
             Some(p) => p,
             None => return,
         };
+        let vanilla_paths = if let Some(shadow) = replacement_shadow.as_ref() {
+            vanilla_paths
+                .into_iter()
+                .filter(|path| !shadow.hides(path))
+                .collect()
+        } else {
+            vanilla_paths
+        };
         let file_index = cwtools_driver::build_file_index(
             &workspace_root,
             &parent_roots,
@@ -272,10 +325,19 @@ impl Backend {
         {
             return;
         }
-        let (explicit_dir, game) = {
+        let (explicit_dir, game, replacement_shadow) = {
             let cfg = self.state.config.read();
-            (cfg.vanilla_dir.clone(), cfg.language.clone())
+            (
+                cfg.vanilla_dir.clone(),
+                cfg.language.clone(),
+                cfg.workspace_roots.first().map(|primary| {
+                    cwtools_driver::vanilla_replacement_shadow(primary, &cfg.parent_roots)
+                }),
+            )
         };
+        let has_vanilla_replacements = replacement_shadow
+            .as_ref()
+            .is_some_and(cwtools_file_manager::file_manager::LayerShadow::has_replace_paths);
         let was_explicit = explicit_dir.is_some();
         let dir = explicit_dir.or_else(|| discover_vanilla_dir(&game));
         let dir = match dir {
@@ -306,6 +368,7 @@ impl Backend {
         let cache_path = self.vanilla_cache_path(&game, &fingerprint);
 
         if !force_rebuild
+            && !has_vanilla_replacements
             && let Some(cp) = &cache_path
             && cp.exists()
         {
@@ -375,14 +438,26 @@ impl Backend {
         let table = self.state.string_table.clone();
         let index_dir = dir.clone();
         let cache_game = game.clone();
+        let shadow = replacement_shadow.clone();
         let join_result = tokio::task::spawn_blocking(move || {
-            index_vanilla_dir(
-                &index_dir,
-                &ruleset,
-                &table,
-                parse_cache_dir.as_deref(),
-                &cache_game,
-            )
+            if has_vanilla_replacements {
+                index_vanilla_dir_with_shadow(
+                    &index_dir,
+                    &ruleset,
+                    &table,
+                    parse_cache_dir.as_deref(),
+                    &cache_game,
+                    shadow.as_ref(),
+                )
+            } else {
+                index_vanilla_dir(
+                    &index_dir,
+                    &ruleset,
+                    &table,
+                    parse_cache_dir.as_deref(),
+                    &cache_game,
+                )
+            }
         })
         .await;
         let (per_type, aux) = match join_result {
@@ -416,7 +491,7 @@ impl Backend {
             }
         };
 
-        if let Some(cp) = &cache_path {
+        if !has_vanilla_replacements && let Some(cp) = &cache_path {
             match cwtools_info::vanilla_cache::save_per_type(
                 &per_type,
                 &game,
@@ -603,6 +678,161 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1.name, "in_root");
         assert_eq!(entries[0].0.as_ref(), path_to_uri(&canonical_in_root));
+    }
+
+    #[test]
+    fn merge_suppresses_vanilla_replaced_by_primary_and_parent_mods() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        let parent = tmp.path().join("parent");
+        let vanilla_root = tmp.path().join("vanilla");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&parent).unwrap();
+        std::fs::write(
+            primary.join("descriptor.mod"),
+            "name = \"Primary\"\nreplace_path = \"common/scripted_effects/primary\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            parent.join("descriptor.mod"),
+            "name = \"Parent\"\nreplace_path = \"COMMON/scripted_effects/PARENT\"\n",
+        )
+        .unwrap();
+
+        let entries = [
+            (
+                "common/scripted_effects/Primary/hidden.txt",
+                "primary_hidden",
+            ),
+            ("common/scripted_effects/parent/hidden.txt", "parent_hidden"),
+            (
+                "common/scripted_effects/parent_extra/kept.txt",
+                "parent_sibling",
+            ),
+            ("common/scripted_effects/elsewhere/kept.txt", "unreplaced"),
+        ];
+        let instance = |name: &str| TypeInstance {
+            name: name.to_string(),
+            location: SourceLocation {
+                line: 0,
+                col: 0,
+                end: (0, 1),
+            },
+            primary_loc_key: None,
+            required_loc_keys: Vec::new(),
+        };
+        let mut data = vanilla_data(Vec::new());
+        data.aux.file_paths = vec![
+            "common/scripted_effects/primary/assets/replaced.dds".to_string(),
+            "common/scripted_effects/parent_extra/assets/kept.dds".to_string(),
+        ];
+        let mut vanilla_instances = Vec::new();
+        for (relative, name) in entries {
+            let path = vanilla_root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+            vanilla_instances.push((Arc::from(path.to_string_lossy().as_ref()), instance(name)));
+        }
+        data.per_type
+            .insert("scripted_effect".to_string(), vanilla_instances);
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![primary.clone()];
+            config.parent_roots = vec![parent.clone()];
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::symlink;
+
+                let alias = tmp.path().join("vanilla-alias");
+                symlink(&vanilla_root, &alias).unwrap();
+                config.vanilla_dir = Some(alias);
+            }
+            #[cfg(not(unix))]
+            {
+                config.vanilla_dir = Some(vanilla_root.clone());
+            }
+            config.refresh_roots();
+        }
+
+        backend.stage_vanilla_payload(data);
+        backend.merge_pending_vanilla_index();
+
+        let info = backend.state.info_service.read();
+        let names: Vec<&str> = info
+            .type_index
+            .instances("scripted_effect")
+            .iter()
+            .map(|(_, instance)| instance.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["parent_sibling", "unreplaced"]);
+        let file_index = &info.type_index.file_index;
+        assert!(!file_index.contains("common/scripted_effects/primary/assets/replaced.dds"));
+        assert!(file_index.contains("common/scripted_effects/parent_extra/assets/kept.dds"));
+    }
+
+    #[test]
+    fn index_vanilla_dir_with_replace_path_filters_auxiliary_paths_and_localisation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        let vanilla_root = tmp.path().join("vanilla");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::write(
+            primary.join("descriptor.mod"),
+            r#"replace_path = "localisation/replaced"
+replace_path = "gfx/replaced"
+"#,
+        )
+        .unwrap();
+        let hidden_loc = vanilla_root.join("localisation/replaced/hidden.yml");
+        let kept_loc = vanilla_root.join("localisation/kept.yml");
+        let hidden_asset = vanilla_root.join("gfx/replaced/hidden.dds");
+        let kept_asset = vanilla_root.join("gfx/kept/visible.dds");
+        for path in [&hidden_loc, &kept_loc, &hidden_asset, &kept_asset] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        std::fs::write(&hidden_loc, "l_english:\n hidden_key:0 \"Hidden\"\n").unwrap();
+        std::fs::write(&kept_loc, "l_english:\n kept_key:0 \"Kept\"\n").unwrap();
+        std::fs::write(hidden_asset, b"").unwrap();
+        std::fs::write(kept_asset, b"").unwrap();
+
+        let shadow = cwtools_driver::vanilla_replacement_shadow(&primary, &[]);
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let (_per_type, aux) = index_vanilla_dir_with_shadow(
+            &vanilla_root,
+            &RuleSet::new(),
+            &table,
+            None,
+            "hoi4",
+            Some(&shadow),
+        )
+        .unwrap();
+
+        assert!(
+            aux.file_paths
+                .iter()
+                .any(|path| path.ends_with("gfx/kept/visible.dds"))
+        );
+        assert!(
+            !aux.file_paths
+                .iter()
+                .any(|path| path.ends_with("gfx/replaced/hidden.dds"))
+        );
+        let loc_keys: Vec<&str> = aux
+            .loc_keys
+            .iter()
+            .flat_map(|(_, keys)| keys.iter().map(String::as_str))
+            .collect();
+        assert!(
+            loc_keys
+                .iter()
+                .any(|key| key.eq_ignore_ascii_case("kept_key"))
+        );
+        assert!(
+            !loc_keys
+                .iter()
+                .any(|key| key.eq_ignore_ascii_case("hidden_key"))
+        );
     }
 
     #[test]

@@ -429,14 +429,21 @@ impl FileManager {
     }
 
     pub fn discover_and_parse(&mut self) -> Result<Vec<ParsedFile>, FileError> {
+        let files = self.discover_files()?;
+        Ok(self.parse_files(files))
+    }
+
+    /// Parse a discovered subset with the same byte and per-file limits used
+    /// by `discover_and_parse`. Callers that layer files after discovery can
+    /// filter this list without bypassing the normal scan budget.
+    pub fn parse_files(&self, files: Vec<DiscoveredFile>) -> Vec<ParsedFile> {
         use rayon::prelude::*;
 
         let table = &self.string_table;
         let max_file_size = self.config.max_file_size;
         let max_bytes = self.config.scan_budget.max_bytes;
         let bytes = ScanBytes::new();
-        let files = self
-            .discover_files()?
+        files
             .into_par_iter()
             .filter_map(|file| {
                 let content = match read_text_capped(&file.path, max_file_size) {
@@ -464,9 +471,7 @@ impl FileManager {
                     errors: parsed.errors,
                 })
             })
-            .collect();
-
-        Ok(files)
+            .collect()
     }
 
     fn collect_paths(&self, dir: &Path, out: &mut Vec<(PathBuf, String)>) -> Result<(), FileError> {
@@ -940,7 +945,7 @@ pub fn read_root_descriptor(root: &Path) -> Option<ModDescriptor> {
 /// each layer before moving down. A file is hidden when a higher layer has
 /// the same root-relative path (case-insensitively, as the game resolves it)
 /// or a higher layer's descriptor `replace_path` covers it.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct LayerShadow {
     claimed: std::collections::HashSet<String>,
     replaced: Vec<String>,
@@ -970,6 +975,38 @@ impl LayerShadow {
         );
         self.replaced
             .extend(replace_paths.iter().map(|rp| replace_path_prefix(rp)));
+    }
+
+    /// Claim the `replace_path`s from a mod root's descriptor.
+    pub fn claim_descriptor(&mut self, root: &Path) {
+        if let Some(descriptor) = read_root_descriptor(root) {
+            self.claim(std::iter::empty::<&str>(), &descriptor.replace_paths);
+        }
+    }
+
+    /// Whether this shadow contains any directory-level `replace_path` rule.
+    pub fn has_replace_paths(&self) -> bool {
+        !self.replaced.is_empty()
+    }
+
+    /// Whether `path` is hidden by a claimed `replace_path` relative to `root`.
+    pub fn hides_file_under(&self, root: &Path, path: &Path) -> bool {
+        let relative = path
+            .strip_prefix(root)
+            .ok()
+            .map(Path::to_path_buf)
+            .or_else(|| {
+                let canonical_root = std::fs::canonicalize(root).ok()?;
+                let canonical_path = std::fs::canonicalize(path).ok()?;
+                canonical_path
+                    .strip_prefix(canonical_root)
+                    .ok()
+                    .map(Path::to_path_buf)
+            });
+        relative
+            .as_deref()
+            .and_then(Path::to_str)
+            .is_some_and(|logical_path| self.hides(logical_path))
     }
 }
 
@@ -1869,6 +1906,81 @@ mod tests {
         assert!(shadow.hides("common/ideas/nested/b.txt"));
         assert!(!shadow.hides("common/ideas_extra/c.txt"));
         assert!(!shadow.hides("common/national_focus/d.txt"));
+    }
+
+    #[test]
+    fn layer_shadow_claims_descriptor_paths_relative_to_the_install_root() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let mod_root = tmp.path().join("mod");
+        let vanilla_root = tmp.path().join("vanilla");
+        let hidden = vanilla_root.join("common/IDEAS/nested/hidden.txt");
+        let sibling = vanilla_root.join("common/ideas_extra/kept.txt");
+        std::fs::create_dir_all(hidden.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&mod_root).unwrap();
+        std::fs::write(
+            mod_root.join("descriptor.mod"),
+            r#"name = "Mod"
+replace_path = "COMMON/ideas"
+"#,
+        )
+        .unwrap();
+
+        let mut shadow = LayerShadow::default();
+        shadow.claim_descriptor(&mod_root);
+
+        assert!(shadow.hides_file_under(&vanilla_root, &hidden));
+        assert!(!shadow.hides_file_under(&vanilla_root, &sibling));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn layer_shadow_matches_cached_paths_through_a_different_root_alias() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let mod_root = tmp.path().join("mod");
+        let vanilla_root = tmp.path().join("vanilla");
+        let vanilla_alias = tmp.path().join("vanilla-alias");
+        let hidden = vanilla_root.join("common/ideas/hidden.txt");
+        std::fs::create_dir_all(&mod_root).unwrap();
+        std::fs::create_dir_all(hidden.parent().unwrap()).unwrap();
+        std::fs::write(&hidden, "").unwrap();
+        std::fs::write(
+            mod_root.join("descriptor.mod"),
+            "replace_path = \"common/ideas\"\n",
+        )
+        .unwrap();
+        symlink(&vanilla_root, &vanilla_alias).unwrap();
+
+        let mut shadow = LayerShadow::default();
+        shadow.claim_descriptor(&mod_root);
+
+        assert!(shadow.hides_file_under(&vanilla_alias, &hidden));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn layer_shadow_matches_cached_paths_when_root_casing_changes() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let mod_root = tmp.path().join("mod");
+        let vanilla_root = tmp.path().join("VanillaInstall");
+        let hidden = vanilla_root.join("common/ideas/hidden.txt");
+        std::fs::create_dir_all(&mod_root).unwrap();
+        std::fs::create_dir_all(hidden.parent().unwrap()).unwrap();
+        std::fs::write(&hidden, "").unwrap();
+        std::fs::write(
+            mod_root.join("descriptor.mod"),
+            "replace_path = \"common/ideas\"\n",
+        )
+        .unwrap();
+        let differently_cased_root =
+            PathBuf::from(vanilla_root.to_string_lossy().to_ascii_uppercase());
+
+        let mut shadow = LayerShadow::default();
+        shadow.claim_descriptor(&mod_root);
+
+        assert!(shadow.hides_file_under(&differently_cased_root, &hidden));
     }
 
     #[test]

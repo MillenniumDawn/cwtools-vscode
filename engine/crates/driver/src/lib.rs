@@ -358,6 +358,14 @@ impl Session {
             case_sensitive_files,
             on_rules_diagnostic,
         } = config;
+        let vanilla_shadow = vanilla_replacement_shadow(&directory, &[]);
+        let has_vanilla_replacements = vanilla_shadow.has_replace_paths();
+        if has_vanilla_replacements {
+            // The vanilla cache aggregates auxiliary indexes without their
+            // source paths. Rebuild this view so replace_path also removes
+            // variables, dynamic values, scripted names, loc keys and assets.
+            vanilla_cache = None;
+        }
 
         let rules_table = StringTable::new();
         let (ruleset, rule_errors) = load_rules(&rules, &rules_table).unwrap_or_else(|e| {
@@ -539,8 +547,9 @@ impl Session {
 
         let mut cache_write_target: Option<(PathBuf, String)> = None;
         let mut force_vanilla_rebuild = false;
-        if let (None, Some(auto), Some(vanilla_dir)) =
-            (&vanilla_cache, &vanilla_cache_auto, &vanilla)
+        if !has_vanilla_replacements
+            && let (None, Some(auto), Some(vanilla_dir)) =
+                (&vanilla_cache, &vanilla_cache_auto, &vanilla)
         {
             let fingerprint = vanilla_cache::combined_fingerprint(vanilla_dir, &ruleset);
             let path = vanilla_cache_path(&auto.dir, &game_id, &fingerprint);
@@ -566,18 +575,24 @@ impl Session {
                     FileError::MissingRoot(vanilla_dir.clone())
                 );
             }
-            type_index.merge_base_game_with_uris(cache.per_type);
+            let vanilla_per_type = if let Some(vanilla_root) = vanilla.as_deref() {
+                filter_vanilla_index(cache.per_type, vanilla_root, &vanilla_shadow)
+            } else {
+                cache.per_type
+            };
+            type_index.merge_base_game_with_uris(vanilla_per_type);
             let aux = cache.aux;
             for n in &aux.var_names {
                 type_index.var_index.add_name(n);
             }
-            type_index.file_index = build_file_index(
+            type_index.file_index = build_file_index_with_vanilla_shadow(
                 &directory,
                 &[],
                 ignore_files,
                 ignore_dirs,
                 VanillaFiles::Cached(aux.file_paths),
                 case_sensitive_files,
+                Some(&vanilla_shadow),
             );
             type_index.complex_enum_values.merge_file(
                 "<vanilla-cache>",
@@ -600,16 +615,23 @@ impl Session {
             } else if let Some(parse_cache_dir) = &vanilla_parse_cache_dir
                 && !force_vanilla_rebuild
             {
-                index_game_dir_with_parse_cache(
+                index_game_dir_with_parse_cache_and_shadow(
                     vanilla_dir,
                     &ruleset,
                     &rules_table,
                     &var_effects,
                     parse_cache_dir,
                     &game_id,
+                    &vanilla_shadow,
                 )
             } else {
-                index_game_dir(vanilla_dir, &ruleset, &rules_table, &var_effects)
+                index_game_dir_with_shadow(
+                    vanilla_dir,
+                    &ruleset,
+                    &rules_table,
+                    &var_effects,
+                    &vanilla_shadow,
+                )
             };
             match vanilla_index {
                 Ok(vanilla_index) => {
@@ -646,14 +668,17 @@ impl Session {
                             .map(str::to_string)
                             .collect(),
                     );
-                    type_index.merge_base_game_with_uris(vanilla_index.map);
-                    type_index.file_index = build_file_index(
+                    let vanilla_per_type =
+                        filter_vanilla_index(vanilla_index.map, vanilla_dir, &vanilla_shadow);
+                    type_index.merge_base_game_with_uris(vanilla_per_type);
+                    type_index.file_index = build_file_index_with_vanilla_shadow(
                         &directory,
                         &[],
                         ignore_files,
                         ignore_dirs,
                         VanillaFiles::Install(vanilla_dir),
                         case_sensitive_files,
+                        Some(&vanilla_shadow),
                     );
                 }
                 Err(error) => {
@@ -679,8 +704,11 @@ impl Session {
         if cached_loc_keys.is_none()
             && let Some(v) = &vanilla
         {
-            let vanilla_paths =
-                localisation_paths(std::slice::from_ref(v), &[], &[], DiscoveryPolicy::Vanilla);
+            let vanilla_paths: Vec<_> =
+                localisation_paths(std::slice::from_ref(v), &[], &[], DiscoveryPolicy::Vanilla)
+                    .into_iter()
+                    .filter(|path| !vanilla_shadow.hides_file_under(v, path))
+                    .collect();
             let vanilla_loc = LocService::from_paths(
                 vanilla_paths,
                 ScanBudget::default(),
@@ -1130,6 +1158,26 @@ pub fn build_file_index(
     vanilla: VanillaFiles<'_>,
     case_sensitive: bool,
 ) -> FileIndex {
+    build_file_index_with_vanilla_shadow(
+        workspace_root,
+        parent_roots,
+        workspace_ignore_files,
+        workspace_ignore_dirs,
+        vanilla,
+        case_sensitive,
+        None,
+    )
+}
+
+pub fn build_file_index_with_vanilla_shadow(
+    workspace_root: &Path,
+    parent_roots: &[PathBuf],
+    workspace_ignore_files: &[String],
+    workspace_ignore_dirs: &[String],
+    vanilla: VanillaFiles<'_>,
+    case_sensitive: bool,
+    shadow: Option<&LayerShadow>,
+) -> FileIndex {
     let mut index = FileIndex::new();
     index.set_case_sensitive(case_sensitive);
     for root in std::iter::once(workspace_root).chain(parent_roots.iter().map(PathBuf::as_path)) {
@@ -1141,13 +1189,19 @@ pub fn build_file_index(
         ));
     }
     match vanilla {
-        VanillaFiles::Cached(paths) => index.add_paths(paths),
-        VanillaFiles::Install(dir) => index.add_paths(discover_file_index_paths(
-            dir,
-            &[],
-            &[],
-            DiscoveryPolicy::Vanilla,
-        )),
+        VanillaFiles::Cached(paths) => index.add_paths(
+            paths
+                .into_iter()
+                .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path))),
+        ),
+        VanillaFiles::Install(dir) => {
+            let paths = discover_file_index_paths(dir, &[], &[], DiscoveryPolicy::Vanilla);
+            index.add_paths(
+                paths
+                    .into_iter()
+                    .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path))),
+            );
+        }
     }
     index
 }
@@ -1202,23 +1256,40 @@ pub fn build_vanilla_cache_aux(
     vanilla_dir: &Path,
     index: &TypeIndex,
 ) -> cwtools_index::vanilla_cache::VanillaCacheAux {
-    let loc_paths = localisation_paths(
+    build_vanilla_cache_aux_with_optional_shadow(vanilla_dir, index, None)
+}
+
+pub fn build_vanilla_cache_aux_with_shadow(
+    vanilla_dir: &Path,
+    index: &TypeIndex,
+    shadow: &LayerShadow,
+) -> cwtools_index::vanilla_cache::VanillaCacheAux {
+    build_vanilla_cache_aux_with_optional_shadow(vanilla_dir, index, Some(shadow))
+}
+
+fn build_vanilla_cache_aux_with_optional_shadow(
+    vanilla_dir: &Path,
+    index: &TypeIndex,
+    shadow: Option<&LayerShadow>,
+) -> cwtools_index::vanilla_cache::VanillaCacheAux {
+    let loc_paths: Vec<_> = localisation_paths(
         &[vanilla_dir.to_path_buf()],
         &[],
         &[],
         DiscoveryPolicy::Vanilla,
-    );
+    )
+    .into_iter()
+    .filter(|path| !shadow.is_some_and(|shadow| shadow.hides_file_under(vanilla_dir, path)))
+    .collect();
     let loc_service = LocService::from_paths(loc_paths, ScanBudget::default(), None);
     let loc_keys = cwtools_localization::loc_index::per_language_keys(&loc_service);
     let mut file_index = cwtools_index::FileIndex::new();
     // Collect on-disk case so a later case-sensitive run can case-check vanilla
     file_index.set_case_sensitive(true);
-    file_index.add_paths(discover_file_index_paths(
-        vanilla_dir,
-        &[],
-        &[],
-        DiscoveryPolicy::Vanilla,
-    ));
+    let file_paths = discover_file_index_paths(vanilla_dir, &[], &[], DiscoveryPolicy::Vanilla)
+        .into_iter()
+        .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path)));
+    file_index.add_paths(file_paths);
     cwtools_index::vanilla_cache::VanillaCacheAux {
         loc_keys,
         file_paths: file_index.paths_exact().cloned().collect(),
@@ -1244,7 +1315,17 @@ pub fn index_game_dir(
     table: &StringTable,
     var_effects: &HashSet<String>,
 ) -> Result<TypeIndex, FileError> {
-    index_game_dir_with_cache(dir, ruleset, table, var_effects, None)
+    index_game_dir_with_cache_and_shadow(dir, ruleset, table, var_effects, None, None)
+}
+
+pub fn index_game_dir_with_shadow(
+    dir: &Path,
+    ruleset: &RuleSet,
+    table: &StringTable,
+    var_effects: &HashSet<String>,
+    shadow: &LayerShadow,
+) -> Result<TypeIndex, FileError> {
+    index_game_dir_with_cache_and_shadow(dir, ruleset, table, var_effects, None, Some(shadow))
 }
 
 pub fn index_game_dir_with_parse_cache(
@@ -1256,24 +1337,49 @@ pub fn index_game_dir_with_parse_cache(
     game: &str,
 ) -> Result<TypeIndex, FileError> {
     let cache = open_parse_cache(cache_dir, game, dir);
-    index_game_dir_with_cache(dir, ruleset, table, var_effects, cache.as_ref())
+    index_game_dir_with_cache_and_shadow(dir, ruleset, table, var_effects, cache.as_ref(), None)
 }
 
-fn index_game_dir_with_cache(
+pub fn index_game_dir_with_parse_cache_and_shadow(
+    dir: &Path,
+    ruleset: &RuleSet,
+    table: &StringTable,
+    var_effects: &HashSet<String>,
+    cache_dir: &Path,
+    game: &str,
+    shadow: &LayerShadow,
+) -> Result<TypeIndex, FileError> {
+    let cache = open_parse_cache(cache_dir, game, dir);
+    index_game_dir_with_cache_and_shadow(
+        dir,
+        ruleset,
+        table,
+        var_effects,
+        cache.as_ref(),
+        Some(shadow),
+    )
+}
+
+fn index_game_dir_with_cache_and_shadow(
     dir: &Path,
     ruleset: &RuleSet,
     table: &StringTable,
     var_effects: &HashSet<String>,
     cache: Option<&ParseCache>,
+    shadow: Option<&LayerShadow>,
 ) -> Result<TypeIndex, FileError> {
     let mut config = search_config_for(dir);
     apply_config_folders(&mut config, &ruleset.folders);
-    let mut mgr = FileManager::with_string_table(config, table.clone());
+    let mgr = FileManager::with_string_table(config, table.clone());
+    let discovered = mgr.discover_files()?;
+    let discovered: Vec<_> = discovered
+        .into_iter()
+        .filter(|file| !shadow.is_some_and(|shadow| shadow.hides(&file.logical_path)))
+        .collect();
     let files = if let Some(cache) = cache {
-        let files = mgr.discover_files()?;
-        parse_discovered_files_for_index(files, table, cache, &mgr.config)
+        parse_discovered_files_for_index(discovered, table, cache, &mgr.config)
     } else {
-        mgr.discover_and_parse()?
+        mgr.parse_files(discovered)
     };
     if let Some(cache) = cache
         && cache.wrote.swap(false, Ordering::Relaxed)
@@ -1430,6 +1536,41 @@ pub fn discover_parent_localisation_files(
         },
         |file| file.root_relative_path.as_str(),
     )
+}
+
+/// The replace paths of the primary mod and any parents, applied to vanilla
+/// files below them. Their order does not affect which base-game paths are
+/// hidden, so this shadow is only used against the lower-priority game index.
+pub fn vanilla_replacement_shadow(primary_root: &Path, parent_roots: &[PathBuf]) -> LayerShadow {
+    let mut shadow = LayerShadow::default();
+    shadow.claim_descriptor(primary_root);
+    for root in parent_roots {
+        shadow.claim_descriptor(root);
+    }
+    shadow
+}
+
+/// Remove indexed vanilla instances under a higher-priority mod layer's
+/// `replace_path`s. `source` is the install-root path preserved by the vanilla
+/// cache; matching is against its logical path and shares `LayerShadow`'s
+/// separator, case and directory-boundary rules.
+pub fn filter_vanilla_index(
+    per_type: impl IntoIterator<Item = (String, Vec<(Arc<str>, cwtools_index::TypeInstance)>)>,
+    vanilla_root: &Path,
+    shadow: &LayerShadow,
+) -> HashMap<String, Vec<(Arc<str>, cwtools_index::TypeInstance)>> {
+    per_type
+        .into_iter()
+        .filter_map(|(type_name, instances)| {
+            let visible: Vec<_> = instances
+                .into_iter()
+                .filter(|(source, _)| {
+                    !shadow.hides_file_under(vanilla_root, Path::new(source.as_ref()))
+                })
+                .collect();
+            (!visible.is_empty()).then_some((type_name, visible))
+        })
+        .collect()
 }
 
 pub fn discover_and_parse_workspace(
