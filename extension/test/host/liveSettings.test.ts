@@ -41,13 +41,13 @@ async function waitForHover(
 	message: string,
 ): Promise<string> {
 	let lastText = "";
-	// didChangeConfiguration triggers a full loc re-index that can exceed 3 s on
-	// a CI runner with a cold cache, so the budget stays generous even though
-	// the poll is fine-grained.
+	// didChangeConfiguration triggers a full re-index, and coverage
+	// instrumentation can push that work past 15 s on a cold CI runner. Keep
+	// the hover assertion strict while allowing the same operation to finish.
 	const matched = await waitUntil(async () => {
 		lastText = await hoverText(uri, position);
 		return predicate(lastText);
-	}, 15_000);
+	}, 30_000);
 	if (!matched) {
 		throw new Error(`${message}: ${JSON.stringify(lastText)}`);
 	}
