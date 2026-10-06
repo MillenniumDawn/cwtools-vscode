@@ -564,9 +564,8 @@ mod tests {
 
     #[test]
     fn valid_directives_with_trailing_comments_are_not_flagged() {
-        let ast = parse(
-            "## cardinality = 1..1 # required\n## severity = warning # visible\nfoo = bar\n",
-        );
+        let ast =
+            parse("## cardinality = 1..1 # required\n## severity = warning # visible\nfoo = bar\n");
         let errors = validate_comment_directives(&ast, std::path::Path::new("t.cwt"));
         assert!(errors.is_empty(), "got: {:?}", errors);
     }
