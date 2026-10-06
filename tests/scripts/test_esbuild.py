@@ -74,7 +74,7 @@ def test_extension_bundle_is_node_cjs() -> None:
 
 
 def test_release_defines_match_test_env_reads() -> None:
-    expected = {name: "undefined" for name in _source_test_env_names()}
+    expected = dict.fromkeys(_source_test_env_names(), "undefined")
     release_args = esbuild.extension_args(watch=False, release=True)
     assert _test_env_defines(release_args) == expected
 
