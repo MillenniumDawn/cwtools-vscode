@@ -11476,12 +11476,14 @@ my_focus = {
 }
 
 #[test]
-fn test_semantic_tokens_delta_returns_content_for_current_and_stale_bases() {
+fn test_semantic_tokens_delta_applies_wire_edit_and_falls_back_for_stale_base() {
     let original = "my_focus = {\n    cost = 10\n}\n";
     let updated = "my_focus = {\n    cost = 200\n}\n";
     let rel = "common/national_focus/tree.txt";
     let (ws, _rules, mut child, reader) = editor_server(&[(rel, original)]);
     let uri = path_uri(ws.path().join(rel));
+    let uri_for_requests = uri.clone();
+    let rel_for_wait = rel.to_string();
     let stdin = child.stdin.take().unwrap();
 
     let result = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
@@ -11490,7 +11492,7 @@ fn test_semantic_tokens_delta_returns_content_for_current_and_stale_bases() {
             &jsonrpc_request(
                 20,
                 "textDocument/semanticTokens/full",
-                serde_json::json!({ "textDocument": { "uri": uri } }),
+                serde_json::json!({ "textDocument": { "uri": uri_for_requests } }),
             ),
         )
         .unwrap();
@@ -11513,7 +11515,7 @@ fn test_semantic_tokens_delta_returns_content_for_current_and_stale_bases() {
                 "textDocument/semanticTokens/full/delta",
                 serde_json::json!({
                     "textDocument": { "uri": uri },
-                    "previousResultId": original_id,
+                    "previousResultId": original_id.clone(),
                 }),
             ),
         )
@@ -11534,6 +11536,10 @@ fn test_semantic_tokens_delta_returns_content_for_current_and_stale_bases() {
             0,
             "token quintets: {original_data:?}"
         );
+        let unchanged_id = unchanged["result"]["resultId"]
+            .as_str()
+            .expect("unchanged delta resultId")
+            .to_string();
 
         write_frame_to(
             stdin,
@@ -11546,6 +11552,9 @@ fn test_semantic_tokens_delta_returns_content_for_current_and_stale_bases() {
             ),
         )
         .unwrap();
+        // Wait until the change notification has been applied and its current
+        // document diagnostics arrive before asking for the delta.
+        wait_for_diagnostics(reader, &rel_for_wait);
         write_frame_to(
             stdin,
             &jsonrpc_request(
@@ -11553,7 +11562,7 @@ fn test_semantic_tokens_delta_returns_content_for_current_and_stale_bases() {
                 "textDocument/semanticTokens/full/delta",
                 serde_json::json!({
                     "textDocument": { "uri": uri },
-                    "previousResultId": unchanged["result"]["resultId"],
+                    "previousResultId": unchanged_id.clone(),
                 }),
             ),
         )
@@ -11561,18 +11570,69 @@ fn test_semantic_tokens_delta_returns_content_for_current_and_stale_bases() {
         let changed_raw = read_response(reader).expect("no changed delta response");
         let changed: serde_json::Value = serde_json::from_str(&changed_raw).unwrap();
         assert_eq!(changed["id"], 22, "got: {changed_raw}");
-        let changed_data = changed["result"]["data"]
+        let changed_id = changed["result"]["resultId"]
+            .as_str()
+            .expect("changed delta resultId")
+            .to_string();
+        assert_ne!(changed_id, unchanged_id, "delta must advance resultId");
+        let edits = changed["result"]["edits"]
             .as_array()
-            .expect("a stale base must fall back to the current full tokens")
-            .clone();
+            .expect("a current base must return semantic-token edits");
+        assert_eq!(
+            edits.len(),
+            1,
+            "expected one changed-token edit: {changed_raw}"
+        );
+        let edit = &edits[0];
+        let start = edit["start"].as_u64().expect("edit start") as usize;
+        let delete_count = edit["deleteCount"].as_u64().expect("edit deleteCount") as usize;
+        assert_eq!(start % 5, 0, "edit start must address token quintets");
+        assert_eq!(delete_count % 5, 0, "deleteCount must cover token quintets");
+        assert!(
+            start + delete_count <= original_data.len(),
+            "edit exceeds base stream"
+        );
+        let inserted_data = edit["data"].as_array().cloned().unwrap_or_default();
+        assert_eq!(inserted_data.len() % 5, 0, "inserted token quintets");
+        let mut changed_data = original_data[..start].to_vec();
+        changed_data.extend(inserted_data);
+        changed_data.extend_from_slice(&original_data[start + delete_count..]);
+        assert!(
+            changed["result"].get("data").is_none(),
+            "delta must not return a full stream: {changed_raw}"
+        );
+
         let changed_tokens = decode_semantic_tokens(&changed_data);
         assert!(
             changed_tokens.contains(&(1, 11, 3, 3, 0)),
             "the new `200` number token must reach the client: {changed_tokens:?}"
         );
         assert!(
-            changed["result"]["edits"].is_null(),
-            "an evicted base must not return an edit against stale data: {changed_raw}"
+            !changed_tokens.contains(&(1, 11, 2, 3, 0)),
+            "the old `10` number token must be removed: {changed_tokens:?}"
+        );
+
+        // A result ID the server no longer retains must fall back to a full
+        // response, and that response must carry the current edited content.
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                23,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "previousResultId": original_id,
+                }),
+            ),
+        )
+        .unwrap();
+        let stale_raw = read_response(reader).expect("no stale-base fallback response");
+        let stale: serde_json::Value = serde_json::from_str(&stale_raw).unwrap();
+        assert_eq!(stale["id"], 23, "got: {stale_raw}");
+        assert_eq!(stale["result"]["data"], serde_json::json!(changed_data));
+        assert!(
+            stale["result"]["edits"].is_null(),
+            "an evicted base must not return an edit against stale data: {stale_raw}"
         );
 
         (original_data, changed_data)
