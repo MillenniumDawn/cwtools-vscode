@@ -146,19 +146,14 @@ jobs:
       # fixture, without reaching the network (see .vscode-test.mjs).
       - name: Host tests (rules sync)
         timeout-minutes: 10
-        run: npm run test:rules-sync
-      # Boots the extension host against the freshly built server: activation,
-      # command registration and the graph/file-explorer UI, plus the
-      # live-settings suite in its own workspace (see .vscode-test.mjs).
-      - name: Host smoke tests
+        run: node scripts/build/python.mjs scripts/build/hosttest.py --label rules-sync
+      # Keep the suites with distinct workspace/configuration coverage. The
+      # smoke files are a subset of hostFiles and run once under host coverage.
+      - name: Host tests (live settings, multi-root, watched files)
         timeout-minutes: 10
-        run: npm run test:smoke
-      # The `host` label adds hover and completion, which need rule data: the
-      # sample workspace detects as `stellaris` (see .vscode-test.mjs) and the
-      # extension fetches its pinned rules over git in the background.
-      - name: Host tests (hover/completion)
-        timeout-minutes: 10
-        run: npm run test:host
+        run: >-
+          node scripts/build/python.mjs scripts/build/hosttest.py
+          --label live --label multi-root --label watched
       # Packages what was just built, server included, so the PR artifact is
       # an installable extension rather than a client-only shell.
       - name: Test build
@@ -167,19 +162,20 @@ jobs:
       # the .vscodeignore boundary as well as the package's required files.
       - name: Smoke test VSIX
         run: python3 scripts/smoke_test_vsix.py artifacts/vsix
-      # Host V8 coverage: mocha forces the instrumented host to exit after
-      # the host label (a superset of unit's and smoke's files, so this one
-      # run measures everything those would, including modules like
-      # graphPanel.ts that only extension.test.ts exercises), and
-      # host_coverage.py kills a leftover process tree if Electron still
-      # hangs under xvfb. Tight step timeout so a hang cannot burn the whole
-      # build job. Gated on the build step: the host label needs the built
-      # server binary, so running it after a failed build would burn the
-      # timeout on a doomed suite and bury the real failure.
+      # Host V8 coverage runs the host label, which includes every smoke file,
+      # plus the isolated live-settings workspace for its separate coverage
+      # configuration. host_coverage.py kills a leftover process tree if
+      # Electron still hangs under xvfb. The build already compiled the client,
+      # so skip recompiling it here. Gated on the build step because this needs
+      # the built server binary.
       - name: Host coverage
         if: always() && steps.build-engine.outcome == 'success'
         timeout-minutes: 15
-        run: npm run test:coverage
+        run: >-
+          node scripts/build/python.mjs scripts/build/host_coverage.py
+          --skip-compile
+          && node scripts/build/python.mjs scripts/build/coverage_summary.py
+          --host-only
       - name: Upload host coverage
         if: always()
         # v7.0.1
@@ -633,7 +629,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-node-npm
       - name: Download host coverage
         if: needs.build.result == 'success'
         # v8.0.1
