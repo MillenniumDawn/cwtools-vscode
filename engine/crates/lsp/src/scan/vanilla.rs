@@ -86,7 +86,7 @@ pub(crate) struct VanillaLoc {
     pub(crate) locations: LocLocations,
 }
 
-pub(crate) type VanillaLocKey = (std::path::PathBuf, Option<Vec<Lang>>, Lang, bool);
+pub(crate) type VanillaLocKey = (std::path::PathBuf, String, Option<Vec<Lang>>, Lang, bool);
 
 impl VanillaLoc {
     pub(crate) fn build(
@@ -364,11 +364,13 @@ impl Backend {
             }
         };
 
-        let fingerprint = cwtools_info::vanilla_cache::combined_fingerprint(&dir, &ruleset);
+        let fingerprint = replacement_shadow.as_ref().map_or_else(
+            || cwtools_info::vanilla_cache::combined_fingerprint(&dir, &ruleset),
+            |shadow| cwtools_driver::replacement_aware_vanilla_fingerprint(&dir, &ruleset, shadow),
+        );
         let cache_path = self.vanilla_cache_path(&game, &fingerprint);
 
         if !force_rebuild
-            && !has_vanilla_replacements
             && let Some(cp) = &cache_path
             && cp.exists()
         {
@@ -491,7 +493,7 @@ impl Backend {
             }
         };
 
-        if !has_vanilla_replacements && let Some(cp) = &cache_path {
+        if let Some(cp) = &cache_path {
             match cwtools_info::vanilla_cache::save_per_type(
                 &per_type,
                 &game,
@@ -593,6 +595,108 @@ mod tests {
                 scripted_gui_names: Vec::new(),
             },
         }
+    }
+
+    fn reset_pending_vanilla(backend: &Backend) {
+        let mut vanilla = backend.state.vanilla_state.lock();
+        vanilla.index = None;
+        vanilla.file_paths = None;
+        vanilla.loc_keys = None;
+        drop(vanilla);
+        backend.state.vanilla_merged.store(false, Ordering::SeqCst);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn replacement_view_vanilla_cache_is_written_reused_and_scoped() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let primary = tmp.path().join("primary");
+        let vanilla_root = tmp.path().join("vanilla");
+        let cache_dir = tmp.path().join("cache");
+        std::fs::create_dir_all(&primary).unwrap();
+        for relative in [
+            "common/things/replaced.dds",
+            "common/things/nested/kept.dds",
+            "common/outside/unrelated.dds",
+        ] {
+            let path = vanilla_root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"").unwrap();
+        }
+        std::fs::write(
+            primary.join("descriptor.mod"),
+            r#"replace_path = "common/things""#,
+        )
+        .unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.language = "hoi4".into();
+            config.workspace_roots = vec![primary.clone()];
+            config.vanilla_dir = Some(vanilla_root.clone());
+            config.cache_dir = Some(cache_dir.clone());
+            config.refresh_roots();
+        }
+        backend.set_ruleset(RuleSet::new());
+
+        backend.ensure_vanilla_index(None, false, true).await;
+
+        let shadow = cwtools_driver::vanilla_replacement_shadow(&primary, &[]);
+        let fingerprint = cwtools_driver::replacement_aware_vanilla_fingerprint(
+            &vanilla_root,
+            &RuleSet::new(),
+            &shadow,
+        );
+        let cache_path = backend
+            .vanilla_cache_path("hoi4", &fingerprint)
+            .expect("configured cache directory");
+        assert!(cache_path.exists(), "replacement view cache is written");
+        let (_, _, cached) = cwtools_info::vanilla_cache::load(&cache_path).unwrap();
+        assert!(
+            !cached
+                .aux
+                .file_paths
+                .iter()
+                .any(|path| path.ends_with("common/things/replaced.dds"))
+        );
+        let nested_path = "common/things/nested/kept.dds";
+        assert!(
+            cached
+                .aux
+                .file_paths
+                .iter()
+                .any(|path| path.ends_with(nested_path))
+        );
+
+        std::fs::remove_file(vanilla_root.join(nested_path)).unwrap();
+        reset_pending_vanilla(&backend);
+        backend.ensure_vanilla_index(None, false, true).await;
+        assert!(
+            backend
+                .state
+                .vanilla_state
+                .lock()
+                .file_paths
+                .as_ref()
+                .is_some_and(|paths| paths.iter().any(|path| path.ends_with(nested_path))),
+            "a same-view cache hit retains its indexed source paths"
+        );
+
+        std::fs::write(
+            primary.join("descriptor.mod"),
+            r#"replace_path = "common/outside""#,
+        )
+        .unwrap();
+        reset_pending_vanilla(&backend);
+        backend.ensure_vanilla_index(None, false, true).await;
+        assert_eq!(
+            std::fs::read_dir(&cache_dir)
+                .unwrap()
+                .flatten()
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "cwv"))
+                .count(),
+            2,
+            "a different replacement view gets its own aggregate cache"
+        );
     }
 
     #[test]
@@ -705,6 +809,10 @@ mod tests {
                 "common/scripted_effects/Primary/hidden.txt",
                 "primary_hidden",
             ),
+            (
+                "common/scripted_effects/Primary/nested/kept.txt",
+                "primary_nested",
+            ),
             ("common/scripted_effects/parent/hidden.txt", "parent_hidden"),
             (
                 "common/scripted_effects/parent_extra/kept.txt",
@@ -724,7 +832,8 @@ mod tests {
         };
         let mut data = vanilla_data(Vec::new());
         data.aux.file_paths = vec![
-            "common/scripted_effects/primary/assets/replaced.dds".to_string(),
+            "common/scripted_effects/primary/replaced.dds".to_string(),
+            "common/scripted_effects/primary/assets/kept.dds".to_string(),
             "common/scripted_effects/parent_extra/assets/kept.dds".to_string(),
         ];
         let mut vanilla_instances = Vec::new();
@@ -759,15 +868,20 @@ mod tests {
         backend.merge_pending_vanilla_index();
 
         let info = backend.state.info_service.read();
-        let names: Vec<&str> = info
+        let mut names: Vec<&str> = info
             .type_index
             .instances("scripted_effect")
             .iter()
             .map(|(_, instance)| instance.name.as_str())
             .collect();
-        assert_eq!(names, vec!["parent_sibling", "unreplaced"]);
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["parent_sibling", "primary_nested", "unreplaced"]
+        );
         let file_index = &info.type_index.file_index;
-        assert!(!file_index.contains("common/scripted_effects/primary/assets/replaced.dds"));
+        assert!(!file_index.contains("common/scripted_effects/primary/replaced.dds"));
+        assert!(file_index.contains("common/scripted_effects/primary/assets/kept.dds"));
         assert!(file_index.contains("common/scripted_effects/parent_extra/assets/kept.dds"));
     }
 

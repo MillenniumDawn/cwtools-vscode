@@ -925,13 +925,16 @@ fn replace_path_prefix(replace_path: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// Whether a normalized `replace_path` prefix covers a lowercase logical path:
-/// the directory itself or anything under it, never a sibling that merely
-/// shares the prefix (`common/ideas` does not cover `common/ideas_extra`).
+/// Whether a normalized `replace_path` covers a lowercase direct child file.
+/// HOI4 applies `replace_path` to files directly in the named directory, not
+/// recursively to files in nested directories.
 fn replace_path_covers(prefix_lower: &str, logical_lower: &str) -> bool {
     logical_lower
         .strip_prefix(prefix_lower)
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        .is_some_and(|rest| {
+            rest.strip_prefix('/')
+                .is_some_and(|file| !file.is_empty() && !file.contains('/'))
+        })
 }
 
 /// The descriptor at a mod root (`<root>/descriptor.mod`), if it has one.
@@ -987,6 +990,21 @@ impl LayerShadow {
     /// Whether this shadow contains any directory-level `replace_path` rule.
     pub fn has_replace_paths(&self) -> bool {
         !self.replaced.is_empty()
+    }
+
+    /// Stable cache-key component for views filtered by this shadow.
+    pub fn replacement_fingerprint(&self) -> String {
+        let mut paths = self.replaced.clone();
+        paths.sort();
+        paths.dedup();
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for path in paths {
+            for byte in path.bytes().chain([0x1e]) {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        format!("rp:{hash:016x}")
     }
 
     /// Whether `path` is hidden by a claimed `replace_path` relative to `root`.
@@ -1899,11 +1917,11 @@ mod tests {
     }
 
     #[test]
-    fn layer_shadow_replace_path_hides_the_directory_but_not_a_sibling() {
+    fn layer_shadow_replace_path_hides_direct_children_not_nested_or_sibling_files() {
         let mut shadow = LayerShadow::default();
         shadow.claim([], &["common\\Ideas/".to_string()]);
         assert!(shadow.hides("common/ideas/a.txt"));
-        assert!(shadow.hides("common/ideas/nested/b.txt"));
+        assert!(!shadow.hides("common/ideas/nested/b.txt"));
         assert!(!shadow.hides("common/ideas_extra/c.txt"));
         assert!(!shadow.hides("common/national_focus/d.txt"));
     }
@@ -1913,9 +1931,11 @@ mod tests {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let mod_root = tmp.path().join("mod");
         let vanilla_root = tmp.path().join("vanilla");
-        let hidden = vanilla_root.join("common/IDEAS/nested/hidden.txt");
+        let hidden = vanilla_root.join("common/IDEAS/hidden.txt");
+        let nested = vanilla_root.join("common/IDEAS/nested/kept.txt");
         let sibling = vanilla_root.join("common/ideas_extra/kept.txt");
         std::fs::create_dir_all(hidden.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
         std::fs::create_dir_all(sibling.parent().unwrap()).unwrap();
         std::fs::create_dir_all(&mod_root).unwrap();
         std::fs::write(
@@ -1930,6 +1950,7 @@ replace_path = "COMMON/ideas"
         shadow.claim_descriptor(&mod_root);
 
         assert!(shadow.hides_file_under(&vanilla_root, &hidden));
+        assert!(!shadow.hides_file_under(&vanilla_root, &nested));
         assert!(!shadow.hides_file_under(&vanilla_root, &sibling));
     }
 

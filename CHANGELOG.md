@@ -17,7 +17,7 @@
 * A submod can name its parent mods (`parentMods` init option, in load order). The server indexes them between the base game and the workspace with base-game provenance, so their scripted effects, triggers, variables, ideas, flags and localisation resolve and complete, and they never count toward CW261. A workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, shadows the parent's copy. Parent files are never validated or diagnosed, and are readable but not editable through the server. (#786)
 * Report syntax errors in `.cwt` rules files (an unclosed clause or quote) when loading a rules directory, as the new CW604. They reach `cwtools rules`, `validate` and the editor at startup, not only once the file is opened, and the live lint now reports them with the same code. The rules the parser recovered still load. (#847)
 * Alias `value[...]` patterns now resolve regardless of ASCII case, like the `enum[...]` arm, so `political_power` on rules side matches any casing of a value-set member. (#483)
-* A mod's `replace_path` now hides the base-game definitions it replaces, including when the replacement comes from a parent mod. Cached base-game data is scoped to its game install. (#820)
+* HOI4 `replace_path` now hides only files directly inside the named directory from lower-priority mod layers and the base game; nested descendants remain visible, including in vanilla assets and localisation. Base-game aggregate caches remain enabled and are scoped to the replacement view. An explicit cache must match that view and include `--vanilla` so its source paths can be filtered safely. (#820)
 
 #### Extension
 

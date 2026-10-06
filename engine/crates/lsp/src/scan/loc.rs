@@ -192,12 +192,23 @@ impl Backend {
         primary_lang: Lang,
         hover_all: bool,
     ) -> Option<Arc<VanillaLoc>> {
-        let Some(dir) = self.state.config.read().vanilla_dir.clone() else {
+        let (dir, replacement_shadow) = {
+            let config = self.state.config.read();
+            let dir = config.vanilla_dir.clone();
+            let shadow = config.workspace_roots.first().map(|primary| {
+                cwtools_driver::vanilla_replacement_shadow(primary, &config.parent_roots)
+            });
+            (dir, shadow)
+        };
+        let Some(dir) = dir else {
             *self.state.vanilla_loc.lock() = None;
             return None;
         };
         let key = (
             dir,
+            replacement_shadow
+                .as_ref()
+                .map_or_else(String::new, |shadow| shadow.replacement_fingerprint()),
             loc_languages.map(<[_]>::to_vec),
             primary_lang,
             hover_all,
@@ -207,15 +218,23 @@ impl Backend {
         {
             return Some(Arc::clone(loc));
         }
+        let vanilla_paths = localisation_paths(
+            std::slice::from_ref(&key.0),
+            &[],
+            &[],
+            cwtools_driver::DiscoveryPolicy::Vanilla,
+        )
+        .into_iter()
+        .filter(|path| {
+            !replacement_shadow
+                .as_ref()
+                .is_some_and(|shadow| shadow.hides_file_under(&key.0, path))
+        })
+        .collect();
         let service = cwtools_localization::LocService::from_paths(
-            localisation_paths(
-                std::slice::from_ref(&key.0),
-                &[],
-                &[],
-                cwtools_driver::DiscoveryPolicy::Vanilla,
-            ),
+            vanilla_paths,
             cwtools_file_manager::file_manager::ScanBudget::default(),
-            key.1.as_deref(),
+            key.2.as_deref(),
         );
         if service.files().is_empty() {
             tracing::warn!(dir = %key.0.display(), "base-game dir holds no localisation files");
@@ -552,6 +571,48 @@ mod tests {
             backend.state.vanilla_state.lock().loc_keys.is_none(),
             "the full base-game loc index may consume the cached fallback after merging it"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn vanilla_loc_rebuild_filters_replace_path_files() {
+        let backend = test_backend();
+        let primary = tempfile::tempdir().unwrap();
+        let vanilla = tempfile::tempdir().unwrap();
+        std::fs::write(
+            primary.path().join("descriptor.mod"),
+            r#"replace_path = "localisation/replaced""#,
+        )
+        .unwrap();
+        let hidden = vanilla
+            .path()
+            .join("localisation/replaced/hidden_l_english.yml");
+        let nested = vanilla
+            .path()
+            .join("localisation/replaced/nested/kept_l_english.yml");
+        let kept = vanilla.path().join("localisation/kept_l_english.yml");
+        for path in [&hidden, &nested, &kept] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        std::fs::write(&hidden, "l_english:\n hidden_key:0 \"Hidden\"\n").unwrap();
+        std::fs::write(&nested, "l_english:\n nested_key:0 \"Nested\"\n").unwrap();
+        std::fs::write(&kept, "l_english:\n kept_key:0 \"Kept\"\n").unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![primary.path().to_path_buf()];
+            config.vanilla_dir = Some(vanilla.path().to_path_buf());
+            config.refresh_roots();
+        }
+
+        backend.rebuild_and_publish_loc(primary.path()).await;
+
+        let index = backend.state.loc_index.read();
+        let keys = index
+            .as_ref()
+            .expect("loc rebuild installs an index")
+            .union();
+        assert!(!keys.contains("hidden_key"));
+        assert!(keys.contains("kept_key"));
+        assert!(keys.contains("nested_key"));
     }
 
     #[test]

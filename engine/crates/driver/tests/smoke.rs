@@ -1619,7 +1619,8 @@ fn vanilla_cache_auto_rebuilds_replacement_view_without_leaking_auxiliary_paths(
         std::fs::write(path, format!("{name} = {{ }}\n")).unwrap();
     }
     for relative in [
-        "common/things/assets/replaced.dds",
+        "common/things/replaced.dds",
+        "common/things/assets/nested_kept.dds",
         "common/things_extra/assets/kept.dds",
     ] {
         let path = vanilla.join(relative);
@@ -1635,7 +1636,7 @@ fn vanilla_cache_auto_rebuilds_replacement_view_without_leaking_auxiliary_paths(
         first
             .type_index()
             .file_index
-            .contains("common/things/assets/replaced.dds")
+            .contains("common/things/replaced.dds")
     );
 
     std::fs::write(
@@ -1666,8 +1667,15 @@ replace_path = "COMMON\THINGS"
         !cached
             .type_index()
             .file_index
-            .contains("common/things/assets/replaced.dds"),
-        "the live file index must also hide resources below replace_path"
+            .contains("common/things/replaced.dds"),
+        "the live file index must also hide direct files below replace_path"
+    );
+    assert!(
+        cached
+            .type_index()
+            .file_index
+            .contains("common/things/assets/nested_kept.dds"),
+        "replace_path must leave files in nested directories visible"
     );
     assert!(
         cached
@@ -1675,7 +1683,104 @@ replace_path = "COMMON\THINGS"
             .file_index
             .contains("common/things_extra/assets/kept.dds")
     );
-    assert_eq!(cache_files(&ws.path().join("cache")).len(), 1);
+    assert_eq!(cache_files(&ws.path().join("cache")).len(), 2);
+
+    // Keep the install-root directory metadata stable but remove the source
+    // contents: the replacement-view cache must still supply unrelated data.
+    std::fs::write(vanilla.join("common/things_extra/y.txt"), "").unwrap();
+    std::fs::write(vanilla.join("common/outside/z.txt"), "").unwrap();
+    let replacement_cache_hit = load_cached_from_vanilla(ws.path(), &vanilla, false, None);
+    assert!(
+        replacement_cache_hit
+            .type_index()
+            .contains("thing", "sibling_thing")
+    );
+    assert!(
+        replacement_cache_hit
+            .type_index()
+            .contains("thing", "outside_thing")
+    );
+    assert_eq!(cache_files(&ws.path().join("cache")).len(), 2);
+
+    std::fs::remove_file(ws.path().join("mod/descriptor.mod")).unwrap();
+    let unfiltered_cache_hit = load_cached_from_vanilla(ws.path(), &vanilla, false, None);
+    assert!(
+        unfiltered_cache_hit
+            .type_index()
+            .contains("thing", "vanilla_thing")
+    );
+    assert!(
+        unfiltered_cache_hit
+            .type_index()
+            .contains("thing", "sibling_thing")
+    );
+    assert_eq!(cache_files(&ws.path().join("cache")).len(), 2);
+}
+
+#[test]
+fn explicit_vanilla_cache_keeps_the_exact_replacement_view_and_unrelated_entries() {
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    for (relative, body) in [
+        ("common/things_extra/sibling.txt", "sibling_thing = { }\n"),
+        ("common/outside/unrelated.txt", "unrelated_thing = { }\n"),
+    ] {
+        let path = vanilla.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+    for relative in ["common/things/replaced.dds", "common/things_extra/kept.dds"] {
+        let path = vanilla.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+    std::fs::write(
+        ws.path().join("mod/descriptor.mod"),
+        r#"replace_path = "common/things""#,
+    )
+    .unwrap();
+
+    let generated = load_cached_from_vanilla(ws.path(), &vanilla, false, None);
+    assert!(!generated.type_index().contains("thing", "vanilla_thing"));
+    let cache_path = cache_files(&ws.path().join("cache"))
+        .into_iter()
+        .next()
+        .expect("replacement-aware cache is written");
+    let (_, _, cache) = cwtools_index::vanilla_cache::load(&cache_path).unwrap();
+
+    let explicit = Session::load_with_parse_cache(
+        SessionConfig {
+            game: Game::Hoi4,
+            rules: RulesInput::Dir(ws.path().join("rules")),
+            directory: ws.path().join("mod"),
+            vanilla: Some(vanilla),
+            vanilla_cache: Some(cache),
+            vanilla_cache_auto: None,
+            ignore_files: &[],
+            ignore_dirs: &[],
+            loc_languages: None,
+            case_sensitive_files: false,
+            on_rules_diagnostic: None,
+        },
+        None,
+    );
+
+    assert!(!explicit.type_index().contains("thing", "vanilla_thing"));
+    assert!(explicit.type_index().contains("thing", "sibling_thing"));
+    assert!(explicit.type_index().contains("thing", "unrelated_thing"));
+    assert!(
+        !explicit
+            .type_index()
+            .file_index
+            .contains("common/things/replaced.dds")
+    );
+    assert!(
+        explicit
+            .type_index()
+            .file_index
+            .contains("common/things_extra/kept.dds")
+    );
 }
 
 #[test]

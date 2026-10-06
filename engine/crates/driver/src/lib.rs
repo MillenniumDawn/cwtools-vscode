@@ -359,13 +359,6 @@ impl Session {
             on_rules_diagnostic,
         } = config;
         let vanilla_shadow = vanilla_replacement_shadow(&directory, &[]);
-        let has_vanilla_replacements = vanilla_shadow.has_replace_paths();
-        if has_vanilla_replacements {
-            // The vanilla cache aggregates auxiliary indexes without their
-            // source paths. Rebuild this view so replace_path also removes
-            // variables, dynamic values, scripted names, loc keys and assets.
-            vanilla_cache = None;
-        }
 
         let rules_table = StringTable::new();
         let (ruleset, rule_errors) = load_rules(&rules, &rules_table).unwrap_or_else(|e| {
@@ -547,11 +540,11 @@ impl Session {
 
         let mut cache_write_target: Option<(PathBuf, String)> = None;
         let mut force_vanilla_rebuild = false;
-        if !has_vanilla_replacements
-            && let (None, Some(auto), Some(vanilla_dir)) =
-                (&vanilla_cache, &vanilla_cache_auto, &vanilla)
+        if let (None, Some(auto), Some(vanilla_dir)) =
+            (&vanilla_cache, &vanilla_cache_auto, &vanilla)
         {
-            let fingerprint = vanilla_cache::combined_fingerprint(vanilla_dir, &ruleset);
+            let fingerprint =
+                replacement_aware_vanilla_fingerprint(vanilla_dir, &ruleset, &vanilla_shadow);
             let path = vanilla_cache_path(&auto.dir, &game_id, &fingerprint);
             if !auto.refresh {
                 vanilla_cache = load_fresh_vanilla_cache(&path, &game_id, &fingerprint);
@@ -637,7 +630,11 @@ impl Session {
                 Ok(vanilla_index) => {
                     has_vanilla_data = true;
                     if let Some((path, fingerprint)) = &cache_write_target {
-                        let aux = build_vanilla_cache_aux(vanilla_dir, &vanilla_index);
+                        let aux = build_vanilla_cache_aux_with_shadow(
+                            vanilla_dir,
+                            &vanilla_index,
+                            &vanilla_shadow,
+                        );
                         match write_vanilla_cache(&vanilla_index, &game_id, fingerprint, path, aux)
                         {
                             Ok(n) => eprintln!(
@@ -1052,6 +1049,21 @@ pub fn load_loc_service(
 /// Cache file for `game` at `fingerprint` under `dir`. The name comes from the
 fn vanilla_cache_path(dir: &Path, game: &str, fingerprint: &str) -> PathBuf {
     dir.join(vanilla_cache::cache_file_name(game, fingerprint))
+}
+
+/// Cache a replacement-filtered vanilla view separately from the unfiltered
+/// install so loading a cache never mixes auxiliary indexes from two views.
+pub fn replacement_aware_vanilla_fingerprint(
+    dir: &Path,
+    ruleset: &RuleSet,
+    shadow: &LayerShadow,
+) -> String {
+    let fingerprint = vanilla_cache::combined_fingerprint(dir, ruleset);
+    if shadow.has_replace_paths() {
+        format!("{fingerprint}|{}", shadow.replacement_fingerprint())
+    } else {
+        fingerprint
+    }
 }
 
 fn write_vanilla_cache(
@@ -1992,6 +2004,7 @@ mod tests {
         }
         for path in [
             "mods/a/localisation/shared_l_english.yml",
+            "mods/a/localisation/nested/kept_l_english.yml",
             "mods/b/localisation/shared_l_english.yml",
         ] {
             let path = root.join(path);
@@ -2007,12 +2020,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(discovery.files.len(), 1);
-        assert!(discovery.files[0].path.starts_with(root.join("mods/b")));
-        assert_eq!(
-            discovery.files[0].root_relative_path,
-            "localisation/shared_l_english.yml"
-        );
+        assert_eq!(discovery.files.len(), 2);
+        assert!(discovery.files.iter().any(|file| {
+            file.path.starts_with(root.join("mods/b"))
+                && file.root_relative_path == "localisation/shared_l_english.yml"
+        }));
+        assert!(discovery.files.iter().any(|file| {
+            file.path.starts_with(root.join("mods/a"))
+                && file.root_relative_path == "localisation/nested/kept_l_english.yml"
+        }));
     }
 
     #[test]

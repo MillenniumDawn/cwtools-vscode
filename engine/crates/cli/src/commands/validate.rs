@@ -80,6 +80,15 @@ pub(super) fn run(args: ValidateArgs) {
     });
     let rules =
         rules.unwrap_or_else(|| missing_required("validate", "--rules <RULES>", "rules", fc));
+    if vanilla_cache.is_some()
+        && vanilla.is_none()
+        && cwtools_driver::vanilla_replacement_shadow(&directory, &[]).has_replace_paths()
+    {
+        eprintln!(
+            "error: --vanilla-cache cannot be filtered for replace_path without --vanilla; pass --vanilla and omit --vanilla-cache to build a replacement-scoped cache"
+        );
+        std::process::exit(EXIT_USAGE);
+    }
     let ignored = load_ignore_hashes(ignore_hashes.as_deref());
 
     // Resolved before the session loads: an unresolvable `--since` should fail
@@ -205,6 +214,25 @@ pub(super) fn run(args: ValidateArgs) {
         cwtools_driver::default_cache_dir(),
     );
     let ruleset = session.ruleset();
+    if let (Some(cache_path), Some(cached_fp), Some(vanilla_dir)) =
+        (&vanilla_cache, &cached_fingerprint, &vanilla)
+    {
+        let shadow = cwtools_driver::vanilla_replacement_shadow(&directory, &[]);
+        if shadow.has_replace_paths() {
+            let required_fp = cwtools_driver::replacement_aware_vanilla_fingerprint(
+                vanilla_dir,
+                ruleset,
+                &shadow,
+            );
+            if *cached_fp != required_fp {
+                eprintln!(
+                    "error: vanilla cache {} does not contain the filtered replace_path view; omit --vanilla-cache to build a cache for this mod view",
+                    cache_path.display()
+                );
+                std::process::exit(EXIT_USAGE);
+            }
+        }
+    }
     note(format!(
         "  Loaded {} types, {} enums, {} aliases",
         ruleset.types.len(),
@@ -255,14 +283,16 @@ pub(super) fn run(args: ValidateArgs) {
     }
 
     // Vanilla-cache freshness check. If both --vanilla-cache and --vanilla
-    // are given we can compute the combined fingerprint (game version +
-    // ruleset shape) and detect staleness. THIS run already used the
+    // are given we can compute the install, ruleset and replacement-view
+    // fingerprint and detect staleness. THIS run already used the
     // cached data (the cache short-circuits the vanilla walk); the
     // rebuild makes the next run correct.
     if let (Some(cache_path), Some(fp_loaded), Some(vanilla_dir)) =
         (&vanilla_cache, &cached_fingerprint, &vanilla)
     {
-        let fp_live = vanilla_cache::combined_fingerprint(vanilla_dir, ruleset);
+        let shadow = cwtools_driver::vanilla_replacement_shadow(&directory, &[]);
+        let fp_live =
+            cwtools_driver::replacement_aware_vanilla_fingerprint(vanilla_dir, ruleset, &shadow);
         if *fp_loaded != fp_live {
             eprintln!(
                 "  warn: vanilla cache is stale (cached: {}, live: {}); rebuilding",

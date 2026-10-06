@@ -77,6 +77,15 @@ pub(super) fn run(args: FixArgs) {
     let directory = directory
         .unwrap_or_else(|| missing_required("fix", "--directory <DIRECTORY>", "directory", fc));
     let rules = rules.unwrap_or_else(|| missing_required("fix", "--rules <RULES>", "rules", fc));
+    if vanilla_cache.is_some()
+        && vanilla.is_none()
+        && cwtools_driver::vanilla_replacement_shadow(&directory, &[]).has_replace_paths()
+    {
+        eprintln!(
+            "error: --vanilla-cache cannot be filtered for replace_path without --vanilla; pass --vanilla and omit --vanilla-cache to build a replacement-scoped cache"
+        );
+        std::process::exit(EXIT_USAGE);
+    }
 
     let game_id = parse_game(&game);
 
@@ -103,7 +112,7 @@ pub(super) fn run(args: FixArgs) {
                 None
             }
         });
-    let (_fp, vanilla_cache_index) = vanilla_cache_index.unzip();
+    let (cached_fingerprint, vanilla_cache_index) = vanilla_cache_index.unzip();
 
     // Same automatic base-game cache as `validate`, so both commands see
     // the same base-game data (and share the warm cache).
@@ -136,6 +145,26 @@ pub(super) fn run(args: FixArgs) {
         },
         cwtools_driver::default_cache_dir(),
     );
+
+    if let (Some(cache_path), Some(cached_fp), Some(vanilla_dir)) =
+        (&vanilla_cache, &cached_fingerprint, &vanilla)
+    {
+        let shadow = cwtools_driver::vanilla_replacement_shadow(&directory, &[]);
+        if shadow.has_replace_paths() {
+            let required_fp = cwtools_driver::replacement_aware_vanilla_fingerprint(
+                vanilla_dir,
+                session.ruleset(),
+                &shadow,
+            );
+            if *cached_fp != required_fp {
+                eprintln!(
+                    "error: vanilla cache {} does not contain the filtered replace_path view; omit --vanilla-cache to build a cache for this mod view",
+                    cache_path.display()
+                );
+                std::process::exit(EXIT_USAGE);
+            }
+        }
+    }
 
     if let Some(notice) = vanilla_notice(game_id, session.type_index().complete) {
         note(format!("  note: {notice}"));

@@ -590,6 +590,68 @@ fn test_validate_with_rules() {
 }
 
 #[test]
+fn test_validate_rejects_unfilterable_explicit_vanilla_cache_for_replace_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mod_dir = tmp.path().join("mod");
+    std::fs::create_dir_all(&mod_dir).unwrap();
+    std::fs::write(
+        mod_dir.join("descriptor.mod"),
+        r#"replace_path = "common/ideas""#,
+    )
+    .unwrap();
+    let rules_dir = fixtures_dir().join("rules");
+    let cache = tmp.path().join("vanilla.cwv");
+    let vanilla = tmp.path().join("vanilla");
+    std::fs::create_dir_all(&vanilla).unwrap();
+    cwtools_info::vanilla_cache::save_per_type(
+        &std::collections::HashMap::new(),
+        "hoi4",
+        "test-fingerprint",
+        &cache,
+        Default::default(),
+    )
+    .unwrap();
+
+    cwtools()
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            mod_dir.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--vanilla-cache cannot be filtered for replace_path without --vanilla",
+        ));
+
+    cwtools()
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            mod_dir.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--vanilla",
+            vanilla.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "does not contain the filtered replace_path view",
+        ));
+}
+
+#[test]
 fn test_validate_warns_when_vanilla_cache_is_for_another_game() {
     let tmp = tempfile::tempdir().unwrap();
     let vanilla = fixtures_dir().join("discover").join("mod_a");
