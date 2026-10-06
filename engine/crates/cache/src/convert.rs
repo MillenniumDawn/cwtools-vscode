@@ -33,7 +33,7 @@ pub fn arena_to_cached(
     });
     let mut strings = resolved_strings.into_iter();
 
-    CachedFile {
+    let cached = CachedFile {
         root_children: children_to_cached(root_children),
         leaves: arena
             .leaves
@@ -46,7 +46,9 @@ pub fn arena_to_cached(
             .map(|lv| leaf_value_to_cached(lv, &mut strings))
             .collect(),
         comments: arena.comments.iter().map(comment_to_cached).collect(),
-    }
+    };
+    debug_assert!(strings.next().is_none(), "resolved string count mismatch");
+    cached
 }
 
 pub fn errors_to_cached(errors: &[ParseError]) -> CachedErrors {
@@ -512,9 +514,269 @@ fn op_to_cached(op: &Operator) -> CachedOperator {
 
 #[cfg(test)]
 mod tests {
-    use super::next_token;
+    use super::{
+        CachedFile, arena_to_cached, children_to_cached, comment_to_cached, next_token,
+        op_to_cached, range_to_cached, string_token_to_owned,
+    };
+    use crate::cache_format::{CachedLeaf, CachedLeafValue, CachedValue};
     use crate::io::CacheError;
-    use cwtools_string_table::string_table::StringTokens;
+    use cwtools_parser::parser::parse_string;
+    use cwtools_string_table::string_table::{StringResolver, StringTable, StringTokens};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn arena_to_cached_preserves_spelling_with_overlay_strings() {
+        let table = StringTable::new();
+        let overlay = table.with_overlay();
+        let parsed = parse_string(
+            "MixedKey = MiXeDValue\nQuoted = \"Quoted Value\"\nouter = { ChildKey = ChildValue }\n",
+            &overlay,
+        );
+
+        let cached = arena_to_cached(&parsed.arena, &parsed.root_children, &overlay);
+
+        let leaf = |key: &str| {
+            cached
+                .leaves
+                .iter()
+                .find(|leaf| leaf.key == key)
+                .unwrap_or_else(|| panic!("missing cached leaf {key}"))
+        };
+        assert!(matches!(
+            &leaf("MixedKey").value,
+            CachedValue::String(value) if value == "MiXeDValue"
+        ));
+        assert!(matches!(
+            &leaf("Quoted").value,
+            CachedValue::QString(value) if value == "\"Quoted Value\""
+        ));
+        assert!(matches!(&leaf("outer").value, CachedValue::Clause(_)));
+        assert!(matches!(
+            &leaf("ChildKey").value,
+            CachedValue::String(value) if value == "ChildValue"
+        ));
+    }
+
+    // Pre-#494 baseline: resolve tokens on demand while the resolver remains
+    // held through CachedFile construction.
+    fn arena_to_cached_holding_read_lock(
+        arena: &cwtools_parser::ast::Arena,
+        root_children: &[cwtools_parser::ast::Child],
+        string_table: &StringTable,
+    ) -> CachedFile {
+        string_table.with_read(|table| CachedFile {
+            root_children: children_to_cached(root_children),
+            leaves: arena
+                .leaves
+                .iter()
+                .map(|leaf| baseline_leaf_to_cached(leaf, &table))
+                .collect(),
+            leaf_values: arena
+                .leaf_values
+                .iter()
+                .map(|leaf_value| baseline_leaf_value_to_cached(leaf_value, &table))
+                .collect(),
+            comments: arena.comments.iter().map(comment_to_cached).collect(),
+        })
+    }
+
+    fn baseline_leaf_to_cached(
+        leaf: &cwtools_parser::ast::Leaf,
+        table: &StringResolver<'_>,
+    ) -> CachedLeaf {
+        let (sl, sc, el, ec) = range_to_cached(&leaf.pos);
+        let (vsl, vsc, vel, vec_) = range_to_cached(&leaf.value_pos);
+        CachedLeaf {
+            key: string_token_to_owned(&leaf.key, table),
+            value: baseline_value_to_cached(&leaf.value, table),
+            op: op_to_cached(&leaf.op),
+            start_line: sl,
+            start_col: sc,
+            end_line: el,
+            end_col: ec,
+            value_start_line: vsl,
+            value_start_col: vsc,
+            value_end_line: vel,
+            value_end_col: vec_,
+        }
+    }
+
+    fn baseline_leaf_value_to_cached(
+        leaf_value: &cwtools_parser::ast::LeafValue,
+        table: &StringResolver<'_>,
+    ) -> CachedLeafValue {
+        let (sl, sc, el, ec) = range_to_cached(&leaf_value.pos);
+        CachedLeafValue {
+            value: baseline_value_to_cached(&leaf_value.value, table),
+            start_line: sl,
+            start_col: sc,
+            end_line: el,
+            end_col: ec,
+        }
+    }
+
+    fn baseline_value_to_cached(
+        value: &cwtools_parser::ast::Value,
+        table: &StringResolver<'_>,
+    ) -> CachedValue {
+        match value {
+            cwtools_parser::ast::Value::String(token) => {
+                CachedValue::String(string_token_to_owned(token, table))
+            }
+            cwtools_parser::ast::Value::QString(token) => {
+                CachedValue::QString(string_token_to_owned(token, table))
+            }
+            cwtools_parser::ast::Value::Float(value) => CachedValue::Float(*value),
+            cwtools_parser::ast::Value::Int(value) => CachedValue::Int(*value),
+            cwtools_parser::ast::Value::Bool(value) => CachedValue::Bool(*value),
+            cwtools_parser::ast::Value::Clause(children) => {
+                CachedValue::Clause(children_to_cached(children))
+            }
+        }
+    }
+
+    /// Interleaved comparison on a checked-in ~165 KiB event file, with a
+    /// concurrent interner to make resolver lock duration observable.
+    /// Run with: cargo test -p cwtools_cache -- --ignored --nocapture bench_arena_to_cached_lock_scope
+    #[test]
+    #[ignore]
+    fn bench_arena_to_cached_lock_scope() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../testfiles/performancetest2/events/cc_colony_events.txt");
+        let source = std::fs::read_to_string(path).expect("read cache benchmark fixture");
+        let table = StringTable::new();
+        let parsed = parse_string(&source, &table);
+        assert!(
+            !parsed.arena.leaves.is_empty(),
+            "benchmark fixture did not parse"
+        );
+
+        // Warm both paths before collecting timings.
+        let _ = arena_to_cached_holding_read_lock(&parsed.arena, &parsed.root_children, &table);
+        let _ = arena_to_cached(&parsed.arena, &parsed.root_children, &table);
+
+        let mut isolated_held_lock = Vec::with_capacity(100);
+        let mut isolated_released_lock = Vec::with_capacity(100);
+        for round in 0..100 {
+            let run_held = || {
+                let start = Instant::now();
+                let _ =
+                    arena_to_cached_holding_read_lock(&parsed.arena, &parsed.root_children, &table);
+                start.elapsed()
+            };
+            let run_released = || {
+                let start = Instant::now();
+                let _ = arena_to_cached(&parsed.arena, &parsed.root_children, &table);
+                start.elapsed()
+            };
+            if round % 2 == 0 {
+                isolated_held_lock.push(run_held());
+                isolated_released_lock.push(run_released());
+            } else {
+                isolated_released_lock.push(run_released());
+                isolated_held_lock.push(run_held());
+            }
+        }
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writes = Arc::new(AtomicUsize::new(0));
+        let writer_table = table.clone();
+        let writer_stop = Arc::clone(&stop);
+        let writer_writes = Arc::clone(&writes);
+        let writer = thread::spawn(move || {
+            let mut sequence = 0usize;
+            while !writer_stop.load(Ordering::Relaxed) {
+                let value = format!("cache_bench_writer_{sequence}");
+                writer_table.intern(&value);
+                sequence += 1;
+                writer_writes.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        thread::sleep(Duration::from_millis(100));
+
+        let mut held_lock = Vec::with_capacity(100);
+        let mut released_lock = Vec::with_capacity(100);
+        let mut held_writer_progress = Vec::with_capacity(100);
+        let mut released_writer_progress = Vec::with_capacity(100);
+        for round in 0..100 {
+            let run_held = || {
+                let writes_before = writes.load(Ordering::Relaxed);
+                let start = Instant::now();
+                let _ =
+                    arena_to_cached_holding_read_lock(&parsed.arena, &parsed.root_children, &table);
+                (
+                    start.elapsed(),
+                    writes.load(Ordering::Relaxed) - writes_before,
+                )
+            };
+            let run_released = || {
+                let writes_before = writes.load(Ordering::Relaxed);
+                let start = Instant::now();
+                let _ = arena_to_cached(&parsed.arena, &parsed.root_children, &table);
+                (
+                    start.elapsed(),
+                    writes.load(Ordering::Relaxed) - writes_before,
+                )
+            };
+            if round % 2 == 0 {
+                let (duration, progress) = run_held();
+                held_lock.push(duration);
+                held_writer_progress.push(progress);
+                let (duration, progress) = run_released();
+                released_lock.push(duration);
+                released_writer_progress.push(progress);
+            } else {
+                let (duration, progress) = run_released();
+                released_lock.push(duration);
+                released_writer_progress.push(progress);
+                let (duration, progress) = run_held();
+                held_lock.push(duration);
+                held_writer_progress.push(progress);
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().expect("join interleaved benchmark writer");
+
+        fn percentile<T: Copy + Ord>(samples: &mut [T], percentile: usize) -> T {
+            samples.sort_unstable();
+            samples[(samples.len() * percentile).div_ceil(100).saturating_sub(1)]
+        }
+        let held_median = percentile(&mut held_lock, 50);
+        let held_p95 = percentile(&mut held_lock, 95);
+        let released_median = percentile(&mut released_lock, 50);
+        let released_p95 = percentile(&mut released_lock, 95);
+        let held_writer_median = percentile(&mut held_writer_progress, 50);
+        let released_writer_median = percentile(&mut released_writer_progress, 50);
+        let isolated_held_median = percentile(&mut isolated_held_lock, 50);
+        let isolated_held_p95 = percentile(&mut isolated_held_lock, 95);
+        let isolated_released_median = percentile(&mut isolated_released_lock, 50);
+        let isolated_released_p95 = percentile(&mut isolated_released_lock, 95);
+        assert!(
+            released_writer_progress.iter().sum::<usize>() > 0,
+            "benchmark writer made no progress during released-lock samples"
+        );
+        eprintln!(
+            "fixture_bytes={} interleaved_rounds={} writer_interns={}\nuncontended held-lock median={:?} p95={:?}\nuncontended released-lock median={:?} p95={:?}\ncontended held-lock median={:?} p95={:?} writer-ops/convert median={}\ncontended released-lock median={:?} p95={:?} writer-ops/convert median={}",
+            source.len(),
+            held_lock.len(),
+            writes.load(Ordering::Relaxed),
+            isolated_held_median,
+            isolated_held_p95,
+            isolated_released_median,
+            isolated_released_p95,
+            held_median,
+            held_p95,
+            held_writer_median,
+            released_median,
+            released_p95,
+            released_writer_median,
+        );
+    }
 
     #[test]
     fn missing_interned_token_is_a_cache_error() {
