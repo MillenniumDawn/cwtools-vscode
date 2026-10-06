@@ -108,7 +108,12 @@ fn fixable_edits_match(
                 .content_hash
                 .is_some_and(|hash| hash == current.content_hash)
         },
-        |version| current.version == Some(version),
+        |version| {
+            current.version == Some(version)
+                && expected
+                    .content_hash
+                    .is_some_and(|hash| hash == current.content_hash)
+        },
     )
 }
 
@@ -387,14 +392,23 @@ mod tests {
         let versioned = crate::FixableEdits {
             entries: vec![("CW281".to_string(), edit.clone())],
             version: Some(1),
-            content_hash: None,
+            content_hash: Some(7),
         };
         let open_v2 = crate::FileTextSnapshot {
             text: "aaaa\n".to_string(),
             version: Some(2),
-            content_hash: 1,
+            content_hash: 7,
         };
         assert!(!fixable_edits_match(&versioned, Some(&open_v2)));
+        let reopened_same_version = crate::FileTextSnapshot {
+            text: "bbbb\n".to_string(),
+            version: Some(1),
+            content_hash: 8,
+        };
+        assert!(!fixable_edits_match(
+            &versioned,
+            Some(&reopened_same_version)
+        ));
 
         let closed = crate::FixableEdits {
             entries: vec![("CW281".to_string(), edit)],

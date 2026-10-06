@@ -3,7 +3,6 @@
 #### Engine
 
 * Keep versioned diagnostic publications ordered with document changes so stale results cannot replace current diagnostics or fixes. (#478)
-
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
 * Reclaim removed localisation URI references and recycle file records after sweeping their old sites, bounding metadata growth across repeated refreshes. (#846)

@@ -981,7 +981,7 @@ impl Backend {
             .iter()
             .flat_map(crate::code_action::fixable_span_edits)
             .collect();
-        let content_hash = if entries.is_empty() || version.is_some() {
+        let content_hash = if entries.is_empty() {
             None
         } else {
             source_hash
@@ -991,16 +991,22 @@ impl Backend {
             if require_closed && docs.contains_key(uri.as_str()) {
                 return;
             }
-            if version.is_some_and(|version| {
-                !docs
-                    .get(uri.as_str())
-                    .is_some_and(|document| document.version == version)
-            }) {
-                return;
+            if let Some(version) = version {
+                let Some(document) = docs.get(uri.as_str()) else {
+                    return;
+                };
+                let Some(source_hash) = source_hash else {
+                    return;
+                };
+                if document.version != version
+                    || source_hash != cwtools_cache::workspace::content_hash(&document.text)
+                {
+                    return;
+                }
             }
             {
                 let mut store = self.state.fixable_edits.lock();
-                if entries.is_empty() || (version.is_none() && content_hash.is_none()) {
+                if entries.is_empty() || content_hash.is_none() {
                     store.remove(uri.as_str());
                 } else {
                     store.insert(
@@ -1493,8 +1499,13 @@ impl Backend {
                 .get(&target.uri)
                 .is_some_and(|document| document.version == target.version);
             if still_current && let Ok(obj) = Url::parse(&target.uri) {
-                self.publish_gated(obj, diagnostics, Some(target.version), None)
-                    .await;
+                self.publish_gated(
+                    obj,
+                    diagnostics,
+                    Some(target.version),
+                    Some(cwtools_cache::workspace::content_hash(&target.text)),
+                )
+                .await;
             }
         }
     }
@@ -3483,7 +3494,7 @@ mod ignored_tests {
                 uri.parse().unwrap(),
                 vec![diagnostic("current")],
                 Some(2),
-                None,
+                Some(cwtools_cache::workspace::content_hash("current text")),
             )
             .await;
         let current = socket.next().await.expect("current diagnostics publish");
@@ -3497,7 +3508,7 @@ mod ignored_tests {
                 uri.parse().unwrap(),
                 vec![diagnostic("stale")],
                 Some(1),
-                None,
+                Some(cwtools_cache::workspace::content_hash("old text")),
             )
             .await;
 
@@ -3517,6 +3528,65 @@ mod ignored_tests {
         assert!(
             socket.next().now_or_never().is_none(),
             "stale diagnostics publish"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_same_version_publication_after_reopen_preserves_current_fixes() {
+        let uri = stale_publication_uri();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
+        open_stale_publication_doc(&backend, &uri, "old text");
+        // Capture an old validation result, then close and reopen the document
+        // with different text but the same LSP version.
+        backend.state.documents.lock().remove(&uri);
+        open_stale_publication_doc(&backend, &uri, "new text");
+
+        let diagnostic = |replacement: &str| Diagnostic {
+            code: Some(NumberOrString::String("CW253".into())),
+            data: Some(crate::code_action::fix_to_data(
+                &cwtools_parser::fix::SuggestedFix::replace(
+                    "Replace value",
+                    cwtools_parser::ast::SourceRange {
+                        start: cwtools_parser::ast::SourcePos { line: 1, col: 0 },
+                        end: cwtools_parser::ast::SourcePos { line: 1, col: 1 },
+                    },
+                    replacement,
+                ),
+            )),
+            ..Default::default()
+        };
+
+        backend
+            .publish_filtered(
+                uri.parse().unwrap(),
+                vec![diagnostic("new")],
+                Some(1),
+                Some(cwtools_cache::workspace::content_hash("new text")),
+            )
+            .await;
+        let current = socket.next().await.expect("current diagnostics publish");
+        assert_eq!(current.method(), "textDocument/publishDiagnostics");
+
+        backend
+            .publish_filtered(
+                uri.parse().unwrap(),
+                vec![diagnostic("old")],
+                Some(1),
+                Some(cwtools_cache::workspace::content_hash("old text")),
+            )
+            .await;
+
+        let fixes = backend.state.fixable_edits.lock();
+        let fixes = fixes.get(&uri).expect("current fix snapshot remains");
+        assert_eq!(fixes.version, Some(1));
+        assert_eq!(
+            fixes.content_hash,
+            Some(cwtools_cache::workspace::content_hash("new text"))
+        );
+        assert_eq!(fixes.entries[0].1.replacement, "new");
+        assert!(
+            socket.next().now_or_never().is_none(),
+            "old diagnostics must not publish after same-version reopen"
         );
     }
 
@@ -3544,7 +3614,7 @@ mod ignored_tests {
                 uri.parse().unwrap(),
                 vec![current_diagnostic],
                 Some(1),
-                None,
+                Some(cwtools_cache::workspace::content_hash("current text")),
             )
             .await;
         let current = socket.next().await.expect("current diagnostics publish");
@@ -3592,7 +3662,12 @@ mod ignored_tests {
         let publishing_uri = uri.clone();
         let publish = tokio::spawn(async move {
             publishing_backend
-                .publish_filtered(publishing_uri.parse().unwrap(), Vec::new(), Some(1), None)
+                .publish_filtered(
+                    publishing_uri.parse().unwrap(),
+                    Vec::new(),
+                    Some(1),
+                    Some(cwtools_cache::workspace::content_hash("old text")),
+                )
                 .await;
         });
         entered.notified().await;

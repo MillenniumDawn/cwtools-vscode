@@ -475,6 +475,7 @@ impl Backend {
             tracing::warn!(%uri, bytes = text.len(), "ignoring oversized didOpen document");
             return;
         }
+        let source_hash = cwtools_cache::workspace::content_hash(&text);
         let text: Arc<str> = Arc::from(text);
         let publication = self.state.diagnostic_publication_lock.lock().await;
         let admission = self.state.open_workspace_document(
@@ -504,7 +505,7 @@ impl Backend {
             self.update_doc_tokens(&uri, None);
             self.invalidate_semantic_tokens(&uri);
             if let Ok(url) = Url::parse(&uri) {
-                self.publish_filtered(url, Vec::new(), Some(version), None)
+                self.publish_filtered(url, Vec::new(), Some(version), Some(source_hash))
                     .await;
             }
             return;
@@ -538,6 +539,7 @@ impl Backend {
             tracing::warn!(%uri, bytes = text.len(), "ignoring oversized didChange document");
             return;
         }
+        let source_hash = cwtools_cache::workspace::content_hash(&text);
 
         let publication = self.state.diagnostic_publication_lock.lock().await;
         let admission = self
@@ -556,7 +558,7 @@ impl Backend {
             self.update_doc_tokens(&uri, None);
             self.invalidate_semantic_tokens(&uri);
             if let Ok(url) = Url::parse(&uri) {
-                self.publish_filtered(url, Vec::new(), Some(version), None)
+                self.publish_filtered(url, Vec::new(), Some(version), Some(source_hash))
                     .await;
             }
             return;
@@ -580,14 +582,15 @@ impl Backend {
         let uri = params.text_document.uri.to_string();
         self.invalidate_semantic_tokens(&uri);
         if self.is_ignored_uri(&uri) {
-            let version = {
+            let snapshot = {
                 let docs = self.state.documents.lock();
-                docs.get(&uri).map(|d| d.version)
+                docs.get(&uri)
+                    .map(|d| (d.version, cwtools_cache::workspace::content_hash(&d.text)))
             };
             self.clear_ignored_file_state(&uri);
             self.update_doc_tokens(&uri, None);
-            if let (Some(version), Ok(url)) = (version, Url::parse(&uri)) {
-                self.publish_filtered(url, Vec::new(), Some(version), None)
+            if let (Some((version, source_hash)), Ok(url)) = (snapshot, Url::parse(&uri)) {
+                self.publish_filtered(url, Vec::new(), Some(version), Some(source_hash))
                     .await;
             } else if let Ok(url) = Url::parse(&uri) {
                 self.publish_filtered(url, Vec::new(), None, None).await;
