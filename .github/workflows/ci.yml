@@ -116,9 +116,9 @@ jobs:
           fail-on-scopes: runtime, development
           comment-summary-in-pr: on-failure
 
-  # Full client build: compile the engine and the client, run the host smoke
-  # suite against the real server, package the vsix, collect host and node
-  # coverage.
+  # Full client build: compile the engine and client, run rules-sync plus the
+  # live-settings, multi-root and watched-file suites, collect host and node
+  # coverage, then package and smoke-test the vsix.
   # The engine lives in-repo at engine/, so this is the same tree the rust
   # jobs lint and test, built here the way the extension actually consumes it.
   build:
@@ -156,13 +156,13 @@ jobs:
         run: >-
           node scripts/build/python.mjs scripts/build/hosttest.py
           --label live --label multi-root --label watched
-      # Host V8 coverage runs the host label, which includes every smoke file,
-      # plus the isolated live-settings workspace for its separate coverage
-      # configuration. Run it before package-prebuilt: that command compiles a
-      # release client with CWTOOLS_TEST_* overrides removed, while these host
-      # configurations need the development build made above. The build already
-      # compiled the client, so skip recompiling it here. Gated on the build
-      # step because this needs the built server binary.
+      # Host V8 coverage runs the host label (including smoke files) and the
+      # isolated live-settings workspace, while the earlier configuration
+      # step retains unique multi-root and watched-file coverage. Run it before
+      # package-prebuilt: that command compiles a release client with
+      # CWTOOLS_TEST_* overrides removed, while these host configurations need
+      # the development build made above. Use --skip-compile to reuse it.
+      # Gated on the build step because this needs the built server binary.
       - name: Host coverage
         if: always() && steps.build-engine.outcome == 'success'
         timeout-minutes: 15
@@ -184,14 +184,14 @@ jobs:
       - name: Test build
         id: test-build
         if: >-
-          always() && steps.build-engine.outcome == 'success' &&
+          !cancelled() && steps.build-engine.outcome == 'success' &&
           steps.host-rules-sync.outcome == 'success' &&
           steps.host-configurations.outcome == 'success'
         run: npm run build -- package-prebuilt
       # Open the archive on every PR, not only in the release job. This checks
       # the .vscodeignore boundary as well as the package's required files.
       - name: Smoke test VSIX
-        if: always() && steps.test-build.outcome == 'success'
+        if: ${{ !cancelled() && steps.test-build.outcome == 'success' }}
         run: python3 scripts/smoke_test_vsix.py artifacts/vsix
       - name: Node unit tests (with coverage)
         if: always()

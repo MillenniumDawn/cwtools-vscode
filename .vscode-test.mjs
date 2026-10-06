@@ -13,7 +13,8 @@
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
 // Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
-// `--label live`, and `--label multi-root` to cover the host workspaces.
+// `--label live`, `--label multi-root`, and `--label watched` to cover the host
+// workspaces and the external-file watcher suite.
 //
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
