@@ -102,6 +102,7 @@ suite('LSP Hover Tests', function () {
 			const document = await vscode.workspace.openTextDocument(uri);
 			await vscode.window.showTextDocument(document);
 			try {
+				assert.ok(await waitForLanguageServer(uri), 'Language server should be ready');
 				const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
 					'vscode.executeHoverProvider',
 					document.uri,
@@ -109,7 +110,7 @@ suite('LSP Hover Tests', function () {
 				);
 				assert.ok(
 					!hovers || hovers.length === 0,
-					`Expected no hover outside the document, received ${hovers.length}`
+					`Expected no hover outside the document, received ${hovers?.length ?? 0}`
 				);
 			} finally {
 				await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
