@@ -476,6 +476,7 @@ impl Backend {
             return;
         }
         let text: Arc<str> = Arc::from(text);
+        let publication = self.state.diagnostic_publication_lock.lock().await;
         let admission = self.state.open_workspace_document(
             uri.clone(),
             ParsedDoc {
@@ -492,6 +493,7 @@ impl Backend {
             tracing::warn!(%uri, reason = rejection.reason(), "ignoring didOpen");
             return;
         }
+        drop(publication);
 
         if crate::paths::is_loc_file(&uri) {
             self.loc_watched_overlay_mut().remove(&uri);
@@ -537,6 +539,7 @@ impl Backend {
             return;
         }
 
+        let publication = self.state.diagnostic_publication_lock.lock().await;
         let admission = self
             .state
             .documents
@@ -546,6 +549,7 @@ impl Backend {
             tracing::warn!(%uri, reason = rejection.reason(), "ignoring didChange");
             return;
         }
+        drop(publication);
 
         if self.is_ignored_uri(&uri) {
             self.clear_ignored_file_state(&uri);
@@ -611,7 +615,10 @@ impl Backend {
         let uri = params.text_document.uri.to_string();
         self.invalidate_semantic_tokens(&uri);
         tracing::debug!(%uri, "did_close");
-        let Some(closed_doc) = self.state.documents.lock().remove(&uri) else {
+        let publication = self.state.diagnostic_publication_lock.lock().await;
+        let closed_doc = self.state.documents.lock().remove(&uri);
+        drop(publication);
+        let Some(closed_doc) = closed_doc else {
             return;
         };
         let pending_validation = self.state.debounce_handles.lock().remove(&uri);
@@ -638,7 +645,7 @@ impl Backend {
             }
             cwtools_profiling::log_rss("did_close");
             if !self.state.documents.lock().contains_key(&uri) {
-                self.publish_filtered(params.text_document.uri, vec![], None, None)
+                self.publish_if_closed(params.text_document.uri, vec![], None)
                     .await;
             }
             self.request_code_lens_refresh().await;
@@ -759,7 +766,7 @@ impl Backend {
 
         cwtools_profiling::log_rss("did_close");
         if !self.state.documents.lock().contains_key(&uri) {
-            self.publish_filtered(params.text_document.uri, vec![], None, None)
+            self.publish_if_closed(params.text_document.uri, vec![], None)
                 .await;
             if let Some(text) = disk_loc_text
                 && !self.state.documents.lock().contains_key(&uri)
@@ -770,10 +777,9 @@ impl Backend {
                 if !self.state.documents.lock().contains_key(&uri)
                     && let Ok(uri_obj) = Url::parse(&uri)
                 {
-                    self.publish_gated(
+                    self.publish_gated_if_closed(
                         uri_obj,
                         diagnostics,
-                        None,
                         Some(cwtools_cache::workspace::content_hash(&text)),
                     )
                     .await;

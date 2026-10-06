@@ -216,6 +216,10 @@ pub(crate) struct VanillaState {
 /// then release it before acquiring `config` or `info_service` or doing I/O.
 /// Other multi-lock paths document their order at their use sites.
 pub(crate) struct DocumentState {
+    /// Orders versioned diagnostic sends against document version changes. A
+    /// validation may finish while didChange is queued, so the version check
+    /// and its client send must be one serialized operation.
+    pub(crate) diagnostic_publication_lock: tokio::sync::Mutex<()>,
     pub(crate) documents: Mutex<DocumentStore>,
     pub(crate) config: parking_lot::RwLock<Config>,
     pub(crate) workspace_roots_generation: AtomicU64,
@@ -975,6 +979,7 @@ impl DocumentState {
         // per-game validators compare against are always base ids (#475).
         cwtools_validation::per_game::seed_comparison_literals(&string_table);
         Self {
+            diagnostic_publication_lock: tokio::sync::Mutex::new(()),
             documents: Mutex::new(DocumentStore::new()),
             config: parking_lot::RwLock::new(Config::new()),
             workspace_roots_generation: AtomicU64::new(0),
