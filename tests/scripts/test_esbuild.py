@@ -68,7 +68,7 @@ def test_extension_bundle_is_node_cjs() -> None:
     assert "--external:vscode" in args
     assert "extension.ts" in args
     assert "--watch" not in args
-    assert _test_env_defines(extension_args) == {}
+    assert not _test_env_defines(extension_args)
 
 
 def test_release_defines_match_test_env_reads() -> None:
@@ -138,7 +138,7 @@ def test_dev_flag_sets_development_without_watch(
     )
     assert "--watch" not in " ".join(commands[0])
     assert "--watch" not in " ".join(commands[1])
-    assert _test_env_defines(commands[0]) == {}
+    assert not _test_env_defines(commands[0])
 
 
 def test_release_flag_defines_test_env(
