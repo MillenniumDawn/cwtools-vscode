@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Ignore trailing `#` comments when parsing `.cwt` directive values, preserving cardinality and severity settings without suppressing genuinely malformed directives. (#603)
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
 * Reclaim removed localisation URI references and recycle file records after sweeping their old sites, bounding metadata growth across repeated refreshes. (#846)
@@ -839,82 +840,6 @@ This is the first release with the engine in-repo under `engine/`. The extension
 
 * 3.0.0 was tagged but never shipped. A release refuses to bundle an untagged engine, and the submodule pointed at a branch commit, so every platform job stopped at that gate and no vsix was built. The pin is now the tagged engine v2.5.0, which carries the same ROOT fix, merged as MillenniumDawn/cwtools#221.
 
-* Installs are on extension 2.5.0, which bundled engine v2.4.0, so this release brings everything in between. **Fix all auto-fixable problems in workspace** has a server side now, so the command the client gates on capability actually runs, and CW100 gains a quick fix for a missing localisation key (MillenniumDawn/cwtools#128). Go-to-definition resolves an enum value. CW113's filepath check gets an opt-in case-sensitive mode, scope fallback no longer breaks on a mixed-case block key, and a subtype-qualified reference counts toward the unused check. On the hardening side, generated workspace edits stay inside the workspace, cache deletion is constrained to cwtools-owned entries, LSP filexists, even if that string has no `[command]`s. A Brazilian `[Grécia]` (or any other language's commands) can no longer turn a valid `desc = EUevent.5.d` into CW267. (MillenniumDawn/cwtools#313)
-
-* LSP: the server no longer goes silent a moment after startup. Asking for semantic tokens twice on an unedited document hit a cache fast path that re-locked a mutex it was already holding, and the thread it wedged is the one carrying stdin, dispatch and stdout together, so the whole server stopped: no further log lines, no diagnostics, no answer to any request. The last line in the output channel was whichever one the workspace scan happened to have reached, usually `Parse cache: hit (settings match)`, which made it look like an indexing failure rather than a stall in front of it. The same shape is fixed in the delta request and in the rename handler. Introduced in 2.6.0; 2.5.0 was unaffected. (MillenniumDawn/cwtools#334)
-
-* LSP: the watched-file drain now applies the same ignore predicate as the workspace scan. Files under a directory matched by `cwtools.ignore.directories` (and the engine's directory exclusions) are skipped before they are read or validated, so an ignored directory can no longer produce diagnostics through a watcher event. (MillenniumDawn/cwtools#314)
-
-* A localisation string that calls a scripted localisation is no longer reported as calling something that does not exist. `[ROOT.Western_Autocracy_L]` gave CW226 and `[Western_Autocracy_L]` gave CW266, on every use, in every HOI4 mod. The engine looked scripted localisations up through the ruleset's `scripted_loc` type, which the HOI4 config declares at Stellaris's `common/scripted_loc`; nothing under HOI4's `common/scripted_localisation` ever matched, so the set was always empty and an empty set read as "flag everything". Names now come from the folder itself, base game included, and a bare `[SomeName]` bracket is judged against them the same way a dotted chain is. A misspelt name still reports. (MillenniumDawn/cwtools#348)
-
-* **Behavioral:** HOI4 `[!name]` localisation calls now resolve `name` against the direct callback keys under scripted GUIs' `effects` and `triggers` containers. Known callbacks no longer report CW226 or CW266, while an unknown callback reports the new Rust-only CW283 once callback data is available. Workspace and base-game callbacks are indexed separately from scripted localisations, and the vanilla cache format moves to version 13 to carry the base-game names. Existing `.cwv` files rebuild once. (MillenniumDawn/cwtools#350)
-
-* **Behavioral:** a loc-typed field is judged against the English string when English exists. The MD guard baseline drops two CW267 rows on `events/EU_events.txt` (`EUevent.5.d` / `EUevent.7.d`) and one CW266 on `events/Iran.txt` (`axis_of_resistance_events.2.t`), all of which were other languages' `[command]`s winning the representative.
-
-* **Behavioral:** with no scripted-localisation data at hand, an unknown command tail is no longer called a typo. Nothing can tell a `defined_text` from a misspelling without the names, so CW226 and CW266 stay quiet there, the way a `?`-marked variable read already does without a variable index. Two passes see that: the editor before its first workspace scan finishes, and `cwtools loc`, which reads the `.yml` files and the ruleset and walks no game files at all. `loc --game --rules` still reports CW260 for a scope link used from a scope that does not accept it.
-
-* **Behavioral:** the vanilla cache format (`CACHE_VERSION`) moves to 12 and carries the base game's scripted-localisation names. An existing `.cwv` is a clean miss and the install is re-indexed once.
-
-* **Behavioral:** the parse cache fingerprint (`CACHE_VERSION`) moves to 8 and now includes the display locale. The `.cwe` sidecar stores each file's diagnostics as finished text, so a cache written in one language would otherwise be replayed verbatim in another. Existing caches are a clean miss on first run after upgrading, and changing the editor's display language costs one cold re-index.
-
-* The diagnostic catalog is enumerated once, as `cwtools_error_codes::CATALOG`, instead of being hand-mirrored in the CLI. `cwtools-rs/crates/cli/src/codes.rs` reads it, and the test that diffed the mirror against the consts moved to `error_codes` beside both.
-
-* `cargo bench -p cwtools_driver --bench snapshot_clone` times the workspace-scan pass 2 index snapshot, the clone that is the whole `info_service` lock hold, and splits it between the type maps and the two dynamic-value indexes. On Millennium Dawn's 249k instances the clone is 41ms, of which the dynamic-value indexes are about 7%, so the maps are what a future change has to move. Runs against a synthetic index when no corpus checkout is present. (MillenniumDawn/cwtools#332)
-
-* Workspace scan pass 2's chunked walk is now a helper with the chunk size as a parameter, so tests can assert the chunked and unchunked results are the same sequence. They run the boundary sizes (0, 1, 255, 256, 257, 300, 512), every chunk size from 1 up to one big enough to swallow the input, and pin that a cancelled walk returns nothing rather than the chunks it had finished. A companion test pins that `instances_in_file` read off a `TypeIndex` clone still answers from the snapshot after the live index compacts its slots. (MillenniumDawn/cwtools#328)
-
-### 3.1.1
-
-* The engine pin moves to v2.6.1, which fixes a Windows-only false positive that made 3.1.0 close to unusable there. Every server-side index is keyed on the raw URI string, and nothing canonicalised those keys, so a file reaching the server under two spellings was indexed twice. On Windows that is every open file: VS Code percent-encodes the drive colon (`file:///d%3A/mod/x.txt`) while the workspace scan builds its keys with `Url::from_file_path` (`file:///d:/mod/x.txt`), so the scan's "skip documents the editor already has open" string compare never matched and each open document was indexed a second time from disk. It stayed invisible until 2.6.0 changed CW261 to ask the type index how many times the *project* defines an id, at which point every `## unique` definition in every opened file reported as defined twice — and because the span is the whole definition block, a focus-tree file squiggled end to end. Incoming document URIs and the workspace folder URIs are now folded onto one spelling at the same boundary. (MillenniumDawn/cwtools#319)
-
-### 3.1.0
-
-* The engine pin moves back to `3309db2`. Dependabot PR #197 bumped it from `3309db2` to `29b9a1c`, which is an *ancestor*, so it reverted both `dcea7893` (apply LSP settings without restart) and `3309db2` (incremental semantic tokens) while two entries in this file said they had shipped. The `automerge-engine.yml` guard added in #179 refuses exactly this move, so #197 did not come through auto-merge; the fast-forward check is worth extending to whatever path did merge it. This went unnoticed because the one suite that covers live settings was never running in CI, which the entry below fixes.
-
-* The engine pin moves the rest of the way to the tagged v2.6.0, which `release.yml` requires exactly (`git describe --tags --exact-match`). Past `3309db2`, that release adds LSP validation of `inline_script` bodies at their call site instead of only from the CLI (MillenniumDawn/cwtools#259), populates the file index so CW113 (missing `filepath`) actually fires in the editor (MillenniumDawn/cwtools#311), widens rule-aware scope inlay hints and the `cwtools-ignore` workspace action (MillenniumDawn/cwtools#275, MillenniumDawn/cwtools#282), and hardens `FilepathField` probes to stay inside the search roots alongside a Windows drive-letter parsing fix (MillenniumDawn/cwtools#233, MillenniumDawn/cwtools#307).
-
-* Activation no longer parks forever when the server binary is missing, which is what had been hanging `pr.yml`'s check job for its full 20 minutes on every run since 2026-08-12. The "no language server binary found" path did `await window.showErrorMessage(...)`, and an error notification stays up until somebody dismisses it, so in a headless extension host that await never resolves. VS Code waits for the extension under development to finish activating before it hands control to the test runner, so mocha printed nothing at all and the job ran to the timeout. The check job builds no server (it doesn't check out the submodule), so it took that path every time. The notification is now fired and forgotten, as the same file already does for the `client.start()` failure, and the "you opened a file directly" warning gets the same treatment. Reproduced by forcing `serverExe` to resolve to nothing: before, no mocha output and a hang; after, 17 passing in 86 ms. The two host test steps in `pr.yml` also carry a `timeout-minutes` now, so the next hang fails in minutes rather than eating the job budget. (#205)
-
-* The live-settings suite has never run in CI. `.vscode-test.mjs` gave it a second config labelled `smoke`, but `@vscode/test-cli` resolves `--label` with `config.tests.find()`, so only the first `smoke` entry ever ran and the sample-live workspace was silently dropped. Labels are unique now, and `test:smoke` passes both `--label smoke` and `--label live`. That put four previously unrun tests into the gate, two of which were failing: the fixture's localisation files had the language header and the entry on one line and carried no BOM, so nothing was indexed and every hover came back without localisation text. Both files now match the layout the main sample uses.
-
-* The host suites poll instead of sleeping. `retryAsync` multiplied a retry count by a coarse delay, which tied poll granularity to the time budget: a check that would pass 20 ms later still paid the full 500 ms, and raising the budget for a loaded runner slowed the fast path too. It is replaced by `waitUntil`, which polls every 25 ms against a deadline, and the fixed `wait(1000)` before the cytoscape render check is gone. `waitForLSP` and `waitForLanguageServer` are deadline-based for the same reason. The full `host` label drops from 8.9 s to 5.7 s wall (4 s to 2 s of mocha), `smoke` from 3 s to 0.8 s, and the live-settings suite from 15 s to 1 s. The tight budgets those tests used to run under (three tries at 500 ms) are now 10 s, so they are less likely to fail on a busy runner rather than more.
-
-* The hover and completion suites assert what the Rust engine actually returns. Their expectations were written against the old F# hover format and never updated, so they required a scope table reading `Any` / `Country` / `ROOT` / `THIS` while the engine renders `**Scope**: country` and `**Root**: country`. The descriptions and scopes were all being served correctly; only the assertions were stale. Both hover tests now pin the trigger name, its rule description, and the scope lines, including the ROOT/PREV pair that survives a scope change. Three completion tests that could not fail were removed or replaced: two restated the "we got items, none of them Text kind" precondition their own helper already asserts, and a third allowed 5 seconds for a request that takes single-digit milliseconds. In their place the trigger and effect contexts are asserted as a pair, each naming what it must offer and what it must not offer from the other context, which is a check that scope awareness can actually fail. Two host tests remain red against genuine engine gaps, now tracked: a `value[…]` string hover reports the enclosing trigger instead of previewing the localisation it resolves to (MillenniumDawn/cwtools#317), and the `pop_faction_flag` value set is built per file, so a flag set in `common/button_effects` is not offered in `common/pop_faction_types` (MillenniumDawn/cwtools#318).
-
-* The four graph editor/title commands (**Show graph**, **Save graph as image**, **Set graph depth**, **Save graph as json**) now carry a codicon instead of showing their full title text in the tab bar. (#144)
-* `client/webview/graph.ts` now shows up in a coverage report. The host run excludes `client/webview/**` and the vitest `include` list never listed it, so the 642-line module counted in neither report, even after #135 added node tests that drive `setupTooltips` and the graph build. It is now a vitest-owned module, which grows that report's denominator and drops the node totals once, from 80.5% to 73.6% lines; graph.ts itself lands at 59.5% lines and 45.3% branches. The host run still excludes the webview, so the two reports stay disjoint. (#190)
-* `publish-marketplace.yml`'s manual republish uploaded only the universal vsix. Both the publish and dry-run steps picked the release's vsix with `find | sort | head -n 1`, so the per-platform packages were downloaded and then silently dropped. Both steps now collect every downloaded vsix into one list and pass the whole set to a single `vsce publish --packagePath` (and `ls-publish` for the dry run), matching how `build.ts`'s `publish-prebuilt` already treats a release's vsixes as one set. (#131)
-* `check` and `build` in `pr.yml` no longer re-download a full VS Code build on every run. `.vscode-test/` is cached via `actions/cache`, keyed on the OS plus the stable version resolved from the same update API `vscode-test` uses for the `vscode: "stable"` pin in `.vscode-test.mjs`, so a new cache entry is written only when stable moves. Restore-keys seed the newest prior cache if the resolve fails, and `vscode-test` tops it up. (#137)
-* A pin bump that replaces an already-cached rules checkout is no longer silent. `syncPinnedRules` now logs the commit being replaced alongside the one replacing it, and shows an information message on that path, distinct from the (still silent) first-time download. The already-current path is untouched. (#168)
-* Locations the server reports are now checked before anything opens them. Clicking a node in the graph or a file in the CWTools files tree passed the path straight to `showTextDocument`, so nothing but the engine's own discipline kept an arbitrary local path off the screen, and on Windows a UNC path would have started an SMB auth handshake with whatever host it named. Both handlers now require an absolute `file:` path, and open it directly only when it sits under a known root: a workspace folder, the extension's cache directory, the rules folder in use, or the configured base-game install. Anything else gets a modal naming the path and opens only if you confirm. Containment is lexical, so `..` can't climb out and a sibling that merely shares a root's name prefix doesn't match. (#134)
-
-* Opening a large graph no longer builds every node's tooltip up front. `setupTooltips` created the header twice and the full details table for each node at setup time, so a graph with thousands of nodes made tens of thousands of detached DOM elements before the layout even ran, for tooltips most of which are never seen. The tooltip DOM is now built inside tippy's `content` closures and memoized there, matching the existing `popperRef` deferral: the header is built on first hover, and the details table only on a hover held past the expand timeout. The dummy tippy anchor moved into the same lazy path. While in there, the edge dedup in `go()` dropped its per-edge `JSON.stringify` key for a NUL-delimited template literal and now builds the deduped list in one pass, instead of materializing an intermediate array of every reference first. (#135)
-
-* The settings schema now declares string `items` for the three array settings (`cwtools.errors.ignore`, `cwtools.errors.ignorefiles`, `cwtools.ignore_patterns`), so the Settings editor renders them as string lists instead of free-form entries. Descriptions that embed error codes, globs, or a reload caveat moved from `description` to `markdownDescription`, with the tokens in code spans and the reload instruction bolded. `cwtools.graph.zoomSensitivity` is now `window` scoped; it was the only `resource`-scoped setting despite being a window-level UI preference. (#143)
-
-* `npm run build -- release` cuts a real release again. It pushed a bare `2.5.0` tag, because the CHANGELOG heading regex captures the version without the `v` and nothing put it back, so `release.yml` (which triggers on `v*`) never fired. The command then packaged and published from the dev machine instead: with no per-platform binaries staged locally, that is a single vsix carrying only the release machine's own server binary, published to the Marketplace with no matrix build and no smoke test. `release` now checks the CHANGELOG section exists, refuses a dirty tree or a tag that already exists locally or on origin, pushes `v<x.y.z>`, and stops. CI does the build, the smoke test, and the publish. The `v` is added where the tag is derived, so a `workflow_dispatch` run no longer cuts a bare-version GitHub release either. (#128)
-
-* Extension highlighting no longer lags or flashes disco colors on large edits and after moving files. The server now serves `textDocument/semanticTokens/full/delta` with a per-file result cache and content-hash memoization so repeated polls skip the walk, and pushes `workspace/semanticTokens/refresh` after a bulk reindex, rules reload, or a watched-file batch so visible editors re-request without a tab switch. File renames are handled via `workspace/didRenameFiles` (with `didCreate`/`didDelete`) and the delta cache is moved to the new URI, so a moved file recolors immediately. `full` now advertises `delta:true` and the file-operations capability covers `**/*.{txt,gui,gfx,asset,yml,cwt}`. (#184)
-
-* Localisation languages and hover preferences now apply without reloading the window. Changing the languages or whether hovers show every language rebuilds the localisation index and diagnostics; debug classification and resolved scopes affect the next hover. `cwtools.rules_folder` and the base-game install-path settings still need a reload, which each description now says. (#142)
-
-* The engine auto-merge no longer accepts a bump that points the submodule backwards. `automerge-engine.yml` checked only that Test passed and that the PR touched nothing but the gitlink, so a Dependabot PR moving the engine to an *older* commit merged like any other — #177 was one (back to `v2.4.0`), stopped only by main's ruleset refusing an unapproved merge. Being tagged is no defense either: `release.yml` refuses an untagged engine, but an older tag clears that gate and would ship a regressed engine. The workflow now reads the gitlink on the base branch and on the PR head and merges only when the move is a fast-forward (GitHub's `compare` status is `ahead`, the API equivalent of `git merge-base --is-ancestor`), leaving anything else for review with a line in the run summary. The changed-path check asserts the file count rather than relying on a one-file PR rendering as a single line, and the header comment no longer claims main is unprotected. (#179)
-
-* The long bulk commands now show a real progress bar, and Cancel actually stops the work. **Clear all caches and reindex**, **Re-index workspace**, **Regenerate game vanilla cache file**, **Reload config rules**, **Generate missing loc**, **Fix all auto-fixable problems in workspace** and the graph build each run inside a cancellable notification that carries the engine's own phase text ("Indexing workspace…", "Validating workspace…") and a percentage that moves during the long parallel passes, instead of an indeterminate spinner with no detail. Cancel now sends `window/workDoneProgress/cancel`, which the engine acts on *while* the scan is running — it stops within a file rather than at the next phase boundary, which on a large mod could be tens of seconds away — and the command returns and reports what happened ("Re-index cancelled.") rather than vanishing silently. Cancelling **Clear all caches** after the purge no longer leaves the base-game index dropped: the rebuild is handed to a background retry and the message says so. Requires MillenniumDawn/cwtools#223; against an older engine the notification keeps its previous indeterminate-spinner behaviour, detected from `executeCommandProvider.workDoneProgress`. (#145)
-
-* One progress indicator per operation instead of three. A bulk command used to light up the extension's status-bar item, a second status-bar spinner from the language client's `$/progress` handling, and the command notification, all for the same scan. The engine now reports a command's progress against the token the client supplies rather than opening its own stream, and the status-bar item stands down while a command notification owns the screen. The status bar still shows the percentage for scans nobody asked for (startup, the periodic background pass). (#145)
-
-* `package-prebuilt` no longer loses the staged server binaries if one platform's `vsce` run fails partway through. `packageAllVsixes` keyed its `finally` restore on whether `release/bin/server` still existed, but a mid-loop failure leaves the failing platform's binary there, so the restore was skipped and the holding directory (the only complete copy) was deleted. The restore is now gated on a success flag, and the partial directory is wiped before the full set is copied back. (#129)
-
-* Edits made outside the editor are picked up for every file the server indexes, not just a hand-picked subset. The client watched `.txt` only under nine named directories, `.gui`/`.gfx`/`.sfx`/`.asset` only under `interface`/`gfx`/`fonts`/`music`/`sound`, and localisation only as `.yml`, while the server's workspace scan walks the whole tree and takes any `txt`, `gui`, `gfx`, `sfx`, `asset` or `map` file, plus `yml`, `yaml` and `csv` under a localisation folder. A git checkout or an external tool touching, say, `portraits/`, `dlc/` or a `.map` file left the index stale until a reload. The watchers are now keyed on those extensions instead of a directory list, with localisation still scoped to `localisation`/`localisation_synced`/`localization` because that is what the server's own loc check requires. Binary resources (`.dds`, `.mesh`) stay unwatched: the server reads a watched file as script, and the file index that filepath checks resolve against is not built in the editor at all. Because extension-keyed globs also catch files the server's own walk skips, and its watched-file path does not re-apply that skip list, the client now drops watched events for the names and directories the engine excludes (`Changelog.txt`, `README.txt`, `LICENSE.txt`, markdown, and anything under `.git`, `node_modules`, `dist`, `target` and the rest); the user's own ignore globs stay a server-side concern. Localisation `.yaml` files also open as Paradox Localisation now, and `.yaml`/`.csv` loc reaches the server on open. (#117)
-
-* A missing `git` on `PATH` no longer surfaces as a cryptic `spawn git ENOENT` inside the rules-download warning. `runGit` translates the spawn ENOENT into a `GitNotFoundError`, and the initial-clone warning now says CWTools needs Git on your PATH (and to install Git and reload) instead of pointing at the network. (#169)
-* `publish-marketplace.yml`'s dry run called `vsce ls-publish`, which isn't a real vsce subcommand, and hid the failure behind `|| true`, so every dry run reported success without validating anything. It now runs `vsce generate-manifest --packagePath` against each downloaded vsix, which actually opens the package and fails the step if one is missing or corrupt. (#193)
-
-### 3.0.1
-
-* 3.0.0 was tagged but never shipped. A release refuses to bundle an untagged engine, and the submodule pointed at a branch commit, so every platform job stopped at that gate and no vsix was built. The pin is now the tagged engine v2.5.0, which carries the same ROOT fix, merged as MillenniumDawn/cwtools#221.
-
 * Installs are on extension 2.5.0, which bundled engine v2.4.0, so this release brings everything in between. **Fix all auto-fixable problems in workspace** has a server side now, so the command the client gates on capability actually runs, and CW100 gains a quick fix for a missing localisation key (MillenniumDawn/cwtools#128). Go-to-definition resolves an enum value. CW113's filepath check gets an opt-in case-sensitive mode, scope fallback no longer breaks on a mixed-case block key, and a subtype-qualified reference counts toward the unused check. On the hardening side, generated workspace edits stay inside the workspace, cache deletion is constrained to cwtools-owned entries, LSP file reads go through a URI access boundary, symlinks are rejected in every discovery walk, and a panic in a background task is logged and recovered instead of taking the server down.
 
 * The `fixAllWorkspace` smoke test asserted the bundled engine does not advertise the command, and predicted in its own comment that a future engine would flip it. v2.5.0 does, so the test now pins the other branch: the server advertises `fixAllWorkspace`, and running the command produces neither the upgrade warning nor a raw protocol error. Activation exposes `serverCommands()` so the host suite can read the advertised commands without loading a second copy of the extension's modules.
@@ -1017,7 +942,134 @@ This is the first release with the engine in-repo under `engine/`. The extension
 ### 1.19.0
 
 * Fixed a feedback loop where a busy language server could make the extension spam "getFileTypes request timed out" and stay stuck: the 5s guard now actually cancels the in-flight request (instead of just giving up locally and leaving it queued on the server), and the editor-tracking retry backs off for a couple of seconds after a timeout instead of firing again immediately. (cwtools-vscode#90)
-* The "did focus file" hint is no lonce triggers (`oil`, `steel`, …) being wrongly flagged "used in incorrect scope … expected combat or unit_leader" when used in a state scope.
+* The "did focus file" hint is no longer re-sent when the active editor is the file it was last sent for.
+* Removed a file watcher on the extension's own rule cache that only generated redundant lint traffic against the server.
+* Upgarded to v1.22.0 of the engine.
+
+### 1.18.0
+
+* A failed first-time download of the language rules now raises a warning notification, instead of silently leaving the extension with no rules and only a line in the output log. A failed offline refresh (rules already present) stays quiet.
+* Documented the background reindex in the README: the idle-gated periodic rescan, the `Re-index workspace` command, and the `cwtools.backgroundReindex.intervalMinutes` setting.
+* Refreshed the theming docs for the single merged `paradox` grammar (the per-game grammars were folded into it in 1.16.0).
+* Removed the dead `cwtools.logging.diagnostic` setting, which did nothing.
+* Housekeeping: bumped the bundled Rust engine submodule to v1.20.0, and made local and PR-CI vsix builds stamp the CHANGELOG version instead of the committed manifest version.
+
+### 1.17.0
+
+* Added a background reindex: the server re-scans the workspace on an interval (default 30 minutes, and only after you've gone idle), so files changed outside the editor and definitions moved between files no longer go stale until a window reload. `cwtools.backgroundReindex.intervalMinutes` tunes the interval; 0 disables it.
+* Added a "Re-index workspace" command to run the same rescan on demand.
+* `history/` script files are now watched, so external edits to them reach the server without a reload.
+
+### 1.16.0
+
+* Fixed identifier highlighting: a letter after a digit inside an id (`my_focus_2b`) was colored differently from the rest of the id. Dates, floats, negative numbers and real event ids (`civil_war.1`) are unaffected. (cwtools-vscode#73)
+* Collapsed the nine vestigial per-game language IDs down to `paradox` and `cwt`, folding the per-game keyword grammars into the base `paradox` grammar. Highlighting is unchanged (no keywords or scopes lost) and the extension manifest is about 450 lines smaller.
+* Removed dead command-palette entries and settings that no longer did anything, and wired the ignore and diagnostic-suppression settings (`ignore_patterns`, `errors.ignorefiles`, `errors.ignore`) through to the server so they take effect live. Added a manifest test that fails if a contributed command is not registered.
+* Corrected the README: removed a stale code-action claim and added Victoria 2 and EU5 to the supported games.
+* Upgrades to v1.19.0 of the Rust cwtools engine:
+  * Completion no longer dumps saved variables where a specific value is expected (`add_tech_bonus` name, focus `x`/`y`, country flags); `mio:` scope keys are suggested inside effect blocks; effect and modifier completion is scope-aware; and `has_dlc` completion inserts a well-formed snippet that quotes DLC names. (cwtools-vscode#74, cwtools-vscode#75, cwtools-vscode#76, cwtools-vscode#77, cwtools-vscode#78, cwtools-vscode#79)
+  * New editor features: document outline, folding, document highlight, and Find All References and Rename across closed files.
+  * New localisation-stub (`genlocall`) and rules-reload (`reloadrulesconfig`) commands, plus diagnostic suppression by error code.
+
+### 1.15.0
+
+* The extension now activates only in Paradox mod workspaces instead of every window. Activation triggers on a Paradox language, a `descriptor.mod` / `.metadata/metadata.json`, or a game executable or content folder at the workspace root, and the cwtools file view only appears once activated. (Opening a lone game script with no folder open no longer auto-activates, which previously only surfaced the "open the mod folder" warning anyway.)
+* Fixed Crusader Kings III and Victoria 3 mod folders being detected as CK2/Vic2: the 2-numbered folder hint matched first, so a "III" folder substring-matched the "II" game. 3-suffixed games are now checked first.
+* The graph view reuses its webview when you change depth instead of tearing it down and re-parsing the 4.6MB bundle each time, so redraws are much faster. Game-exe detection, tooltips and node lookups were also trimmed along the way.
+* The rules folder download (git clone/pull, up to a minute on first run) now runs under a progress notification instead of appearing to hang silently.
+* Upgrades to 1.18.0 of the Rust cwtools engine.
+  * Supports stellaris
+  * Auto completion improvements
+  * Memory improvements + performance improvements
+
+### 1.14.0
+
+* Fixed loc highlighting: text left over outside a quoted value (e.g. a stray character after the closing quote, or bare text instead of a quoted value) was colored as part of the string. It's now flagged in red as invalid, across all bundled themes. (cwtools-vscode#70)
+
+### 1.13.0
+
+* Fixed localisation `.yml` highlighting eating across lines on an unterminated string. (cwtools-vscode#59)
+* Updated the cwtools engine with autocomplete, linting and go-to-definition fixes:
+  * Localisation now flags unterminated quotes and invalid keys. (cwtools-vscode#59)
+  * Better autocomplete context-awareness in alias blocks; scripted effects and dynamic modifiers are suggested; boolean aliases complete with `= yes/no`; duplicates removed. (cwtools-vscode#60, cwtools-vscode#64, cwtools-vscode#65, cwtools-vscode#66, cwtools-vscode#67)
+  * Go-to-definition no longer shows duplicate results. (cwtools-vscode#62)
+  * Missing required-field warnings point at the block key. (cwtools-vscode#63)
+
+### 1.12.0
+
+* Updated to v1.15.0 of the cwtools engine
+  * The cwtools engine upgrade focus on math expressions support for Hearts of Iron IV + improve auto completion and context awareness
+
+### 1.11.2
+
+* Updated to v1.14.1 of the cwtools engine improving auto completion robustness and snappiness
+
+### 1.11.1
+
+* Improved minimalism of the classic theme.
+
+### 1.11.0
+
+* Improved localisation highlighting.
+* Improved themes for various theme structures.
+* Improved intellisense for localisation as a whole.
+* Updated to v1.13.0 the cwtools engine.
+
+### 1.10.0
+
+* Added dedicated highlighting for Paradox localisation `.yml` files: a new `paradox-localisation` language, scoped to `localisation`/`localisation_synced`/`localization` folders so ordinary YAML is untouched. Strings now run to the last quote on the line (an embedded `"` or `#` no longer breaks coloring), `KEY:0` version suffixes and keys with no leading whitespace parse correctly, and `[commands]`, `$references$`, `§` colour codes and `£icons` are highlighted. It reuses the Paradox script grammar's scope names, so the bundled themes and editor defaults color it with no theme changes. (cwtools-vscode#56)
+* Loc hover tooltips no longer append a trailing `#` comment, and no longer truncate a value that legitimately contains a `#`. (cwtools-vscode#50)
+* Loc hover now falls back to the vanilla string for keys defined in the base game but not the mod, and refreshes live as you edit `.yml` files instead of needing a reload. (cwtools-vscode#51, cwtools-vscode#53)
+* Go-to-definition follows a focus/event/decision after it is moved to another file, without a window reload. (cwtools-vscode#52)
+* `visible`/`available` blocks in decisions now complete triggers instead of effects. (cwtools-vscode#57)
+* Added the `## default_bool = yes|no` rule directive: a bool field explicitly set to its declared default gets an info-level hint (CW282) that the line can be omitted. (cwtools-vscode#26)
+
+### 1.9.0
+
+* Reworked the bundled themes. Every theme now paints the full scope set from both grammars (game scripts and `.cwt` rule files) plus a generic baseline, so coloring no longer falls flat in `.cwt` files or on the scopes most themes used to miss.
+* Renamed the themes to `Paradox - <name>` (`Paradox - Nord`, `Paradox - Kate`, ...). If you had one of the old names set, reselect it in the Color Theme picker.
+* Retuned `Paradox - Kate`/`Kate Light`, the `High Contrast` pair, and `Paradox - Syntax` (now a Dark+ flavored default), and converted `Paradox - Dimmed` and `Paradox - Quiet Light` to the full theme format while keeping their look.
+* `.cwt` grammar: rule keys on the left of an assignment (`key = ...`) are now scoped, so they pick up theme colors instead of rendering as plain text.
+* Added a node test that fails if any shipped theme leaves a grammar scope unstyled.
+
+### 1.8.0
+
+* Updated to v1.12.0 of the cwtools engine.
+
+### 1.7.0
+
+* Vendored the TextMate grammars from [cwtools/paradox-syntax](https://github.com/cwtools/paradox-syntax) directly into the extension, so highlighting ships with `cwtools-md-edition` and no longer needs the [tboby.paradox-syntax](https://marketplace.visualstudio.com/items?itemName=tboby.paradox-syntax) extension pack.
+* Added a themes block: `Paradox-Syntax` (minimal), `Paradox-Kate` and `Paradox-Kate-Light` (modeled on the Kate syntax's `defStyleNum` token categorization), `Paradox-Nord` (Nord palette), `Paradox-HighContrast` and `Paradox-HighContrast-Light` (accessibility), plus the upstream `Paradox-Dimmed` and `Paradox-QuietLight` re-homed here.
+* Added [`tools/sync-paradox-syntax.sh`](tools/sync-paradox-syntax.sh) to re-vendor the upstream grammars on demand without touching the themes.
+* The per-game `stellaris`/`hoi4`/`eu4`/`ck2` grammars are intermediate. The end state is a single merged `paradox.tmLanguage.json` with game-specific keywords injected on top; this release keeps the per-game split for now to make the upstream diff trivial to track.
+
+### 1.6.0
+
+* Updated to v1.11.0 of the cwtools engine.
+
+### 1.5.0
+
+* Updated to v1.10.0 of the cwtools engine.
+
+### 1.4.0
+
+* Updated to v1.9.0 of the cwtools engine
+
+### 1.3.4
+
+* Updated to v1.8.4 of the cwtools engine.
+* Fixed the hover for a resource trigger (`oil`, `steel`, …) showing the wrong tooltip: it read "Check ratio of this type of unit for commander" with scopes `unit_leader`/`combat` instead of "Check amount of resource state or country has" with scopes `country`/`state`. The engine was skipping `common/resources` when it indexed the mod, so resources were never recognized and the hover fell through to an unrelated rule. It now indexes `common/resources` and resolves the resource trigger correctly.
+
+### 1.3.3
+
+* Updated to v1.8.3 of the cwtools engine.
+* Autocomplete now finishes effects and triggers as usable snippets. Block ones like `if` complete to `if = { limit = { } }` with the brackets and required fields filled in and tab stops to move between them; value ones like `add_political_power` complete to `add_political_power =` with the cursor ready for the value.
+
+### 1.3.2
+
+* Updated to v1.8.2 of the cwtools engine.
+* Fixed a parser bug where a names/callsigns list mixing quoted and unquoted entries (e.g. `{ "Sunshine" Demon }`) reported a false "unclosed clause" error and dropped the rest of the file. Affected `common/names` and unit name files.
+* Fixed resource triggers (`oil`, `steel`, …) being wrongly flagged "used in incorrect scope … expected combat or unit_leader" when used in a state scope.
 * A numeric state-id block (`129 = { ... }`) now resolves to the state scope, so triggers and effects inside it (and the hover) show state. `random_list` weight buckets keep the surrounding scope.
 
 ### 1.3.1
@@ -2209,4 +2261,97 @@ Press "Show event graph" in an event file in order to visualise your events
   * government key
   * ruler\_title, ruler\_title\_female, heir\_title, heir\_title\_female
   * civic
-  * civic plus "_
+  * civic plus "_desc"
+  * civic description
+* Add localisation for personalities
+  * "personality_" plus personality
+  * peronality plus "_desc"
+* Add localisation for ethics
+  * ethics
+  * ethics plus "_desc"
+* Add localisation for planet_classes
+  * planet class
+  * planet class plus "_desc"
+  * if colonizable
+    * planet class plus "_tile"
+    * planet class plus "\_tile\_desc"
+    * "trait\_" plus planet class plus "\_preference"
+    * preference plus "_desc"
+    * planet class plus "_habitability"
+* Add localisation for edicts
+  * "edict\_" plus edict name
+  * "edict\_" plus edict name plus "\_desc"
+* Add localisation for policies
+  * "policy\_" plus policy
+  * "policy\_" plus policy plus "\_desc"
+  * policy option name
+  * policy option name plus "\_desc"
+  * policy option flags
+* Add more localisation for technology
+  * feature_flags
+  * feature\_flags + "\_desc"
+* Add localisation for section_templates
+  * key
+* Add localisation for species\_name
+  * "\_desc"; "\_plural"; "\_insult\_01"; "\_insult\_plural\_01"; "\_compliment\_01";"\_compliment\_plural\_01";"\_spawn";"\_spawn\_plural";
+                                "\_sound\_01";"\_sound\_02";"\_sound\_03";"\_sound\_04";"\_sound\_05";"\_organ";"\_mouth"
+* Add localisation for strategic_resources
+  * resource
+  * resource + "\_desc"
+
+### 0.2.8
+
+* Temporarily remove research leader checks
+
+### 0.2.7
+
+* Add localisation for armies and army_attachments
+  * army name
+  * army name plus "_plural"
+  * army name plus "_desc"
+  * attachtment is the same three but starting "army_"
+* Add localisation for aura in component_templates
+* Add localisation for diplo phrases
+* Check technology "research_leader"'s "has\_trait" matches the technology category
+* Add localisation for ship_sizes
+* Add localisation for pop\_faction\_types
+* Add localisation for technology gateway
+* Add localisation for species_rights
+  * right name
+  * right name plus "_tooltip"
+  * right name plus "\_tooltip\_delayed"
+* Add localisation for map setup_secnarios
+* Add localisation for megastructurew
+  * megastructure name
+  * megastrcture name plus "_DESC"
+  * megastructure name plus "\_MEGASTRUCTURE\_DETAILS"
+  * megastructure name plsu "\_CONSTRUCTION\_INFO\_DELAYED"
+
+### 0.2.6
+
+* Add more validation for technologies
+  * All "research_leader" must have an area, which should match the technology
+
+### 0.2.5
+
+* Add localisation checks for buildings
+  * building name
+  * build name plus "_desc"
+  * all "fail_text" under buildings
+* Add localisation checks for component_templates
+  * key
+* Add localisation checks for traditions
+  * use tradition_categories to determine traditions
+  * tradition name for all
+  * tradition_desc for start + traditions
+  * tradition_delayed for traditions
+  * tradition_effect for start and finish
+
+### 0.2.4
+
+* Add localisation checks for technology
+  * technology name
+  * technology name plus "_desc"
+  * all "title" and "desc" keys under "prereqfor_desc"
+* Add localisation checks for component_sets
+  * component\_set's "key", but only is "required\_component\_set" is false
