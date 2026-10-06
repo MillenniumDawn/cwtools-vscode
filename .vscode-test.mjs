@@ -22,7 +22,9 @@
 // (added for #185, unrelated to detection) is Stellaris's content marker (see
 // extension/src/host/games.ts), so it already detects as `stellaris` and fetches
 // real rules in the background on activation. `host` needs the built server
-// binary, so it is gated in ci.yml's `build` job rather than `check`.
+// binary, so it is gated in ci.yml's `build` job rather than `check`; two of
+// its assertions stay `test.skip` against genuine engine gaps
+// (MillenniumDawn/cwtools#317, #318).
 //
 // The multi-root fixture needs a staged server, so it runs with smoke after the
 // build job has produced one; unit remains server-free for fast client tests.
@@ -41,7 +43,8 @@
 //
 // Coverage applies globally when `--coverage` is passed. test:coverage runs
 // the `host` and `live` labels together, preserving their separate workspaces
-// while collecting them in one session; host also exercises graphPanel.ts.
+// while collecting them in one session. Vitest-owned modules stay out of this
+// report because their node-side tests give the accurate coverage measurement.
 
 import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";

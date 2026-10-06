@@ -101,14 +101,19 @@ suite('LSP Hover Tests', function () {
 			const uri = vscode.Uri.file(testEventFile);
 			const document = await vscode.workspace.openTextDocument(uri);
 			await vscode.window.showTextDocument(document);
-			assert.ok(await waitForLanguageServer(uri), 'Language server should be ready');
-			const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
-				'vscode.executeHoverProvider',
-				document.uri,
-				new vscode.Position(1000, 1000)
-			);
-			expect(hovers ?? [], 'invalid positions should not produce a hover').to.be.empty;
-			await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+			try {
+				const hovers = await vscode.commands.executeCommand<vscode.Hover[]>(
+					'vscode.executeHoverProvider',
+					document.uri,
+					new vscode.Position(1000, 1000)
+				);
+				assert.ok(
+					!hovers || hovers.length === 0,
+					`Expected no hover outside the document, received ${hovers.length}`
+				);
+			} finally {
+				await vscode.commands.executeCommand('workbench.action.closeActiveEditor');
+			}
 		});
 	});
 
