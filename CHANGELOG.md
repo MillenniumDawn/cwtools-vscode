@@ -2,7 +2,6 @@
 
 #### Engine
 
-* Ignore trailing `#` comments when parsing `.cwt` directive values, preserving cardinality and severity settings without suppressing genuinely malformed directives. (#603)
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
 * Reclaim removed localisation URI references and recycle file records after sweeping their old sites, bounding metadata growth across repeated refreshes. (#846)
@@ -70,7 +69,6 @@
 #### Extension
 
 * Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. (#603)
-
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
 * Keep graph commands gated by the live server capability and remove an unused
   webview export. (#765)
