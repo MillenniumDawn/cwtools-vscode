@@ -28,9 +28,7 @@ def procs(*codes: int | None) -> list[subprocess.Popen[bytes]]:
 
 
 _TEST_ENV_READ = re.compile(r"\bprocess\.env\.(CWTOOLS_TEST_[A-Z0-9_]+)\b")
-_TEST_ENV_DEFINE = re.compile(
-    r"--define:process\.env\.(CWTOOLS_TEST_[A-Z0-9_]+)=(.*)"
-)
+_TEST_ENV_DEFINE = re.compile(r"--define:process\.env\.(CWTOOLS_TEST_[A-Z0-9_]+)=(.*)")
 
 
 def _source_test_env_names() -> set[str]:
@@ -178,9 +176,7 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
     binary = esbuild.esbuild_bin()
     if not binary.is_file():
         if os.environ.get("CI"):
-            pytest.fail(
-                "esbuild is not installed in CI; real-esbuild smoke must run"
-            )
+            pytest.fail("esbuild is not installed in CI; real-esbuild smoke must run")
         pytest.skip("esbuild is not installed")
 
     source = tmp_path / "repo.ts"
