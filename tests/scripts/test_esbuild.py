@@ -10,7 +10,7 @@ from typing import Self, cast
 import pytest
 
 import esbuild
-from paths import EXTENSION_SOURCE_ROOT
+from paths import EXTENSION_HOST_ROOT, EXTENSION_SOURCE_ROOT
 
 
 # wait_for_watcher_exit only ever calls poll(), so a stub keeps the test from
@@ -51,7 +51,7 @@ def _test_env_defines(args: list[str]) -> dict[str, str]:
 
 def _esbuild_test_args(source: Path, outfile: Path, *, release: bool) -> list[str]:
     args = esbuild.bundle_commands(watch=False, dev=False, release=release)[0]
-    entrypoint = str(esbuild.EXTENSION_HOST_ROOT / "extension.ts")
+    entrypoint = str(EXTENSION_HOST_ROOT / "extension.ts")
     args[args.index(entrypoint)] = str(source)
     outfile_index = next(
         index for index, arg in enumerate(args) if arg.startswith("--outfile=")
