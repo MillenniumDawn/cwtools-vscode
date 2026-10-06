@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -8,6 +10,7 @@ from typing import Self, cast
 import pytest
 
 import esbuild
+from paths import EXTENSION_SOURCE_ROOT
 
 
 # wait_for_watcher_exit only ever calls poll(), so a stub keeps the test from
@@ -24,12 +27,18 @@ def procs(*codes: int | None) -> list[subprocess.Popen[bytes]]:
     return cast("list[subprocess.Popen[bytes]]", [FakeProcess(code) for code in codes])
 
 
-TEST_ENV_DEFINES = (
-    "--define:process.env.CWTOOLS_TEST_HOI4_REPO=undefined",
-    "--define:process.env.CWTOOLS_TEST_HOI4_REF=undefined",
-    "--define:process.env.CWTOOLS_TEST_RULES_MANIFEST_URL=undefined",
-    "--define:process.env.CWTOOLS_TEST_RULES_FOLDER=undefined",
-)
+@pytest.fixture(name="test_env_names", scope="session")
+def test_env_names_fixture() -> set[str]:
+    names = {
+        name
+        for source in EXTENSION_SOURCE_ROOT.rglob("*.ts")
+        for name in re.findall(
+            r"\bprocess\.env\.(CWTOOLS_TEST_\w+)",
+            source.read_text(encoding="utf-8"),
+        )
+    }
+    assert names
+    return names
 
 
 def test_extension_bundle_is_node_cjs() -> None:
@@ -39,14 +48,17 @@ def test_extension_bundle_is_node_cjs() -> None:
     assert "--external:vscode" in args
     assert "extension.ts" in args
     assert "--watch" not in args
-    for define in TEST_ENV_DEFINES:
-        assert define not in args
+    assert "--define:process.env.CWTOOLS_TEST_" not in args
 
 
-def test_release_folds_test_env_overrides() -> None:
-    args = " ".join(esbuild.extension_args(watch=False, release=True))
-    for define in TEST_ENV_DEFINES:
-        assert define in args
+def test_release_folds_test_env_overrides(test_env_names: set[str]) -> None:
+    args = esbuild.extension_args(watch=False, release=True)
+    defines = {
+        arg for arg in args if arg.startswith("--define:process.env.CWTOOLS_TEST_")
+    }
+    assert defines == {
+        f"--define:process.env.{name}=undefined" for name in test_env_names
+    }
 
 
 def test_webview_bundle_is_browser_iife() -> None:
@@ -110,12 +122,11 @@ def test_dev_flag_sets_development_without_watch(
     )
     assert "--watch" not in " ".join(commands[0])
     assert "--watch" not in " ".join(commands[1])
-    for define in TEST_ENV_DEFINES:
-        assert define not in " ".join(commands[0])
+    assert "--define:process.env.CWTOOLS_TEST_" not in " ".join(commands[0])
 
 
 def test_release_flag_defines_test_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, test_env_names: set[str]
 ) -> None:
     stub_bin = tmp_path / "esbuild"
     stub_bin.touch()
@@ -124,8 +135,8 @@ def test_release_flag_defines_test_env(
     monkeypatch.setattr(esbuild, "_run", commands.append)
     assert esbuild.main(["--release"]) == 0
     extension = " ".join(commands[0])
-    for define in TEST_ENV_DEFINES:
-        assert define in extension
+    for name in test_env_names:
+        assert f"--define:process.env.{name}=undefined" in extension
     assert "--watch" not in extension
 
 
@@ -145,42 +156,61 @@ def test_watch_treats_an_early_clean_exit_as_failure() -> None:
     assert esbuild.wait_for_watcher_exit(procs(None, 0), poll_interval=0) == 1
 
 
-def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
-    binary = esbuild.esbuild_bin()
-    if not binary.is_file():
+def test_windows_bundles_use_the_resolved_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda _name: "resolved-node")
+
+    commands = esbuild.bundle_commands(watch=False, dev=False)
+
+    assert all(
+        command[:2] == ["resolved-node", str(esbuild.esbuild_bin())]
+        for command in commands
+    )
+
+
+def test_windows_bundles_reject_missing_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match=r"^node is not on PATH$"):
+        esbuild.bundle_commands(watch=False, dev=False)
+
+
+@pytest.mark.parametrize("release", [False, True], ids=["development", "release"])
+def test_bundle_test_env_reads_with_production_args(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    test_env_names: set[str],
+    release: bool,
+) -> None:
+    if not esbuild.esbuild_bin().is_file():
         pytest.skip("esbuild is not installed")
 
-    source = tmp_path / "repo.ts"
-    source.write_text(
-        'export const repo = process.env.CWTOOLS_TEST_RULES_FOLDER ?? "https://ok.example";\n',
-        encoding="utf-8",
+    source = tmp_path / "extension.ts"
+    reads = ",\n".join(
+        f'process.env.{name} ?? "https://ok.example"' for name in sorted(test_env_names)
     )
-    dropped = tmp_path / "dropped.js"
-    kept = tmp_path / "kept.js"
-    common = [str(binary), str(source), "--bundle", "--format=cjs"]
+    source.write_text(f"export const overrides = [{reads}];\n", encoding="utf-8")
+    dist = tmp_path / "dist"
+    monkeypatch.setattr(esbuild, "EXTENSION_HOST_ROOT", tmp_path)
+    monkeypatch.setattr(esbuild, "EXTENSION_DIST_ROOT", dist)
 
-    folded = subprocess.run(
-        [
-            *common,
-            f"--outfile={dropped}",
-            "--define:process.env.CWTOOLS_TEST_RULES_FOLDER=undefined",
-        ],
+    result = subprocess.run(
+        esbuild.bundle_commands(watch=False, dev=False, release=release)[0],
         check=False,
         capture_output=True,
         text=True,
     )
-    assert folded.returncode == 0, folded.stderr
+    assert result.returncode == 0, result.stderr
 
-    live = subprocess.run(
-        [*common, f"--outfile={kept}"],
-        check=False,
-        capture_output=True,
-        text=True,
+    bundled = (dist / "bin" / "client" / "extension" / "extension.js").read_text(
+        encoding="utf-8"
     )
-    assert live.returncode == 0, live.stderr
-
-    dropped_js = dropped.read_text(encoding="utf-8")
-    kept_js = kept.read_text(encoding="utf-8")
-    assert "CWTOOLS_TEST" not in dropped_js
-    assert "https://ok.example" in dropped_js
-    assert "CWTOOLS_TEST" in kept_js
+    assert "https://ok.example" in bundled
+    if release:
+        assert "CWTOOLS_TEST_" not in bundled
+    else:
+        for name in test_env_names:
+            assert name in bundled

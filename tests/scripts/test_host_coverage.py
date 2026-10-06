@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -14,6 +15,7 @@ import pytest
 
 import host_coverage
 import hosttest
+from paths import BUILD_DIR
 
 requires_proc = pytest.mark.skipif(
     not Path("/proc/self/stat").is_file(),
@@ -80,7 +82,7 @@ def signalled_runner(tmp_path: Path, script: str) -> str:
     return "\n".join(
         [
             "import sys",
-            f"sys.path.insert(0, {str(Path(host_coverage.__file__).parent)!r})",
+            f"sys.path.insert(0, {str(BUILD_DIR)!r})",
             "import host_coverage",
             "host_coverage.run_with_timeout(",
             "    'signalled',",
@@ -351,6 +353,28 @@ def test_an_unavailable_display_backend_fails_before_the_compile(
     assert not coverage_dir.exists()
 
 
+def test_missing_npm_fails_before_compilation_and_clears_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    coverage_dir = tmp_path / "coverage"
+    coverage_dir.mkdir()
+    (coverage_dir / "coverage-summary.json").write_text("{}", encoding="utf-8")
+    display = hosttest.Display("native", [], None)
+    monkeypatch.setattr(host_coverage, "COVERAGE_DIR", coverage_dir)
+    monkeypatch.setattr(host_coverage, "resolve_display", lambda: display)
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    def refuse_compilation(*_args: object) -> None:
+        pytest.fail("compilation must not start without npm")
+
+    monkeypatch.setattr(host_coverage, "_run", refuse_compilation)
+
+    with pytest.raises(RuntimeError, match=r"^npm is not on PATH$"):
+        host_coverage.main()
+
+    assert not coverage_dir.exists()
+
+
 def test_runs_host_and_live_labels_in_one_coverage_command(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -359,6 +383,7 @@ def test_runs_host_and_live_labels_in_one_coverage_command(
     labels_seen: list[list[str]] = []
     coverage_seen: list[bool] = []
     invoked_command: list[str] = []
+    compile_commands: list[list[str]] = []
     display = hosttest.Display("native", [], None)
 
     def make_test_cli_command(
@@ -387,15 +412,19 @@ def test_runs_host_and_live_labels_in_one_coverage_command(
             encoding="utf-8",
         )
 
+    def record_compilation(_name: str, command: str, args: list[str]) -> None:
+        compile_commands.append([command, *args])
+
     monkeypatch.setattr(host_coverage, "COVERAGE_DIR", coverage_dir)
     monkeypatch.setattr(host_coverage, "SUMMARY_PATH", summary_path)
     monkeypatch.setattr(host_coverage, "resolve_display", lambda: display)
-    monkeypatch.setattr(host_coverage, "_npm", lambda: "npm")
-    monkeypatch.setattr(host_coverage, "_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(shutil, "which", lambda _name: "resolved-npm")
+    monkeypatch.setattr(host_coverage, "_run", record_compilation)
     monkeypatch.setattr(host_coverage, "test_cli_command", make_test_cli_command)
     monkeypatch.setattr(host_coverage, "run_with_timeout", record_command)
 
     assert host_coverage.main() == 0
+    assert compile_commands == [["resolved-npm", "run", "compile"]]
     assert labels_seen == [["host", "live"]]
     assert coverage_seen == [True]
     assert invoked_command == [
