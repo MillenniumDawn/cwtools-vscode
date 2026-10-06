@@ -22,9 +22,7 @@
 // (added for #185, unrelated to detection) is Stellaris's content marker (see
 // extension/src/host/games.ts), so it already detects as `stellaris` and fetches
 // real rules in the background on activation. `host` needs the built server
-// binary, so it is gated in ci.yml's `build` job rather than `check`; two of
-// its assertions stay `test.skip` against genuine engine gaps
-// (MillenniumDawn/cwtools#317, #318).
+// binary, so it is gated in ci.yml's `build` job rather than `check`.
 //
 // The multi-root fixture needs a staged server, so it runs with smoke after the
 // build job has produced one; unit remains server-free for fast client tests.
