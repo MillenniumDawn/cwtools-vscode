@@ -1252,7 +1252,46 @@ suite("lspClient — executeCommand middleware", () => {
 		assert.deepStrictEqual(next.mock.calls, []);
 	});
 
-	test("validateWorkspace cancellation result is silent", async () => {
+	// workspaceWide off publishes no closed-file diagnostics, so the Problems
+	// panel holds only open files while the totals cover the whole workspace.
+	// The summary has to say so; Show Problems stays, open files do show up.
+	test("validateWorkspace summary explains open-files-only Problems when workspace-wide diagnostics are off", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["validateWorkspace"]);
+		client.sendRequest.mockResolvedValue({
+			totalFiles: 10,
+			validatedFiles: 7,
+			filesWithErrors: 2,
+			totalErrors: 3,
+			totalWarnings: 4,
+			totalInfos: 5,
+			totalHints: 6,
+		});
+		configurationValues.set("diagnostics.workspaceWide", false);
+		showInformationMessage.mockResolvedValue(undefined);
+		const next = vi.fn();
+
+		const result: unknown = await middleware("validateWorkspace", [], next);
+
+		assert.deepStrictEqual(result, {
+			totalFiles: 10,
+			validatedFiles: 7,
+			filesWithErrors: 2,
+			totalErrors: 3,
+			totalWarnings: 4,
+			totalInfos: 5,
+			totalHints: 6,
+		});
+		assert.deepStrictEqual(showWarningMessage.mock.calls, []);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			[
+				"CWTools: validated 7 of 10 files; 2 with errors, 3 errors, 4 warnings, 5 infos, 6 hints. Problems only lists open files while workspace-wide diagnostics are off.",
+				"Show Problems",
+			],
+		]);
+	});
+
+	test("validateWorkspace cancellation result reports the cancelled command", async () => {
 		const { middleware, client } = middlewareSetup();
 		client.initializeResult = serverCommands(["validateWorkspace"]);
 		client.sendRequest.mockResolvedValue({ cancelled: true });
@@ -1260,7 +1299,11 @@ suite("lspClient — executeCommand middleware", () => {
 		const result: unknown = await middleware("validateWorkspace", [], vi.fn());
 
 		assert.deepStrictEqual(result, { cancelled: true });
-		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		// The token path returns normally with `{ cancelled: true }`; the toast
+		// matches the `$/cancelRequest` fallback rather than vanishing.
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			["CWTools: validateWorkspace cancelled."],
+		]);
 		assert.deepStrictEqual(showWarningMessage.mock.calls, []);
 		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
 	});

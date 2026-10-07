@@ -177,10 +177,18 @@ function workspaceValidationSummary(value: unknown): WorkspaceValidationSummary 
 	return record as unknown as WorkspaceValidationSummary;
 }
 
-function showWorkspaceValidationResult(result: unknown): void {
+function showWorkspaceValidationResult(
+	command: ServerCommandName,
+	result: unknown,
+): void {
 	if (result !== null && typeof result === "object") {
 		const record = result as Record<string, unknown>;
+		// Token-path cancellation: the server stopped the graceful scan and came
+		// back with `{ cancelled: true }`. Say so — the `$/cancelRequest`
+		// fallback in this middleware reports the same cancellation, and a
+		// notification that just vanishes reads as a silent failure.
 		if (record.cancelled === true) {
+			window.showInformationMessage(l10n.t("CWTools: {0} cancelled.", command));
 			return;
 		}
 		if (record.busy === true) {
@@ -197,7 +205,7 @@ function showWorkspaceValidationResult(result: unknown): void {
 		);
 		return;
 	}
-	const message = l10n.t(
+	const validatedSummary = l10n.t(
 		"CWTools: validated {0} of {1} files; {2} with errors, {3} errors, {4} warnings, {5} infos, {6} hints.",
 		summary.validatedFiles,
 		summary.totalFiles,
@@ -207,6 +215,19 @@ function showWorkspaceValidationResult(result: unknown): void {
 		summary.totalInfos,
 		summary.totalHints,
 	);
+	// With workspace-wide diagnostics off the server still totals every file
+	// but publishes none of the closed-file diagnostics, so the Problems panel
+	// below only lists open files. Say so rather than point the numbers at a
+	// panel that is missing most of them. Read the setting the same way the
+	// server sees it (cf. readLiveServerSettings). The totals cover the whole
+	// workspace in both cases.
+	const workspaceWide =
+		workspace
+			.getConfiguration("cwtools")
+			.get<boolean>("diagnostics.workspaceWide") ?? true;
+	const message = workspaceWide
+		? validatedSummary
+		: `${validatedSummary} ${l10n.t("Problems only lists open files while workspace-wide diagnostics are off.")}`;
 	const showProblems = l10n.t("Show Problems");
 	void Promise.resolve(window.showInformationMessage(message, showProblems)).then(
 		(choice) => {
@@ -553,7 +574,7 @@ export function createLanguageClient(
 					title,
 				);
 				if (command === serverCommand("validateWorkspace")) {
-					showWorkspaceValidationResult(result);
+					showWorkspaceValidationResult(command, result);
 					return result;
 				}
 				// Against a server that supports command progress this covers

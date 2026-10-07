@@ -20,6 +20,7 @@
 
 #### Extension
 
+* Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. (#603)
 * Measure watched-file exclusions from configured parent, vanilla and rules roots as well as the workspace (the rules root for `.cwt` files only), refreshing roots on restart or rules-folder changes. Add a real create/change/delete watcher regression. (#862)
 * When the client drops watched-file events, skipped directory names (`.git`, `.claude`, `target`, `dist`, `out` and the rest) no longer count in the folders above the served workspace root. A mod checked out under a folder with one of those names, such as `.claude/worktrees/<mod>`, used to index at startup but ignore later external edits, checkouts and deletes. (#835)
 * Report graph image export failures in the webview instead of leaving rejected promises unhandled, and allow a later export to succeed. (#834)
@@ -68,7 +69,6 @@
 
 #### Extension
 
-* Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. (#603)
 * Add the cwtools.enable setting (default true) so the extension can be switched off per workspace; when disabled, activation starts no server and registers no client or watchers. (#505)
 * Keep graph commands gated by the live server capability and remove an unused
   webview export. (#765)
