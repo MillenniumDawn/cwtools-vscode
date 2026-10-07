@@ -363,6 +363,7 @@ const MAX_CONCURRENT_VALIDATIONS: usize = 2;
 
 pub(crate) struct DocumentStore {
     documents: HashMap<String, ParsedDoc>,
+    content_hashes: HashMap<String, u64>,
     pub(crate) retained_text_bytes: usize,
 }
 
@@ -370,8 +371,13 @@ impl DocumentStore {
     pub(crate) fn new() -> Self {
         Self {
             documents: HashMap::new(),
+            content_hashes: HashMap::new(),
             retained_text_bytes: 0,
         }
+    }
+
+    pub(crate) fn content_hash(&self, uri: &str) -> Option<u64> {
+        self.content_hashes.get(uri).copied()
     }
 
     /// The open buffer's text as a refcount clone. `ParsedDoc.text` is an
@@ -388,6 +394,16 @@ impl DocumentStore {
         uri: String,
         document: ParsedDoc,
     ) -> std::result::Result<(), DocumentRejection> {
+        let content_hash = cwtools_cache::workspace::content_hash(&document.text);
+        self.open_with_hash(uri, document, content_hash)
+    }
+
+    pub(crate) fn open_with_hash(
+        &mut self,
+        uri: String,
+        document: ParsedDoc,
+        content_hash: u64,
+    ) -> std::result::Result<(), DocumentRejection> {
         let old_len = self
             .documents
             .get(&uri)
@@ -396,7 +412,8 @@ impl DocumentStore {
             return Err(DocumentRejection::TooManyOpen);
         }
         let retained = self.replacement_total(old_len, document.retained_bytes())?;
-        self.documents.insert(uri, document);
+        self.documents.insert(uri.clone(), document);
+        self.content_hashes.insert(uri, content_hash);
         self.retained_text_bytes = retained;
         Ok(())
     }
@@ -406,6 +423,17 @@ impl DocumentStore {
         uri: &str,
         version: i32,
         text: Arc<str>,
+    ) -> std::result::Result<(), DocumentRejection> {
+        let content_hash = cwtools_cache::workspace::content_hash(&text);
+        self.change_with_hash(uri, version, text, content_hash)
+    }
+
+    pub(crate) fn change_with_hash(
+        &mut self,
+        uri: &str,
+        version: i32,
+        text: Arc<str>,
+        content_hash: u64,
     ) -> std::result::Result<(), DocumentRejection> {
         let Some(document) = self.documents.get(uri) else {
             return Err(DocumentRejection::NotOpen);
@@ -419,6 +447,7 @@ impl DocumentStore {
         document.version = version;
         document.text = text;
         document.loc_cache = None;
+        self.content_hashes.insert(uri.to_string(), content_hash);
         self.retained_text_bytes = retained;
         Ok(())
     }
@@ -468,6 +497,7 @@ impl DocumentStore {
 
     pub(crate) fn remove(&mut self, uri: &str) -> Option<ParsedDoc> {
         let document = self.documents.remove(uri)?;
+        self.content_hashes.remove(uri);
         self.retained_text_bytes -= document.retained_bytes();
         Some(document)
     }
@@ -1064,6 +1094,7 @@ impl DocumentState {
         &self,
         uri: String,
         document: ParsedDoc,
+        content_hash: u64,
         mut is_workspace_document: impl FnMut() -> bool,
     ) -> std::result::Result<(), DocumentRejection> {
         loop {
@@ -1075,7 +1106,7 @@ impl DocumentState {
             if roots_generation != self.workspace_roots_generation.load(Ordering::Acquire) {
                 continue;
             }
-            return documents.open(uri, document);
+            return documents.open_with_hash(uri, document, content_hash);
         }
     }
 }

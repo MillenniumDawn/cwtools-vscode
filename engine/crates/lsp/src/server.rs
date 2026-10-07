@@ -459,6 +459,34 @@ impl Backend {
 /// on the message pump (#470), so they live outside the trait impl where the
 /// unit tests can drive them directly without a worker.
 impl Backend {
+    pub(crate) async fn move_open_document(&self, old_uri: &str, new_uri: &str) -> bool {
+        let _publication = self.state.diagnostic_publication_lock.lock().await;
+        let mut docs = self.state.documents.lock();
+        let Some(content_hash) = docs.content_hash(old_uri) else {
+            return false;
+        };
+        let Some(mut document) = docs.remove(old_uri) else {
+            return false;
+        };
+        let document_version = document.version;
+        document.loc_cache = None;
+        if docs
+            .open_with_hash(new_uri.to_string(), document, content_hash)
+            .is_err()
+        {
+            self.state.fixable_edits.lock().remove(old_uri);
+            return false;
+        }
+        let mut fixable_edits = self.state.fixable_edits.lock();
+        if let Some(edits) = fixable_edits.remove(old_uri)
+            && edits.version == Some(document_version)
+            && edits.content_hash == Some(content_hash)
+        {
+            fixable_edits.insert(new_uri.to_string(), edits);
+        }
+        true
+    }
+
     #[tracing::instrument(skip_all)]
     pub(crate) async fn did_open_impl(&self, mut params: DidOpenTextDocumentParams) {
         canonicalize_url(&mut params.text_document.uri);
@@ -488,6 +516,7 @@ impl Backend {
                 ast_source_bytes: 0,
                 loc_cache: None,
             },
+            source_hash,
             || self.is_workspace_document(&uri),
         );
         if let Err(rejection) = admission {
@@ -546,7 +575,7 @@ impl Backend {
             .state
             .documents
             .lock()
-            .change(&uri, version, Arc::from(text));
+            .change_with_hash(&uri, version, Arc::from(text), source_hash);
         if let Err(rejection) = admission {
             tracing::warn!(%uri, reason = rejection.reason(), "ignoring didChange");
             return;
@@ -585,7 +614,7 @@ impl Backend {
             let snapshot = {
                 let docs = self.state.documents.lock();
                 docs.get(&uri)
-                    .map(|d| (d.version, cwtools_cache::workspace::content_hash(&d.text)))
+                    .and_then(|d| docs.content_hash(&uri).map(|hash| (d.version, hash)))
             };
             self.clear_ignored_file_state(&uri);
             self.update_doc_tokens(&uri, None);
@@ -593,7 +622,7 @@ impl Backend {
                 self.publish_filtered(url, Vec::new(), Some(version), Some(source_hash))
                     .await;
             } else if let Ok(url) = Url::parse(&uri) {
-                self.publish_filtered(url, Vec::new(), None, None).await;
+                self.publish_if_closed(url, Vec::new(), None).await;
             }
             return;
         }
@@ -825,7 +854,7 @@ impl LanguageServer for Backend {
         let deferred = std::mem::take(&mut *self.state.deferred_rule_diagnostics.lock());
         for (uri, diags) in deferred {
             if let Ok(url) = uri.parse() {
-                self.client.publish_diagnostics(url, diags, None).await;
+                self.publish_if_closed(url, diags, None).await;
             }
         }
         let deferred_msgs = std::mem::take(&mut *self.state.deferred_rules_messages.lock());
@@ -1159,14 +1188,9 @@ impl LanguageServer for Backend {
                 canonicalize_uri_string(&mut f.new_uri);
                 let old = f.old_uri.as_str();
                 let new = f.new_uri.as_str();
-                let moved = {
-                    let mut docs = backend.state.documents.lock();
-                    docs.remove(old)
-                        .map(|doc| (old.to_string(), new.to_string(), doc))
-                };
-                if let Some((old_uri, new_uri, mut doc)) = moved {
-                    doc.loc_cache = None;
-                    let _ = backend.state.documents.lock().open(new_uri.clone(), doc);
+                if backend.move_open_document(old, new).await {
+                    let old_uri = old.to_string();
+                    let new_uri = new.to_string();
                     // same non-reentrant mutex (#334).
                     let moved_tokens = backend.state.semantic_tokens_cache.lock().remove(&old_uri);
                     if let Some(entry) = moved_tokens {

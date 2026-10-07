@@ -999,7 +999,7 @@ impl Backend {
                     return;
                 };
                 if document.version != version
-                    || source_hash != cwtools_cache::workspace::content_hash(&document.text)
+                    || docs.content_hash(uri.as_str()) != Some(source_hash)
                 {
                     return;
                 }
@@ -3643,6 +3643,107 @@ mod ignored_tests {
             socket.next().now_or_never().is_none(),
             "late close clear must not publish"
         );
+    }
+
+    #[tokio::test]
+    async fn file_rename_waits_for_in_flight_diagnostic_send() {
+        let uri = stale_publication_uri();
+        let new_uri = if cfg!(windows) {
+            "file:///C:/ws/common/ideas/01_ideas.txt".to_string()
+        } else {
+            "file:///ws/common/ideas/01_ideas.txt".to_string()
+        };
+        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
+        open_stale_publication_doc(&backend, &uri, "old text");
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        super::diagnostic_publish_test_hook::set(
+            &backend,
+            Arc::clone(&entered),
+            Arc::clone(&release),
+        );
+        let publishing_backend = backend.clone();
+        let publishing_uri = uri.clone();
+        let diagnostic = |replacement: &str| Diagnostic {
+            code: Some(NumberOrString::String("CW253".into())),
+            data: Some(crate::code_action::fix_to_data(
+                &cwtools_parser::fix::SuggestedFix::replace(
+                    "Replace value",
+                    cwtools_parser::ast::SourceRange {
+                        start: cwtools_parser::ast::SourcePos { line: 1, col: 0 },
+                        end: cwtools_parser::ast::SourcePos { line: 1, col: 1 },
+                    },
+                    replacement,
+                ),
+            )),
+            ..Default::default()
+        };
+        let publish = tokio::spawn(async move {
+            publishing_backend
+                .publish_filtered(
+                    publishing_uri.parse().unwrap(),
+                    vec![diagnostic("current")],
+                    Some(1),
+                    Some(cwtools_cache::workspace::content_hash("old text")),
+                )
+                .await;
+        });
+        entered.notified().await;
+
+        let mut moving = Box::pin(backend.move_open_document(&uri, &new_uri));
+        let first_poll =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(moving.as_mut().poll(cx))).await;
+        assert!(
+            first_poll.is_pending(),
+            "rename must wait until the in-flight diagnostic send completes"
+        );
+        assert!(backend.state.documents.lock().contains_key(&uri));
+        assert!(backend.state.fixable_edits.lock().contains_key(&uri));
+
+        release.notify_one();
+        publish.await.unwrap();
+        assert!(moving.await);
+
+        let message = socket.next().await.expect("version 1 diagnostics publish");
+        assert_eq!(message.method(), "textDocument/publishDiagnostics");
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(message.params().cloned().unwrap_or_default())
+                .expect("publishDiagnostics params");
+        assert_eq!(published.uri.as_str(), uri.as_str());
+        assert_eq!(published.version, Some(1));
+
+        let docs = backend.state.documents.lock();
+        assert!(!docs.contains_key(&uri));
+        assert!(docs.contains_key(&new_uri));
+        assert_eq!(
+            docs.content_hash(&new_uri),
+            Some(cwtools_cache::workspace::content_hash("old text"))
+        );
+        drop(docs);
+        {
+            let fixes = backend.state.fixable_edits.lock();
+            assert!(!fixes.contains_key(&uri));
+            let moved = fixes.get(&new_uri).expect("fix-all snapshot moves with URI");
+            assert_eq!(moved.version, Some(1));
+            assert_eq!(moved.entries[0].1.replacement, "current");
+        }
+
+        let second_uri = if cfg!(windows) {
+            "file:///C:/ws/common/ideas/02_ideas.txt".to_string()
+        } else {
+            "file:///ws/common/ideas/02_ideas.txt".to_string()
+        };
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&new_uri, 2, Arc::from("newer text"))
+            .unwrap();
+        assert!(backend.move_open_document(&new_uri, &second_uri).await);
+        let fixes = backend.state.fixable_edits.lock();
+        assert!(!fixes.contains_key(&new_uri));
+        assert!(!fixes.contains_key(&second_uri));
     }
 
     #[tokio::test]
