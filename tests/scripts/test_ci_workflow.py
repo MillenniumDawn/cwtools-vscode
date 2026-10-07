@@ -49,7 +49,10 @@ def test_ci_keeps_distinct_host_suites_and_reuses_build_for_coverage() -> None:
     rules_sync = workflow_step(workflow, "Host tests (rules sync)")
     assert "--label rules-sync" in rules_sync
     coverage = workflow_step(workflow, "Host coverage")
-    assert "if: ${{ !cancelled() && steps.build-engine.outcome == 'success' }}" in coverage
+    assert (
+        "if: ${{ !cancelled() && steps.build-engine.outcome == 'success' }}"
+        in coverage
+    )
     assert "always()" not in coverage
     assert "scripts/build/host_coverage.py" in coverage
     assert "--skip-compile" in coverage
