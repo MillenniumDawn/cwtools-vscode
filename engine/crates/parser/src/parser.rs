@@ -20,8 +20,8 @@ struct Parser<'a> {
     comment_mode: CommentMode,
     /// Clauses currently open, bounded by [`MAX_CLAUSE_DEPTH`].
     depth: u32,
-    /// Whether a quoted string read in leaf-value position ran unclosed with
-    /// its diagnostic suppressed; the formatter must refuse such a file.
+    /// Leaf-value quotes read to end of line unclosed; the formatter refuses
+    /// files carrying one.
     has_unclosed_leaf_value_quote: bool,
 }
 
@@ -559,7 +559,9 @@ impl<'a> Parser<'a> {
         let mut unclosed_key_eats_structure = false;
         if let Some(raw_key) = self.read_key() {
             unclosed_key_eats_structure = self.errors.len() > saved_cursor.errors_len
-                && swallows_operator_or_shorthand(&raw_key);
+                && raw_key
+                    .chars()
+                    .any(|c| matches!(c, '=' | '<' | '>' | '!' | '?' | '{'));
             if let Some(op) = self.parse_operator() {
                 let key = self.table.intern(&raw_key);
                 if let Some((value, value_pos)) = self.parse_value(false) {
@@ -762,16 +764,6 @@ fn is_key_char(c: char) -> bool {
     } else {
         c.is_alphanumeric()
     }
-}
-
-/// Whether text swallowed by an unclosed quoted key holds a character any
-/// [`Operator`] starts with, or the `{` of the `key {` shorthand. Such a key
-/// is malformed beyond its missing quote, so its unclosed-string diagnostic
-/// is re-reported when the statement recovers as a leaf value; otherwise the
-/// recovered leaf value parses clean and only the formatter must refuse it.
-fn swallows_operator_or_shorthand(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(c, '=' | '<' | '>' | '!' | '?' | '{'))
 }
 
 /// A stack overflow aborts the process rather than unwinding, so an unbounded
@@ -1494,7 +1486,7 @@ shorthand { nested = value }
             messages,
             ["2:2: unclosed quoted string starting at line 2"],
             "the unclosed quoted key swallowing a `{{` shorthand must keep its \
-             diagnostic at the quote, not silently close `a` and drop the outer brace"
+             diagnostic at the quote"
         );
     }
 
@@ -1516,8 +1508,7 @@ shorthand { nested = value }
     #[test]
     fn unclosed_leaf_value_quote_is_only_recorded_when_a_string_stays_open() {
         let table = StringTable::new();
-        // A closed quoted key or value is not unclosed, no matter what its
-        // text contains.
+        // Closed quotes never set the flag, whatever their text contains.
         for input in ["foo = \"bar\"", "foo = \"a< >?\"", "foo\"bar = x"] {
             let result = parse_string(input, &table);
             assert!(

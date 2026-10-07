@@ -153,11 +153,9 @@ pub struct ParsedFile {
     pub arena: Arena,
     pub root_children: Vec<Child>,
     pub errors: Vec<ParseError>,
-    /// Whether a quoted string parsed in leaf-value position ran to the end
-    /// of its line without a closing quote while its diagnostic was suppressed
-    /// (speculative-key recovery, #556). Not carried through the parse cache;
-    /// the formatter reparses fresh text before consulting it.
-    pub has_unclosed_leaf_value_quote: bool,
+    /// Whether a quoted string parsed in leaf-value position ran unclosed with
+    /// its diagnostic suppressed; the parse cache does not carry it.
+    pub(crate) has_unclosed_leaf_value_quote: bool,
     /// Keeps alive the overlay region this file's ids were interned into, if any.
     /// Private so out-of-crate construction has to go through [`ParsedFile::new`]
     /// rather than silently defaulting it (#475).
@@ -170,8 +168,6 @@ impl ParsedFile {
             arena,
             root_children,
             errors,
-            // Rehydrated from the parse cache, so re-reported recovery state
-            // is unknown here; only the formatter reads it and it reparses.
             has_unclosed_leaf_value_quote: false,
             overlay: None,
         }

@@ -55,10 +55,8 @@ pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Op
     let bom = input.starts_with('\u{FEFF}');
     let body = input.strip_prefix('\u{FEFF}').unwrap_or(input);
     let parsed = parse_ok(body, table)?;
-    // An unclosed leaf-value quote has no parse diagnostic (speculative-key
-    // recovery, #556), so without this check the printer would join it with
-    // the next lines and the closing brace would land inside the still-open
-    // quote. Refuse instead of corrupting; the flag is the parser's own view.
+    // Printing would join the unclosed leaf-value quote into the next lines;
+    // refuse rather than corrupt.
     if parsed.has_unclosed_leaf_value_quote {
         return None;
     }
@@ -667,10 +665,8 @@ mod tests {
 
     #[test]
     fn quoted_key_characters_are_not_unclosed_quotes_to_the_formatter() {
-        // `KEY_CHAR` includes `"`, so `foo"bar` is one bare key: the parser
-        // never opens a string literal on it. The refusal must follow that
-        // parser view, not a quote scanner, or `format_text` would reject a
-        // file that parses cleanly (main formats it).
+        // `KEY_CHAR` includes `"`, so `foo"bar` is one bare key that never
+        // opens a string literal; a quote scanner would wrongly refuse it.
         let input = "foo\"bar = x\nother = 1\n";
         assert_eq!(fmt(input), input);
     }
