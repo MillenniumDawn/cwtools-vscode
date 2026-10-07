@@ -108,10 +108,7 @@ fn run_child_with_deadline_with_status<T: Send + 'static>(
         let result = f(&mut stdin, &mut reader);
         let _ = tx.send((result, stdin));
         if begin_shutdown_rx.recv().is_ok() {
-            let _ = shutdown_tx.send(read_response_for_id(
-                &mut reader,
-                SHUTDOWN_REQUEST_ID,
-            ));
+            let _ = shutdown_tx.send(read_response_for_id(&mut reader, SHUTDOWN_REQUEST_ID));
         }
         // Keep reading so the server never blocks on a full pipe before `exit`.
         let _ = std::io::copy(&mut reader, &mut std::io::sink());
@@ -119,11 +116,12 @@ fn run_child_with_deadline_with_status<T: Send + 'static>(
     let (result, exit_status, shutdown_responded) =
         match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
             Ok((result, mut stdin)) => {
-                let shutdown = jsonrpc_request(
-                    SHUTDOWN_REQUEST_ID,
-                    "shutdown",
-                    serde_json::json!(null),
-                );
+                let shutdown = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": SHUTDOWN_REQUEST_ID,
+                    "method": "shutdown",
+                })
+                .to_string();
                 let exit = jsonrpc_notification("exit", serde_json::json!({}));
                 let _ = write_frame_to(&mut stdin, &shutdown);
                 let _ = begin_shutdown_tx.send(());
@@ -205,7 +203,9 @@ fn run_child_with_deadline_reports_a_graceful_successful_exit() {
         "server must respond to shutdown before exit is sent"
     );
     assert!(
-        status.expect("server exit must be observed before the kill").success(),
+        status
+            .expect("server exit must be observed before the kill")
+            .success(),
         "server must exit successfully after shutdown/exit"
     );
 }
@@ -227,7 +227,10 @@ fn run_child_with_deadline_reaps_a_blocked_server() {
         });
     assert_eq!(result, None);
     assert!(!shutdown_responded);
-    assert!(status.is_none(), "a timeout-killed server did not exit gracefully");
+    assert!(
+        status.is_none(),
+        "a timeout-killed server did not exit gracefully"
+    );
 }
 
 /// Read one LSP frame, or `Err` once the server closes its stdout.
