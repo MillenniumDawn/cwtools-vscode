@@ -3736,12 +3736,14 @@ mod ignored_tests {
         } else {
             "file:///ws/common/ideas/02_ideas.txt".to_string()
         };
-        backend
-            .state
-            .documents
-            .lock()
-            .change(&new_uri, 2, Arc::from("newer text"))
-            .unwrap();
+        {
+            backend
+                .state
+                .documents
+                .lock()
+                .change(&new_uri, 2, Arc::from("newer text"))
+                .unwrap();
+        }
         assert!(backend.move_open_document(&new_uri, &second_uri).await);
         let fixes = backend.state.fixable_edits.lock();
         assert!(!fixes.contains_key(&new_uri));
