@@ -7050,10 +7050,10 @@ fn spawn_frame_collector(
 }
 
 /// Collect frames from `rx` until none arrives for `quiet`, or `budget` elapses.
-/// `quiet` must exceed the coalescing window so the drain doesn't stop before it
-/// fires. Use this only where zero frames is a legitimate outcome (a no-op
-/// guard that must not revalidate); anything asserting on what arrived wants
-/// [`drain_after_first`].
+/// For watched-file batches, `quiet` is 900 ms, exceeding the 500 ms debounce
+/// window with room for runner scheduling. Use this only where zero frames is
+/// a legitimate outcome (a no-op guard that must not revalidate); anything
+/// asserting on what arrived wants [`drain_after_first`].
 fn drain_until_quiet(
     rx: &std::sync::mpsc::Receiver<serde_json::Value>,
     quiet: std::time::Duration,
@@ -7198,7 +7198,7 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1001);
@@ -7244,7 +7244,7 @@ fn test_watched_batch_panic_is_recovered_and_retried() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1010);
@@ -7303,7 +7303,7 @@ fn test_debounced_validate_panic_is_logged_and_next_edit_recovers() {
     .unwrap();
     let after_open = drain_until_quiet(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     assert_eq!(
@@ -7324,7 +7324,7 @@ fn test_debounced_validate_panic_is_logged_and_next_edit_recovers() {
     .unwrap();
     let after_edit = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
 
@@ -7347,7 +7347,7 @@ fn test_debounced_validate_panic_is_logged_and_next_edit_recovers() {
     }
     drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1011);
@@ -7392,7 +7392,7 @@ fn test_watched_distinct_files_each_validate_once() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(10),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1002);
@@ -7438,7 +7438,7 @@ fn test_watched_change_on_a_symlink_neither_validates_nor_publishes() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(10),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1003);
@@ -7484,7 +7484,7 @@ fn test_watched_bulk_flood_uses_rescan_not_per_file() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1500),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(20),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1003);
@@ -7536,12 +7536,13 @@ fn test_watched_overcap_batch_does_not_spin_against_running_scan() {
         .map(|i| write_disk_file(ws.path(), &format!("common/decisions/s{i}.txt"), STORM_FILE))
         .collect();
     let rx = spawn_frame_collector(reader);
+    let scan_release = scan_release_path(ws.path());
 
     // Start a scan, then flood while it holds the CAS. The hold begins after
     // the bar-on, so waiting for that signal keeps the flood's debounce window
     // from slipping past the scan and winning the CAS.
     std::fs::write(&gate, b"hold").unwrap();
-    reindex_until_scan_starts(&mut child, &rx, &scan_release_path(ws.path()));
+    reindex_until_scan_starts(&mut child, &rx, &scan_release);
     write_frame(&mut child, &watched_changes(&uris)).unwrap();
 
     let mut request_id = 1004;
@@ -7558,16 +7559,52 @@ fn test_watched_overcap_batch_does_not_spin_against_running_scan() {
         .is_some(),
         "the losing watched drain never reported its over-cap batch"
     );
+    let retried_while_held = poll_until(
+        std::time::Instant::now() + std::time::Duration::from_millis(900),
+        std::time::Duration::from_millis(100),
+        || {
+            let log = fetch_profiling_log(&mut child, &rx, request_id);
+            request_id += 1;
+            (log.matches("watched batch over cap").count() > 1).then_some(())
+        },
+    );
+    assert!(
+        retried_while_held.is_none(),
+        "the losing watched drain must park until the scan releases its gate"
+    );
     assert!(ready.exists(), "scan did not enter its file gate");
     std::fs::remove_file(&gate).unwrap();
+    wait_for_scan_release(&scan_release);
 
-    // Preserve the quiet window that observes the winner-armed retry.
-    let _ = drain_until_quiet(
-        &rx,
-        std::time::Duration::from_millis(5500),
-        std::time::Duration::from_secs(30),
+    // The scan's release signal is the readiness edge for the winner-armed
+    // retry. Then observe one debounce window to catch any accidental re-arm.
+    assert!(
+        poll_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+            std::time::Duration::from_millis(100),
+            || {
+                let log = fetch_profiling_log(&mut child, &rx, request_id);
+                request_id += 1;
+                (log.matches("watched batch over cap").count() >= 2).then_some(())
+            }
+        )
+        .is_some(),
+        "the winner-armed watched drain never reported its over-cap batch"
     );
-    let log = fetch_profiling_log(&mut child, &rx, 1004);
+    let retried_after_winner = poll_until(
+        std::time::Instant::now() + std::time::Duration::from_millis(900),
+        std::time::Duration::from_millis(100),
+        || {
+            let log = fetch_profiling_log(&mut child, &rx, request_id);
+            request_id += 1;
+            (log.matches("watched batch over cap").count() > 2).then_some(())
+        },
+    );
+    assert!(
+        retried_after_winner.is_none(),
+        "the winner-armed watched batch must not re-arm after its one rescan"
+    );
+    let log = fetch_profiling_log(&mut child, &rx, request_id);
     stop_server(&mut child);
 
     assert_eq!(
@@ -7631,7 +7668,7 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     assert_eq!(
@@ -7653,7 +7690,7 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7729,7 +7766,7 @@ fn test_open_loc_key_edit_revalidates_only_referencing_open_files() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7815,7 +7852,7 @@ fn test_open_loc_revalidation_skips_ignored_targets() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7880,7 +7917,7 @@ fn test_open_loc_revalidation_applies_inline_ignore() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7973,7 +8010,7 @@ fn test_watched_loc_new_keys_revalidate_only_referencing_open_files() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -8082,7 +8119,7 @@ fn test_watched_loc_keys_survive_scan_index_install() {
     write_frame(&mut child, &watched_changes(std::slice::from_ref(&b_uri))).unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let opens = publish_codes_for(&frames, "open_l_english.yml");
@@ -8111,7 +8148,7 @@ fn test_watched_loc_keys_survive_scan_index_install() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1500),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(15),
     );
     stop_server(&mut child);
@@ -8168,7 +8205,7 @@ fn test_watched_loc_removed_key_stops_resolving() {
     write_frame(&mut child, &watched_changes(std::slice::from_ref(&b_uri))).unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let opens = publish_codes_for(&frames, "open_l_english.yml");
@@ -8188,7 +8225,7 @@ fn test_watched_loc_removed_key_stops_resolving() {
     write_frame(&mut child, &watched_changes(std::slice::from_ref(&b_uri))).unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -8257,7 +8294,7 @@ fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let loc_codes = publish_codes_for(&frames, "dependent_l_english.yml");
@@ -8286,7 +8323,7 @@ fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -8346,7 +8383,7 @@ fn test_watched_loc_delete_revalidates_live_overlay_dependents() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let codes = publish_codes_for(&frames, "dependent_l_english.yml");
@@ -8368,7 +8405,7 @@ fn test_watched_loc_delete_revalidates_live_overlay_dependents() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -9223,7 +9260,7 @@ fn test_did_save_for_a_document_that_was_never_opened_is_a_no_op() {
 
     let frames = drain_until_quiet(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(6),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1021);
