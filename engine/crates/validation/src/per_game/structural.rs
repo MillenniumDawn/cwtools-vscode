@@ -233,7 +233,6 @@ fn validate_if_else_order(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn walk(
     children: &[Child],
     ast: &ParsedFile,

@@ -9,6 +9,7 @@
 * Return `RequestFailed` instead of `ServerNotInitialized` for navigation and rename refusals. (#828)
 * Hover and go-to-definition on a variable look its definitions up in a name-keyed index instead of scanning every file's defined variables under the info lock. (#872)
 * Test fixtures stop assuming Unix paths: the position-resolver test writes its rules into a `tempfile` directory instead of a hard-coded `/tmp`, and every report test builds its repository root through the existing `abs()` helper. (#885)
+* Remove three test-only public wrappers (`scope_transitions`, `LocService::from_folders`, `LocService::discover_files`) and two stale `too_many_arguments` allows. (#912)
 * The per-edit ignored-file check reads the default exclude patterns from a shared static instead of building a whole `FileManagerConfig` per call. (#873)
 * Cap cumulative text snapshots for references and rename requests, refusing incomplete navigation when the request budget is exhausted. The conservative 5× peak-memory reservation means a closed UTF-8 file larger than 25.6 MiB cannot fit within the 128 MiB request budget. (#569)
 * Reuse formatted text when constructing whole-file format edits, avoiding reparsing and the multi-edit planner. (#557)
