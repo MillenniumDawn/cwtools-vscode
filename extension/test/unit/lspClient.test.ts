@@ -1281,6 +1281,56 @@ suite("lspClient — executeCommand middleware", () => {
 		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
 	});
 
+	test("validateWorkspace message-only result warns that the scan summary is missing", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["validateWorkspace"]);
+		client.sendRequest.mockResolvedValue({
+			message: "workspace validation did not complete",
+		});
+
+		const result: unknown = await middleware("validateWorkspace", [], vi.fn());
+
+		assert.deepStrictEqual(result, {
+			message: "workspace validation did not complete",
+		});
+		assert.deepStrictEqual(showWarningMessage.mock.calls, [
+			["CWTools: workspace validation did not return a summary."],
+		]);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
+	});
+
+	test("validateWorkspace malformed summary warns instead of showing an information toast", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["validateWorkspace"]);
+		client.sendRequest.mockResolvedValue({
+			totalFiles: 10,
+			validatedFiles: 7,
+			filesWithErrors: 2,
+			totalErrors: -1,
+			totalWarnings: 4,
+			totalInfos: 5,
+			totalHints: 6,
+		});
+
+		const result: unknown = await middleware("validateWorkspace", [], vi.fn());
+
+		assert.deepStrictEqual(result, {
+			totalFiles: 10,
+			validatedFiles: 7,
+			filesWithErrors: 2,
+			totalErrors: -1,
+			totalWarnings: 4,
+			totalInfos: 5,
+			totalHints: 6,
+		});
+		assert.deepStrictEqual(showWarningMessage.mock.calls, [
+			["CWTools: workspace validation did not return a summary."],
+		]);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, []);
+		assert.deepStrictEqual(showErrorMessage.mock.calls, []);
+	});
+
 	test("known commands without a string result show no toast", async () => {
 		const { middleware, client } = middlewareSetup();
 		client.initializeResult = serverCommands(["reindexWorkspace"]);
