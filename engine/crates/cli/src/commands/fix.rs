@@ -9,8 +9,9 @@ use std::io::Write as _;
 
 use crate::cli::FixArgs;
 use crate::run::{
-    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty, load_config,
-    missing_required, note, parse_game, vanilla_notice,
+    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty,
+    gate_vanilla_cache_for_replacements, load_config, missing_required, note, parse_game,
+    rebuild_vanilla_cache_if_stale, vanilla_notice,
 };
 use crate::{codes, config};
 
@@ -77,23 +78,13 @@ pub(super) fn run(args: FixArgs) {
     let directory = directory
         .unwrap_or_else(|| missing_required("fix", "--directory <DIRECTORY>", "directory", fc));
     let rules = rules.unwrap_or_else(|| missing_required("fix", "--rules <RULES>", "rules", fc));
-    if vanilla_cache.is_some()
-        && vanilla.is_none()
-        && cwtools_driver::vanilla_replacement_shadow(&directory, &[]).has_replace_paths()
-    {
-        eprintln!(
-            "error: --vanilla-cache cannot be filtered for replace_path without --vanilla; pass --vanilla and omit --vanilla-cache to build a replacement-scoped cache"
-        );
-        std::process::exit(EXIT_USAGE);
-    }
 
     let game_id = parse_game(&game);
 
     let want = |code: &str| codes::wanted(code, &only_codes, &ignore_codes);
 
-    let vanilla_cache_index = vanilla_cache
-        .as_ref()
-        .and_then(|p| match vanilla_cache::load(p) {
+    let vanilla_cache_index = vanilla_cache.as_ref().and_then(|p| {
+        let loaded = match vanilla_cache::load(p) {
             Ok((cache_game, fp, data)) => {
                 if Game::from_str(&cache_game) != Some(game_id) {
                     eprintln!(
@@ -111,7 +102,9 @@ pub(super) fn run(args: FixArgs) {
                 );
                 None
             }
-        });
+        };
+        gate_vanilla_cache_for_replacements(p, loaded, &directory, vanilla.as_deref())
+    });
     let (cached_fingerprint, vanilla_cache_index) = vanilla_cache_index.unzip();
 
     // Same automatic base-game cache as `validate`, so both commands see
@@ -149,21 +142,17 @@ pub(super) fn run(args: FixArgs) {
     if let (Some(cache_path), Some(cached_fp), Some(vanilla_dir)) =
         (&vanilla_cache, &cached_fingerprint, &vanilla)
     {
-        let shadow = cwtools_driver::vanilla_replacement_shadow(&directory, &[]);
-        if shadow.has_replace_paths() {
-            let required_fp = cwtools_driver::replacement_aware_vanilla_fingerprint(
-                vanilla_dir,
-                session.ruleset(),
-                &shadow,
-            );
-            if *cached_fp != required_fp {
-                eprintln!(
-                    "error: vanilla cache {} does not contain the filtered replace_path view; omit --vanilla-cache to build a cache for this mod view",
-                    cache_path.display()
-                );
-                std::process::exit(EXIT_USAGE);
-            }
-        }
+        // The stale-cache warn-and-rebuild `validate` runs, so both commands
+        // leave an explicit cache that serves their view.
+        rebuild_vanilla_cache_if_stale(
+            &session,
+            cache_path,
+            cached_fp,
+            &directory,
+            vanilla_dir,
+            game_id,
+            !no_vanilla_cache,
+        );
     }
 
     if let Some(notice) = vanilla_notice(game_id, session.type_index().complete) {

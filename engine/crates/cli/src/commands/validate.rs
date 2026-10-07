@@ -1,9 +1,6 @@
 //! `validate`: run the whole engine over a mod directory and render a report.
 
-use cwtools_driver::{
-    RulesInput, Session, SessionConfig, VanillaCacheAuto, index_game_dir,
-    index_game_dir_with_parse_cache,
-};
+use cwtools_driver::{RulesInput, Session, SessionConfig, VanillaCacheAuto};
 use cwtools_game::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
@@ -15,9 +12,9 @@ use crate::diag::{
 };
 use crate::report::ReportType;
 use crate::run::{
-    EXIT_USAGE, announce_config, color_enabled, exit_code, exit_if_empty, load_config,
-    load_ignore_hashes, missing_required, note, parse_game, report_owns_stdout, status,
-    vanilla_notice,
+    EXIT_USAGE, announce_config, color_enabled, exit_code, exit_if_empty,
+    gate_vanilla_cache_for_replacements, load_config, load_ignore_hashes, missing_required, note,
+    parse_game, rebuild_vanilla_cache_if_stale, report_owns_stdout, status, vanilla_notice,
 };
 use crate::{codes, config, report, scope};
 
@@ -80,15 +77,6 @@ pub(super) fn run(args: ValidateArgs) {
     });
     let rules =
         rules.unwrap_or_else(|| missing_required("validate", "--rules <RULES>", "rules", fc));
-    if vanilla_cache.is_some()
-        && vanilla.is_none()
-        && cwtools_driver::vanilla_replacement_shadow(&directory, &[]).has_replace_paths()
-    {
-        eprintln!(
-            "error: --vanilla-cache cannot be filtered for replace_path without --vanilla; pass --vanilla and omit --vanilla-cache to build a replacement-scoped cache"
-        );
-        std::process::exit(EXIT_USAGE);
-    }
     let ignored = load_ignore_hashes(ignore_hashes.as_deref());
 
     // Resolved before the session loads: an unresolvable `--since` should fail
@@ -110,7 +98,6 @@ pub(super) fn run(args: ValidateArgs) {
     }
 
     let game_id = parse_game(&game);
-    let parse_cache_game = game_id.to_string();
 
     let rules_label = if rules.is_dir() {
         format!("directory {}", rules.display())
@@ -141,7 +128,7 @@ pub(super) fn run(args: ValidateArgs) {
     // Fingerprint comparison happens after the session is loaded (needs
     // the ruleset); stale caches are detected there and re-generated.
     let vanilla_cache_index = vanilla_cache.as_ref().and_then(|cache_path| {
-        match vanilla_cache::load(cache_path) {
+        let loaded = match vanilla_cache::load(cache_path) {
             Ok((cache_game, cached_fp, data)) => {
                 if Game::from_str(&cache_game) != Some(game_id) {
                     eprintln!(
@@ -168,7 +155,8 @@ pub(super) fn run(args: ValidateArgs) {
                 );
                 None
             }
-        }
+        };
+        gate_vanilla_cache_for_replacements(cache_path, loaded, &directory, vanilla.as_deref())
     });
     let (cached_fingerprint, vanilla_cache_index) = vanilla_cache_index.unzip();
 
@@ -214,25 +202,6 @@ pub(super) fn run(args: ValidateArgs) {
         cwtools_driver::default_cache_dir(),
     );
     let ruleset = session.ruleset();
-    if let (Some(cache_path), Some(cached_fp), Some(vanilla_dir)) =
-        (&vanilla_cache, &cached_fingerprint, &vanilla)
-    {
-        let shadow = cwtools_driver::vanilla_replacement_shadow(&directory, &[]);
-        if shadow.has_replace_paths() {
-            let required_fp = cwtools_driver::replacement_aware_vanilla_fingerprint(
-                vanilla_dir,
-                ruleset,
-                &shadow,
-            );
-            if *cached_fp != required_fp {
-                eprintln!(
-                    "error: vanilla cache {} does not contain the filtered replace_path view; omit --vanilla-cache to build a cache for this mod view",
-                    cache_path.display()
-                );
-                std::process::exit(EXIT_USAGE);
-            }
-        }
-    }
     note(format!(
         "  Loaded {} types, {} enums, {} aliases",
         ruleset.types.len(),
@@ -290,49 +259,15 @@ pub(super) fn run(args: ValidateArgs) {
     if let (Some(cache_path), Some(fp_loaded), Some(vanilla_dir)) =
         (&vanilla_cache, &cached_fingerprint, &vanilla)
     {
-        let shadow = cwtools_driver::vanilla_replacement_shadow(&directory, &[]);
-        let fp_live =
-            cwtools_driver::replacement_aware_vanilla_fingerprint(vanilla_dir, ruleset, &shadow);
-        if *fp_loaded != fp_live {
-            eprintln!(
-                "  warn: vanilla cache is stale (cached: {}, live: {}); rebuilding",
-                fp_loaded, fp_live
-            );
-            let rules_table = session.string_table();
-            let var_effects = cwtools_info::variable_defining_effects(ruleset);
-            let index = if no_vanilla_cache {
-                index_game_dir(vanilla_dir, ruleset, rules_table, &var_effects)
-            } else if let Some(cache_dir) = cwtools_driver::default_cache_dir() {
-                index_game_dir_with_parse_cache(
-                    vanilla_dir,
-                    ruleset,
-                    rules_table,
-                    &var_effects,
-                    &cache_dir,
-                    &parse_cache_game,
-                )
-            } else {
-                index_game_dir(vanilla_dir, ruleset, rules_table, &var_effects)
-            };
-            match index {
-                Ok(index) => {
-                    let aux = cwtools_driver::build_vanilla_cache_aux(vanilla_dir, &index);
-                    match vanilla_cache::save(&index, &game, &fp_live, cache_path, aux) {
-                        Ok(n) => note(format!("  Rebuilt vanilla cache with {} instances", n)),
-                        Err(e) => eprintln!(
-                            "  warn: could not write rebuilt cache {}: {}",
-                            cache_path.display(),
-                            e
-                        ),
-                    }
-                }
-                Err(e) => eprintln!(
-                    "  warn: could not rebuild vanilla cache from {}: {}",
-                    vanilla_dir.display(),
-                    e
-                ),
-            }
-        }
+        rebuild_vanilla_cache_if_stale(
+            &session,
+            cache_path,
+            fp_loaded,
+            &directory,
+            vanilla_dir,
+            game_id,
+            !no_vanilla_cache,
+        );
     }
 
     tlog!("load");

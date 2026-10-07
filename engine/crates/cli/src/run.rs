@@ -1,5 +1,6 @@
 use clap::CommandFactory;
 use cwtools_game::constants::Game;
+use cwtools_info::vanilla_cache::{self, VanillaCacheData};
 use cwtools_validation::ErrorSeverity;
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -169,6 +170,136 @@ pub(crate) fn vanilla_notice(game: Game, has_vanilla: bool) -> Option<String> {
         "no base-game data loaded, so {} report nothing; pass --vanilla or --vanilla-cache to run them",
         codes.join(", ")
     ))
+}
+
+// ── Explicit `--vanilla-cache` (validate / fix) ────────────────────────────
+//
+// Both commands consume an explicit cache through this one seam so they cannot
+// drift apart: the gate decides before the session loads which cache may be
+// consumed under the mod's replacement shadow, and the staleness rebuild after
+// the session load refreshes the file for the next run.
+
+/// Whether a cache fingerprint was written for a replacement-scoped view: the
+/// driver keys one by appending `|rp:<hash>` to the install fingerprint only
+/// when the view requires it.
+fn fingerprint_is_replacement_scoped(fingerprint: &str) -> bool {
+    fingerprint.contains("|rp:")
+}
+
+/// The loaded `--vanilla-cache` the run may consume, if any, given the mod's
+/// replacement shadow. A `replace_path` hides base-game definitions, so the
+/// cache serves the run only when it carries that replacement view:
+///
+/// - an `--vanilla` install is available: keep the cache and let the freshness
+///   check after the session load ([`rebuild_vanilla_cache_if_stale`]) warn and
+///   rebuild whichever view the file lacks;
+/// - the cache is keyed by this exact replacement view (a cache handed over
+///   from a tool that already built the filtered view): keep it;
+/// - anything else is dropped with a warning, so the run answers without
+///   base-game data rather than on a view it cannot trust.
+pub(crate) fn gate_vanilla_cache_for_replacements(
+    cache_path: &Path,
+    loaded: Option<(String, VanillaCacheData)>,
+    directory: &Path,
+    vanilla: Option<&Path>,
+) -> Option<(String, VanillaCacheData)> {
+    let (fingerprint, data) = loaded?;
+    let shadow = cwtools_driver::vanilla_replacement_shadow(directory, &[]);
+    let trusted = if shadow.has_replace_paths() {
+        vanilla.is_some()
+            || fingerprint.ends_with(&format!("|{}", shadow.replacement_fingerprint()))
+    } else {
+        vanilla.is_some() || !fingerprint_is_replacement_scoped(&fingerprint)
+    };
+    if trusted {
+        return Some((fingerprint, data));
+    }
+    let reason = if shadow.has_replace_paths() {
+        "does not carry this mod's replace_path view"
+    } else {
+        "is scoped by another mod's replace_path"
+    };
+    eprintln!(
+        "warn: vanilla cache {} {reason} and there is no --vanilla install to rebuild it from; \
+         continuing without base-game data",
+        cache_path.display()
+    );
+    None
+}
+
+/// The full fingerprint of an explicit cache is only computable after the
+/// session loads (it needs the ruleset), so staleness is detected here and the
+/// file is rebuilt for the next run while this one stays on what it consumed.
+/// The rebuild indexes with the replacement shadow, so the file is written as
+/// what it should be: the filtered view when the mod's `replace_path`s require
+/// one, under the fingerprint computed for exactly that view. Requires an
+/// install; [`gate_vanilla_cache_for_replacements`] owns the case where the
+/// cache cannot be honored without one.
+pub(crate) fn rebuild_vanilla_cache_if_stale(
+    session: &cwtools_driver::Session,
+    cache_path: &Path,
+    cached_fingerprint: &str,
+    directory: &Path,
+    vanilla_dir: &Path,
+    game: Game,
+    use_parse_cache: bool,
+) {
+    let ruleset = session.ruleset();
+    let shadow = cwtools_driver::vanilla_replacement_shadow(directory, &[]);
+    let live_fingerprint =
+        cwtools_driver::replacement_aware_vanilla_fingerprint(vanilla_dir, ruleset, &shadow);
+    if cached_fingerprint == live_fingerprint {
+        return;
+    }
+    eprintln!(
+        "  warn: vanilla cache is stale (cached: {cached_fingerprint}, live: {live_fingerprint}); rebuilding"
+    );
+    let rules_table = session.string_table();
+    let var_effects = cwtools_info::variable_defining_effects(ruleset);
+    let index = if use_parse_cache && let Some(cache_dir) = cwtools_driver::default_cache_dir() {
+        cwtools_driver::index_game_dir_with_parse_cache_and_shadow(
+            vanilla_dir,
+            ruleset,
+            rules_table,
+            &var_effects,
+            &cache_dir,
+            &game.to_string(),
+            &shadow,
+        )
+    } else {
+        cwtools_driver::index_game_dir_with_shadow(
+            vanilla_dir,
+            ruleset,
+            rules_table,
+            &var_effects,
+            &shadow,
+        )
+    };
+    match index {
+        Ok(index) => {
+            let aux =
+                cwtools_driver::build_vanilla_cache_aux_with_shadow(vanilla_dir, &index, &shadow);
+            match vanilla_cache::save(
+                &index,
+                &game.to_string(),
+                &live_fingerprint,
+                cache_path,
+                aux,
+            ) {
+                Ok(n) => note(format!("  Rebuilt vanilla cache with {n} instances")),
+                Err(e) => eprintln!(
+                    "  warn: could not write rebuilt cache {}: {}",
+                    cache_path.display(),
+                    e
+                ),
+            }
+        }
+        Err(e) => eprintln!(
+            "  warn: could not rebuild vanilla cache from {}: {}",
+            vanilla_dir.display(),
+            e
+        ),
+    }
 }
 
 /// Bail on a setting that neither a flag nor the config file supplied, through

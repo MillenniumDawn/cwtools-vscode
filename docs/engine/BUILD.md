@@ -52,7 +52,7 @@ Produces two binaries in `target/release/`:
 `cwtools <subcommand> --help` prints the flags for each. The full set:
 
 - `validate`: validate a directory of game files against `.cwt` rules (the main command).
-- `cache-vanilla`: pre-generate a vanilla type index from a base-game install, for later use with `validate --vanilla-cache`.
+- `cache-vanilla`: pre-generate a vanilla type index from a base-game install, for later use with `validate --vanilla-cache`. The cache holds the unfiltered install; a mod whose `descriptor.mod` lists `replace_path`s needs its filtered view instead, which `validate --vanilla --vanilla-cache <file>` warns about and rebuilds once (or omit `--vanilla-cache` and let the runs maintain one per replacement view automatically).
 - `parse`: parse a single script file (or a directory of `.cwt` rule files) and print a summary.
 - `discover`: discover and parse every file under a directory (no validation).
 - `serialize`: serialize a parsed AST to a `.cwb` cache file.

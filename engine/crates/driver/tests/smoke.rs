@@ -1783,6 +1783,98 @@ fn explicit_vanilla_cache_keeps_the_exact_replacement_view_and_unrelated_entries
     );
 }
 
+/// Filtering is the identity when the shadow has no `replace_path`s: nothing
+/// about a cache's stored sources needs resolving, which is what keeps the
+/// per-instance canonicalize off mods without replacements.
+#[test]
+fn filter_vanilla_index_passes_everything_through_without_replace_paths() {
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    let table = StringTable::new();
+    let (ruleset, _) = load_ruleset_from_dir(
+        &ws.path().join("rules"),
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+    let var_effects = variable_defining_effects(&ruleset);
+
+    let index = index_game_dir(&vanilla, &ruleset, &table, &var_effects).unwrap();
+    let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
+    assert!(!shadow.has_replace_paths());
+
+    let filtered = cwtools_driver::filter_vanilla_index(index.map.clone(), &vanilla, &shadow);
+    assert!(
+        filtered.get("thing").is_some_and(|instances| instances
+            .iter()
+            .any(|(_, instance)| instance.name == "vanilla_thing")),
+        "every instance must survive a shadow without replace paths"
+    );
+}
+
+/// Cached sources carry the canonical install root while the run consumes them
+/// through an alias of it (a symlink, a changed path case): the filter resolves
+/// the aliased root once and still hides exactly the replaced files.
+#[cfg(unix)]
+#[test]
+fn filter_vanilla_index_matches_cached_sources_through_a_root_alias() {
+    use std::os::unix::fs::symlink;
+
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    let nested = vanilla.join("common/things/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("y.txt"), "nested_kept = { }\n").unwrap();
+    let extra = vanilla.join("common/things_extra");
+    std::fs::create_dir_all(&extra).unwrap();
+    std::fs::write(extra.join("z.txt"), "sibling_kept = { }\n").unwrap();
+    std::fs::write(
+        ws.path().join("mod/descriptor.mod"),
+        r#"replace_path = "common/things""#,
+    )
+    .unwrap();
+
+    let table = StringTable::new();
+    let (ruleset, _) = load_ruleset_from_dir(
+        &ws.path().join("rules"),
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+    let var_effects = variable_defining_effects(&ruleset);
+    // Index through the real root, the way a cache build would.
+    let index = index_game_dir(&vanilla, &ruleset, &table, &var_effects).unwrap();
+
+    let alias = ws.path().join("vanilla-alias");
+    symlink(&vanilla, &alias).unwrap();
+
+    let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
+    assert!(shadow.has_replace_paths());
+
+    let filtered = cwtools_driver::filter_vanilla_index(index.map, &alias, &shadow);
+    let things: Vec<String> = filtered
+        .get("thing")
+        .map(|instances| {
+            instances
+                .iter()
+                .map(|(_, instance)| instance.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        !things.iter().any(|name| name == "vanilla_thing"),
+        "the replaced definition must be hidden through the alias"
+    );
+    assert!(
+        things.iter().any(|name| name == "nested_kept"),
+        "nested descendants stay visible"
+    );
+    assert!(
+        things.iter().any(|name| name == "sibling_kept"),
+        "the replace path must not capture a sibling directory"
+    );
+}
+
 #[test]
 fn vanilla_cache_auto_distinguishes_installs_with_the_same_game_version() {
     let ws = cache_workspace();

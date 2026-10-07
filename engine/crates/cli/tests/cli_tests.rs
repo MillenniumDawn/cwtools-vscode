@@ -589,17 +589,35 @@ fn test_validate_with_rules() {
         .stdout(predicate::str::contains("Validation complete"));
 }
 
+/// A mod with `replace_path` and an explicit cache that does not carry its
+/// replacement view, without `--vanilla`: no exit — the old warn-and-rebuild
+/// path degrades to a loud warn + a run without base-game data, so the run
+/// still completes and never validates on the unfiltered install.
 #[test]
-fn test_validate_rejects_unfilterable_explicit_vanilla_cache_for_replace_path() {
+fn test_validate_warns_and_skips_unfilterable_explicit_vanilla_cache_without_vanilla() {
     let tmp = tempfile::tempdir().unwrap();
     let mod_dir = tmp.path().join("mod");
-    std::fs::create_dir_all(&mod_dir).unwrap();
+    let mod_common = mod_dir.join("common");
+    std::fs::create_dir_all(&mod_common).unwrap();
     std::fs::write(
         mod_dir.join("descriptor.mod"),
         r#"replace_path = "common/ideas""#,
     )
     .unwrap();
-    let rules_dir = fixtures_dir().join("rules");
+    std::fs::write(mod_common.join("test.txt"), "test_thing = { }\n").unwrap();
+    let rules_dir = tmp.path().join("rules");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+    std::fs::write(
+        rules_dir.join("things.cwt"),
+        r#"
+types = {
+    type[thing] = {
+        path = "game/common/things"
+    }
+}
+"#,
+    )
+    .unwrap();
     let cache = tmp.path().join("vanilla.cwv");
     let vanilla = tmp.path().join("vanilla");
     std::fs::create_dir_all(&vanilla).unwrap();
@@ -625,10 +643,80 @@ fn test_validate_rejects_unfilterable_explicit_vanilla_cache_for_replace_path() 
             cache.to_str().unwrap(),
         ])
         .assert()
-        .failure()
+        .success()
+        .stdout(predicate::str::contains("Validation complete"))
         .stderr(predicate::str::contains(
-            "--vanilla-cache cannot be filtered for replace_path without --vanilla",
+            "does not carry this mod's replace_path view",
+        ))
+        .stderr(predicate::str::contains(
+            "no base-game data loaded, so CW113, CW222, CW500",
         ));
+}
+
+/// An unfiltered `cache-vanilla` cache paired with `--vanilla` on a mod with
+/// `replace_path`: the old warn-and-rebuild path takes the mismatch, and the
+/// rebuild writes the filtered view under the replacement-aware fingerprint,
+/// so the file lands as what it claims to be.
+#[test]
+fn test_validate_warns_and_rebuilds_replace_path_cache_with_vanilla() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mod_dir = tmp.path().join("mod");
+    std::fs::create_dir_all(&mod_dir).unwrap();
+    std::fs::write(
+        mod_dir.join("descriptor.mod"),
+        r#"replace_path = "common/things""#,
+    )
+    .unwrap();
+    std::fs::write(mod_dir.join("script.txt"), "anyway_valid = { }\n").unwrap();
+    let rules_dir = tmp.path().join("rules");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+    std::fs::write(
+        rules_dir.join("things.cwt"),
+        r#"
+types = {
+    type[thing] = {
+        path = "game/common/things"
+    }
+}
+"#,
+    )
+    .unwrap();
+    let vanilla = tmp.path().join("vanilla");
+    let replaced = vanilla.join("common/things");
+    std::fs::create_dir_all(&replaced).unwrap();
+    std::fs::write(replaced.join("x.txt"), "vanilla_thing = { }\n").unwrap();
+    let nested = replaced.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("y.txt"), "nested_kept = { }\n").unwrap();
+    let cache = tmp.path().join("vanilla.cwv");
+
+    // Build the cache the documented way: the unfiltered install view.
+    cwtools()
+        .args([
+            "cache-vanilla",
+            "--game",
+            "hoi4",
+            "--vanilla",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--output",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Wrote 2 base-game instances"));
+    let (_, cache_fp, cache_data) = cwtools_info::vanilla_cache::load(&cache).unwrap();
+    assert!(
+        cache_data.per_type["thing"]
+            .iter()
+            .any(|(_, i)| i.name == "vanilla_thing"),
+        "cache-vanilla writes the unfiltered install"
+    );
+    assert!(
+        !cache_fp.contains("|rp:"),
+        "the documented fingerprint is the unfiltered one"
+    );
 
     cwtools()
         .args([
@@ -645,10 +733,49 @@ fn test_validate_rejects_unfilterable_explicit_vanilla_cache_for_replace_path() 
             cache.to_str().unwrap(),
         ])
         .assert()
-        .failure()
+        .success()
+        .stdout(predicate::str::contains("Validation complete"))
+        .stderr(predicate::str::contains("vanilla cache is stale (cached:"))
         .stderr(predicate::str::contains(
-            "does not contain the filtered replace_path view",
+            "Rebuilt vanilla cache with 1 instances",
         ));
+
+    // The rebuilt file carries the filtered view under the replacement-aware
+    // fingerprint: not an unfiltered index labelled as one.
+    let (_, rebuilt_fp, rebuilt) = cwtools_info::vanilla_cache::load(&cache).unwrap();
+    assert!(
+        rebuilt_fp.contains("|rp:"),
+        "the rebuilt cache is replacement-scoped"
+    );
+    assert!(
+        !rebuilt.per_type["thing"]
+            .iter()
+            .any(|(_, i)| i.name == "vanilla_thing"),
+        "the replaced definition must not survive the rebuild"
+    );
+    assert!(
+        rebuilt
+            .per_type
+            .get("thing")
+            .is_some_and(|instances| instances.iter().any(|(_, i)| i.name == "nested_kept")),
+        "files in nested directories stay visible to the rebuilt view"
+    );
+    assert!(
+        !rebuilt
+            .aux
+            .file_paths
+            .iter()
+            .any(|path| path == "common/things/x.txt"),
+        "the rebuilt auxiliary index hides the replaced file"
+    );
+    assert!(
+        rebuilt
+            .aux
+            .file_paths
+            .iter()
+            .any(|path| path == "common/things/nested/y.txt"),
+        "the rebuilt auxiliary index keeps nested files"
+    );
 }
 
 #[test]
