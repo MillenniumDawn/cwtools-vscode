@@ -368,6 +368,9 @@ export function createLanguageClient(
 		isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
 		cfg.onRulesCacheChanged?.(rulesCache);
 		installRulesWatcher();
+		if (process.env.CWTOOLS_TEST_RULES_FOLDER === rulesCache) {
+			outputChannel.info(`CWTOOLS_TEST_RULES_WATCHER_READY ${rulesCache}`);
+		}
 	};
 
 	const diagnosticsCache = new DiagnosticsSignatureCache();
