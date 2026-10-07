@@ -1565,9 +1565,8 @@ pub fn vanilla_replacement_shadow(primary_root: &Path, parent_roots: &[PathBuf])
 /// Remove indexed vanilla instances under a higher-priority mod layer's
 /// `replace_path`s. `source` is the install-root path preserved by the vanilla
 /// cache; matching is against its logical path and shares `LayerShadow`'s
-/// separator, case and directory-boundary rules. Shadows without
-/// `replace_path`s hide nothing, so the instances pass through untouched and
-/// no file I/O is spent resolving them.
+/// separator, case and directory-boundary rules. A shadow without
+/// `replace_path`s hides nothing, so the instances pass through untouched.
 pub fn filter_vanilla_index(
     per_type: impl IntoIterator<Item = (String, Vec<(Arc<str>, cwtools_index::TypeInstance)>)>,
     vanilla_root: &Path,
@@ -1576,11 +1575,8 @@ pub fn filter_vanilla_index(
     if !shadow.has_replace_paths() {
         return per_type.into_iter().collect();
     }
-    // A cached source may be written under an alias of the install (a symlink,
-    // a changed path case), where `strip_prefix` fails and `hides_file_under`
-    // falls back to canonicalizing. Resolve the root once for the whole batch
-    // — and each repeated source across types exactly once — instead of twice
-    // per instance.
+    // Resolve the (possibly aliased) install root and each distinct cached
+    // source once, instead of canonicalizing twice per instance.
     let resolved_root =
         std::fs::canonicalize(vanilla_root).unwrap_or_else(|_| vanilla_root.to_path_buf());
     let mut hidden: HashMap<Arc<str>, bool> = HashMap::new();

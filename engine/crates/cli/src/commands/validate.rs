@@ -127,38 +127,44 @@ pub(super) fn run(args: ValidateArgs) {
     // resolves base-game references without re-parsing the install).
     // Fingerprint comparison happens after the session is loaded (needs
     // the ruleset); stale caches are detected there and re-generated.
-    let vanilla_cache_index = vanilla_cache.as_ref().and_then(|cache_path| {
-        let loaded = match vanilla_cache::load(cache_path) {
-            Ok((cache_game, cached_fp, data)) => {
-                if Game::from_str(&cache_game) != Some(game_id) {
-                    eprintln!(
-                        "  warn: vanilla cache was built for game '{}', validating '{}'",
-                        cache_game, game
-                    );
+    let (cached_fingerprint, vanilla_cache_index) = vanilla_cache
+        .as_ref()
+        .map_or((None, None), |cache_path| {
+            let loaded = match vanilla_cache::load(cache_path) {
+                Ok((cache_game, cached_fp, data)) => {
+                    if Game::from_str(&cache_game) != Some(game_id) {
+                        eprintln!(
+                            "  warn: vanilla cache was built for game '{}', validating '{}'",
+                            cache_game, game
+                        );
+                    }
+                    let total: usize = data.per_type.values().map(|v| v.len()).sum();
+                    note(format!(
+                        "  Loaded {} base-game instances, {} loc languages, {} files from cache {} (fp: {})",
+                        total,
+                        data.aux.loc_keys.len(),
+                        data.aux.file_paths.len(),
+                        cache_path.display(),
+                        cached_fp,
+                    ));
+                    Some((cached_fp, data))
                 }
-                let total: usize = data.per_type.values().map(|v| v.len()).sum();
-                note(format!(
-                    "  Loaded {} base-game instances, {} loc languages, {} files from cache {} (fp: {})",
-                    total,
-                    data.aux.loc_keys.len(),
-                    data.aux.file_paths.len(),
-                    cache_path.display(),
-                    cached_fp,
-                ));
-                Some((cached_fp, data))
-            }
-            Err(e) => {
-                eprintln!(
-                    "  warn: could not load vanilla cache {}: {}",
-                    cache_path.display(),
-                    e
-                );
-                None
-            }
-        };
-        gate_vanilla_cache_for_replacements(cache_path, loaded, &directory, vanilla.as_deref())
-    });
-    let (cached_fingerprint, vanilla_cache_index) = vanilla_cache_index.unzip();
+                Err(e) => {
+                    eprintln!(
+                        "  warn: could not load vanilla cache {}: {}",
+                        cache_path.display(),
+                        e
+                    );
+                    None
+                }
+            };
+            gate_vanilla_cache_for_replacements(
+                cache_path,
+                loaded,
+                &directory,
+                vanilla.as_deref(),
+            )
+        });
 
     // Without an explicit --vanilla-cache, keep one under the OS cache dir
     // so repeat runs don't re-parse the whole install. The driver keys it

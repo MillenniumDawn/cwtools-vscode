@@ -1783,9 +1783,8 @@ fn explicit_vanilla_cache_keeps_the_exact_replacement_view_and_unrelated_entries
     );
 }
 
-/// Filtering is the identity when the shadow has no `replace_path`s: nothing
-/// about a cache's stored sources needs resolving, which is what keeps the
-/// per-instance canonicalize off mods without replacements.
+/// A shadow with no `replace_path`s hides nothing: the filter must not spend
+/// any file resolution proving it.
 #[test]
 fn filter_vanilla_index_passes_everything_through_without_replace_paths() {
     let ws = cache_workspace();
@@ -1812,9 +1811,9 @@ fn filter_vanilla_index_passes_everything_through_without_replace_paths() {
     );
 }
 
-/// Cached sources carry the canonical install root while the run consumes them
-/// through an alias of it (a symlink, a changed path case): the filter resolves
-/// the aliased root once and still hides exactly the replaced files.
+/// Cached sources carry the real install root while the run sees an alias of
+/// it: the filter resolves the aliased root and still hides exactly the
+/// replaced files.
 #[cfg(unix)]
 #[test]
 fn filter_vanilla_index_matches_cached_sources_through_a_root_alias() {

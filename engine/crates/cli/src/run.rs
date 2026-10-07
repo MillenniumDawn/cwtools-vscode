@@ -174,67 +174,65 @@ pub(crate) fn vanilla_notice(game: Game, has_vanilla: bool) -> Option<String> {
 
 // ── Explicit `--vanilla-cache` (validate / fix) ────────────────────────────
 //
-// Both commands consume an explicit cache through this one seam so they cannot
-// drift apart: the gate decides before the session loads which cache may be
-// consumed under the mod's replacement shadow, and the staleness rebuild after
-// the session load refreshes the file for the next run.
+// The gate decides before the session loads whether an explicit cache serves
+// the mod's replacement view, and the staleness rebuild refreshes the file
+// after the session load.
 
-/// Whether a cache fingerprint was written for a replacement-scoped view: the
-/// driver keys one by appending `|rp:<hash>` to the install fingerprint only
-/// when the view requires it.
-fn fingerprint_is_replacement_scoped(fingerprint: &str) -> bool {
-    fingerprint.contains("|rp:")
+/// Whether the cache fingerprint covers this mod's replacements: keyed with
+/// the shadow's `rp:<hash>` when it has `replace_path`s, and not
+/// replacement-scoped when it has none.
+fn carries_replacement_view(
+    fingerprint: &str,
+    shadow: &cwtools_file_manager::file_manager::LayerShadow,
+) -> bool {
+    if shadow.has_replace_paths() {
+        fingerprint.ends_with(&format!("|{}", shadow.replacement_fingerprint()))
+    } else {
+        !fingerprint.contains("|rp:")
+    }
 }
 
-/// The loaded `--vanilla-cache` the run may consume, if any, given the mod's
-/// replacement shadow. A `replace_path` hides base-game definitions, so the
-/// cache serves the run only when it carries that replacement view:
-///
-/// - an `--vanilla` install is available: keep the cache and let the freshness
-///   check after the session load ([`rebuild_vanilla_cache_if_stale`]) warn and
-///   rebuild whichever view the file lacks;
-/// - the cache is keyed by this exact replacement view (a cache handed over
-///   from a tool that already built the filtered view): keep it;
-/// - anything else is dropped with a warning, so the run answers without
-///   base-game data rather than on a view it cannot trust.
+/// What the run consumes from a loaded explicit cache. A cache whose
+/// replacement scope does not match the mod must not feed the session — its
+/// aux loc keys cannot be filtered without re-walking the install — so its
+/// data is dropped and the view rebuilt live; the fingerprint survives so the
+/// freshness check still rewrites the file for the next run.
 pub(crate) fn gate_vanilla_cache_for_replacements(
     cache_path: &Path,
     loaded: Option<(String, VanillaCacheData)>,
     directory: &Path,
     vanilla: Option<&Path>,
-) -> Option<(String, VanillaCacheData)> {
-    let (fingerprint, data) = loaded?;
-    let shadow = cwtools_driver::vanilla_replacement_shadow(directory, &[]);
-    let trusted = if shadow.has_replace_paths() {
-        vanilla.is_some()
-            || fingerprint.ends_with(&format!("|{}", shadow.replacement_fingerprint()))
-    } else {
-        vanilla.is_some() || !fingerprint_is_replacement_scoped(&fingerprint)
+) -> (Option<String>, Option<VanillaCacheData>) {
+    let Some((fingerprint, data)) = loaded else {
+        return (None, None);
     };
-    if trusted {
-        return Some((fingerprint, data));
+    let shadow = cwtools_driver::vanilla_replacement_shadow(directory, &[]);
+    if carries_replacement_view(&fingerprint, &shadow) {
+        return (Some(fingerprint), Some(data));
     }
     let reason = if shadow.has_replace_paths() {
         "does not carry this mod's replace_path view"
     } else {
         "is scoped by another mod's replace_path"
     };
+    if vanilla.is_some() {
+        eprintln!(
+            "warn: vanilla cache {} {reason}; using a live base-game index for this run",
+            cache_path.display()
+        );
+        return (Some(fingerprint), None);
+    }
     eprintln!(
         "warn: vanilla cache {} {reason} and there is no --vanilla install to rebuild it from; \
          continuing without base-game data",
         cache_path.display()
     );
-    None
+    (None, None)
 }
 
-/// The full fingerprint of an explicit cache is only computable after the
-/// session loads (it needs the ruleset), so staleness is detected here and the
-/// file is rebuilt for the next run while this one stays on what it consumed.
-/// The rebuild indexes with the replacement shadow, so the file is written as
-/// what it should be: the filtered view when the mod's `replace_path`s require
-/// one, under the fingerprint computed for exactly that view. Requires an
-/// install; [`gate_vanilla_cache_for_replacements`] owns the case where the
-/// cache cannot be honored without one.
+/// The full fingerprint of an explicit cache needs the ruleset, so staleness
+/// is detected here: warn and rebuild the file — with the replacement shadow,
+/// so an unfiltered index is never saved as the filtered view.
 pub(crate) fn rebuild_vanilla_cache_if_stale(
     session: &cwtools_driver::Session,
     cache_path: &Path,

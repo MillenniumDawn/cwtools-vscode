@@ -654,9 +654,8 @@ types = {
 }
 
 /// An unfiltered `cache-vanilla` cache paired with `--vanilla` on a mod with
-/// `replace_path`: the old warn-and-rebuild path takes the mismatch, and the
-/// rebuild writes the filtered view under the replacement-aware fingerprint,
-/// so the file lands as what it claims to be.
+/// `replace_path`: the warn-and-rebuild path rebuilds the filtered view under
+/// the replacement-aware fingerprint instead of exiting.
 #[test]
 fn test_validate_warns_and_rebuilds_replace_path_cache_with_vanilla() {
     let tmp = tempfile::tempdir().unwrap();
@@ -735,6 +734,12 @@ types = {
         .assert()
         .success()
         .stdout(predicate::str::contains("Validation complete"))
+        .stderr(predicate::str::contains(
+            "does not carry this mod's replace_path view",
+        ))
+        .stderr(predicate::str::contains(
+            "using a live base-game index for this run",
+        ))
         .stderr(predicate::str::contains("vanilla cache is stale (cached:"))
         .stderr(predicate::str::contains(
             "Rebuilt vanilla cache with 1 instances",
@@ -775,6 +780,127 @@ types = {
             .iter()
             .any(|path| path == "common/things/nested/y.txt"),
         "the rebuilt auxiliary index keeps nested files"
+    );
+}
+
+/// The FIRST `--vanilla --vanilla-cache` run on a replace_path mod must
+/// already refuse a loc key hidden by the replacement view, not only heal the
+/// cache file for the next run.
+#[test]
+fn test_validate_first_run_cannot_resolve_loc_key_hidden_by_replace_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mod_dir = tmp.path().join("mod");
+    std::fs::create_dir_all(&mod_dir).unwrap();
+    std::fs::write(
+        mod_dir.join("descriptor.mod"),
+        r#"replace_path = "localisation/replaced""#,
+    )
+    .unwrap();
+    std::fs::write(mod_dir.join("script.txt"), "anyway_valid = { }\n").unwrap();
+    let mod_loc = mod_dir.join("localisation");
+    std::fs::create_dir_all(&mod_loc).unwrap();
+    std::fs::write(
+        mod_loc.join("mod_l_english.yml"),
+        "l_english:\n mod_key:0 \"$hidden_key$\"\n ref_kept:0 \"$kept_key$\"\n",
+    )
+    .unwrap();
+    let rules_dir = tmp.path().join("rules");
+    std::fs::create_dir_all(&rules_dir).unwrap();
+    std::fs::write(
+        rules_dir.join("things.cwt"),
+        r#"
+types = {
+    type[thing] = {
+        path = "game/common/things"
+    }
+}
+"#,
+    )
+    .unwrap();
+    let vanilla = tmp.path().join("vanilla");
+    let replaced_loc = vanilla.join("localisation/replaced");
+    std::fs::create_dir_all(&replaced_loc).unwrap();
+    std::fs::write(
+        replaced_loc.join("hidden_l_english.yml"),
+        "l_english:\n hidden_key:0 \"Hidden\"\n",
+    )
+    .unwrap();
+    let vanilla_loc = vanilla.join("localisation");
+    std::fs::write(
+        vanilla_loc.join("kept_l_english.yml"),
+        "l_english:\n kept_key:0 \"Kept\"\n",
+    )
+    .unwrap();
+    let cache = tmp.path().join("vanilla.cwv");
+
+    // The cache built the documented way carries the unfiltered loc keys.
+    cwtools()
+        .args([
+            "cache-vanilla",
+            "--game",
+            "hoi4",
+            "--vanilla",
+            vanilla.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--output",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let (_, cache_fp, cache_data) = cwtools_info::vanilla_cache::load(&cache).unwrap();
+    assert!(
+        cache_data
+            .aux
+            .loc_keys
+            .iter()
+            .any(|(_, keys)| keys.iter().any(|key| key == "hidden_key")),
+        "the documented cache holds the key that the game no longer loads"
+    );
+    assert!(!cache_fp.contains("|rp:"));
+
+    cwtools()
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            mod_dir.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--vanilla",
+            vanilla.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Validation complete"))
+        .stdout(predicate::str::contains(
+            "Localisation key \"mod_key\" references \"hidden_key\"",
+        ))
+        .stdout(predicate::str::contains("CW225"))
+        .stdout(predicate::str::contains("references \"kept_key\"").not());
+
+    // The same first run rewrites the explicit file as the filtered view:
+    // the hidden key leaves the auxiliary loc index too.
+    let (_, rebuilt_fp, rebuilt) = cwtools_info::vanilla_cache::load(&cache).unwrap();
+    assert!(rebuilt_fp.contains("|rp:"));
+    assert!(
+        !rebuilt
+            .aux
+            .loc_keys
+            .iter()
+            .any(|(_, keys)| keys.iter().any(|key| key == "hidden_key")),
+        "the rebuilt cache must not carry the replaced loc key"
+    );
+    assert!(
+        rebuilt
+            .aux
+            .loc_keys
+            .iter()
+            .any(|(_, keys)| keys.iter().any(|key| key == "kept_key")),
+        "the rebuilt cache keeps the visible loc key"
     );
 }
 
