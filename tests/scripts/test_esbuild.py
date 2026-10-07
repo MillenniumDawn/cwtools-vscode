@@ -27,17 +27,57 @@ def procs(*codes: int | None) -> list[subprocess.Popen[bytes]]:
     return cast("list[subprocess.Popen[bytes]]", [FakeProcess(code) for code in codes])
 
 
-_TEST_ENV_READ = re.compile(r"\bprocess\.env\.(CWTOOLS_TEST_[A-Z0-9_]+)\b")
-_TEST_ENV_DEFINE = re.compile(r"--define:process\.env\.(CWTOOLS_TEST_[A-Z0-9_]+)=(.*)")
+_TEST_ENV_NAME = re.compile(r"\b(CWTOOLS_TEST_[A-Za-z0-9_]+)\b")
+_TEST_ENV_READ = re.compile(
+    r"(?<![A-Za-z0-9_$.])process\.env\.(CWTOOLS_TEST_[A-Za-z0-9_]+)(?![A-Za-z0-9_$])"
+)
+
+
+def _test_env_names_in_source(source: str) -> tuple[set[str], set[str]]:
+    direct_reads = {
+        match.start(1): match.group(1) for match in _TEST_ENV_READ.finditer(source)
+    }
+    names: set[str] = set()
+    unsupported: set[str] = set()
+    for match in _TEST_ENV_NAME.finditer(source):
+        name = match.group(1)
+        if direct_reads.get(match.start(1)) == name:
+            names.add(name)
+        else:
+            unsupported.add(name)
+    return names, unsupported
 
 
 def _source_test_env_names() -> set[str]:
-    return {
-        name
-        for path in EXTENSION_SOURCE_ROOT.rglob("*")
-        if path.is_file() and path.suffix in {".ts", ".tsx"}
-        for name in _TEST_ENV_READ.findall(path.read_text(encoding="utf-8"))
-    }
+    names: set[str] = set()
+    unsupported: list[str] = []
+    for path in EXTENSION_SOURCE_ROOT.rglob("*"):
+        if not path.is_file() or path.suffix not in {
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".mjs",
+            ".cjs",
+        }:
+            continue
+        source_names, invalid_names = _test_env_names_in_source(
+            path.read_text(encoding="utf-8")
+        )
+        names.update(source_names)
+        if invalid_names:
+            relative_path = path.relative_to(EXTENSION_SOURCE_ROOT)
+            unsupported.append(f"{relative_path}: {', '.join(sorted(invalid_names))}")
+    assert not unsupported, (
+        "Every CWTOOLS_TEST_* occurrence in extension/src must be a direct "
+        "process.env.NAME read; unsupported references:\n" + "\n".join(unsupported)
+    )
+    return names
+
+
+_TEST_ENV_DEFINE = re.compile(
+    r"--define:process\.env\.(CWTOOLS_TEST_[A-Za-z0-9_]+)=(.*)"
+)
 
 
 def _test_env_defines(args: list[str]) -> dict[str, str]:
@@ -58,6 +98,39 @@ def _esbuild_test_args(source: Path, outfile: Path, *, release: bool) -> list[st
     )
     args[outfile_index] = f"--outfile={outfile}"
     return args
+
+
+@pytest.mark.parametrize(
+    ("source", "direct_reads", "unsupported"),
+    [
+        (
+            "const rules = process.env.CWTOOLS_TEST_RULES_FOLDER;",
+            {"CWTOOLS_TEST_RULES_FOLDER"},
+            set(),
+        ),
+        (
+            'const rules = process.env["CWTOOLS_TEST_BRACKET"];',
+            set(),
+            {"CWTOOLS_TEST_BRACKET"},
+        ),
+        (
+            "const { CWTOOLS_TEST_DESTRUCTURED } = process.env;",
+            set(),
+            {"CWTOOLS_TEST_DESTRUCTURED"},
+        ),
+        (
+            "const env = process.env; const rules = env.CWTOOLS_TEST_ALIASED;",
+            set(),
+            {"CWTOOLS_TEST_ALIASED"},
+        ),
+    ],
+)
+def test_test_env_reads_must_use_direct_process_env_properties(
+    source: str,
+    direct_reads: set[str],
+    unsupported: set[str],
+) -> None:
+    assert _test_env_names_in_source(source) == (direct_reads, unsupported)
 
 
 def test_extension_bundle_is_node_cjs() -> None:
@@ -181,7 +254,8 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
 
     source = tmp_path / "repo.ts"
     source.write_text(
-        'export const repo = process.env.CWTOOLS_TEST_RULES_FOLDER ?? "https://ok.example";\n',
+        'export const repo = process.env.CWTOOLS_TEST_RULES_FOLDER ?? '
+        '"https://ok.example";\n',
         encoding="utf-8",
     )
     dropped = tmp_path / "dropped.js"
