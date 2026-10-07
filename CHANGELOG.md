@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Ignore trailing `#` comments when parsing `.cwt` directive values, including `type_key_filter`, while retaining quoted hashes and malformed-directive checks. (#903)
 * Preserve the previous semantic-token snapshot across buffer edits so delta requests return edits; assert the wire edit, file-operation refresh behavior, and `genlocall` output over framed LSP traffic. (#519)
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
