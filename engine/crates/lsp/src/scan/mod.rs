@@ -115,7 +115,14 @@ impl ScanGuard {
         }
         if self.owns_scan {
             self.state.scan_in_progress.store(false, Ordering::SeqCst);
+            signal_scan_release_for_tests();
         }
+    }
+}
+
+fn signal_scan_release_for_tests() {
+    if let Ok(path) = std::env::var("CWTOOLS_SCAN_RELEASE_FILE") {
+        let _ = std::fs::write(path, b"released");
     }
 }
 
@@ -138,10 +145,14 @@ impl Drop for ScanGuard {
                             .state
                             .scan_in_progress
                             .store(false, Ordering::SeqCst);
+                        signal_scan_release_for_tests();
                     }
                 });
             }
-            _ if self.owns_scan => self.state.scan_in_progress.store(false, Ordering::SeqCst),
+            _ if self.owns_scan => {
+                self.state.scan_in_progress.store(false, Ordering::SeqCst);
+                signal_scan_release_for_tests();
+            }
             _ => {}
         }
     }
@@ -383,12 +394,22 @@ where
 
 /// that parallel load can blow through (#198). Unset, which is every real run,
 pub(crate) async fn hold_scan_for_tests() {
-    hold_for_tests("CWTOOLS_SCAN_HOLD_MS", "CWTOOLS_SCAN_HOLD_FILE").await;
+    hold_for_tests(
+        "CWTOOLS_SCAN_HOLD_MS",
+        "CWTOOLS_SCAN_HOLD_FILE",
+        "CWTOOLS_SCAN_HOLD_READY_FILE",
+    )
+    .await;
 }
 
 /// phase's ticker demonstrably alive — #434, proving a stray sampler tick
 pub(crate) async fn hold_parse_for_tests() {
-    hold_for_tests("CWTOOLS_PARSE_HOLD_MS", "CWTOOLS_PARSE_HOLD_FILE").await;
+    hold_for_tests(
+        "CWTOOLS_PARSE_HOLD_MS",
+        "CWTOOLS_PARSE_HOLD_FILE",
+        "CWTOOLS_PARSE_HOLD_READY_FILE",
+    )
+    .await;
 }
 
 /// The blocking sibling of [`hold_parse_for_tests`], for #470.
@@ -404,19 +425,29 @@ pub(crate) async fn hold_parse_for_tests() {
 /// it with a sleep — the difference between a test that fails on this bug and
 /// one that races it. Unset, which is every real run, both are a no-op.
 pub(crate) fn hold_parse_blocking_for_tests() {
-    let Some(ms) = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-    else {
+    let ready = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_READY_FILE").ok();
+    let gate = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_FILE").ok();
+    if ready.is_none() && gate.is_none() {
+        if let Some(ms) = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+        }
         return;
-    };
-    if let Ok(ready) = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_READY_FILE") {
-        let _ = std::fs::write(&ready, b"held");
     }
-    std::thread::sleep(std::time::Duration::from_millis(ms));
+    if let Some(ready) = ready {
+        let _ = std::fs::write(ready, b"held");
+    }
+    if let Some(gate) = gate {
+        let gate = std::path::PathBuf::from(gate);
+        while gate.exists() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
 }
 
-async fn hold_for_tests(ms_var: &str, file_var: &str) {
+async fn hold_for_tests(ms_var: &str, file_var: &str, ready_var: &str) {
     if let Some(ms) = std::env::var(ms_var)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -427,6 +458,11 @@ async fn hold_for_tests(ms_var: &str, file_var: &str) {
         return;
     };
     let gate = std::path::PathBuf::from(gate);
+    if tokio::fs::try_exists(&gate).await.unwrap_or(false)
+        && let Ok(ready) = std::env::var(ready_var)
+    {
+        let _ = tokio::fs::write(ready, b"held").await;
+    }
     while tokio::fs::try_exists(&gate).await.unwrap_or(false) {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
@@ -543,7 +579,7 @@ mod tests {
     async fn test_watched_batch_slot_is_ours_while_handle_unfinished() {
         let state = DocumentState::new();
         let handle = tokio::spawn(async {
-            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            std::future::pending::<()>().await;
         });
         *state.watched_debounce.lock() = Some(handle);
         assert!(
@@ -777,13 +813,13 @@ mod tests {
     }
 
     async fn wait_for_clear(flag: &AtomicBool) -> bool {
-        for _ in 0..200 {
-            if !flag.load(Ordering::SeqCst) {
-                return true;
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while flag.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-        false
+        })
+        .await
+        .is_ok()
     }
 
     #[tokio::test]
@@ -845,7 +881,6 @@ mod tests {
         let backend = test_backend();
         backend.state.scan_in_progress.store(true, Ordering::SeqCst);
         drop(ScanGuard::for_command(&backend));
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert!(
             backend.state.scan_in_progress.load(Ordering::SeqCst),
             "a command guard must not release a scan it never took"
