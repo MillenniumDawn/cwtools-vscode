@@ -550,8 +550,8 @@ impl<'a> Parser<'a> {
         let saved_cursor = self.save();
         let mut unclosed_key_with_operator = false;
         if let Some(raw_key) = self.read_key() {
-            unclosed_key_with_operator = self.errors.len() > saved_cursor.errors_len
-                && raw_key.contains('=');
+            unclosed_key_with_operator =
+                self.errors.len() > saved_cursor.errors_len && raw_key.contains('=');
             if let Some(op) = self.parse_operator() {
                 let key = self.table.intern(&raw_key);
                 if let Some((value, value_pos)) = self.parse_value(false) {

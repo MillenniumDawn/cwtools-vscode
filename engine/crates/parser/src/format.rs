@@ -681,16 +681,18 @@ mod tests {
             None,
             "the formatter must refuse output that reparses with errors"
         );
-        assert!(format_range_edits(
-            input,
-            &table(),
-            &FormatOptions::default(),
-            SourceRange {
-                start: SourcePos { line: 1, col: 5 },
-                end: SourcePos { line: 2, col: 7 },
-            },
-        )
-        .is_empty());
+        assert!(
+            format_range_edits(
+                input,
+                &table(),
+                &FormatOptions::default(),
+                SourceRange {
+                    start: SourcePos { line: 1, col: 5 },
+                    end: SourcePos { line: 2, col: 7 },
+                },
+            )
+            .is_empty()
+        );
 
         let paired = "n = { \"a\n \"b\n \"c\n \"d\n}";
         assert_eq!(
@@ -700,7 +702,7 @@ mod tests {
         );
     }
 
-    fn display_width(line: &str, tab_size: usize) {
+    fn display_width(line: &str, tab_size: usize) -> usize {
         line.chars()
             .fold(0, |width, ch| advance_char(width, ch, tab_size))
     }
