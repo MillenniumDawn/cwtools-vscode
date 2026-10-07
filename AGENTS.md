@@ -52,7 +52,7 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 ```bash
 npm install
 npm run compile    # tsc + esbuild (bundle extension + webview)
-npm run check      # typecheck + lint
+npm run check      # host-test inventory, typecheck + lint
 npm test           # Run VS Code extension tests
 ```
 

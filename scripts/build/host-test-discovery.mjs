@@ -6,11 +6,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 /**
- * Return source names assigned to a vscode-test config's file lists. The
- * runner config uses emitted JavaScript paths corresponding to `.test.ts`
- * source basenames.
+ * Convert a vscode-test config's emitted JavaScript paths to source test
+ * basenames.
  * @param {{ files: string[] }[]} testConfigs Configs returned by vscode-test.
- * @returns {Set<string>} Assigned host test basenames, including `.test.ts`.
+ * @returns {Set<string>} Configured host test basenames, including `.test.ts`.
  */
 function configuredHostTests(testConfigs) {
 	return new Set(
