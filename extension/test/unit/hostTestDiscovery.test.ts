@@ -43,7 +43,7 @@ test("runs the discovery guard when invoked through a directory symlink", async 
 		await mkdir(scriptDirectory, { recursive: true });
 		await mkdir(hostDirectory, { recursive: true });
 		await copyFile(
-			new URL("../../../scripts/build/host-test-discovery.mjs", import.meta.url),
+			path.resolve(process.cwd(), "scripts/build/host-test-discovery.mjs"),
 			path.join(scriptDirectory, "host-test-discovery.mjs"),
 		);
 		await writeFile(path.join(hostDirectory, "unassigned.test.ts"), "", "utf8");
