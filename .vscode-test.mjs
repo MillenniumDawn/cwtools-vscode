@@ -4,16 +4,18 @@
 //   unit        fast suites that need the VS Code API but not the language server
 //   smoke       unit + activation, in the sample workspace
 //   multi-root  server-backed descriptor/root selection in a multi-root fixture
+//   watched     served-root exclusions and watched-file updates, in its own workspace
 //   live        the live-settings suite, in sample-live (its own workspace
 //               because .vscode/settings.json attempts to set rules_folder)
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
 //               (see below; its own CI step, not part of test:smoke)
-//   host        full suite excl. live (slower, see below)
+//   host        sample-workspace suites, including smoke, hover and completion;
+//               excludes live, multi-root, rules-sync and watched
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
-// Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
-// `--label live`, and `--label multi-root` to cover the host workspaces.
+// Labels are therefore unique here. `test:smoke` passes `--label smoke`,
+// `--label live`, `--label multi-root`, and `--label watched`.
 //
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
