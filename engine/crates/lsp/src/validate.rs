@@ -3713,14 +3713,15 @@ mod ignored_tests {
         assert_eq!(published.uri.as_str(), uri.as_str());
         assert_eq!(published.version, Some(1));
 
-        let docs = backend.state.documents.lock();
-        assert!(!docs.contains_key(&uri));
-        assert!(docs.contains_key(&new_uri));
-        assert_eq!(
-            docs.content_hash(&new_uri),
-            Some(cwtools_cache::workspace::content_hash("old text"))
-        );
-        drop(docs);
+        {
+            let docs = backend.state.documents.lock();
+            assert!(!docs.contains_key(&uri));
+            assert!(docs.contains_key(&new_uri));
+            assert_eq!(
+                docs.content_hash(&new_uri),
+                Some(cwtools_cache::workspace::content_hash("old text"))
+            );
+        }
         {
             let fixes = backend.state.fixable_edits.lock();
             assert!(!fixes.contains_key(&uri));
