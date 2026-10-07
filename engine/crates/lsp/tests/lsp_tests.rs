@@ -57,7 +57,7 @@ fn write_frame(child: &mut std::process::Child, body: &str) -> std::io::Result<(
 // A graceful exit lets spawned coverage runtimes flush their profiles.
 fn stop_server(child: &mut std::process::Child) {
     if child.stdin.is_some() {
-        let shutdown = jsonrpc_request(2_147_483_647, "shutdown", serde_json::json!(null));
+        let shutdown = shutdown_request(2_147_483_647);
         let exit = jsonrpc_notification("exit", serde_json::json!({}));
         let _ = write_frame(child, &shutdown);
         let _ = write_frame(child, &exit);
@@ -75,8 +75,10 @@ fn write_frame_to(stdin: &mut impl Write, body: &str) -> std::io::Result<()> {
 }
 
 /// Run a child interaction with a deadline and clean up every owner on exit.
-/// `read_frame` blocks with no timeout, so killing the child on timeout is what
-/// lets the worker thread join instead of leaking for the rest of the binary.
+/// [`run_child_with_deadline_with_status`] also stops the server gracefully and
+/// reports how; this wrapper keeps only the closure's result. `read_frame`
+/// blocks with no timeout, so killing the child on timeout is what lets the
+/// worker thread join instead of leaking for the rest of the binary.
 fn run_child_with_deadline<T: Send + 'static>(
     child: std::process::Child,
     stdin: std::process::ChildStdin,
@@ -89,6 +91,18 @@ fn run_child_with_deadline<T: Send + 'static>(
     run_child_with_deadline_with_status(child, stdin, reader, secs, f).0
 }
 
+/// Run a child interaction with a deadline, then stop the server gracefully.
+///
+/// Returns `(result, exit_status, shutdown_responded)`: `result` is the
+/// closure's value, `None` once `secs` passes before it returns; `exit_status`
+/// is the child's own [`std::process::ExitStatus`] when that was observed
+/// before the fallback kill, `None` otherwise; `shutdown_responded` is whether
+/// the server answered [`shutdown_request`] with a valid success reply.
+///
+/// On a timely return the helper sends `shutdown` and waits up to 2 seconds for
+/// a valid reply, sends `exit` only on such a reply, then waits another
+/// separate 2 seconds for the child to self-exit; every path still ends in
+/// kill and reap so the worker can join.
 fn run_child_with_deadline_with_status<T: Send + 'static>(
     mut child: std::process::Child,
     mut stdin: std::process::ChildStdin,
@@ -116,12 +130,7 @@ fn run_child_with_deadline_with_status<T: Send + 'static>(
     let (result, exit_status, shutdown_responded) =
         match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
             Ok((result, mut stdin)) => {
-                let shutdown = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": SHUTDOWN_REQUEST_ID,
-                    "method": "shutdown",
-                })
-                .to_string();
+                let shutdown = shutdown_request(SHUTDOWN_REQUEST_ID);
                 let exit = jsonrpc_notification("exit", serde_json::json!({}));
                 let _ = write_frame_to(&mut stdin, &shutdown);
                 let _ = begin_shutdown_tx.send(());
@@ -338,6 +347,19 @@ fn jsonrpc_request(id: i64, method: &str, params: serde_json::Value) -> String {
     .to_string()
 }
 
+/// Build the `shutdown` request frame the server answers successfully.
+///
+/// `params` must be omitted entirely: tower-lsp 0.20 answers an explicit
+/// `"params": null` shutdown with `-32602 Unexpected params: null`.
+fn shutdown_request(id: i64) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "shutdown",
+    })
+    .to_string()
+}
+
 fn jsonrpc_notification(method: &str, params: serde_json::Value) -> String {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -409,14 +431,17 @@ fn test_lsp_full_lifecycle() {
     let body = jsonrpc_notification("initialized", serde_json::json!({}));
     write_frame(&mut child, &body).unwrap();
 
-    let body = jsonrpc_request(2, "shutdown", serde_json::json!(null));
+    let body = shutdown_request(2);
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("no shutdown response");
     stop_server(&mut child);
 
     let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
     assert_eq!(resp["id"], 2);
-    assert!(resp["result"].is_null());
+    // `resp["result"]` is Null for a missing key too, which used to pass when
+    // the server answered -32602, so reach for the keys themselves.
+    assert!(resp.get("error").is_none());
+    assert_eq!(resp.get("result"), Some(&serde_json::Value::Null));
 }
 
 #[test]
@@ -518,7 +543,7 @@ fn test_lsp_unknown_notification_does_not_crash() {
     let body = jsonrpc_notification("nonexistent/method", serde_json::json!({}));
     write_frame(&mut child, &body).unwrap();
 
-    let body = jsonrpc_request(99, "shutdown", serde_json::json!(null));
+    let body = shutdown_request(99);
     write_frame(&mut child, &body).unwrap();
     let resp_str = read_response(&mut reader).expect("server should respond");
     stop_server(&mut child);
@@ -6210,11 +6235,7 @@ fn perf_completion_md() {
         }
     }
 
-    write_frame(
-        &mut child,
-        &jsonrpc_request(999, "shutdown", serde_json::json!(null)),
-    )
-    .unwrap();
+    write_frame(&mut child, &shutdown_request(999)).unwrap();
     let _ = read_response(&mut reader);
     stop_server(&mut child);
     stderr_thread.join().ok();
