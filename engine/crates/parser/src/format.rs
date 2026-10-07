@@ -54,10 +54,14 @@ impl FormatOptions {
 pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Option<String> {
     let bom = input.starts_with('\u{FEFF}');
     let body = input.strip_prefix('\u{FEFF}').unwrap_or(input);
-    if has_unclosed_quoted_string(body) {
+    let parsed = parse_ok(body, table)?;
+    // An unclosed leaf-value quote has no parse diagnostic (speculative-key
+    // recovery, #556), so without this check the printer would join it with
+    // the next lines and the closing brace would land inside the still-open
+    // quote. Refuse instead of corrupting; the flag is the parser's own view.
+    if parsed.has_unclosed_leaf_value_quote {
         return None;
     }
-    let parsed = parse_ok(body, table)?;
     let mut printed = print_file(body, table, &parsed, opts);
     if opts.insert_final_newline {
         if !printed.ends_with('\n') {
@@ -97,12 +101,12 @@ pub fn format_range_edits(
     opts: &FormatOptions,
     range: SourceRange,
 ) -> Vec<SpanEdit> {
-    if has_unclosed_quoted_string(input) {
-        return Vec::new();
-    }
     let Some(parsed) = parse_ok(input, table) else {
         return Vec::new();
     };
+    if parsed.has_unclosed_leaf_value_quote {
+        return Vec::new();
+    }
     let mut positions = PositionLookup::new(input, &line_start_bytes(input));
     let range_start = positions.byte_offset(range.start);
     let range_end = positions.byte_offset(range.end);
@@ -172,45 +176,6 @@ pub fn format_range_edits(
 fn parse_ok(input: &str, table: &StringTable) -> Option<ParsedFile> {
     let parsed = parse_string(input, table);
     parsed.errors.is_empty().then_some(parsed)
-}
-
-fn has_unclosed_quoted_string(input: &str) -> bool {
-    let mut in_string = false;
-    let mut in_comment = false;
-    let mut escaped = false;
-    for ch in input.chars() {
-        if ch == '\n' {
-            if in_string {
-                return true;
-            }
-            in_comment = false;
-            escaped = false;
-            continue;
-        }
-        if in_comment {
-            continue;
-        }
-        if in_string {
-            if escaped {
-                escaped = false;
-                if ch == '"' || ch == '\\' {
-                    continue;
-                }
-            }
-            match ch {
-                '\\' => escaped = true,
-                '"' => in_string = false,
-                _ => {}
-            }
-        } else {
-            match ch {
-                '#' => in_comment = true,
-                '"' => in_string = true,
-                _ => {}
-            }
-        }
-    }
-    in_string
 }
 
 fn newline_of(input: &str) -> &'static str {
@@ -698,6 +663,16 @@ mod tests {
             None,
             "unclosed quotes must not be paired by the printer into different values"
         );
+    }
+
+    #[test]
+    fn quoted_key_characters_are_not_unclosed_quotes_to_the_formatter() {
+        // `KEY_CHAR` includes `"`, so `foo"bar` is one bare key: the parser
+        // never opens a string literal on it. The refusal must follow that
+        // parser view, not a quote scanner, or `format_text` would reject a
+        // file that parses cleanly (main formats it).
+        let input = "foo\"bar = x\nother = 1\n";
+        assert_eq!(fmt(input), input);
     }
 
     fn display_width(line: &str, tab_size: usize) -> usize {
