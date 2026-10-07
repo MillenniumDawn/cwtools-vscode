@@ -1196,4 +1196,49 @@ mod tests {
             });
         });
     }
+
+    #[test]
+    fn semantic_delta_edit_reconstructs_the_changed_flat_token_stream() {
+        let token = |delta_start, length, token_type| SemanticToken {
+            delta_line: 0,
+            delta_start,
+            length,
+            token_type,
+            token_modifiers_bitset: 0,
+        };
+        let before = vec![token(0, 3, 1), token(4, 1, 2), token(2, 5, 3)];
+        let after = vec![before[0], token(4, 1, 4), before[2]];
+        let edits = compute_semantic_delta(&before, &after);
+
+        assert_eq!(edits.len(), 1, "the changed token is one wire edit");
+        let edit = &edits[0];
+        assert_eq!(
+            edit.start, 5,
+            "edits index the flat array, not token tuples"
+        );
+        assert_eq!(edit.delete_count, 5, "one token is five integers");
+        let replacement = edit.data.as_ref().expect("replacement token");
+        assert_eq!(replacement, &[after[1]]);
+
+        let flatten = |tokens: &[SemanticToken]| {
+            tokens
+                .iter()
+                .flat_map(|t| {
+                    [
+                        t.delta_line,
+                        t.delta_start,
+                        t.length,
+                        t.token_type,
+                        t.token_modifiers_bitset,
+                    ]
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut reconstructed = flatten(&before);
+        let replacement = flatten(replacement);
+        let start = edit.start as usize;
+        let end = start + edit.delete_count as usize;
+        reconstructed.splice(start..end, replacement);
+        assert_eq!(reconstructed, flatten(&after));
+    }
 }

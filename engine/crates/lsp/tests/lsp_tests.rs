@@ -282,6 +282,34 @@ fn jsonrpc_notification(method: &str, params: serde_json::Value) -> String {
     .to_string()
 }
 
+fn reply_to_client_request(stdin: &mut std::process::ChildStdin, frame: &serde_json::Value) {
+    assert!(frame.get("method").is_some(), "not a request: {frame}");
+    assert!(frame.get("id").is_some(), "request has no id: {frame}");
+    write_frame_to(
+        stdin,
+        &serde_json::json!({ "jsonrpc": "2.0", "id": frame["id"], "result": null }).to_string(),
+    )
+    .unwrap();
+}
+
+fn read_client_request_and_reply(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+) -> serde_json::Value {
+    for _ in 0..5000 {
+        let raw = read_frame(reader).expect("server exited before its client request");
+        if raw.is_empty() {
+            continue;
+        }
+        let frame: serde_json::Value = serde_json::from_str(&raw).expect("JSON-RPC frame");
+        if frame.get("method").is_some() && frame.get("id").is_some() {
+            reply_to_client_request(stdin, &frame);
+            return frame;
+        }
+    }
+    panic!("no server-to-client JSON-RPC request in the first 5000 frames");
+}
+
 // ── Full lifecycle: initialize → initialized → shutdown ──────────────────────
 
 #[test]
@@ -9532,6 +9560,89 @@ thing = { x = scalar }
 "#;
 
 #[test]
+fn test_genlocall_returns_missing_name_derived_localisation_keys() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("test_rules.cwt"), MISSING_LOC_RULES).unwrap();
+
+    let script = ws.path().join("common/things/test.txt");
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::write(&script, "my_thing = { x = yes }\n").unwrap();
+
+    let loc = ws.path().join("localisation/english/test_l_english.yml");
+    std::fs::create_dir_all(loc.parent().unwrap()).unwrap();
+    let mut loc_bytes = vec![0xEF, 0xBB, 0xBF];
+    loc_bytes.extend_from_slice(b"l_english:\n existing_key:0 \"Existing\"\n");
+    std::fs::write(loc, loc_bytes).unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let stdin = child.stdin.take().unwrap();
+    let root_uri = path_uri(ws.path());
+    let rules_uri = rules_dir.path().to_string_lossy().to_string();
+    let vanilla_uri = vanilla_dir.path().to_string_lossy().to_string();
+
+    let response = run_child_with_deadline(child, stdin, reader, 60, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                1,
+                "initialize",
+                serde_json::json!({
+                    "processId": std::process::id(),
+                    "rootUri": root_uri,
+                    "capabilities": {},
+                    "initializationOptions": {
+                        "language": "hoi4",
+                        "rulesCache": rules_uri,
+                        "vanilla": vanilla_uri,
+                    },
+                }),
+            ),
+        )
+        .unwrap();
+        let init_raw = read_response(reader).expect("no initialize response");
+        let init: serde_json::Value = serde_json::from_str(&init_raw).unwrap();
+        assert_eq!(init["id"], 1, "got: {init_raw}");
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+        wait_for_scan_done(reader);
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                2,
+                "workspace/executeCommand",
+                serde_json::json!({ "command": "genlocall", "arguments": [] }),
+            ),
+        )
+        .unwrap();
+        let raw = read_response(reader).expect("no genlocall response");
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    })
+    .expect("genlocall deadlocked or timed out");
+
+    assert_eq!(response["id"], 2, "got: {response}");
+    let stubs = response["result"].as_array().expect("localisation stubs");
+    assert_eq!(stubs.len(), 1, "got: {response}");
+    assert_eq!(stubs[0]["language"], "english");
+    assert_eq!(stubs[0]["filename_suggestion"], "generated_l_english.yml");
+    assert_eq!(
+        stubs[0]["content"], "l_english:\n my_thing:0 \"TODO\"\n my_thing_desc:0 \"TODO\"\n",
+        "genlocall must return the missing type-name-derived keys: {response}"
+    );
+}
+
+#[test]
 fn test_keystroke_edit_reports_missing_loc_once_loc_index_is_built() {
     // CW100 (missing localisation) is gated on the loc index being non-empty
     // (`validate.rs::append_missing_loc_errors`). Before this fix the gate was
@@ -11563,6 +11674,260 @@ my_focus = {
 }
 
 #[test]
+fn test_semantic_tokens_delta_applies_wire_edit_and_falls_back_for_stale_base() {
+    let original = "my_focus = {\n    cost = 10\n}\n";
+    let updated = "my_focus = {\n    cost = 200\n}\n";
+    let rel = "common/national_focus/tree.txt";
+    let (ws, _rules, mut child, reader) = editor_server(&[(rel, original)]);
+    let uri = path_uri(ws.path().join(rel));
+    let uri_for_requests = uri.clone();
+    let rel_for_wait = rel.to_string();
+    let stdin = child.stdin.take().unwrap();
+
+    let result = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                20,
+                "textDocument/semanticTokens/full",
+                serde_json::json!({ "textDocument": { "uri": uri_for_requests } }),
+            ),
+        )
+        .unwrap();
+        let full_raw = read_response(reader).expect("no initial full-token response");
+        let full: serde_json::Value = serde_json::from_str(&full_raw).unwrap();
+        assert_eq!(full["id"], 20, "got: {full_raw}");
+        let original_data = full["result"]["data"]
+            .as_array()
+            .expect("full-token data")
+            .clone();
+        let original_id = full["result"]["resultId"]
+            .as_str()
+            .expect("full-token resultId")
+            .to_string();
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                21,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "previousResultId": original_id.clone(),
+                }),
+            ),
+        )
+        .unwrap();
+        let unchanged_raw = read_response(reader).expect("no unchanged delta response");
+        let unchanged: serde_json::Value = serde_json::from_str(&unchanged_raw).unwrap();
+        assert_eq!(unchanged["id"], 21, "got: {unchanged_raw}");
+        assert!(
+            unchanged["result"]["resultId"].as_str().is_some(),
+            "delta must advance its resultId: {unchanged_raw}"
+        );
+        let unchanged_edits = unchanged["result"]["edits"]
+            .as_array()
+            .expect("delta edits");
+        assert!(unchanged_edits.is_empty(), "got: {unchanged_raw}");
+        assert_eq!(
+            original_data.len() % 5,
+            0,
+            "token quintets: {original_data:?}"
+        );
+        let unchanged_id = unchanged["result"]["resultId"]
+            .as_str()
+            .expect("unchanged delta resultId")
+            .to_string();
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "textDocument/didChange",
+                serde_json::json!({
+                    "textDocument": { "uri": uri, "version": 2 },
+                    "contentChanges": [{ "text": updated }],
+                }),
+            ),
+        )
+        .unwrap();
+        // Wait until the change notification has been applied and its current
+        // document diagnostics arrive before asking for the delta.
+        wait_for_diagnostics(reader, &rel_for_wait);
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                22,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "previousResultId": unchanged_id.clone(),
+                }),
+            ),
+        )
+        .unwrap();
+        let changed_raw = read_response(reader).expect("no changed delta response");
+        let changed: serde_json::Value = serde_json::from_str(&changed_raw).unwrap();
+        assert_eq!(changed["id"], 22, "got: {changed_raw}");
+        let changed_id = changed["result"]["resultId"]
+            .as_str()
+            .expect("changed delta resultId")
+            .to_string();
+        assert_ne!(changed_id, unchanged_id, "delta must advance resultId");
+        let edits = changed["result"]["edits"]
+            .as_array()
+            .expect("a current base must return semantic-token edits");
+        assert_eq!(
+            edits.len(),
+            1,
+            "expected one changed-token edit: {changed_raw}"
+        );
+        let edit = &edits[0];
+        let start = edit["start"].as_u64().expect("edit start") as usize;
+        let delete_count = edit["deleteCount"].as_u64().expect("edit deleteCount") as usize;
+        assert_eq!(start % 5, 0, "edit start must address token quintets");
+        assert_eq!(delete_count % 5, 0, "deleteCount must cover token quintets");
+        assert!(
+            start + delete_count <= original_data.len(),
+            "edit exceeds base stream"
+        );
+        let inserted_data = edit["data"].as_array().cloned().unwrap_or_default();
+        assert_eq!(inserted_data.len() % 5, 0, "inserted token quintets");
+        let mut changed_data = original_data[..start].to_vec();
+        changed_data.extend(inserted_data);
+        changed_data.extend_from_slice(&original_data[start + delete_count..]);
+        assert!(
+            changed["result"].get("data").is_none(),
+            "delta must not return a full stream: {changed_raw}"
+        );
+
+        let changed_tokens = decode_semantic_tokens(&changed_data);
+        assert!(
+            changed_tokens.contains(&(1, 11, 3, 3, 0)),
+            "the new `200` number token must reach the client: {changed_tokens:?}"
+        );
+        assert!(
+            !changed_tokens.contains(&(1, 11, 2, 3, 0)),
+            "the old `10` number token must be removed: {changed_tokens:?}"
+        );
+
+        // A result ID the server no longer retains must fall back to a full
+        // response, and that response must carry the current edited content.
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                23,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "previousResultId": original_id,
+                }),
+            ),
+        )
+        .unwrap();
+        let stale_raw = read_response(reader).expect("no stale-base fallback response");
+        let stale: serde_json::Value = serde_json::from_str(&stale_raw).unwrap();
+        assert_eq!(stale["id"], 23, "got: {stale_raw}");
+        assert_eq!(stale["result"]["data"], serde_json::json!(changed_data));
+        assert!(
+            stale["result"]["edits"].is_null(),
+            "an evicted base must not return an edit against stale data: {stale_raw}"
+        );
+
+        (original_data, changed_data)
+    })
+    .expect("semantic-token requests deadlocked or timed out");
+    assert_ne!(
+        result.0, result.1,
+        "the edit must change the wire token stream"
+    );
+}
+
+#[test]
+fn test_did_rename_files_moves_the_open_semantic_token_cache() {
+    let text = "buffer_value = 9\n";
+    let old_rel = "common/national_focus/tree.txt";
+    let new_rel = "common/national_focus/renamed.txt";
+    let (ws, _rules, mut child, reader) = editor_server(&[(old_rel, text)]);
+    let old_path = ws.path().join(old_rel);
+    let new_path = ws.path().join(new_rel);
+    let old_uri = path_uri(&old_path);
+    let new_uri = path_uri(&new_path);
+    let stdin = child.stdin.take().unwrap();
+
+    let response = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                30,
+                "textDocument/semanticTokens/full",
+                serde_json::json!({ "textDocument": { "uri": old_uri } }),
+            ),
+        )
+        .unwrap();
+        let full_raw = read_response(reader).expect("no semantic-token response before rename");
+        let full: serde_json::Value = serde_json::from_str(&full_raw).unwrap();
+        assert_eq!(full["id"], 30, "got: {full_raw}");
+        let original_data = full["result"]["data"]
+            .as_array()
+            .expect("semantic-token data")
+            .clone();
+        let tokens = decode_semantic_tokens(&original_data);
+        assert!(
+            tokens.contains(&(0, 15, 1, 3, 0)),
+            "the cached open buffer contains its number token: {tokens:?}"
+        );
+        let previous_result_id = full["result"]["resultId"]
+            .as_str()
+            .expect("resultId")
+            .to_string();
+
+        std::fs::write(&old_path, "disk_value = 1\n").unwrap();
+        std::fs::rename(&old_path, &new_path).unwrap();
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "workspace/didRenameFiles",
+                serde_json::json!({
+                    "files": [{ "oldUri": old_uri, "newUri": new_uri }],
+                }),
+            ),
+        )
+        .unwrap();
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                31,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": new_uri },
+                    "previousResultId": previous_result_id,
+                }),
+            ),
+        )
+        .unwrap();
+        let delta_raw = read_response(reader).expect("no semantic-token delta after rename");
+        let delta: serde_json::Value = serde_json::from_str(&delta_raw).unwrap();
+        assert_eq!(delta["id"], 31, "got: {delta_raw}");
+        assert_eq!(
+            delta["result"]["edits"],
+            serde_json::json!([]),
+            "got: {delta_raw}"
+        );
+        assert!(
+            delta["result"].get("data").is_none(),
+            "the moved cache must answer with a delta, not unrelated disk tokens: {delta_raw}"
+        );
+        assert_ne!(
+            delta["result"]["resultId"], full["result"]["resultId"],
+            "the delta response must advance the client-visible resultId"
+        );
+        original_data
+    })
+    .expect("didRenameFiles or the follow-up delta deadlocked or timed out");
+    assert_eq!(response.len() % 5, 0, "token quintets: {response:?}");
+}
+
+#[test]
 fn test_semantic_tokens_range_returns_only_the_requested_lines() {
     // Two entities; the request covers the second one's body only.
     let text = "\
@@ -11855,6 +12220,154 @@ fn test_initialize_advertises_the_new_capabilities() {
         commands.iter().any(|c| c == "formatWorkspace"),
         "formatWorkspace must be advertised: {commands:?}"
     );
+    assert!(
+        commands.iter().any(|c| c == "genlocall"),
+        "genlocall must be advertised: {commands:?}"
+    );
+}
+
+#[test]
+fn test_create_and_delete_file_notifications_request_client_refreshes() {
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().to_path_buf();
+    let root_uri = path_uri(ws.path());
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let stdin = child.stdin.take().unwrap();
+
+    run_child_with_deadline(child, stdin, reader, 45, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                1,
+                "initialize",
+                serde_json::json!({
+                    "processId": std::process::id(),
+                    "rootUri": root_uri,
+                    "capabilities": {
+                        "workspace": {
+                            "semanticTokens": { "refreshSupport": true },
+                            "codeLens": { "refreshSupport": true },
+                        },
+                    },
+                    "initializationOptions": { "language": "hoi4" },
+                }),
+            ),
+        )
+        .unwrap();
+        let init_raw = read_response(reader).expect("no initialize response");
+        let init: serde_json::Value = serde_json::from_str(&init_raw).unwrap();
+        assert_eq!(init["id"], 1, "got: {init_raw}");
+        let operations = &init["result"]["capabilities"]["workspace"]["fileOperations"];
+        let glob = "**/*.{txt,gui,gfx,asset,yml,cwt}";
+        for operation in ["didCreate", "didRename", "didDelete"] {
+            assert_eq!(
+                operations[operation]["filters"][0]["pattern"]["glob"], glob,
+                "{operation} file notification must be advertised"
+            );
+        }
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+
+        let mut scan_finished = false;
+        let mut startup_refreshes = Vec::new();
+        for _ in 0..10_000 {
+            let raw = read_frame(reader).expect("server exited before the initial scan finished");
+            if raw.is_empty() {
+                continue;
+            }
+            let frame: serde_json::Value = serde_json::from_str(&raw).expect("JSON-RPC frame");
+            if frame["method"] == "loadingBar"
+                && frame["params"]["enable"] == serde_json::Value::Bool(false)
+            {
+                scan_finished = true;
+            }
+            if frame.get("method").is_some() && frame.get("id").is_some() {
+                startup_refreshes.push(frame["method"].as_str().unwrap().to_string());
+                reply_to_client_request(stdin, &frame);
+            }
+            if scan_finished
+                && startup_refreshes
+                    .iter()
+                    .any(|method| method == "workspace/semanticTokens/refresh")
+                && startup_refreshes
+                    .iter()
+                    .any(|method| method == "workspace/codeLens/refresh")
+            {
+                break;
+            }
+        }
+        assert!(scan_finished, "the initial workspace scan did not finish");
+        startup_refreshes.sort();
+        assert_eq!(
+            startup_refreshes,
+            [
+                "workspace/codeLens/refresh".to_string(),
+                "workspace/semanticTokens/refresh".to_string(),
+            ],
+            "the server must finish startup refresh requests before the file-operation assertions"
+        );
+
+        let create_path = ws_path.join("common/national_focus/created.txt");
+        std::fs::create_dir_all(create_path.parent().unwrap()).unwrap();
+        std::fs::write(&create_path, "created_focus = { cost = 1 }\n").unwrap();
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "workspace/didCreateFiles",
+                serde_json::json!({ "files": [{ "uri": path_uri(&create_path) }] }),
+            ),
+        )
+        .unwrap();
+        let created = read_client_request_and_reply(stdin, reader);
+        assert_eq!(created["jsonrpc"], "2.0", "got: {created}");
+        assert!(
+            created.get("id").is_some(),
+            "refresh is a request: {created}"
+        );
+        assert_eq!(created["method"], "workspace/semanticTokens/refresh");
+
+        let delete_path = ws_path.join("common/national_focus/deleted.txt");
+        std::fs::write(&delete_path, "deleted_focus = { cost = 2 }\n").unwrap();
+        std::fs::remove_file(&delete_path).unwrap();
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "workspace/didDeleteFiles",
+                serde_json::json!({ "files": [{ "uri": path_uri(&delete_path) }] }),
+            ),
+        )
+        .unwrap();
+        let mut deleted = vec![
+            read_client_request_and_reply(stdin, reader)["method"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            read_client_request_and_reply(stdin, reader)["method"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ];
+        deleted.sort();
+        assert_eq!(
+            deleted,
+            [
+                "workspace/codeLens/refresh".to_string(),
+                "workspace/semanticTokens/refresh".to_string(),
+            ],
+            "deleting a file must refresh both cached token and code-lens views"
+        );
+    })
+    .expect("file-operation notification handling deadlocked or timed out");
 }
 
 #[test]
