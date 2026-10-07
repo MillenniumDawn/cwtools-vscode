@@ -86,13 +86,32 @@ fn run_child_with_deadline<T: Send + 'static>(
     + Send
     + 'static,
 ) -> Option<T> {
+    const EXIT_BOUND: std::time::Duration = std::time::Duration::from_secs(2);
+
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let _ = tx.send(f(&mut stdin, &mut reader));
+        let result = f(&mut stdin, &mut reader);
+        let _ = tx.send((result, stdin));
+        // Keep reading so the server never blocks on a full pipe before `exit`.
+        let _ = std::io::copy(&mut reader, &mut std::io::sink());
     });
-    let result = rx.recv_timeout(std::time::Duration::from_secs(secs)).ok();
-    stop_server(&mut child);
-    let _ = child.wait();
+    let result = match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok((result, mut stdin)) => {
+            let shutdown = jsonrpc_request(2_147_483_647, "shutdown", serde_json::json!(null));
+            let exit = jsonrpc_notification("exit", serde_json::json!({}));
+            let _ = write_frame_to(&mut stdin, &shutdown);
+            let _ = write_frame_to(&mut stdin, &exit);
+            drop(stdin);
+            let deadline = std::time::Instant::now() + EXIT_BOUND;
+            while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Some(result)
+        }
+        Err(_) => None,
+    };
+    child.kill().ok();
+    child.wait().ok();
     worker.join().expect("deadline worker panicked");
     result
 }
