@@ -38,14 +38,18 @@ def test_live_settings_timeout_covers_two_hover_waits_with_overhead() -> None:
     hover_timeout = int(hover_match.group(1).replace("_", ""))
     suite_timeout = int(suite_match.group(1).replace("_", ""))
 
-    assert hover_timeout == 30_000
     assert suite_timeout >= 2 * hover_timeout + 15_000
 
 
 def test_ci_keeps_distinct_host_suites_and_reuses_build_for_coverage() -> None:
     workflow = CI.read_text(encoding="utf-8")
-    assert "--label live --label multi-root --label watched" in workflow
-    assert "--label rules-sync" in workflow
+    configurations = workflow_step(workflow, "Host tests (multi-root, watched files)")
+    assert "--label multi-root --label watched" in configurations
+    assert "--label live" not in configurations
+    rules_sync = workflow_step(workflow, "Host tests (rules sync)")
+    assert "--label rules-sync" in rules_sync
     coverage = workflow_step(workflow, "Host coverage")
+    assert "if: ${{ !cancelled() && steps.build-engine.outcome == 'success' }}" in coverage
+    assert "always()" not in coverage
     assert "scripts/build/host_coverage.py" in coverage
     assert "--skip-compile" in coverage

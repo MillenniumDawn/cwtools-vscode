@@ -150,12 +150,12 @@ jobs:
         run: node scripts/build/python.mjs scripts/build/hosttest.py --label rules-sync
       # Keep the suites with distinct workspace/configuration coverage. The
       # smoke files are a subset of hostFiles and run once under host coverage.
-      - name: Host tests (live settings, multi-root, watched files)
+      - name: Host tests (multi-root, watched files)
         id: host-configurations
         timeout-minutes: 10
         run: >-
           node scripts/build/python.mjs scripts/build/hosttest.py
-          --label live --label multi-root --label watched
+          --label multi-root --label watched
       # Host V8 coverage runs the host label (including smoke files) and the
       # isolated live-settings workspace, while the earlier configuration
       # step retains unique multi-root and watched-file coverage. Run it before
@@ -164,7 +164,7 @@ jobs:
       # the development build made above. Use --skip-compile to reuse it.
       # Gated on the build step because this needs the built server binary.
       - name: Host coverage
-        if: always() && steps.build-engine.outcome == 'success'
+        if: ${{ !cancelled() && steps.build-engine.outcome == 'success' }}
         timeout-minutes: 15
         run: >-
           node scripts/build/python.mjs scripts/build/host_coverage.py
