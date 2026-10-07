@@ -1172,6 +1172,138 @@ mod tests {
     }
 
     #[test]
+    fn scope_transitions_treat_a_type_per_file_file_as_the_entity() {
+        use cwtools_game::constants::Game;
+        use cwtools_parser::parser::parse_string;
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+        use cwtools_string_table::string_table::StringTable;
+        let table = StringTable::new();
+        let rules = parse_string(
+            "types = { type[foo] = { path = \"common/foo\" type_per_file = yes } }\n\
+             scopes = { Country = { aliases = { country } } Character = { aliases = { character } } }\n\
+             foo = {\n    ## push_scope = character\n    custom = { }\n}\n",
+            &table,
+        );
+        let ruleset = ast_to_ruleset(&rules, &table);
+        let registry = crate::build_scope_registry_arc(&ruleset, Some(Game::Hoi4));
+        let prepared = crate::Prepared {
+            ruleset: &ruleset,
+            table: &table,
+            game: Some(Game::Hoi4),
+            type_index: None,
+            modifier_keys: None,
+            loc_index: None,
+            extra_loc_keys: None,
+            inline_scripts: None,
+            registry: registry.as_ref(),
+            scope_checks: true,
+            var_checks: false,
+        };
+        let country = registry.as_ref().and_then(|r| r.id_of("country"));
+        let character = registry.as_ref().and_then(|r| r.id_of("character"));
+        let ast = parse_string("plain = { }\ncustom = { }\n", &table);
+        let transitions =
+            scope_transitions_with_limit(&ast, "common/foo/test.txt", &prepared, 1, 2, usize::MAX);
+        assert_eq!(transitions.len(), 1, "got: {transitions:?}");
+        assert_eq!(transitions[0].range.start.line, 2);
+        assert_eq!(Some(transitions[0].ambient), country);
+        assert_eq!(Some(transitions[0].resolved), character);
+    }
+
+    #[test]
+    fn scope_transitions_walk_instances_inside_a_wrapper_block() {
+        use cwtools_game::constants::Game;
+        use cwtools_parser::parser::parse_string;
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+        use cwtools_string_table::string_table::StringTable;
+        let table = StringTable::new();
+        let rules = parse_string(
+            "types = { type[foo] = { path = \"common/foo\" skip_root_key = wrapper } }\n\
+             scopes = { Country = { aliases = { country } } Character = { aliases = { character } } }\n\
+             foo = {\n    ## push_scope = character\n    custom = { }\n}\n",
+            &table,
+        );
+        let ruleset = ast_to_ruleset(&rules, &table);
+        let registry = crate::build_scope_registry_arc(&ruleset, Some(Game::Hoi4));
+        let prepared = crate::Prepared {
+            ruleset: &ruleset,
+            table: &table,
+            game: Some(Game::Hoi4),
+            type_index: None,
+            modifier_keys: None,
+            loc_index: None,
+            extra_loc_keys: None,
+            inline_scripts: None,
+            registry: registry.as_ref(),
+            scope_checks: true,
+            var_checks: false,
+        };
+        let country = registry.as_ref().and_then(|r| r.id_of("country"));
+        let character = registry.as_ref().and_then(|r| r.id_of("character"));
+        let ast = parse_string(
+            "wrapper = {\n    item_a = {\n        custom = { }\n    }\n    item_b = {\n        custom = { }\n    }\n}\n",
+            &table,
+        );
+        let path = "common/foo/test.txt";
+
+        let all = scope_transitions_with_limit(&ast, path, &prepared, 1, 8, usize::MAX);
+        let lines: Vec<u32> = all.iter().map(|t| t.range.start.line).collect();
+        assert_eq!(lines, [3, 6], "got: {all:?}");
+        for transition in &all {
+            assert_eq!(Some(transition.ambient), country);
+            assert_eq!(Some(transition.resolved), character);
+        }
+
+        let capped = scope_transitions_with_limit(&ast, path, &prepared, 1, 8, 1);
+        let lines: Vec<u32> = capped.iter().map(|t| t.range.start.line).collect();
+        assert_eq!(lines, [3], "got: {capped:?}");
+
+        let visible = scope_transitions_with_limit(&ast, path, &prepared, 5, 8, usize::MAX);
+        let lines: Vec<u32> = visible.iter().map(|t| t.range.start.line).collect();
+        assert_eq!(lines, [6], "got: {visible:?}");
+    }
+
+    #[test]
+    fn scope_transitions_walk_instances_inside_nested_wrapper_blocks() {
+        use cwtools_game::constants::Game;
+        use cwtools_parser::parser::parse_string;
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+        use cwtools_string_table::string_table::StringTable;
+        let table = StringTable::new();
+        let rules = parse_string(
+            "types = { type[foo] = { path = \"common/foo\" skip_root_key = { wrapper inner } } }\n\
+             scopes = { Country = { aliases = { country } } Character = { aliases = { character } } }\n\
+             foo = {\n    ## push_scope = character\n    custom = { }\n}\n",
+            &table,
+        );
+        let ruleset = ast_to_ruleset(&rules, &table);
+        let registry = crate::build_scope_registry_arc(&ruleset, Some(Game::Hoi4));
+        let prepared = crate::Prepared {
+            ruleset: &ruleset,
+            table: &table,
+            game: Some(Game::Hoi4),
+            type_index: None,
+            modifier_keys: None,
+            loc_index: None,
+            extra_loc_keys: None,
+            inline_scripts: None,
+            registry: registry.as_ref(),
+            scope_checks: true,
+            var_checks: false,
+        };
+        let character = registry.as_ref().and_then(|r| r.id_of("character"));
+        let ast = parse_string(
+            "wrapper = {\n    inner = {\n        item_a = {\n            custom = { }\n        }\n    }\n    other = {\n        item_b = {\n            custom = { }\n        }\n    }\n}\n",
+            &table,
+        );
+        let transitions =
+            scope_transitions_with_limit(&ast, "common/foo/test.txt", &prepared, 1, 12, usize::MAX);
+        assert_eq!(transitions.len(), 1, "got: {transitions:?}");
+        assert_eq!(transitions[0].range.start.line, 4);
+        assert_eq!(Some(transitions[0].resolved), character);
+    }
+
+    #[test]
     fn rules_at_pos_distinguishes_on_key_from_in_value() {
         use cwtools_file_manager::file_manager::ScanBudget;
         use cwtools_parser::parser::parse_string;
