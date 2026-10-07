@@ -202,8 +202,10 @@ scopes = {
 types = { type[foo] = { path = "game/common/foo" } }
 foo = {
     ## scope = state
+    ## cardinality = 0..1
     state_field = bool
     ## push_scope = state
+    ## cardinality = 0..1
     state_block = {
         ## scope = state
         state_field = bool
@@ -232,7 +234,7 @@ fn rule_used_in_required_scope_is_not_cw247() {
         RULE_SCOPE_RULES,
         "foo = { state_block = { state_field = yes } }",
     );
-    assert!(!c.contains(&"CW247".to_string()), "got: {:?}", c);
+    assert!(c.is_empty(), "got: {:?}", c);
 }
 
 /// A type whose root rule seeds state scope via `## replace_scope` should make a
