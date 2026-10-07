@@ -80,6 +80,8 @@ pub(crate) struct ScanGuard {
     owns_scan: bool,
     quiet: bool,
     finished: bool,
+    #[cfg(test)]
+    drop_completion: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl ScanGuard {
@@ -90,6 +92,8 @@ impl ScanGuard {
             owns_scan: true,
             quiet,
             finished: false,
+            #[cfg(test)]
+            drop_completion: None,
         }
     }
 
@@ -100,7 +104,18 @@ impl ScanGuard {
             owns_scan: false,
             quiet: false,
             finished: false,
+            #[cfg(test)]
+            drop_completion: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_drop_completion(
+        mut self,
+        completion: tokio::sync::oneshot::Sender<()>,
+    ) -> Self {
+        self.drop_completion = Some(completion);
+        self
     }
 
     pub(crate) async fn finish(mut self) {
@@ -138,6 +153,8 @@ impl Drop for ScanGuard {
                     state: self.state.clone(),
                 };
                 let owns_scan = self.owns_scan;
+                #[cfg(test)]
+                let drop_completion = self.drop_completion.take();
                 handle.spawn(async move {
                     backend.send_loading_bar(false, "").await;
                     if owns_scan {
@@ -147,13 +164,26 @@ impl Drop for ScanGuard {
                             .store(false, Ordering::SeqCst);
                         signal_scan_release_for_tests();
                     }
+                    #[cfg(test)]
+                    if let Some(completion) = drop_completion {
+                        let _ = completion.send(());
+                    }
                 });
             }
             _ if self.owns_scan => {
                 self.state.scan_in_progress.store(false, Ordering::SeqCst);
                 signal_scan_release_for_tests();
+                #[cfg(test)]
+                if let Some(completion) = self.drop_completion.take() {
+                    let _ = completion.send(());
+                }
             }
-            _ => {}
+            _ => {
+                #[cfg(test)]
+                if let Some(completion) = self.drop_completion.take() {
+                    let _ = completion.send(());
+                }
+            }
         }
     }
 }
@@ -880,7 +910,12 @@ mod tests {
     async fn test_command_guard_leaves_the_scan_flag_alone() {
         let backend = test_backend();
         backend.state.scan_in_progress.store(true, Ordering::SeqCst);
-        drop(ScanGuard::for_command(&backend));
+        let (completion, completed) = tokio::sync::oneshot::channel();
+        drop(ScanGuard::for_command(&backend).with_drop_completion(completion));
+        tokio::time::timeout(std::time::Duration::from_secs(1), completed)
+            .await
+            .expect("the command guard's drop task did not complete")
+            .expect("the command guard's drop task was cancelled");
         assert!(
             backend.state.scan_in_progress.load(Ordering::SeqCst),
             "a command guard must not release a scan it never took"

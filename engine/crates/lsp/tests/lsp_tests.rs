@@ -4313,7 +4313,9 @@ fn spawn_unused_workspace() -> (
     std::fs::write(&b_path, B_TEXT).unwrap();
 
     let ws_uri = path_uri(ws.path());
+    let scan_release = scan_release_path(ws.path());
     let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_SCAN_RELEASE_FILE", &scan_release)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -17943,11 +17945,13 @@ fn expect_ranges(response: &serde_json::Value) -> &Vec<serde_json::Value> {
 /// Boot a server rooted at `ws`, optionally open `open` (uri, text) as buffers,
 /// then ask for `uri`'s folding ranges. Returns the whole JSON-RPC response so
 /// callers can tell a refusal from an error reply.
-fn folding_ranges_for(
+fn folding_ranges_for_attempts(
     ws: &std::path::Path,
     open: &[(&str, &str)],
     uri: &str,
-) -> Option<serde_json::Value> {
+    request_count: usize,
+) -> Option<Vec<serde_json::Value>> {
+    assert!(request_count > 0, "at least one folding request is required");
     let mut child = cwtools_server_cmd()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -18003,18 +18007,38 @@ fn folding_ranges_for(
                 }
             }
         }
-        write_frame_to(
-            stdin,
-            &jsonrpc_request(
-                2,
-                "textDocument/foldingRange",
-                serde_json::json!({ "textDocument": { "uri": uri } }),
-            ),
-        )
-        .ok()?;
-        serde_json::from_str(&read_response(reader).ok()?).ok()
+
+        let mut responses = Vec::with_capacity(request_count);
+        for attempt in 0..request_count {
+            let request_id = 2 + attempt as i64;
+            write_frame_to(
+                stdin,
+                &jsonrpc_request(
+                    request_id,
+                    "textDocument/foldingRange",
+                    serde_json::json!({ "textDocument": { "uri": uri } }),
+                ),
+            )
+            .ok()?;
+            responses.push(serde_json::from_str(&read_response(reader).ok()?).ok()?);
+            if attempt + 1 < request_count {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
+        Some(responses)
     });
     result.flatten()
+}
+
+/// Boot a server and repeat folding requests in one process. The repetitions
+/// let an opened buffer's notification reach the server before a boundary
+/// assertion, even when the notification produces no diagnostics as a signal.
+fn folding_ranges_for(
+    ws: &std::path::Path,
+    open: &[(&str, &str)],
+    uri: &str,
+) -> Option<serde_json::Value> {
+    folding_ranges_for_attempts(ws, open, uri, 1).and_then(|mut responses| responses.pop())
 }
 
 /// A workspace tempdir holding one foldable script file, plus its URI.
@@ -18060,8 +18084,15 @@ fn test_access_boundary_refuses_an_open_buffer_outside_the_workspace() {
     let text = "outer = {\n    inner = {\n        x = 1\n    }\n}\n";
     std::fs::write(&file, text).unwrap();
     let uri = path_uri(&file);
-    let response = folding_ranges_for(ws.path(), &[(&uri, text)], &uri).expect("server went quiet");
-    assert_refused(&response, "an open buffer outside every workspace folder");
+    // An outside open is intentionally silent, so it cannot be used as a
+    // readiness signal. Reissue the request long enough for didOpen to land;
+    // serving the buffer after the initial race would expose a folding range.
+    let responses =
+        folding_ranges_for_attempts(ws.path(), &[(&uri, text)], &uri, 20)
+            .expect("server went quiet");
+    for response in &responses {
+        assert_refused(response, "an open buffer outside every workspace folder");
+    }
 }
 
 #[test]
