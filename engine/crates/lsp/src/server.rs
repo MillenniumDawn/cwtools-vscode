@@ -568,8 +568,8 @@ impl Backend {
             tracing::warn!(%uri, bytes = text.len(), "ignoring oversized didChange document");
             return;
         }
-        let source_hash = cwtools_cache::workspace::content_hash(&text);
 
+        let source_hash = cwtools_cache::workspace::content_hash(&text);
         let publication = self.state.diagnostic_publication_lock.lock().await;
         let admission = self
             .state
@@ -594,7 +594,9 @@ impl Backend {
         }
 
         let generation = self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1;
-        self.invalidate_semantic_tokens(&uri);
+        // Keep the previous token snapshot as a delta base. A delta request
+        // can use it when its `previousResultId` is still current, then replace
+        // it with tokens for the current buffer.
 
         // debounce tasks (#47).
         self.spawn_debounced_validate(

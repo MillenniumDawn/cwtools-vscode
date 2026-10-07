@@ -5,6 +5,7 @@ use tower_lsp::lsp_types::*;
 use cwtools_parser::fix::{SpanEdit, plan_file_edits};
 
 use crate::Backend;
+use crate::format::workspace_edit_for_snapshots;
 
 use super::payload::source_range_to_lsp;
 
@@ -59,36 +60,6 @@ fn workspace_edit_changes(
         changes.insert(uri, edits);
     }
     changes
-}
-
-fn workspace_edit_for_snapshots(
-    changes: HashMap<Url, Vec<TextEdit>>,
-    snapshots: &HashMap<String, crate::FileTextSnapshot>,
-    document_changes: bool,
-) -> WorkspaceEdit {
-    if document_changes {
-        let edits = changes
-            .into_iter()
-            .map(|(uri, edits)| TextDocumentEdit {
-                text_document: OptionalVersionedTextDocumentIdentifier {
-                    version: snapshots.get(uri.as_str()).and_then(|s| s.version),
-                    uri,
-                },
-                edits: edits.into_iter().map(OneOf::Left).collect(),
-            })
-            .collect();
-        WorkspaceEdit {
-            changes: None,
-            document_changes: Some(DocumentChanges::Edits(edits)),
-            change_annotations: None,
-        }
-    } else {
-        WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }
-    }
 }
 
 fn outside_workspace_summary(refused: usize) -> String {
@@ -400,6 +371,15 @@ mod tests {
             content_hash: 7,
         };
         assert!(!fixable_edits_match(&versioned, Some(&open_v2)));
+        let unchanged_versioned = crate::FileTextSnapshot {
+            text: "aaaa\n".to_string(),
+            version: Some(1),
+            content_hash: 7,
+        };
+        assert!(fixable_edits_match(
+            &versioned,
+            Some(&unchanged_versioned)
+        ));
         let reopened_same_version = crate::FileTextSnapshot {
             text: "bbbb\n".to_string(),
             version: Some(1),
