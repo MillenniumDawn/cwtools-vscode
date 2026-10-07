@@ -40,9 +40,9 @@ export default defineConfig({
 			reporter: ["text-summary", "html", "lcov", "json-summary"],
 			reportsDirectory: "coverage-node",
 			thresholds: {
-				lines: 80,
+				lines: 81,
 				statements: 80,
-				branches: 77,
+				branches: 78,
 				functions: 80,
 			},
 		},
