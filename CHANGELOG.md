@@ -15,6 +15,7 @@
 * The per-edit ignored-file check reads the default exclude patterns from a shared static instead of building a whole `FileManagerConfig` per call. (#873)
 * Cap cumulative text snapshots for references and rename requests, refusing incomplete navigation when the request budget is exhausted. The conservative 5× peak-memory reservation means a closed UTF-8 file larger than 25.6 MiB cannot fit within the 128 MiB request budget. (#569)
 * Reuse formatted text when constructing whole-file format edits, avoiding reparsing and the multi-edit planner. (#557)
+* Share one `workspace_edit_for_snapshots` between format and fix-all instead of keeping two copies. (#909)
 * Memoize subtype merges per file and precompute matcher key groups. (#492)
 * Harden cache corruption handling, pin the `.cwb` archive layout with a golden fixture, and benchmark cache serialization and loading. (#520)
 * Add tests for scope transitions through per-file and wrapper types, and for loading `colour[rgb]` and `colour[hsv]` rules. (#926)
