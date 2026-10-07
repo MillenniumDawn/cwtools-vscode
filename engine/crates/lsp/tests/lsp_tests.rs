@@ -186,31 +186,32 @@ fn poll_until<T>(
     }
 }
 
-/// Preserve an existing retry count while using the shared deadline-aware
-/// polling path. The extra budget covers request latency around the original
-/// interval count, so slow responses do not reduce the number of observations.
+/// Retry a state query up to `attempts_limit` times, sleeping `interval`
+/// between attempts. Bounded by the attempt count alone, not a wall-clock
+/// deadline, so slow responses never reduce the number of observations.
 fn poll_until_attempts<T>(
     attempts_limit: usize,
     interval: std::time::Duration,
     mut poll: impl FnMut() -> Option<T>,
 ) -> Option<T> {
-    let budget = interval
-        .saturating_mul(attempts_limit.min(u32::MAX as usize) as u32)
-        .saturating_add(std::time::Duration::from_secs(30));
-    let deadline = std::time::Instant::now() + budget;
-    let mut attempts = 0;
-    poll_until(deadline, interval, || {
-        if attempts >= attempts_limit {
-            return Some(None);
+    for attempt in 0..attempts_limit {
+        if let Some(value) = poll() {
+            return Some(value);
         }
-        attempts += 1;
-        poll().map(Some)
-    })
-    .flatten()
+        if attempt + 1 < attempts_limit {
+            std::thread::sleep(interval);
+        }
+    }
+    None
 }
 
+/// Where the server under test signals that its scan guard released. Kept out
+/// of `workspace`, so the server never writes into the tree its own scans walk;
+/// the workspace's unique tempdir name keeps concurrent tests apart.
 fn scan_release_path(workspace: &std::path::Path) -> std::path::PathBuf {
-    workspace.join(".cwtools-scan-released")
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("scan-release");
+    std::fs::create_dir_all(&dir).expect("create scan release marker dir");
+    dir.join(workspace.file_name().expect("workspace tempdir has a name"))
 }
 
 fn clear_scan_release(path: &std::path::Path) {
@@ -7042,7 +7043,23 @@ fn storm_server_env_with_ignore(
     )
     .unwrap();
     wait_for_scan_done(&mut reader);
+    // The guard releases just after bar-off. Consume the startup scan's marker
+    // here, so a test waiting on its own scan's release never sees this one.
+    wait_for_scan_release(&scan_release_path(ws));
     (child, reader)
+}
+
+/// Collect frames until the scan the caller just triggered signals that its
+/// guard released, then until `quiet` passes with nothing new. The release is
+/// the end of the scan, so a silent scan phase cannot cut the drain short; the
+/// quiet window only has to cover frames still in flight on stdout.
+fn drain_through_scan_release(
+    rx: &std::sync::mpsc::Receiver<serde_json::Value>,
+    scan_release: &std::path::Path,
+    quiet: std::time::Duration,
+) -> Vec<serde_json::Value> {
+    wait_for_scan_release(scan_release);
+    drain_until_quiet(rx, quiet, std::time::Duration::from_secs(8))
 }
 
 /// Move `reader` into a background thread that forwards every non-empty frame
@@ -7512,10 +7529,10 @@ fn test_watched_bulk_flood_uses_rescan_not_per_file() {
 
     write_frame(&mut child, &watched_changes(&uris)).unwrap();
 
-    let frames = drain_after_first(
+    let frames = drain_through_scan_release(
         &rx,
+        &scan_release_path(ws.path()),
         std::time::Duration::from_millis(900),
-        std::time::Duration::from_secs(20),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1003);
     stop_server(&mut child);
@@ -8176,10 +8193,10 @@ fn test_watched_loc_keys_survive_scan_index_install() {
         ),
     )
     .unwrap();
-    let frames = drain_after_first(
+    let frames = drain_through_scan_release(
         &rx,
+        &scan_release_path(ws.path()),
         std::time::Duration::from_millis(900),
-        std::time::Duration::from_secs(15),
     );
     stop_server(&mut child);
 
@@ -12884,9 +12901,13 @@ fn test_format_workspace_cancel_applies_nothing() {
             std::time::Instant::now() < startup_deadline,
             "startup scan never closed its loading bar"
         );
-        let v = rx
-            .recv_timeout(std::time::Duration::from_millis(200))
-            .expect("server exited during startup scan");
+        let v = match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(v) => v,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("server exited during startup scan")
+            }
+        };
         if v["method"] == "window/workDoneProgress/create" {
             write_frame(
                 &mut child,
@@ -16182,6 +16203,10 @@ impl HeldPass1 {
 /// spent not reading, so it stays well short of what would fill the stdout pipe.
 const MARKER_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// How long a probe sent while pass 1 holds its thread may take to come back.
+/// A working pump answers in milliseconds; past this the pump is stalled (#470).
+const PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+
 /// Blocks until pass 1 says it has parked its thread. `false` means this bar
 /// belonged to some other scan — a startup or deferred one — and the caller
 /// should go back to reading and try again on the next one.
@@ -16246,10 +16271,14 @@ fn test_a_blocked_scan_does_not_stall_the_pump() {
                 .unwrap();
                 continue;
             }
-            // The probe's answer is the whole measurement.
+            // The probe's answer is the whole measurement. The watchdog lifts the
+            // gate once PROBE_BUDGET runs out, so a stalled pump answers late,
+            // with the gate gone, instead of hanging until the run deadline.
             if v["id"] == serde_json::json!(701) && v.get("result").is_some() {
-                answered_while_held =
-                    Some(gate.exists() && ready.exists() && probe_sent_at.is_some());
+                answered_while_held = Some(
+                    gate.exists()
+                        && probe_sent_at.is_some_and(|sent| sent.elapsed() < PROBE_BUDGET),
+                );
                 break;
             }
             // Same scan-guard race the cancel tests hit: a command sent on the
@@ -16283,6 +16312,11 @@ fn test_a_blocked_scan_does_not_stall_the_pump() {
                     continue;
                 }
                 probe_sent_at = Some(std::time::Instant::now());
+                let watchdog_gate = gate.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(PROBE_BUDGET);
+                    let _ = std::fs::remove_file(watchdog_gate);
+                });
                 write_frame_to(
                     stdin,
                     &jsonrpc_request(
@@ -16302,7 +16336,7 @@ fn test_a_blocked_scan_does_not_stall_the_pump() {
         .expect("the probe request was never answered");
     assert!(
         answered_while_held,
-        "the probe response must arrive while the pass-1 gate and ready marker are present"
+        "the probe was not answered within {PROBE_BUDGET:?} while pass 1 held its thread (#470)"
     );
 }
 

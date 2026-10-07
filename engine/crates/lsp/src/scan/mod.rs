@@ -423,21 +423,15 @@ where
 /// that parallel load can blow through (#198). Unset, which is every real run,
 pub(crate) async fn hold_scan_for_tests() {
     hold_for_tests(
-        "CWTOOLS_SCAN_HOLD_MS",
         "CWTOOLS_SCAN_HOLD_FILE",
-        "CWTOOLS_SCAN_HOLD_READY_FILE",
+        Some("CWTOOLS_SCAN_HOLD_READY_FILE"),
     )
     .await;
 }
 
 /// phase's ticker demonstrably alive — #434, proving a stray sampler tick
 pub(crate) async fn hold_parse_for_tests() {
-    hold_for_tests(
-        "CWTOOLS_PARSE_HOLD_MS",
-        "CWTOOLS_PARSE_HOLD_FILE",
-        "CWTOOLS_PARSE_HOLD_READY_FILE",
-    )
-    .await;
+    hold_for_tests("CWTOOLS_PARSE_HOLD_FILE", None).await;
 }
 
 /// The blocking sibling of [`hold_parse_for_tests`], for #470.
@@ -453,21 +447,10 @@ pub(crate) async fn hold_parse_for_tests() {
 /// it with a sleep — the difference between a test that fails on this bug and
 /// one that races it. Unset, which is every real run, both are a no-op.
 pub(crate) fn hold_parse_blocking_for_tests() {
-    let ready = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_READY_FILE").ok();
-    let gate = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_FILE").ok();
-    if ready.is_none() && gate.is_none() {
-        if let Some(ms) = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-        {
-            std::thread::sleep(std::time::Duration::from_millis(ms));
-        }
-        return;
-    }
-    if let Some(ready) = ready {
+    if let Ok(ready) = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_READY_FILE") {
         let _ = std::fs::write(ready, b"held");
     }
-    if let Some(gate) = gate {
+    if let Ok(gate) = std::env::var("CWTOOLS_PARSE_BLOCKING_HOLD_FILE") {
         let gate = std::path::PathBuf::from(gate);
         while gate.exists() {
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -475,19 +458,13 @@ pub(crate) fn hold_parse_blocking_for_tests() {
     }
 }
 
-async fn hold_for_tests(ms_var: &str, file_var: &str, ready_var: &str) {
-    if let Some(ms) = std::env::var(ms_var)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-    {
-        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-    }
+async fn hold_for_tests(file_var: &str, ready_var: Option<&str>) {
     let Ok(gate) = std::env::var(file_var) else {
         return;
     };
     let gate = std::path::PathBuf::from(gate);
     if tokio::fs::try_exists(&gate).await.unwrap_or(false)
-        && let Ok(ready) = std::env::var(ready_var)
+        && let Some(Ok(ready)) = ready_var.map(std::env::var)
     {
         let _ = tokio::fs::write(ready, b"held").await;
     }
@@ -843,7 +820,7 @@ mod tests {
     async fn wait_for_clear(flag: &AtomicBool) -> bool {
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while flag.load(Ordering::SeqCst) {
-                tokio::task::yield_now().await;
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
             }
         })
         .await

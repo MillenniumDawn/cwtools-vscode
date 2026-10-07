@@ -1893,7 +1893,7 @@ mod tests {
         ticker.tick();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while progress.reports_sent() < 2 && std::time::Instant::now() < deadline {
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert!(
             progress.reports_sent() >= 2,

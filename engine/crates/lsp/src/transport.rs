@@ -526,9 +526,9 @@ mod tests {
     }
 
     /// A handler that owns its thread the way a scan pass does. `Blocking`
-    /// answers a request by parking the thread until `release` is set, and
-    /// answers a notification immediately; the difference is what the two tests
-    /// below measure.
+    /// answers a request by parking the thread until the test sends on the
+    /// `release` channel, and answers a notification immediately; the
+    /// difference is what the two tests below measure.
     #[derive(Clone)]
     struct Blocking {
         release: std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
