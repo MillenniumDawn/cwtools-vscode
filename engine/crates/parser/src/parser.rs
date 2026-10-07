@@ -548,7 +548,10 @@ impl<'a> Parser<'a> {
 
         let saved = self.pos();
         let saved_cursor = self.save();
+        let mut unclosed_key_with_operator = false;
         if let Some(raw_key) = self.read_key() {
+            unclosed_key_with_operator = self.errors.len() > saved_cursor.errors_len
+                && raw_key.contains('=');
             if let Some(op) = self.parse_operator() {
                 let key = self.table.intern(&raw_key);
                 if let Some((value, value_pos)) = self.parse_value(false) {
@@ -611,6 +614,13 @@ impl<'a> Parser<'a> {
         }
 
         if let Some((value, value_pos)) = self.parse_value(true) {
+            if unclosed_key_with_operator {
+                self.errors.push(ParseError::Pos(
+                    saved.line,
+                    saved.col,
+                    format!("unclosed quoted string starting at line {}", saved.line),
+                ));
+            }
             let lv = LeafValue {
                 value,
                 pos: value_pos,
@@ -1419,6 +1429,16 @@ shorthand { nested = value }
         assert!(
             !result.errors.is_empty(),
             "the committed quoted key should report its unclosed string"
+        );
+    }
+
+    #[test]
+    fn unclosed_quoted_key_with_same_line_operator_produces_error() {
+        let table = StringTable::new();
+        let result = parse_string("\"unterminated = 5", &table);
+        assert!(
+            !result.errors.is_empty(),
+            "an unclosed quoted key before a same-line operator must report an error"
         );
     }
 

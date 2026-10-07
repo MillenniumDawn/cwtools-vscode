@@ -54,6 +54,9 @@ impl FormatOptions {
 pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Option<String> {
     let bom = input.starts_with('\u{FEFF}');
     let body = input.strip_prefix('\u{FEFF}').unwrap_or(input);
+    if has_unclosed_quoted_string(body) {
+        return None;
+    }
     let parsed = parse_ok(body, table)?;
     let mut printed = print_file(body, table, &parsed, opts);
     if opts.insert_final_newline {
@@ -68,6 +71,10 @@ pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Op
     }
     if bom {
         printed.insert(0, '\u{FEFF}');
+    }
+    let formatted_body = printed.strip_prefix('\u{FEFF}').unwrap_or(&printed);
+    if parse_ok(formatted_body, table).is_none() {
+        return None;
     }
     Some(printed)
 }
@@ -92,6 +99,9 @@ pub fn format_range_edits(
     opts: &FormatOptions,
     range: SourceRange,
 ) -> Vec<SpanEdit> {
+    if has_unclosed_quoted_string(input) {
+        return Vec::new();
+    }
     let Some(parsed) = parse_ok(input, table) else {
         return Vec::new();
     };
@@ -137,6 +147,14 @@ pub fn format_range_edits(
     if replacement == original {
         return Vec::new();
     }
+    let mut formatted = String::with_capacity(input.len() + replacement.len());
+    formatted.push_str(input.get(..replace_from).unwrap_or(""));
+    formatted.push_str(&replacement);
+    formatted.push_str(input.get(replace_to..).unwrap_or(""));
+    let formatted_body = formatted.strip_prefix('\u{FEFF}').unwrap_or(&formatted);
+    if parse_ok(formatted_body, table).is_none() {
+        return Vec::new();
+    }
     let (kept, _) = plan_file_edits(
         input,
         vec![(
@@ -156,6 +174,45 @@ pub fn format_range_edits(
 fn parse_ok(input: &str, table: &StringTable) -> Option<ParsedFile> {
     let parsed = parse_string(input, table);
     parsed.errors.is_empty().then_some(parsed)
+}
+
+fn has_unclosed_quoted_string(input: &str) -> bool {
+    let mut in_string = false;
+    let mut in_comment = false;
+    let mut escaped = false;
+    for ch in input.chars() {
+        if ch == '\n' {
+            if in_string {
+                return true;
+            }
+            in_comment = false;
+            escaped = false;
+            continue;
+        }
+        if in_comment {
+            continue;
+        }
+        if in_string {
+            if escaped {
+                escaped = false;
+                if ch == '"' || ch == '\\' {
+                    continue;
+                }
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+        } else {
+            match ch {
+                '#' => in_comment = true,
+                '"' => in_string = true,
+                _ => {}
+            }
+        }
+    }
+    in_string
 }
 
 fn newline_of(input: &str) -> &'static str {
@@ -617,12 +674,33 @@ mod tests {
     }
 
     #[test]
-    fn unclosed_quote_leafvalue_remains_formatable() {
+    fn unclosed_quote_leafvalue_that_would_break_a_clause_is_not_formatable() {
         let input = "n = { \"Falke\n Adler }";
-        assert!(format_text(input, &table(), &FormatOptions::default()).is_some());
+        assert_eq!(
+            format_text(input, &table(), &FormatOptions::default()),
+            None,
+            "the formatter must refuse output that reparses with errors"
+        );
+        assert!(format_range_edits(
+            input,
+            &table(),
+            &FormatOptions::default(),
+            SourceRange {
+                start: SourcePos { line: 1, col: 5 },
+                end: SourcePos { line: 2, col: 7 },
+            },
+        )
+        .is_empty());
+
+        let paired = "n = { \"a\n \"b\n \"c\n \"d\n}";
+        assert_eq!(
+            format_text(paired, &table(), &FormatOptions::default()),
+            None,
+            "unclosed quotes must not be paired by the printer into different values"
+        );
     }
 
-    fn display_width(line: &str, tab_size: usize) -> usize {
+    fn display_width(line: &str, tab_size: usize) {
         line.chars()
             .fold(0, |width, ch| advance_char(width, ch, tab_size))
     }
