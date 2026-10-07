@@ -173,14 +173,8 @@ pub(crate) fn vanilla_notice(game: Game, has_vanilla: bool) -> Option<String> {
 }
 
 // ── Explicit `--vanilla-cache` (validate / fix) ────────────────────────────
-//
-// The gate decides before the session loads whether an explicit cache serves
-// the mod's replacement view, and the staleness rebuild refreshes the file
-// after the session load.
 
-/// Whether the cache fingerprint covers this mod's replacements: keyed with
-/// the shadow's `rp:<hash>` when it has `replace_path`s, and not
-/// replacement-scoped when it has none.
+/// Whether the cache has this mod's replacement scope.
 fn carries_replacement_view(
     fingerprint: &str,
     shadow: &cwtools_file_manager::file_manager::LayerShadow,
@@ -192,11 +186,7 @@ fn carries_replacement_view(
     }
 }
 
-/// What the run consumes from a loaded explicit cache. A cache whose
-/// replacement scope does not match the mod must not feed the session — its
-/// aux loc keys cannot be filtered without re-walking the install — so its
-/// data is dropped and the view rebuilt live; the fingerprint survives so the
-/// freshness check still rewrites the file for the next run.
+/// Keep the fingerprint for rebuilding, dropping mismatched cache data.
 pub(crate) fn gate_vanilla_cache_for_replacements(
     cache_path: &Path,
     loaded: Option<(String, VanillaCacheData)>,
@@ -230,9 +220,7 @@ pub(crate) fn gate_vanilla_cache_for_replacements(
     (None, None)
 }
 
-/// The full fingerprint of an explicit cache needs the ruleset, so staleness
-/// is detected here: warn and rebuild the file — with the replacement shadow,
-/// so an unfiltered index is never saved as the filtered view.
+/// Rebuild stale explicit caches with the mod's replacement shadow.
 pub(crate) fn rebuild_vanilla_cache_if_stale(
     session: &cwtools_driver::Session,
     cache_path: &Path,
