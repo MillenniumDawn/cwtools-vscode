@@ -27,7 +27,10 @@ def procs(*codes: int | None) -> list[subprocess.Popen[bytes]]:
     return cast("list[subprocess.Popen[bytes]]", [FakeProcess(code) for code in codes])
 
 
-_TEST_ENV_NAME = re.compile(r"\b(CWTOOLS_TEST_[A-Za-z0-9_]+)\b")
+# `*` (not `+`) so a bare CWTOOLS_TEST_ prefix is captured: a computed read
+# such as process.env[`CWTOOLS_TEST_${name}`] or process.env["CWTOOLS_TEST_"
+# + name] builds the name at run time, which no `--define:` can fold.
+_TEST_ENV_NAME = re.compile(r"\b(CWTOOLS_TEST_[A-Za-z0-9_]*)\b")
 _TEST_ENV_READ = re.compile(
     r"(?<![A-Za-z0-9_$.])process\.env\.(CWTOOLS_TEST_[A-Za-z0-9_]+)(?![A-Za-z0-9_$])"
 )
@@ -122,6 +125,16 @@ def _esbuild_test_args(source: Path, outfile: Path, *, release: bool) -> list[st
             "const env = process.env; const rules = env.CWTOOLS_TEST_ALIASED;",
             set(),
             {"CWTOOLS_TEST_ALIASED"},
+        ),
+        (
+            "const rules = process.env[`CWTOOLS_TEST_${name}`];",
+            set(),
+            {"CWTOOLS_TEST_"},
+        ),
+        (
+            'const rules = process.env["CWTOOLS_TEST_" + name];',
+            set(),
+            {"CWTOOLS_TEST_"},
         ),
     ],
 )
@@ -254,7 +267,7 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
 
     source = tmp_path / "repo.ts"
     source.write_text(
-        'export const repo = process.env.CWTOOLS_TEST_RULES_FOLDER ?? '
+        "export const repo = process.env.CWTOOLS_TEST_RULES_FOLDER ?? "
         '"https://ok.example";\n',
         encoding="utf-8",
     )
