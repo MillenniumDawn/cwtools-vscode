@@ -389,6 +389,7 @@ impl DocumentStore {
             .map(|document| document.text.clone())
     }
 
+    #[cfg(test)]
     pub(crate) fn open(
         &mut self,
         uri: String,
@@ -418,6 +419,7 @@ impl DocumentStore {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn change(
         &mut self,
         uri: &str,

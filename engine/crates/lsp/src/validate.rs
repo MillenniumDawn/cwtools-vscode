@@ -3724,7 +3724,9 @@ mod ignored_tests {
         {
             let fixes = backend.state.fixable_edits.lock();
             assert!(!fixes.contains_key(&uri));
-            let moved = fixes.get(&new_uri).expect("fix-all snapshot moves with URI");
+            let moved = fixes
+                .get(&new_uri)
+                .expect("fix-all snapshot moves with URI");
             assert_eq!(moved.version, Some(1));
             assert_eq!(moved.entries[0].1.replacement, "current");
         }

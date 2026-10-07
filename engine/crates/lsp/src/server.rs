@@ -571,11 +571,12 @@ impl Backend {
 
         let source_hash = cwtools_cache::workspace::content_hash(&text);
         let publication = self.state.diagnostic_publication_lock.lock().await;
-        let admission = self
-            .state
-            .documents
-            .lock()
-            .change_with_hash(&uri, version, Arc::from(text), source_hash);
+        let admission = self.state.documents.lock().change_with_hash(
+            &uri,
+            version,
+            Arc::from(text),
+            source_hash,
+        );
         if let Err(rejection) = admission {
             tracing::warn!(%uri, reason = rejection.reason(), "ignoring didChange");
             return;

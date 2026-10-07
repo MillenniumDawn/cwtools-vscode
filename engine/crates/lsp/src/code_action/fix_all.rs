@@ -376,10 +376,7 @@ mod tests {
             version: Some(1),
             content_hash: 7,
         };
-        assert!(fixable_edits_match(
-            &versioned,
-            Some(&unchanged_versioned)
-        ));
+        assert!(fixable_edits_match(&versioned, Some(&unchanged_versioned)));
         let reopened_same_version = crate::FileTextSnapshot {
             text: "bbbb\n".to_string(),
             version: Some(1),
