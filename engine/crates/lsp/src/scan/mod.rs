@@ -110,10 +110,7 @@ impl ScanGuard {
     }
 
     #[cfg(test)]
-    fn with_drop_completion(
-        mut self,
-        completion: tokio::sync::oneshot::Sender<()>,
-    ) -> Self {
+    fn with_drop_completion(mut self, completion: tokio::sync::oneshot::Sender<()>) -> Self {
         self.drop_completion = Some(completion);
         self
     }
@@ -178,7 +175,8 @@ impl Drop for ScanGuard {
                     let _ = completion.send(());
                 }
             }
-            _ => {
+            _ =>
+            {
                 #[cfg(test)]
                 if let Some(completion) = self.drop_completion.take() {
                     let _ = completion.send(());

@@ -17951,7 +17951,10 @@ fn folding_ranges_for_attempts(
     uri: &str,
     request_count: usize,
 ) -> Option<Vec<serde_json::Value>> {
-    assert!(request_count > 0, "at least one folding request is required");
+    assert!(
+        request_count > 0,
+        "at least one folding request is required"
+    );
     let mut child = cwtools_server_cmd()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -18087,9 +18090,8 @@ fn test_access_boundary_refuses_an_open_buffer_outside_the_workspace() {
     // An outside open is intentionally silent, so it cannot be used as a
     // readiness signal. Reissue the request long enough for didOpen to land;
     // serving the buffer after the initial race would expose a folding range.
-    let responses =
-        folding_ranges_for_attempts(ws.path(), &[(&uri, text)], &uri, 20)
-            .expect("server went quiet");
+    let responses = folding_ranges_for_attempts(ws.path(), &[(&uri, text)], &uri, 20)
+        .expect("server went quiet");
     for response in &responses {
         assert_refused(response, "an open buffer outside every workspace folder");
     }
