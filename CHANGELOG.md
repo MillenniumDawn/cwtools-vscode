@@ -17,6 +17,7 @@
 * A submod can name its parent mods (`parentMods` init option, in load order). The server indexes them between the base game and the workspace with base-game provenance, so their scripted effects, triggers, variables, ideas, flags and localisation resolve and complete, and they never count toward CW261. A workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, shadows the parent's copy. Parent files are never validated or diagnosed, and are readable but not editable through the server. (#786)
 * Report syntax errors in `.cwt` rules files (an unclosed clause or quote) when loading a rules directory, as the new CW604. They reach `cwtools rules`, `validate` and the editor at startup, not only once the file is opened, and the live lint now reports them with the same code. The rules the parser recovered still load. (#847)
 * Alias `value[...]` patterns now resolve regardless of ASCII case, like the `enum[...]` arm, so `political_power` on rules side matches any casing of a value-set member. (#483)
+* Delete three functions with no callers: `InfoService::index_file`, `is_ignored_file` and the coverage script's `is_record`. (#910)
 
 #### Extension
 
