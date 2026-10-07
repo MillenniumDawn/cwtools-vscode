@@ -310,7 +310,7 @@ fn span_to_text_edit(edit: &SpanEdit, lines: &DocLines) -> TextEdit {
     }
 }
 
-fn workspace_edit_for_snapshots(
+pub(crate) fn workspace_edit_for_snapshots(
     changes: HashMap<Url, Vec<TextEdit>>,
     snapshots: &HashMap<String, FileTextSnapshot>,
     document_changes: bool,

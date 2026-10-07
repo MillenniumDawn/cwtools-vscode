@@ -2,20 +2,25 @@
 
 #### Engine
 
+* Ignore trailing `#` comments when parsing `.cwt` directive values, including `type_key_filter`, while retaining quoted hashes and malformed-directive checks. (#903)
 * Replace fixed language-server integration sleeps and timed scan/format holds with readiness signals and test-controlled gates, preserving cancellation, negative-result and scan-guard race assertions. (#887)
 * Preserve the previous semantic-token snapshot across buffer edits so delta requests return edits; assert the wire edit, file-operation refresh behavior, and `genlocall` output over framed LSP traffic. (#519)
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
 * Reclaim removed localisation URI references and recycle file records after sweeping their old sites, bounding metadata growth across repeated refreshes. (#846)
+* Add tests for bare value clauses: CW265 when no rule allows one, and CW242 when their count is out of range. (#924)
 * Avoid interning speculative parser keys, removing discarded numeric and boolean entries from bare clause values. (#547)
 * Return `RequestFailed` instead of `ServerNotInitialized` for navigation and rename refusals. (#828)
 * Hover and go-to-definition on a variable look its definitions up in a name-keyed index instead of scanning every file's defined variables under the info lock. (#872)
 * Test fixtures stop assuming Unix paths: the position-resolver test writes its rules into a `tempfile` directory instead of a hard-coded `/tmp`, and every report test builds its repository root through the existing `abs()` helper. (#885)
+* Remove three test-only public wrappers (`scope_transitions`, `LocService::from_folders`, `LocService::discover_files`) and two stale `too_many_arguments` allows. (#912)
 * The per-edit ignored-file check reads the default exclude patterns from a shared static instead of building a whole `FileManagerConfig` per call. (#873)
 * Cap cumulative text snapshots for references and rename requests, refusing incomplete navigation when the request budget is exhausted. The conservative 5× peak-memory reservation means a closed UTF-8 file larger than 25.6 MiB cannot fit within the 128 MiB request budget. (#569)
 * Reuse formatted text when constructing whole-file format edits, avoiding reparsing and the multi-edit planner. (#557)
+* Share one `workspace_edit_for_snapshots` between format and fix-all instead of keeping two copies. (#909)
 * Memoize subtype merges per file and precompute matcher key groups. (#492)
 * Harden cache corruption handling, pin the `.cwb` archive layout with a golden fixture, and benchmark cache serialization and loading. (#520)
+* Add tests for scope transitions through per-file and wrapper types, and for loading `colour[rgb]` and `colour[hsv]` rules. (#926)
 * A submod can name its parent mods (`parentMods` init option, in load order). The server indexes them between the base game and the workspace with base-game provenance, so their scripted effects, triggers, variables, ideas, flags and localisation resolve and complete, and they never count toward CW261. A workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, shadows the parent's copy. Parent files are never validated or diagnosed, and are readable but not editable through the server. (#786)
 * Report syntax errors in `.cwt` rules files (an unclosed clause or quote) when loading a rules directory, as the new CW604. They reach `cwtools rules`, `validate` and the editor at startup, not only once the file is opened, and the live lint now reports them with the same code. The rules the parser recovered still load. (#847)
 * Alias `value[...]` patterns now resolve regardless of ASCII case, like the `enum[...]` arm, so `political_power` on rules side matches any casing of a value-set member. (#483)
@@ -45,6 +50,7 @@
 * The release PR body lists every pull request merged since the last stable tag, as the Utility Tool's release PR does. Dependabot bumps are left out. (#794)
 * The VSIX smoke test now requires a nonempty `cwtools-server.exe` in the `win-x64` directory and a nonempty `cwtools-server` in every other platform directory, as the extension's resolver does. Flat layouts check each executable name present. A directory holding only other files, an empty binary, or the wrong suffix fails the package gate. (#850)
 * The VSIX smoke test rejects any file under `bin/server` that is not one of those executables, such as a stray `.pdb` in the flat directory or in a platform directory, even if earlier build checks are bypassed. It reports unexpected files and missing or empty executables in one run. (#852)
+* Drop four npm overrides (`minimatch@3`, `minimatch@5`, `brace-expansion@1` and `uuid`) that matched nothing in the lockfile. (#911)
 
 ### 3.4.7
 
