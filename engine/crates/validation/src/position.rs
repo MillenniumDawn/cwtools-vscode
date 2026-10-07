@@ -185,17 +185,6 @@ pub fn rules_at_pos(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn scope_transitions(
-    ast: &ParsedFile,
-    file_path: &str,
-    prepared: &Prepared<'_>,
-    start_line: u32,
-    end_line: u32,
-) -> Vec<ScopeTransition> {
-    scope_transitions_with_limit(ast, file_path, prepared, start_line, end_line, usize::MAX)
-}
-
 pub fn scope_transitions_with_limit(
     ast: &ParsedFile,
     file_path: &str,
@@ -1088,7 +1077,8 @@ mod tests {
             "foo = {\n    custom = {\n        add = { }\n    }\n}\n",
             &table,
         );
-        let transitions = scope_transitions(&ast, "common/foo/test.txt", &prepared, 1, 5);
+        let transitions =
+            scope_transitions_with_limit(&ast, "common/foo/test.txt", &prepared, 1, 5, usize::MAX);
         assert_eq!(transitions.len(), 1, "got: {transitions:?}");
         assert_eq!(transitions[0].range.start.line, 2);
         assert_eq!(transitions[0].resolved, ScopeId(101));
@@ -1128,7 +1118,8 @@ mod tests {
             var_checks: false,
         };
         let ast = parse_string("foo = { custom = { } }\n", &table);
-        let transitions = scope_transitions(&ast, "common/foo/test.txt", &prepared, 1, 1);
+        let transitions =
+            scope_transitions_with_limit(&ast, "common/foo/test.txt", &prepared, 1, 1, usize::MAX);
         assert_eq!(transitions.len(), 1);
         assert_eq!(transitions[0].resolved, ScopeId(101));
     }
@@ -1164,9 +1155,13 @@ mod tests {
             var_checks: false,
         };
         let ast = parse_string("foo = {\n    owner = { }\n}\n", &table);
-        assert!(scope_transitions(&ast, "common/foo/test.txt", &prepared, 1, 1).is_empty());
+        assert!(
+            scope_transitions_with_limit(&ast, "common/foo/test.txt", &prepared, 1, 1, usize::MAX)
+                .is_empty()
+        );
         assert_eq!(
-            scope_transitions(&ast, "common/foo/test.txt", &prepared, 1, 2).len(),
+            scope_transitions_with_limit(&ast, "common/foo/test.txt", &prepared, 1, 2, usize::MAX)
+                .len(),
             1
         );
     }
