@@ -174,6 +174,7 @@ function workspaceValidationSummary(value: unknown): WorkspaceValidationSummary 
 	) {
 		return undefined;
 	}
+	// SAFETY: fields.some above proved all seven fields are non-negative safe integers, the invariant WorkspaceValidationSummary encodes.
 	return record as unknown as WorkspaceValidationSummary;
 }
 
@@ -183,10 +184,6 @@ function showWorkspaceValidationResult(
 ): void {
 	if (result !== null && typeof result === "object") {
 		const record = result as Record<string, unknown>;
-		// Token-path cancellation: the server stopped the graceful scan and came
-		// back with `{ cancelled: true }`. Say so — the `$/cancelRequest`
-		// fallback in this middleware reports the same cancellation, and a
-		// notification that just vanishes reads as a silent failure.
 		if (record.cancelled === true) {
 			window.showInformationMessage(l10n.t("CWTools: {0} cancelled.", command));
 			return;
@@ -215,12 +212,7 @@ function showWorkspaceValidationResult(
 		summary.totalInfos,
 		summary.totalHints,
 	);
-	// With workspace-wide diagnostics off the server still totals every file
-	// but publishes none of the closed-file diagnostics, so the Problems panel
-	// below only lists open files. Say so rather than point the numbers at a
-	// panel that is missing most of them. Read the setting the same way the
-	// server sees it (cf. readLiveServerSettings). The totals cover the whole
-	// workspace in both cases.
+	// Totals cover the whole workspace; with workspace-wide diagnostics off, Problems only lists open files.
 	const workspaceWide =
 		workspace
 			.getConfiguration("cwtools")

@@ -1252,9 +1252,6 @@ suite("lspClient — executeCommand middleware", () => {
 		assert.deepStrictEqual(next.mock.calls, []);
 	});
 
-	// workspaceWide off publishes no closed-file diagnostics, so the Problems
-	// panel holds only open files while the totals cover the whole workspace.
-	// The summary has to say so; Show Problems stays, open files do show up.
 	test("validateWorkspace summary explains open-files-only Problems when workspace-wide diagnostics are off", async () => {
 		const { middleware, client } = middlewareSetup();
 		client.initializeResult = serverCommands(["validateWorkspace"]);
@@ -1299,8 +1296,6 @@ suite("lspClient — executeCommand middleware", () => {
 		const result: unknown = await middleware("validateWorkspace", [], vi.fn());
 
 		assert.deepStrictEqual(result, { cancelled: true });
-		// The token path returns normally with `{ cancelled: true }`; the toast
-		// matches the `$/cancelRequest` fallback rather than vanishing.
 		assert.deepStrictEqual(showInformationMessage.mock.calls, [
 			["CWTools: validateWorkspace cancelled."],
 		]);
