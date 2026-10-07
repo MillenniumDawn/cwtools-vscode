@@ -210,9 +210,8 @@ pinned input revisions and when re-blessing a baseline is appropriate.
 
 CI runs the node tests and the VS Code `unit` label in the fast client job.
 After building the server and client, it runs `rules-sync` against the checked-in
-offline fixture, then keeps the `live`, `multi-root` and `watched` labels in a
-separate host-test step so their workspace and watcher coverage remains
-distinct. Host coverage runs the `host` and `live` labels together; `host`
+offline fixture, then runs `multi-root` and `watched` in a separate host-test
+step. The `live` label runs once, together with `host` under coverage; `host`
 includes the smoke, hover and completion suites against the real server. The
 engine suite, cargo-deny and diagnostics guards run alongside these client
 checks. See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
