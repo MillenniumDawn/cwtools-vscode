@@ -73,9 +73,7 @@ pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Op
         printed.insert(0, '\u{FEFF}');
     }
     let formatted_body = printed.strip_prefix('\u{FEFF}').unwrap_or(&printed);
-    if parse_ok(formatted_body, table).is_none() {
-        return None;
-    }
+    parse_ok(formatted_body, table)?;
     Some(printed)
 }
 
