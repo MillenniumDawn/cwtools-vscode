@@ -50,7 +50,8 @@ export function findStaleHostTests(sourceNames, testConfigs) {
 }
 
 /**
- * Read the repository's host suite inventory and fail if a test has no label.
+ * Read the repository's host suite inventory and fail if a test has no label,
+ * or if a `.vscode-test.mjs` entry has no source file in `extension/test/host`.
  * @param {string} root Repository root (injectable for fixture tests).
  */
 export async function checkHostTestDiscovery(root = repoRoot) {
