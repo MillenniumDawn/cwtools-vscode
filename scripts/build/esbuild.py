@@ -1,25 +1,18 @@
 from __future__ import annotations
 
 import contextlib
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+from executables import require_executable
 from paths import (
     EXTENSION_DIST_ROOT,
     EXTENSION_HOST_ROOT,
     EXTENSION_WEBVIEW_ROOT,
     REPO_ROOT,
 )
-
-
-def _node() -> str:
-    found = shutil.which("node")
-    if found is None:
-        raise RuntimeError("node is not on PATH")
-    return found
 
 
 def esbuild_bin() -> Path:
@@ -82,7 +75,7 @@ def bundle_commands(
         webview_args(watch=watch, dev=dev),
     ]
     if sys.platform == "win32":
-        return [[_node(), *command] for command in commands]
+        return [[require_executable("node"), *command] for command in commands]
     return commands
 
 

@@ -80,25 +80,27 @@ pub struct VanillaCacheData {
 
 /// A stable fingerprint of a base-game install, used to invalidate the cache
 pub fn fingerprint(dir: &Path) -> String {
+    let root = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let root_hash = fnv1a(root.to_string_lossy().as_bytes(), 0xcbf2_9ce4_8422_2325u64);
+    let root_id = format!("root-{root_hash:016x}");
     let launcher = dir.join("launcher-settings.json");
     if let Ok(text) = std::fs::read_to_string(&launcher)
         && let Ok(v) = serde_json::from_str::<serde_json::Value>(&text)
     {
         if let Some(ver) = v.get("rawVersion").and_then(|x| x.as_str()) {
-            return format!("v{ver}");
+            return format!("{root_id}-v{ver}");
         }
         if let Some(ver) = v.get("version").and_then(|x| x.as_str()) {
-            return format!("ver-{ver}");
+            return format!("{root_id}-ver-{ver}");
         }
     }
     if let Ok(meta) = std::fs::metadata(dir)
         && let Ok(mtime) = meta.modified()
         && let Ok(dur) = mtime.duration_since(std::time::UNIX_EPOCH)
     {
-        return format!("mtime-{}", dur.as_secs());
+        return format!("{root_id}-mtime-{}", dur.as_secs());
     }
-    let h = fnv1a(dir.to_string_lossy().as_bytes(), 0xcbf2_9ce4_8422_2325u64);
-    format!("unknown-{h:016x}")
+    format!("{root_id}-unknown")
 }
 
 /// FNV-1a over `bytes`, continuing from `hash`. A stable, dependency-free hash
@@ -463,6 +465,28 @@ mod tests {
             "distinct unreadable installs need distinct fingerprints"
         );
         assert_ne!(a, "unknown");
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_installs_with_the_same_game_version() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let a = tmp.path().join("install-a");
+        let b = tmp.path().join("install-b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        for install in [&a, &b] {
+            std::fs::write(
+                install.join("launcher-settings.json"),
+                r#"{"rawVersion":"1.16.4"}"#,
+            )
+            .unwrap();
+        }
+
+        assert_ne!(
+            fingerprint(&a),
+            fingerprint(&b),
+            "the install root must remain part of the identity when versions match"
+        );
     }
 
     #[test]

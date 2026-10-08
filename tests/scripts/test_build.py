@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -9,6 +10,57 @@ import pytest
 import build
 
 CopyPackageInputs = cast(Callable[[], None], vars(build)["copy_package_inputs"])
+SetReleaseVersion = cast(Callable[[str], None], vars(build)["set_release_version"])
+
+
+def test_set_release_version_preserves_other_manifest_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "package.json"
+    original = {
+        "version": "3.4.7",
+        "name": "cwtools",
+        "contributes": {"commands": [{"command": "cwtools.validate"}]},
+    }
+    manifest_path.write_text(json.dumps(original), encoding="utf-8")
+    monkeypatch.setattr(build, "EXTENSION_DIST_ROOT", tmp_path)
+
+    SetReleaseVersion("3.5.42")
+
+    updated = manifest_path.read_text(encoding="utf-8")
+    assert json.loads(updated) == original | {"version": "3.5.42"}
+    assert updated.endswith("\n")
+
+
+@pytest.mark.parametrize(
+    ("content", "error_type"),
+    [("{", RuntimeError), ("[]", TypeError), ("null", TypeError)],
+)
+def test_set_release_version_rejects_invalid_manifests_without_writing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    content: str,
+    error_type: type[Exception],
+) -> None:
+    manifest_path = tmp_path / "package.json"
+    manifest_path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(build, "EXTENSION_DIST_ROOT", tmp_path)
+
+    with pytest.raises(error_type, match="could not parse"):
+        SetReleaseVersion("3.5.42")
+
+    assert manifest_path.read_text(encoding="utf-8") == content
+
+
+def test_set_release_version_reports_a_missing_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(build, "EXTENSION_DIST_ROOT", tmp_path)
+
+    with pytest.raises(RuntimeError, match="could not parse"):
+        SetReleaseVersion("3.5.42")
+
+    assert not (tmp_path / "package.json").exists()
 
 
 def test_copy_package_inputs_prunes_stale_content_and_preserves_generated_files(

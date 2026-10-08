@@ -311,8 +311,11 @@ mod tests {
         let state = DocumentState::new();
         let mut checks = 0;
 
-        let result =
-            state.open_workspace_document("file:///doc".to_string(), document("text"), || {
+        let result = state.open_workspace_document(
+            "file:///doc".to_string(),
+            document("text"),
+            cwtools_cache::workspace::content_hash("text"),
+            || {
                 checks += 1;
                 if checks == 1 {
                     state
@@ -322,7 +325,8 @@ mod tests {
                 } else {
                     false
                 }
-            });
+            },
+        );
 
         assert_eq!(result, Err(DocumentRejection::OutsideWorkspace));
         assert!(state.documents.lock().is_empty());

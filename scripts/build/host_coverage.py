@@ -14,6 +14,7 @@ from types import FrameType
 from typing import NoReturn
 
 from coverage_metrics import HOST_COVERAGE_LABELS, validate_host_coverage_summary
+from executables import require_executable
 from hosttest import resolve_display, test_cli_command
 from paths import REPO_ROOT
 
@@ -139,13 +140,6 @@ def _run(name: str, command: str, args: list[str]) -> None:
         raise RuntimeError(f"{name} failed with exit code {result.returncode}")
 
 
-def _npm() -> str:
-    found = shutil.which("npm")
-    if found is None:
-        raise RuntimeError("npm is not on PATH")
-    return found
-
-
 def clean_coverage() -> None:
     with contextlib.suppress(FileNotFoundError):
         shutil.rmtree(COVERAGE_DIR)
@@ -165,7 +159,11 @@ def main(argv: list[str] | None = None) -> int:
         if display.note is not None:
             sys.stderr.write(f"{display.note}\n")
         if not args.skip_compile:
-            _run("extension compilation", _npm(), ["run", "compile"])
+            _run(
+                "extension compilation",
+                require_executable("npm"),
+                ["run", "compile"],
+            )
         # Run the separate live workspace alongside host so both contribute to
         # one coverage session. Host also exercises modules like graphPanel.ts.
         # This needs a built cwtools-server binary and network access for the
