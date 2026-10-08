@@ -20,9 +20,9 @@ struct Parser<'a> {
     comment_mode: CommentMode,
     /// Clauses currently open, bounded by [`MAX_CLAUSE_DEPTH`].
     depth: u32,
-    /// Leaf-value quotes read to end of line unclosed; the formatter refuses
-    /// files carrying one.
-    has_unclosed_leaf_value_quote: bool,
+    /// Line of the first leaf-value quote read to end of line unclosed; the
+    /// formatter refuses files carrying one.
+    unclosed_leaf_value_quote_line: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -50,7 +50,7 @@ impl<'a> Parser<'a> {
             errors: Vec::new(),
             comment_mode,
             depth: 0,
-            has_unclosed_leaf_value_quote: false,
+            unclosed_leaf_value_quote_line: None,
         }
     }
 
@@ -358,7 +358,8 @@ impl<'a> Parser<'a> {
                     ),
                 ));
             } else {
-                self.has_unclosed_leaf_value_quote = true;
+                self.unclosed_leaf_value_quote_line
+                    .get_or_insert(quote_start.line);
             }
         }
         let end_byte = self.byte_pos();
@@ -711,7 +712,7 @@ impl<'a> Parser<'a> {
             arena: self.arena,
             root_children,
             errors: self.errors,
-            has_unclosed_leaf_value_quote: self.has_unclosed_leaf_value_quote,
+            unclosed_leaf_value_quote_line: self.unclosed_leaf_value_quote_line,
             overlay: self.table.overlay_guard(),
         }
     }
@@ -1528,8 +1529,9 @@ shorthand { nested = value }
             "leaf-value quote recovery should discard speculative key errors: {:?}",
             result.errors
         );
-        assert!(
-            result.has_unclosed_leaf_value_quote,
+        assert_eq!(
+            result.unclosed_leaf_value_quote_line,
+            Some(1),
             "the parser must record the suppressed unclosed leaf-value quote for the formatter"
         );
     }
@@ -1540,8 +1542,8 @@ shorthand { nested = value }
         // Closed quotes never set the flag, whatever their text contains.
         for input in ["foo = \"bar\"", "foo = \"a< >?\"", "foo\"bar = x"] {
             let result = parse_string(input, &table);
-            assert!(
-                !result.has_unclosed_leaf_value_quote,
+            assert_eq!(
+                result.unclosed_leaf_value_quote_line, None,
                 "{input:?} must not record an unclosed leaf-value quote"
             );
         }
