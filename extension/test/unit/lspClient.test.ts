@@ -31,6 +31,7 @@ const {
 	sendNotification,
 	sendRequest,
 	logError,
+	logInfo,
 } = vi.hoisted(() => {
 	const createdWatchers: {
 		glob: unknown;
@@ -124,6 +125,7 @@ const {
 			.fn<(type: unknown, params: unknown) => Promise<unknown>>()
 			.mockResolvedValue(undefined),
 		logError: vi.fn(),
+		logInfo: vi.fn<(message: string) => void>(),
 	};
 });
 
@@ -173,6 +175,7 @@ vi.mock("../../src/host/logger", () => ({
 	errorMessage: (err: unknown) =>
 		err instanceof Error ? err.message : String(err),
 	logError,
+	logInfo,
 	outputChannel: { appendLine: () => undefined },
 }));
 
@@ -353,6 +356,7 @@ suite("lspClient — watched files", () => {
 		onDidChangeConfiguration.mockClear();
 		sendNotification.mockClear();
 		sendRequest.mockClear();
+		logInfo.mockClear();
 	});
 
 	test("re-reads initialization settings for each client start", () => {
@@ -550,6 +554,9 @@ suite("lspClient — watched files", () => {
 			assert.strictEqual(oldWatcher.dispose.mock.calls.length, 1);
 			const newWatcher = rulesWatcherAt(rulesRoot);
 			assert.ok(newWatcher, "new resolved rules folder is not watched");
+			assert.deepStrictEqual(logInfo.mock.calls, [
+				[`Watching rules in ${rulesRoot}`],
+			]);
 			await vi.advanceTimersByTimeAsync(500);
 			assert.strictEqual(
 				sendRequest.mock.calls.length,
@@ -576,6 +583,32 @@ suite("lspClient — watched files", () => {
 			assert.strictEqual(restartedWatcher.dispose.mock.calls.length, 1);
 		} finally {
 			vi.useRealTimers();
+			fs.rmSync(rulesRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("a rules folder change while the server is stopped reports no watcher", async () => {
+		const rulesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cwtools-rules-"));
+		resolveRulesCache.mockResolvedValue({
+			rulesCache: rulesRoot,
+			fetchUpstream: false,
+		});
+		const changed: string[] = [];
+		try {
+			create(
+				() => {},
+				(value) => changed.push(value),
+			);
+			stateChangeHandlers[0]?.({ oldState: 2, newState: 0 });
+			configurationValues.set("rules_folder", rulesRoot);
+			configurationChangeHandler()(
+				configurationChangeEvent(["cwtools.rules_folder"]),
+			);
+			await vi.waitFor(() => assert.deepStrictEqual(changed, [rulesRoot]));
+
+			assert.strictEqual(rulesWatcherAt(rulesRoot), undefined);
+			assert.deepStrictEqual(logInfo.mock.calls, []);
+		} finally {
 			fs.rmSync(rulesRoot, { recursive: true, force: true });
 		}
 	});

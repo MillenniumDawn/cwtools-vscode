@@ -27,6 +27,7 @@
 * A submod can name its parent mods (`parentMods` init option, in load order). The server indexes them between the base game and the workspace with base-game provenance, so their scripted effects, triggers, variables, ideas, flags and localisation resolve and complete, and they never count toward CW261. A workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, shadows the parent's copy. Parent files are never validated or diagnosed, and are readable but not editable through the server. (#786)
 * Report syntax errors in `.cwt` rules files (an unclosed clause or quote) when loading a rules directory, as the new CW604. They reach `cwtools rules`, `validate` and the editor at startup, not only once the file is opened, and the live lint now reports them with the same code. The rules the parser recovered still load. (#847)
 * Alias `value[...]` patterns now resolve regardless of ASCII case, like the `enum[...]` arm, so `political_power` on rules side matches any casing of a value-set member. (#483)
+* Delete two functions with no callers: `InfoService::index_file` and `is_ignored_file`. (#910)
 
 #### Extension
 
@@ -44,6 +45,7 @@
 * A late file type reply no longer marks the wrong editor, or no editor, as a graph file. Closing the last editor or switching tabs clears the graph state at once, a queued switch is dropped once a newer one supersedes it, and the pending tab-switch timer is cleared on shutdown. (#837)
 * The graph, Fix All and Format Workspace commands now come back after the language server crashes and restarts on its own. They stayed hidden until a manual restart. (#838)
 * The Set graph depth prompt now accepts only a whole number of at least 1. Blank, zero, negative, fractional and unsafe values are rejected with a message naming the minimum, so they no longer replace the remembered depth or send a request the server refuses. (#841)
+* Log `Watching rules in <folder>` to the CWTools output when a `cwtools.rules_folder` change installs the rules watcher. The live-settings host test waits for that line before it edits a rules file. (#918)
 
 #### Tooling
 
@@ -54,6 +56,7 @@
 * The release PR body lists every pull request merged since the last stable tag, as the Utility Tool's release PR does. Dependabot bumps are left out. (#794)
 * The VSIX smoke test now requires a nonempty `cwtools-server.exe` in the `win-x64` directory and a nonempty `cwtools-server` in every other platform directory, as the extension's resolver does. Flat layouts check each executable name present. A directory holding only other files, an empty binary, or the wrong suffix fails the package gate. (#850)
 * The VSIX smoke test rejects any file under `bin/server` that is not one of those executables, such as a stray `.pdb` in the flat directory or in a platform directory, even if earlier build checks are bypassed. It reports unexpected files and missing or empty executables in one run. (#852)
+* Delete `is_record` from the coverage script. It had no callers. (#910)
 * Drop four npm overrides (`minimatch@3`, `minimatch@5`, `brace-expansion@1` and `uuid`) that matched nothing in the lockfile. (#911)
 * Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
 
