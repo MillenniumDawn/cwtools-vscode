@@ -166,6 +166,75 @@ fn read_response(reader: &mut BufReader<std::process::ChildStdout>) -> std::io::
     }
 }
 
+/// Retry a state query until it returns a value or its original deadline
+/// expires. Keeping the request and completion condition together avoids
+/// open-coded sleeps that can miss a readiness signal or drift past a timeout.
+fn poll_until<T>(
+    deadline: std::time::Instant,
+    interval: std::time::Duration,
+    mut poll: impl FnMut() -> Option<T>,
+) -> Option<T> {
+    loop {
+        if let Some(value) = poll() {
+            return Some(value);
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        std::thread::sleep(interval.min(remaining));
+    }
+}
+
+/// Retry a state query up to `attempts_limit` times, sleeping `interval`
+/// between attempts. Bounded by the attempt count alone, not a wall-clock
+/// deadline, so slow responses never reduce the number of observations.
+fn poll_until_attempts<T>(
+    attempts_limit: usize,
+    interval: std::time::Duration,
+    mut poll: impl FnMut() -> Option<T>,
+) -> Option<T> {
+    for attempt in 0..attempts_limit {
+        if let Some(value) = poll() {
+            return Some(value);
+        }
+        if attempt + 1 < attempts_limit {
+            std::thread::sleep(interval);
+        }
+    }
+    None
+}
+
+/// Where the server under test signals that its scan guard released. Kept out
+/// of `workspace`, so the server never writes into the tree its own scans walk;
+/// the workspace's unique tempdir name keeps concurrent tests apart.
+fn scan_release_path(workspace: &std::path::Path) -> std::path::PathBuf {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("scan-release");
+    std::fs::create_dir_all(&dir).expect("create scan release marker dir");
+    dir.join(workspace.file_name().expect("workspace tempdir has a name"))
+}
+
+fn clear_scan_release(path: &std::path::Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("could not clear scan release marker: {error}"),
+    }
+}
+
+fn wait_for_scan_release(path: &std::path::Path) {
+    assert!(
+        poll_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+            std::time::Duration::from_millis(5),
+            || path.exists().then_some(())
+        )
+        .is_some(),
+        "the active scan did not signal that its guard was released"
+    );
+    std::fs::remove_file(path).expect("consume scan release marker");
+}
+
 /// Drain server frames until the `publishDiagnostics` notification whose URI
 /// ends with `rel_path` arrives. did_open publishes diagnostics for a file only
 /// after its index write lands, so this is the readiness signal that the file's
@@ -214,6 +283,34 @@ fn jsonrpc_notification(method: &str, params: serde_json::Value) -> String {
     .to_string()
 }
 
+fn reply_to_client_request(stdin: &mut std::process::ChildStdin, frame: &serde_json::Value) {
+    assert!(frame.get("method").is_some(), "not a request: {frame}");
+    assert!(frame.get("id").is_some(), "request has no id: {frame}");
+    write_frame_to(
+        stdin,
+        &serde_json::json!({ "jsonrpc": "2.0", "id": frame["id"], "result": null }).to_string(),
+    )
+    .unwrap();
+}
+
+fn read_client_request_and_reply(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+) -> serde_json::Value {
+    for _ in 0..5000 {
+        let raw = read_frame(reader).expect("server exited before its client request");
+        if raw.is_empty() {
+            continue;
+        }
+        let frame: serde_json::Value = serde_json::from_str(&raw).expect("JSON-RPC frame");
+        if frame.get("method").is_some() && frame.get("id").is_some() {
+            reply_to_client_request(stdin, &frame);
+            return frame;
+        }
+    }
+    panic!("no server-to-client JSON-RPC request in the first 5000 frames");
+}
+
 // ── Full lifecycle: initialize → initialized → shutdown ──────────────────────
 
 #[test]
@@ -233,11 +330,12 @@ fn test_lsp_rejects_an_oversized_frame_without_waiting_for_the_body() {
     }
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        if child.try_wait().unwrap().is_some() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
+    if poll_until(deadline, std::time::Duration::from_millis(25), || {
+        child.try_wait().unwrap().is_some().then_some(())
+    })
+    .is_some()
+    {
+        return;
     }
     stop_server(&mut child);
     child.wait().ok();
@@ -2570,7 +2668,7 @@ fn hover_markdowns_with_live_settings(
             .unwrap();
         }
         let mut hover_value = String::new();
-        for _ in 0..120 {
+        let _ = poll_until_attempts(120, std::time::Duration::from_millis(500), || {
             let hover_req = jsonrpc_request(
                 request_id,
                 "textDocument/hover",
@@ -2587,11 +2685,8 @@ fn hover_markdowns_with_live_settings(
                 .as_str()
                 .unwrap_or("")
                 .to_string();
-            if hover_value.contains(expected) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
+            hover_value.contains(expected).then_some(())
+        });
         hover_values.push(hover_value);
     }
     stop_server(&mut child);
@@ -2775,7 +2870,8 @@ fn test_loc_edit_updates_hover_without_a_rescan() {
                     id0: i64|
      -> String {
         let mut last = String::new();
-        for attempt in 0..120 {
+        let mut attempt = 0;
+        let _ = poll_until_attempts(120, std::time::Duration::from_millis(500), || {
             write_frame(
                 child,
                 &jsonrpc_request(
@@ -2794,11 +2890,9 @@ fn test_loc_edit_updates_hover_without_a_rescan() {
                 .as_str()
                 .unwrap_or("")
                 .to_string();
-            if last.contains(expect) {
-                return last;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
+            attempt += 1;
+            last.contains(expect).then_some(())
+        });
         last
     };
 
@@ -3177,7 +3271,8 @@ fn goto_def(
     // Loc-key goto depends on the async workspace scan populating loc_locations;
     // under parallel test load that can lag far beyond the fast no-load case, so
     // poll very generously.
-    for attempt in 0..200 {
+    let mut attempt = 0;
+    let _ = poll_until_attempts(200, std::time::Duration::from_millis(300), || {
         let req = jsonrpc_request(
             100 + attempt,
             "textDocument/definition",
@@ -3206,11 +3301,9 @@ fn goto_def(
                 Some((uri, line))
             })
             .collect();
-        if !out.is_empty() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(300));
-    }
+        attempt += 1;
+        (!out.is_empty()).then_some(())
+    });
     stop_server(&mut child);
     out
 }
@@ -3589,7 +3682,8 @@ fn test_goto_vanilla_definition_resolves_to_vanilla_file() {
     // Cursor on VANILLA_FOCUS (line 1, col 16). Poll: the vanilla index lands
     // via the async workspace scan, so goto is empty until the merge completes.
     let mut out: Vec<(String, u32)> = Vec::new();
-    for attempt in 0..50 {
+    let mut attempt = 0;
+    let _ = poll_until_attempts(50, std::time::Duration::from_millis(300), || {
         let req = jsonrpc_request(
             100 + attempt,
             "textDocument/definition",
@@ -3619,11 +3713,9 @@ fn test_goto_vanilla_definition_resolves_to_vanilla_file() {
                 ))
             })
             .collect();
-        if !out.is_empty() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(300));
-    }
+        attempt += 1;
+        (!out.is_empty()).then_some(())
+    });
     stop_server(&mut child);
 
     assert!(
@@ -3732,7 +3824,8 @@ fn test_vanilla_loc_is_read_once_and_the_mod_wins_a_shared_key() {
                 id_base: i64|
      -> Vec<String> {
         // loc_locations lands via the async scan, so poll until it answers.
-        for attempt in 0..50 {
+        let mut attempt = 0;
+        poll_until_attempts(50, std::time::Duration::from_millis(300), || {
             write_frame(
                 child,
                 &jsonrpc_request(
@@ -3761,12 +3854,10 @@ fn test_vanilla_loc_is_read_once_and_the_mod_wins_a_shared_key() {
                 .iter()
                 .filter_map(|l| Some(l["uri"].as_str()?.to_string()))
                 .collect();
-            if !out.is_empty() {
-                return out;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-        Vec::new()
+            attempt += 1;
+            (!out.is_empty()).then_some(out)
+        })
+        .unwrap_or_default()
     };
 
     let shared = goto(&mut child, &mut reader, 1, 100);
@@ -3977,8 +4068,8 @@ fn is_scan_started(v: &serde_json::Value) -> bool {
 /// [`spawn_frame_collector`] channel. `what` names the scan awaited, so a
 /// failure says which one never started.
 ///
-/// `CWTOOLS_SCAN_HOLD_MS` (and `CWTOOLS_SCAN_HOLD_FILE`, which holds while the
-/// named path exists) holds the scan open *after* this signal fires (see
+/// `CWTOOLS_SCAN_HOLD_FILE`, which holds while the named path exists, keeps the
+/// scan open *after* this signal fires (see
 /// `scan::hold_scan_for_tests`), so the wait for the started signal
 /// is a measure of server command-processing latency under load, not of the
 /// hold. Size `budget` to that latency (a generous fixed value), not to the
@@ -3994,7 +4085,7 @@ fn wait_for_scan_started(
 
 /// Send `reindexWorkspace` until it actually starts a scan, returning once the
 /// scan-started signal is in hand. The gate for every test that needs a scan
-/// running — and holding, under `CWTOOLS_SCAN_HOLD_MS` — before it acts.
+/// running — and holding behind its file gate — before it acts.
 ///
 /// Waiting on the bar-on alone is not enough, because the command is allowed to
 /// do nothing: `Backend::validate_entire_workspace` returns `false` and sends no
@@ -4012,8 +4103,10 @@ fn wait_for_scan_started(
 fn reindex_until_scan_starts(
     child: &mut std::process::Child,
     rx: &std::sync::mpsc::Receiver<serde_json::Value>,
+    scan_release: &std::path::Path,
 ) {
     for attempt in 0..20 {
+        clear_scan_release(scan_release);
         let id = 7900 + attempt;
         write_frame(
             child,
@@ -4034,10 +4127,9 @@ fn reindex_until_scan_starts(
         if is_scan_started(&v) {
             return;
         }
-        // Answered with no bar: it lost the CAS to the tail of the previous
-        // scan. That scan is on its way out, so give the guard a moment to drop
-        // rather than spending the retries inside the same window.
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // The previous scan sends bar-off before dropping its guard. Retry only
+        // after the server signals that the guard itself has been released.
+        wait_for_scan_release(scan_release);
     }
     panic!("reindexWorkspace answered without starting a scan 20 times running");
 }
@@ -4222,7 +4314,9 @@ fn spawn_unused_workspace() -> (
     std::fs::write(&b_path, B_TEXT).unwrap();
 
     let ws_uri = path_uri(ws.path());
+    let scan_release = scan_release_path(ws.path());
     let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_SCAN_RELEASE_FILE", &scan_release)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -4733,7 +4827,7 @@ fn test_closed_file_cw239_only_catches_up_on_the_next_scan() {
 
     // The scan is what refreshes it, and it counts the open buffer's unsaved
     // reference: the diagnostic clears without b.txt ever being written to disk.
-    reindex_until_scan_starts(&mut child, &rx);
+    reindex_until_scan_starts(&mut child, &rx, &scan_release_path(ws.path()));
     let republished = recv_frame_until(
         &rx,
         std::time::Duration::from_secs(30),
@@ -4767,8 +4861,9 @@ fn test_closed_file_cw239_only_catches_up_on_the_next_scan() {
 /// Spawn a server with `rules`, write `files` to disk, initialize with
 /// `client_caps`, run the workspace scan (which indexes every file, open or
 /// not), didOpen the `open` files, then issue `method` against `doc_rel` with
-/// `extra` merged into the request params. Polls until a non-empty `result`
-/// arrives. Returns the JSON `result`.
+/// `extra` merged into the request params. Positive expectations poll until a
+/// non-empty result; negative expectations query once after readiness. Returns
+/// the JSON `result`.
 fn feature_request(
     rules: &str,
     files: &[(&str, &str)],
@@ -4777,6 +4872,60 @@ fn feature_request(
     doc_rel: &str,
     method: &str,
     extra: serde_json::Value,
+) -> serde_json::Value {
+    feature_request_impl(
+        rules,
+        files,
+        open,
+        client_caps,
+        doc_rel,
+        FeatureRequest {
+            method,
+            extra,
+            once_after_ready: false,
+        },
+    )
+}
+
+/// Query exactly once after the workspace scan and didOpen diagnostics have
+/// signaled readiness. Negative expectations use this form so a delayed
+/// positive result cannot be hidden by retrying until the server changes state.
+fn feature_request_once(
+    rules: &str,
+    files: &[(&str, &str)],
+    open: &[&str],
+    client_caps: serde_json::Value,
+    doc_rel: &str,
+    method: &str,
+    extra: serde_json::Value,
+) -> serde_json::Value {
+    feature_request_impl(
+        rules,
+        files,
+        open,
+        client_caps,
+        doc_rel,
+        FeatureRequest {
+            method,
+            extra,
+            once_after_ready: true,
+        },
+    )
+}
+
+struct FeatureRequest<'a> {
+    method: &'a str,
+    extra: serde_json::Value,
+    once_after_ready: bool,
+}
+
+fn feature_request_impl(
+    rules: &str,
+    files: &[(&str, &str)],
+    open: &[&str],
+    client_caps: serde_json::Value,
+    doc_rel: &str,
+    request: FeatureRequest<'_>,
 ) -> serde_json::Value {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
@@ -4841,23 +4990,36 @@ fn feature_request(
 
     let doc_uri = path_uri(ws.path().join(doc_rel));
     let mut result = serde_json::Value::Null;
-    for attempt in 0..40 {
+    if request.once_after_ready {
         let mut params = serde_json::json!({ "textDocument": { "uri": doc_uri } });
-        if let Some(obj) = extra.as_object() {
+        if let Some(obj) = request.extra.as_object() {
             for (k, v) in obj {
                 params[k.as_str()] = v.clone();
             }
         }
-        let req = jsonrpc_request(100 + attempt, method, params);
-        write_frame(&mut child, &req).unwrap();
-        let resp_str = read_response(&mut reader).expect("no response");
-        let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
+        write_frame(&mut child, &jsonrpc_request(100, request.method, params)).unwrap();
+        let resp: serde_json::Value =
+            serde_json::from_str(&read_response(&mut reader).expect("no response")).unwrap();
         result = resp["result"].clone();
-        let empty = result.is_null() || result.as_array().map(|a| a.is_empty()).unwrap_or(false);
-        if !empty {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+    } else {
+        let mut attempt = 0;
+        let _ = poll_until_attempts(40, std::time::Duration::from_millis(200), || {
+            let mut params = serde_json::json!({ "textDocument": { "uri": doc_uri } });
+            if let Some(obj) = request.extra.as_object() {
+                for (k, v) in obj {
+                    params[k.as_str()] = v.clone();
+                }
+            }
+            let req = jsonrpc_request(100 + attempt, request.method, params);
+            write_frame(&mut child, &req).unwrap();
+            let resp_str = read_response(&mut reader).expect("no response");
+            let resp: serde_json::Value = serde_json::from_str(&resp_str).unwrap();
+            result = resp["result"].clone();
+            let empty =
+                result.is_null() || result.as_array().map(|a| a.is_empty()).unwrap_or(false);
+            attempt += 1;
+            (!empty).then_some(())
+        });
     }
     stop_server(&mut child);
     result
@@ -6824,7 +6986,7 @@ fn storm_server(
 }
 
 /// [`storm_server`] with extra environment variables (test-only server knobs
-/// like `CWTOOLS_SCAN_HOLD_MS`).
+/// like `CWTOOLS_SCAN_HOLD_FILE`).
 fn storm_server_env(
     ws: &std::path::Path,
     rules_dir: &std::path::Path,
@@ -6850,6 +7012,7 @@ fn storm_server_env_with_ignore(
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
+    cmd.env("CWTOOLS_SCAN_RELEASE_FILE", scan_release_path(ws));
     let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -6880,7 +7043,23 @@ fn storm_server_env_with_ignore(
     )
     .unwrap();
     wait_for_scan_done(&mut reader);
+    // The guard releases just after bar-off. Consume the startup scan's marker
+    // here, so a test waiting on its own scan's release never sees this one.
+    wait_for_scan_release(&scan_release_path(ws));
     (child, reader)
+}
+
+/// Collect frames until the scan the caller just triggered signals that its
+/// guard released, then until `quiet` passes with nothing new. The release is
+/// the end of the scan, so a silent scan phase cannot cut the drain short; the
+/// quiet window only has to cover frames still in flight on stdout.
+fn drain_through_scan_release(
+    rx: &std::sync::mpsc::Receiver<serde_json::Value>,
+    scan_release: &std::path::Path,
+    quiet: std::time::Duration,
+) -> Vec<serde_json::Value> {
+    wait_for_scan_release(scan_release);
+    drain_until_quiet(rx, quiet, std::time::Duration::from_secs(8))
 }
 
 /// Move `reader` into a background thread that forwards every non-empty frame
@@ -6918,10 +7097,10 @@ fn spawn_frame_collector(
 }
 
 /// Collect frames from `rx` until none arrives for `quiet`, or `budget` elapses.
-/// `quiet` must exceed the coalescing window so the drain doesn't stop before it
-/// fires. Use this only where zero frames is a legitimate outcome (a no-op
-/// guard that must not revalidate); anything asserting on what arrived wants
-/// [`drain_after_first`].
+/// For watched-file batches, `quiet` is 900 ms, exceeding the 500 ms debounce
+/// window with room for runner scheduling. Use this only where zero frames is
+/// a legitimate outcome (a no-op guard that must not revalidate); anything
+/// asserting on what arrived wants [`drain_after_first`].
 fn drain_until_quiet(
     rx: &std::sync::mpsc::Receiver<serde_json::Value>,
     quiet: std::time::Duration,
@@ -7066,7 +7245,7 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1001);
@@ -7112,7 +7291,7 @@ fn test_watched_batch_panic_is_recovered_and_retried() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1010);
@@ -7171,7 +7350,7 @@ fn test_debounced_validate_panic_is_logged_and_next_edit_recovers() {
     .unwrap();
     let after_open = drain_until_quiet(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     assert_eq!(
@@ -7192,7 +7371,7 @@ fn test_debounced_validate_panic_is_logged_and_next_edit_recovers() {
     .unwrap();
     let after_edit = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
 
@@ -7215,7 +7394,7 @@ fn test_debounced_validate_panic_is_logged_and_next_edit_recovers() {
     }
     drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1011);
@@ -7260,7 +7439,7 @@ fn test_watched_distinct_files_each_validate_once() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(10),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1002);
@@ -7306,7 +7485,7 @@ fn test_watched_change_on_a_symlink_neither_validates_nor_publishes() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(10),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1003);
@@ -7350,10 +7529,10 @@ fn test_watched_bulk_flood_uses_rescan_not_per_file() {
 
     write_frame(&mut child, &watched_changes(&uris)).unwrap();
 
-    let frames = drain_after_first(
+    let frames = drain_through_scan_release(
         &rx,
-        std::time::Duration::from_millis(1500),
-        std::time::Duration::from_secs(20),
+        &scan_release_path(ws.path()),
+        std::time::Duration::from_millis(900),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1003);
     stop_server(&mut child);
@@ -7383,34 +7562,96 @@ fn test_watched_overcap_batch_does_not_spin_against_running_scan() {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
     let vanilla = tempfile::tempdir().unwrap();
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("scan-hold");
+    let ready = signals.path().join("scan-hold-ready");
     std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
 
-    // Hold every scan open for 4s so the watched drain reliably lands mid-scan.
+    // The startup scan passes before the gate is created; the rescan then waits
+    // for the watched drain to report its first over-cap batch.
     let (mut child, reader) = storm_server_env(
         ws.path(),
         rules_dir.path(),
         vanilla.path(),
-        &[("CWTOOLS_SCAN_HOLD_MS", "4000")],
+        &[
+            ("CWTOOLS_SCAN_HOLD_FILE", gate.to_str().unwrap()),
+            ("CWTOOLS_SCAN_HOLD_READY_FILE", ready.to_str().unwrap()),
+        ],
     );
     let n = 205usize;
     let uris: Vec<String> = (0..n)
         .map(|i| write_disk_file(ws.path(), &format!("common/decisions/s{i}.txt"), STORM_FILE))
         .collect();
     let rx = spawn_frame_collector(reader);
+    let scan_release = scan_release_path(ws.path());
 
     // Start a scan, then flood while it holds the CAS. The hold begins after
     // the bar-on, so waiting for that signal keeps the flood's debounce window
     // from slipping past the scan and winning the CAS.
-    reindex_until_scan_starts(&mut child, &rx);
+    std::fs::write(&gate, b"hold").unwrap();
+    reindex_until_scan_starts(&mut child, &rx, &scan_release);
     write_frame(&mut child, &watched_changes(&uris)).unwrap();
 
-    // Quiet must outlast the held rescan so the whole story is observed.
-    let _ = drain_until_quiet(
-        &rx,
-        std::time::Duration::from_millis(5500),
-        std::time::Duration::from_secs(30),
+    let mut request_id = 1004;
+    assert!(
+        poll_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+            std::time::Duration::from_millis(100),
+            || {
+                let log = fetch_profiling_log(&mut child, &rx, request_id);
+                request_id += 1;
+                (log.matches("watched batch over cap").count() >= 1).then_some(())
+            }
+        )
+        .is_some(),
+        "the losing watched drain never reported its over-cap batch"
     );
-    let log = fetch_profiling_log(&mut child, &rx, 1004);
+    let retried_while_held = poll_until(
+        std::time::Instant::now() + std::time::Duration::from_millis(900),
+        std::time::Duration::from_millis(100),
+        || {
+            let log = fetch_profiling_log(&mut child, &rx, request_id);
+            request_id += 1;
+            (log.matches("watched batch over cap").count() > 1).then_some(())
+        },
+    );
+    assert!(
+        retried_while_held.is_none(),
+        "the losing watched drain must park until the scan releases its gate"
+    );
+    assert!(ready.exists(), "scan did not enter its file gate");
+    std::fs::remove_file(&gate).unwrap();
+    wait_for_scan_release(&scan_release);
+
+    // The scan's release signal is the readiness edge for the winner-armed
+    // retry. Then observe one debounce window to catch any accidental re-arm.
+    assert!(
+        poll_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+            std::time::Duration::from_millis(100),
+            || {
+                let log = fetch_profiling_log(&mut child, &rx, request_id);
+                request_id += 1;
+                (log.matches("watched batch over cap").count() >= 2).then_some(())
+            }
+        )
+        .is_some(),
+        "the winner-armed watched drain never reported its over-cap batch"
+    );
+    let retried_after_winner = poll_until(
+        std::time::Instant::now() + std::time::Duration::from_millis(900),
+        std::time::Duration::from_millis(100),
+        || {
+            let log = fetch_profiling_log(&mut child, &rx, request_id);
+            request_id += 1;
+            (log.matches("watched batch over cap").count() > 2).then_some(())
+        },
+    );
+    assert!(
+        retried_after_winner.is_none(),
+        "the winner-armed watched batch must not re-arm after its one rescan"
+    );
+    let log = fetch_profiling_log(&mut child, &rx, request_id);
     stop_server(&mut child);
 
     assert_eq!(
@@ -7474,7 +7715,7 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     assert_eq!(
@@ -7496,7 +7737,7 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7572,7 +7813,7 @@ fn test_open_loc_key_edit_revalidates_only_referencing_open_files() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7658,7 +7899,7 @@ fn test_open_loc_revalidation_skips_ignored_targets() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7723,7 +7964,7 @@ fn test_open_loc_revalidation_applies_inline_ignore() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7816,7 +8057,7 @@ fn test_watched_loc_new_keys_revalidate_only_referencing_open_files() {
 
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -7925,7 +8166,7 @@ fn test_watched_loc_keys_survive_scan_index_install() {
     write_frame(&mut child, &watched_changes(std::slice::from_ref(&b_uri))).unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let opens = publish_codes_for(&frames, "open_l_english.yml");
@@ -7952,10 +8193,10 @@ fn test_watched_loc_keys_survive_scan_index_install() {
         ),
     )
     .unwrap();
-    let frames = drain_after_first(
+    let frames = drain_through_scan_release(
         &rx,
-        std::time::Duration::from_millis(1500),
-        std::time::Duration::from_secs(15),
+        &scan_release_path(ws.path()),
+        std::time::Duration::from_millis(900),
     );
     stop_server(&mut child);
 
@@ -8011,7 +8252,7 @@ fn test_watched_loc_removed_key_stops_resolving() {
     write_frame(&mut child, &watched_changes(std::slice::from_ref(&b_uri))).unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let opens = publish_codes_for(&frames, "open_l_english.yml");
@@ -8031,7 +8272,7 @@ fn test_watched_loc_removed_key_stops_resolving() {
     write_frame(&mut child, &watched_changes(std::slice::from_ref(&b_uri))).unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -8100,7 +8341,7 @@ fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let loc_codes = publish_codes_for(&frames, "dependent_l_english.yml");
@@ -8129,7 +8370,7 @@ fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -8189,7 +8430,7 @@ fn test_watched_loc_delete_revalidates_live_overlay_dependents() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     let codes = publish_codes_for(&frames, "dependent_l_english.yml");
@@ -8211,7 +8452,7 @@ fn test_watched_loc_delete_revalidates_live_overlay_dependents() {
     .unwrap();
     let frames = drain_after_first(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(8),
     );
     stop_server(&mut child);
@@ -8489,7 +8730,7 @@ fn test_live_ignore_clears_closed_localisation_diagnostics() {
 
     let (mut child, reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
     let rx = spawn_frame_collector(reader);
-    reindex_until_scan_starts(&mut child, &rx);
+    reindex_until_scan_starts(&mut child, &rx, &scan_release_path(ws.path()));
     recv_frame_until(
         &rx,
         std::time::Duration::from_secs(10),
@@ -8777,16 +9018,20 @@ fn test_validate_workspace_reports_busy_when_scan_never_releases() {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
     let vanilla = tempfile::tempdir().unwrap();
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("scan-hold");
+    let ready = signals.path().join("scan-hold-ready");
     std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
 
-    // Hold every scan open for 10s, but give validateWorkspace only 1s to win
-    // the guard: it must give up and report busy.
+    // Hold the competing scan until validateWorkspace gives up on its original
+    // 1s retry deadline and reports busy.
     let (mut child, reader) = storm_server_env(
         ws.path(),
         rules_dir.path(),
         vanilla.path(),
         &[
-            ("CWTOOLS_SCAN_HOLD_MS", "10000"),
+            ("CWTOOLS_SCAN_HOLD_FILE", gate.to_str().unwrap()),
+            ("CWTOOLS_SCAN_HOLD_READY_FILE", ready.to_str().unwrap()),
             ("CWTOOLS_RETRY_DEADLINE_MS", "1000"),
         ],
     );
@@ -8794,7 +9039,8 @@ fn test_validate_workspace_reports_busy_when_scan_never_releases() {
 
     // Start a competing scan and wait for the scan-started signal, so the hold
     // is definitely active for the command's whole deadline.
-    reindex_until_scan_starts(&mut child, &rx);
+    std::fs::write(&gate, b"hold").unwrap();
+    reindex_until_scan_starts(&mut child, &rx, &scan_release_path(ws.path()));
 
     write_frame(
         &mut child,
@@ -8805,14 +9051,15 @@ fn test_validate_workspace_reports_busy_when_scan_never_releases() {
         ),
     )
     .unwrap();
-    // The competing scan releases only after 10s, so any answer inside this
-    // window must be the command's own give-up response.
+    // The file gate remains closed, so any answer inside this window must be
+    // the command's own give-up response.
     let (response, saw_revalidation) = wait_for_response_watching_scans(
         &rx,
         903,
         std::time::Duration::from_secs(5),
         "validateWorkspace to give up on its 1s deadline",
     );
+    assert!(ready.exists(), "competing scan did not enter its file gate");
     stop_server(&mut child);
 
     assert!(
@@ -8856,18 +9103,15 @@ fn test_did_open_burst_stops_at_the_document_count_limit() {
         .unwrap();
     }
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut validations = 0;
     let mut request_id = 2000;
-    while std::time::Instant::now() < deadline {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let _ = poll_until(deadline, std::time::Duration::from_millis(100), || {
         let log = fetch_profiling_log(&mut child, &rx, request_id);
         validations = count_validate_log(&log, "didOpen");
-        if validations >= MAX_OPEN_DOCUMENTS {
-            break;
-        }
         request_id += 1;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+        (validations >= MAX_OPEN_DOCUMENTS).then_some(())
+    });
     stop_server(&mut child);
     child.wait().ok();
 
@@ -9063,7 +9307,7 @@ fn test_did_save_for_a_document_that_was_never_opened_is_a_no_op() {
 
     let frames = drain_until_quiet(
         &rx,
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_millis(900),
         std::time::Duration::from_secs(6),
     );
     let log = fetch_profiling_log(&mut child, &rx, 1021);
@@ -9333,6 +9577,89 @@ types = {
 }
 thing = { x = scalar }
 "#;
+
+#[test]
+fn test_genlocall_returns_missing_name_derived_localisation_keys() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla_dir = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("test_rules.cwt"), MISSING_LOC_RULES).unwrap();
+
+    let script = ws.path().join("common/things/test.txt");
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::write(&script, "my_thing = { x = yes }\n").unwrap();
+
+    let loc = ws.path().join("localisation/english/test_l_english.yml");
+    std::fs::create_dir_all(loc.parent().unwrap()).unwrap();
+    let mut loc_bytes = vec![0xEF, 0xBB, 0xBF];
+    loc_bytes.extend_from_slice(b"l_english:\n existing_key:0 \"Existing\"\n");
+    std::fs::write(loc, loc_bytes).unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let stdin = child.stdin.take().unwrap();
+    let root_uri = path_uri(ws.path());
+    let rules_uri = rules_dir.path().to_string_lossy().to_string();
+    let vanilla_uri = vanilla_dir.path().to_string_lossy().to_string();
+
+    let response = run_child_with_deadline(child, stdin, reader, 60, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                1,
+                "initialize",
+                serde_json::json!({
+                    "processId": std::process::id(),
+                    "rootUri": root_uri,
+                    "capabilities": {},
+                    "initializationOptions": {
+                        "language": "hoi4",
+                        "rulesCache": rules_uri,
+                        "vanilla": vanilla_uri,
+                    },
+                }),
+            ),
+        )
+        .unwrap();
+        let init_raw = read_response(reader).expect("no initialize response");
+        let init: serde_json::Value = serde_json::from_str(&init_raw).unwrap();
+        assert_eq!(init["id"], 1, "got: {init_raw}");
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+        wait_for_scan_done(reader);
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                2,
+                "workspace/executeCommand",
+                serde_json::json!({ "command": "genlocall", "arguments": [] }),
+            ),
+        )
+        .unwrap();
+        let raw = read_response(reader).expect("no genlocall response");
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    })
+    .expect("genlocall deadlocked or timed out");
+
+    assert_eq!(response["id"], 2, "got: {response}");
+    let stubs = response["result"].as_array().expect("localisation stubs");
+    assert_eq!(stubs.len(), 1, "got: {response}");
+    assert_eq!(stubs[0]["language"], "english");
+    assert_eq!(stubs[0]["filename_suggestion"], "generated_l_english.yml");
+    assert_eq!(
+        stubs[0]["content"], "l_english:\n my_thing:0 \"TODO\"\n my_thing_desc:0 \"TODO\"\n",
+        "genlocall must return the missing type-name-derived keys: {response}"
+    );
+}
 
 #[test]
 fn test_keystroke_edit_reports_missing_loc_once_loc_index_is_built() {
@@ -10500,7 +10827,8 @@ types = {
 
     // Poll the inlay request until the loc map + type index are populated.
     let mut hint = serde_json::Value::Null;
-    for attempt in 0..30 {
+    let mut attempt = 0;
+    let _ = poll_until_attempts(30, std::time::Duration::from_millis(500), || {
         let req = jsonrpc_request(
             2 + attempt,
             "textDocument/inlayHint",
@@ -10519,10 +10847,11 @@ types = {
             && !arr.is_empty()
         {
             hint = arr[0].clone();
-            break;
+            return Some(());
         }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
+        attempt += 1;
+        None
+    });
     stop_server(&mut child);
 
     assert_eq!(hint["label"], "My Decision", "got: {hint}");
@@ -10785,7 +11114,8 @@ fn graph_data_response(files: &[(&str, &str)], arguments: serde_json::Value) -> 
 
     let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
     let mut response = serde_json::Value::Null;
-    for attempt in 0..20 {
+    let mut attempt = 0;
+    let _ = poll_until_attempts(20, std::time::Duration::from_millis(300), || {
         write_frame(
             &mut child,
             &jsonrpc_request(
@@ -10804,11 +11134,9 @@ fn graph_data_response(files: &[(&str, &str)], arguments: serde_json::Value) -> 
                 .iter()
                 .any(|n| !n["references"].as_array().unwrap().is_empty())
         });
-        if settled {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(300));
-    }
+        attempt += 1;
+        settled.then_some(())
+    });
     stop_server(&mut child);
     response
 }
@@ -11365,6 +11693,260 @@ my_focus = {
 }
 
 #[test]
+fn test_semantic_tokens_delta_applies_wire_edit_and_falls_back_for_stale_base() {
+    let original = "my_focus = {\n    cost = 10\n}\n";
+    let updated = "my_focus = {\n    cost = 200\n}\n";
+    let rel = "common/national_focus/tree.txt";
+    let (ws, _rules, mut child, reader) = editor_server(&[(rel, original)]);
+    let uri = path_uri(ws.path().join(rel));
+    let uri_for_requests = uri.clone();
+    let rel_for_wait = rel.to_string();
+    let stdin = child.stdin.take().unwrap();
+
+    let result = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                20,
+                "textDocument/semanticTokens/full",
+                serde_json::json!({ "textDocument": { "uri": uri_for_requests } }),
+            ),
+        )
+        .unwrap();
+        let full_raw = read_response(reader).expect("no initial full-token response");
+        let full: serde_json::Value = serde_json::from_str(&full_raw).unwrap();
+        assert_eq!(full["id"], 20, "got: {full_raw}");
+        let original_data = full["result"]["data"]
+            .as_array()
+            .expect("full-token data")
+            .clone();
+        let original_id = full["result"]["resultId"]
+            .as_str()
+            .expect("full-token resultId")
+            .to_string();
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                21,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "previousResultId": original_id.clone(),
+                }),
+            ),
+        )
+        .unwrap();
+        let unchanged_raw = read_response(reader).expect("no unchanged delta response");
+        let unchanged: serde_json::Value = serde_json::from_str(&unchanged_raw).unwrap();
+        assert_eq!(unchanged["id"], 21, "got: {unchanged_raw}");
+        assert!(
+            unchanged["result"]["resultId"].as_str().is_some(),
+            "delta must advance its resultId: {unchanged_raw}"
+        );
+        let unchanged_edits = unchanged["result"]["edits"]
+            .as_array()
+            .expect("delta edits");
+        assert!(unchanged_edits.is_empty(), "got: {unchanged_raw}");
+        assert_eq!(
+            original_data.len() % 5,
+            0,
+            "token quintets: {original_data:?}"
+        );
+        let unchanged_id = unchanged["result"]["resultId"]
+            .as_str()
+            .expect("unchanged delta resultId")
+            .to_string();
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "textDocument/didChange",
+                serde_json::json!({
+                    "textDocument": { "uri": uri, "version": 2 },
+                    "contentChanges": [{ "text": updated }],
+                }),
+            ),
+        )
+        .unwrap();
+        // Wait until the change notification has been applied and its current
+        // document diagnostics arrive before asking for the delta.
+        wait_for_diagnostics(reader, &rel_for_wait);
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                22,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "previousResultId": unchanged_id.clone(),
+                }),
+            ),
+        )
+        .unwrap();
+        let changed_raw = read_response(reader).expect("no changed delta response");
+        let changed: serde_json::Value = serde_json::from_str(&changed_raw).unwrap();
+        assert_eq!(changed["id"], 22, "got: {changed_raw}");
+        let changed_id = changed["result"]["resultId"]
+            .as_str()
+            .expect("changed delta resultId")
+            .to_string();
+        assert_ne!(changed_id, unchanged_id, "delta must advance resultId");
+        let edits = changed["result"]["edits"]
+            .as_array()
+            .expect("a current base must return semantic-token edits");
+        assert_eq!(
+            edits.len(),
+            1,
+            "expected one changed-token edit: {changed_raw}"
+        );
+        let edit = &edits[0];
+        let start = edit["start"].as_u64().expect("edit start") as usize;
+        let delete_count = edit["deleteCount"].as_u64().expect("edit deleteCount") as usize;
+        assert_eq!(start % 5, 0, "edit start must address token quintets");
+        assert_eq!(delete_count % 5, 0, "deleteCount must cover token quintets");
+        assert!(
+            start + delete_count <= original_data.len(),
+            "edit exceeds base stream"
+        );
+        let inserted_data = edit["data"].as_array().cloned().unwrap_or_default();
+        assert_eq!(inserted_data.len() % 5, 0, "inserted token quintets");
+        let mut changed_data = original_data[..start].to_vec();
+        changed_data.extend(inserted_data);
+        changed_data.extend_from_slice(&original_data[start + delete_count..]);
+        assert!(
+            changed["result"].get("data").is_none(),
+            "delta must not return a full stream: {changed_raw}"
+        );
+
+        let changed_tokens = decode_semantic_tokens(&changed_data);
+        assert!(
+            changed_tokens.contains(&(1, 11, 3, 3, 0)),
+            "the new `200` number token must reach the client: {changed_tokens:?}"
+        );
+        assert!(
+            !changed_tokens.contains(&(1, 11, 2, 3, 0)),
+            "the old `10` number token must be removed: {changed_tokens:?}"
+        );
+
+        // A result ID the server no longer retains must fall back to a full
+        // response, and that response must carry the current edited content.
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                23,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "previousResultId": original_id,
+                }),
+            ),
+        )
+        .unwrap();
+        let stale_raw = read_response(reader).expect("no stale-base fallback response");
+        let stale: serde_json::Value = serde_json::from_str(&stale_raw).unwrap();
+        assert_eq!(stale["id"], 23, "got: {stale_raw}");
+        assert_eq!(stale["result"]["data"], serde_json::json!(changed_data));
+        assert!(
+            stale["result"]["edits"].is_null(),
+            "an evicted base must not return an edit against stale data: {stale_raw}"
+        );
+
+        (original_data, changed_data)
+    })
+    .expect("semantic-token requests deadlocked or timed out");
+    assert_ne!(
+        result.0, result.1,
+        "the edit must change the wire token stream"
+    );
+}
+
+#[test]
+fn test_did_rename_files_moves_the_open_semantic_token_cache() {
+    let text = "buffer_value = 9\n";
+    let old_rel = "common/national_focus/tree.txt";
+    let new_rel = "common/national_focus/renamed.txt";
+    let (ws, _rules, mut child, reader) = editor_server(&[(old_rel, text)]);
+    let old_path = ws.path().join(old_rel);
+    let new_path = ws.path().join(new_rel);
+    let old_uri = path_uri(&old_path);
+    let new_uri = path_uri(&new_path);
+    let stdin = child.stdin.take().unwrap();
+
+    let response = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                30,
+                "textDocument/semanticTokens/full",
+                serde_json::json!({ "textDocument": { "uri": old_uri } }),
+            ),
+        )
+        .unwrap();
+        let full_raw = read_response(reader).expect("no semantic-token response before rename");
+        let full: serde_json::Value = serde_json::from_str(&full_raw).unwrap();
+        assert_eq!(full["id"], 30, "got: {full_raw}");
+        let original_data = full["result"]["data"]
+            .as_array()
+            .expect("semantic-token data")
+            .clone();
+        let tokens = decode_semantic_tokens(&original_data);
+        assert!(
+            tokens.contains(&(0, 15, 1, 3, 0)),
+            "the cached open buffer contains its number token: {tokens:?}"
+        );
+        let previous_result_id = full["result"]["resultId"]
+            .as_str()
+            .expect("resultId")
+            .to_string();
+
+        std::fs::write(&old_path, "disk_value = 1\n").unwrap();
+        std::fs::rename(&old_path, &new_path).unwrap();
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "workspace/didRenameFiles",
+                serde_json::json!({
+                    "files": [{ "oldUri": old_uri, "newUri": new_uri }],
+                }),
+            ),
+        )
+        .unwrap();
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                31,
+                "textDocument/semanticTokens/full/delta",
+                serde_json::json!({
+                    "textDocument": { "uri": new_uri },
+                    "previousResultId": previous_result_id,
+                }),
+            ),
+        )
+        .unwrap();
+        let delta_raw = read_response(reader).expect("no semantic-token delta after rename");
+        let delta: serde_json::Value = serde_json::from_str(&delta_raw).unwrap();
+        assert_eq!(delta["id"], 31, "got: {delta_raw}");
+        assert_eq!(
+            delta["result"]["edits"],
+            serde_json::json!([]),
+            "got: {delta_raw}"
+        );
+        assert!(
+            delta["result"].get("data").is_none(),
+            "the moved cache must answer with a delta, not unrelated disk tokens: {delta_raw}"
+        );
+        assert_ne!(
+            delta["result"]["resultId"], full["result"]["resultId"],
+            "the delta response must advance the client-visible resultId"
+        );
+        original_data
+    })
+    .expect("didRenameFiles or the follow-up delta deadlocked or timed out");
+    assert_eq!(response.len() % 5, 0, "token quintets: {response:?}");
+}
+
+#[test]
 fn test_semantic_tokens_range_returns_only_the_requested_lines() {
     // Two entities; the request covers the second one's body only.
     let text = "\
@@ -11657,6 +12239,154 @@ fn test_initialize_advertises_the_new_capabilities() {
         commands.iter().any(|c| c == "formatWorkspace"),
         "formatWorkspace must be advertised: {commands:?}"
     );
+    assert!(
+        commands.iter().any(|c| c == "genlocall"),
+        "genlocall must be advertised: {commands:?}"
+    );
+}
+
+#[test]
+fn test_create_and_delete_file_notifications_request_client_refreshes() {
+    let ws = tempfile::tempdir().unwrap();
+    let ws_path = ws.path().to_path_buf();
+    let root_uri = path_uri(ws.path());
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let stdin = child.stdin.take().unwrap();
+
+    run_child_with_deadline(child, stdin, reader, 45, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                1,
+                "initialize",
+                serde_json::json!({
+                    "processId": std::process::id(),
+                    "rootUri": root_uri,
+                    "capabilities": {
+                        "workspace": {
+                            "semanticTokens": { "refreshSupport": true },
+                            "codeLens": { "refreshSupport": true },
+                        },
+                    },
+                    "initializationOptions": { "language": "hoi4" },
+                }),
+            ),
+        )
+        .unwrap();
+        let init_raw = read_response(reader).expect("no initialize response");
+        let init: serde_json::Value = serde_json::from_str(&init_raw).unwrap();
+        assert_eq!(init["id"], 1, "got: {init_raw}");
+        let operations = &init["result"]["capabilities"]["workspace"]["fileOperations"];
+        let glob = "**/*.{txt,gui,gfx,asset,yml,cwt}";
+        for operation in ["didCreate", "didRename", "didDelete"] {
+            assert_eq!(
+                operations[operation]["filters"][0]["pattern"]["glob"], glob,
+                "{operation} file notification must be advertised"
+            );
+        }
+
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+
+        let mut scan_finished = false;
+        let mut startup_refreshes = Vec::new();
+        for _ in 0..10_000 {
+            let raw = read_frame(reader).expect("server exited before the initial scan finished");
+            if raw.is_empty() {
+                continue;
+            }
+            let frame: serde_json::Value = serde_json::from_str(&raw).expect("JSON-RPC frame");
+            if frame["method"] == "loadingBar"
+                && frame["params"]["enable"] == serde_json::Value::Bool(false)
+            {
+                scan_finished = true;
+            }
+            if frame.get("method").is_some() && frame.get("id").is_some() {
+                startup_refreshes.push(frame["method"].as_str().unwrap().to_string());
+                reply_to_client_request(stdin, &frame);
+            }
+            if scan_finished
+                && startup_refreshes
+                    .iter()
+                    .any(|method| method == "workspace/semanticTokens/refresh")
+                && startup_refreshes
+                    .iter()
+                    .any(|method| method == "workspace/codeLens/refresh")
+            {
+                break;
+            }
+        }
+        assert!(scan_finished, "the initial workspace scan did not finish");
+        startup_refreshes.sort();
+        assert_eq!(
+            startup_refreshes,
+            [
+                "workspace/codeLens/refresh".to_string(),
+                "workspace/semanticTokens/refresh".to_string(),
+            ],
+            "the server must finish startup refresh requests before the file-operation assertions"
+        );
+
+        let create_path = ws_path.join("common/national_focus/created.txt");
+        std::fs::create_dir_all(create_path.parent().unwrap()).unwrap();
+        std::fs::write(&create_path, "created_focus = { cost = 1 }\n").unwrap();
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "workspace/didCreateFiles",
+                serde_json::json!({ "files": [{ "uri": path_uri(&create_path) }] }),
+            ),
+        )
+        .unwrap();
+        let created = read_client_request_and_reply(stdin, reader);
+        assert_eq!(created["jsonrpc"], "2.0", "got: {created}");
+        assert!(
+            created.get("id").is_some(),
+            "refresh is a request: {created}"
+        );
+        assert_eq!(created["method"], "workspace/semanticTokens/refresh");
+
+        let delete_path = ws_path.join("common/national_focus/deleted.txt");
+        std::fs::write(&delete_path, "deleted_focus = { cost = 2 }\n").unwrap();
+        std::fs::remove_file(&delete_path).unwrap();
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "workspace/didDeleteFiles",
+                serde_json::json!({ "files": [{ "uri": path_uri(&delete_path) }] }),
+            ),
+        )
+        .unwrap();
+        let mut deleted = vec![
+            read_client_request_and_reply(stdin, reader)["method"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            read_client_request_and_reply(stdin, reader)["method"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        ];
+        deleted.sort();
+        assert_eq!(
+            deleted,
+            [
+                "workspace/codeLens/refresh".to_string(),
+                "workspace/semanticTokens/refresh".to_string(),
+            ],
+            "deleting a file must refresh both cached token and code-lens views"
+        );
+    })
+    .expect("file-operation notification handling deadlocked or timed out");
 }
 
 #[test]
@@ -12129,12 +12859,16 @@ fn test_format_workspace_reports_a_discovery_failure() {
 #[test]
 fn test_format_workspace_cancel_applies_nothing() {
     let ws = tempfile::tempdir().unwrap();
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("format-hold");
+    let ready = signals.path().join("format-hold-ready");
     let p = ws.path().join("common").join("a.txt");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(&p, "root={\n a=1\n}\n").unwrap();
 
     let mut child = cwtools_server_cmd()
-        .env("CWTOOLS_FORMAT_HOLD_MS", "2000")
+        .env("CWTOOLS_FORMAT_HOLD_FILE", &gate)
+        .env("CWTOOLS_FORMAT_HOLD_READY_FILE", &ready)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -12161,6 +12895,31 @@ fn test_format_workspace_cancel_applies_nothing() {
     )
     .unwrap();
     let rx = spawn_frame_collector(reader);
+    let startup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        assert!(
+            std::time::Instant::now() < startup_deadline,
+            "startup scan never closed its loading bar"
+        );
+        let v = match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(v) => v,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("server exited during startup scan")
+            }
+        };
+        if v["method"] == "window/workDoneProgress/create" {
+            write_frame(
+                &mut child,
+                &serde_json::json!({ "jsonrpc": "2.0", "id": v["id"], "result": null }).to_string(),
+            )
+            .unwrap();
+        }
+        if v["method"] == "loadingBar" && v["params"]["enable"] == serde_json::Value::Bool(false) {
+            break;
+        }
+    }
+    std::fs::write(&gate, b"hold").unwrap();
     let token = "cwtools/format/cancel";
     write_frame(
         &mut child,
@@ -12203,6 +12962,19 @@ fn test_format_workspace_cancel_applies_nothing() {
             && !saw_begin
         {
             saw_begin = true;
+            assert!(
+                poll_until(
+                    std::time::Instant::now() + std::time::Duration::from_secs(5),
+                    std::time::Duration::from_millis(5),
+                    || ready.exists().then_some(())
+                )
+                .is_some(),
+                "format command never entered its test gate"
+            );
+            assert!(
+                gate.exists(),
+                "format hold gate released before cancellation"
+            );
             write_frame(
                 &mut child,
                 &jsonrpc_notification(
@@ -14957,16 +15729,21 @@ fn test_concurrent_commands_keep_separate_progress_streams() {
     // Explicit and empty, so `cacheVanilla` re-indexes nothing instead of
     // whatever real game install auto-discovery finds on the host.
     let vanilla_dir = tempfile::tempdir().unwrap();
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("scan-hold");
+    let ready = signals.path().join("scan-hold-ready");
+    let released = signals.path().join("scan-released");
     std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
     let p = ws.path().join("common/national_focus/tree.txt");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(&p, "my_focus = {\n    id = my_focus\n}\n").unwrap();
 
     let mut child = cwtools_server_cmd()
-        // Holds every scan at its first phase, so the re-index is reliably
-        // still running when the second command opens and closes its stream —
-        // rather than racing a workspace big enough to take a measurable time.
-        .env("CWTOOLS_SCAN_HOLD_MS", "5000")
+        // The test creates the gate after the startup scan, then releases it
+        // only after cacheVanilla has closed its own progress stream.
+        .env("CWTOOLS_SCAN_HOLD_FILE", &gate)
+        .env("CWTOOLS_SCAN_HOLD_READY_FILE", &ready)
+        .env("CWTOOLS_SCAN_RELEASE_FILE", &released)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -15001,7 +15778,7 @@ fn test_concurrent_commands_keep_separate_progress_streams() {
     // because answering `window/workDoneProgress/create` is what lets the
     // startup scan finish.
     let stdin = child.stdin.take().unwrap();
-    let collected = run_child_with_deadline(child, stdin, reader, 180, |stdin, reader| {
+    let collected = run_child_with_deadline(child, stdin, reader, 180, move |stdin, reader| {
         // Every `$/progress` frame as `(token, kind)`, in arrival order — the
         // interleaving is the thing under test.
         let mut events: Vec<(String, String)> = Vec::new();
@@ -15015,6 +15792,8 @@ fn test_concurrent_commands_keep_separate_progress_streams() {
         let mut reindex_token = String::new();
         let mut vanilla_token = String::new();
         let send_reindex = |stdin: &mut std::process::ChildStdin, attempt: i64| -> String {
+            clear_scan_release(&released);
+            std::fs::write(&gate, b"hold").expect("create scan gate");
             let token = format!("cwtools/command/228/reindex/{attempt}");
             write_frame_to(
                 stdin,
@@ -15043,7 +15822,7 @@ fn test_concurrent_commands_keep_separate_progress_streams() {
                     events.clear();
                     vanilla_token.clear();
                     reindex_closed = false;
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    wait_for_scan_release(&released);
                     reindex_token = send_reindex(stdin, attempt);
                     continue;
                 }
@@ -15089,6 +15868,9 @@ fn test_concurrent_commands_keep_separate_progress_streams() {
                             ),
                         )
                         .unwrap();
+                    }
+                    if token == vanilla_token && kind == "end" && gate.exists() {
+                        std::fs::remove_file(&gate).expect("release scan gate");
                     }
                     reindex_closed |= token == reindex_token && kind == "end";
                     events.push((token, kind));
@@ -15150,16 +15932,21 @@ fn test_concurrent_commands_keep_separate_progress_streams() {
 fn test_work_done_progress_cancel_stops_a_command() {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("scan-hold");
+    let ready = signals.path().join("scan-hold-ready");
+    let cancelled = signals.path().join("cancel-ack");
+    let released = signals.path().join("scan-released");
     std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
     let p = ws.path().join("common/national_focus/tree.txt");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(&p, "my_focus = {\n    id = my_focus\n}\n").unwrap();
 
     let mut child = cwtools_server_cmd()
-        // Holds every scan open at its start, which is how the cancel lands
-        // mid-scan deterministically instead of racing a workspace big enough
-        // to take a measurable time.
-        .env("CWTOOLS_SCAN_HOLD_MS", "3000")
+        .env("CWTOOLS_SCAN_HOLD_FILE", &gate)
+        .env("CWTOOLS_SCAN_HOLD_READY_FILE", &ready)
+        .env("CWTOOLS_CANCEL_ACK_FILE", &cancelled)
+        .env("CWTOOLS_SCAN_RELEASE_FILE", &released)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -15193,7 +15980,7 @@ fn test_work_done_progress_cancel_stops_a_command() {
     // closure so it can answer `window/workDoneProgress/create` while waiting
     // out the startup scan.
     let stdin = child.stdin.take().unwrap();
-    let collected = run_child_with_deadline(child, stdin, reader, 120, |stdin, reader| {
+    let collected = run_child_with_deadline(child, stdin, reader, 120, move |stdin, reader| {
         let mut saw_cancellable_begin = false;
         let mut progress_end = None;
         let mut result = None;
@@ -15203,6 +15990,8 @@ fn test_work_done_progress_cancel_stops_a_command() {
         let mut attempt = 0i64;
         let mut token = String::new();
         let send_attempt = |stdin: &mut std::process::ChildStdin, attempt: i64| -> String {
+            clear_scan_release(&released);
+            std::fs::write(&gate, b"hold").expect("create scan gate");
             let token = format!("cwtools/command/7/{attempt}");
             write_frame_to(
                 stdin,
@@ -15231,7 +16020,7 @@ fn test_work_done_progress_cancel_stops_a_command() {
                     saw_cancellable_begin = false;
                     progress_end = None;
                     result = None;
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    wait_for_scan_release(&released);
                     token = send_attempt(stdin, attempt);
                     continue;
                 }
@@ -15262,6 +16051,15 @@ fn test_work_done_progress_cancel_stops_a_command() {
                     if v["params"]["token"] == token.as_str()
                         && v["params"]["value"]["kind"] == "begin" =>
                 {
+                    assert!(
+                        poll_until(
+                            std::time::Instant::now() + std::time::Duration::from_secs(5),
+                            std::time::Duration::from_millis(5),
+                            || ready.exists().then_some(())
+                        )
+                        .is_some(),
+                        "scan did not enter its file gate before cancellation"
+                    );
                     saw_cancellable_begin =
                         v["params"]["value"]["cancellable"] == serde_json::Value::Bool(true);
                     write_frame_to(
@@ -15272,6 +16070,16 @@ fn test_work_done_progress_cancel_stops_a_command() {
                         ),
                     )
                     .unwrap();
+                    assert!(
+                        poll_until(
+                            std::time::Instant::now() + std::time::Duration::from_secs(5),
+                            std::time::Duration::from_millis(5),
+                            || cancelled.exists().then_some(())
+                        )
+                        .is_some(),
+                        "server did not acknowledge cancellation while the scan was held"
+                    );
+                    std::fs::remove_file(&gate).expect("release cancelled scan");
                 }
                 Some("$/progress")
                     if v["params"]["token"] == token.as_str()
@@ -15307,18 +16115,13 @@ fn test_work_done_progress_cancel_stops_a_command() {
 /// The state #470 describes, reproduced: pass 1 of a command-driven scan owns
 /// its thread, and everything else has to keep working anyway.
 ///
-/// `CWTOOLS_SCAN_HOLD_MS`, which the two cancel tests use, holds the scan at an
-/// `.await` — it yields, so it cannot reproduce this at all.
-/// `CWTOOLS_PARSE_BLOCKING_HOLD_MS` parks the thread from inside pass 1's
-/// `block_in_place` instead, and writes the ready file first so the test acts
-/// while the thread is genuinely held rather than in the gap before the hold
-/// starts. That gap is what would let a timing-only version of this test pass on
-/// the bug.
+/// `CWTOOLS_SCAN_HOLD_FILE` holds the scan at an `.await` — it yields, so it
+/// cannot reproduce this at all. `CWTOOLS_PARSE_BLOCKING_HOLD_FILE` parks the
+/// thread from inside pass 1's `block_in_place`, and writes the ready file first
+/// so the test acts while the thread is held rather than before it starts.
 ///
 /// The scan has to be command-driven: the startup scan already runs on a task of
 /// its own, where `block_in_place` behaves.
-const PASS1_HOLD_MS: u64 = 6000;
-
 struct HeldPass1 {
     workspace: tempfile::TempDir,
     rules: tempfile::TempDir,
@@ -15344,11 +16147,25 @@ impl HeldPass1 {
         self.markers.path().join("pass1-holding")
     }
 
-    /// A handshaken server whose every scan parks pass 1 for [`PASS1_HOLD_MS`].
+    fn hold_file(&self) -> std::path::PathBuf {
+        self.markers.path().join("pass1-release")
+    }
+
+    fn cancel_ack_file(&self) -> std::path::PathBuf {
+        self.markers.path().join("cancel-ack")
+    }
+
+    fn scan_release_file(&self) -> std::path::PathBuf {
+        self.markers.path().join("scan-released")
+    }
+
+    /// A handshaken server whose scans park pass 1 while the gate exists.
     fn start(&self) -> (std::process::Child, BufReader<std::process::ChildStdout>) {
         let mut child = cwtools_server_cmd()
-            .env("CWTOOLS_PARSE_BLOCKING_HOLD_MS", PASS1_HOLD_MS.to_string())
+            .env("CWTOOLS_PARSE_BLOCKING_HOLD_FILE", self.hold_file())
             .env("CWTOOLS_PARSE_BLOCKING_HOLD_READY_FILE", self.ready_file())
+            .env("CWTOOLS_CANCEL_ACK_FILE", self.cancel_ack_file())
+            .env("CWTOOLS_SCAN_RELEASE_FILE", self.scan_release_file())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -15382,23 +16199,24 @@ impl HeldPass1 {
     }
 }
 
-/// How long to give the marker once a scan has opened its bar. A scan reaches
-/// pass 1 in milliseconds; the budget only has to outlast that, and it is spent
-/// not reading, so it stays well short of what would fill the stdout pipe.
+/// How long to give the marker once a scan has opened its bar. The budget is
+/// spent not reading, so it stays well short of what would fill the stdout pipe.
 const MARKER_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long a probe sent while pass 1 holds its thread may take to come back.
+/// A working pump answers in milliseconds; past this the pump is stalled (#470).
+const PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Blocks until pass 1 says it has parked its thread. `false` means this bar
 /// belonged to some other scan — a startup or deferred one — and the caller
 /// should go back to reading and try again on the next one.
 fn wait_for_pass1_hold(ready: &std::path::Path, budget: std::time::Duration) -> bool {
-    let deadline = std::time::Instant::now() + budget;
-    while std::time::Instant::now() < deadline {
-        if ready.exists() {
-            return true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    false
+    poll_until(
+        std::time::Instant::now() + budget,
+        std::time::Duration::from_millis(10),
+        || ready.exists().then_some(()),
+    )
+    .is_some()
 }
 
 /// #470: a `reindexWorkspace` whose pass 1 owns the thread used to own the
@@ -15409,6 +16227,8 @@ fn wait_for_pass1_hold(ready: &std::path::Path, budget: std::time::Duration) -> 
 fn test_a_blocked_scan_does_not_stall_the_pump() {
     let fixture = HeldPass1::new();
     let ready = fixture.ready_file();
+    let gate = fixture.hold_file();
+    let released = fixture.scan_release_file();
     let (mut child, reader) = fixture.start();
 
     let stdin = child.stdin.take().unwrap();
@@ -15416,13 +16236,15 @@ fn test_a_blocked_scan_does_not_stall_the_pump() {
         let mut attempt = 0i64;
         let mut command_sent = false;
         let mut probe_sent_at: Option<std::time::Instant> = None;
-        let mut answered_in = None;
+        let mut answered_while_held = None;
         let send_command = |stdin: &mut std::process::ChildStdin, attempt: i64| {
             // Clearing the marker is what keeps an earlier scan's hold from
             // being mistaken for this one's — the startup scan parks on the
             // same hold, off the pump, where `block_in_place` behaves and this
             // bug does not exist.
             let _ = std::fs::remove_file(&ready);
+            clear_scan_release(&released);
+            std::fs::write(&gate, b"hold").expect("create pass-1 gate");
             write_frame_to(
                 stdin,
                 &jsonrpc_request(
@@ -15449,9 +16271,14 @@ fn test_a_blocked_scan_does_not_stall_the_pump() {
                 .unwrap();
                 continue;
             }
-            // The probe's answer is the whole measurement.
+            // The probe's answer is the whole measurement. The watchdog lifts the
+            // gate once PROBE_BUDGET runs out, so a stalled pump answers late,
+            // with the gate gone, instead of hanging until the run deadline.
             if v["id"] == serde_json::json!(701) && v.get("result").is_some() {
-                answered_in = probe_sent_at.map(|at| at.elapsed());
+                answered_while_held = Some(
+                    gate.exists()
+                        && probe_sent_at.is_some_and(|sent| sent.elapsed() < PROBE_BUDGET),
+                );
                 break;
             }
             // Same scan-guard race the cancel tests hit: a command sent on the
@@ -15461,7 +16288,7 @@ fn test_a_blocked_scan_does_not_stall_the_pump() {
                 && v["result"] == serde_json::json!("Re-index already in progress.")
             {
                 attempt += 1;
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                wait_for_scan_release(&released);
                 send_command(stdin, attempt);
                 continue;
             }
@@ -15485,6 +16312,11 @@ fn test_a_blocked_scan_does_not_stall_the_pump() {
                     continue;
                 }
                 probe_sent_at = Some(std::time::Instant::now());
+                let watchdog_gate = gate.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(PROBE_BUDGET);
+                    let _ = std::fs::remove_file(watchdog_gate);
+                });
                 write_frame_to(
                     stdin,
                     &jsonrpc_request(
@@ -15496,16 +16328,15 @@ fn test_a_blocked_scan_does_not_stall_the_pump() {
                 .unwrap();
             }
         }
-        answered_in
+        answered_while_held
     });
 
-    let answered_in = collected
+    let answered_while_held = collected
         .expect("timed out waiting on the server")
         .expect("the probe request was never answered");
     assert!(
-        answered_in < std::time::Duration::from_millis(PASS1_HOLD_MS / 2),
-        "a request must be answered while pass 1 holds its thread, took {answered_in:?} \
-         against a {PASS1_HOLD_MS}ms hold"
+        answered_while_held,
+        "the probe was not answered within {PROBE_BUDGET:?} while pass 1 held its thread (#470)"
     );
 }
 
@@ -15526,6 +16357,9 @@ const INDEXING_PASS_LOG: &str = "Indexing pass:";
 fn test_cancel_reaches_a_scan_that_holds_its_thread() {
     let fixture = HeldPass1::new();
     let ready = fixture.ready_file();
+    let gate = fixture.hold_file();
+    let cancelled = fixture.cancel_ack_file();
+    let released = fixture.scan_release_file();
     let (mut child, reader) = fixture.start();
 
     let stdin = child.stdin.take().unwrap();
@@ -15537,6 +16371,8 @@ fn test_cancel_reaches_a_scan_that_holds_its_thread() {
         let mut result = None;
         let mut progress_end = None;
         let send_attempt = |stdin: &mut std::process::ChildStdin, attempt: i64| -> String {
+            clear_scan_release(&released);
+            std::fs::write(&gate, b"hold").expect("create pass-1 gate");
             let token = format!("cwtools/command/470/{attempt}");
             write_frame_to(
                 stdin,
@@ -15565,7 +16401,7 @@ fn test_cancel_reaches_a_scan_that_holds_its_thread() {
                     cancelled_mid_hold = false;
                     indexed_after_cancel = false;
                     progress_end = None;
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    wait_for_scan_release(&released);
                     let _ = std::fs::remove_file(&ready);
                     token = send_attempt(stdin, attempt);
                     continue;
@@ -15620,6 +16456,16 @@ fn test_cancel_reaches_a_scan_that_holds_its_thread() {
                         ),
                     )
                     .unwrap();
+                    assert!(
+                        poll_until(
+                            std::time::Instant::now() + std::time::Duration::from_secs(5),
+                            std::time::Duration::from_millis(5),
+                            || cancelled.exists().then_some(())
+                        )
+                        .is_some(),
+                        "server did not acknowledge cancellation while pass 1 was held"
+                    );
+                    std::fs::remove_file(&gate).expect("release cancelled pass-1 scan");
                 }
                 Some("$/progress")
                     if v["params"]["token"] == token.as_str()
@@ -15671,14 +16517,17 @@ fn test_cancel_reaches_a_scan_that_holds_its_thread() {
 fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("scan-hold");
+    let ready = signals.path().join("scan-hold-ready");
     std::fs::write(rules_dir.path().join("editor_rules.cwt"), EDITOR_RULES).unwrap();
     let p = ws.path().join("common/national_focus/tree.txt");
     std::fs::create_dir_all(p.parent().unwrap()).unwrap();
     std::fs::write(&p, "my_focus = {\n    id = my_focus\n}\n").unwrap();
 
-    // Hold every scan open for 3s so the cancel reliably lands mid-scan.
     let mut child = cwtools_server_cmd()
-        .env("CWTOOLS_SCAN_HOLD_MS", "3000")
+        .env("CWTOOLS_SCAN_HOLD_FILE", &gate)
+        .env("CWTOOLS_SCAN_HOLD_READY_FILE", &ready)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -15746,6 +16595,7 @@ fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
         "the startup scan never closed its loading bar"
     );
 
+    std::fs::write(&gate, b"hold").unwrap();
     let token = "cwtools/command/204/cancel";
     write_frame(
         &mut child,
@@ -15768,6 +16618,15 @@ fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
             && v["params"]["value"]["kind"] == "begin")
         .is_some(),
         "no $/progress begin for the command token"
+    );
+    assert!(
+        poll_until(
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            std::time::Duration::from_millis(5),
+            || ready.exists().then_some(())
+        )
+        .is_some(),
+        "scan did not enter its file gate before request cancellation"
     );
 
     write_frame(
@@ -15824,6 +16683,7 @@ fn test_cancelling_a_scan_command_closes_progress_and_frees_the_scan() {
         response["error"]["code"], -32800,
         "a cancelled request answers RequestCancelled: {response}"
     );
+    std::fs::remove_file(&gate).expect("release scan gate after cancellation");
 
     // The guard releases the scan flag only once the close has gone out, so the
     // first retry can still lose the CAS — the point is that one of them wins.
@@ -16822,21 +17682,28 @@ fn test_reloadrulesconfig_retries_until_it_wins_the_scan_guard() {
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
     let vanilla = tempfile::tempdir().unwrap();
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("scan-hold");
+    let ready = signals.path().join("scan-hold-ready");
     std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
 
-    // Hold every scan open for 4s so the reload reliably lands mid-scan. The
-    // startup scan's own hold is waited out by storm_server_env.
+    // Hold the explicit competing scan until the reload has proved it remains
+    // pending, then release it and observe the queued retry.
     let (mut child, reader) = storm_server_env(
         ws.path(),
         rules_dir.path(),
         vanilla.path(),
-        &[("CWTOOLS_SCAN_HOLD_MS", "4000")],
+        &[
+            ("CWTOOLS_SCAN_HOLD_FILE", gate.to_str().unwrap()),
+            ("CWTOOLS_SCAN_HOLD_READY_FILE", ready.to_str().unwrap()),
+        ],
     );
     let rx = spawn_frame_collector(reader);
 
     // Start a competing scan and wait for the scan-started signal, so the hold
     // is definitely active when the reload arrives.
-    reindex_until_scan_starts(&mut child, &rx);
+    std::fs::write(&gate, b"hold").unwrap();
+    reindex_until_scan_starts(&mut child, &rx, &scan_release_path(ws.path()));
 
     // Fire the reload while the scan holds the CAS: it must not answer until
     // the competing scan is gone and a revalidation has run.
@@ -16855,6 +17722,8 @@ fn test_reloadrulesconfig_retries_until_it_wins_the_scan_guard() {
         std::time::Duration::from_secs(2),
         "reloadrulesconfig must not answer while the competing scan holds the guard",
     );
+    assert!(ready.exists(), "competing scan did not enter its file gate");
+    std::fs::remove_file(&gate).unwrap();
 
     // The competing scan releases after its hold, the retry wins the CAS, and
     // one full revalidation (a second loadingBar on→off cycle) must complete
@@ -16887,16 +17756,20 @@ fn test_reloadrulesconfig_reports_queued_revalidation_when_scan_never_releases()
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
     let vanilla = tempfile::tempdir().unwrap();
+    let signals = tempfile::tempdir().unwrap();
+    let gate = signals.path().join("scan-hold");
+    let ready = signals.path().join("scan-hold-ready");
     std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
 
-    // Hold every scan open for 10s, but give the reload only 1s to win the
-    // guard: it must give up and report the pending state.
+    // Keep the competing scan held while the reload reaches its original 1s
+    // retry deadline and reports the queued state.
     let (mut child, reader) = storm_server_env(
         ws.path(),
         rules_dir.path(),
         vanilla.path(),
         &[
-            ("CWTOOLS_SCAN_HOLD_MS", "10000"),
+            ("CWTOOLS_SCAN_HOLD_FILE", gate.to_str().unwrap()),
+            ("CWTOOLS_SCAN_HOLD_READY_FILE", ready.to_str().unwrap()),
             ("CWTOOLS_RETRY_DEADLINE_MS", "1000"),
         ],
     );
@@ -16904,10 +17777,11 @@ fn test_reloadrulesconfig_reports_queued_revalidation_when_scan_never_releases()
 
     // Start a competing scan and wait for the scan-started signal, so the hold
     // is definitely active for the reload's whole deadline.
-    reindex_until_scan_starts(&mut child, &rx);
+    std::fs::write(&gate, b"hold").unwrap();
+    reindex_until_scan_starts(&mut child, &rx, &scan_release_path(ws.path()));
 
-    // Fire the reload. Its 1s deadline expires while the 10s hold is still
-    // active, so the answer must arrive promptly, report the pending state,
+    // Fire the reload. Its 1s deadline expires while the gate remains closed,
+    // so the answer must arrive promptly, report the pending state,
     // and no revalidation scan may have run.
     write_frame(
         &mut child,
@@ -16918,14 +17792,15 @@ fn test_reloadrulesconfig_reports_queued_revalidation_when_scan_never_releases()
         ),
     )
     .unwrap();
-    // The competing scan releases only after 10s, so any answer inside this
-    // window must be the reload's own give-up response.
+    // The file gate remains closed, so any answer inside this window must be
+    // the reload's own give-up response.
     let (response, saw_revalidation) = wait_for_response_watching_scans(
         &rx,
         901,
         std::time::Duration::from_secs(5),
         "reloadrulesconfig to give up on its 1s deadline",
     );
+    assert!(ready.exists(), "competing scan did not enter its file gate");
     stop_server(&mut child);
 
     assert!(
@@ -16973,7 +17848,7 @@ fn test_reloadrulesconfig_give_up_lands_queued_revalidation() {
     // Arm the hold (the startup scan is already done, so it isn't caught by
     // it), then start the competing scan that trips it.
     std::fs::write(&gate, "").unwrap();
-    reindex_until_scan_starts(&mut child, &rx);
+    reindex_until_scan_starts(&mut child, &rx, &scan_release_path(ws.path()));
 
     // The give-up response arrives ~1s in, with the scan still held.
     write_frame(
@@ -17104,11 +17979,16 @@ fn expect_ranges(response: &serde_json::Value) -> &Vec<serde_json::Value> {
 /// Boot a server rooted at `ws`, optionally open `open` (uri, text) as buffers,
 /// then ask for `uri`'s folding ranges. Returns the whole JSON-RPC response so
 /// callers can tell a refusal from an error reply.
-fn folding_ranges_for(
+fn folding_ranges_for_attempts(
     ws: &std::path::Path,
     open: &[(&str, &str)],
     uri: &str,
-) -> Option<serde_json::Value> {
+    request_count: usize,
+) -> Option<Vec<serde_json::Value>> {
+    assert!(
+        request_count > 0,
+        "at least one folding request is required"
+    );
     let mut child = cwtools_server_cmd()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -17123,6 +18003,7 @@ fn folding_ranges_for(
         .map(|(u, t)| ((*u).to_string(), (*t).to_string()))
         .collect();
     let uri = uri.to_string();
+    let workspace_uri = ws_uri.clone();
 
     // Deadline-bounded: before the boundary existed a `/dev/zero` request read
     // until it ran the machine out of memory rather than answering.
@@ -17156,31 +18037,45 @@ fn folding_ranges_for(
                 ),
             )
             .ok()?;
+            if let Some(relative_uri) = u.strip_prefix(&workspace_uri) {
+                let suffix = relative_uri.trim_start_matches('/');
+                if !suffix.is_empty() {
+                    wait_for_diagnostics(reader, suffix);
+                }
+            }
         }
-        // A didOpen and the request after it are dispatched concurrently, so
-        // when a buffer is expected the request is retried until it lands.
-        // Nothing to wait for otherwise: the disk read is immediate.
-        let attempts = if open.is_empty() { 1 } else { 40 };
-        let mut response = serde_json::Value::Null;
-        for attempt in 0..attempts {
+
+        let mut responses = Vec::with_capacity(request_count);
+        for attempt in 0..request_count {
+            let request_id = 2 + attempt as i64;
             write_frame_to(
                 stdin,
                 &jsonrpc_request(
-                    2 + attempt,
+                    request_id,
                     "textDocument/foldingRange",
                     serde_json::json!({ "textDocument": { "uri": uri } }),
                 ),
             )
             .ok()?;
-            response = serde_json::from_str(&read_response(reader).ok()?).ok()?;
-            if !response["result"].is_null() {
-                break;
+            responses.push(serde_json::from_str(&read_response(reader).ok()?).ok()?);
+            if attempt + 1 < request_count {
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        Some(response)
+        Some(responses)
     });
     result.flatten()
+}
+
+/// Boot a server and repeat folding requests in one process. The repetitions
+/// let an opened buffer's notification reach the server before a boundary
+/// assertion, even when the notification produces no diagnostics as a signal.
+fn folding_ranges_for(
+    ws: &std::path::Path,
+    open: &[(&str, &str)],
+    uri: &str,
+) -> Option<serde_json::Value> {
+    folding_ranges_for_attempts(ws, open, uri, 1).and_then(|mut responses| responses.pop())
 }
 
 /// A workspace tempdir holding one foldable script file, plus its URI.
@@ -17226,8 +18121,14 @@ fn test_access_boundary_refuses_an_open_buffer_outside_the_workspace() {
     let text = "outer = {\n    inner = {\n        x = 1\n    }\n}\n";
     std::fs::write(&file, text).unwrap();
     let uri = path_uri(&file);
-    let response = folding_ranges_for(ws.path(), &[(&uri, text)], &uri).expect("server went quiet");
-    assert_refused(&response, "an open buffer outside every workspace folder");
+    // An outside open is intentionally silent, so it cannot be used as a
+    // readiness signal. Reissue the request long enough for didOpen to land;
+    // serving the buffer after the initial race would expose a folding range.
+    let responses = folding_ranges_for_attempts(ws.path(), &[(&uri, text)], &uri, 20)
+        .expect("server went quiet");
+    for response in &responses {
+        assert_refused(response, "an open buffer outside every workspace folder");
+    }
 }
 
 #[test]
@@ -17721,7 +18622,7 @@ fn test_loc_outline_outside_localisation_is_empty() {
     let yml = "l_english:\n my_key:0 \"Hello\"\n";
     // File under .github is has_loc_ext but not is_loc_file, so outline should be empty (no game AST)
     let files = &[(".github/workflows/ci.yml", yml)];
-    let result = feature_request(
+    let result = feature_request_once(
         GOTO_RULES,
         files,
         &[".github/workflows/ci.yml"],
@@ -18523,7 +19424,8 @@ fn test_loc_goto_falls_back_to_the_base_game_after_a_watched_delete() {
                          want: &str|
      -> Vec<String> {
         let mut last = Vec::new();
-        for attempt in 0..50 {
+        let mut attempt = 0;
+        poll_until_attempts(50, std::time::Duration::from_millis(300), || {
             write_frame(
                 child,
                 &jsonrpc_request(
@@ -18552,12 +19454,12 @@ fn test_loc_goto_falls_back_to_the_base_game_after_a_watched_delete() {
                 .iter()
                 .filter_map(|l| Some(l["uri"].as_str()?.to_string()))
                 .collect();
-            if last.iter().any(|u| u.ends_with(want)) {
-                return last;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(300));
-        }
-        last
+            attempt += 1;
+            last.iter()
+                .any(|u| u.ends_with(want))
+                .then_some(last.clone())
+        })
+        .unwrap_or(last)
     };
 
     let before = goto_lands_in(&mut child, &mut reader, 100, "def_l_english.yml");
