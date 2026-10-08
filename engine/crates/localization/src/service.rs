@@ -48,10 +48,6 @@ impl LocService {
         Self::from_folders_filtered(&[folder], budget, None, &[], &[])
     }
 
-    pub fn from_folders(folders: &[&Path], budget: ScanBudget) -> Self {
-        Self::from_folders_filtered(folders, budget, None, &[], &[])
-    }
-
     pub fn from_folders_filtered(
         folders: &[&Path],
         budget: ScanBudget,
@@ -61,10 +57,6 @@ impl LocService {
     ) -> Self {
         let paths = Self::discover_files_filtered(folders, budget, ignore_files, ignore_dirs);
         Self::from_paths(paths, budget, langs)
-    }
-
-    pub fn discover_files(folders: &[&Path], budget: ScanBudget) -> Vec<PathBuf> {
-        Self::discover_files_filtered(folders, budget, &[], &[])
     }
 
     /// the file budget.
@@ -556,7 +548,13 @@ mod tests {
         )
         .unwrap();
 
-        let svc = LocService::from_folders(&[a.path(), b.path()], ScanBudget::default());
+        let svc = LocService::from_folders_filtered(
+            &[a.path(), b.path()],
+            ScanBudget::default(),
+            None,
+            &[],
+            &[],
+        );
         let paths: Vec<&str> = svc.files().iter().map(|f| f.path.as_str()).collect();
         assert!(
             paths.iter().any(|p| p.contains("a_l_english.yml")),
@@ -820,7 +818,8 @@ mod tests {
         std::fs::write(loc.join("zebra").join("z.yml"), "l_english:\n k:0 \"v\"\n").unwrap();
         std::fs::write(loc.join("alpha").join("a.yml"), "l_english:\n k:0 \"v\"\n").unwrap();
 
-        let files = LocService::discover_files(&[tmp.path()], ScanBudget::default());
+        let files =
+            LocService::discover_files_filtered(&[tmp.path()], ScanBudget::default(), &[], &[]);
         let names: Vec<String> = files
             .iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
@@ -836,12 +835,14 @@ mod tests {
         for name in ["zebra.yml", "alpha.yml", "middle.yml"] {
             std::fs::write(loc.join(name), "l_english:\n k:0 \"v\"\n").unwrap();
         }
-        let files = LocService::discover_files(
+        let files = LocService::discover_files_filtered(
             &[tmp.path()],
             ScanBudget {
                 max_files: 1,
                 ..ScanBudget::default()
             },
+            &[],
+            &[],
         );
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].file_name().unwrap().to_string_lossy(), "alpha.yml");

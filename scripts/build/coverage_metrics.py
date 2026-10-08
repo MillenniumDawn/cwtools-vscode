@@ -49,10 +49,6 @@ Metric = dict[str, float | int | None]
 FileCoverage = dict[str, Metric]
 
 
-def is_record(value: object) -> bool:
-    return isinstance(value, dict)
-
-
 def is_host_source(path: str) -> bool:
     normalized = path.replace("\\", "/")
     if any(item in normalized for item in HOST_COVERAGE_DROPS):

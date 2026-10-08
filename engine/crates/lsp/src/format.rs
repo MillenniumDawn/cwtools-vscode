@@ -20,15 +20,14 @@ enum DiscoverOutcome {
 }
 
 async fn hold_format_for_tests(progress: &CommandProgress) {
-    let Some(ms) = std::env::var("CWTOOLS_FORMAT_HOLD_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .filter(|ms| *ms > 0)
-    else {
+    let Ok(gate) = std::env::var("CWTOOLS_FORMAT_HOLD_FILE") else {
         return;
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
-    while std::time::Instant::now() < deadline {
+    if let Ok(ready) = std::env::var("CWTOOLS_FORMAT_HOLD_READY_FILE") {
+        let _ = std::fs::write(ready, b"held");
+    }
+    let gate = PathBuf::from(gate);
+    while tokio::fs::try_exists(&gate).await.unwrap_or(false) {
         if progress.is_cancelled() {
             return;
         }
@@ -311,7 +310,7 @@ fn span_to_text_edit(edit: &SpanEdit, lines: &DocLines) -> TextEdit {
     }
 }
 
-fn workspace_edit_for_snapshots(
+pub(crate) fn workspace_edit_for_snapshots(
     changes: HashMap<Url, Vec<TextEdit>>,
     snapshots: &HashMap<String, FileTextSnapshot>,
     document_changes: bool,

@@ -21,6 +21,7 @@ __pycache__/
 *.py[cod]
 temp/
 artifacts/
+.agents/
 .cwtools-parity/
 # Left by pre-migration local builds. Generated packages now live under dist/.
 release/README.md
