@@ -261,6 +261,7 @@ pub(crate) fn parse_type_key_filter_from_comments(
         } else {
             continue;
         };
+        let rhs = directive_value(rhs);
         let values = if rhs.starts_with('{') && rhs.ends_with('}') {
             split_brace_list(rhs)
         } else {
@@ -506,6 +507,17 @@ mod option_directive_tests {
             }"#,
         );
         assert_eq!(def.starts_with, Some("my_".to_string()));
+    }
+
+    #[test]
+    fn type_key_filter_ignores_trailing_comment() {
+        let def = parse_typedef(
+            r#"types = {
+                ## type_key_filter = foo # note
+                type[foo] = { path = "game/common/foo" }
+            }"#,
+        );
+        assert_eq!(def.type_key_filter, Some((vec!["foo".to_string()], false)));
     }
 
     #[test]

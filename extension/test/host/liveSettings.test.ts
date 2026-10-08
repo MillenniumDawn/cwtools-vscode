@@ -207,6 +207,7 @@ suite("Live settings", function () {
 			messages.filter((message) =>
 				message.includes(`Loaded rules from ${rulesRoot}`),
 			);
+		const watcherReadyMessage = `Watching rules in ${rulesRoot}`;
 		try {
 			await fs.writeFile(
 				rulesFile,
@@ -221,6 +222,10 @@ suite("Live settings", function () {
 			assert.ok(
 				await waitUntil(() => matchingLoads().length >= 1, 15_000),
 				"a valid rules_folder change should load rules without restarting",
+			);
+			assert.ok(
+				await waitUntil(() => messages.includes(watcherReadyMessage), 15_000),
+				"the external rules watcher should be registered before the file edit",
 			);
 			await fs.writeFile(
 				rulesFile,
