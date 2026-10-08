@@ -3645,6 +3645,65 @@ mod ignored_tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loc_rebuild_skips_a_file_opened_while_it_publishes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let loc_dir = workspace.path().join("localisation");
+        std::fs::create_dir_all(&loc_dir).unwrap();
+        for name in ["a", "b"] {
+            std::fs::write(
+                loc_dir.join(format!("{name}_l_english.yml")),
+                format!("l_english:\n {name}_key:0 \"text\"\n"),
+            )
+            .unwrap();
+        }
+        let (backend, mut socket) =
+            handshaken_backend_with_workspace(&crate::paths::path_to_uri(workspace.path())).await;
+
+        // A first rebuild publishes both closed files, which gives their URIs
+        // as the server spells them. The socket holds one message, so each
+        // rebuild runs as a task while the test reads.
+        let rebuilding = backend.clone();
+        let root = workspace.path().to_path_buf();
+        let rebuild = tokio::spawn(async move { rebuilding.rebuild_and_publish_loc(&root).await });
+        let mut uris = Vec::new();
+        for _ in 0..2 {
+            let message = socket.next().await.expect("closed loc file publishes");
+            let published: PublishDiagnosticsParams =
+                serde_json::from_value(message.params().cloned().unwrap_or_default())
+                    .expect("publishDiagnostics params");
+            uris.push(published.uri.to_string());
+        }
+        rebuild.await.unwrap();
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        super::diagnostic_publish_test_hook::set(
+            &backend,
+            Arc::clone(&entered),
+            Arc::clone(&release),
+        );
+        let rebuilding = backend.clone();
+        let root = workspace.path().to_path_buf();
+        let rebuild = tokio::spawn(async move { rebuilding.rebuild_and_publish_loc(&root).await });
+        entered.notified().await;
+
+        // The rebuild has taken its open-file snapshot and is sending the first
+        // file, so opening both leaves the second one open before its turn.
+        for uri in &uris {
+            open_stale_publication_doc(&backend, uri, "l_english:\n edited:0 \"text\"\n");
+        }
+        release.notify_one();
+
+        let in_flight = socket.next().await.expect("the in-flight file publishes");
+        assert_eq!(in_flight.method(), "textDocument/publishDiagnostics");
+        rebuild.await.unwrap();
+        assert!(
+            socket.next().now_or_never().is_none(),
+            "disk diagnostics must not publish for a file opened during the rebuild"
+        );
+    }
+
     #[tokio::test]
     async fn file_rename_waits_for_in_flight_diagnostic_send() {
         let uri = stale_publication_uri();
