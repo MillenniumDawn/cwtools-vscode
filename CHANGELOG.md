@@ -6,7 +6,7 @@
 * Ignore trailing `#` comments when parsing `.cwt` directive values, including `type_key_filter`, while retaining quoted hashes and malformed-directive checks. (#903)
 * Replace fixed language-server integration sleeps and timed scan/format holds with readiness signals and test-controlled gates, preserving cancellation, negative-result and scan-guard race assertions. (#887)
 * Preserve the previous semantic-token snapshot across buffer edits so delta requests return edits; assert the wire edit, file-operation refresh behavior, and `genlocall` output over framed LSP traffic. (#519)
-* Keep versioned diagnostic publications ordered with document changes so stale results cannot replace current diagnostics or fixes. (#478)
+* Keep versioned diagnostic publications ordered with document changes so stale results cannot replace current diagnostics or fixes. A rules reload no longer publishes on-disk rule errors over an open `.cwt` file. (#478)
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
 * Add tests that make CW247 fire for a rule validated in the wrong scope, and stay quiet in the right one. (#922)
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.

@@ -3704,6 +3704,66 @@ mod ignored_tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rules_reload_skips_an_open_rules_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let rules = temp.path().join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        let broken = "types = {\n    type[thing] = { path = \"game/thing }\n}\n";
+        for name in ["open.cwt", "closed.cwt"] {
+            std::fs::write(rules.join(name), broken).unwrap();
+        }
+        let (backend, mut socket) =
+            handshaken_backend_with_workspace(&crate::paths::path_to_uri(temp.path())).await;
+        {
+            let mut config = backend.state.config.write();
+            config.language = "hoi4".to_string();
+            config.rules_dir = Some(rules.clone());
+            config.refresh_roots();
+        }
+        backend
+            .state
+            .handshake_complete
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let open_uri = crate::paths::path_to_uri(&rules.join("open.cwt"));
+        open_stale_publication_doc(&backend, &open_uri, broken);
+
+        // The socket holds one message, so the reload runs as a task while the
+        // test reads, and a marker says when it is done.
+        let loading = backend.clone();
+        let dir = rules.clone();
+        let load = tokio::spawn(async move {
+            loading.load_rules_config(&dir).await;
+            loading
+                .client
+                .log_message(tower_lsp::lsp_types::MessageType::LOG, "reload done")
+                .await;
+        });
+        let mut published = Vec::new();
+        loop {
+            let message = socket
+                .next()
+                .await
+                .expect("the reload reports to the client");
+            let params = message.params().cloned().unwrap_or_default();
+            if message.method() == "textDocument/publishDiagnostics" {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(params).expect("publishDiagnostics params");
+                published.push(params.uri);
+            } else if params["message"] == "reload done" {
+                break;
+            }
+        }
+        load.await.unwrap();
+
+        let closed_uri = crate::paths::path_to_uri(&rules.join("closed.cwt"));
+        assert_eq!(
+            published,
+            [closed_uri.parse().unwrap()],
+            "rule diagnostics must not publish over an open rules file"
+        );
+    }
+
     #[tokio::test]
     async fn file_rename_waits_for_in_flight_diagnostic_send() {
         let uri = stale_publication_uri();
