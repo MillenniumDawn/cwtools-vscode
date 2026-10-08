@@ -206,7 +206,7 @@ suite("Live settings", function () {
 			messages.filter((message) =>
 				message.includes(`Loaded rules from ${rulesRoot}`),
 			);
-		const watcherReadyMessage = `CWTOOLS_TEST_RULES_WATCHER_READY ${rulesRoot}`;
+		const watcherReadyMessage = `Watching rules in ${rulesRoot}`;
 		try {
 			await fs.writeFile(
 				rulesFile,

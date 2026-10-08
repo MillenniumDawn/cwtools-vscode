@@ -43,7 +43,7 @@ import {
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import type { RulesSetup } from "./rulesSetup";
 import { createWatchedPathExcluder, forwardWatchedFileEvent } from "./watchedFiles";
-import { logError, errorMessage, outputChannel } from "./logger";
+import { logError, logInfo, errorMessage, outputChannel } from "./logger";
 import {
 	isServerCommand,
 	serverCommand,
@@ -308,13 +308,14 @@ export function createLanguageClient(
 				.catch((err) => logError("Automatic rules reload failed", err));
 		}, 500);
 	};
-	const installRulesWatcher = () => {
+	// Returns whether this call installed a watcher.
+	const installRulesWatcher = (): boolean => {
 		if (
 			rulesWatcherDisposed ||
 			rulesWatcherSuspended ||
 			rulesWatcherSubscriptions.length > 0
 		)
-			return;
+			return false;
 		if (workspace.getWorkspaceFolder(Uri.file(currentRulesCache))) {
 			const reloadSelectedRules = (uri: Uri) => {
 				const relative = path.relative(currentRulesCache, uri.fsPath);
@@ -331,7 +332,7 @@ export function createLanguageClient(
 				cwtWatcher.onDidChange(reloadSelectedRules),
 				cwtWatcher.onDidDelete(reloadSelectedRules),
 			];
-			return;
+			return true;
 		}
 		const watcher = workspace.createFileSystemWatcher(
 			new RelativePattern(Uri.file(currentRulesCache), "**/*.cwt"),
@@ -352,6 +353,7 @@ export function createLanguageClient(
 			watcher.onDidChange((uri) => watchRulesFileChange(uri, 2)),
 			watcher.onDidDelete((uri) => watchRulesFileChange(uri, 3)),
 		];
+		return true;
 	};
 	const rulesWatcherLifetime: Disposable = {
 		dispose: () => {
@@ -367,9 +369,8 @@ export function createLanguageClient(
 		currentRulesCache = rulesCache;
 		isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
 		cfg.onRulesCacheChanged?.(rulesCache);
-		installRulesWatcher();
-		if (process.env.CWTOOLS_TEST_RULES_FOLDER === rulesCache) {
-			outputChannel.info(`CWTOOLS_TEST_RULES_WATCHER_READY ${rulesCache}`);
+		if (installRulesWatcher()) {
+			logInfo(`Watching rules in ${rulesCache}`);
 		}
 	};
 
