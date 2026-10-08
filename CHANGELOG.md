@@ -13,6 +13,7 @@
 * Add tests for bare value clauses: CW265 when no rule allows one, and CW242 when their count is out of range. (#924)
 * Avoid interning speculative parser keys, removing discarded numeric and boolean entries from bare clause values. (#547)
 * Return `RequestFailed` instead of `ServerNotInitialized` for navigation and rename refusals. (#828)
+* LSP wire tests run through the deadline helper now stop their server gracefully, so its coverage is recorded; the helper used to kill it every time. (#923)
 * Hover and go-to-definition on a variable look its definitions up in a name-keyed index instead of scanning every file's defined variables under the info lock. (#872)
 * Test fixtures stop assuming Unix paths: the position-resolver test writes its rules into a `tempfile` directory instead of a hard-coded `/tmp`, and every report test builds its repository root through the existing `abs()` helper. (#885)
 * Remove three test-only public wrappers (`scope_transitions`, `LocService::from_folders`, `LocService::discover_files`) and two stale `too_many_arguments` allows. (#912)
