@@ -9,8 +9,9 @@ use std::io::Write as _;
 
 use crate::cli::FixArgs;
 use crate::run::{
-    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty, load_config,
-    missing_required, note, parse_game, vanilla_notice,
+    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty,
+    gate_vanilla_cache_for_replacements, load_config, missing_required, note, parse_game,
+    rebuild_vanilla_cache_if_stale, vanilla_notice,
 };
 use crate::{codes, config};
 
@@ -82,28 +83,29 @@ pub(super) fn run(args: FixArgs) {
 
     let want = |code: &str| codes::wanted(code, &only_codes, &ignore_codes);
 
-    let vanilla_cache_index = vanilla_cache
-        .as_ref()
-        .and_then(|p| match vanilla_cache::load(p) {
-            Ok((cache_game, fp, data)) => {
-                if Game::from_str(&cache_game) != Some(game_id) {
-                    eprintln!(
-                        "  warn: vanilla cache was built for game '{}', fixing '{}'",
-                        cache_game, game
-                    );
+    let (cached_fingerprint, vanilla_cache_index) =
+        vanilla_cache.as_ref().map_or((None, None), |p| {
+            let loaded = match vanilla_cache::load(p) {
+                Ok((cache_game, fp, data)) => {
+                    if Game::from_str(&cache_game) != Some(game_id) {
+                        eprintln!(
+                            "  warn: vanilla cache was built for game '{}', fixing '{}'",
+                            cache_game, game
+                        );
+                    }
+                    Some((fp, data))
                 }
-                Some((fp, data))
-            }
-            Err(e) => {
-                eprintln!(
-                    "  warn: could not load vanilla cache {}: {}",
-                    p.display(),
-                    e
-                );
-                None
-            }
+                Err(e) => {
+                    eprintln!(
+                        "  warn: could not load vanilla cache {}: {}",
+                        p.display(),
+                        e
+                    );
+                    None
+                }
+            };
+            gate_vanilla_cache_for_replacements(p, loaded, &directory, vanilla.as_deref())
         });
-    let (_fp, vanilla_cache_index) = vanilla_cache_index.unzip();
 
     // Same automatic base-game cache as `validate`, so both commands see
     // the same base-game data (and share the warm cache).
@@ -136,6 +138,22 @@ pub(super) fn run(args: FixArgs) {
         },
         cwtools_driver::default_cache_dir(),
     );
+
+    if let (Some(cache_path), Some(cached_fp), Some(vanilla_dir)) =
+        (&vanilla_cache, &cached_fingerprint, &vanilla)
+    {
+        // Same stale-cache warn-and-rebuild as `validate`, so both commands
+        // leave the file serving this view.
+        rebuild_vanilla_cache_if_stale(
+            &session,
+            cache_path,
+            cached_fp,
+            &directory,
+            vanilla_dir,
+            game_id,
+            !no_vanilla_cache,
+        );
+    }
 
     if let Some(notice) = vanilla_notice(game_id, session.type_index().complete) {
         note(format!("  note: {notice}"));

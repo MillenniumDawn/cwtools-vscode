@@ -1,9 +1,6 @@
 //! `validate`: run the whole engine over a mod directory and render a report.
 
-use cwtools_driver::{
-    RulesInput, Session, SessionConfig, VanillaCacheAuto, index_game_dir,
-    index_game_dir_with_parse_cache,
-};
+use cwtools_driver::{RulesInput, Session, SessionConfig, VanillaCacheAuto};
 use cwtools_game::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
@@ -15,9 +12,9 @@ use crate::diag::{
 };
 use crate::report::ReportType;
 use crate::run::{
-    EXIT_USAGE, announce_config, color_enabled, exit_code, exit_if_empty, load_config,
-    load_ignore_hashes, missing_required, note, parse_game, report_owns_stdout, status,
-    vanilla_notice,
+    EXIT_USAGE, announce_config, color_enabled, exit_code, exit_if_empty,
+    gate_vanilla_cache_for_replacements, load_config, load_ignore_hashes, missing_required, note,
+    parse_game, rebuild_vanilla_cache_if_stale, report_owns_stdout, status, vanilla_notice,
 };
 use crate::{codes, config, report, scope};
 
@@ -101,7 +98,6 @@ pub(super) fn run(args: ValidateArgs) {
     }
 
     let game_id = parse_game(&game);
-    let parse_cache_game = game_id.to_string();
 
     let rules_label = if rules.is_dir() {
         format!("directory {}", rules.display())
@@ -131,37 +127,44 @@ pub(super) fn run(args: ValidateArgs) {
     // resolves base-game references without re-parsing the install).
     // Fingerprint comparison happens after the session is loaded (needs
     // the ruleset); stale caches are detected there and re-generated.
-    let vanilla_cache_index = vanilla_cache.as_ref().and_then(|cache_path| {
-        match vanilla_cache::load(cache_path) {
-            Ok((cache_game, cached_fp, data)) => {
-                if Game::from_str(&cache_game) != Some(game_id) {
-                    eprintln!(
-                        "  warn: vanilla cache was built for game '{}', validating '{}'",
-                        cache_game, game
-                    );
+    let (cached_fingerprint, vanilla_cache_index) = vanilla_cache
+        .as_ref()
+        .map_or((None, None), |cache_path| {
+            let loaded = match vanilla_cache::load(cache_path) {
+                Ok((cache_game, cached_fp, data)) => {
+                    if Game::from_str(&cache_game) != Some(game_id) {
+                        eprintln!(
+                            "  warn: vanilla cache was built for game '{}', validating '{}'",
+                            cache_game, game
+                        );
+                    }
+                    let total: usize = data.per_type.values().map(|v| v.len()).sum();
+                    note(format!(
+                        "  Loaded {} base-game instances, {} loc languages, {} files from cache {} (fp: {})",
+                        total,
+                        data.aux.loc_keys.len(),
+                        data.aux.file_paths.len(),
+                        cache_path.display(),
+                        cached_fp,
+                    ));
+                    Some((cached_fp, data))
                 }
-                let total: usize = data.per_type.values().map(|v| v.len()).sum();
-                note(format!(
-                    "  Loaded {} base-game instances, {} loc languages, {} files from cache {} (fp: {})",
-                    total,
-                    data.aux.loc_keys.len(),
-                    data.aux.file_paths.len(),
-                    cache_path.display(),
-                    cached_fp,
-                ));
-                Some((cached_fp, data))
-            }
-            Err(e) => {
-                eprintln!(
-                    "  warn: could not load vanilla cache {}: {}",
-                    cache_path.display(),
-                    e
-                );
-                None
-            }
-        }
-    });
-    let (cached_fingerprint, vanilla_cache_index) = vanilla_cache_index.unzip();
+                Err(e) => {
+                    eprintln!(
+                        "  warn: could not load vanilla cache {}: {}",
+                        cache_path.display(),
+                        e
+                    );
+                    None
+                }
+            };
+            gate_vanilla_cache_for_replacements(
+                cache_path,
+                loaded,
+                &directory,
+                vanilla.as_deref(),
+            )
+        });
 
     // Without an explicit --vanilla-cache, keep one under the OS cache dir
     // so repeat runs don't re-parse the whole install. The driver keys it
@@ -255,54 +258,22 @@ pub(super) fn run(args: ValidateArgs) {
     }
 
     // Vanilla-cache freshness check. If both --vanilla-cache and --vanilla
-    // are given we can compute the combined fingerprint (game version +
-    // ruleset shape) and detect staleness. THIS run already used the
+    // are given we can compute the install, ruleset and replacement-view
+    // fingerprint and detect staleness. THIS run already used the
     // cached data (the cache short-circuits the vanilla walk); the
     // rebuild makes the next run correct.
     if let (Some(cache_path), Some(fp_loaded), Some(vanilla_dir)) =
         (&vanilla_cache, &cached_fingerprint, &vanilla)
     {
-        let fp_live = vanilla_cache::combined_fingerprint(vanilla_dir, ruleset);
-        if *fp_loaded != fp_live {
-            eprintln!(
-                "  warn: vanilla cache is stale (cached: {}, live: {}); rebuilding",
-                fp_loaded, fp_live
-            );
-            let rules_table = session.string_table();
-            let var_effects = cwtools_info::variable_defining_effects(ruleset);
-            let index = if no_vanilla_cache {
-                index_game_dir(vanilla_dir, ruleset, rules_table, &var_effects)
-            } else if let Some(cache_dir) = cwtools_driver::default_cache_dir() {
-                index_game_dir_with_parse_cache(
-                    vanilla_dir,
-                    ruleset,
-                    rules_table,
-                    &var_effects,
-                    &cache_dir,
-                    &parse_cache_game,
-                )
-            } else {
-                index_game_dir(vanilla_dir, ruleset, rules_table, &var_effects)
-            };
-            match index {
-                Ok(index) => {
-                    let aux = cwtools_driver::build_vanilla_cache_aux(vanilla_dir, &index);
-                    match vanilla_cache::save(&index, &game, &fp_live, cache_path, aux) {
-                        Ok(n) => note(format!("  Rebuilt vanilla cache with {} instances", n)),
-                        Err(e) => eprintln!(
-                            "  warn: could not write rebuilt cache {}: {}",
-                            cache_path.display(),
-                            e
-                        ),
-                    }
-                }
-                Err(e) => eprintln!(
-                    "  warn: could not rebuild vanilla cache from {}: {}",
-                    vanilla_dir.display(),
-                    e
-                ),
-            }
-        }
+        rebuild_vanilla_cache_if_stale(
+            &session,
+            cache_path,
+            fp_loaded,
+            &directory,
+            vanilla_dir,
+            game_id,
+            !no_vanilla_cache,
+        );
     }
 
     tlog!("load");

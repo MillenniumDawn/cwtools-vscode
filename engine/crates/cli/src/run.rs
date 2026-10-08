@@ -1,5 +1,6 @@
 use clap::CommandFactory;
 use cwtools_game::constants::Game;
+use cwtools_info::vanilla_cache::{self, VanillaCacheData};
 use cwtools_validation::ErrorSeverity;
 use std::fs::{self, File, OpenOptions};
 use std::io;
@@ -169,6 +170,122 @@ pub(crate) fn vanilla_notice(game: Game, has_vanilla: bool) -> Option<String> {
         "no base-game data loaded, so {} report nothing; pass --vanilla or --vanilla-cache to run them",
         codes.join(", ")
     ))
+}
+
+// ── Explicit `--vanilla-cache` (validate / fix) ────────────────────────────
+
+/// Whether the cache has this mod's replacement scope.
+fn carries_replacement_view(
+    fingerprint: &str,
+    shadow: &cwtools_file_manager::file_manager::LayerShadow,
+) -> bool {
+    if shadow.has_replace_paths() {
+        fingerprint.ends_with(&format!("|{}", shadow.replacement_fingerprint()))
+    } else {
+        !fingerprint.contains("|rp:")
+    }
+}
+
+/// Keep the fingerprint for rebuilding, dropping mismatched cache data.
+pub(crate) fn gate_vanilla_cache_for_replacements(
+    cache_path: &Path,
+    loaded: Option<(String, VanillaCacheData)>,
+    directory: &Path,
+    vanilla: Option<&Path>,
+) -> (Option<String>, Option<VanillaCacheData>) {
+    let Some((fingerprint, data)) = loaded else {
+        return (None, None);
+    };
+    let shadow = cwtools_driver::vanilla_replacement_shadow(directory, &[]);
+    if carries_replacement_view(&fingerprint, &shadow) {
+        return (Some(fingerprint), Some(data));
+    }
+    let reason = if shadow.has_replace_paths() {
+        "does not carry this mod's replace_path view"
+    } else {
+        "is scoped by another mod's replace_path"
+    };
+    if vanilla.is_some() {
+        eprintln!(
+            "warn: vanilla cache {} {reason}; using a live base-game index for this run",
+            cache_path.display()
+        );
+        return (Some(fingerprint), None);
+    }
+    eprintln!(
+        "warn: vanilla cache {} {reason} and there is no --vanilla install to rebuild it from; \
+         continuing without base-game data",
+        cache_path.display()
+    );
+    (None, None)
+}
+
+/// Rebuild stale explicit caches with the mod's replacement shadow.
+pub(crate) fn rebuild_vanilla_cache_if_stale(
+    session: &cwtools_driver::Session,
+    cache_path: &Path,
+    cached_fingerprint: &str,
+    directory: &Path,
+    vanilla_dir: &Path,
+    game: Game,
+    use_parse_cache: bool,
+) {
+    let ruleset = session.ruleset();
+    let shadow = cwtools_driver::vanilla_replacement_shadow(directory, &[]);
+    let live_fingerprint =
+        cwtools_driver::replacement_aware_vanilla_fingerprint(vanilla_dir, ruleset, &shadow);
+    if cached_fingerprint == live_fingerprint {
+        return;
+    }
+    eprintln!(
+        "  warn: vanilla cache is stale (cached: {cached_fingerprint}, live: {live_fingerprint}); rebuilding"
+    );
+    let rules_table = session.string_table();
+    let var_effects = cwtools_info::variable_defining_effects(ruleset);
+    let index = if use_parse_cache && let Some(cache_dir) = cwtools_driver::default_cache_dir() {
+        cwtools_driver::index_game_dir_with_parse_cache_and_shadow(
+            vanilla_dir,
+            ruleset,
+            rules_table,
+            &var_effects,
+            &cache_dir,
+            &game.to_string(),
+            &shadow,
+        )
+    } else {
+        cwtools_driver::index_game_dir_with_shadow(
+            vanilla_dir,
+            ruleset,
+            rules_table,
+            &var_effects,
+            &shadow,
+        )
+    };
+    match index {
+        Ok(index) => {
+            let aux =
+                cwtools_driver::build_vanilla_cache_aux_with_shadow(vanilla_dir, &index, &shadow);
+            match vanilla_cache::save(
+                &index,
+                &game.to_string(),
+                &live_fingerprint,
+                cache_path,
+                aux,
+            ) {
+                Ok(n) => note(format!("  Rebuilt vanilla cache with {n} instances")),
+                Err(e) => eprintln!(
+                    "  warn: could not write rebuilt cache {}: {}",
+                    cache_path.display(),
+                    e
+                ),
+            }
+        }
+        Err(e) => eprintln!(
+            "  warn: could not rebuild vanilla cache from {}: {}",
+            vanilla_dir.display(),
+            e
+        ),
+    }
 }
 
 /// Bail on a setting that neither a flag nor the config file supplied, through
