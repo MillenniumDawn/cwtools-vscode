@@ -254,7 +254,7 @@ def test_windows_bundles_reject_missing_node(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize("release", [False, True], ids=["development", "release"])
-def test_bundle_test_env_reads_with_production_args(
+def test_bundle_test_env_reads_with_repo_args(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     test_env_names: set[str],
