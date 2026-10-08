@@ -27,8 +27,9 @@
 // its assertions stay `test.skip` against genuine engine gaps
 // (MillenniumDawn/cwtools#317, #318).
 //
-// The multi-root fixture needs a staged server, so it runs with smoke after the
-// build job has produced one; unit remains server-free for fast client tests.
+// The multi-root fixture needs a staged server, so CI runs it alongside watched
+// after the build step has produced one, and locally it runs with smoke under
+// test:smoke; unit remains server-free for fast client tests.
 //
 // rules-sync exercises the opposite gap: sample-hoi4's folder name and
 // common/ai_strategy dir make it detect as hoi4, so activation's real
