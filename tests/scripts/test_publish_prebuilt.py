@@ -19,6 +19,7 @@ cmd_publish_open_vsx = cast(Callable[[], None], vars(build)["cmd_publish_open_vs
 cmd_publish_github = cast(Callable[[], None], vars(build)["cmd_publish_github"])
 find_vsixes = cast(Callable[[str], list[str]], vars(build)["find_vsixes"])
 find_universal_vsix = cast(Callable[[str], str], vars(build)["find_universal_vsix"])
+prerelease_notes = cast(Callable[[str], str], vars(build)["prerelease_notes"])
 publish_github_release = cast(
     Callable[[str, str, bool, list[str]], None],
     vars(build)["publish_github_release"],
@@ -462,6 +463,30 @@ def test_standalone_publish_commands_reject_off_version_vsixes_before_publishing
         f"VSIX manifest version mismatch: {stale} has '3.4.99'; expected '3.5.42'"
     )
     assert not publishers
+
+
+@pytest.mark.parametrize(
+    ("sha", "commit"),
+    [
+        (None, "this commit"),
+        ("", "this commit"),
+        (" \t ", "this commit"),
+        (" cafef00d ", "cafef00d"),
+    ],
+)
+def test_prerelease_notes_use_a_trimmed_sha_or_fallback(
+    monkeypatch: pytest.MonkeyPatch, sha: str | None, commit: str
+) -> None:
+    if sha is None:
+        monkeypatch.delenv("GITHUB_SHA", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_SHA", sha)
+
+    notes = prerelease_notes("3.5.42")
+
+    assert notes.startswith(
+        f"Automated pre-release build 3.5.42 from commit {commit}.\n"
+    )
 
 
 def test_prerelease_notes_replace_the_missing_changelog_section(

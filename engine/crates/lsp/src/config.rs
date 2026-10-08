@@ -831,7 +831,7 @@ impl Backend {
         if handshake_complete {
             for (uri, diags) in to_publish {
                 if let Ok(url) = uri.parse() {
-                    self.client.publish_diagnostics(url, diags, None).await;
+                    self.publish_if_closed(url, diags, None).await;
                 }
             }
         } else {

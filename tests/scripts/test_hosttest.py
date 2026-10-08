@@ -131,6 +131,14 @@ def test_appends_coverage_watch_and_passthrough_arguments() -> None:
 
 
 @pytest.mark.usefixtures("installed_cli")
+def test_missing_node_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match=r"^node is not on PATH$"):
+        hosttest.test_cli_command(["unit"])
+
+
+@pytest.mark.usefixtures("installed_cli")
 def test_missing_test_cli_names_npm_ci(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hosttest, "TEST_CLI", MISSING_CLI)
 
