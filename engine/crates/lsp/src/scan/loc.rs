@@ -405,7 +405,7 @@ impl Backend {
         };
         for uri in stale_uris {
             if let Ok(uri) = Url::parse(&uri) {
-                self.publish_filtered(uri, Vec::new(), None, None).await;
+                self.publish_if_closed(uri, Vec::new(), None).await;
             }
         }
         for (file, mut diags) in by_file.drain() {
@@ -430,7 +430,7 @@ impl Backend {
                 .flatten()
                 .unwrap_or_default();
                 crate::validate::drop_inline_suppressed(&mut diags, &inline_ignored);
-                self.publish_filtered(uri_obj, diags, None, source_hashes.get(&file).copied())
+                self.publish_if_closed(uri_obj, diags, source_hashes.get(&file).copied())
                     .await;
             }
         }
