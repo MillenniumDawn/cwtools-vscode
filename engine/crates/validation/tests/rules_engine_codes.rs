@@ -134,6 +134,86 @@ foo = {
     );
 }
 
+#[test]
+fn unexpected_value_clause_is_cw265() {
+    let codes = codes_for(
+        RULES,
+        r#"
+foo = {
+    required_field = ok
+    { x = 1 }
+}
+"#,
+    );
+    assert!(codes.contains(&"CW265".to_string()), "got: {:?}", codes);
+}
+
+const VALUE_CLAUSE_RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    {
+        id = int
+    }
+}
+"#;
+
+#[test]
+fn allowed_value_clause_is_not_cw265() {
+    let codes = codes_for(VALUE_CLAUSE_RULES, "foo = { { id = 1 } }");
+    assert!(codes.is_empty(), "got: {:?}", codes);
+}
+
+#[test]
+fn value_clause_children_are_validated() {
+    let codes = codes_for(VALUE_CLAUSE_RULES, "foo = { { id = notaninteger } }");
+    assert!(codes.contains(&"CW240".to_string()), "got: {:?}", codes);
+    assert!(!codes.contains(&"CW265".to_string()), "got: {:?}", codes);
+}
+
+#[test]
+fn too_few_value_clauses_is_cw242() {
+    const RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    ## cardinality = 2..3
+    {
+        id = int
+    }
+}
+"#;
+    let (_t, _r, errors) = validate_pair(RULES, "foo = { { id = 1 } }");
+    let err = errors
+        .iter()
+        .find(|e| e.code == Some("CW242"))
+        .expect("CW242 emitted");
+    assert_eq!(
+        err.message,
+        "ValueClause appears 1 time(s), expected at least 2"
+    );
+}
+
+#[test]
+fn too_many_value_clauses_is_cw242() {
+    const RULES: &str = r#"
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    ## cardinality = 0..2
+    {
+        id = int
+    }
+}
+"#;
+    let (_t, _r, errors) = validate_pair(RULES, "foo = { { id = 1 } { id = 2 } { id = 3 } }");
+    let err = errors
+        .iter()
+        .find(|e| e.code == Some("CW242"))
+        .expect("CW242 emitted");
+    assert_eq!(
+        err.message,
+        "ValueClause appears 3 time(s), expected at most 2"
+    );
+}
+
 // ── Did-you-mean suggested fixes (Task 19): fix metadata only ─────────────────
 // The suggestion lives in the fix title/edit; the diagnostic message, code, and
 // position are unchanged (corpus-inert).
