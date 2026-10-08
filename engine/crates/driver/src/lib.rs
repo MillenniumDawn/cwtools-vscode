@@ -1575,20 +1575,29 @@ pub fn filter_vanilla_index(
     if !shadow.has_replace_paths() {
         return per_type.into_iter().collect();
     }
-    // Resolve the (possibly aliased) install root and each distinct cached
-    // source once, instead of canonicalizing twice per instance.
+    // A source under the root as given needs no filesystem call. Only an
+    // aliased one is resolved, once per distinct source, against a root
+    // resolved once.
     let resolved_root =
         std::fs::canonicalize(vanilla_root).unwrap_or_else(|_| vanilla_root.to_path_buf());
-    let mut hidden: HashMap<Arc<str>, bool> = HashMap::new();
+    let mut visible_sources: HashMap<Arc<str>, bool> = HashMap::new();
     per_type
         .into_iter()
         .filter_map(|(type_name, instances)| {
             let visible: Vec<_> = instances
                 .into_iter()
                 .filter(|(source, _)| {
-                    *hidden.entry(Arc::clone(source)).or_insert_with(|| {
-                        !shadow.hides_file_under(&resolved_root, Path::new(source.as_ref()))
-                    })
+                    *visible_sources
+                        .entry(Arc::clone(source))
+                        .or_insert_with(|| {
+                            let path = Path::new(source.as_ref());
+                            let root = if path.starts_with(vanilla_root) {
+                                vanilla_root
+                            } else {
+                                &resolved_root
+                            };
+                            !shadow.hides_file_under(root, path)
+                        })
                 })
                 .collect();
             (!visible.is_empty()).then_some((type_name, visible))

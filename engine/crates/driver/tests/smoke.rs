@@ -1874,6 +1874,45 @@ fn filter_vanilla_index_matches_cached_sources_through_a_root_alias() {
     );
 }
 
+/// A source spelled under the root as given is matched by prefix, with no
+/// file resolution: the file can be gone and the filter still hides it.
+#[cfg(unix)]
+#[test]
+fn filter_vanilla_index_matches_sources_under_the_given_root_without_resolving_them() {
+    use std::os::unix::fs::symlink;
+
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    std::fs::write(
+        ws.path().join("mod/descriptor.mod"),
+        r#"replace_path = "common/things""#,
+    )
+    .unwrap();
+    let alias = ws.path().join("vanilla-alias");
+    symlink(&vanilla, &alias).unwrap();
+
+    let table = StringTable::new();
+    let (ruleset, _) = load_ruleset_from_dir(
+        &ws.path().join("rules"),
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+    let var_effects = variable_defining_effects(&ruleset);
+    // Index through the alias, so every source is spelled under it.
+    let index = index_game_dir(&alias, &ruleset, &table, &var_effects).unwrap();
+    std::fs::remove_file(vanilla.join("common/things/x.txt")).unwrap();
+
+    let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
+    let filtered = cwtools_driver::filter_vanilla_index(index.map, &alias, &shadow);
+    assert!(
+        !filtered.get("thing").is_some_and(|instances| instances
+            .iter()
+            .any(|(_, instance)| instance.name == "vanilla_thing")),
+        "the replaced definition must be hidden without its file on disk"
+    );
+}
+
 #[test]
 fn vanilla_cache_auto_distinguishes_installs_with_the_same_game_version() {
     let ws = cache_workspace();
