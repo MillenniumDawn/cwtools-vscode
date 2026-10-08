@@ -526,12 +526,12 @@ mod tests {
     }
 
     /// A handler that owns its thread the way a scan pass does. `Blocking`
-    /// answers a request by parking the thread until `release` is set, and
-    /// answers a notification immediately; the difference is what the two tests
-    /// below measure.
+    /// answers a request by parking the thread until the test sends on the
+    /// `release` channel, and answers a notification immediately; the
+    /// difference is what the two tests below measure.
     #[derive(Clone)]
     struct Blocking {
-        release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        release: std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>,
     }
 
     impl Service<Request> for Blocking {
@@ -550,9 +550,7 @@ mod tests {
                 let Some(id) = id else {
                     return Ok(None);
                 };
-                while !release.load(std::sync::atomic::Ordering::Relaxed) {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
+                release.lock().expect("release mutex").recv().ok();
                 Ok(Some(Response::from_ok(id, serde_json::Value::Null)))
             })
         }
@@ -939,7 +937,8 @@ mod tests {
     async fn a_blocking_request_does_not_hold_up_the_notification_behind_it() {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let release = std::sync::Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release = std::sync::Arc::new(std::sync::Mutex::new(release_rx));
         let mut service = SpawnRequests::new(Blocking {
             release: release.clone(),
         });
@@ -967,9 +966,8 @@ mod tests {
             "a notification behind a blocking request must still be dispatched"
         );
 
-        // Let the parked handler's thread go; it busy-waits, so an abort alone
-        // would never reach it.
-        release.store(true, Ordering::Relaxed);
+        // Release the blocked request only after the notification has passed.
+        release_tx.send(()).expect("blocked handler still waiting");
     }
 
     /// Dropping the returned future is how tower-lsp delivers `$/cancelRequest`,
@@ -978,10 +976,12 @@ mod tests {
     async fn dropping_the_future_aborts_the_spawned_handler() {
         let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
 
         struct Marked {
             started: std::sync::Arc<std::sync::atomic::AtomicBool>,
             finished: std::sync::Arc<std::sync::atomic::AtomicBool>,
+            dropped: Option<tokio::sync::oneshot::Sender<()>>,
         }
 
         impl Service<Request> for Marked {
@@ -996,9 +996,19 @@ mod tests {
             fn call(&mut self, _: Request) -> Self::Future {
                 let started = self.started.clone();
                 let finished = self.finished.clone();
+                let dropped = self.dropped.take().expect("one request");
                 Box::pin(async move {
+                    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+                    impl Drop for DropSignal {
+                        fn drop(&mut self) {
+                            if let Some(tx) = self.0.take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                    }
+                    let _drop_signal = DropSignal(Some(dropped));
                     started.store(true, std::sync::atomic::Ordering::Relaxed);
-                    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                    std::future::pending::<()>().await;
                     finished.store(true, std::sync::atomic::Ordering::Relaxed);
                     Ok(None)
                 })
@@ -1008,21 +1018,27 @@ mod tests {
         let mut service = SpawnRequests::new(Marked {
             started: started.clone(),
             finished: finished.clone(),
+            dropped: Some(dropped_tx),
         });
-        let in_flight = service.call(request(2));
-        let in_flight = std::pin::pin!(in_flight);
-        // One poll to get the task spawned, then walk away from it.
-        assert!(
+        // One poll to get the task spawned, then drop the waiting future as
+        // tower-lsp does on request cancellation.
+        let timed_out = {
+            let in_flight = service.call(request(2));
+            let in_flight = std::pin::pin!(in_flight);
             tokio::time::timeout(std::time::Duration::from_millis(500), in_flight)
                 .await
                 .is_err()
-        );
+        };
+        assert!(timed_out);
 
         assert!(
             started.load(std::sync::atomic::Ordering::Relaxed),
             "the handler must have been spawned at all"
         );
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::time::timeout(std::time::Duration::from_millis(500), dropped_rx)
+            .await
+            .expect("aborted handler drop was not observed")
+            .expect("drop signal sender was lost");
         assert!(
             !finished.load(std::sync::atomic::Ordering::Relaxed),
             "a dropped request future must abort its handler, not detach it"

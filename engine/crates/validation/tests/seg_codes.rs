@@ -191,6 +191,52 @@ fn cw104_underlines_only_the_trigger_key() {
     );
 }
 
+/// A plain leaf rule that carries its own `## scope = state`, no alias involved.
+/// It sits at `foo`'s top level (default country scope) and inside a block that
+/// pushes state scope.
+const RULE_SCOPE_RULES: &str = r#"
+scopes = {
+    Country = { aliases = { country } }
+    State = { aliases = { state } }
+}
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    ## scope = state
+    ## cardinality = 0..1
+    state_field = bool
+    ## push_scope = state
+    ## cardinality = 0..1
+    state_block = {
+        ## scope = state
+        state_field = bool
+    }
+}
+"#;
+
+#[test]
+fn rule_used_in_wrong_scope_is_cw247() {
+    let errs = errors_hoi4(RULE_SCOPE_RULES, "foo = {\n    state_field = yes\n}\n");
+    let err = errs
+        .iter()
+        .find(|e| e.code == Some("CW247"))
+        .unwrap_or_else(|| panic!("CW247 not emitted, got: {errs:?}"));
+    assert_eq!((err.line, err.col), (2, 4));
+    assert_eq!(
+        err.end,
+        Some((2, 4 + "state_field".len() as u16)),
+        "CW247 must span only the key"
+    );
+}
+
+#[test]
+fn rule_used_in_required_scope_is_not_cw247() {
+    let c = codes_hoi4(
+        RULE_SCOPE_RULES,
+        "foo = { state_block = { state_field = yes } }",
+    );
+    assert!(c.is_empty(), "got: {:?}", c);
+}
+
 /// A type whose root rule seeds state scope via `## replace_scope` should make a
 /// state-only effect inside it clean (mirrors history/states `state` object).
 const REPLACE_SCOPE_RULES: &str = r#"
