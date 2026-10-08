@@ -34,6 +34,15 @@ fn bench_cache(c: &mut Criterion) {
     io::serialize_to_file(&cached, &path).expect("seed cache benchmark archive");
 
     let mut group = c.benchmark_group("cache");
+    group.bench_function("arena_to_cached", |b| {
+        b.iter(|| {
+            convert::arena_to_cached(
+                black_box(&parsed.arena),
+                black_box(&parsed.root_children),
+                &table,
+            )
+        })
+    });
     group.bench_function("serialize", |b| {
         b.iter(|| io::serialize_to_file(black_box(&cached), black_box(&path)).unwrap())
     });

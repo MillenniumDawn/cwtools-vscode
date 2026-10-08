@@ -4217,7 +4217,7 @@ mod ignored_tests {
                 }],
             })
             .await;
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        backend.wait_for_notifications().await;
         assert_eq!(
             backend
                 .state

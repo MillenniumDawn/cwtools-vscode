@@ -389,6 +389,9 @@ impl Backend {
         match flag {
             Some(flag) => {
                 flag.store(true, Ordering::Relaxed);
+                if let Ok(ack) = std::env::var("CWTOOLS_CANCEL_ACK_FILE") {
+                    let _ = std::fs::write(ack, b"cancelled");
+                }
                 tracing::info!(token = %key, "command cancelled by client");
             }
             None => {

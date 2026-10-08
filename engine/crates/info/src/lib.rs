@@ -115,16 +115,6 @@ impl InfoService {
         )
     }
 
-    pub fn index_file(
-        &mut self,
-        uri: &str,
-        ast: &ParsedFile,
-        table: &StringTable,
-        ruleset: &RuleSet,
-    ) {
-        self.index_file_with_path(uri, ast, table, ruleset, uri);
-    }
-
     pub fn index_file_with_path(
         &mut self,
         uri: &str,
