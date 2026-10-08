@@ -561,7 +561,7 @@ impl<'a> Parser<'a> {
             unclosed_key_eats_structure = self.errors.len() > saved_cursor.errors_len
                 && raw_key
                     .chars()
-                    .any(|c| matches!(c, '=' | '<' | '>' | '!' | '?' | '{'));
+                    .any(|c| matches!(c, '=' | '<' | '>' | '!' | '?' | '{' | '}'));
             if let Some(op) = self.parse_operator() {
                 let key = self.table.intern(&raw_key);
                 if let Some((value, value_pos)) = self.parse_value(false) {
@@ -1488,6 +1488,35 @@ shorthand { nested = value }
             "the unclosed quoted key swallowing a `{{` shorthand must keep its \
              diagnostic at the quote"
         );
+    }
+
+    #[test]
+    fn unclosed_quote_swallowing_closing_brace_produces_error() {
+        let table = StringTable::new();
+        for (input, expected) in [
+            (
+                "a = { \"foo }\nb = 1\n",
+                [
+                    "1:6: unclosed quoted string starting at line 1",
+                    "3:0: unclosed clause: expected '}' before end of file",
+                ],
+            ),
+            (
+                "a = {\n  b = { \"foo }\n  c = 1\n}\nd = 1\n",
+                [
+                    "2:8: unclosed quoted string starting at line 2",
+                    "6:0: unclosed clause: expected '}' before end of file",
+                ],
+            ),
+        ] {
+            let result = parse_string(input, &table);
+            let messages: Vec<String> = result.errors.iter().map(|e| e.to_string()).collect();
+            assert_eq!(
+                messages, expected,
+                "the unclosed quote swallowing a closing `}}` must keep its \
+                 diagnostic at the quote in {input:?}"
+            );
+        }
     }
 
     #[test]
