@@ -143,6 +143,7 @@ function commandProgressTitle(
 interface WorkspaceValidationSummary {
 	totalFiles: number;
 	validatedFiles: number;
+	heldBackFiles: number;
 	filesWithErrors: number;
 	totalErrors: number;
 	totalWarnings: number;
@@ -158,6 +159,7 @@ function workspaceValidationSummary(value: unknown): WorkspaceValidationSummary 
 	const fields = [
 		"totalFiles",
 		"validatedFiles",
+		"heldBackFiles",
 		"filesWithErrors",
 		"totalErrors",
 		"totalWarnings",
@@ -174,7 +176,7 @@ function workspaceValidationSummary(value: unknown): WorkspaceValidationSummary 
 	) {
 		return undefined;
 	}
-	// SAFETY: fields.some above proved all seven fields are non-negative safe integers, the invariant WorkspaceValidationSummary encodes.
+	// SAFETY: fields.some above proved all eight fields are non-negative safe integers, the invariant WorkspaceValidationSummary encodes.
 	return record as unknown as WorkspaceValidationSummary;
 }
 
@@ -212,14 +214,22 @@ function showWorkspaceValidationResult(
 		summary.totalInfos,
 		summary.totalHints,
 	);
-	// Totals cover the whole workspace; with workspace-wide diagnostics off, Problems only lists open files.
+	// Totals cover the whole workspace; Problems lists less with workspace-wide diagnostics off, or past the server's publish budget.
 	const workspaceWide =
 		workspace
 			.getConfiguration("cwtools")
 			.get<boolean>("diagnostics.workspaceWide") ?? true;
-	const message = workspaceWide
-		? validatedSummary
-		: `${validatedSummary} ${l10n.t("Problems only lists open files while workspace-wide diagnostics are off.")}`;
+	let caveat: string | undefined;
+	if (!workspaceWide) {
+		caveat = l10n.t("Problems only lists open files while workspace-wide diagnostics are off.");
+	} else if (summary.heldBackFiles > 0) {
+		caveat = l10n.t(
+			"Problems leaves out {0} closed files past the workspace diagnostics budget.",
+			summary.heldBackFiles,
+		);
+	}
+	const message =
+		caveat === undefined ? validatedSummary : `${validatedSummary} ${caveat}`;
 	const showProblems = l10n.t("Show Problems");
 	void Promise.resolve(window.showInformationMessage(message, showProblems)).then(
 		(choice) => {

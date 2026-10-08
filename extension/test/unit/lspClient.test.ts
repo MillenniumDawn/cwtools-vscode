@@ -1240,6 +1240,7 @@ suite("lspClient — executeCommand middleware", () => {
 		client.sendRequest.mockResolvedValue({
 			totalFiles: 10,
 			validatedFiles: 7,
+			heldBackFiles: 0,
 			filesWithErrors: 2,
 			totalErrors: 3,
 			totalWarnings: 4,
@@ -1255,6 +1256,7 @@ suite("lspClient — executeCommand middleware", () => {
 		assert.deepStrictEqual(result, {
 			totalFiles: 10,
 			validatedFiles: 7,
+			heldBackFiles: 0,
 			filesWithErrors: 2,
 			totalErrors: 3,
 			totalWarnings: 4,
@@ -1291,6 +1293,7 @@ suite("lspClient — executeCommand middleware", () => {
 		client.sendRequest.mockResolvedValue({
 			totalFiles: 10,
 			validatedFiles: 7,
+			heldBackFiles: 0,
 			filesWithErrors: 2,
 			totalErrors: 3,
 			totalWarnings: 4,
@@ -1306,6 +1309,7 @@ suite("lspClient — executeCommand middleware", () => {
 		assert.deepStrictEqual(result, {
 			totalFiles: 10,
 			validatedFiles: 7,
+			heldBackFiles: 0,
 			filesWithErrors: 2,
 			totalErrors: 3,
 			totalWarnings: 4,
@@ -1316,6 +1320,32 @@ suite("lspClient — executeCommand middleware", () => {
 		assert.deepStrictEqual(showInformationMessage.mock.calls, [
 			[
 				"CWTools: validated 7 of 10 files; 2 with errors, 3 errors, 4 warnings, 5 infos, 6 hints. Problems only lists open files while workspace-wide diagnostics are off.",
+				"Show Problems",
+			],
+		]);
+	});
+
+	test("validateWorkspace summary says how many closed files the diagnostics budget held back", async () => {
+		const { middleware, client } = middlewareSetup();
+		client.initializeResult = serverCommands(["validateWorkspace"]);
+		client.sendRequest.mockResolvedValue({
+			totalFiles: 2500,
+			validatedFiles: 2500,
+			heldBackFiles: 500,
+			filesWithErrors: 2,
+			totalErrors: 3,
+			totalWarnings: 4,
+			totalInfos: 5,
+			totalHints: 6,
+		});
+		showInformationMessage.mockResolvedValue(undefined);
+
+		await middleware("validateWorkspace", [], vi.fn());
+
+		assert.deepStrictEqual(showWarningMessage.mock.calls, []);
+		assert.deepStrictEqual(showInformationMessage.mock.calls, [
+			[
+				"CWTools: validated 2500 of 2500 files; 2 with errors, 3 errors, 4 warnings, 5 infos, 6 hints. Problems leaves out 500 closed files past the workspace diagnostics budget.",
 				"Show Problems",
 			],
 		]);
@@ -1377,6 +1407,7 @@ suite("lspClient — executeCommand middleware", () => {
 		client.sendRequest.mockResolvedValue({
 			totalFiles: 10,
 			validatedFiles: 7,
+			heldBackFiles: 0,
 			filesWithErrors: 2,
 			totalErrors: -1,
 			totalWarnings: 4,
@@ -1389,6 +1420,7 @@ suite("lspClient — executeCommand middleware", () => {
 		assert.deepStrictEqual(result, {
 			totalFiles: 10,
 			validatedFiles: 7,
+			heldBackFiles: 0,
 			filesWithErrors: 2,
 			totalErrors: -1,
 			totalWarnings: 4,
