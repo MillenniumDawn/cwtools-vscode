@@ -1227,15 +1227,6 @@ pub fn is_ignored_logical_path(logical_path: &str, extra_file_globs: &[String]) 
             .any(|pat| ignore_glob_match(pat, file_name, &normalized))
 }
 
-pub fn is_ignored_file(
-    root: &std::path::Path,
-    path: &std::path::Path,
-    extra_file_globs: &[String],
-) -> bool {
-    let logical = compute_logical_path(path, root);
-    is_ignored_logical_path(&logical, extra_file_globs)
-}
-
 pub fn is_ignored_path(
     logical_path: &str,
     extra_file_globs: &[String],
@@ -2370,26 +2361,6 @@ mod tests {
     fn is_ignored_logical_path_empty_is_never_ignored() {
         assert!(!is_ignored_logical_path("", &[]));
         assert!(!is_ignored_logical_path("", &["ignored.txt".to_string()]));
-    }
-
-    #[test]
-    fn is_ignored_file_wrapper_derives_logical_path() {
-        let tmp = tempfile::TempDir::new().expect("tmpdir");
-        let root = tmp.path();
-        let inside = root.join("common/ignored.txt");
-        std::fs::create_dir_all(inside.parent().unwrap()).unwrap();
-        std::fs::write(&inside, "").unwrap();
-        assert!(is_ignored_file(root, &inside, &["ignored.txt".to_string()]));
-        let outside = tmp.path().join("../outside_ignored.txt");
-        assert!(is_ignored_file(
-            root,
-            &outside,
-            &["outside_ignored.txt".to_string()]
-        ));
-        assert!(!is_ignored_file(root, &inside, &[]));
-        let readme = root.join("README.txt");
-        std::fs::write(&readme, "").unwrap();
-        assert!(is_ignored_file(root, &readme, &[]));
     }
 
     #[test]
