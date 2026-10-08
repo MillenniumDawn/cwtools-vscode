@@ -1014,8 +1014,12 @@ impl LayerShadow {
             .ok()
             .map(Path::to_path_buf)
             .or_else(|| {
-                let canonical_root = std::fs::canonicalize(root).ok()?;
                 let canonical_path = std::fs::canonicalize(path).ok()?;
+                // A caller that already resolved `root` skips resolving it again.
+                if let Ok(relative) = canonical_path.strip_prefix(root) {
+                    return Some(relative.to_path_buf());
+                }
+                let canonical_root = std::fs::canonicalize(root).ok()?;
                 canonical_path
                     .strip_prefix(canonical_root)
                     .ok()
