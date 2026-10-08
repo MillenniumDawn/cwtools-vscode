@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Release string-table read locks before building cached AST records. (#494)
 * Ignore trailing `#` comments when parsing `.cwt` directive values, including `type_key_filter`, while retaining quoted hashes and malformed-directive checks. (#903)
 * Replace fixed language-server integration sleeps and timed scan/format holds with readiness signals and test-controlled gates, preserving cancellation, negative-result and scan-guard race assertions. (#887)
 * Preserve the previous semantic-token snapshot across buffer edits so delta requests return edits; assert the wire edit, file-operation refresh behavior, and `genlocall` output over framed LSP traffic. (#519)
