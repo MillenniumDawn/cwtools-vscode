@@ -58,6 +58,7 @@
 * The VSIX smoke test rejects any file under `bin/server` that is not one of those executables, such as a stray `.pdb` in the flat directory or in a platform directory, even if earlier build checks are bypassed. It reports unexpected files and missing or empty executables in one run. (#852)
 * Delete `is_record` from the coverage script. It had no callers. (#910)
 * Drop four npm overrides (`minimatch@3`, `minimatch@5`, `brace-expansion@1` and `uuid`) that matched nothing in the lockfile. (#911)
+* The build helpers share one `require_executable` for the node and npm lookups, `set_release_version` and `prerelease_notes` have direct tests, and `scripts/pyrightconfig.json` moves to the repo root with `scripts/build` as its extra path. The Python CI job no longer saves an npm cache, which claimed the key the check and build jobs share. (#889)
 * Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
 
 ### 3.4.7

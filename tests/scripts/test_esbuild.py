@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -256,6 +257,28 @@ def test_watch_returns_when_the_second_bundle_exits() -> None:
 
 def test_watch_treats_an_early_clean_exit_as_failure() -> None:
     assert esbuild.wait_for_watcher_exit(procs(None, 0), poll_interval=0) == 1
+
+
+def test_windows_bundles_use_the_resolved_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda _name: "resolved-node")
+
+    commands = esbuild.bundle_commands(watch=False, dev=False)
+
+    assert all(
+        command[:2] == ["resolved-node", str(esbuild.esbuild_bin())]
+        for command in commands
+    )
+
+
+def test_windows_bundles_reject_missing_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    with pytest.raises(RuntimeError, match=r"^node is not on PATH$"):
+        esbuild.bundle_commands(watch=False, dev=False)
 
 
 def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:

@@ -80,11 +80,11 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt
-      # v7.0.0
+      # v7.0.0. No npm cache: this job only installs esbuild, and a cache saved
+      # from here would claim the key the check and build jobs share.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "26"
-          cache: npm
       - name: Install esbuild for the release-define smoke
         run: |
           version="$(

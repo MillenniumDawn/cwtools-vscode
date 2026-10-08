@@ -7,6 +7,7 @@ import sys
 from argparse import ArgumentParser
 from typing import NamedTuple
 
+from executables import require_executable
 from paths import REPO_ROOT
 
 TEST_CLI = REPO_ROOT / "node_modules" / "@vscode" / "test-cli" / "out" / "bin.mjs"
@@ -71,10 +72,7 @@ def test_cli_command(
 ) -> list[str]:
     if not TEST_CLI.is_file():
         raise RuntimeError(f"{TEST_CLI} is missing. Run npm ci first.")
-    node = shutil.which("node")
-    if node is None:
-        raise RuntimeError("node is not on PATH")
-    command = [node, str(TEST_CLI)]
+    command = [require_executable("node"), str(TEST_CLI)]
     for label in labels:
         command += ["--label", label]
     if coverage:
