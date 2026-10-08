@@ -58,7 +58,7 @@ impl Backend {
         Ok(text_edits_or_none(&edits, &text, &self.position_encoding()))
     }
 
-    /// Parse errors already show as diagnostics; a suppressed unclosed quote shows nothing.
+    /// A suppressed unclosed quote has no diagnostic, so the refusal has to say so itself.
     async fn edits_or_refusal_notice(
         &self,
         edits: std::result::Result<Vec<SpanEdit>, FormatRefusal>,
@@ -67,16 +67,22 @@ impl Backend {
         match edits {
             Ok(edits) => edits,
             Err(FormatRefusal::ParseErrors) => Vec::new(),
-            Err(refusal @ FormatRefusal::UnclosedQuote { .. }) => {
-                self.client
-                    .show_message(
-                        MessageType::WARNING,
-                        format!(
-                            "CWTools: did not format {}: {refusal}.",
-                            uri_to_path_str(uri)
-                        ),
-                    )
-                    .await;
+            Err(refusal @ FormatRefusal::UnclosedQuote { line }) => {
+                let message = format!(
+                    "CWTools: did not format {}: {refusal}.",
+                    uri_to_path_str(uri)
+                );
+                let first = self
+                    .state
+                    .format_refusal_toasts
+                    .lock()
+                    .insert((uri.to_string(), line));
+                if first {
+                    self.client
+                        .show_message(MessageType::WARNING, message.clone())
+                        .await;
+                }
+                self.client.log_message(MessageType::WARNING, message).await;
                 Vec::new()
             }
         }

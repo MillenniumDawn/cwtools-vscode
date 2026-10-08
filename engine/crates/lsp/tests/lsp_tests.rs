@@ -12765,32 +12765,46 @@ fn test_formatting_names_the_unclosed_quote_it_refuses() {
         ),
     )
     .unwrap();
-    write_frame(
-        &mut child,
-        &jsonrpc_request(
-            2,
-            "textDocument/formatting",
-            serde_json::json!({
-                "textDocument": { "uri": uri },
-                "options": { "tabSize": 4, "insertSpaces": true },
-            }),
-        ),
-    )
-    .unwrap();
-    let (notices, resp) =
-        unclosed_quote_notices_until_response(&mut reader, "window/showMessage", 2);
+    // Format on save repeats the request; the toast must not repeat with it.
+    let mut rounds = Vec::new();
+    for id in [2, 3] {
+        write_frame(
+            &mut child,
+            &jsonrpc_request(
+                id,
+                "textDocument/formatting",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "options": { "tabSize": 4, "insertSpaces": true },
+                }),
+            ),
+        )
+        .unwrap();
+        rounds.push(unclosed_quote_notices_until_response(
+            &mut reader,
+            "window/showMessage",
+            id,
+        ));
+    }
     stop_server(&mut child);
-    assert!(resp.get("error").is_none(), "got: {resp}");
+    for (_, resp) in &rounds {
+        assert!(resp.get("error").is_none(), "got: {resp}");
+        assert!(
+            resp["result"].is_null(),
+            "an unclosed leaf-value quote must not rewrite, got: {}",
+            resp["result"]
+        );
+    }
+    let (first, second) = (&rounds[0].0, &rounds[1].0);
+    assert_eq!(first.len(), 1, "one toast for the refusal: {first:?}");
     assert!(
-        resp["result"].is_null(),
-        "an unclosed leaf-value quote must not rewrite, got: {}",
-        resp["result"]
+        first[0].starts_with("CWTools: did not format ")
+            && first[0].ends_with("names.txt: unclosed quote on line 2."),
+        "{first:?}"
     );
-    assert_eq!(notices.len(), 1, "one notice for the refusal: {notices:?}");
     assert!(
-        notices[0].starts_with("CWTools: did not format ")
-            && notices[0].ends_with("names.txt: unclosed quote on line 2."),
-        "{notices:?}"
+        second.is_empty(),
+        "the second request must not toast again: {second:?}"
     );
 }
 
