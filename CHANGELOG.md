@@ -7,6 +7,7 @@
 * Replace fixed language-server integration sleeps and timed scan/format holds with readiness signals and test-controlled gates, preserving cancellation, negative-result and scan-guard race assertions. (#887)
 * Preserve the previous semantic-token snapshot across buffer edits so delta requests return edits; assert the wire edit, file-operation refresh behavior, and `genlocall` output over framed LSP traffic. (#519)
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
+* Add tests that make CW247 fire for a rule validated in the wrong scope, and stay quiet in the right one. (#922)
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
 * Reclaim removed localisation URI references and recycle file records after sweeping their old sites, bounding metadata growth across repeated refreshes. (#846)
 * Add tests for bare value clauses: CW265 when no rule allows one, and CW242 when their count is out of range. (#924)
