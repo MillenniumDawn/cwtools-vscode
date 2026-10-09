@@ -14,6 +14,11 @@ use super::{
 };
 use crate::navigation::helpers::{REQUEST_FAILED, TokenCase, loc_ref_key_cols_in_line, loc_root};
 
+struct RenameRequestSnapshot {
+    generation: u64,
+    open_documents: HashMap<String, (i32, Option<u64>)>,
+}
+
 impl Backend {
     pub(crate) async fn prepare_rename_impl(
         &self,
@@ -68,6 +73,7 @@ impl Backend {
         lines: &DocLines,
         name: &str,
         new_name: &str,
+        snapshot: &RenameRequestSnapshot,
     ) -> Result<Option<WorkspaceEdit>> {
         let edits: Vec<TextEdit> = lines
             .iter()
@@ -87,7 +93,7 @@ impl Backend {
         if let Some(refused) = self.first_refused_edit_target(&by_uri, uri) {
             return Err(refused);
         }
-        Ok(Some(self.build_workspace_edit(by_uri)))
+        Ok(Some(self.build_workspace_edit(by_uri, snapshot)?))
     }
 
     fn at_var_rename_target(
@@ -106,6 +112,7 @@ impl Backend {
         uri: &str,
         key_lower: &str,
         new_name: &str,
+        snapshot: &RenameRequestSnapshot,
     ) -> Result<Option<WorkspaceEdit>> {
         let root = loc_root(key_lower);
         let trigger_suffix = key_lower.strip_prefix(&root).unwrap_or("");
@@ -166,7 +173,7 @@ impl Backend {
         if let Some(err) = self.first_refused_edit_target(&by_uri, uri) {
             return Err(err);
         }
-        Ok(Some(self.build_workspace_edit(by_uri)))
+        Ok(Some(self.build_workspace_edit(by_uri, snapshot)?))
     }
 
     /// The edits inside loc files: each key's definition lines, and every
@@ -287,13 +294,50 @@ impl Backend {
         })
     }
 
-    fn build_workspace_edit(&self, by_uri: Vec<(String, Vec<TextEdit>)>) -> WorkspaceEdit {
+    fn capture_rename_request(&self) -> RenameRequestSnapshot {
+        let docs = self.state.documents.lock();
+        RenameRequestSnapshot {
+            generation: self
+                .state
+                .edit_generation
+                .load(std::sync::atomic::Ordering::Relaxed),
+            open_documents: docs
+                .iter()
+                .map(|(uri, doc)| (uri.clone(), (doc.version, docs.content_hash(uri))))
+                .collect(),
+        }
+    }
+
+    fn build_workspace_edit(
+        &self,
+        by_uri: Vec<(String, Vec<TextEdit>)>,
+        snapshot: &RenameRequestSnapshot,
+    ) -> Result<WorkspaceEdit> {
+        // Hold the store through construction. Versions alone miss a close /
+        // reopen with the same version, and unversioned clients need a refusal.
+        let docs = self.state.documents.lock();
+        let generation = self
+            .state
+            .edit_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let target_changed = by_uri.iter().any(|(uri, _)| {
+            let current = docs
+                .get(uri)
+                .map(|doc| (doc.version, docs.content_hash(uri)));
+            snapshot.open_documents.get(uri).copied() != current
+        });
+        if generation != snapshot.generation || target_changed {
+            return Err(tower_lsp::jsonrpc::Error {
+                code: tower_lsp::jsonrpc::ErrorCode::ContentModified,
+                message: "Rename cancelled: documents changed while rename edits were being collected; try again".into(),
+                data: None,
+            });
+        }
         if self
             .state
             .workspace_edit_document_changes
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            let docs = self.state.documents.lock();
             let edits = by_uri
                 .into_iter()
                 .filter_map(|(uri, edits)| {
@@ -301,17 +345,20 @@ impl Backend {
                     Some(TextDocumentEdit {
                         text_document: OptionalVersionedTextDocumentIdentifier {
                             uri: url,
-                            version: docs.get(&uri).map(|d| d.version),
+                            version: snapshot
+                                .open_documents
+                                .get(&uri)
+                                .map(|(version, _)| *version),
                         },
                         edits: edits.into_iter().map(OneOf::Left).collect(),
                     })
                 })
                 .collect();
-            WorkspaceEdit {
+            Ok(WorkspaceEdit {
                 changes: None,
                 document_changes: Some(DocumentChanges::Edits(edits)),
                 change_annotations: None,
-            }
+            })
         } else {
             let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
             for (uri, edits) in by_uri {
@@ -319,15 +366,16 @@ impl Backend {
                     changes.entry(url).or_default().extend(edits);
                 }
             }
-            WorkspaceEdit {
+            Ok(WorkspaceEdit {
                 changes: Some(changes),
                 document_changes: None,
                 change_annotations: None,
-            }
+            })
         }
     }
 
     pub(crate) async fn rename_impl(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let snapshot = self.capture_rename_request();
         let uri = params.text_document_position.text_document.uri.to_string();
         let pos = params.text_document_position.position;
         let new_name = params.new_name.clone();
@@ -342,11 +390,14 @@ impl Backend {
         if let (Some(text), Some(lines)) = (source_text.as_deref(), source_lines.as_ref())
             && let Some((name, _)) = Self::at_var_rename_target(text, lines, pos)
         {
-            return self.rename_at_var(&uri, lines, &name, &new_name);
+            return self.rename_at_var(&uri, lines, &name, &new_name, &snapshot);
         }
 
         if let Some(key_lower) = self.loc_key_at_cursor(&uri, pos, &logical_path).await {
-            match self.rename_loc(&uri, &key_lower, &new_name).await {
+            match self
+                .rename_loc(&uri, &key_lower, &new_name, &snapshot)
+                .await
+            {
                 Ok(Some(edit)) => return Ok(Some(edit)),
                 Ok(None) => {}
                 Err(e) => return Err(e),
@@ -423,6 +474,6 @@ impl Backend {
         if let Some(refused) = self.first_refused_edit_target(&by_uri, &uri) {
             return Err(refused);
         }
-        Ok(Some(self.build_workspace_edit(by_uri)))
+        Ok(Some(self.build_workspace_edit(by_uri, &snapshot)?))
     }
 }

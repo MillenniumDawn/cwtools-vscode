@@ -5796,6 +5796,184 @@ fn test_rename_emits_versioned_document_changes_when_supported() {
     );
 }
 
+#[derive(Clone, Copy, Debug)]
+enum RenameInterleave {
+    Change,
+    Close,
+    Open,
+    CloseReopen,
+}
+
+#[test]
+fn test_rename_refuses_changes_after_snapshot_capture() {
+    for localisation in [false, true] {
+        for document_changes in [true, false] {
+            let response = rename_during_document_transition(
+                localisation,
+                document_changes,
+                RenameInterleave::Change,
+            );
+            assert_eq!(
+                response["error"]["code"], -32801,
+                "localisation={localisation}, documentChanges={document_changes}: {response}"
+            );
+            assert!(response["result"].is_null(), "got: {response}");
+        }
+    }
+}
+
+#[test]
+fn test_rename_refuses_open_close_transitions_after_snapshot_capture() {
+    for localisation in [false, true] {
+        for transition in [
+            RenameInterleave::Close,
+            RenameInterleave::Open,
+            RenameInterleave::CloseReopen,
+        ] {
+            let response = rename_during_document_transition(localisation, true, transition);
+            assert_eq!(
+                response["error"]["code"], -32801,
+                "localisation={localisation}, {transition:?}: {response}"
+            );
+            assert!(response["result"].is_null(), "got: {response}");
+        }
+    }
+}
+
+fn rename_during_document_transition(
+    localisation: bool,
+    document_changes: bool,
+    transition: RenameInterleave,
+) -> serde_json::Value {
+    let ws = tempfile::tempdir().unwrap();
+    let rules = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    let markers = tempfile::tempdir().unwrap();
+    let gate = markers.path().join("snapshot-hold");
+    let ready = markers.path().join("snapshot-ready");
+    std::fs::write(rules.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let files = [
+        ("common/national_focus/f.txt", "MY_FOCUS = { x = yes }\n"),
+        (
+            "common/decisions/a.txt",
+            "adec = {\n    has_focus = MY_FOCUS\n}\n",
+        ),
+        (
+            "common/decisions/b.txt",
+            "bdec = {\n    has_focus = MY_FOCUS\n}\n",
+        ),
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n my_key:0 \"Hello\"\n",
+        ),
+        (
+            "localisation/test_l_french.yml",
+            "l_french:\n my_key:0 \"Bonjour\"\n",
+        ),
+    ];
+    for (rel, text) in files {
+        let path = ws.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let source = if localisation { files[3] } else { files[1] };
+    let closed = if localisation { files[4] } else { files[2] };
+    let source_uri = path_uri(ws.path().join(source.0));
+    let closed_uri = path_uri(ws.path().join(closed.0));
+    let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_NAV_SNAPSHOT_HOLD_FILE", &gate)
+        .env("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE", &ready)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(&mut child, &jsonrpc_request(1, "initialize", serde_json::json!({
+        "processId": std::process::id(), "rootUri": path_uri(ws.path()),
+        "capabilities": { "workspace": { "workspaceEdit": { "documentChanges": document_changes } } },
+        "initializationOptions": { "language": "hoi4", "rulesCache": rules.path().to_string_lossy(), "vanilla": vanilla.path().to_string_lossy() }
+    }))).unwrap();
+    let _ = read_response_for_id(&mut reader, 1).unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    wait_for_scan_done(&mut reader);
+    write_frame(&mut child, &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+        "textDocument": { "uri": source_uri, "languageId": "hoi4", "version": 1, "text": source.1 }
+    }))).unwrap();
+    wait_for_diagnostics(&mut reader, source.0);
+    let stdin = child.stdin.take().unwrap();
+    run_child_with_deadline(child, stdin, reader, 45, move |stdin, reader| {
+        std::fs::write(&gate, b"hold").unwrap();
+        write_frame_to(stdin, &jsonrpc_request(700, "textDocument/rename", serde_json::json!({
+            "textDocument": { "uri": source_uri },
+            "position": { "line": 1, "character": if localisation { 2 } else { 18 } },
+            "newName": if localisation { "renamed_key" } else { "RENAMED_FOCUS" }
+        }))).unwrap();
+        assert!(poll_until(std::time::Instant::now() + std::time::Duration::from_secs(20), std::time::Duration::from_millis(10), || ready.exists().then_some(())).is_some(), "rename did not capture its open-buffer snapshot");
+        let shifted_source = if localisation {
+            "l_english:\n\n my_key:0 \"Hello\"\n"
+        } else {
+            "# inserted line\nadec = {\n    has_focus = MY_FOCUS\n}\n"
+        };
+        match transition {
+            RenameInterleave::Change => {
+                write_frame_to(stdin, &jsonrpc_notification("textDocument/didChange", serde_json::json!({
+                    "textDocument": { "uri": source_uri, "version": 2 },
+                    "contentChanges": [{ "text": shifted_source }]
+                }))).unwrap();
+            }
+            RenameInterleave::Close | RenameInterleave::CloseReopen => {
+                write_frame_to(stdin, &jsonrpc_notification("textDocument/didClose", serde_json::json!({ "textDocument": { "uri": source_uri } }))).unwrap();
+                if matches!(transition, RenameInterleave::CloseReopen) {
+                    rename_notification_barrier(stdin, reader, 701);
+                    write_frame_to(stdin, &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+                        "textDocument": { "uri": source_uri, "languageId": "hoi4", "version": 1, "text": shifted_source }
+                    }))).unwrap();
+                }
+            }
+            RenameInterleave::Open => {
+                let text = if localisation { "l_french:\n\n my_key:0 \"Bonjour\"\n" } else { "# inserted line\nbdec = {\n    has_focus = MY_FOCUS\n}\n" };
+                write_frame_to(stdin, &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+                    "textDocument": { "uri": closed_uri, "languageId": "hoi4", "version": 1, "text": text }
+                }))).unwrap();
+            }
+        }
+        // This command waits for the notification handlers, so the transition
+        // is observed while the snapshot gate is still held.
+        rename_notification_barrier(stdin, reader, 702);
+        assert!(gate.exists(), "snapshot hold released before the transition");
+        std::fs::remove_file(&gate).unwrap();
+        let raw = read_response_for_id(reader, 700).unwrap();
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    }).expect("rename interleaving timed out")
+}
+
+fn rename_notification_barrier(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+    id: i64,
+) {
+    write_frame_to(
+        stdin,
+        &jsonrpc_request(
+            id,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "getFileTypes", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response_for_id(reader, id).unwrap();
+    let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(
+        response["error"].is_null(),
+        "notification barrier failed: {response}"
+    );
+}
+
 /// One `@const` rename in a session with NO workspace folder, driven straight
 /// through the wire so a refusal (`error`) is visible instead of being
 /// flattened into a null `result` the way [`feature_request`] does. Nothing is
