@@ -3,16 +3,14 @@
 Run `npx --no-install vitest run extension/test/unit/graphLayout.test.ts` for the
 headless graph suite, or `npm run test:node:coverage` for the full node report.
 
-`extension/test/unit/support/graphHeadless.ts` drives the normal graph.ts message
-dispatcher using real headless Cytoscape. Collections, connected components,
-selectors, classes, scratch state and event propagation run unchanged. The
-real canvas.ts extension also runs, against a small DOM/canvas boundary stub.
-The asynchronous ELK and grid layout engines are recording adapters, so tests
-can assert exactly which nodes and edges each layout receives without waiting
-on external layout workers or coupling assertions to their coordinates.
+The suite runs on the headless Cytoscape harness in
+`extension/test/unit/support/graphHeadless.ts`.
+[Graph layout partition performance](GRAPH_LAYOUT_PERFORMANCE.md) describes that
+harness and covers the isolated/connected partition. Here the real canvas.ts
+extension also runs, against a small DOM/canvas boundary stub.
 
-The suite covers the isolated/connected split (including self-loops), the closed
-neighborhood hover classes, bounded class-update work, drawExtra label caching
+The suite covers the closed neighborhood hover classes, bounded class-update
+work, drawExtra label caching
 and shadow limits, canvas pixel ratios/resize/transforms, and lazy tooltip
 creation, detail expansion, simple/expanded mouseout behavior and graph-replacement
 cleanup. It complements graphWebview.test.ts,

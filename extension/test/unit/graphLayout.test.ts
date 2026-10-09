@@ -7,20 +7,6 @@ beforeEach(() => { vi.useFakeTimers(); resetGraphState(); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 afterAll(() => { state.cores.forEach((core) => core.destroy()); vi.unstubAllGlobals(); });
 
-test("partitions isolated nodes and connected elements through real Cytoscape", () => {
-	const cy = render([node("solo"), node("a", ["b"]), node("b"), node("loop", ["loop"])]);
-	expect(cy.nodes().length).toBe(4);
-	expect(cy.edges().length).toBe(2);
-	const grid = state.layouts.find((l) => l.name === "grid")!;
-	const elk = state.layouts.find((l) => l.name === "elk")!;
-	expect(grid.ids).toEqual(["solo"]);
-	expect(elk.ids).toContain("a");
-	expect(elk.ids).toContain("b");
-	expect(elk.ids).toContain("loop");
-	expect(new Set([...grid.ids, ...elk.ids])).toEqual(new Set(cy.elements().map((e) => e.id())));
-	expect(grid.ids.length + elk.ids.length).toBe(cy.elements().length);
-});
-
 test("real delegated hover highlights the closed neighborhood and restores classes", () => {
 	const cy = render([node("a", ["b"]), node("b"), node("other")]);
 	const selected = cy.$id("a");
