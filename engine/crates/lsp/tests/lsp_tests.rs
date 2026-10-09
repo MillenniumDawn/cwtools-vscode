@@ -9153,6 +9153,11 @@ fn test_validate_workspace_command_returns_summary() {
         "summary must count the one validated file, got: {result:?}"
     );
     assert_eq!(
+        result["heldBackFiles"].as_u64(),
+        Some(0),
+        "one file is inside the diagnostics budget, got: {result:?}"
+    );
+    assert_eq!(
         result["filesWithErrors"].as_u64(),
         Some(1),
         "the malformed file must carry an error, got: {result:?}"
