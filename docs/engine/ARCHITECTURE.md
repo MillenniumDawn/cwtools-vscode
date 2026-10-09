@@ -119,6 +119,16 @@ against what it pulls in (CW274 and the body's own diagnostics). The LSP keeps n
 such registry yet and passes `inline_scripts: None`, which accepts a call site
 without expanding it.
 
+### Rename replacement names
+
+Rename validates the replacement for its target before collecting edits.
+Script constants keep their `@` prefix and accept a non-empty identifier;
+localisation keys accept ASCII letters, digits, underscores, dots and hyphens.
+Type names must parse as one definition key and one reference value. Complete
+quoted type names are supported, and edits replace the whole quoted token at
+quoted targets. Invalid replacement names return `RequestFailed` (-32803)
+without a workspace edit.
+
 ### Background reindex
 
 A long-running session drifts: files deleted while the server had no watcher event,
