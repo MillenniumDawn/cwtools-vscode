@@ -669,7 +669,7 @@ impl Backend {
                 .await;
             for uri in &removed_uris {
                 if let Ok(uri_obj) = Url::parse(uri) {
-                    self.publish_filtered(uri_obj, vec![], None, None).await;
+                    self.publish_if_closed(uri_obj, vec![], None).await;
                 }
             }
         }
@@ -967,7 +967,7 @@ impl Backend {
                 if publish_diagnostics {
                     closed_budget_remaining -= 1;
                     if let Ok(uri_obj) = Url::parse(&uri) {
-                        self.publish_filtered(uri_obj, diagnostics, None, source_hash)
+                        self.publish_if_closed(uri_obj, diagnostics, source_hash)
                             .await;
                     }
                     self.state
@@ -976,7 +976,7 @@ impl Backend {
                         .insert(uri.clone());
                     published_this_scan.insert(uri);
                 } else if previously_published && let Ok(uri_obj) = Url::parse(&uri) {
-                    self.publish_filtered(uri_obj, Vec::new(), None, source_hash)
+                    self.publish_if_closed(uri_obj, Vec::new(), source_hash)
                         .await;
                 }
             }
@@ -1006,7 +1006,7 @@ impl Backend {
             clear_budget_remaining -= 1;
             self.state.published_workspace_uris.lock().remove(&uri);
             if let Ok(uri_obj) = Url::parse(&uri) {
-                self.publish_filtered(uri_obj, Vec::new(), None, None).await;
+                self.publish_if_closed(uri_obj, Vec::new(), None).await;
             }
         }
 

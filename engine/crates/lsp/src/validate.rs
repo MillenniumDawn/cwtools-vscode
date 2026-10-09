@@ -50,6 +50,40 @@ mod loc_sweep_test_hook {
     }
 }
 
+#[cfg(test)]
+mod diagnostic_publish_test_hook {
+    use super::Backend;
+    use parking_lot::Mutex;
+    use std::collections::HashMap;
+    use std::sync::{Arc, OnceLock};
+    use tokio::sync::Notify;
+
+    type Gate = (Arc<Notify>, Arc<Notify>);
+    static GATES: OnceLock<Mutex<HashMap<usize, Gate>>> = OnceLock::new();
+
+    fn key(backend: &Backend) -> usize {
+        Arc::as_ptr(&backend.state) as usize
+    }
+
+    pub(super) fn set(backend: &Backend, entered: Arc<Notify>, release: Arc<Notify>) {
+        GATES
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .insert(key(backend), (entered, release));
+    }
+
+    pub(super) async fn wait(backend: &Backend) {
+        let gate = GATES
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .remove(&key(backend));
+        if let Some((entered, release)) = gate {
+            entered.notify_one();
+            release.notified().await;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn make_prepared<'a>(
     ruleset: &'a cwtools_rules::rules_types::RuleSet,
@@ -909,10 +943,33 @@ impl Backend {
     pub(crate) async fn publish_filtered(
         &self,
         uri: tower_lsp::lsp_types::Url,
-        mut diagnostics: Vec<Diagnostic>,
+        diagnostics: Vec<Diagnostic>,
         version: Option<i32>,
         source_hash: Option<u64>,
     ) {
+        self.publish_filtered_with_closed_state(uri, diagnostics, version, source_hash, false)
+            .await;
+    }
+
+    pub(crate) async fn publish_if_closed(
+        &self,
+        uri: tower_lsp::lsp_types::Url,
+        diagnostics: Vec<Diagnostic>,
+        source_hash: Option<u64>,
+    ) {
+        self.publish_filtered_with_closed_state(uri, diagnostics, None, source_hash, true)
+            .await;
+    }
+
+    async fn publish_filtered_with_closed_state(
+        &self,
+        uri: tower_lsp::lsp_types::Url,
+        mut diagnostics: Vec<Diagnostic>,
+        version: Option<i32>,
+        source_hash: Option<u64>,
+        require_closed: bool,
+    ) {
+        let _publication = self.state.diagnostic_publication_lock.lock().await;
         {
             let cfg = self.state.config.read();
             if !cfg.ignored_error_codes.is_empty() {
@@ -924,26 +981,47 @@ impl Backend {
             .iter()
             .flat_map(crate::code_action::fixable_span_edits)
             .collect();
-        let content_hash = if entries.is_empty() || version.is_some() {
+        let content_hash = if entries.is_empty() {
             None
         } else {
             source_hash
         };
         {
-            let mut store = self.state.fixable_edits.lock();
-            if entries.is_empty() || (version.is_none() && content_hash.is_none()) {
-                store.remove(uri.as_str());
-            } else {
-                store.insert(
-                    uri.as_str().to_string(),
-                    crate::FixableEdits {
-                        entries,
-                        version,
-                        content_hash,
-                    },
-                );
+            let docs = self.state.documents.lock();
+            if require_closed && docs.contains_key(uri.as_str()) {
+                return;
+            }
+            if let Some(version) = version {
+                let Some(document) = docs.get(uri.as_str()) else {
+                    return;
+                };
+                let Some(source_hash) = source_hash else {
+                    return;
+                };
+                if document.version != version
+                    || docs.content_hash(uri.as_str()) != Some(source_hash)
+                {
+                    return;
+                }
+            }
+            {
+                let mut store = self.state.fixable_edits.lock();
+                if entries.is_empty() || content_hash.is_none() {
+                    store.remove(uri.as_str());
+                } else {
+                    store.insert(
+                        uri.as_str().to_string(),
+                        crate::FixableEdits {
+                            entries,
+                            version,
+                            content_hash,
+                        },
+                    );
+                }
             }
         }
+        #[cfg(test)]
+        diagnostic_publish_test_hook::wait(self).await;
         self.client
             .publish_diagnostics(uri, diagnostics, version)
             .await;
@@ -963,6 +1041,20 @@ impl Backend {
         let diags = if ready { diagnostics } else { Vec::new() };
         self.publish_filtered(uri, diags, version, source_hash)
             .await;
+    }
+
+    pub(crate) async fn publish_gated_if_closed(
+        &self,
+        uri: tower_lsp::lsp_types::Url,
+        diagnostics: Vec<Diagnostic>,
+        source_hash: Option<u64>,
+    ) {
+        let ready = self
+            .state
+            .index_ready
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let diags = if ready { diagnostics } else { Vec::new() };
+        self.publish_if_closed(uri, diags, source_hash).await;
     }
 
     #[tracing::instrument(skip_all, fields(uri = %uri, version = expected_version))]
@@ -1407,8 +1499,13 @@ impl Backend {
                 .get(&target.uri)
                 .is_some_and(|document| document.version == target.version);
             if still_current && let Ok(obj) = Url::parse(&target.uri) {
-                self.publish_gated(obj, diagnostics, Some(target.version), None)
-                    .await;
+                self.publish_gated(
+                    obj,
+                    diagnostics,
+                    Some(target.version),
+                    Some(cwtools_cache::workspace::content_hash(&target.text)),
+                )
+                .await;
             }
         }
     }
@@ -3152,14 +3249,43 @@ mod whole_line_range_tests {
 #[cfg(test)]
 mod ignored_tests {
     use super::*;
+    use std::future::Future;
     use std::sync::Arc;
 
     use crate::state::{DocumentState, ParsedDoc};
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
+    use futures_util::FutureExt;
     use futures_util::stream::StreamExt;
     use parking_lot::Mutex;
     use tower_lsp::{LanguageServer, LspService};
+
+    fn stale_publication_uri() -> String {
+        if cfg!(windows) {
+            "file:///C:/ws/common/ideas/00_ideas.txt".to_string()
+        } else {
+            "file:///ws/common/ideas/00_ideas.txt".to_string()
+        }
+    }
+
+    fn open_stale_publication_doc(backend: &Backend, uri: &str, text: &str) {
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.to_string(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+    }
 
     fn backend_with_ignore(patterns: Vec<String>, workspace_uri: Option<&str>) -> Backend {
         let state = Arc::new(DocumentState::new());
@@ -3333,6 +3459,491 @@ mod ignored_tests {
         assert!(
             published.is_err(),
             "stale diagnostics must not publish after the target changes"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_versioned_publication_preserves_current_diagnostics_and_fixes() {
+        let uri = stale_publication_uri();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
+        open_stale_publication_doc(&backend, &uri, "old text");
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::from("current text"))
+            .unwrap();
+
+        let diagnostic = |replacement: &str| Diagnostic {
+            code: Some(NumberOrString::String("CW253".into())),
+            data: Some(crate::code_action::fix_to_data(
+                &cwtools_parser::fix::SuggestedFix::replace(
+                    "Replace value",
+                    cwtools_parser::ast::SourceRange {
+                        start: cwtools_parser::ast::SourcePos { line: 1, col: 0 },
+                        end: cwtools_parser::ast::SourcePos { line: 1, col: 1 },
+                    },
+                    replacement,
+                ),
+            )),
+            ..Default::default()
+        };
+
+        backend
+            .publish_filtered(
+                uri.parse().unwrap(),
+                vec![diagnostic("current")],
+                Some(2),
+                Some(cwtools_cache::workspace::content_hash("current text")),
+            )
+            .await;
+        let current = socket.next().await.expect("current diagnostics publish");
+        assert_eq!(current.method(), "textDocument/publishDiagnostics");
+
+        // Interleave a result captured from version 1 after version 2 has been
+        // published. It must not replace either the client diagnostics or its
+        // fix-all snapshot.
+        backend
+            .publish_filtered(
+                uri.parse().unwrap(),
+                vec![diagnostic("stale")],
+                Some(1),
+                Some(cwtools_cache::workspace::content_hash("old text")),
+            )
+            .await;
+
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .map(|doc| doc.version),
+            Some(2)
+        );
+        let fixes = backend.state.fixable_edits.lock();
+        let fixes = fixes.get(&uri).expect("current fix snapshot remains");
+        assert_eq!(fixes.version, Some(2));
+        assert_eq!(fixes.entries[0].1.replacement, "current");
+        assert!(
+            socket.next().now_or_never().is_none(),
+            "stale diagnostics publish"
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_same_version_publication_after_reopen_preserves_current_fixes() {
+        let uri = stale_publication_uri();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
+        open_stale_publication_doc(&backend, &uri, "old text");
+        // Capture an old validation result, then close and reopen the document
+        // with different text but the same LSP version.
+        backend.state.documents.lock().remove(&uri);
+        open_stale_publication_doc(&backend, &uri, "new text");
+
+        let diagnostic = |replacement: &str| Diagnostic {
+            code: Some(NumberOrString::String("CW253".into())),
+            data: Some(crate::code_action::fix_to_data(
+                &cwtools_parser::fix::SuggestedFix::replace(
+                    "Replace value",
+                    cwtools_parser::ast::SourceRange {
+                        start: cwtools_parser::ast::SourcePos { line: 1, col: 0 },
+                        end: cwtools_parser::ast::SourcePos { line: 1, col: 1 },
+                    },
+                    replacement,
+                ),
+            )),
+            ..Default::default()
+        };
+
+        backend
+            .publish_filtered(
+                uri.parse().unwrap(),
+                vec![diagnostic("new")],
+                Some(1),
+                Some(cwtools_cache::workspace::content_hash("new text")),
+            )
+            .await;
+        let current = socket.next().await.expect("current diagnostics publish");
+        assert_eq!(current.method(), "textDocument/publishDiagnostics");
+
+        backend
+            .publish_filtered(
+                uri.parse().unwrap(),
+                vec![diagnostic("old")],
+                Some(1),
+                Some(cwtools_cache::workspace::content_hash("old text")),
+            )
+            .await;
+
+        let fixes = backend.state.fixable_edits.lock();
+        let fixes = fixes.get(&uri).expect("current fix snapshot remains");
+        assert_eq!(fixes.version, Some(1));
+        assert_eq!(
+            fixes.content_hash,
+            Some(cwtools_cache::workspace::content_hash("new text"))
+        );
+        assert_eq!(fixes.entries[0].1.replacement, "new");
+        assert!(
+            socket.next().now_or_never().is_none(),
+            "old diagnostics must not publish after same-version reopen"
+        );
+    }
+
+    #[tokio::test]
+    async fn late_close_clear_does_not_publish_after_document_reopens() {
+        let uri = stale_publication_uri();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
+        open_stale_publication_doc(&backend, &uri, "current text");
+        let current_diagnostic = Diagnostic {
+            code: Some(NumberOrString::String("CW253".into())),
+            data: Some(crate::code_action::fix_to_data(
+                &cwtools_parser::fix::SuggestedFix::replace(
+                    "Replace value",
+                    cwtools_parser::ast::SourceRange {
+                        start: cwtools_parser::ast::SourcePos { line: 1, col: 0 },
+                        end: cwtools_parser::ast::SourcePos { line: 1, col: 1 },
+                    },
+                    "current",
+                ),
+            )),
+            ..Default::default()
+        };
+        backend
+            .publish_filtered(
+                uri.parse().unwrap(),
+                vec![current_diagnostic],
+                Some(1),
+                Some(cwtools_cache::workspace::content_hash("current text")),
+            )
+            .await;
+        let current = socket.next().await.expect("current diagnostics publish");
+        assert_eq!(current.method(), "textDocument/publishDiagnostics");
+
+        // This empty result represents didClose work that completed after a
+        // didOpen for the same URI had already installed the current document.
+        backend
+            .publish_if_closed(uri.parse().unwrap(), Vec::new(), None)
+            .await;
+
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .map(|doc| doc.version),
+            Some(1)
+        );
+        let fixes = backend.state.fixable_edits.lock();
+        let fixes = fixes.get(&uri).expect("reopened document fixes remain");
+        assert_eq!(fixes.version, Some(1));
+        assert_eq!(fixes.entries[0].1.replacement, "current");
+        assert!(
+            socket.next().now_or_never().is_none(),
+            "late close clear must not publish"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loc_rebuild_skips_a_file_opened_while_it_publishes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let loc_dir = workspace.path().join("localisation");
+        std::fs::create_dir_all(&loc_dir).unwrap();
+        for name in ["a", "b"] {
+            std::fs::write(
+                loc_dir.join(format!("{name}_l_english.yml")),
+                format!("l_english:\n {name}_key:0 \"text\"\n"),
+            )
+            .unwrap();
+        }
+        let (backend, mut socket) =
+            handshaken_backend_with_workspace(&crate::paths::path_to_uri(workspace.path())).await;
+
+        // A first rebuild publishes both closed files, which gives their URIs
+        // as the server spells them. The socket holds one message, so each
+        // rebuild runs as a task while the test reads.
+        let rebuilding = backend.clone();
+        let root = workspace.path().to_path_buf();
+        let rebuild = tokio::spawn(async move { rebuilding.rebuild_and_publish_loc(&root).await });
+        let mut uris = Vec::new();
+        for _ in 0..2 {
+            let message = socket.next().await.expect("closed loc file publishes");
+            let published: PublishDiagnosticsParams =
+                serde_json::from_value(message.params().cloned().unwrap_or_default())
+                    .expect("publishDiagnostics params");
+            uris.push(published.uri.to_string());
+        }
+        rebuild.await.unwrap();
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        super::diagnostic_publish_test_hook::set(
+            &backend,
+            Arc::clone(&entered),
+            Arc::clone(&release),
+        );
+        let rebuilding = backend.clone();
+        let root = workspace.path().to_path_buf();
+        let rebuild = tokio::spawn(async move { rebuilding.rebuild_and_publish_loc(&root).await });
+        entered.notified().await;
+
+        // The rebuild has taken its open-file snapshot and is sending the first
+        // file, so opening both leaves the second one open before its turn.
+        for uri in &uris {
+            open_stale_publication_doc(&backend, uri, "l_english:\n edited:0 \"text\"\n");
+        }
+        release.notify_one();
+
+        let in_flight = socket.next().await.expect("the in-flight file publishes");
+        assert_eq!(in_flight.method(), "textDocument/publishDiagnostics");
+        rebuild.await.unwrap();
+        assert!(
+            socket.next().now_or_never().is_none(),
+            "disk diagnostics must not publish for a file opened during the rebuild"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rules_reload_skips_an_open_rules_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let rules = temp.path().join("rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        let broken = "types = {\n    type[thing] = { path = \"game/thing }\n}\n";
+        for name in ["open.cwt", "closed.cwt"] {
+            std::fs::write(rules.join(name), broken).unwrap();
+        }
+        let (backend, mut socket) =
+            handshaken_backend_with_workspace(&crate::paths::path_to_uri(temp.path())).await;
+        {
+            let mut config = backend.state.config.write();
+            config.language = "hoi4".to_string();
+            config.rules_dir = Some(rules.clone());
+            config.refresh_roots();
+        }
+        backend
+            .state
+            .handshake_complete
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let open_uri = crate::paths::path_to_uri(&rules.join("open.cwt"));
+        open_stale_publication_doc(&backend, &open_uri, broken);
+
+        // The socket holds one message, so the reload runs as a task while the
+        // test reads, and a marker says when it is done.
+        let loading = backend.clone();
+        let dir = rules.clone();
+        let load = tokio::spawn(async move {
+            loading.load_rules_config(&dir).await;
+            loading
+                .client
+                .log_message(tower_lsp::lsp_types::MessageType::LOG, "reload done")
+                .await;
+        });
+        let mut published = Vec::new();
+        loop {
+            let message = socket
+                .next()
+                .await
+                .expect("the reload reports to the client");
+            let params = message.params().cloned().unwrap_or_default();
+            if message.method() == "textDocument/publishDiagnostics" {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(params).expect("publishDiagnostics params");
+                published.push(params.uri);
+            } else if params["message"] == "reload done" {
+                break;
+            }
+        }
+        load.await.unwrap();
+
+        let closed_uri = crate::paths::path_to_uri(&rules.join("closed.cwt"));
+        assert_eq!(
+            published,
+            [closed_uri.parse().unwrap()],
+            "rule diagnostics must not publish over an open rules file"
+        );
+    }
+
+    #[tokio::test]
+    async fn file_rename_waits_for_in_flight_diagnostic_send() {
+        let uri = stale_publication_uri();
+        let new_uri = if cfg!(windows) {
+            "file:///C:/ws/common/ideas/01_ideas.txt".to_string()
+        } else {
+            "file:///ws/common/ideas/01_ideas.txt".to_string()
+        };
+        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
+        open_stale_publication_doc(&backend, &uri, "old text");
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        super::diagnostic_publish_test_hook::set(
+            &backend,
+            Arc::clone(&entered),
+            Arc::clone(&release),
+        );
+        let publishing_backend = backend.clone();
+        let publishing_uri = uri.clone();
+        let diagnostic = |replacement: &str| Diagnostic {
+            code: Some(NumberOrString::String("CW253".into())),
+            data: Some(crate::code_action::fix_to_data(
+                &cwtools_parser::fix::SuggestedFix::replace(
+                    "Replace value",
+                    cwtools_parser::ast::SourceRange {
+                        start: cwtools_parser::ast::SourcePos { line: 1, col: 0 },
+                        end: cwtools_parser::ast::SourcePos { line: 1, col: 1 },
+                    },
+                    replacement,
+                ),
+            )),
+            ..Default::default()
+        };
+        let publish = tokio::spawn(async move {
+            publishing_backend
+                .publish_filtered(
+                    publishing_uri.parse().unwrap(),
+                    vec![diagnostic("current")],
+                    Some(1),
+                    Some(cwtools_cache::workspace::content_hash("old text")),
+                )
+                .await;
+        });
+        entered.notified().await;
+
+        let mut moving = Box::pin(backend.move_open_document(&uri, &new_uri));
+        let first_poll =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(moving.as_mut().poll(cx))).await;
+        assert!(
+            first_poll.is_pending(),
+            "rename must wait until the in-flight diagnostic send completes"
+        );
+        assert!(backend.state.documents.lock().contains_key(&uri));
+        assert!(backend.state.fixable_edits.lock().contains_key(&uri));
+
+        release.notify_one();
+        publish.await.unwrap();
+        assert!(moving.await);
+
+        let message = socket.next().await.expect("version 1 diagnostics publish");
+        assert_eq!(message.method(), "textDocument/publishDiagnostics");
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(message.params().cloned().unwrap_or_default())
+                .expect("publishDiagnostics params");
+        assert_eq!(published.uri.as_str(), uri.as_str());
+        assert_eq!(published.version, Some(1));
+
+        {
+            let docs = backend.state.documents.lock();
+            assert!(!docs.contains_key(&uri));
+            assert!(docs.contains_key(&new_uri));
+            assert_eq!(
+                docs.content_hash(&new_uri),
+                Some(cwtools_cache::workspace::content_hash("old text"))
+            );
+        }
+        {
+            let fixes = backend.state.fixable_edits.lock();
+            assert!(!fixes.contains_key(&uri));
+            let moved = fixes
+                .get(&new_uri)
+                .expect("fix-all snapshot moves with URI");
+            assert_eq!(moved.version, Some(1));
+            assert_eq!(moved.entries[0].1.replacement, "current");
+        }
+
+        let second_uri = if cfg!(windows) {
+            "file:///C:/ws/common/ideas/02_ideas.txt".to_string()
+        } else {
+            "file:///ws/common/ideas/02_ideas.txt".to_string()
+        };
+        {
+            backend
+                .state
+                .documents
+                .lock()
+                .change(&new_uri, 2, Arc::from("newer text"))
+                .unwrap();
+        }
+        assert!(backend.move_open_document(&new_uri, &second_uri).await);
+        let fixes = backend.state.fixable_edits.lock();
+        assert!(!fixes.contains_key(&new_uri));
+        assert!(!fixes.contains_key(&second_uri));
+    }
+
+    #[tokio::test]
+    async fn did_change_cannot_overtake_an_in_flight_diagnostic_send() {
+        let uri = stale_publication_uri();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
+        open_stale_publication_doc(&backend, &uri, "old text");
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        super::diagnostic_publish_test_hook::set(
+            &backend,
+            Arc::clone(&entered),
+            Arc::clone(&release),
+        );
+        let publishing_backend = backend.clone();
+        let publishing_uri = uri.clone();
+        let publish = tokio::spawn(async move {
+            publishing_backend
+                .publish_filtered(
+                    publishing_uri.parse().unwrap(),
+                    Vec::new(),
+                    Some(1),
+                    Some(cwtools_cache::workspace::content_hash("old text")),
+                )
+                .await;
+        });
+        entered.notified().await;
+
+        let params = DidChangeTextDocumentParams {
+            text_document: VersionedTextDocumentIdentifier {
+                uri: uri.parse().unwrap(),
+                version: 2,
+            },
+            content_changes: vec![TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "current text".into(),
+            }],
+        };
+        let mut change = Box::pin(backend.did_change_impl(params));
+        let first_poll =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(change.as_mut().poll(cx))).await;
+        assert!(
+            first_poll.is_pending(),
+            "didChange must wait until the in-flight diagnostic send completes"
+        );
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .map(|doc| doc.version),
+            Some(1),
+            "the edit must not be processed while the older publication is in flight"
+        );
+
+        release.notify_one();
+        publish.await.unwrap();
+        change.await;
+
+        let message = socket.next().await.expect("version 1 diagnostics publish");
+        assert_eq!(message.method(), "textDocument/publishDiagnostics");
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(message.params().cloned().unwrap_or_default())
+                .expect("publishDiagnostics params");
+        assert_eq!(published.version, Some(1));
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .map(|doc| doc.version),
+            Some(2)
         );
     }
 
@@ -4072,5 +4683,34 @@ mod ignored_tests {
         keystroke.await.expect("keystroke validation task");
         batch.await.expect("watched batch task");
         drain.abort();
+    }
+}
+
+#[cfg(test)]
+mod inline_ignore_tests {
+    use super::*;
+
+    #[test]
+    fn quoted_inline_ignore_examples_keep_editor_diagnostics() {
+        for source in [
+            r#"example = "literal # cwtools-ignore CW100 example""#,
+            r#" KEY:0 "literal # cwtools-ignore CW100 example""#,
+            r#" KEY:0 "text "quoted # cwtools-ignore CW100 example" rest""#,
+        ] {
+            let map = cwtools_validation::inline_ignore::extract_inline_ignored_codes(source);
+            let diagnostic = Diagnostic {
+                code: Some(NumberOrString::String("CW100".into())),
+                ..Diagnostic::default()
+            };
+            let mut diagnostics = vec![diagnostic.clone()];
+            drop_inline_suppressed(&mut diagnostics, &map);
+            assert_eq!(diagnostics, vec![diagnostic], "{source}");
+
+            let map = cwtools_validation::inline_ignore::extract_inline_ignored_codes(&format!(
+                "{source} # cwtools-ignore CW100"
+            ));
+            drop_inline_suppressed(&mut diagnostics, &map);
+            assert!(diagnostics.is_empty(), "real trailing comment: {source}");
+        }
     }
 }

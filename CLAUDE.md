@@ -52,7 +52,7 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 ```bash
 npm install
 npm run compile    # tsc + esbuild (bundle extension + webview)
-npm run check      # typecheck + lint
+npm run check      # host-test inventory, typecheck + lint
 npm test           # Run VS Code extension tests
 ```
 
@@ -71,13 +71,13 @@ Run as `npm run build -- <command>` or `./build.sh <command>`:
 
 ### Testing
 
-Two test layers. `npm run test:node` runs the fast node-only unit tests under `extension/test/unit/`. The rest run in a real extension host against `extension/test/workspaces/stellaris`, picked by label from `.vscode-test.mjs`: `npm test` runs the `unit` label, `npm run test:smoke` adds activation against the real server, and `npm run test:host` adds hover and completion. CI gates on all four.
+Two test layers. `npm run test:node` runs the fast node-only unit tests under `extension/test/unit/`. The rest run in a real extension host and are picked by label from `.vscode-test.mjs`: `npm test` runs the `unit` label, `npm run test:smoke` adds activation against the real server, and `npm run test:host` adds hover and completion. CI runs node and unit tests in its fast client job; after building the server and client it runs `rules-sync`, then the distinct `multi-root` and `watched` labels. Host coverage runs `host` (including smoke, hover and completion) with the separate `live` workspace, so `live` runs once, under coverage.
 
 Every host label goes through `scripts/build/hosttest.py`, which picks a display backend so a local run does not open a VS Code window on your desktop. On Linux that is `xvfb-run -a`, and a missing `xvfb-run` fails with install instructions rather than falling back to a visible window. macOS and Windows have no such backend yet, so they run natively and print a notice (#406). `CWTOOLS_TEST_DISPLAY` overrides the choice with `xvfb`, `ozone` (Electron's headless Ozone backend, no system package), or `native`. `npm run test:native` is the explicit visible-window runner for platform debugging.
 
 Single test: `npx --no-install vitest run extension/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `node scripts/build/python.mjs scripts/build/hosttest.py --label unit --grep 'name'` (unrecognized arguments pass through to `vscode-test`). Watch modes: `npm run test:watch` and `npm run test:node:watch`.
 
-Coverage: `npm run test:coverage` (`host` label, needs a built server binary like `test:host`; V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). The two runs cover disjoint modules (engine.ts and executable.ts are vitest-owned, and `HOST_COVERAGE_DROPS` in `scripts/build/coverage_metrics.py` keeps them out of the host report), and `scripts/build/coverage_summary.py` renders rust, host, and node into the PR comment.
+Coverage: `npm run test:coverage` (the `host` and `live` labels together, needs a built server binary; V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). CI calls `scripts/build/host_coverage.py --skip-compile` after its development build so coverage reuses the compiled client, then `scripts/build/coverage_summary.py` renders rust, host, and node into the PR comment. The host and node runs cover disjoint modules (engine.ts and executable.ts are vitest-owned, and `HOST_COVERAGE_DROPS` in `scripts/build/coverage_metrics.py` keeps them out of the host report).
 
 Host suites must not import extension modules directly: the host runs the esbuild bundle, so a direct import is a second copy of the module. Reach the extension's own modules through its activation API (`graphPanelModule()` in `extension/test/support/utils.ts`).
 

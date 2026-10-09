@@ -104,7 +104,7 @@ fn bench_format_edits(c: &mut Criterion) {
     let table = StringTable::new();
     let options = FormatOptions::default();
     assert!(
-        !format_edits(&input, &table, &options).is_empty(),
+        format_edits(&input, &table, &options).is_ok_and(|edits| !edits.is_empty()),
         "fixture must need formatting"
     );
     c.bench_function("format_edits/changed_file", |b| {

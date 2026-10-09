@@ -46,7 +46,14 @@ Three ways, all case-insensitive about the code:
   comment on either side both work. It names as many codes as you like
   (`# cwtools-ignore CW100 CW246`), and a second `#` ends the list, so a human
   note after it is not read as a code. Read from the raw source rather than the
-  AST, so it works in loc files and in a file that failed to parse. A
+  AST, so it works in loc files and in a file that failed to parse. Hashes
+  inside double-quoted values, including escaped quotes, are literal text and
+  cannot start a directive. An unclosed quote ends at the newline for this
+  scan, so real comments on later lines still work. Localization entries allow
+  embedded unescaped quotes, so their literal extends through the final
+  unescaped quote. A quoted note after a localization directive is ambiguous:
+  `KEY:0 "value" # cwtools-ignore CW100 # "note"` stays literal and suppresses
+  nothing. Put the directive after the final quote or on a separate line. A
   whole-file diagnostic (one with no line, like CW254) cannot be suppressed
   this way.
 - Per run: `--ignore-code CWxxx` on the CLI (repeatable), or `ignore-codes` in
@@ -224,7 +231,7 @@ CW501 (duplicate type) and CW502 (unused type) were Rust-invented IDs that have 
 
 ---
 
-## CW600-CW604 -- Rules config (Rust-only)
+## CW600-CW605 -- Rules config (Rust-only)
 
 Both a rules directory and a single `.cwt` file passed to `rules` or `validate --rules` use these checks. Syntax recovery keeps successfully parsed rules; a single file that cannot be read still fails discovery.
 
@@ -237,6 +244,7 @@ Problems in the `.cwt` ruleset itself rather than in the script it checks. Emitt
 | <a id="cw602"></a>CW602 | Error | {} | A `single_alias_right[...]` the post-processor refused to expand: a reference cycle, a chain past the depth limit, or the node budget. Reported on the `single_alias` definition it names, which is where the fix goes. | Emitted |
 | <a id="cw603"></a>CW603 | Warning | {} | A `##` directive whose value the loader can't parse (a malformed `cardinality` bound, an unrecognised `severity`), so the option silently falls back to its default. One rule under-checks; the ruleset still loads. | Emitted |
 | <a id="cw604"></a>CW604 | Error | {} | A syntax error in a `.cwt` file, such as an unclosed clause or quote. The loader still builds a ruleset from what the parser recovered, so the rules that did parse keep working. The live lint of an open `.cwt` file reports the same error with the same code. | Emitted |
+| <a id="cw605"></a>CW605 | Error | {} | A reserved root `alias[category:name]` or `single_alias[name]` key is missing brackets, names, or an alias category separator, or has unmatched brackets or trailing text. The malformed definition is skipped while other rules continue to load. Ordinary root type names and nested fields in valid alias names remain supported. | Emitted |
 
 ---
 
@@ -332,7 +340,7 @@ hits and Kaiserreich 1, all genuine unset variables.
 
 - **CW283** — a `[!name]` localisation call whose scripted-GUI callback does not exist.
 - **CW500** — an `<type>` reference that resolves to no known instance (the event-specific case is F#'s CW222).
-- **CW600-CW604** — problems in the `.cwt` ruleset itself, which F# only ever printed as text.
+- **CW600-CW605** — problems in the `.cwt` ruleset itself, which F# only ever printed as text.
 
 CW301 (pre-trigger at event root) was a Rust-invented ID that duplicated F#'s
 CW120 on the same leaf; it has been retired in favour of CW120.
