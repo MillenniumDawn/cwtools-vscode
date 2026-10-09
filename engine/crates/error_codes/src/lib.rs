@@ -717,6 +717,13 @@ pub const CW604_RULES_SYNTAX_ERROR: ErrorCode = ErrorCode {
     message_template: "{}",
 };
 
+/// A reserved alias or single_alias root directive has a malformed key.
+pub const CW605_RULES_MALFORMED_ALIAS: ErrorCode = ErrorCode {
+    id: "CW605",
+    severity: ErrorSeverity::Error,
+    message_template: "{}",
+};
+
 // error_code_hash deleted: no callers, and it wasn't actually a hash.
 
 // ── The catalog as a list ──────────────────────────────
@@ -814,6 +821,7 @@ catalog![
     CW602_RULES_UNEXPANDED_ALIAS,
     CW603_RULES_INVALID_DIRECTIVE,
     CW604_RULES_SYNTAX_ERROR,
+    CW605_RULES_MALFORMED_ALIAS,
 ];
 
 #[cfg(test)]
