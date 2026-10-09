@@ -2,7 +2,7 @@
 
 #### Engine
 
-* Return RequestFailed for graph requests refused while the workspace index is building, rules are absent, or the index is empty, preserving the pre-initialization handshake rejection. (#833)
+* Return RequestFailed for graph requests refused while the workspace index is building, rules are absent, or the index is empty, preserving the pre-initialization handshake rejection and sharing the navigation wire error code. (#833)
 * Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
 * Assert ignored-document save publications and typed-path and fallback getFileTypes responses over the LSP wire. (#929)
 * Release string-table read locks before building cached AST records. (#494)

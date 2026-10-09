@@ -8,13 +8,12 @@ use tower_lsp::jsonrpc::{Error, ErrorCode, Result};
 use cwtools_info::SourceLocation;
 
 use crate::Backend;
+use crate::navigation::REQUEST_FAILED;
 
 pub(crate) const MAX_GRAPH_NODES: usize = 500;
 
 const MAX_GRAPH_EDGES: usize = MAX_GRAPH_NODES * 8;
 const MAX_GRAPH_USE_SITES_PER_NODE: usize = 64;
-
-const REQUEST_FAILED: i64 = -32803;
 
 const MAX_LABEL_CHARS: usize = 60;
 
