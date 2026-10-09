@@ -32,20 +32,11 @@ export async function detectFromFolder(
 	root: string,
 	fileExists: (p: string) => boolean | Promise<boolean>,
 ): Promise<string | null> {
-	// Inspect only the fixed set of game-specific markers, never the whole tree.
-	// Content is stronger evidence than a name; mixed trees use GAMES order.
-	for (const [sub, id] of CONTENT_HINTS) {
-		if (await fileExists(path.join(root, sub))) return id;
-	}
 	const parts = root.toLowerCase().split(/[\\/]+/).filter(Boolean);
 	const name = parts[parts.length - 1] ?? "";
-	for (const [pattern, id] of FOLDER_HINTS) {
-		if (
-			typeof pattern === "string" ? name.includes(pattern) : pattern.test(name)
-		) {
-			return id;
-		}
-	}
+	const rootHint = FOLDER_HINTS.find(([pattern]) =>
+		typeof pattern === "string" ? name.includes(pattern) : pattern.test(name),
+	)?.[1];
 	// The root name is relevant. Ancestors count only in the conventional
 	// <vanilla>/game and <game>/mod/<mod> layouts, with exact game folder names.
 	const layoutGame =
@@ -57,9 +48,17 @@ export async function detectFromFolder(
 	const vanilla = GAMES.find((game) =>
 		game.vanillaFolders.includes(layoutGame ?? ""),
 	);
+	const nameHint = rootHint ?? vanilla?.id;
 
-	if (vanilla) return vanilla.id;
-	return null;
+	// Inspect only the fixed set of content markers, never the whole tree.
+	// Content is stronger than names; mixed trees use GAMES order. Dynasties
+	// are shared by CK2 and CK3, so a recognized CK2 root/layout resolves them.
+	for (const [sub, id] of CONTENT_HINTS) {
+		if (await fileExists(path.join(root, sub))) {
+			return sub === "common/dynasties" && nameHint === "ck2" ? "ck2" : id;
+		}
+	}
+	return nameHint ?? null;
 }
 
 function serverPlatformDir(): string {

@@ -16,7 +16,7 @@ export interface GameDef {
 	vanillaFolders: string[];
 	// Games that keep `common` under a game/ subdir in the vanilla install.
 	vanillaSubdir?: string;
-	// A dir unique to this game, for opaque folder names.
+	// A content marker for opaque folder names; shared markers need name hints.
 	contentHint?: string;
 }
 
@@ -87,6 +87,7 @@ export const GAMES: GameDef[] = [
 		folderHint: /(ck3|crusader kings iii)/,
 		vanillaFolders: ["crusader kings iii"],
 		vanillaSubdir: "game",
+		// CK2 also uses this marker; a recognized CK2 name disambiguates it.
 		contentHint: "common/dynasties",
 	},
 	{

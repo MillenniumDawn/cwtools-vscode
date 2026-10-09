@@ -131,6 +131,41 @@ suite("engine — detectFromFolder", () => {
 		);
 	});
 
+	test.each([
+		"/games/Crusader Kings II",
+		"C:\\games\\Crusader Kings II\\",
+		"/mods/CK2_dynasty_mod",
+		"C:\\mods\\CK2_dynasty_mod",
+		"/games/Crusader Kings II/mod/opaque",
+		"C:\\games\\Crusader Kings II\\mod\\opaque",
+		"/games/Crusader Kings II/game",
+		"C:\\games\\Crusader Kings II\\game",
+	])("shared dynasties content preserves the recognized CK2 root or layout: %s", async (root) => {
+		assert.strictEqual(await detectFromFolder(root, (p) =>
+			p === path.join(root, "common", "dynasties")), "ck2");
+	});
+
+	test.each([
+		"/games/Crusader Kings II",
+		"/games/Crusader Kings II/mod/opaque",
+		"/home/ck2/projects/opaque",
+		"C:\\Users\\Crusader Kings II\\projects\\opaque",
+	])("HOI4 content keeps priority over CK2 names and unrelated ancestors: %s", async (root) => {
+		assert.strictEqual(await detectFromFolder(root, (p) =>
+			p === path.join(root, "common", "dynasties") ||
+			p === path.join(root, "common", "ai_strategy")), "hoi4");
+	});
+
+	test.each([
+		"/home/ck2/projects/opaque",
+		"C:\\Users\\Crusader Kings II\\projects\\opaque",
+		"/games/Crusader Kings III",
+		"/games/Crusader Kings III/mod/opaque",
+	])("shared dynasties default to CK3 without a recognized CK2 root or layout: %s", async (root) => {
+		assert.strictEqual(await detectFromFolder(root, (p) =>
+			p === path.join(root, "common", "dynasties")), "ck3");
+	});
+
 	test("mixed content markers follow game-table order before names", async () => {
 		assert.strictEqual(await detectFromFolder("/mods/HOI4", () => true), "stellaris");
 	});

@@ -73,15 +73,17 @@ the server. If you add a descriptor after activation, reload the VS Code window.
 2. Edit files and watch syntax errors show up when you make mistakes
 3. Wait up to a minute for the extension to scan your mod and find errors
 
-Game detection checks the fixed game-specific content markers first (for
+Game detection checks the fixed content markers first (for
 example, `common/ai_strategy` selects HOI4), then the opened folder's name.
 A recognized game folder also supplies a hint for `<game>/mod/<mod>` and
 `<game>/game` layouts; unrelated ancestor names are ignored. Conflicting
 content markers use this order: Stellaris, HOI4, EU4, CK3. Content takes
 precedence over conflicting names, and overlapping names prefer the newer
-game (CK3 before CK2, EU5 before EU4). If neither content nor names identify
-a game, detection checks supported game executables before using generic
-Paradox mode. Detection does not recursively scan content for hints.
+game (CK3 before CK2, EU5 before EU4). The shared `common/dynasties` marker
+selects CK2 when the opened root or supported layout names CK2; otherwise it
+defaults to CK3. Earlier content markers, including HOI4, still take precedence.
+If neither content nor names identify a game, detection checks supported game
+executables before using generic Paradox mode. Detection does not recursively scan content for hints.
 
 ### Submods
 
