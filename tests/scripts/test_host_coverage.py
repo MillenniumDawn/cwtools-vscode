@@ -347,7 +347,7 @@ def test_an_unavailable_display_backend_fails_before_the_compile(
     monkeypatch.setattr(host_coverage, "_run", compile_step)
 
     with pytest.raises(RuntimeError, match="xvfb-run is not on PATH"):
-        host_coverage.main()
+        host_coverage.main([])
 
     assert not compiled
     assert not coverage_dir.exists()
@@ -370,13 +370,16 @@ def test_missing_npm_fails_before_compilation_and_clears_coverage(
     monkeypatch.setattr(host_coverage, "_run", refuse_compilation)
 
     with pytest.raises(RuntimeError, match=r"^npm is not on PATH$"):
-        host_coverage.main()
+        host_coverage.main([])
 
     assert not coverage_dir.exists()
 
 
+@pytest.mark.parametrize("skip_compile", [False, True])
 def test_runs_host_and_live_labels_in_one_coverage_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_compile: bool,
 ) -> None:
     coverage_dir = tmp_path / "coverage"
     summary_path = coverage_dir / "coverage-summary.json"
@@ -423,8 +426,12 @@ def test_runs_host_and_live_labels_in_one_coverage_command(
     monkeypatch.setattr(host_coverage, "test_cli_command", make_test_cli_command)
     monkeypatch.setattr(host_coverage, "run_with_timeout", record_command)
 
-    assert host_coverage.main() == 0
-    assert compile_commands == [["resolved-npm", "run", "compile"]]
+    argv = ["--skip-compile"] if skip_compile else []
+    assert host_coverage.main(argv) == 0
+    expected_compile_commands = (
+        [] if skip_compile else [["resolved-npm", "run", "compile"]]
+    )
+    assert compile_commands == expected_compile_commands
     assert labels_seen == [["host", "live"]]
     assert coverage_seen == [True]
     assert invoked_command == [
