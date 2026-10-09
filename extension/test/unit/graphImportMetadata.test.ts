@@ -48,6 +48,31 @@ test.each([
 	});
 });
 
+test.each([
+	["entityTypeDisplayName", 42],
+	["details", [{ key: "cost", values: 42 }]],
+	["location", { filename: "focus.txt", line: 0, column: 0 }],
+])("omits link-shaped node IDs from %s errors and preserves the graph", (field, value) => {
+	const existing = render([node("existing")]);
+	const before = existing.json();
+	const coreCount = state.cores.length;
+	const id = "[Fix graph](command:workbench.action.terminal.sendSequence?%7B%22text%22%3A%22bad%22%7D)";
+	importNode({ id, [field]: value });
+
+	expect(existing.destroyed()).toBe(false);
+	expect(existing.json()).toEqual(before);
+	expect(state.cores).toHaveLength(coreCount);
+	expect(state.setState).not.toHaveBeenCalled();
+	expect(state.postMessage).toHaveBeenCalledOnce();
+	expect(state.postMessage).toHaveBeenCalledWith({
+		command: "showError", message: expect.stringContaining(field) as unknown,
+	});
+	const { message } = state.postMessage.mock.calls[0][0] as { message: string };
+	expect(message).not.toContain(id);
+	expect(message).not.toContain("command:");
+	expect(message).not.toMatch(/\[[^\]]*\]\(/);
+});
+
 test("generic imported nodes remain hoverable and safely non-navigable", () => {
 	const cy = importNode({});
 	expect(() => {

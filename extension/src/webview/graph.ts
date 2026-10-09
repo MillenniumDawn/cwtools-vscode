@@ -514,15 +514,17 @@ function validateImportedMetadata(json: CytoscapeJson) {
 		if (!isRecord(data)) {
 			continue;
 		}
+		// Imported IDs may contain command links rendered by host notifications.
+		// Keep validation errors independent of all imported field values.
 		if (data.entityTypeDisplayName !== undefined && typeof data.entityTypeDisplayName !== "string") {
-			throw new GraphMetadataError(`node "${String(data.id)}" has an invalid entityTypeDisplayName (expected a string)`);
+			throw new GraphMetadataError("a node has an invalid entityTypeDisplayName (expected a string)");
 		}
 		if (data.details !== undefined &&
 			(!Array.isArray(data.details) || !data.details.every(isGraphNodeDetail))) {
-			throw new GraphMetadataError(`node "${String(data.id)}" has invalid details (expected string keys and arrays of strings)`);
+			throw new GraphMetadataError("a node has invalid details (expected string keys and arrays of strings)");
 		}
 		if (data.location !== undefined && !isGraphLocation(data.location)) {
-			throw new GraphMetadataError(`node "${String(data.id)}" has an invalid location (expected filename and whole-number line/column coordinates)`);
+			throw new GraphMetadataError("a node has an invalid location (expected filename and whole-number line/column coordinates)");
 		}
 	}
 }
