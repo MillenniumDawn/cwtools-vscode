@@ -1,5 +1,7 @@
 import * as assert from "assert";
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as vscode from "vscode";
 import { activate, waitForServerReady, waitUntil } from "../support/utils";
 
@@ -44,4 +46,32 @@ suite("Multi-root descriptor selection", function () {
 			"the descriptor-bearing root should be scanned",
 		);
 	});
+	test("keeps unrelated and external plaintext files while promoting selected mod script", async () => {
+		await activate();
+		const folders = vscode.workspace.workspaceFolders ?? [];
+		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "cwtools-language-"));
+		const files = [
+			path.join(folders[1].uri.fsPath, "common", "cwtools-language-probe.txt"),
+			path.join(folders[0].uri.fsPath, "common", "cwtools-language-probe.txt"),
+			path.join(temp, "common", "notes.txt"),
+			path.join(temp, "unrelated.gfx"),
+		];
+		try {
+			for (const file of files) {
+				await fs.mkdir(path.dirname(file), { recursive: true });
+				await fs.writeFile(file, "probe = yes\n");
+				const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+				await vscode.languages.setTextDocumentLanguage(doc, "plaintext");
+			}
+			const language = (file: string) => vscode.workspace.textDocuments.find((doc) => doc.uri.fsPath === file)?.languageId;
+			assert.ok(await waitUntil(() => language(files[0]) === "paradox"));
+			// Give open/language-change callbacks a turn to settle for every doc.
+			await new Promise((resolve) => setTimeout(resolve, 250));
+			for (const file of files.slice(1)) assert.strictEqual(language(file), "plaintext", file);
+		} finally {
+			for (const file of files.slice(0, 2)) await fs.rm(file, { force: true });
+			await fs.rm(temp, { recursive: true, force: true });
+		}
+	});
+
 });

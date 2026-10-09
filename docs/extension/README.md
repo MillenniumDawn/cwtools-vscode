@@ -92,6 +92,15 @@ reindex, not live. Reload the window after changing the setting.
 The server scans only the first workspace folder, so adding a parent mod as a
 second folder of a multi-root workspace does not make its definitions visible.
 
+Plaintext game scripts are automatically promoted to the Paradox language only
+inside the selected descriptor-bearing mod, its configured `cwtools.parentMods`,
+and the detected game's `cwtools.cache.<game>` install. Parent mods overlapping
+the selected mod are excluded, matching the server's startup rules. Directory
+hints are checked relative to these roots; unrelated workspace folders, external
+files, and scratch buffers keep their language. This applies to both documents
+already open at activation and documents opened later. Changes to these root
+settings require reloading the window, as they do for server indexing.
+
 If you want to browse vanilla files, you can use the "CWTOOLS LOADED FILES" section in the Explorer tab.
 
 ### Completion

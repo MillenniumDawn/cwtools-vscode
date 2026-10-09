@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import type { ExtensionContext } from "vscode";
 import { workspace, window, commands } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
@@ -6,6 +7,7 @@ import type { LanguageClient } from "vscode-languageclient/node";
 import { serverCommand } from "../common/serverCommandContract";
 import { shouldNotifyFocus, pendingProcessDelayMs } from "./focusTracking";
 import { logError, logInfo } from "./logger";
+import { isTrustedPath } from "./trustedPaths";
 
 export interface EditorTracker {
 	getLatestType(): string;
@@ -24,6 +26,7 @@ export async function registerDocumentLanguage(
 	context: ExtensionContext,
 	client: LanguageClient,
 	languageId: string,
+	contentRoots: readonly string[],
 ): Promise<EditorTracker> {
 	const didFocusFile = "didFocusFile";
 	let latestType: string = "";
@@ -41,14 +44,18 @@ export async function registerDocumentLanguage(
 	// folder named like the game ("hearts of iron iv"), so a mod workspace with
 	// any other name opens its .txt files as plaintext (no grammar, no LSP).
 	// Upgrade plaintext docs that look like game script to the detected language.
-	// Scoped to the usual game dirs (and known extensions) so unrelated .txt
-	// notes and scratch buffers aren't hijacked, in both the concrete-game and
-	// generic "paradox" cases.
+	// Only the selected mod and configured parent/vanilla content roots qualify.
+	// Test directory hints relative to those roots, so an ancestor named common
+	// cannot turn ordinary notes into script.
 	const gameScriptDirs =
-		/[\\/](events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
+		/(?:^|[\\/])(events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
 	function looksLikeGameScript(doc: vscode.TextDocument): boolean {
 		if (doc.uri.scheme !== "file") return false;
-		const p = doc.uri.fsPath;
+		const root = contentRoots.find((root) =>
+			isTrustedPath(doc.uri.fsPath, [root]),
+		);
+		if (!root) return false;
+		const p = path.relative(root, doc.uri.fsPath);
 		if (/\.(gui|gfx|asset|sfx)$/i.test(p)) return true;
 		return /\.txt$/i.test(p) && gameScriptDirs.test(p);
 	}

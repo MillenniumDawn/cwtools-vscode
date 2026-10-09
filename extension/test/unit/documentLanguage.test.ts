@@ -1,4 +1,6 @@
 import { languages } from "vscode";
+import * as path from "node:path";
+import type { TextDocument } from "vscode";
 import * as assert from "assert";
 import { afterEach, beforeEach, suite, test, vi } from "vitest";
 import type { ExtensionContext } from "vscode";
@@ -11,7 +13,11 @@ const {
 	logError,
 	logInfo,
 	onDidChangeActiveTextEditor,
+	documentState,
+	onDidOpenTextDocument,
 } = vi.hoisted(() => ({
+	documentState: { documents: [] as TextDocument[] },
+	onDidOpenTextDocument: vi.fn((_listener: unknown) => ({ dispose() {} })),
 	activeEditor: {
 		document: {
 			languageId: "paradox",
@@ -56,8 +62,8 @@ vi.mock("vscode", () => ({
 		onDidChangeActiveTextEditor,
 	},
 	workspace: {
-		textDocuments: [],
-		onDidOpenTextDocument: vi.fn(() => disposable),
+		get textDocuments() { return documentState.documents; },
+		onDidOpenTextDocument,
 	},
 }));
 
@@ -72,9 +78,12 @@ vi.mock("../../src/host/logger", () => ({
 
 import { registerDocumentLanguage } from "../../src/host/documentLanguage";
 
+const contentRoot = path.resolve("document-language-workspace");
+
 suite("documentLanguage", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		documentState.documents = [];
 	});
 
 	test("logs a rejected focus notification instead of propagating it", async () => {
@@ -85,6 +94,7 @@ suite("documentLanguage", () => {
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification, sendRequest } as unknown as LanguageClient,
 			"paradox",
+			[contentRoot],
 		);
 
 		await assert.doesNotReject(() => tracker.classifyActiveEditor());
@@ -107,6 +117,7 @@ suite("documentLanguage", () => {
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification, sendRequest } as unknown as LanguageClient,
 			"paradox",
+			[contentRoot],
 		);
 
 		await tracker.classifyActiveEditor();
@@ -131,6 +142,7 @@ suite("documentLanguage", () => {
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification, sendRequest } as unknown as LanguageClient,
 			"paradox",
+			[contentRoot],
 		);
 
 		await tracker.classifyActiveEditor();
@@ -156,6 +168,7 @@ suite("documentLanguage", () => {
 				{ subscriptions: [] } as unknown as ExtensionContext,
 				{ sendNotification, sendRequest } as unknown as LanguageClient,
 				"paradox",
+				[contentRoot],
 			);
 			await tracker.classifyActiveEditor();
 			assert.strictEqual(tracker.getLatestType(), "idea");
@@ -189,6 +202,7 @@ suite("documentLanguage", () => {
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification, sendRequest } as unknown as LanguageClient,
 			"paradox",
+			[contentRoot],
 		);
 
 		await tracker.classifyActiveEditor();
@@ -225,6 +239,7 @@ suite("documentLanguage", () => {
 				{ subscriptions: [] } as unknown as ExtensionContext,
 				{ sendNotification, sendRequest } as unknown as LanguageClient,
 				"paradox",
+				[contentRoot],
 			);
 
 			const classification = tracker.classifyActiveEditor();
@@ -254,6 +269,7 @@ suite("documentLanguage", () => {
 				{ subscriptions: [] } as unknown as ExtensionContext,
 				{ sendNotification, sendRequest: vi.fn() } as unknown as LanguageClient,
 				"paradox",
+				[contentRoot],
 			);
 			const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
 				| ((editor: typeof activeEditor) => void)
@@ -274,6 +290,58 @@ suite("documentLanguage", () => {
 		}
 	});
 
+	suite("plaintext promotion", () => {
+		const makeDocument = (file: string, languageId = "plaintext", scheme = "file") => ({
+			languageId,
+			uri: { fsPath: file, scheme, toString: () => `file://${file}` },
+		}) as TextDocument;
+		const roots = [contentRoot, path.resolve("parent-mod"), path.resolve("vanilla")];
+		const valid = [
+			makeDocument(path.join(contentRoot, "common", "ideas", "idea.txt")),
+			makeDocument(path.join(contentRoot, "interface", "test.gfx")),
+			makeDocument(path.join(roots[1], "events", "parent.txt")),
+			makeDocument(path.join(roots[2], "game", "common", "ideas", "base.txt")),
+		];
+		const unrelated = [
+			makeDocument(path.join(path.resolve("unrelated"), "common", "notes.txt")),
+			makeDocument(path.join(path.resolve("outside"), "image.gfx")),
+			makeDocument(path.join(`${contentRoot}-other`, "events", "notes.txt")),
+			makeDocument(path.join(contentRoot, "..", "outside", "common", "notes.txt")),
+			makeDocument(path.join(contentRoot, "notes.txt")),
+			makeDocument(path.join(contentRoot, "common", "notes.txt"), "markdown"),
+			makeDocument(path.join(contentRoot, "common", "notes.txt"), "plaintext", "untitled"),
+		];
+		const register = () => registerDocumentLanguage(
+			{ subscriptions: [] } as unknown as ExtensionContext,
+			{ sendNotification: vi.fn(), sendRequest: vi.fn() } as unknown as LanguageClient,
+			"paradox", roots,
+		);
+
+		test("promotes only recognized content among documents already open", async () => {
+			documentState.documents = [...valid, ...unrelated];
+			await register();
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, valid.map((doc) => [doc, "paradox"]));
+		});
+
+		test("does not treat the content root's ancestor names as directory hints", async () => {
+			const root = path.join(contentRoot, "common", "opaque-mod");
+			documentState.documents = [makeDocument(path.join(root, "notes.txt"))];
+			await registerDocumentLanguage(
+				{ subscriptions: [] } as unknown as ExtensionContext,
+				{ sendNotification: vi.fn(), sendRequest: vi.fn() } as unknown as LanguageClient,
+				"paradox", [root],
+			);
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, []);
+		});
+
+		test("applies the same containment when new documents open", async () => {
+			await register();
+			const listener = onDidOpenTextDocument.mock.calls[0][0] as (doc: TextDocument) => Promise<void>;
+			for (const doc of [...valid, ...unrelated]) await listener(doc);
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, valid.map((doc) => [doc, "paradox"]));
+		});
+	});
+
 	suite("stale editor classification", () => {
 		interface Editor {
 			document: { languageId: string; uri: { toString(): string; scheme: string; fsPath: string } };
@@ -281,7 +349,7 @@ suite("documentLanguage", () => {
 		const editorFor = (name: string): Editor => ({
 			document: {
 				languageId: "paradox",
-				uri: { toString: () => `file:///workspace/events/${name}.txt`, scheme: "file", fsPath: `/workspace/events/${name}.txt` },
+				uri: { toString: () => `file:///workspace/events/${name}.txt`, scheme: "file", fsPath: path.join(contentRoot, "events", `${name}.txt`) },
 			},
 		});
 		const editorA = editorFor("a");
@@ -315,6 +383,7 @@ suite("documentLanguage", () => {
 				{ subscriptions } as unknown as ExtensionContext,
 				{ sendNotification, sendRequest } as unknown as LanguageClient,
 				"paradox",
+				[contentRoot],
 			);
 			const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
 				| ((editor: Editor | undefined) => void)

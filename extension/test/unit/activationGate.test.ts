@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 	resolveRulesCache: vi.fn(),
 	createLanguageClient: vi.fn(),
 	registerCommands: vi.fn(),
+	registerDocumentLanguage: vi.fn(),
 	fsStat: vi.fn(),
 	fsChmod: vi.fn(),
 	client: {
@@ -72,7 +73,7 @@ vi.mock("../../src/host/serverNotifications", () => ({
 	registerServerNotifications: vi.fn(() => mocks.notifications),
 }));
 vi.mock("../../src/host/documentLanguage", () => ({
-	registerDocumentLanguage: vi.fn(() => mocks.tracker),
+	registerDocumentLanguage: mocks.registerDocumentLanguage,
 }));
 vi.mock("../../src/host/commands", () => ({
 	registerCommands: mocks.registerCommands,
@@ -92,6 +93,7 @@ suite("descriptor startup gate", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		vi.clearAllMocks();
+		mocks.registerDocumentLanguage.mockReturnValue(mocks.tracker);
 		mocks.workspace.getConfiguration.mockImplementation(() => ({
 			get: vi.fn((_key: string, defaultValue?: unknown) => defaultValue),
 		}));
@@ -236,6 +238,9 @@ suite("descriptor startup gate", () => {
 			expect.any(Function),
 		);
 		expect(mocks.client.registerProposedFeatures).toHaveBeenCalledOnce();
+		expect(mocks.registerDocumentLanguage).toHaveBeenCalledWith(
+			context, mocks.client, "paradox", ["/mod"],
+		);
 		expect(mocks.registerCommands).toHaveBeenCalledWith(
 			context,
 			mocks.client,
