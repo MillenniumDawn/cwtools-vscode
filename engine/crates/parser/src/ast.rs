@@ -153,6 +153,9 @@ pub struct ParsedFile {
     pub arena: Arena,
     pub root_children: Vec<Child>,
     pub errors: Vec<ParseError>,
+    /// Line of the first quoted string parsed in leaf-value position that ran
+    /// unclosed with its diagnostic suppressed; the parse cache does not carry it.
+    pub(crate) unclosed_leaf_value_quote_line: Option<u32>,
     /// Keeps alive the overlay region this file's ids were interned into, if any.
     /// Private so out-of-crate construction has to go through [`ParsedFile::new`]
     /// rather than silently defaulting it (#475).
@@ -165,6 +168,7 @@ impl ParsedFile {
             arena,
             root_children,
             errors,
+            unclosed_leaf_value_quote_line: None,
             overlay: None,
         }
     }

@@ -10,6 +10,7 @@ code.
 - [Commands and settings reference](extension/reference.md)
 - [Theme authoring](extension/themes.md)
 - [Graph hover wiring and retained state](extension/GRAPH_HOVER_SCALING.md)
+- [Graph layout partition performance](extension/GRAPH_LAYOUT_PERFORMANCE.md)
 
 ## Engine
 

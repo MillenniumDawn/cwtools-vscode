@@ -16,6 +16,7 @@
   "commands.exportProfilingLog.title": "Profiling-Protokoll exportieren",
   "commands.fixAllWorkspace.title": "Alle automatisch behebbaren Probleme im Arbeitsbereich beheben",
   "commands.formatWorkspace.title": "Arbeitsbereich formatieren",
+  "commands.validateWorkspace.title": "Arbeitsbereich validieren",
   "commands.restartServer.title": "Server neu starten",
   "commands.showOutput.title": "Ausgabe anzeigen",
   "commands.showGraph.title": "Graph anzeigen",

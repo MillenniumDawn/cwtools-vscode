@@ -13,6 +13,7 @@ import {
 	graphDataAvailable,
 	fixAllWorkspaceAvailable,
 	formatWorkspaceAvailable,
+	validateWorkspaceAvailable,
 } from "./graphAvailability";
 import type { EditorTracker } from "./documentLanguage";
 import { errorMessage, logError, outputChannel } from "./logger";
@@ -43,6 +44,12 @@ function serverProvidesFormatWorkspace(client: LanguageClient): boolean {
 	);
 }
 
+function serverProvidesValidateWorkspace(client: LanguageClient): boolean {
+	return validateWorkspaceAvailable(
+		client.initializeResult?.capabilities.executeCommandProvider?.commands,
+	);
+}
+
 // Gates the palette entries and the editor-title button. The client state
 // handler calls it whenever the client reaches Running, when the server's
 // capabilities are known.
@@ -62,6 +69,11 @@ export function publishCommandAvailability(client: LanguageClient): void {
 		"cwtoolsFormatWorkspaceAvailable",
 		serverProvidesFormatWorkspace(client),
 	);
+	void commands.executeCommand(
+		"setContext",
+		"cwtoolsValidateWorkspaceAvailable",
+		serverProvidesValidateWorkspace(client),
+	);
 }
 
 export function clearCommandAvailability(): void {
@@ -70,6 +82,11 @@ export function clearCommandAvailability(): void {
 	void commands.executeCommand(
 		"setContext",
 		"cwtoolsFormatWorkspaceAvailable",
+		false,
+	);
+	void commands.executeCommand(
+		"setContext",
+		"cwtoolsValidateWorkspaceAvailable",
 		false,
 	);
 }
