@@ -380,6 +380,64 @@ suite("graph panel restore", () => {
 		]);
 	});
 
+	test("keeps a normal import when an older server restore completes", async () => {
+		const restored = deferred<GraphData>();
+		executeCommand.mockImplementation((command: unknown) =>
+			command === "getGraphData" ? restored.promise : undefined,
+		);
+		const panel = fakePanel();
+		const restore = deserialize(panel.panel, { source: "server", entityType: "idea" });
+		await vi.waitFor(() => assert.strictEqual(graphRequests().length, 1));
+		showOpenDialog.mockResolvedValue([{ fsPath: "new.json" }]);
+		readFile.mockResolvedValue(Buffer.from(sampleJson));
+		await registeredCommands.get("cwtools.graphFromJson")!();
+		restored.resolve(graphData);
+		await restore;
+		panel.ready();
+		assert.deepStrictEqual(panel.postMessage.mock.calls, [[{
+			command: "importJson", json: sampleJson,
+			settings: { wheelSensitivity: 1 },
+			persist: { source: "json", fileName: "new.json" },
+		}]]);
+	});
+
+	test("keeps a newer server graph when a JSON restore read finishes later", async () => {
+		const bytes = deferred<Uint8Array>();
+		showOpenDialog.mockResolvedValue([{ fsPath: "old.json" }]);
+		readFile.mockReturnValue(bytes.promise);
+		const panel = fakePanel();
+		const restore = deserialize(panel.panel, { source: "json" });
+		await vi.waitFor(() => assert.strictEqual(readFile.mock.calls.length, 1));
+		executeCommand.mockResolvedValue(graphData);
+		await registeredCommands.get("cwtools.showGraph")!();
+		bytes.resolve(Buffer.from(sampleJson));
+		await restore;
+		panel.ready();
+		assert.deepStrictEqual(panel.postMessage.mock.calls, [[{
+			command: "go", data: graphData,
+			settings: { wheelSensitivity: 1 },
+			persist: { source: "server", entityType: "idea", depth: 3 },
+		}]]);
+	});
+
+	test("a cancelled JSON restore dialog preserves a server request started during the dialog", async () => {
+		const selection = deferred<undefined>();
+		showOpenDialog.mockReturnValue(selection.promise);
+		const panel = fakePanel();
+		const restore = deserialize(panel.panel, { source: "json" });
+		await vi.waitFor(() => assert.strictEqual(showOpenDialog.mock.calls.length, 1));
+		executeCommand.mockResolvedValue(graphData);
+		await registeredCommands.get("cwtools.showGraph")!();
+		selection.resolve(undefined);
+		await restore;
+		panel.ready();
+		assert.deepStrictEqual(panel.postMessage.mock.calls, [[{
+			command: "go", data: graphData,
+			settings: { wheelSensitivity: 1 },
+			persist: { source: "server", entityType: "idea", depth: 3 },
+		}]]);
+	});
+
 	test("tells the user a JSON graph can't be restored when the import is cancelled", async () => {
 		showOpenDialog.mockResolvedValue(undefined);
 		const panel = fakePanel();

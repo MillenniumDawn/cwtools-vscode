@@ -305,12 +305,18 @@ export function registerCommands(
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.graphFromJson", async () => {
 			const uri = await window.showOpenDialog({ filters: { Json: ["json"] } });
-			if (!uri) {
+			if (!uri?.length) {
 				return;
 			}
+			// Selecting a file commits an import. Cancelling the dialog leaves
+			// pending work alone; after selection, even a failed read supersedes it.
+			const requestId = ++latestGraphRequest;
 			const bytes = await vscode.workspace.fs.readFile(uri[0]);
 			const data = new TextDecoder("utf-8").decode(bytes);
 			const gp = await import("./graphPanel");
+			if (requestId !== latestGraphRequest) {
+				return;
+			}
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity(), {
 				source: "json",
@@ -332,7 +338,9 @@ export function registerCommands(
 								context.extensionPath,
 								webviewPanel,
 							);
-							const requestId = ++latestGraphRequest;
+							let requestId = persisted?.source === "json"
+								? latestGraphRequest
+								: ++latestGraphRequest;
 							if (persisted?.source === "server" && persisted.entityType) {
 								if (!serverProvidesGraphData(client)) {
 									window.showWarningMessage(
@@ -356,7 +364,7 @@ export function registerCommands(
 								const uri = await window.showOpenDialog({
 									filters: { Json: ["json"] },
 								});
-								if (!uri) {
+								if (!uri?.length) {
 									window.showInformationMessage(
 										l10n.t(
 											"CWTools: graph data from a JSON export isn't persisted across reloads. Run 'CWTools: Recreate graph from json' to rebuild it.",
@@ -364,12 +372,15 @@ export function registerCommands(
 									);
 									return;
 								}
+								// Restoration uses the same file-selection commitment point.
+								requestId = ++latestGraphRequest;
 								const bytes = await vscode.workspace.fs.readFile(uri[0]);
 								const data = new TextDecoder("utf-8").decode(bytes);
 								if (requestId !== latestGraphRequest) {
 									return;
 								}
-								panel.initialiseGraph(data, wheelSensitivity(), {
+								gp.GraphPanel.create(context.extensionPath);
+								gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity(), {
 									source: "json",
 									fileName: path.basename(uri[0].fsPath),
 								});
