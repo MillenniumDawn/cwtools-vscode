@@ -37,6 +37,7 @@
 * Recover an unclosed quoted key as a leaf value without carrying over the speculative parse error, so an unclosed quote used as a leaf value no longer reports a parse diagnostic of its own. A quote whose missing end swallowed a following operator, a `{` shorthand or a closing `}` still reports its unclosed string, and the formatter keeps refusing any file with an unclosed quote so reformatting cannot corrupt it. Because such a file now parses clean, the refusal says why: `cwtools format` prints `<file>: unclosed quote on line N; skipping`, format document and format selection show a warning naming the line (once per file and line, and logged every time), and Format workspace counts those files apart from parse errors and lists them in the output. (#556)
 * HOI4 `replace_path` now hides only files directly inside the named directory from lower-priority mod layers and the base game; nested descendants remain visible, including in vanilla assets and localisation. Base-game aggregate caches remain enabled and are keyed to the replacement view. When an explicit cache has a different replacement view, `validate` and `fix` warn and use a freshly indexed filtered view with `--vanilla`, then rebuild the cache. Without `--vanilla`, they skip that cache with a warning. (#820)
 * Delete two functions with no callers: `InfoService::index_file` and `is_ignored_file`. (#910)
+* Empty the 50 `.dds` images in the `performancetest2` test fixture. The engine indexes them by path and no test reads their bytes, so a checkout is 2.8 MB smaller. (#916)
 
 #### Extension
 
