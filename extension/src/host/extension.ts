@@ -202,18 +202,21 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		defaultClient = client;
 		client.registerProposedFeatures();
 
-		const settings = workspace.getConfiguration("cwtools");
+		const readContentRoots = () => {
+			const settings = workspace.getConfiguration("cwtools");
+			return gameContentRoots(
+				workspaceFolder.uri.fsPath,
+				settings.get<string[]>("parentMods"),
+				settings.get<string>(`cache.${language}`),
+			);
+		};
 		const tracker = await registerDocumentLanguage(
 			context,
 			client,
 			"paradox",
-			gameContentRoots(
-				workspaceFolder.uri.fsPath,
-				settings.get<string[]>("parentMods"),
-				settings.get<string>(`cache.${language}`),
-			),
+			readContentRoots,
 		);
-		const notifications = registerServerNotifications(context, client);
+		const notifications = registerServerNotifications(context, client, tracker.updateVanillaRoots);
 		initialScanDone = notifications.initialScanDone;
 		statusText = notifications.statusText;
 		notifyStopped = notifications.markStopped;

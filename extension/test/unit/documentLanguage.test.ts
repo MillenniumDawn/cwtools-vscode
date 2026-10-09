@@ -1,5 +1,6 @@
-import { languages } from "vscode";
+import { languages, Uri } from "vscode";
 import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { TextDocument } from "vscode";
 import * as assert from "assert";
 import { afterEach, beforeEach, suite, test, vi } from "vitest";
@@ -15,7 +16,9 @@ const {
 	onDidChangeActiveTextEditor,
 	documentState,
 	onDidOpenTextDocument,
+	uriParse,
 } = vi.hoisted(() => ({
+	uriParse: vi.fn<(value: string) => { scheme: string; fsPath: string }>(),
 	documentState: { documents: [] as TextDocument[] },
 	onDidOpenTextDocument: vi.fn((_listener: unknown) => ({ dispose() {} })),
 	activeEditor: {
@@ -34,6 +37,21 @@ const {
 }));
 
 vi.mock("vscode", () => ({
+	Uri: {
+		file: (file: string) => ({ toString: () => pathToFileURL(file).toString() }),
+		parse: uriParse.mockImplementation((value: string) => {
+			if (/^file:\/\/(?:[?#]|$)/.test(value)) return { scheme: "file", fsPath: path.sep };
+			if (value.startsWith("file:") && !value.startsWith("file://")) {
+				// VS Code's _referenceResolution prefixes an empty or relative
+				// file path with '/', even when Uri.parse's strict flag is set.
+				const suffix = value.slice("file:".length).replace(/^\//, "");
+				return { scheme: "file", fsPath: path.sep + suffix.replace(/\//g, path.sep) };
+			}
+			return { scheme: new URL(value).protocol.slice(0, -1), fsPath: fileURLToPath(value) };
+		}),
+	},
+	StatusBarAlignment: { Left: 1 },
+	l10n: { t: (message: string) => message },
 	CancellationTokenSource: class {
 		private readonly cancellationListeners: Array<() => void> = [];
 		token = {
@@ -53,11 +71,13 @@ vi.mock("vscode", () => ({
 	},
 	commands: {
 		executeCommand,
+		registerCommand: vi.fn(() => disposable),
 	},
 	languages: {
 		setTextDocumentLanguage: vi.fn().mockResolvedValue(undefined),
 	},
 	window: {
+		createStatusBarItem: () => ({ text: "", show() {}, dispose() {} }),
 		activeTextEditor: activeEditor,
 		onDidChangeActiveTextEditor,
 	},
@@ -69,6 +89,11 @@ vi.mock("vscode", () => ({
 
 vi.mock("vscode-languageclient/node", () => ({
 	ExecuteCommandRequest: { type: {} },
+	State: { Stopped: 1, Running: 2, Starting: 3, StartFailed: 4 },
+}));
+
+vi.mock("../../src/host/fileExplorer", () => ({
+	FileExplorer: class { dispose() {} refresh() {} },
 }));
 
 vi.mock("../../src/host/logger", () => ({
@@ -77,6 +102,9 @@ vi.mock("../../src/host/logger", () => ({
 }));
 
 import { registerDocumentLanguage } from "../../src/host/documentLanguage";
+import { gameContentRoots } from "../../src/host/gameContentRoots";
+import { registerServerNotifications } from "../../src/host/serverNotifications";
+import { State } from "vscode-languageclient/node";
 
 const contentRoot = path.resolve("document-language-workspace");
 
@@ -316,6 +344,90 @@ suite("documentLanguage", () => {
 			{ sendNotification: vi.fn(), sendRequest: vi.fn() } as unknown as LanguageClient,
 			"paradox", roots,
 		);
+
+		test("promotes auto-discovered vanilla with the cache setting unset and keeps unrelated roots plaintext", async () => {
+			for (const [value, suffix] of [["file:", ""], ["file:relative", "relative"], ["file:/relative", "relative"], ["file://", ""], ["file://?q=/path", ""], ["file://#x/path", ""]]) {
+				assert.strictEqual(Uri.parse(value, true).fsPath, path.sep + suffix);
+			}
+			uriParse.mockClear();
+			const vanilla = path.resolve("auto-discovered-vanilla");
+			const physical = path.resolve("physical-vanilla");
+			const vanillaRoots = [vanilla, physical].map((root) => Uri.file(root).toString());
+			const alreadyOpen = makeDocument(path.join(vanilla, "common", "ideas", "base.txt"));
+			const definition = makeDocument(path.join(physical, "common", "ideas", "base.txt"));
+			const external = makeDocument(path.join(`${vanilla}-other`, "common", "notes.txt"));
+			const physicalExternal = makeDocument(path.join(`${physical}-other`, "common", "notes.txt"));
+			documentState.documents = [alreadyOpen, definition, external, physicalExternal, ...unrelated];
+			const handlers = new Map<string, (params: unknown) => void>();
+			let stateChanged: (event: { oldState: number; newState: number }) => void = () => {};
+			const client = {
+				sendNotification: vi.fn(), sendRequest: vi.fn(),
+				onNotification: (method: string, handler: (params: unknown) => void) => {
+					handlers.set(method, handler);
+					return disposable;
+				},
+				onDidChangeState: (handler: typeof stateChanged) => { stateChanged = handler; return disposable; },
+			} as unknown as LanguageClient;
+			const context = { subscriptions: [] } as unknown as ExtensionContext;
+			const tracker = await registerDocumentLanguage(
+				context, client,
+				"paradox", gameContentRoots(contentRoot),
+			);
+			registerServerNotifications(context, client, tracker.updateVanillaRoots);
+			const updateFileList = handlers.get("updateFileList");
+			assert.ok(updateFileList);
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, []);
+
+			updateFileList({ fileList: [], vanillaRoots });
+			await Promise.resolve();
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, [[alreadyOpen, "paradox"], [definition, "paradox"]]);
+			vi.mocked(languages.setTextDocumentLanguage).mockClear();
+			const onOpen = onDidOpenTextDocument.mock.calls[0][0] as (doc: TextDocument) => Promise<void>;
+			const newlyOpen = makeDocument(path.join(vanilla, "events", "base.txt"));
+			const newlyDefined = makeDocument(path.join(physical, "events", "base.txt"));
+			await onOpen(newlyOpen);
+			await onOpen(newlyDefined);
+			await onOpen(external);
+			await onOpen(physicalExternal);
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, [[newlyOpen, "paradox"], [newlyDefined, "paradox"]]);
+
+			stateChanged({ oldState: State.Running, newState: State.Starting });
+			// A late notification from the stopped server cannot restore its root.
+			updateFileList({ fileList: [], vanillaRoots });
+			vi.mocked(languages.setTextDocumentLanguage).mockClear();
+			await onOpen(newlyOpen);
+			await onOpen(newlyDefined);
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, []);
+			stateChanged({ oldState: State.Starting, newState: State.Running });
+			for (const invalid of [42, {}, "relative/install", [42, {}, "relative/install", "https://example.com/install", "file:", "file:relative", "file:/relative", "file://", "file://?q=/path", "file://#x/path"]]) {
+				updateFileList({ fileList: [], vanillaRoots: invalid });
+				await onOpen(newlyOpen);
+				await onOpen(newlyDefined);
+			}
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, []);
+			assert.ok(uriParse.mock.calls.every(([root]) => /^file:\/\/[^/?#]*\//.test(root)), "malformed file URIs must be rejected before VS Code can normalize them");
+			updateFileList({ fileList: [], vanillaRoots });
+			await onOpen(newlyOpen);
+			assert.ok(vi.mocked(languages.setTextDocumentLanguage).mock.calls.some(([doc]) => doc === newlyOpen));
+		});
+
+		test("refreshes configured roots after a server restart", async () => {
+			const previous = path.resolve("previous-vanilla");
+			const replacement = path.resolve("replacement-vanilla");
+			let configured = previous;
+			const tracker = await registerDocumentLanguage(
+				{ subscriptions: [] } as unknown as ExtensionContext,
+				{ sendNotification: vi.fn(), sendRequest: vi.fn() } as unknown as LanguageClient,
+				"paradox", () => gameContentRoots(contentRoot, [], configured),
+			);
+			configured = replacement;
+			await tracker.updateVanillaRoots([]);
+			const onOpen = onDidOpenTextDocument.mock.calls[0][0] as (doc: TextDocument) => Promise<void>;
+			await onOpen(makeDocument(path.join(previous, "common", "notes.txt")));
+			const current = makeDocument(path.join(replacement, "common", "base.txt"));
+			await onOpen(current);
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, [[current, "paradox"]]);
+		});
 
 		test("promotes only recognized content among documents already open", async () => {
 			documentState.documents = [...valid, ...unrelated];

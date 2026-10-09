@@ -16,6 +16,8 @@ export interface EditorTracker {
 	// type stays unknown until the user switches tabs once. Call it after the
 	// client is running, since it makes a getFileTypes request.
 	classifyActiveEditor(): Promise<void>;
+	/** Recheck open documents when the server resolves its base-game install. */
+	updateVanillaRoots(this: void, roots: readonly string[]): Promise<void>;
 }
 
 // Trailing debounce on tab switches: rapid cycling otherwise sends a
@@ -26,7 +28,7 @@ export async function registerDocumentLanguage(
 	context: ExtensionContext,
 	client: LanguageClient,
 	languageId: string,
-	contentRoots: readonly string[],
+	roots: readonly string[] | (() => readonly string[]),
 ): Promise<EditorTracker> {
 	const didFocusFile = "didFocusFile";
 	let latestType: string = "";
@@ -39,19 +41,23 @@ export async function registerDocumentLanguage(
 	let graphFileContext: boolean | undefined;
 	const getFileTypesTimeoutMs = 5000;
 	const getFileTypesBackoffMs = 2000;
+	const readContentRoots = () => typeof roots === "function" ? roots() : roots;
+	let contentRoots = readContentRoots();
+	let vanillaRoots: readonly string[] = [];
 
 	// The static filenamePatterns in package.json only match game files under a
 	// folder named like the game ("hearts of iron iv"), so a mod workspace with
 	// any other name opens its .txt files as plaintext (no grammar, no LSP).
 	// Upgrade plaintext docs that look like game script to the detected language.
-	// Only the selected mod and configured parent/vanilla content roots qualify.
+	// Only the selected mod, configured parents and the resolved vanilla qualify.
 	// Test directory hints relative to those roots, so an ancestor named common
 	// cannot turn ordinary notes into script.
 	const gameScriptDirs =
 		/(?:^|[\\/])(events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
 	function looksLikeGameScript(doc: vscode.TextDocument): boolean {
 		if (doc.uri.scheme !== "file") return false;
-		const root = contentRoots.find((root) =>
+		const roots = [...contentRoots, ...vanillaRoots];
+		const root = roots.find((root) =>
 			isTrustedPath(doc.uri.fsPath, [root]),
 		);
 		if (!root) return false;
@@ -189,5 +195,13 @@ export async function registerDocumentLanguage(
 		getLatestType: () => latestType,
 		classifyActiveEditor: () =>
 			didChangeActiveTextEditor(window.activeTextEditor, ++generation),
+		updateVanillaRoots: async (roots) => {
+			const nextRoots = readContentRoots();
+			if (contentRoots === nextRoots && vanillaRoots.length === roots.length &&
+				vanillaRoots.every((root, i) => root === roots[i])) return;
+			contentRoots = nextRoots;
+			vanillaRoots = roots;
+			await Promise.all(workspace.textDocuments.map(upgradePlaintextDocument));
+		},
 	};
 }

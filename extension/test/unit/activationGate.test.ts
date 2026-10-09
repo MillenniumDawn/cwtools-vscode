@@ -34,7 +34,7 @@ const mocks = vi.hoisted(() => ({
 		start: vi.fn(),
 		dispose: vi.fn(),
 	},
-	tracker: { classifyActiveEditor: vi.fn() },
+	tracker: { classifyActiveEditor: vi.fn(), updateVanillaRoots: vi.fn() },
 	notifications: {
 		initialScanDone: Promise.resolve(),
 		statusText: vi.fn(),
@@ -239,8 +239,10 @@ suite("descriptor startup gate", () => {
 		);
 		expect(mocks.client.registerProposedFeatures).toHaveBeenCalledOnce();
 		expect(mocks.registerDocumentLanguage).toHaveBeenCalledWith(
-			context, mocks.client, "paradox", ["/mod"],
+			context, mocks.client, "paradox", expect.any(Function),
 		);
+		const roots = mocks.registerDocumentLanguage.mock.calls[0][3] as () => string[];
+		expect(roots()).toEqual(["/mod"]);
 		expect(mocks.registerCommands).toHaveBeenCalledWith(
 			context,
 			mocks.client,

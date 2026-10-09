@@ -50,9 +50,12 @@ suite("Multi-root descriptor selection", function () {
 		await activate();
 		const folders = vscode.workspace.workspaceFolders ?? [];
 		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "cwtools-language-"));
+		const probeRoots = await Promise.all(folders.map((folder) =>
+			fs.mkdtemp(path.join(folder.uri.fsPath, "cwtools-language-")),
+		));
 		const files = [
-			path.join(folders[1].uri.fsPath, "common", "cwtools-language-probe.txt"),
-			path.join(folders[0].uri.fsPath, "common", "cwtools-language-probe.txt"),
+			path.join(probeRoots[1], "common", "probe.txt"),
+			path.join(probeRoots[0], "common", "probe.txt"),
 			path.join(temp, "common", "notes.txt"),
 			path.join(temp, "unrelated.gfx"),
 		];
@@ -69,7 +72,7 @@ suite("Multi-root descriptor selection", function () {
 			await new Promise((resolve) => setTimeout(resolve, 250));
 			for (const file of files.slice(1)) assert.strictEqual(language(file), "plaintext", file);
 		} finally {
-			for (const file of files.slice(0, 2)) await fs.rm(file, { force: true });
+			for (const root of probeRoots) await fs.rm(root, { recursive: true, force: true });
 			await fs.rm(temp, { recursive: true, force: true });
 		}
 	});
