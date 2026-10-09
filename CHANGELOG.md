@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
 * Release string-table read locks before building cached AST records. (#494)
 * Ignore trailing `#` comments when parsing `.cwt` directive values, including `type_key_filter`, while retaining quoted hashes and malformed-directive checks. (#903)
 * Replace fixed language-server integration sleeps and timed scan/format holds with readiness signals and test-controlled gates, preserving cancellation, negative-result and scan-guard race assertions. (#887)

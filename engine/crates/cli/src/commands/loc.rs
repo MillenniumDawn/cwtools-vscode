@@ -118,10 +118,19 @@ pub(super) fn run(args: LocArgs) {
     }
     let diags: Vec<Diag> = loc_diags
         .into_iter()
-        .filter(|d| codes::wanted(d.code, &only_codes, &ignore_codes))
-        .map(|d| {
-            let line_text = sources.trimmed(&d.file, d.line as u32).to_string();
-            loc_diagnostic_to_diag(&directory, d, &line_text, want_legacy_hash)
+        .filter_map(|d| {
+            if !codes::wanted(d.code, &only_codes, &ignore_codes)
+                || sources.inline_suppressed(&d.file, d.line as u32, d.code)
+            {
+                return None;
+            }
+            let line_text = sources.trimmed(&d.file, d.line as u32);
+            Some(loc_diagnostic_to_diag(
+                &directory,
+                d,
+                line_text,
+                want_legacy_hash,
+            ))
         })
         .filter(keep)
         .collect();
