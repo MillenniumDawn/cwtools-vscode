@@ -9,6 +9,7 @@ code.
 - [User guide](extension/README.md)
 - [Commands and settings reference](extension/reference.md)
 - [Theme authoring](extension/themes.md)
+- [Graph layout partition performance](extension/GRAPH_LAYOUT_PERFORMANCE.md)
 
 ## Engine
 
