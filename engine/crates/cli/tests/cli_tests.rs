@@ -3868,6 +3868,33 @@ fn test_format_skips_a_parse_error() {
 }
 
 #[test]
+fn test_format_names_the_unclosed_quote_it_will_not_format() {
+    let tmp = tempfile::tempdir().unwrap();
+    let common = tmp.path().join("common");
+    std::fs::create_dir_all(&common).unwrap();
+    let file = common.join("names.txt");
+    let original = "names = {\n\t\"Falke\n\tAdler\n}\n";
+    std::fs::write(&file, original).unwrap();
+    cwtools()
+        .args([
+            "format",
+            "--directory",
+            tmp.path().to_str().unwrap(),
+            "--apply",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "names.txt: unclosed quote on line 2; skipping",
+        ))
+        .stderr(predicate::str::contains(
+            "skipped 1 file(s) (unreadable, parse errors or unclosed quotes)",
+        ))
+        .stderr(predicate::str::contains("failed to parse").not());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), original);
+}
+
+#[test]
 fn test_format_apply_read_failure_exits_two() {
     let tmp = tempfile::tempdir().unwrap();
     let common = tmp.path().join("common");
@@ -3935,6 +3962,24 @@ fn test_format_rejects_an_unknown_indent_style() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains("indent-style"));
+}
+
+#[test]
+fn test_rules_malformed_alias_directive_reports_cw605() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("malformed.cwt");
+    std::fs::write(
+        &file,
+        "# comment\nalias[effect] = { field = scalar }\nordinary_type = { field = scalar }\n",
+    )
+    .unwrap();
+    cwtools()
+        .arg("rules")
+        .arg(&file)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CW605"))
+        .stdout(predicate::str::contains("alias[effect]"));
 }
 
 #[test]

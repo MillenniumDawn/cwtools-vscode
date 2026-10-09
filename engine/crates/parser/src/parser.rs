@@ -20,6 +20,9 @@ struct Parser<'a> {
     comment_mode: CommentMode,
     /// Clauses currently open, bounded by [`MAX_CLAUSE_DEPTH`].
     depth: u32,
+    /// Line of the first leaf-value quote read to end of line unclosed; the
+    /// formatter refuses files carrying one.
+    unclosed_leaf_value_quote_line: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -27,6 +30,7 @@ struct Cursor<'a> {
     chars: Chars<'a>,
     line: u32,
     col: u16,
+    errors_len: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -46,6 +50,7 @@ impl<'a> Parser<'a> {
             errors: Vec::new(),
             comment_mode,
             depth: 0,
+            unclosed_leaf_value_quote_line: None,
         }
     }
 
@@ -65,10 +70,12 @@ impl<'a> Parser<'a> {
             chars: self.chars.clone(),
             line: self.line,
             col: self.col,
+            errors_len: self.errors.len(),
         }
     }
 
     fn restore(&mut self, c: Cursor<'a>) {
+        self.errors.truncate(c.errors_len);
         self.chars = c.chars;
         self.line = c.line;
         self.col = c.col;
@@ -340,15 +347,20 @@ impl<'a> Parser<'a> {
             }
             self.advance();
         }
-        if report_unclosed && !closed {
-            self.errors.push(ParseError::Pos(
-                quote_start.line,
-                quote_start.col,
-                format!(
-                    "unclosed quoted string starting at line {}",
-                    quote_start.line
-                ),
-            ));
+        if !closed {
+            if report_unclosed {
+                self.errors.push(ParseError::Pos(
+                    quote_start.line,
+                    quote_start.col,
+                    format!(
+                        "unclosed quoted string starting at line {}",
+                        quote_start.line
+                    ),
+                ));
+            } else {
+                self.unclosed_leaf_value_quote_line
+                    .get_or_insert(quote_start.line);
+            }
         }
         let end_byte = self.byte_pos();
         let body_end = if closed { end_byte - 1 } else { end_byte };
@@ -545,7 +557,12 @@ impl<'a> Parser<'a> {
 
         let saved = self.pos();
         let saved_cursor = self.save();
+        let mut unclosed_key_eats_structure = false;
         if let Some(raw_key) = self.read_key() {
+            unclosed_key_eats_structure = self.errors.len() > saved_cursor.errors_len
+                && raw_key
+                    .chars()
+                    .any(|c| matches!(c, '=' | '<' | '>' | '!' | '?' | '{' | '}'));
             if let Some(op) = self.parse_operator() {
                 let key = self.table.intern(&raw_key);
                 if let Some((value, value_pos)) = self.parse_value(false) {
@@ -608,6 +625,13 @@ impl<'a> Parser<'a> {
         }
 
         if let Some((value, value_pos)) = self.parse_value(true) {
+            if unclosed_key_eats_structure {
+                self.errors.push(ParseError::Pos(
+                    saved.line,
+                    saved.col,
+                    format!("unclosed quoted string starting at line {}", saved.line),
+                ));
+            }
             let lv = LeafValue {
                 value,
                 pos: value_pos,
@@ -688,6 +712,7 @@ impl<'a> Parser<'a> {
             arena: self.arena,
             root_children,
             errors: self.errors,
+            unclosed_leaf_value_quote_line: self.unclosed_leaf_value_quote_line,
             overlay: self.table.overlay_guard(),
         }
     }
@@ -1389,10 +1414,10 @@ shorthand { nested = value }
     #[test]
     fn unclosed_quoted_key_terminates_at_newline_with_error() {
         let table = StringTable::new();
-        let result = parse_string("\"foo\nbar = 1\n\" = 5\n", &table);
+        let result = parse_string("\"foo\n= 5\nbar = 1\n", &table);
         assert!(
             !result.errors.is_empty(),
-            "expected an unclosed quoted string error, got none"
+            "the committed quoted key should report its unclosed string"
         );
         let bar = result
             .root_children
@@ -1410,13 +1435,118 @@ shorthand { nested = value }
     }
 
     #[test]
-    fn unclosed_quoted_key_at_eof_produces_error() {
+    fn unclosed_quoted_key_followed_by_operator_produces_error() {
+        let table = StringTable::new();
+        let result = parse_string("\"unterminated\n= 5", &table);
+        assert!(
+            !result.errors.is_empty(),
+            "the committed quoted key should report its unclosed string"
+        );
+    }
+
+    #[test]
+    fn unclosed_quoted_key_with_same_line_operator_produces_error() {
         let table = StringTable::new();
         let result = parse_string("\"unterminated = 5", &table);
         assert!(
             !result.errors.is_empty(),
-            "expected a parse error for an unclosed quoted key at EOF"
+            "an unclosed quoted key before a same-line operator must report an error"
         );
+    }
+
+    #[test]
+    fn unclosed_quoted_key_swallowing_less_than_produces_error() {
+        let table = StringTable::new();
+        let result = parse_string("\"foo < 5", &table);
+        let messages: Vec<String> = result.errors.iter().map(|e| e.to_string()).collect();
+        assert_eq!(
+            messages,
+            ["1:0: unclosed quoted string starting at line 1"],
+            "an unclosed quoted key swallowing `<` must keep its diagnostic"
+        );
+    }
+
+    #[test]
+    fn unclosed_quoted_key_swallowing_greater_than_produces_error() {
+        let table = StringTable::new();
+        let result = parse_string("\"foo > 5", &table);
+        let messages: Vec<String> = result.errors.iter().map(|e| e.to_string()).collect();
+        assert_eq!(
+            messages,
+            ["1:0: unclosed quoted string starting at line 1"],
+            "an unclosed quoted key swallowing `>` must keep its diagnostic"
+        );
+    }
+
+    #[test]
+    fn unclosed_quoted_key_swallowing_shorthand_brace_produces_error() {
+        let table = StringTable::new();
+        let result = parse_string("a = {\n  \"foo {\n    x = 1\n  }\n}\n", &table);
+        let messages: Vec<String> = result.errors.iter().map(|e| e.to_string()).collect();
+        assert_eq!(
+            messages,
+            ["2:2: unclosed quoted string starting at line 2"],
+            "the unclosed quoted key swallowing a `{{` shorthand must keep its \
+             diagnostic at the quote"
+        );
+    }
+
+    #[test]
+    fn unclosed_quote_swallowing_closing_brace_produces_error() {
+        let table = StringTable::new();
+        for (input, expected) in [
+            (
+                "a = { \"foo }\nb = 1\n",
+                [
+                    "1:6: unclosed quoted string starting at line 1",
+                    "3:0: unclosed clause: expected '}' before end of file",
+                ],
+            ),
+            (
+                "a = {\n  b = { \"foo }\n  c = 1\n}\nd = 1\n",
+                [
+                    "2:8: unclosed quoted string starting at line 2",
+                    "6:0: unclosed clause: expected '}' before end of file",
+                ],
+            ),
+        ] {
+            let result = parse_string(input, &table);
+            let messages: Vec<String> = result.errors.iter().map(|e| e.to_string()).collect();
+            assert_eq!(
+                messages, expected,
+                "the unclosed quote swallowing a closing `}}` must keep its \
+                 diagnostic at the quote in {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unclosed_quote_leafvalue_does_not_leak_speculative_key_error() {
+        let table = StringTable::new();
+        let result = parse_string("n = { \"Falke\n Adler }", &table);
+        assert!(
+            result.errors.is_empty(),
+            "leaf-value quote recovery should discard speculative key errors: {:?}",
+            result.errors
+        );
+        assert_eq!(
+            result.unclosed_leaf_value_quote_line,
+            Some(1),
+            "the parser must record the suppressed unclosed leaf-value quote for the formatter"
+        );
+    }
+
+    #[test]
+    fn unclosed_leaf_value_quote_is_only_recorded_when_a_string_stays_open() {
+        let table = StringTable::new();
+        // Closed quotes never set the flag, whatever their text contains.
+        for input in ["foo = \"bar\"", "foo = \"a< >?\"", "foo\"bar = x"] {
+            let result = parse_string(input, &table);
+            assert_eq!(
+                result.unclosed_leaf_value_quote_line, None,
+                "{input:?} must not record an unclosed leaf-value quote"
+            );
+        }
     }
 
     fn keyed_clause_key(result: &ParsedFile, table: &StringTable, idx: usize) -> String {

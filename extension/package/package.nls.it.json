@@ -16,6 +16,7 @@
   "commands.exportProfilingLog.title": "Esporta il log di profilazione",
   "commands.fixAllWorkspace.title": "Correggi tutti i problemi correggibili automaticamente nell'area di lavoro",
   "commands.formatWorkspace.title": "Formatta l'area di lavoro",
+  "commands.validateWorkspace.title": "Convalida l'area di lavoro",
   "commands.restartServer.title": "Riavvia il server",
   "commands.showOutput.title": "Mostra l'output",
   "commands.showGraph.title": "Mostra il grafo",

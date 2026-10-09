@@ -16,6 +16,7 @@
   "commands.exportProfilingLog.title": "تصدير سجل قياس الأداء",
   "commands.fixAllWorkspace.title": "إصلاح كل المشكلات القابلة للإصلاح تلقائيًا في مساحة العمل",
   "commands.formatWorkspace.title": "تنسيق مساحة العمل",
+  "commands.validateWorkspace.title": "التحقق من مساحة العمل",
   "commands.restartServer.title": "إعادة تشغيل الخادم",
   "commands.showOutput.title": "عرض المخرجات",
   "commands.showGraph.title": "عرض المخطط",
