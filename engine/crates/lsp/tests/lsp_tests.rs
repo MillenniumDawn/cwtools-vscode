@@ -9552,6 +9552,119 @@ fn test_did_open_then_immediate_close_ends_empty() {
 }
 
 #[test]
+fn test_did_save_on_ignored_open_file_publishes_empty_diagnostics() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let rel = "common/decisions/saved_ignored.txt";
+    let uri = write_disk_file(ws.path(), rel, STORM_FILE);
+    let (mut child, reader) = storm_server_env_with_ignore(
+        ws.path(),
+        rules_dir.path(),
+        vanilla.path(),
+        &[],
+        &["saved_ignored.txt"],
+    );
+    let stdin = child.stdin.take().unwrap();
+    let expected_uri = uri.clone();
+    let saved = run_child_with_deadline(child, stdin, reader, 20, move |stdin, reader| {
+        write_frame_to(stdin, &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+            "textDocument": { "uri": uri, "languageId": "hoi4", "version": 1, "text": STORM_FILE }
+        }))).unwrap();
+        // Consume the open's publication so only the save can satisfy the assert.
+        wait_for_diagnostics(reader, rel);
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification(
+                "textDocument/didSave",
+                serde_json::json!({ "textDocument": { "uri": uri } }),
+            ),
+        )
+        .unwrap();
+        loop {
+            let raw = read_frame(reader).expect("no ignored-save publication");
+            let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if frame["method"] == "textDocument/publishDiagnostics" && frame["params"]["uri"] == uri
+            {
+                return frame;
+            }
+        }
+    })
+    .expect("ignored save did not publish before the deadline");
+    assert_eq!(saved["params"]["uri"], expected_uri);
+    assert_eq!(saved["params"]["version"], 1);
+    assert_eq!(saved["params"]["diagnostics"], serde_json::json!([]));
+}
+
+#[test]
+fn test_get_file_types_returns_rule_types_and_path_fallbacks() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(
+        rules_dir.path().join("r.cwt"),
+        r#"
+        types = { type[focus] = { path = "game/common/national_focus" } }
+        focus = { x = bool }
+    "#,
+    )
+    .unwrap();
+    let cases = [
+        ("common/national_focus/empty.txt", vec!["focus"]),
+        ("common/untyped/a.txt", vec!["script", "txt"]),
+        ("events/a.txt", vec!["event", "txt"]),
+        (
+            "common/scripted_effects/a.txt",
+            vec!["script", "scripted_effect", "txt"],
+        ),
+        (
+            "common/scripted_triggers/a.txt",
+            vec!["script", "scripted_trigger", "txt"],
+        ),
+        ("notes/readme.yml", vec![]),
+    ];
+    for (rel, _) in &cases {
+        write_disk_file(ws.path(), rel, "");
+    }
+    let (mut child, reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
+    let queries: Vec<_> = cases
+        .iter()
+        .map(|(rel, _)| path_uri(ws.path().join(rel)))
+        .collect();
+    let stdin = child.stdin.take().unwrap();
+    let responses = run_child_with_deadline(child, stdin, reader, 20, move |stdin, reader| {
+        queries
+            .iter()
+            .enumerate()
+            .map(|(i, uri)| {
+                let id = 700 + i as i64;
+                write_frame_to(
+                    stdin,
+                    &jsonrpc_request(
+                        id,
+                        "workspace/executeCommand",
+                        serde_json::json!({ "command": "getFileTypes", "arguments": [uri] }),
+                    ),
+                )
+                .unwrap();
+                let raw = read_response_for_id(reader, id).expect("no getFileTypes response");
+                serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+            })
+            .collect::<Vec<_>>()
+    })
+    .expect("getFileTypes did not answer before the deadline");
+    for ((rel, expected), response) in cases.iter().zip(responses) {
+        assert!(response["error"].is_null(), "{rel}: {response}");
+        assert_eq!(
+            response["result"],
+            serde_json::json!(expected),
+            "{rel}: {response}"
+        );
+    }
+}
+
+#[test]
 fn test_did_save_revalidates_the_open_document() {
     // did_save takes its own path: no text arrives with the notification
     // (`include_text` is false), nothing is written to the document store, and
