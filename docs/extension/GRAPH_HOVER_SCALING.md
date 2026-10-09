@@ -9,16 +9,20 @@ all created tips.
 
 Highlighting retains only the active closed neighborhood in core scratch state.
 Each entry computes a transient complement, toggles its dim class, and discards
-that collection. The neighborhood removes its dim class and adds its highlight. Exit clears both classes and active scratch state.
+that collection. The neighborhood removes its dim class and adds its highlight.
+Exit clears both classes and active scratch state.
 A late mouseout from a previous node does not clear a newer node's highlight.
 There is no per-node neighborhood Map or retained complement collection.
 
 Run `npx --no-install vitest run extension/test/unit/graphHoverScaling.test.ts`
 for the correctness/scaling suite. It uses the real headless Cytoscape dispatcher
-and asserts constant listener count, no complement caching, one active hood,
-lazy tooltip lifecycle, cancellation and class cleanup. To reproduce operation
-counts on identical inputs, copy that test and support/graphHeadless.ts into a
-clean base worktree and run the same command on both revisions:
+and asserts constant listener count, no collections in node/core scratch after
+a full hover traversal, exactly one active hood during a hover, lazy tooltip
+lifecycle, cancellation and class cleanup. Nested scratch objects, arrays, Maps
+and Sets are inspected; closure-private caches are not visible to this check.
+To record listener and scratch collection counts on identical inputs, copy that
+test and support/graphHeadless.ts into a clean base worktree and run the same
+command on both revisions:
 
 ```sh
 CWTOOLS_HOVER_BENCH=1 CWTOOLS_HOVER_BENCH_OUTPUT=/tmp/graph-hover.json \
@@ -27,7 +31,9 @@ CWTOOLS_HOVER_BENCH=1 CWTOOLS_HOVER_BENCH_OUTPUT=/tmp/graph-hover.json \
 
 On Linux, Node 26.11.1 and Cytoscape 3.34.3, the base revision
 `f90c4a25a5414f3f4304213d2ac01a5eebeafb4e` and this change used the identical
-500-node/500-edge ring and hovered every node in order:
+500-node/500-edge ring and hovered every node in order. These historical
+complement counts came from instrumenting the old neighborhood Map writes; the
+current benchmark inspects scratch collections directly instead:
 
 | Recorded operation/state | Base | Changed |
 | --- | ---: | ---: |

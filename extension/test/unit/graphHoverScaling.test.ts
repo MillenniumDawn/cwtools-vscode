@@ -19,23 +19,33 @@ function listenerCounts(size: number) {
 	} finally { nodeOn.mockRestore(); coreOn.mockRestore(); }
 }
 
-function retainedComplements(cy: cytoscape.Core) {
-	const original = Object.getOwnPropertyDescriptor(Map.prototype, "set")!.value as
-		(this: Map<unknown, unknown>, key: unknown, value: unknown) => Map<unknown, unknown>;
-	let collections = 0;
-	let elements = 0;
-	const spy = vi.spyOn(Map.prototype, "set").mockImplementation(function (this: Map<unknown, unknown>, key: unknown, value: unknown) {
-		if (typeof value === "object" && value !== null && "hood" in value && "rest" in value) {
-			const rest = (value as { rest: cytoscape.CollectionReturnValue }).rest;
-			collections++;
-			elements += rest.length;
+function scratchCollections(cy: cytoscape.Core) {
+	const collectionPrototype = Object.getPrototypeOf(cy.collection()) as object;
+	const collections: { path: string; collection: cytoscape.CollectionReturnValue }[] = [];
+	const visited = new Set<object>();
+	const visit = (value: unknown, path: string) => {
+		if (typeof value !== "object" || value === null) return;
+		if (Object.prototype.isPrototypeOf.call(collectionPrototype, value)) {
+			collections.push({ path, collection: value as cytoscape.CollectionReturnValue });
+			return;
 		}
-		return original.call(this, key, value);
-	});
-	try {
-		cy.nodes().forEach((n) => { n.emit("mouseover"); n.emit("mouseout"); });
-		return { collections, elements };
-	} finally { spy.mockRestore(); }
+		if (visited.has(value)) return;
+		visited.add(value);
+		if (value instanceof Map) {
+			for (const [key, entry] of value) { visit(key, `${path}.key`); visit(entry, `${path}.value`); }
+		} else if (value instanceof Set) {
+			for (const entry of value) visit(entry, `${path}.value`);
+		} else {
+			for (const [key, entry] of Object.entries(value)) visit(entry, `${path}.${key}`);
+		}
+	};
+	visit(cy.scratch(), "core");
+	cy.nodes().forEach((n) => { visit(n.scratch(), n.id()); });
+	return collections;
+}
+
+function traverseHovers(cy: cytoscape.Core) {
+	cy.nodes().forEach((n) => { n.emit("mouseover"); n.emit("mouseout"); });
 }
 
 test.each([10, 100, 500])("tooltip listeners are delegated for %i nodes", (size) => {
@@ -50,23 +60,28 @@ test("listener count remains constant when graph size increases", () => {
 	expect(large.core + large.perNode).toBe(small.core + small.perNode);
 });
 
-test("hovering every node retains no complement collections and only one active hood", () => {
+test("hovering every node leaves scratch collections bounded to the active hood", () => {
 	const { cy } = listenerCounts(100);
-	const complements = retainedComplements(cy);
-	expect(complements).toEqual({ collections: 0, elements: 0 });
+	traverseHovers(cy);
+	expect(scratchCollections(cy).map((entry) => entry.path)).toEqual([]);
 	expect(cy.scratch("_hoverHood")).toBeUndefined();
 	cy.$id("n0").emit("mouseover");
 	const first: cytoscape.CollectionReturnValue = cy.scratch("_hoverHood") as cytoscape.CollectionReturnValue;
 	expect(first.length).toBe(5);
+	expect(scratchCollections(cy).map((entry) => entry.path)).toEqual(["core._hoverHood"]);
+	expect(scratchCollections(cy)[0].collection).toBe(first);
 	cy.$id("n1").emit("mouseover");
 	const second: cytoscape.CollectionReturnValue = cy.scratch("_hoverHood") as cytoscape.CollectionReturnValue;
 	expect(second.length).toBe(5);
 	expect(second).not.toBe(first);
+	expect(scratchCollections(cy).map((entry) => entry.path)).toEqual(["core._hoverHood"]);
+	expect(scratchCollections(cy)[0].collection).toBe(second);
 	cy.$id("n0").emit("mouseout");
 	expect(cy.$id("n1").hasClass("highlight")).toBe(true);
 	cy.$id("n1").emit("mouseout");
 	expect(cy.scratch("_hoverHood")).toBeUndefined();
 	expect(cy.$(".highlight, .semitransp").length).toBe(0);
+	expect(scratchCollections(cy).map((entry) => entry.path)).toEqual([]);
 });
 
 test("replacing a graph cancels a pending tooltip expansion and destroys the tooltip", () => {
@@ -109,8 +124,12 @@ test("repeated hover schedules one expansion and preserves simple/expanded behav
 
 test.skipIf(process.env.CWTOOLS_HOVER_BENCH !== "1")("record listener and retained collection counts for 500-node hover traversal", () => {
 	const { cy, perNode, core } = listenerCounts(500);
-	const complements = retainedComplements(cy);
-	const result = { nodes: 500, edges: 500, perNodeListeners: perNode, coreListeners: core, ...complements };
+	traverseHovers(cy);
+	const retained = scratchCollections(cy);
+	const result = {
+		nodes: 500, edges: 500, perNodeListeners: perNode, coreListeners: core,
+		scratchCollections: retained.length, scratchElements: retained.reduce((sum, entry) => sum + entry.collection.length, 0),
+	};
 	if (process.env.CWTOOLS_HOVER_BENCH_OUTPUT) {
 		writeFileSync(process.env.CWTOOLS_HOVER_BENCH_OUTPUT, JSON.stringify(result, null, 2));
 	}
