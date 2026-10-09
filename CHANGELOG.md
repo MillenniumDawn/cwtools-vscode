@@ -35,6 +35,7 @@
 
 #### Extension
 
+* Partition isolated and connected graph elements in linear time, preserving self-loops and edges while removing repeated component unions; verify degree checks, difference inputs and preservation with real Cytoscape. (#587)
 * Measure watched-file exclusions from configured parent, vanilla and rules roots as well as the workspace (the rules root for `.cwt` files only), refreshing roots on restart or rules-folder changes. Add a real create/change/delete watcher regression. (#862)
 * When the client drops watched-file events, skipped directory names (`.git`, `.claude`, `target`, `dist`, `out` and the rest) no longer count in the folders above the served workspace root. A mod checked out under a folder with one of those names, such as `.claude/worktrees/<mod>`, used to index at startup but ignore later external edits, checkouts and deletes. (#835)
 * Report graph image export failures in the webview instead of leaving rejected promises unhandled, and allow a later export to succeed. (#834)
