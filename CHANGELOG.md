@@ -73,6 +73,7 @@
 * Drop four npm overrides (`minimatch@3`, `minimatch@5`, `brace-expansion@1` and `uuid`) that matched nothing in the lockfile. (#911)
 * The build helpers share one `require_executable` for the node and npm lookups, `set_release_version` and `prerelease_notes` have direct tests, and `scripts/pyrightconfig.json` moves to the repo root with `scripts/build` as its extra path. The Python CI job no longer saves an npm cache, which claimed the key the check and build jobs share. (#889)
 * Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
+* Rename `vitest.config.ts` to `vitest.config.mts` so Vite's native config loader can read it. The node test runs no longer print the config-loader warning. (#921)
 
 ### 3.4.7
 

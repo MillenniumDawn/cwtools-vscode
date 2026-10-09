@@ -9,7 +9,7 @@ HOST_COVERAGE_SCOPES = (
     "extension/src/host",
     "extension/src/common",
 )
-# Modules vitest.config.ts already covers with real node-side tests (its
+# Modules vitest.config.mts already covers with real node-side tests (its
 # `coverage.include`). Keep this list in sync with that one: the host suite
 # loads these transitively without exercising them the way the node tests do,
 # so leaving them in would show a misleadingly low number next to the
