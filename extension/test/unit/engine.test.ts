@@ -123,9 +123,42 @@ suite("engine — detectFromFolder", () => {
 		}
 	});
 
-	test("prefers folder-name hint over content hint", async () => {
-		const exists = () => true;
-		assert.strictEqual(await detectFromFolder("/mods/HOI4", exists), "hoi4");
+	test("content beats a conflicting root name", async () => {
+		const root = path.resolve("mods", "Stellaris");
+		assert.strictEqual(
+			await detectFromFolder(root, (p) => p === path.join(root, "common", "ai_strategy")),
+			"hoi4",
+		);
+	});
+
+	test("mixed content markers follow game-table order before names", async () => {
+		assert.strictEqual(await detectFromFolder("/mods/HOI4", () => true), "stellaris");
+	});
+
+	test("unrelated ancestors do not provide folder hints on either path style", async () => {
+		for (const root of [
+			"/home/stellaris/mods/Millennium-Dawn",
+			"/home/europa/projects/Millennium-Dawn/",
+			"C:\\Users\\stellaris\\mods\\Millennium-Dawn",
+			"C:\\projects\\europa\\Millennium-Dawn\\",
+		]) {
+			await assertDetects(root, null);
+			assert.strictEqual(await detectFromFolder(root, (p) =>
+				p.replace(/\\/g, "/").endsWith("/common/ai_strategy")), "hoi4");
+		}
+	});
+
+	test("canonical mod and vanilla game-subdirectory layouts retain name hints", async () => {
+		for (const root of [
+			"/games/Crusader Kings III/game",
+			"C:\\games\\Crusader Kings III\\game\\",
+			"/Documents/Paradox Interactive/Hearts of Iron IV/mod/opaque",
+			"C:\\Documents\\Paradox Interactive\\Hearts of Iron IV\\mod\\opaque",
+		]) {
+			await assertDetects(root, root.toLowerCase().includes("crusader") ? "ck3" : "hoi4");
+		}
+		await assertDetects("/projects/stellaris/game", "stellaris");
+		await assertDetects("/projects/stellaris-project/mod/opaque", null);
 	});
 
 	test("first matching folder-name hint wins (order matters)", async () => {

@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import type { ExtensionContext } from "vscode";
 import { existsSync as fsExistsSync } from "fs";
 import { logInfo, logWarn, logError } from "./logger";
-import { FOLDER_HINTS, CONTENT_HINTS } from "./games";
+import { GAMES, FOLDER_HINTS, CONTENT_HINTS } from "./games";
 import type { RulesRepo } from "./games";
 
 export { LANGUAGE_REPOS } from "./games";
@@ -32,19 +32,33 @@ export async function detectFromFolder(
 	root: string,
 	fileExists: (p: string) => boolean | Promise<boolean>,
 ): Promise<string | null> {
-	const lower = root.toLowerCase();
+	// Inspect only the fixed set of game-specific markers, never the whole tree.
+	// Content is stronger evidence than a name; mixed trees use GAMES order.
+	for (const [sub, id] of CONTENT_HINTS) {
+		if (await fileExists(path.join(root, sub))) return id;
+	}
+	const parts = root.toLowerCase().split(/[\\/]+/).filter(Boolean);
+	const name = parts[parts.length - 1] ?? "";
 	for (const [pattern, id] of FOLDER_HINTS) {
 		if (
-			typeof pattern === "string"
-				? lower.includes(pattern)
-				: pattern.test(lower)
+			typeof pattern === "string" ? name.includes(pattern) : pattern.test(name)
 		) {
 			return id;
 		}
 	}
-	for (const [sub, id] of CONTENT_HINTS) {
-		if (await fileExists(path.join(root, sub))) return id;
-	}
+	// The root name is relevant. Ancestors count only in the conventional
+	// <vanilla>/game and <game>/mod/<mod> layouts, with exact game folder names.
+	const layoutGame =
+		name === "game"
+			? parts[parts.length - 2]
+			: parts[parts.length - 2] === "mod"
+				? parts[parts.length - 3]
+				: undefined;
+	const vanilla = GAMES.find((game) =>
+		game.vanillaFolders.includes(layoutGame ?? ""),
+	);
+
+	if (vanilla) return vanilla.id;
 	return null;
 }
 

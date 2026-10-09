@@ -10,7 +10,7 @@ export interface GameDef {
 	exeName: string;
 	// Exe lives under binaries/ in the vanilla install.
 	binariesPrefix: boolean;
-	// Matched against the lowercased workspace path (string = substring).
+	// Matched against the lowercased workspace root name (string = substring).
 	folderHint: RegExp | string;
 	// Vanilla Steam install folder names, lowercased.
 	vanillaFolders: string[];
