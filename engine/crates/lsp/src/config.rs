@@ -1432,6 +1432,7 @@ impl Backend {
                     Some(s) => serde_json::json!({
                         "totalFiles": s.total_files,
                         "validatedFiles": s.validated_files,
+                        "heldBackFiles": s.held_back_files,
                         "filesWithErrors": s.files_with_errors,
                         "totalErrors": s.total_errors,
                         "totalWarnings": s.total_warnings,

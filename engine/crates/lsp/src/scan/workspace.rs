@@ -917,9 +917,12 @@ impl Backend {
             .filter(|result| !open_uris.contains(&result.0))
             .count();
 
-        let workspace_wide = {
+        let (workspace_wide, ignored_codes) = {
             let cfg = self.state.config.read();
-            cfg.workspace_wide_diagnostics
+            (
+                cfg.workspace_wide_diagnostics,
+                cfg.ignored_error_codes.clone(),
+            )
         };
         let mut closed_budget_remaining = if workspace_wide {
             WORKSPACE_DIAGNOSTICS_BUDGET
@@ -935,6 +938,9 @@ impl Backend {
         {
             phase.tick();
             crate::validate::drop_inline_suppressed(&mut diagnostics, &inline_ignored);
+            // Before the count, so the summary matches what Problems lists.
+            diagnostics
+                .retain(|d| !crate::validate::code_is_suppressed(d.code.as_ref(), &ignored_codes));
 
             let mut file_has_error = false;
             for d in &diagnostics {
@@ -1004,9 +1010,15 @@ impl Backend {
             }
         }
 
+        let held_back = if workspace_wide {
+            closed_files_total.saturating_sub(WORKSPACE_DIAGNOSTICS_BUDGET)
+        } else {
+            0
+        };
         *self.state.last_scan_summary.lock() = Some(ScanSummary {
             total_files,
             validated_files: publish_total,
+            held_back_files: held_back,
             files_with_errors,
             total_errors,
             total_warnings,
@@ -1014,8 +1026,7 @@ impl Backend {
             total_hints,
         });
 
-        let held_back = closed_files_total.saturating_sub(WORKSPACE_DIAGNOSTICS_BUDGET);
-        if workspace_wide && held_back > 0 {
+        if held_back > 0 {
             tracing::info!(
                 held_back,
                 clear_held_back = held_back_clears,
@@ -1723,6 +1734,42 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_scan_summary_leaves_out_ignored_codes() {
+        let (backend, _tmp) = setup_workspace(None);
+        let reported = |backend: &Backend| {
+            let summary = backend.state.last_scan_summary.lock();
+            let summary = summary.as_ref().expect("a completed scan stores a summary");
+            summary.total_errors
+                + summary.total_warnings
+                + summary.total_infos
+                + summary.total_hints
+        };
+        let progress =
+            CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
+        let outcome = backend
+            .validate_entire_workspace_tracked(false, Some(&progress))
+            .await;
+        assert_eq!(outcome, ScanOutcome::Ran);
+        assert!(
+            reported(&backend) > 0,
+            "the unreferenced things must be counted as CW239"
+        );
+
+        backend.state.config.write().ignored_error_codes = vec!["cw239".to_string()];
+        let progress =
+            CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
+        let outcome = backend
+            .validate_entire_workspace_tracked(false, Some(&progress))
+            .await;
+        assert_eq!(outcome, ScanOutcome::Ran);
+        assert_eq!(
+            reported(&backend),
+            0,
+            "a code the user ignores never reaches Problems, so the summary must not count it"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_workspace_diagnostics_disabled_clears_previous() {
         let (backend, _tmp) = setup_error_workspace(2);
         let progress =
@@ -1787,6 +1834,16 @@ mod tests {
             published.len(),
             WORKSPACE_DIAGNOSTICS_BUDGET,
             "only the budgeted number of closed files should be published"
+        );
+        assert_eq!(
+            backend
+                .state
+                .last_scan_summary
+                .lock()
+                .as_ref()
+                .map(|summary| summary.held_back_files),
+            Some(4 - WORKSPACE_DIAGNOSTICS_BUDGET),
+            "the summary must say how many closed files the budget held back"
         );
     }
 

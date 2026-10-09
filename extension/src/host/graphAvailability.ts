@@ -23,3 +23,9 @@ export const FORMAT_WORKSPACE_COMMAND = serverCommand("formatWorkspace");
 export function formatWorkspaceAvailable(serverCommands: readonly string[] | undefined): boolean {
 	return serverCommands?.includes(FORMAT_WORKSPACE_COMMAND) ?? false;
 }
+
+export const VALIDATE_WORKSPACE_COMMAND = serverCommand("validateWorkspace");
+
+export function validateWorkspaceAvailable(serverCommands: readonly string[] | undefined): boolean {
+	return serverCommands?.includes(VALIDATE_WORKSPACE_COMMAND) ?? false;
+}
