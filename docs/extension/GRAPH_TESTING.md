@@ -14,7 +14,8 @@ on external layout workers or coupling assertions to their coordinates.
 The suite covers the isolated/connected split (including self-loops), the closed
 neighborhood hover classes, bounded class-update work, drawExtra label caching
 and shadow limits, canvas pixel ratios/resize/transforms, and lazy tooltip
-creation and graph-replacement cleanup. It complements graphWebview.test.ts,
+creation, detail expansion, simple/expanded mouseout behavior and graph-replacement
+cleanup. It complements graphWebview.test.ts,
 whose fake Cytoscape boundary remains useful for import/export failure cases.
 
 These tests measure graph correctness and application operations before layout.

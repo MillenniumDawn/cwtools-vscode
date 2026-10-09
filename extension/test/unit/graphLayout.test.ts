@@ -60,17 +60,40 @@ test("a large graph draws each node once and disables expensive shadows", () => 
 });
 
 test("real hover creates tooltips lazily and replacement destroys them", () => {
-	const cy = render([node("a"), node("b")]);
+	const cy = render([{ ...node("a"), details: [{ key: "cost", values: ["10", "20"] }] }, node("b")]);
 	expect(state.tips).toHaveLength(0);
 	cy.$id("a").emit("mouseover");
 	expect(state.tips).toHaveLength(1);
-	expect(state.tips[0].show).toHaveBeenCalledTimes(1);
-	vi.advanceTimersByTime(1000);
-	cy.$id("a").emit("mouseout");
 	const tip = state.tips[0];
+	expect(tip.show).toHaveBeenCalledTimes(1);
+	const simpleContent = tip.props.content;
+	const setProps = vi.spyOn(tip, "setProps");
+	vi.advanceTimersByTime(1000);
+	expect(setProps).toHaveBeenCalledTimes(1);
+	expect(setProps).toHaveBeenCalledWith(expect.objectContaining({ interactive: true }));
+	expect(tip.props.content).not.toBe(simpleContent);
+	const content = (tip.props.content as () => HTMLElement)();
+	const table = content.children[0].children[2];
+	expect(table.className).toBe("cwtools-table");
+	expect(table.children[0].children[0].textContent).toBe("cost");
+	expect(table.children[0].children[1].textContent).toBe("10, 20");
+	cy.$id("a").emit("mouseout");
+	expect(tip.hide).not.toHaveBeenCalled();
 	render([node("new")]);
 	expect(tip.destroy).toHaveBeenCalledTimes(1);
 	expect(cy.destroyed()).toBe(true);
+});
+
+test("mouseout before expansion hides the simple tooltip and cancels detail content", () => {
+	const cy = render([node("a")]);
+	cy.$id("a").emit("mouseover");
+	const tip = state.tips[0];
+	const setProps = vi.spyOn(tip, "setProps");
+	vi.advanceTimersByTime(999);
+	cy.$id("a").emit("mouseout");
+	expect(tip.hide).toHaveBeenCalledTimes(1);
+	vi.advanceTimersByTime(1);
+	expect(setProps).not.toHaveBeenCalled();
 });
 
 test("hover class updates touch at most the graph size for a fixed-degree node", () => {
