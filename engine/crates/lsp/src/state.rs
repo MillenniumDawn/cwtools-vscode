@@ -269,6 +269,8 @@ pub(crate) struct DocumentState {
     /// toast), parked the same way as the diagnostics above (#98).
     pub(crate) deferred_rules_messages: parking_lot::Mutex<Vec<DeferredRulesMessage>>,
     pub(crate) last_rules_toast: parking_lot::Mutex<Option<String>>,
+    /// Unclosed-quote format refusals already shown, so format on save does not repeat the toast.
+    pub(crate) format_refusal_toasts: parking_lot::Mutex<HashSet<(String, u32)>>,
     pub(crate) published_rule_uris: parking_lot::Mutex<HashSet<String>>,
     pub(crate) published_loc_uris: parking_lot::Mutex<HashSet<String>>,
     pub(crate) edit_generation: AtomicU64,
@@ -1050,6 +1052,7 @@ impl DocumentState {
             deferred_rule_diagnostics: parking_lot::Mutex::new(Vec::new()),
             deferred_rules_messages: parking_lot::Mutex::new(Vec::new()),
             last_rules_toast: parking_lot::Mutex::new(None),
+            format_refusal_toasts: parking_lot::Mutex::new(HashSet::new()),
             published_rule_uris: parking_lot::Mutex::new(HashSet::new()),
             published_loc_uris: parking_lot::Mutex::new(HashSet::new()),
             edit_generation: AtomicU64::new(0),

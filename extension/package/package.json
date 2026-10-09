@@ -127,6 +127,10 @@
         {
           "command": "cwtools.formatWorkspace",
           "when": "cwtoolsFormatWorkspaceAvailable"
+        },
+        {
+          "command": "validateWorkspace",
+          "when": "cwtoolsValidateWorkspaceAvailable"
         }
       ]
     },
@@ -169,6 +173,11 @@
       {
         "command": "cwtools.formatWorkspace",
         "title": "%commands.formatWorkspace.title%",
+        "category": "cwtools"
+      },
+      {
+        "command": "validateWorkspace",
+        "title": "%commands.validateWorkspace.title%",
         "category": "cwtools"
       },
       {

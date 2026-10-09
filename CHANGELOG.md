@@ -2,6 +2,10 @@
 
 #### Engine
 
+* Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
+* Test completion field variants and enum, scope and boolean key helpers, asserting suggestion labels, kinds, insertion text and filtering. (#925)
+* Report CW605 for malformed reserved alias and single_alias rules directives without rejecting ordinary root type names. (#484)
+* Return RequestFailed for graph requests refused while the workspace index is building, rules are absent, or the index is empty, preserving the pre-initialization handshake rejection and sharing the navigation wire error code. (#833)
 * Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
 * Assert ignored-document save publications and typed-path and fallback getFileTypes responses over the LSP wire. (#929)
 * Release string-table read locks before building cached AST records. (#494)
@@ -30,12 +34,16 @@
 * A submod can name its parent mods (`parentMods` init option, in load order). The server indexes them between the base game and the workspace with base-game provenance, so their scripted effects, triggers, variables, ideas, flags and localisation resolve and complete, and they never count toward CW261. A workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, shadows the parent's copy. Parent files are never validated or diagnosed, and are readable but not editable through the server. (#786)
 * Report syntax errors in `.cwt` rules files (an unclosed clause or quote) when loading a rules directory, as the new CW604. They reach `cwtools rules`, `validate` and the editor at startup, not only once the file is opened, and the live lint now reports them with the same code. The rules the parser recovered still load. (#847)
 * Alias `value[...]` patterns now resolve regardless of ASCII case, like the `enum[...]` arm, so `political_power` on rules side matches any casing of a value-set member. (#483)
+* Recover an unclosed quoted key as a leaf value without carrying over the speculative parse error, so an unclosed quote used as a leaf value no longer reports a parse diagnostic of its own. A quote whose missing end swallowed a following operator, a `{` shorthand or a closing `}` still reports its unclosed string, and the formatter keeps refusing any file with an unclosed quote so reformatting cannot corrupt it. Because such a file now parses clean, the refusal says why: `cwtools format` prints `<file>: unclosed quote on line N; skipping`, format document and format selection show a warning naming the line (once per file and line, and logged every time), and Format workspace counts those files apart from parse errors and lists them in the output. (#556)
 * HOI4 `replace_path` now hides only files directly inside the named directory from lower-priority mod layers and the base game; nested descendants remain visible, including in vanilla assets and localisation. Base-game aggregate caches remain enabled and are keyed to the replacement view. When an explicit cache has a different replacement view, `validate` and `fix` warn and use a freshly indexed filtered view with `--vanilla`, then rebuild the cache. Without `--vanilla`, they skip that cache with a warning. (#820)
 * Delete two functions with no callers: `InfoService::index_file` and `is_ignored_file`. (#910)
 
 #### Extension
 
 * Exercise graph layout partitions, hover classes, drawing and canvas transforms against real headless Cytoscape, including lazy tooltip creation, detail expansion, simple/expanded mouseout behavior and replacement cleanup. (#881)
+* Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. The summary leaves out codes ignored with `cwtools.errors.ignore`, and says how many closed files the workspace diagnostics budget kept out of Problems. (#603)
+* Fail `npm run check` when a host test file is missing from the configured labels, or when a configured host test no longer has a source file. Assert that an out-of-range hover position returns no results, and remove the stale skipped-test note. (#880)
+* Partition isolated and connected graph elements in linear time, preserving self-loops and edges while removing repeated component unions; verify degree checks, difference inputs and preservation with real Cytoscape. (#587)
 * Measure watched-file exclusions from configured parent, vanilla and rules roots as well as the workspace (the rules root for `.cwt` files only), refreshing roots on restart or rules-folder changes. Add a real create/change/delete watcher regression. (#862)
 * When the client drops watched-file events, skipped directory names (`.git`, `.claude`, `target`, `dist`, `out` and the rest) no longer count in the folders above the served workspace root. A mod checked out under a folder with one of those names, such as `.claude/worktrees/<mod>`, used to index at startup but ignore later external edits, checkouts and deletes. (#835)
 * Report graph image export failures in the webview instead of leaving rejected promises unhandled, and allow a later export to succeed. (#834)
