@@ -136,9 +136,9 @@ jobs:
           fail-on-scopes: runtime, development
           comment-summary-in-pr: on-failure
 
-  # Full client build: compile the engine and the client, run the host smoke
-  # suite against the real server, package the vsix, collect host and node
-  # coverage.
+  # Full client build: compile the engine and client, run rules-sync plus the
+  # live-settings, multi-root and watched-file suites, collect host and node
+  # coverage, then package and smoke-test the vsix.
   # The engine lives in-repo at engine/, so this is the same tree the rust
   # jobs lint and test, built here the way the extension actually consumes it.
   build:
@@ -165,41 +165,32 @@ jobs:
       # Exercises activation-triggered rules sync against the checked-in local
       # fixture, without reaching the network (see .vscode-test.mjs).
       - name: Host tests (rules sync)
+        id: host-rules-sync
         timeout-minutes: 10
-        run: npm run test:rules-sync
-      # Boots the extension host against the freshly built server: activation,
-      # command registration and the graph/file-explorer UI, plus the
-      # live-settings suite in its own workspace (see .vscode-test.mjs).
-      - name: Host smoke tests
+        run: node scripts/build/python.mjs scripts/build/hosttest.py --label rules-sync
+      # Keep the suites with distinct workspace/configuration coverage. The
+      # smoke files are a subset of hostFiles and run once under host coverage.
+      - name: Host tests (multi-root, watched files)
+        id: host-configurations
         timeout-minutes: 10
-        run: npm run test:smoke
-      # The `host` label adds hover and completion, which need rule data: the
-      # sample workspace detects as `stellaris` (see .vscode-test.mjs) and the
-      # extension fetches its pinned rules over git in the background.
-      - name: Host tests (hover/completion)
-        timeout-minutes: 10
-        run: npm run test:host
-      # Packages what was just built, server included, so the PR artifact is
-      # an installable extension rather than a client-only shell.
-      - name: Test build
-        run: npm run build -- package-prebuilt
-      # Open the archive on every PR, not only in the release job. This checks
-      # the .vscodeignore boundary as well as the package's required files.
-      - name: Smoke test VSIX
-        run: python3 scripts/smoke_test_vsix.py artifacts/vsix
-      # Host V8 coverage: mocha forces the instrumented host to exit after
-      # the host label (a superset of unit's and smoke's files, so this one
-      # run measures everything those would, including modules like
-      # graphPanel.ts that only extension.test.ts exercises), and
-      # host_coverage.py kills a leftover process tree if Electron still
-      # hangs under xvfb. Tight step timeout so a hang cannot burn the whole
-      # build job. Gated on the build step: the host label needs the built
-      # server binary, so running it after a failed build would burn the
-      # timeout on a doomed suite and bury the real failure.
+        run: >-
+          node scripts/build/python.mjs scripts/build/hosttest.py
+          --label multi-root --label watched
+      # Host V8 coverage runs the host label (including smoke files) and the
+      # isolated live-settings workspace, while the earlier configuration
+      # step retains unique multi-root and watched-file coverage. Run it before
+      # package-prebuilt: that command compiles a release client with
+      # CWTOOLS_TEST_* overrides removed, while these host configurations need
+      # the development build made above. Use --skip-compile to reuse it.
+      # Gated on the build step because this needs the built server binary.
       - name: Host coverage
-        if: always() && steps.build-engine.outcome == 'success'
+        if: ${{ !cancelled() && steps.build-engine.outcome == 'success' }}
         timeout-minutes: 15
-        run: npm run test:coverage
+        run: >-
+          node scripts/build/python.mjs scripts/build/host_coverage.py
+          --skip-compile
+          && node scripts/build/python.mjs scripts/build/coverage_summary.py
+          --host-only
       - name: Upload host coverage
         if: always()
         # v7.0.1
@@ -208,6 +199,20 @@ jobs:
           name: coverage-html
           path: coverage
           retention-days: 5
+      # Packages what was just built, server included, so the PR artifact is
+      # an installable extension rather than a client-only shell.
+      - name: Test build
+        id: test-build
+        if: >-
+          !cancelled() && steps.build-engine.outcome == 'success' &&
+          steps.host-rules-sync.outcome == 'success' &&
+          steps.host-configurations.outcome == 'success'
+        run: npm run build -- package-prebuilt
+      # Open the archive on every PR, not only in the release job. This checks
+      # the .vscodeignore boundary as well as the package's required files.
+      - name: Smoke test VSIX
+        if: ${{ !cancelled() && steps.test-build.outcome == 'success' }}
+        run: python3 scripts/smoke_test_vsix.py artifacts/vsix
       - name: Node unit tests (with coverage)
         if: always()
         run: npm run test:node:coverage
@@ -653,7 +658,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-node-npm
       - name: Download host coverage
         if: needs.build.result == 'success'
         # v8.0.1
