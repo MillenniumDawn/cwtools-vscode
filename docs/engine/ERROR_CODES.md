@@ -46,7 +46,14 @@ Three ways, all case-insensitive about the code:
   comment on either side both work. It names as many codes as you like
   (`# cwtools-ignore CW100 CW246`), and a second `#` ends the list, so a human
   note after it is not read as a code. Read from the raw source rather than the
-  AST, so it works in loc files and in a file that failed to parse. A
+  AST, so it works in loc files and in a file that failed to parse. Hashes
+  inside double-quoted values, including escaped quotes, are literal text and
+  cannot start a directive. An unclosed quote ends at the newline for this
+  scan, so real comments on later lines still work. Localization entries allow
+  embedded unescaped quotes, so their literal extends through the final
+  unescaped quote. A quoted note after a localization directive is ambiguous:
+  `KEY:0 "value" # cwtools-ignore CW100 # "note"` stays literal and suppresses
+  nothing. Put the directive after the final quote or on a separate line. A
   whole-file diagnostic (one with no line, like CW254) cannot be suppressed
   this way.
 - Per run: `--ignore-code CWxxx` on the CLI (repeatable), or `ignore-codes` in
