@@ -172,7 +172,7 @@ function workspaceValidationSummary(value: unknown): WorkspaceValidationSummary 
 				typeof record[field] !== "number" ||
 				!Number.isSafeInteger(record[field]) ||
 				record[field] < 0,
-			)
+		)
 	) {
 		return undefined;
 	}
