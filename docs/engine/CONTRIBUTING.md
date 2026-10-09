@@ -42,6 +42,11 @@ the hooks in a pinch with `git commit --no-verify` (use sparingly).
 
 From `engine/`:
 
+When parser output changes, bump `CACHE_VERSION` in
+`crates/cache/src/workspace.rs` so unchanged files are reparsed. The parse cache
+stores diagnostics in `.cwe` sidecars as well as ASTs in `.cwb` files; version 11
+invalidates the speculative unclosed leaf-value quote errors stored by version 10.
+
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
