@@ -400,7 +400,11 @@ export function registerCommands(
 								if (requestId !== latestGraphRequest) {
 									return;
 								}
-								gp.GraphPanel.create(context.extensionPath);
+								// Render in place: create() would reveal the revived panel in
+								// the active editor's column. Use it only once the panel is gone.
+								if (gp.GraphPanel.currentPanel !== panel) {
+									gp.GraphPanel.create(context.extensionPath);
+								}
 								gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity(), {
 									source: "json",
 									fileName: path.basename(uri[0].fsPath),
