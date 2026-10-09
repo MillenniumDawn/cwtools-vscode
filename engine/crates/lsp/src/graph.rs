@@ -14,7 +14,7 @@ pub(crate) const MAX_GRAPH_NODES: usize = 500;
 const MAX_GRAPH_EDGES: usize = MAX_GRAPH_NODES * 8;
 const MAX_GRAPH_USE_SITES_PER_NODE: usize = 64;
 
-const SERVER_NOT_INITIALIZED: i64 = -32002;
+const REQUEST_FAILED: i64 = -32803;
 
 const MAX_LABEL_CHARS: usize = 60;
 
@@ -540,9 +540,9 @@ fn truncate_label(label: &str) -> String {
     s
 }
 
-fn not_initialized(message: impl Into<String>) -> Error {
+fn graph_not_ready(message: impl Into<String>) -> Error {
     Error {
-        code: ErrorCode::ServerError(SERVER_NOT_INITIALIZED),
+        code: ErrorCode::ServerError(REQUEST_FAILED),
         message: message.into().into(),
         data: None,
     }
@@ -632,7 +632,7 @@ impl Backend {
         }
 
         if !self.state.index_ready.load(Ordering::Relaxed) {
-            return Err(not_initialized(
+            return Err(graph_not_ready(
                 "getGraphData: the workspace index is still building; try again once the initial scan finishes",
             ));
         }
@@ -659,7 +659,7 @@ impl Backend {
             }
         };
         if !rules_loaded {
-            return Err(not_initialized(
+            return Err(graph_not_ready(
                 "getGraphData: no rules config is loaded, so no entity types are known",
             ));
         }
@@ -677,7 +677,7 @@ impl Backend {
             (resolved, index_empty)
         };
         if index_empty {
-            return Err(not_initialized(
+            return Err(graph_not_ready(
                 "getGraphData: the workspace index is empty; no entities have been indexed",
             ));
         }
