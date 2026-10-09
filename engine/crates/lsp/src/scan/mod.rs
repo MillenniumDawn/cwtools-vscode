@@ -24,6 +24,8 @@ pub(crate) use vanilla::{VanillaLoc, VanillaLocKey};
 pub(crate) struct ScanSummary {
     pub total_files: usize,
     pub validated_files: usize,
+    /// Closed files past the workspace diagnostics budget, so not in Problems.
+    pub held_back_files: usize,
     pub files_with_errors: usize,
     pub total_errors: usize,
     pub total_warnings: usize,

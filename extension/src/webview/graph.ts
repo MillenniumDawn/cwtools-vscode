@@ -361,12 +361,10 @@ function runLayout(cy: cytoscape.Core) {
 		},
 	};
 
-	const t = cy.elements();
-	const groups: CollectionReturnValue[] = t.components();
-	const singles = groups.filter((f) => f.length === 1);
-	const singles2 = singles.reduce((p, c) => p.union(c), cy.collection());
-	const rest = groups.filter((f) => f.length !== 1);
-	const rest2 = rest.reduce((p, c) => p.union(c), cy.collection());
+	// Degree includes self-loops: only truly isolated nodes go to the grid.
+	// Keep all edges with the connected partition, including loop edges.
+	const singles2 = cy.nodes().filter((node) => node.degree() === 0);
+	const rest2 = cy.elements().difference(singles2);
 
 	const lrest = rest2.layout(opts);
 	lrest.run();
