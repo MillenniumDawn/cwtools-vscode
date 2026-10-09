@@ -3,6 +3,8 @@
 #### Engine
 
 * Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
+* Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
+* Assert ignored-document save publications and typed-path and fallback getFileTypes responses over the LSP wire. (#929)
 * Release string-table read locks before building cached AST records. (#494)
 * Ignore trailing `#` comments when parsing `.cwt` directive values, including `type_key_filter`, while retaining quoted hashes and malformed-directive checks. (#903)
 * Replace fixed language-server integration sleeps and timed scan/format holds with readiness signals and test-controlled gates, preserving cancellation, negative-result and scan-guard race assertions. (#887)
@@ -52,6 +54,7 @@
 
 #### Tooling
 
+* Run the extension-host coverage label once, retain the distinct live-settings, multi-root, watched-file and rules-sync suites, and reuse the build output instead of recompiling it in each test step. Skip npm installation in the Python-only coverage-report job. (#509)
 * Host coverage now launches in a dedicated POSIX process group and terminates descendants on timeout or interruption, including children whose parent exits on SIGTERM. A SIGTERM or SIGHUP sent to the script itself gets the same cleanup, and a second signal during it no longer stops it before the kill step. (#851)
 * `npm run bench:node` measures again: the client hot-path benchmark registered its three benches under Vitest 5 without running them, so it passed in a few hundred milliseconds with no results. Each bench is now run and its result asserted. (#878)
 * The node coverage report now includes the webview's `canvas.ts` and `graphLabel.ts`, and its floors sit just under the measured numbers instead of about 15 points below. (#927)

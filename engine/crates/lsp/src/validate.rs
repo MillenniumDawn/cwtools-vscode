@@ -4687,6 +4687,35 @@ mod ignored_tests {
 }
 
 #[cfg(test)]
+mod inline_ignore_tests {
+    use super::*;
+
+    #[test]
+    fn quoted_inline_ignore_examples_keep_editor_diagnostics() {
+        for source in [
+            r#"example = "literal # cwtools-ignore CW100 example""#,
+            r#" KEY:0 "literal # cwtools-ignore CW100 example""#,
+            r#" KEY:0 "text "quoted # cwtools-ignore CW100 example" rest""#,
+        ] {
+            let map = cwtools_validation::inline_ignore::extract_inline_ignored_codes(source);
+            let diagnostic = Diagnostic {
+                code: Some(NumberOrString::String("CW100".into())),
+                ..Diagnostic::default()
+            };
+            let mut diagnostics = vec![diagnostic.clone()];
+            drop_inline_suppressed(&mut diagnostics, &map);
+            assert_eq!(diagnostics, vec![diagnostic], "{source}");
+
+            let map = cwtools_validation::inline_ignore::extract_inline_ignored_codes(&format!(
+                "{source} # cwtools-ignore CW100"
+            ));
+            drop_inline_suppressed(&mut diagnostics, &map);
+            assert!(diagnostics.is_empty(), "real trailing comment: {source}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod raw_equipment_icon_tests {
     use super::*;
     use cwtools_string_table::string_table::StringTable;
