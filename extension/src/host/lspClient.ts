@@ -135,8 +135,112 @@ function commandProgressTitle(
 		[serverCommand("clearAllCaches")]: l10n.t("CWTools: Clear all caches and reindex"),
 		[serverCommand("reloadrulesconfig")]: l10n.t("CWTools: Reload config rules"),
 		[serverCommand("reindexWorkspace")]: l10n.t("CWTools: Re-index workspace"),
+		[serverCommand("validateWorkspace")]: l10n.t("CWTools: Validate workspace"),
 	};
 	return titles[command];
+}
+
+interface WorkspaceValidationSummary {
+	totalFiles: number;
+	validatedFiles: number;
+	heldBackFiles: number;
+	filesWithErrors: number;
+	totalErrors: number;
+	totalWarnings: number;
+	totalInfos: number;
+	totalHints: number;
+}
+
+function workspaceValidationSummary(value: unknown): WorkspaceValidationSummary | undefined {
+	if (value === null || typeof value !== "object") {
+		return undefined;
+	}
+	const record = value as Record<string, unknown>;
+	const fields = [
+		"totalFiles",
+		"validatedFiles",
+		"heldBackFiles",
+		"filesWithErrors",
+		"totalErrors",
+		"totalWarnings",
+		"totalInfos",
+		"totalHints",
+	] as const;
+	if (
+		fields.some(
+			(field) =>
+				typeof record[field] !== "number" ||
+				!Number.isSafeInteger(record[field]) ||
+				record[field] < 0,
+		)
+	) {
+		return undefined;
+	}
+	// SAFETY: fields.some above proved all eight fields are non-negative safe integers, the invariant WorkspaceValidationSummary encodes.
+	return record as unknown as WorkspaceValidationSummary;
+}
+
+function showWorkspaceValidationResult(
+	command: ServerCommandName,
+	result: unknown,
+): void {
+	if (result !== null && typeof result === "object") {
+		const record = result as Record<string, unknown>;
+		if (record.cancelled === true) {
+			window.showInformationMessage(l10n.t("CWTools: {0} cancelled.", command));
+			return;
+		}
+		if (record.busy === true) {
+			window.showWarningMessage(
+				l10n.t("CWTools: workspace validation could not start because another scan is still running. Try again shortly."),
+			);
+			return;
+		}
+	}
+	const summary = workspaceValidationSummary(result);
+	if (summary === undefined) {
+		window.showWarningMessage(
+			l10n.t("CWTools: workspace validation did not return a summary."),
+		);
+		return;
+	}
+	const validatedSummary = l10n.t(
+		"CWTools: validated {0} of {1} files; {2} with errors, {3} errors, {4} warnings, {5} infos, {6} hints.",
+		summary.validatedFiles,
+		summary.totalFiles,
+		summary.filesWithErrors,
+		summary.totalErrors,
+		summary.totalWarnings,
+		summary.totalInfos,
+		summary.totalHints,
+	);
+	// Totals cover the whole workspace; Problems lists less with workspace-wide diagnostics off, or past the server's publish budget.
+	const workspaceWide =
+		workspace
+			.getConfiguration("cwtools")
+			.get<boolean>("diagnostics.workspaceWide") ?? true;
+	let caveat: string | undefined;
+	if (!workspaceWide) {
+		caveat = l10n.t("Problems only lists open files while workspace-wide diagnostics are off.");
+	} else if (summary.heldBackFiles > 0) {
+		caveat = l10n.t(
+			"Problems leaves out {0} closed files past the workspace diagnostics budget.",
+			summary.heldBackFiles,
+		);
+	}
+	const message =
+		caveat === undefined ? validatedSummary : `${validatedSummary} ${caveat}`;
+	const showProblems = l10n.t("Show Problems");
+	void Promise.resolve(window.showInformationMessage(message, showProblems)).then(
+		(choice) => {
+			if (choice === showProblems) {
+				return commands.executeCommand("workbench.actions.view.problems");
+			}
+			return undefined;
+		},
+	).catch((err: unknown) =>
+		logError("Failed to open the Problems panel after workspace validation", err),
+	);
 }
 
 // genlocall returns one stub per language; open each as an untitled document so
@@ -475,6 +579,10 @@ export function createLanguageClient(
 					args,
 					title,
 				);
+				if (command === serverCommand("validateWorkspace")) {
+					showWorkspaceValidationResult(command, result);
+					return result;
+				}
 				// Against a server that supports command progress this covers
 				// cancellation too: the command returns normally and says so
 				// ("Re-index cancelled.") instead of being dropped mid-flight.

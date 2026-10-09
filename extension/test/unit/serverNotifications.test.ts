@@ -61,6 +61,7 @@ import { State } from "vscode-languageclient/node";
 import {
 	FIX_ALL_WORKSPACE_COMMAND,
 	FORMAT_WORKSPACE_COMMAND,
+	VALIDATE_WORKSPACE_COMMAND,
 	GRAPH_DATA_COMMAND,
 } from "../../src/host/graphAvailability";
 import { registerServerNotifications } from "../../src/host/serverNotifications";
@@ -69,6 +70,7 @@ const allAdvertised = [
 	GRAPH_DATA_COMMAND,
 	FIX_ALL_WORKSPACE_COMMAND,
 	FORMAT_WORKSPACE_COMMAND,
+	VALIDATE_WORKSPACE_COMMAND,
 ];
 
 function registerStatefulClient() {
@@ -116,11 +118,12 @@ function contextKeys(): Record<string, unknown> {
 	return keys;
 }
 
-function keysFor(graph: boolean, fixAll: boolean, format: boolean) {
+function keysFor(graph: boolean, fixAll: boolean, format: boolean, validate: boolean) {
 	return {
 		cwtoolsGraphAvailable: graph,
 		cwtoolsFixAllAvailable: fixAll,
 		cwtoolsFormatWorkspaceAvailable: format,
+		cwtoolsValidateWorkspaceAvailable: validate,
 	};
 }
 
@@ -211,6 +214,7 @@ suite("server notifications", () => {
 			["setContext", "cwtoolsGraphAvailable", false],
 			["setContext", "cwtoolsFixAllAvailable", false],
 			["setContext", "cwtoolsFormatWorkspaceAvailable", false],
+			["setContext", "cwtoolsValidateWorkspaceAvailable", false],
 		]);
 		assert.strictEqual(notifications.statusText(), "CWTools: stopped");
 	});
@@ -222,7 +226,7 @@ suite("server notifications", () => {
 
 		client.run(allAdvertised);
 
-		assert.deepStrictEqual(contextKeys(), keysFor(true, true, true));
+		assert.deepStrictEqual(contextKeys(), keysFor(true, true, true, true));
 	});
 
 	test("restores command availability after an automatic restart", () => {
@@ -231,11 +235,11 @@ suite("server notifications", () => {
 		client.run(allAdvertised);
 
 		client.enter(State.Stopped);
-		assert.deepStrictEqual(contextKeys(), keysFor(false, false, false));
+		assert.deepStrictEqual(contextKeys(), keysFor(false, false, false, false));
 		client.enter(State.Starting);
 		client.run(allAdvertised);
 
-		assert.deepStrictEqual(contextKeys(), keysFor(true, true, true));
+		assert.deepStrictEqual(contextKeys(), keysFor(true, true, true, true));
 		assert.ok(
 			state.executeCommand.mock.calls.every(([command]) => command === "setContext"),
 			"no restart command should be needed",
@@ -251,7 +255,7 @@ suite("server notifications", () => {
 		client.enter(State.Starting);
 		client.run([GRAPH_DATA_COMMAND]);
 
-		assert.deepStrictEqual(contextKeys(), keysFor(true, false, false));
+		assert.deepStrictEqual(contextKeys(), keysFor(true, false, false, false));
 	});
 
 	test.each([
@@ -268,7 +272,7 @@ suite("server notifications", () => {
 			client.enter(State.Starting);
 			client.enter(finalState);
 
-			assert.deepStrictEqual(contextKeys(), keysFor(false, false, false));
+			assert.deepStrictEqual(contextKeys(), keysFor(false, false, false, false));
 		},
 	);
 });

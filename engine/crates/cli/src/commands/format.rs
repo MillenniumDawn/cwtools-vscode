@@ -1,6 +1,6 @@
 //! `format`: reprint script files with normalized whitespace.
 
-use cwtools_parser::format::{FormatOptions, IndentStyle, format_text};
+use cwtools_parser::format::{FormatOptions, FormatRefusal, IndentStyle, format_text};
 use cwtools_string_table::string_table::StringTable;
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -89,12 +89,16 @@ pub(super) fn run(args: FormatArgs) {
             continue;
         };
         match format_text(&text, &table, &opts) {
-            None => {
+            Err(FormatRefusal::ParseErrors) => {
                 eprintln!("warn: {} failed to parse; skipping", path.display());
                 skipped += 1;
             }
-            Some(formatted) if formatted == text => {}
-            Some(formatted) => {
+            Err(refusal @ FormatRefusal::UnclosedQuote { .. }) => {
+                eprintln!("warn: {}: {refusal}; skipping", path.display());
+                skipped += 1;
+            }
+            Ok(formatted) if formatted == text => {}
+            Ok(formatted) => {
                 if apply {
                     if let Err(e) = crate::run::write_atomically(path, |file| {
                         file.write_all(formatted.as_bytes())
@@ -122,7 +126,7 @@ pub(super) fn run(args: FormatArgs) {
         println!("\nDry run: {files_changed} file(s) would be formatted (pass --apply to write)");
     }
     if skipped > 0 {
-        eprintln!("skipped {skipped} file(s) (unreadable or parse errors)");
+        eprintln!("skipped {skipped} file(s) (unreadable, parse errors or unclosed quotes)");
     }
     if write_failed {
         std::process::exit(EXIT_USAGE);
