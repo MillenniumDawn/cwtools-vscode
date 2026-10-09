@@ -21,6 +21,11 @@ Source: `extension/package/package.json` `contributes.commands`.
 - `reindexWorkspace` (`Re-index workspace`)
   - Re-parses and reindexes the current workspace.
 
+- `validateWorkspace` (`Validate workspace`)
+  - Runs a workspace validation scan and reports file and diagnostic totals.
+    The command is hidden from the palette unless the running server advertises
+    it. The result offers **Show Problems** to open VS Code's Problems panel.
+
 - `cwtools.exportProfilingLog` (`Export profiling log`)
   - Exports the language server profiling buffer to a chosen file.
 

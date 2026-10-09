@@ -133,6 +133,16 @@ The localisation scan keeps its existing streaming text lifetime. Rename
 retains only small request metadata alongside the collected edits, rather
 than retaining every scanned file's text.
 
+### Graph request readiness
+
+The `getGraphData` executeCommand requires a completed initial scan, loaded
+rules, and an index containing entities. After initialization, a refusal for
+any of these prerequisites returns LSP `RequestFailed` (-32803) with a message
+naming the missing prerequisite. `ServerNotInitialized` (-32002) remains the
+transport's rejection for requests received before `initialize` completes.
+Invalid graph arguments and unknown entity types return `InvalidParams`
+(-32602).
+
 ### Background reindex
 
 A long-running session drifts: files deleted while the server had no watcher event,

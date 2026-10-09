@@ -33,6 +33,7 @@ const BUILTIN_VSCODE_COMMANDS = new Set([
 	"setContext",
 	"editor.action.showReferences",
 	"workbench.action.reloadWindow",
+	"workbench.actions.view.problems",
 	...BUILTIN_COMMANDS,
 ]);
 
@@ -188,6 +189,7 @@ suite("manifest — command registration", () => {
 			"cwtools.setGraphDepth": "cwtoolsGraphAvailable",
 			"cwtools.fixAllWorkspace": "cwtoolsFixAllAvailable",
 			"cwtools.formatWorkspace": "cwtoolsFormatWorkspaceAvailable",
+			validateWorkspace: "cwtoolsValidateWorkspaceAvailable",
 		};
 		for (const [id, key] of Object.entries(gated)) {
 			const entry = palette.find((e) => e.command === id);
