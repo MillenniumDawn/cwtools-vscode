@@ -169,7 +169,7 @@ impl Backend {
                 if self.is_ignored_uri(&uri) {
                     self.clear_ignored_file_state(&uri);
                     if let Ok(uri_obj) = Url::parse(&uri) {
-                        self.publish_filtered(uri_obj, Vec::new(), None, None).await;
+                        self.publish_if_closed(uri_obj, Vec::new(), None).await;
                     }
                     continue;
                 }
@@ -211,10 +211,9 @@ impl Backend {
                                 .insert(uri.clone(), sig);
                         }
                         if let Ok(uri_obj) = Url::parse(&uri) {
-                            self.publish_gated(
+                            self.publish_gated_if_closed(
                                 uri_obj,
                                 diagnostics,
-                                None,
                                 Some(cwtools_cache::workspace::content_hash(&text)),
                             )
                             .await;
@@ -358,7 +357,7 @@ impl Backend {
         self.bump_info_revision();
         for uri in deletes {
             if let Ok(uri_obj) = Url::parse(uri) {
-                self.publish_filtered(uri_obj, vec![], None, None).await;
+                self.publish_if_closed(uri_obj, vec![], None).await;
             }
         }
         removed_loc_keys

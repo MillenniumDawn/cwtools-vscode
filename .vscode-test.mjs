@@ -14,8 +14,9 @@
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
-// Labels are therefore unique here. `test:smoke` passes `--label smoke`,
-// `--label live`, `--label multi-root`, and `--label watched`.
+// Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
+// `--label live`, `--label multi-root`, and `--label watched` to cover the host
+// workspaces and the external-file watcher suite.
 //
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
@@ -26,8 +27,9 @@
 // real rules in the background on activation. `host` needs the built server
 // binary, so it is gated in ci.yml's `build` job rather than `check`.
 //
-// The multi-root fixture needs a staged server, so it runs with smoke after the
-// build job has produced one; unit remains server-free for fast client tests.
+// The multi-root fixture needs a staged server, so CI runs it alongside watched
+// after the build step has produced one, and locally it runs with smoke under
+// test:smoke; unit remains server-free for fast client tests.
 //
 // rules-sync exercises the opposite gap: sample-hoi4's folder name and
 // common/ai_strategy dir make it detect as hoi4, so activation's real

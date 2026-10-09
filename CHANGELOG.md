@@ -2,10 +2,13 @@
 
 #### Engine
 
+* Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
+* Assert ignored-document save publications and typed-path and fallback getFileTypes responses over the LSP wire. (#929)
 * Release string-table read locks before building cached AST records. (#494)
 * Ignore trailing `#` comments when parsing `.cwt` directive values, including `type_key_filter`, while retaining quoted hashes and malformed-directive checks. (#903)
 * Replace fixed language-server integration sleeps and timed scan/format holds with readiness signals and test-controlled gates, preserving cancellation, negative-result and scan-guard race assertions. (#887)
 * Preserve the previous semantic-token snapshot across buffer edits so delta requests return edits; assert the wire edit, file-operation refresh behavior, and `genlocall` output over framed LSP traffic. (#519)
+* Keep versioned diagnostic publications ordered with document changes so stale results cannot replace current diagnostics or fixes. A rules reload no longer publishes on-disk rule errors over an open `.cwt` file. (#478)
 * Report syntax, directive and reference diagnostics for a single `--rules` file using the same loader as rules directories, retaining recovered rules. (#863)
 * Add tests that make CW247 fire for a rule validated in the wrong scope, and stay quiet in the right one. (#922)
 * Remove redundant scope-resolver borrows so the engine passes Rust 1.99 Clippy without changing scope resolution.
@@ -27,6 +30,7 @@
 * A submod can name its parent mods (`parentMods` init option, in load order). The server indexes them between the base game and the workspace with base-game provenance, so their scripted effects, triggers, variables, ideas, flags and localisation resolve and complete, and they never count toward CW261. A workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, shadows the parent's copy. Parent files are never validated or diagnosed, and are readable but not editable through the server. (#786)
 * Report syntax errors in `.cwt` rules files (an unclosed clause or quote) when loading a rules directory, as the new CW604. They reach `cwtools rules`, `validate` and the editor at startup, not only once the file is opened, and the live lint now reports them with the same code. The rules the parser recovered still load. (#847)
 * Alias `value[...]` patterns now resolve regardless of ASCII case, like the `enum[...]` arm, so `political_power` on rules side matches any casing of a value-set member. (#483)
+* HOI4 `replace_path` now hides only files directly inside the named directory from lower-priority mod layers and the base game; nested descendants remain visible, including in vanilla assets and localisation. Base-game aggregate caches remain enabled and are keyed to the replacement view. When an explicit cache has a different replacement view, `validate` and `fix` warn and use a freshly indexed filtered view with `--vanilla`, then rebuild the cache. Without `--vanilla`, they skip that cache with a warning. (#820)
 * Delete two functions with no callers: `InfoService::index_file` and `is_ignored_file`. (#910)
 
 #### Extension
@@ -50,6 +54,7 @@
 
 #### Tooling
 
+* Run the extension-host coverage label once, retain the distinct live-settings, multi-root, watched-file and rules-sync suites, and reuse the build output instead of recompiling it in each test step. Skip npm installation in the Python-only coverage-report job. (#509)
 * Host coverage now launches in a dedicated POSIX process group and terminates descendants on timeout or interruption, including children whose parent exits on SIGTERM. A SIGTERM or SIGHUP sent to the script itself gets the same cleanup, and a second signal during it no longer stops it before the kill step. (#851)
 * `npm run bench:node` measures again: the client hot-path benchmark registered its three benches under Vitest 5 without running them, so it passed in a few hundred milliseconds with no results. Each bench is now run and its result asserted. (#878)
 * The node coverage report now includes the webview's `canvas.ts` and `graphLabel.ts`, and its floors sit just under the measured numbers instead of about 15 points below. (#927)
@@ -59,6 +64,7 @@
 * The VSIX smoke test rejects any file under `bin/server` that is not one of those executables, such as a stray `.pdb` in the flat directory or in a platform directory, even if earlier build checks are bypassed. It reports unexpected files and missing or empty executables in one run. (#852)
 * Delete `is_record` from the coverage script. It had no callers. (#910)
 * Drop four npm overrides (`minimatch@3`, `minimatch@5`, `brace-expansion@1` and `uuid`) that matched nothing in the lockfile. (#911)
+* The build helpers share one `require_executable` for the node and npm lookups, `set_release_version` and `prerelease_notes` have direct tests, and `scripts/pyrightconfig.json` moves to the repo root with `scripts/build` as its extra path. The Python CI job no longer saves an npm cache, which claimed the key the check and build jobs share. (#889)
 * Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
 
 ### 3.4.7

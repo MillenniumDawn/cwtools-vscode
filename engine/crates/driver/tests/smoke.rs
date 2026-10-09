@@ -1490,6 +1490,14 @@ types = {
 }
 "#;
 
+const COMMON_ROOT_RULES: &str = r#"
+types = {
+    type[thing] = {
+        path = "game/common"
+    }
+}
+"#;
+
 /// A temp workspace with `rules/`, a one-instance `mod/`, a one-instance
 /// `vanilla/` install, and an empty `cache/` for the auto cache to write into.
 fn cache_workspace() -> tempfile::TempDir {
@@ -1510,12 +1518,26 @@ fn load_cached_with_parse_cache(
     refresh: bool,
     parse_cache_dir: Option<PathBuf>,
 ) -> cwtools_driver::SessionWithFiles {
+    load_cached_from_vanilla(
+        workspace,
+        &workspace.join("vanilla"),
+        refresh,
+        parse_cache_dir,
+    )
+}
+
+fn load_cached_from_vanilla(
+    workspace: &std::path::Path,
+    vanilla_root: &std::path::Path,
+    refresh: bool,
+    parse_cache_dir: Option<PathBuf>,
+) -> cwtools_driver::SessionWithFiles {
     Session::load_with_parse_cache(
         SessionConfig {
             game: Game::Hoi4,
             rules: RulesInput::Dir(workspace.join("rules")),
             directory: workspace.join("mod"),
-            vanilla: Some(workspace.join("vanilla")),
+            vanilla: Some(vanilla_root.to_path_buf()),
             vanilla_cache: None,
             vanilla_cache_auto: Some(VanillaCacheAuto {
                 dir: workspace.join("cache"),
@@ -1580,6 +1602,347 @@ fn vanilla_cache_auto_writes_then_reuses() {
     assert!(
         second.type_index().contains("thing", "vanilla_thing"),
         "the second run should read the base-game instance from the cache"
+    );
+}
+
+#[test]
+fn vanilla_cache_auto_rebuilds_replacement_view_without_leaking_auxiliary_paths() {
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    for (relative, name) in [
+        ("common/things_extra/y.txt", "sibling_thing"),
+        ("common/outside/z.txt", "outside_thing"),
+    ] {
+        let path = vanilla.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("{name} = {{ }}\n")).unwrap();
+    }
+    for relative in [
+        "common/things/replaced.dds",
+        "common/things/assets/nested_kept.dds",
+        "common/things_extra/assets/kept.dds",
+    ] {
+        let path = vanilla.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    let first = load_cached_from_vanilla(ws.path(), &vanilla, false, None);
+    assert!(first.type_index().contains("thing", "vanilla_thing"));
+    assert!(first.type_index().contains("thing", "sibling_thing"));
+    assert!(first.type_index().contains("thing", "outside_thing"));
+    assert!(
+        first
+            .type_index()
+            .file_index
+            .contains("common/things/replaced.dds")
+    );
+
+    std::fs::write(
+        ws.path().join("mod/descriptor.mod"),
+        r#"name = "Test mod"
+replace_path = "COMMON\THINGS"
+"#,
+    )
+    .unwrap();
+    let descriptor =
+        cwtools_file_manager::file_manager::read_root_descriptor(&ws.path().join("mod"))
+            .expect("the primary mod descriptor should parse");
+    assert_eq!(descriptor.replace_paths, vec![r"COMMON\THINGS"]);
+    let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
+    assert!(shadow.hides_file_under(&vanilla, &vanilla.join("common/things/x.txt")));
+    let cached = load_cached_from_vanilla(ws.path(), &vanilla, false, None);
+    assert!(
+        !cached.type_index().contains("thing", "vanilla_thing"),
+        "the cached definition under replace_path must be suppressed"
+    );
+    assert!(
+        cached.type_index().contains("thing", "sibling_thing"),
+        "replace_path must not capture a sibling directory with the same prefix"
+    );
+    assert!(cached.type_index().contains("thing", "outside_thing"));
+    assert!(cached.type_index().contains("thing", "my_thing"));
+    assert!(
+        !cached
+            .type_index()
+            .file_index
+            .contains("common/things/replaced.dds"),
+        "the live file index must also hide direct files below replace_path"
+    );
+    assert!(
+        cached
+            .type_index()
+            .file_index
+            .contains("common/things/assets/nested_kept.dds"),
+        "replace_path must leave files in nested directories visible"
+    );
+    assert!(
+        cached
+            .type_index()
+            .file_index
+            .contains("common/things_extra/assets/kept.dds")
+    );
+    assert_eq!(cache_files(&ws.path().join("cache")).len(), 2);
+
+    // Keep the install-root directory metadata stable but remove the source
+    // contents: the replacement-view cache must still supply unrelated data.
+    std::fs::write(vanilla.join("common/things_extra/y.txt"), "").unwrap();
+    std::fs::write(vanilla.join("common/outside/z.txt"), "").unwrap();
+    let replacement_cache_hit = load_cached_from_vanilla(ws.path(), &vanilla, false, None);
+    assert!(
+        replacement_cache_hit
+            .type_index()
+            .contains("thing", "sibling_thing")
+    );
+    assert!(
+        replacement_cache_hit
+            .type_index()
+            .contains("thing", "outside_thing")
+    );
+    assert_eq!(cache_files(&ws.path().join("cache")).len(), 2);
+
+    std::fs::remove_file(ws.path().join("mod/descriptor.mod")).unwrap();
+    let unfiltered_cache_hit = load_cached_from_vanilla(ws.path(), &vanilla, false, None);
+    assert!(
+        unfiltered_cache_hit
+            .type_index()
+            .contains("thing", "vanilla_thing")
+    );
+    assert!(
+        unfiltered_cache_hit
+            .type_index()
+            .contains("thing", "sibling_thing")
+    );
+    assert_eq!(cache_files(&ws.path().join("cache")).len(), 2);
+}
+
+#[test]
+fn explicit_vanilla_cache_keeps_the_exact_replacement_view_and_unrelated_entries() {
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    for (relative, body) in [
+        ("common/things_extra/sibling.txt", "sibling_thing = { }\n"),
+        ("common/outside/unrelated.txt", "unrelated_thing = { }\n"),
+    ] {
+        let path = vanilla.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+    for relative in ["common/things/replaced.dds", "common/things_extra/kept.dds"] {
+        let path = vanilla.join(relative);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+    std::fs::write(
+        ws.path().join("mod/descriptor.mod"),
+        r#"replace_path = "common/things""#,
+    )
+    .unwrap();
+
+    let generated = load_cached_from_vanilla(ws.path(), &vanilla, false, None);
+    assert!(!generated.type_index().contains("thing", "vanilla_thing"));
+    let cache_path = cache_files(&ws.path().join("cache"))
+        .into_iter()
+        .next()
+        .expect("replacement-aware cache is written");
+    let (_, _, cache) = cwtools_index::vanilla_cache::load(&cache_path).unwrap();
+
+    let explicit = Session::load_with_parse_cache(
+        SessionConfig {
+            game: Game::Hoi4,
+            rules: RulesInput::Dir(ws.path().join("rules")),
+            directory: ws.path().join("mod"),
+            vanilla: Some(vanilla),
+            vanilla_cache: Some(cache),
+            vanilla_cache_auto: None,
+            ignore_files: &[],
+            ignore_dirs: &[],
+            loc_languages: None,
+            case_sensitive_files: false,
+            on_rules_diagnostic: None,
+        },
+        None,
+    );
+
+    assert!(!explicit.type_index().contains("thing", "vanilla_thing"));
+    assert!(explicit.type_index().contains("thing", "sibling_thing"));
+    assert!(explicit.type_index().contains("thing", "unrelated_thing"));
+    assert!(
+        !explicit
+            .type_index()
+            .file_index
+            .contains("common/things/replaced.dds")
+    );
+    assert!(
+        explicit
+            .type_index()
+            .file_index
+            .contains("common/things_extra/kept.dds")
+    );
+}
+
+/// A shadow with no `replace_path`s hides nothing: the filter must not spend
+/// any file resolution proving it.
+#[test]
+fn filter_vanilla_index_passes_everything_through_without_replace_paths() {
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    let table = StringTable::new();
+    let (ruleset, _) = load_ruleset_from_dir(
+        &ws.path().join("rules"),
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+    let var_effects = variable_defining_effects(&ruleset);
+
+    let index = index_game_dir(&vanilla, &ruleset, &table, &var_effects).unwrap();
+    let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
+    assert!(!shadow.has_replace_paths());
+
+    let filtered = cwtools_driver::filter_vanilla_index(index.map.clone(), &vanilla, &shadow);
+    assert!(
+        filtered.get("thing").is_some_and(|instances| instances
+            .iter()
+            .any(|(_, instance)| instance.name == "vanilla_thing")),
+        "every instance must survive a shadow without replace paths"
+    );
+}
+
+/// Cached sources carry the real install root while the run sees an alias of
+/// it: the filter resolves the aliased root and still hides exactly the
+/// replaced files.
+#[cfg(unix)]
+#[test]
+fn filter_vanilla_index_matches_cached_sources_through_a_root_alias() {
+    use std::os::unix::fs::symlink;
+
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    let nested = vanilla.join("common/things/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    std::fs::write(nested.join("y.txt"), "nested_kept = { }\n").unwrap();
+    let extra = vanilla.join("common/things_extra");
+    std::fs::create_dir_all(&extra).unwrap();
+    std::fs::write(extra.join("z.txt"), "sibling_kept = { }\n").unwrap();
+    std::fs::write(
+        ws.path().join("mod/descriptor.mod"),
+        r#"replace_path = "common/things""#,
+    )
+    .unwrap();
+
+    let table = StringTable::new();
+    let (ruleset, _) = load_ruleset_from_dir(
+        &ws.path().join("rules"),
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+    let var_effects = variable_defining_effects(&ruleset);
+    // Index through the real root, the way a cache build would.
+    let index = index_game_dir(&vanilla, &ruleset, &table, &var_effects).unwrap();
+
+    let alias = ws.path().join("vanilla-alias");
+    symlink(&vanilla, &alias).unwrap();
+
+    let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
+    assert!(shadow.has_replace_paths());
+
+    let filtered = cwtools_driver::filter_vanilla_index(index.map, &alias, &shadow);
+    let things: Vec<String> = filtered
+        .get("thing")
+        .map(|instances| {
+            instances
+                .iter()
+                .map(|(_, instance)| instance.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        !things.iter().any(|name| name == "vanilla_thing"),
+        "the replaced definition must be hidden through the alias"
+    );
+    assert!(
+        things.iter().any(|name| name == "nested_kept"),
+        "nested descendants stay visible"
+    );
+    assert!(
+        things.iter().any(|name| name == "sibling_kept"),
+        "the replace path must not capture a sibling directory"
+    );
+}
+
+/// A source spelled under the root as given is matched by prefix, with no
+/// file resolution: the file can be gone and the filter still hides it.
+#[cfg(unix)]
+#[test]
+fn filter_vanilla_index_matches_sources_under_the_given_root_without_resolving_them() {
+    use std::os::unix::fs::symlink;
+
+    let ws = cache_workspace();
+    std::fs::write(ws.path().join("rules/things.cwt"), COMMON_ROOT_RULES).unwrap();
+    let vanilla = ws.path().join("vanilla");
+    std::fs::write(
+        ws.path().join("mod/descriptor.mod"),
+        r#"replace_path = "common/things""#,
+    )
+    .unwrap();
+    let alias = ws.path().join("vanilla-alias");
+    symlink(&vanilla, &alias).unwrap();
+
+    let table = StringTable::new();
+    let (ruleset, _) = load_ruleset_from_dir(
+        &ws.path().join("rules"),
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+    let var_effects = variable_defining_effects(&ruleset);
+    // Index through the alias, so every source is spelled under it.
+    let index = index_game_dir(&alias, &ruleset, &table, &var_effects).unwrap();
+    std::fs::remove_file(vanilla.join("common/things/x.txt")).unwrap();
+
+    let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
+    let filtered = cwtools_driver::filter_vanilla_index(index.map, &alias, &shadow);
+    assert!(
+        !filtered.get("thing").is_some_and(|instances| instances
+            .iter()
+            .any(|(_, instance)| instance.name == "vanilla_thing")),
+        "the replaced definition must be hidden without its file on disk"
+    );
+}
+
+#[test]
+fn vanilla_cache_auto_distinguishes_installs_with_the_same_game_version() {
+    let ws = cache_workspace();
+    let first_root = ws.path().join("vanilla");
+    let second_root = ws.path().join("other-vanilla");
+    let second_things = second_root.join("common/things");
+    std::fs::create_dir_all(&second_things).unwrap();
+    std::fs::write(second_things.join("x.txt"), "second_vanilla_thing = { }\n").unwrap();
+    for root in [&first_root, &second_root] {
+        std::fs::write(
+            root.join("launcher-settings.json"),
+            "{\"rawVersion\":\"1.16.4\"}\n",
+        )
+        .unwrap();
+    }
+
+    let first = load_cached_from_vanilla(ws.path(), &first_root, false, None);
+    assert!(first.type_index().contains("thing", "vanilla_thing"));
+    let second = load_cached_from_vanilla(ws.path(), &second_root, false, None);
+    assert!(
+        second
+            .type_index()
+            .contains("thing", "second_vanilla_thing"),
+        "a cache entry from the first install must not be reused for a different root"
+    );
+    assert!(!second.type_index().contains("thing", "vanilla_thing"));
+    assert_eq!(
+        cache_files(&ws.path().join("cache")).len(),
+        2,
+        "each vanilla root should have its own cache entry"
     );
 }
 
