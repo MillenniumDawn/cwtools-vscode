@@ -38,6 +38,7 @@
 
 #### Extension
 
+* Fail `npm run check` when a host test file is missing from the configured labels, or when a configured host test no longer has a source file. Assert that an out-of-range hover position returns no results, and remove the stale skipped-test note. (#880)
 * Partition isolated and connected graph elements in linear time, preserving self-loops and edges while removing repeated component unions; verify degree checks, difference inputs and preservation with real Cytoscape. (#587)
 * Measure watched-file exclusions from configured parent, vanilla and rules roots as well as the workspace (the rules root for `.cwt` files only), refreshing roots on restart or rules-folder changes. Add a real create/change/delete watcher regression. (#862)
 * When the client drops watched-file events, skipped directory names (`.git`, `.claude`, `target`, `dist`, `out` and the rest) no longer count in the folders above the served workspace root. A mod checked out under a folder with one of those names, such as `.claude/worktrees/<mod>`, used to index at startup but ignore later external edits, checkouts and deletes. (#835)
