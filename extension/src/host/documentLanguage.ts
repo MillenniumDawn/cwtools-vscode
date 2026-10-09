@@ -42,6 +42,9 @@ export async function registerDocumentLanguage(
 	const getFileTypesTimeoutMs = 5000;
 	const getFileTypesBackoffMs = 2000;
 	const readContentRoots = () => typeof roots === "function" ? roots() : roots;
+	// A roots callback builds a new array per call, so compare by value.
+	const sameRoots = (a: readonly string[], b: readonly string[]) =>
+		a.length === b.length && a.every((root, i) => root === b[i]);
 	let contentRoots = readContentRoots();
 	let vanillaRoots: readonly string[] = [];
 
@@ -197,8 +200,7 @@ export async function registerDocumentLanguage(
 			didChangeActiveTextEditor(window.activeTextEditor, ++generation),
 		updateVanillaRoots: async (roots) => {
 			const nextRoots = readContentRoots();
-			if (contentRoots === nextRoots && vanillaRoots.length === roots.length &&
-				vanillaRoots.every((root, i) => root === roots[i])) return;
+			if (sameRoots(contentRoots, nextRoots) && sameRoots(vanillaRoots, roots)) return;
 			contentRoots = nextRoots;
 			vanillaRoots = roots;
 			await Promise.all(workspace.textDocuments.map(upgradePlaintextDocument));

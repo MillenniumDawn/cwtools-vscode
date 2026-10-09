@@ -429,6 +429,17 @@ suite("documentLanguage", () => {
 			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, [[current, "paradox"]]);
 		});
 
+		test("skips the recheck when a roots callback returns equal roots in a new array", async () => {
+			const tracker = await registerDocumentLanguage(
+				{ subscriptions: [] } as unknown as ExtensionContext,
+				{ sendNotification: vi.fn(), sendRequest: vi.fn() } as unknown as LanguageClient,
+				"paradox", () => gameContentRoots(contentRoot),
+			);
+			documentState.documents = [makeDocument(path.join(contentRoot, "common", "ideas", "idea.txt"))];
+			await tracker.updateVanillaRoots([]);
+			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, []);
+		});
+
 		test("promotes only recognized content among documents already open", async () => {
 			documentState.documents = [...valid, ...unrelated];
 			await register();
