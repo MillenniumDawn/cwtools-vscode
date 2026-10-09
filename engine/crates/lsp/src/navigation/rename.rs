@@ -32,7 +32,7 @@ fn validate_replacement_name(name: &str, kind: RenameNameKind) -> Result<()> {
             !name.is_empty()
                 && name
                     .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')),
+                    .all(cwtools_localization::is_valid_loc_key_char),
             "a localisation key containing letters, digits, underscores, dots or hyphens",
         ),
         RenameNameKind::Type => (
@@ -53,7 +53,12 @@ fn validate_replacement_name(name: &str, kind: RenameNameKind) -> Result<()> {
 
 fn valid_type_replacement(name: &str) -> bool {
     use cwtools_parser::ast::{Child, Operator, Value};
-    if name.is_empty() || name == "\"\"" || name.chars().any(char::is_control) {
+    if name.is_empty()
+        || name == "\"\""
+        || cwtools_parser::unquote(name).starts_with(['@', '['])
+        || name.contains('$')
+        || name.chars().any(char::is_control)
+    {
         return false;
     }
     // A type name must fit both a definition key and a reference value. Let

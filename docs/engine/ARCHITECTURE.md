@@ -123,8 +123,11 @@ without expanding it.
 
 Rename validates the replacement for its target before collecting edits.
 Script constants keep their `@` prefix and accept a non-empty identifier;
-localisation keys accept ASCII letters, digits, underscores, dots and hyphens.
-Type names must parse as one definition key and one reference value. Complete
+localisation keys accept ASCII letters, digits, underscores, dots and hyphens,
+using the same character predicate as localisation validation.
+Type names must parse as one definition key and one reference value. After
+unquoting, they cannot begin with `@` or `[`, or contain `$`, because those forms
+have constant, scripted-localisation or macro-parameter meaning. Complete
 quoted type names are supported, and edits replace the whole quoted token at
 quoted targets. Invalid replacement names return `RequestFailed` (-32803)
 without a workspace edit.

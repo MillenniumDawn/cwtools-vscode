@@ -6090,6 +6090,12 @@ fn test_rename_rejects_invalid_replacement_names_over_the_wire() {
         (files[1].0, 0, 2, "plain_name"),
         (files[1].0, 0, 2, "@"),
         (files[1].0, 0, 2, "@@new"),
+        (files[1].0, 2, 18, "@foo"),
+        (files[1].0, 2, 18, "$p$"),
+        (files[1].0, 2, 18, "foo$x$"),
+        (files[1].0, 2, 18, "[foo]"),
+        (files[1].0, 2, 18, "\"@foo\""),
+        (files[1].0, 2, 18, "\"[foo]\""),
         (files[1].0, 2, 18, "new}name"),
         (files[1].0, 2, 18, "new#comment"),
         (files[1].0, 2, 18, "new name"),
@@ -6154,7 +6160,7 @@ fn test_rename_valid_constant_name_preserves_parseability() {
 
 #[test]
 fn test_rename_valid_type_names_preserve_parseability() {
-    for new_name in ["NEW.focus_1", "\"New focus_1\""] {
+    for new_name in ["NEW_FOCUS", "NEW.focus_1", "\"New focus_1\""] {
         let files = [
             ("common/national_focus/f.txt", "MY_FOCUS = { x = yes }\n"),
             (

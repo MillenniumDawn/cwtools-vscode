@@ -2,7 +2,7 @@
 
 #### Engine
 
-* Validate rename replacements against constant, localisation-key and script type syntax, preserving valid dotted and quoted names and complete quoted target spans. (#845)
+* Validate rename replacements against constant, the shared localisation-key rule and script type syntax, rejecting constant, macro-parameter and scripted-localisation forms as type names, preserving valid dotted and quoted names and complete quoted target spans. (#845)
 * Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
 * Assert ignored-document save publications and typed-path and fallback getFileTypes responses over the LSP wire. (#929)
 * Release string-table read locks before building cached AST records. (#494)
