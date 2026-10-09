@@ -220,6 +220,7 @@ const {
 			}),
 			destroy: vi.fn(),
 			elements: () => ({
+				difference: () => fakeCollection(),
 				components: () => [],
 				boundingBox: () => ({
 					x1: bounds.x1,
@@ -238,6 +239,7 @@ const {
 			}),
 			png: vi.fn(() => `data:image/png;base64,${GRAPH_BODY}`),
 			nodes: () => ({
+				filter: () => fakeCollection(),
 				forEach: (fn: (node: FakeGraphNode) => void) => {
 					graphNodes.nodes.forEach(fn);
 				},
