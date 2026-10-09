@@ -206,6 +206,10 @@ export function registerCommands(
 		}),
 	);
 	let currentGraphDepth = 3;
+	// Show graph, JSON imports and reload restoration share this generation.
+	// Imports commit on file selection, before reading; cancelled dialogs leave
+	// pending work eligible to finish. Only the latest committed request may
+	// render or persist its source. A failed request never revives older results.
 	let latestGraphRequest = 0;
 	const wheelSensitivity = (): number =>
 		workspace.getConfiguration("cwtools.graph").get("zoomSensitivity") ?? 1;
