@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import contextlib
 import json
 import os
@@ -144,13 +145,25 @@ def clean_coverage() -> None:
         shutil.rmtree(COVERAGE_DIR)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run extension-host coverage")
+    parser.add_argument(
+        "--skip-compile",
+        action="store_true",
+        help="reuse the already-compiled extension client",
+    )
+    args = parser.parse_args(argv)
     clean_coverage()
     try:
         display = resolve_display()
         if display.note is not None:
             sys.stderr.write(f"{display.note}\n")
-        _run("extension compilation", require_executable("npm"), ["run", "compile"])
+        if not args.skip_compile:
+            _run(
+                "extension compilation",
+                require_executable("npm"),
+                ["run", "compile"],
+            )
         # Run the separate live workspace alongside host so both contribute to
         # one coverage session. Host also exercises modules like graphPanel.ts.
         # This needs a built cwtools-server binary and network access for the
