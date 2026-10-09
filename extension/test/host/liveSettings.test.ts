@@ -16,6 +16,7 @@ const settingsFile = path.join(
 	"common/live_settings/cwtools_live_settings.txt",
 );
 const workspaceRulesFolder = ".cwtools-test-rules";
+const hoverTimeoutMs = 30_000;
 const localisationPosition = new vscode.Position(1, 9);
 const ownerPosition = new vscode.Position(2, 2);
 
@@ -41,13 +42,13 @@ async function waitForHover(
 	message: string,
 ): Promise<string> {
 	let lastText = "";
-	// didChangeConfiguration triggers a full loc re-index that can exceed 3 s on
-	// a CI runner with a cold cache, so the budget stays generous even though
-	// the poll is fine-grained.
+	// didChangeConfiguration triggers a full re-index, and coverage
+	// instrumentation can push that work past 15 s on a cold CI runner. Keep
+	// the hover assertion strict while allowing the same operation to finish.
 	const matched = await waitUntil(async () => {
 		lastText = await hoverText(uri, position);
 		return predicate(lastText);
-	}, 15_000);
+	}, hoverTimeoutMs);
 	if (!matched) {
 		throw new Error(`${message}: ${JSON.stringify(lastText)}`);
 	}
@@ -55,7 +56,7 @@ async function waitForHover(
 }
 
 suite("Live settings", function () {
-	this.timeout(60_000);
+	this.timeout(75_000);
 
 	let document: vscode.TextDocument;
 

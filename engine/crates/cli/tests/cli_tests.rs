@@ -3963,3 +3963,52 @@ fn test_format_rejects_an_unknown_indent_style() {
         .code(2)
         .stderr(predicate::str::contains("indent-style"));
 }
+
+#[test]
+fn test_validate_inline_ignore_quoted_example_keeps_the_diagnostic() {
+    let content = "namespace = test_events\n\ncountry_event = {\n\tid = test.1\n\ttitle = \"Test Event\"\n\tdesc = \"A test event\"\n}\n";
+    let content = content.replace(
+        "country_event = {",
+        "country_event = { title = \"literal # cwtools-ignore CW107 example\"",
+    );
+    validate_inline_mod(&content)
+        .success()
+        .stdout(predicate::str::contains("CW107"));
+}
+
+#[test]
+fn test_loc_inline_ignore_quoted_example_keeps_the_diagnostic() {
+    let tmp = tempfile::tempdir().unwrap();
+    let loc = tmp.path().join("localisation");
+    std::fs::create_dir_all(&loc).unwrap();
+    let file = loc.join("test_l_english.yml");
+    std::fs::write(
+        &file,
+        "\u{FEFF}l_english:\n KEY:0 \"$missing_key$ \"quoted # cwtools-ignore CW225 example\" rest\"\n",
+    )
+    .unwrap();
+    cwtools()
+        .arg("loc")
+        .arg(tmp.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CW225"));
+}
+
+#[test]
+fn test_loc_inline_ignore_real_comment_after_embedded_quotes_suppresses() {
+    let tmp = tempfile::tempdir().unwrap();
+    let loc = tmp.path().join("localisation");
+    std::fs::create_dir_all(&loc).unwrap();
+    std::fs::write(
+        loc.join("test_l_english.yml"),
+        "\u{FEFF}l_english:\n KEY:0 \"$missing_key$ \"quoted\" rest\" # cwtools-ignore CW225\n",
+    )
+    .unwrap();
+    cwtools()
+        .arg("loc")
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CW225").not());
+}
