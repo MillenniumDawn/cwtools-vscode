@@ -40,7 +40,6 @@
 
 #### Extension
 
-* Omit imported node IDs from graph metadata errors so rejected graph JSON cannot inject command links into notifications. (#842)
 * Validate optional imported graph details, display names and file locations before replacement, and keep generic nodes safely hoverable without navigation metadata. (#842)
 * Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. The summary leaves out codes ignored with `cwtools.errors.ignore`, and says how many closed files the workspace diagnostics budget kept out of Problems. (#603)
 * Fail `npm run check` when a host test file is missing from the configured labels, or when a configured host test no longer has a source file. Assert that an out-of-range hover position returns no results, and remove the stale skipped-test note. (#880)

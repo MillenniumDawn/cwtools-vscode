@@ -10,7 +10,7 @@ string `filename`, a safe integer `line` of at least 1, and a safe integer
 `column` of at least 0. Column 0 remains accepted for existing graph exports.
 
 Malformed metadata is rejected before replacing the current graph or changing
-its persisted source. The error names the node and the invalid field. The
+its persisted source. The error names only the invalid field. The
 navigation interaction also checks its coordinates before forwarding them,
 and tooltip detail rendering omits malformed entries if data changes later.
 
