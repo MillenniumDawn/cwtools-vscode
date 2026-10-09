@@ -196,6 +196,15 @@ suite("engine — detectFromFolder", () => {
 		await assertDetects("/projects/stellaris-project/mod/opaque", null);
 	});
 
+	test.each([
+		["/Documents/Paradox Interactive/Hearts of Iron IV/mod/Fall of Rome", "hoi4"],
+		["C:\\Documents\\Paradox Interactive\\Hearts of Iron IV\\mod\\Europa Reborn", "hoi4"],
+		["/Documents/Paradox Interactive/Crusader Kings III/mod/ck2_conversion", "ck3"],
+		["/Documents/Paradox Interactive/Stellaris/mod/Victoria 3 flags", "stellaris"],
+	])("the canonical layout game beats another game's keyword in the mod name: %s", async (root, expected) => {
+		await assertDetects(root, expected);
+	});
+
 	test("first matching folder-name hint wins (order matters)", async () => {
 		assert.strictEqual(await detectFromFolder("/mods/CK2", noopExists), "ck2");
 	});

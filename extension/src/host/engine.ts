@@ -39,6 +39,7 @@ export async function detectFromFolder(
 	)?.[1];
 	// The root name is relevant. Ancestors count only in the conventional
 	// <vanilla>/game and <game>/mod/<mod> layouts, with exact game folder names.
+	// That exact game beats a keyword in the mod's own name.
 	const layoutGame =
 		name === "game"
 			? parts[parts.length - 2]
@@ -48,7 +49,7 @@ export async function detectFromFolder(
 	const vanilla = GAMES.find((game) =>
 		game.vanillaFolders.includes(layoutGame ?? ""),
 	);
-	const nameHint = rootHint ?? vanilla?.id;
+	const nameHint = vanilla?.id ?? rootHint;
 
 	// Inspect only the fixed set of content markers, never the whole tree.
 	// Content is stronger than names; mixed trees use GAMES order. Dynasties
