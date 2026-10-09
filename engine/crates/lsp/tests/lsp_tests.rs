@@ -11577,6 +11577,137 @@ fn test_get_graph_data_rejects_bad_requests() {
 }
 
 #[test]
+fn test_get_graph_data_before_initialize_keeps_handshake_rejection() {
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let stdin = child.stdin.take().unwrap();
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let response = run_child_with_deadline(child, stdin, reader, 20, |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                720,
+                "workspace/executeCommand",
+                serde_json::json!({ "command": "getGraphData", "arguments": ["focus", 3] }),
+            ),
+        )
+        .unwrap();
+        let raw = read_response_for_id(reader, 720).expect("no getGraphData response");
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    })
+    .expect("pre-initialization graph request timed out");
+    assert!(response["result"].is_null(), "got: {response}");
+    assert_eq!(response["error"]["code"], -32002, "got: {response}");
+    assert_eq!(response["error"]["message"], "Server not initialized");
+}
+
+#[test]
+fn test_get_graph_data_while_initial_scan_builds_reports_request_failed() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    let markers = tempfile::tempdir().unwrap();
+    let gate = markers.path().join("scan-hold");
+    std::fs::write(&gate, b"hold").unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GRAPH_RULES).unwrap();
+    let init = jsonrpc_request(
+        1,
+        "initialize",
+        serde_json::json!({
+            "processId": std::process::id(),
+            "rootUri": path_uri(ws.path()),
+            "capabilities": {},
+            "initializationOptions": {
+                "language": "hoi4",
+                "rulesCache": rules_dir.path().to_string_lossy(),
+                "vanilla": vanilla.path().to_string_lossy(),
+            }
+        }),
+    );
+    let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_SCAN_HOLD_FILE", &gate)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let stdin = child.stdin.take().unwrap();
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let response = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
+        write_frame_to(stdin, &init).unwrap();
+        let raw = read_response_for_id(reader, 1).expect("no init response");
+        let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(response["error"].is_null(), "got: {response}");
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+        loop {
+            let raw = read_frame(reader).expect("no scan-started notification");
+            let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if is_scan_started(&frame) {
+                break;
+            }
+        }
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                720,
+                "workspace/executeCommand",
+                serde_json::json!({ "command": "getGraphData", "arguments": ["focus", 3] }),
+            ),
+        )
+        .unwrap();
+        let raw = read_response_for_id(reader, 720).expect("no getGraphData response");
+        assert!(
+            gate.exists(),
+            "scan must stay held until the graph request answers"
+        );
+        std::fs::remove_file(gate).unwrap();
+        wait_for_scan_done(reader);
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    })
+    .expect("graph request during the initial scan timed out");
+    assert!(response["result"].is_null(), "got: {response}");
+    assert_eq!(response["error"]["code"], -32803, "got: {response}");
+    assert_eq!(
+        response["error"]["message"],
+        "getGraphData: the workspace index is still building; try again once the initial scan finishes"
+    );
+}
+
+#[test]
+fn test_get_graph_data_without_rules_reports_request_failed() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            720,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "getGraphData", "arguments": ["focus", 3] }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response_for_id(&mut reader, 720).expect("no getGraphData response");
+    stop_server(&mut child);
+    let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(response["result"].is_null(), "got: {response}");
+    assert_eq!(response["error"]["code"], -32803, "got: {response}");
+    assert_eq!(
+        response["error"]["message"],
+        "getGraphData: no rules config is loaded, so no entity types are known"
+    );
+}
+
+#[test]
 fn test_get_graph_data_on_empty_workspace_reports_not_ready() {
     // No script files at all: the command must name the problem rather than
     // hand the webview an empty array.
@@ -11600,10 +11731,10 @@ fn test_get_graph_data_on_empty_workspace_reports_not_ready() {
 
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(resp["result"].is_null(), "got: {resp}");
-    let message = resp["error"]["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("index is empty") || message.contains("no instances"),
-        "got: {resp}"
+    assert_eq!(resp["error"]["code"], -32803, "got: {resp}");
+    assert_eq!(
+        resp["error"]["message"],
+        "getGraphData: the workspace index is empty; no entities have been indexed"
     );
 }
 
