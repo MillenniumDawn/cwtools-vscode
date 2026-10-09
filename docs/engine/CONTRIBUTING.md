@@ -59,6 +59,13 @@ COVERAGE_THRESHOLD=85 python3 ../scripts/coverage.py
 The command writes `target/coverage/lcov.info`, which is the source for CI and
 local review diffs.
 
+The stdio tests in `lsp/tests/lsp_tests.rs` assert response contents as well as
+request completion. The ignored-file save test consumes the initial open
+diagnostics before saving, then checks the fresh empty publication and its
+document version. The file-type command test uses empty files to distinguish
+rule path matching from indexed instances, and checks the complete fallback
+lists for events, scripts, scripted effects and scripted triggers.
+
 ## Diagnostics guard
 
 The test suite says the code still compiles and behaves. The diagnostics guard
