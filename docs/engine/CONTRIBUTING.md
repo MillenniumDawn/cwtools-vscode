@@ -59,6 +59,13 @@ COVERAGE_THRESHOLD=85 python3 ../scripts/coverage.py
 The command writes `target/coverage/lcov.info`, which is the source for CI and
 local review diffs.
 
+The completion builders have focused unit tests in
+`lsp/src/completion/builders.rs`. Run them with
+`cargo test -p cwtools_lsp completion::builders`; they compare labels, item
+kinds and inserted text for value fields and rule keys. For a coverage change,
+check the relevant builder arms in the generated LCOV report as well as the
+workspace percentage, so an unrelated test cannot hide an unvisited field.
+
 The stdio tests in `lsp/tests/lsp_tests.rs` assert response contents as well as
 request completion. The ignored-file save test consumes the initial open
 diagnostics before saving, then checks the fresh empty publication and its

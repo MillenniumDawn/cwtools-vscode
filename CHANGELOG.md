@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Test completion field variants and enum, scope and boolean key helpers, asserting suggestion labels, kinds, insertion text and filtering. (#925)
 * Report CW605 for malformed reserved alias and single_alias rules directives without rejecting ordinary root type names. (#484)
 * Return RequestFailed for graph requests refused while the workspace index is building, rules are absent, or the index is empty, preserving the pre-initialization handshake rejection and sharing the navigation wire error code. (#833)
 * Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
