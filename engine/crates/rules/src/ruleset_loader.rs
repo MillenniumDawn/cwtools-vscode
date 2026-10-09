@@ -1,7 +1,9 @@
 use crate::post_process::post_process;
 #[cfg(test)]
 use crate::rules_converter::ast_to_ruleset;
-use crate::rules_converter::{ast_to_ruleset_raw, validate_comment_directives};
+use crate::rules_converter::{
+    ast_to_ruleset_raw, validate_comment_directives, validate_root_alias_directives,
+};
 use crate::rules_types::{CwtDefKind, CwtDefPosition, RuleSet};
 use cwtools_error_codes::{
     CW600_RULES_FILE_UNREADABLE, CW602_RULES_UNEXPANDED_ALIAS, CW604_RULES_SYNTAX_ERROR, ErrorCode,
@@ -223,6 +225,8 @@ fn load_cwt_file(
                 );
                 out.errors
                     .extend(validate_comment_directives(&parsed, path));
+                out.errors
+                    .extend(validate_root_alias_directives(&parsed, table, path));
                 out.ruleset = ast_to_ruleset_raw(&parsed, table);
                 crate::config_validation::collect_reference_candidates(
                     path,
@@ -630,5 +634,74 @@ thing = { second = any }
         assert!(rs.localisation_commands.contains("<scripted_loc"));
         assert!(rs.localisation_commands.contains("getfoo"));
         assert_eq!(rs.localisation_commands.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod malformed_alias_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_reserved_alias_keys_report_their_file_and_line() {
+        for key in [
+            "alias[effect]",
+            "alias[effect:]",
+            "alias[:name]",
+            "alias[effect:name",
+            "alias[effect:name]suffix",
+            "single_alias[",
+            "single_alias[]",
+            "single_alias[name",
+            "single_alias[name]suffix",
+            "alias",
+            "single_alias",
+            "alias]effect:name",
+            "single_alias]name",
+            "alias[effect:name]]",
+            "alias[effect:enum[name]",
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let file = tmp.path().join("malformed.cwt");
+            std::fs::write(&file, format!("# preceding comment\n{key} = {{ field = scalar }}\nvalid_type = {{ field = scalar }}\n")).unwrap();
+            let (rules, errors) =
+                load_ruleset_from_file(&file, &StringTable::new(), ScanBudget::default()).unwrap();
+            let error = errors
+                .iter()
+                .find(|e| e.code == "CW605")
+                .unwrap_or_else(|| {
+                    panic!("missing malformed alias diagnostic for {key}: {errors:?}")
+                });
+            let (directory_rules, directory_errors) =
+                load_ruleset_from_dir(tmp.path(), &StringTable::new(), ScanBudget::default());
+            let directory_error = directory_errors
+                .iter()
+                .find(|e| e.code == "CW605")
+                .expect("directory loader diagnostic");
+            assert_eq!(directory_error.message, error.message);
+            assert_eq!(directory_error.line, error.line);
+            assert_eq!(directory_rules.root_rules.len(), rules.root_rules.len());
+            assert_eq!(error.file, file);
+            assert_eq!(error.line, 2);
+            assert_eq!(error.severity, ErrorSeverity::Error);
+            assert!(error.message.contains(key));
+            assert_eq!(
+                rules.root_rules.len(),
+                1,
+                "malformed reserved key is not a type rule: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_root_type_names_and_valid_aliases_still_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("valid.cwt");
+        std::fs::write(&file, "ordinary_type = { field = scalar }\nalias_type = { field = scalar }\nsingle_alias_type = { field = scalar }\nenums = { enum[names] = { foo } }\nalias[effect:enum[names]] = scalar\nalias[effect:name] = scalar\nsingle_alias[name] = scalar\n").unwrap();
+        let (rules, errors) =
+            load_ruleset_from_file(&file, &StringTable::new(), ScanBudget::default()).unwrap();
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(rules.root_rules.len(), 3);
+        assert_eq!(rules.aliases.len(), 2);
+        assert_eq!(rules.single_aliases.len(), 1);
     }
 }

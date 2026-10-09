@@ -3938,6 +3938,24 @@ fn test_format_rejects_an_unknown_indent_style() {
 }
 
 #[test]
+fn test_rules_malformed_alias_directive_reports_cw605() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("malformed.cwt");
+    std::fs::write(
+        &file,
+        "# comment\nalias[effect] = { field = scalar }\nordinary_type = { field = scalar }\n",
+    )
+    .unwrap();
+    cwtools()
+        .arg("rules")
+        .arg(&file)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CW605"))
+        .stdout(predicate::str::contains("alias[effect]"));
+}
+
+#[test]
 fn test_validate_inline_ignore_quoted_example_keeps_the_diagnostic() {
     let content = "namespace = test_events\n\ncountry_event = {\n\tid = test.1\n\ttitle = \"Test Event\"\n\tdesc = \"A test event\"\n}\n";
     let content = content.replace(
