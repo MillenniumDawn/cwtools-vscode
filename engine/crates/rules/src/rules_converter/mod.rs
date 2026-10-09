@@ -125,14 +125,14 @@ fn process_root_leaf(
     comments: &[String],
     ruleset: &mut RuleSet,
 ) {
-    if key.starts_with("alias[") {
+    if is_reserved_alias_key(&key, "alias") {
         if let Some((category, _alias_name)) = get_alias_settings(&key, "alias") {
             let full_name = format!("{}:{}", category, _alias_name);
             let rule = leaf_to_rule(leaf, ast, table);
             let opts = options_from_comments(comments, leaf_is_eqeq(leaf));
             ruleset.aliases.push((full_name, (rule, opts)));
         }
-    } else if key.starts_with("single_alias[") {
+    } else if is_reserved_alias_key(&key, "single_alias") {
         if let Some(alias_name) = get_setting_from_string(&key, "single_alias") {
             let rule = leaf_to_rule(leaf, ast, table);
             let opts = options_from_comments(comments, leaf_is_eqeq(leaf));
@@ -390,23 +390,74 @@ pub(crate) fn value_to_string(value: &Value, table: &StringTable) -> String {
     }
 }
 
+fn is_reserved_alias_key(key: &str, directive: &str) -> bool {
+    key == directive
+        || key
+            .strip_prefix(directive)
+            .is_some_and(|rest| rest.starts_with(['[', ']']))
+}
+
+pub(crate) fn validate_root_alias_directives(
+    ast: &ParsedFile,
+    table: &StringTable,
+    path: &std::path::Path,
+) -> Vec<crate::ruleset_loader::RuleParseError> {
+    ast.root_children
+        .iter()
+        .filter_map(|child| {
+            let Child::Leaf(idx) = child else { return None };
+            let leaf = &ast.arena.leaves[*idx as usize];
+            let key = table.get_string(leaf.key.normal).unwrap_or_default();
+            let expected = if is_reserved_alias_key(&key, "alias")
+                && get_alias_settings(&key, "alias").is_none()
+            {
+                "alias[category:name]"
+            } else if is_reserved_alias_key(&key, "single_alias")
+                && get_setting_from_string(&key, "single_alias").is_none()
+            {
+                "single_alias[name]"
+            } else {
+                return None;
+            };
+            Some(crate::ruleset_loader::RuleParseError::new(
+                &cwtools_error_codes::CW605_RULES_MALFORMED_ALIAS,
+                path.to_path_buf(),
+                leaf.pos.start.line,
+                leaf.pos.start.col,
+                format!(
+                    "Malformed alias directive `{key}`; expected `{expected}` with nonempty names"
+                ),
+            ))
+        })
+        .collect()
+}
+
 fn get_alias_settings(full: &str, prefix: &str) -> Option<(String, String)> {
     let setting = get_setting_from_string(full, prefix)?;
-    let parts: Vec<&str> = setting.splitn(2, ':').collect();
-    if parts.len() < 2 {
-        None
-    } else {
-        Some((parts[0].to_string(), parts[1].to_string()))
+    let (category, name) = setting.split_once(':')?;
+    if category.is_empty() || name.is_empty() {
+        return None;
     }
+    Some((category.to_string(), name.to_string()))
 }
 
 fn get_setting_from_string(full: &str, key: &str) -> Option<String> {
-    let expected = format!("{}[", key);
-    if full.starts_with(&expected) && full.ends_with(']') {
-        Some(full[expected.len()..full.len() - 1].to_string())
-    } else {
-        None
+    let expected = format!("{key}[");
+    let setting = full.strip_prefix(&expected)?.strip_suffix(']')?;
+    if setting.is_empty() {
+        return None;
     }
+    // Alias names can contain nested fields, e.g. enum[equipment_category].
+    // Only unmatched brackets or text after the outer closing bracket fail.
+    let mut depth = 0usize;
+    for ch in setting.chars() {
+        match ch {
+            '[' => depth += 1,
+            ']' => depth = depth.checked_sub(1)?,
+            _ => {}
+        }
+    }
+    (depth == 0).then(|| setting.to_string())
 }
 
 pub(crate) fn clean_path(path: &str) -> String {

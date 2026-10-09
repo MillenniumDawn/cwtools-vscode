@@ -9389,6 +9389,11 @@ fn test_validate_workspace_command_returns_summary() {
         "summary must count the one validated file, got: {result:?}"
     );
     assert_eq!(
+        result["heldBackFiles"].as_u64(),
+        Some(0),
+        "one file is inside the diagnostics budget, got: {result:?}"
+    );
+    assert_eq!(
         result["filesWithErrors"].as_u64(),
         Some(1),
         "the malformed file must carry an error, got: {result:?}"
@@ -11813,6 +11818,137 @@ fn test_get_graph_data_rejects_bad_requests() {
 }
 
 #[test]
+fn test_get_graph_data_before_initialize_keeps_handshake_rejection() {
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let stdin = child.stdin.take().unwrap();
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let response = run_child_with_deadline(child, stdin, reader, 20, |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                720,
+                "workspace/executeCommand",
+                serde_json::json!({ "command": "getGraphData", "arguments": ["focus", 3] }),
+            ),
+        )
+        .unwrap();
+        let raw = read_response_for_id(reader, 720).expect("no getGraphData response");
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    })
+    .expect("pre-initialization graph request timed out");
+    assert!(response["result"].is_null(), "got: {response}");
+    assert_eq!(response["error"]["code"], -32002, "got: {response}");
+    assert_eq!(response["error"]["message"], "Server not initialized");
+}
+
+#[test]
+fn test_get_graph_data_while_initial_scan_builds_reports_request_failed() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    let markers = tempfile::tempdir().unwrap();
+    let gate = markers.path().join("scan-hold");
+    std::fs::write(&gate, b"hold").unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), GRAPH_RULES).unwrap();
+    let init = jsonrpc_request(
+        1,
+        "initialize",
+        serde_json::json!({
+            "processId": std::process::id(),
+            "rootUri": path_uri(ws.path()),
+            "capabilities": {},
+            "initializationOptions": {
+                "language": "hoi4",
+                "rulesCache": rules_dir.path().to_string_lossy(),
+                "vanilla": vanilla.path().to_string_lossy(),
+            }
+        }),
+    );
+    let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_SCAN_HOLD_FILE", &gate)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let stdin = child.stdin.take().unwrap();
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let response = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
+        write_frame_to(stdin, &init).unwrap();
+        let raw = read_response_for_id(reader, 1).expect("no init response");
+        let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(response["error"].is_null(), "got: {response}");
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+        loop {
+            let raw = read_frame(reader).expect("no scan-started notification");
+            let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if is_scan_started(&frame) {
+                break;
+            }
+        }
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                720,
+                "workspace/executeCommand",
+                serde_json::json!({ "command": "getGraphData", "arguments": ["focus", 3] }),
+            ),
+        )
+        .unwrap();
+        let raw = read_response_for_id(reader, 720).expect("no getGraphData response");
+        assert!(
+            gate.exists(),
+            "scan must stay held until the graph request answers"
+        );
+        std::fs::remove_file(gate).unwrap();
+        wait_for_scan_done(reader);
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    })
+    .expect("graph request during the initial scan timed out");
+    assert!(response["result"].is_null(), "got: {response}");
+    assert_eq!(response["error"]["code"], -32803, "got: {response}");
+    assert_eq!(
+        response["error"]["message"],
+        "getGraphData: the workspace index is still building; try again once the initial scan finishes"
+    );
+}
+
+#[test]
+fn test_get_graph_data_without_rules_reports_request_failed() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules_dir = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    let (mut child, mut reader) = storm_server(ws.path(), rules_dir.path(), vanilla.path());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            720,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "getGraphData", "arguments": ["focus", 3] }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response_for_id(&mut reader, 720).expect("no getGraphData response");
+    stop_server(&mut child);
+    let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(response["result"].is_null(), "got: {response}");
+    assert_eq!(response["error"]["code"], -32803, "got: {response}");
+    assert_eq!(
+        response["error"]["message"],
+        "getGraphData: no rules config is loaded, so no entity types are known"
+    );
+}
+
+#[test]
 fn test_get_graph_data_on_empty_workspace_reports_not_ready() {
     // No script files at all: the command must name the problem rather than
     // hand the webview an empty array.
@@ -11836,10 +11972,10 @@ fn test_get_graph_data_on_empty_workspace_reports_not_ready() {
 
     let resp: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(resp["result"].is_null(), "got: {resp}");
-    let message = resp["error"]["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains("index is empty") || message.contains("no instances"),
-        "got: {resp}"
+    assert_eq!(resp["error"]["code"], -32803, "got: {resp}");
+    assert_eq!(
+        resp["error"]["message"],
+        "getGraphData: the workspace index is empty; no entities have been indexed"
     );
 }
 
@@ -13037,6 +13173,183 @@ fn test_formatting_parse_error_returns_no_edits() {
         "parse error must not rewrite, got: {}",
         resp["result"]
     );
+}
+
+/// Frames up to the response for `id`, as (messages of `method` notifications
+/// that mention an unclosed quote, the response).
+fn unclosed_quote_notices_until_response(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    method: &str,
+    id: i64,
+) -> (Vec<String>, serde_json::Value) {
+    let mut notices = Vec::new();
+    loop {
+        let raw = read_frame(reader).expect("no response");
+        let Ok(frame) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if frame["method"] == method
+            && let Some(message) = frame["params"]["message"].as_str()
+            && message.contains("unclosed quote")
+        {
+            notices.push(message.to_owned());
+        }
+        if frame["id"] == id && frame.get("method").is_none() {
+            return (notices, frame);
+        }
+    }
+}
+
+#[test]
+fn test_formatting_names_the_unclosed_quote_it_refuses() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("names.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let text = "names = {\n\t\"Falke\n\tAdler\n}\n";
+    std::fs::write(&p, text).unwrap();
+    let uri = path_uri(&p);
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "hoi4",
+                    "version": 1,
+                    "text": text,
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    // Format on save repeats the request; the toast must not repeat with it.
+    let mut rounds = Vec::new();
+    for id in [2, 3] {
+        write_frame(
+            &mut child,
+            &jsonrpc_request(
+                id,
+                "textDocument/formatting",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "options": { "tabSize": 4, "insertSpaces": true },
+                }),
+            ),
+        )
+        .unwrap();
+        rounds.push(unclosed_quote_notices_until_response(
+            &mut reader,
+            "window/showMessage",
+            id,
+        ));
+    }
+    stop_server(&mut child);
+    for (_, resp) in &rounds {
+        assert!(resp.get("error").is_none(), "got: {resp}");
+        assert!(
+            resp["result"].is_null(),
+            "an unclosed leaf-value quote must not rewrite, got: {}",
+            resp["result"]
+        );
+    }
+    let (first, second) = (&rounds[0].0, &rounds[1].0);
+    assert_eq!(first.len(), 1, "one toast for the refusal: {first:?}");
+    assert!(
+        first[0].starts_with("CWTools: did not format ")
+            && first[0].ends_with("names.txt: unclosed quote on line 2."),
+        "{first:?}"
+    );
+    assert!(
+        second.is_empty(),
+        "the second request must not toast again: {second:?}"
+    );
+}
+
+#[test]
+fn test_format_workspace_counts_and_logs_an_unclosed_quote() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("names.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let original = "names = {\n\t\"Falke\n\tAdler\n}\n";
+    std::fs::write(&p, original).unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "formatWorkspace", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    let (notices, resp) =
+        unclosed_quote_notices_until_response(&mut reader, "window/logMessage", 2);
+    stop_server(&mut child);
+    assert_eq!(
+        resp["result"],
+        "No files needed formatting; skipped 1 (unclosed quotes, listed in the output).",
+        "got: {resp}"
+    );
+    assert_eq!(notices.len(), 1, "one log line for the file: {notices:?}");
+    assert!(
+        notices[0].ends_with("names.txt: unclosed quote on line 2"),
+        "{notices:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), original);
 }
 
 #[test]

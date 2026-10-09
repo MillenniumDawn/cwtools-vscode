@@ -16,6 +16,7 @@
   "commands.exportProfilingLog.title": "Export profiling log",
   "commands.fixAllWorkspace.title": "Fix all auto-fixable problems in workspace",
   "commands.formatWorkspace.title": "Format workspace",
+  "commands.validateWorkspace.title": "Validate workspace",
   "commands.restartServer.title": "Restart Server",
   "commands.showOutput.title": "Show Output",
   "commands.showGraph.title": "Show graph",

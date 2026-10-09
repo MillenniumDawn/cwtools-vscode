@@ -132,6 +132,16 @@ quoted type names are supported, and edits replace the whole quoted token at
 quoted targets. Invalid replacement names return `RequestFailed` (-32803)
 without a workspace edit.
 
+### Graph request readiness
+
+The `getGraphData` executeCommand requires a completed initial scan, loaded
+rules, and an index containing entities. After initialization, a refusal for
+any of these prerequisites returns LSP `RequestFailed` (-32803) with a message
+naming the missing prerequisite. `ServerNotInitialized` (-32002) remains the
+transport's rejection for requests received before `initialize` completes.
+Invalid graph arguments and unknown entity types return `InvalidParams`
+(-32602).
+
 ### Background reindex
 
 A long-running session drifts: files deleted while the server had no watcher event,

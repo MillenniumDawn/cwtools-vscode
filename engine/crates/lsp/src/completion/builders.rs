@@ -1582,6 +1582,385 @@ mod resolve_data_tests {
     }
 
     #[test]
+    fn literal_value_completion_quotes_the_inserted_value() {
+        let (items, dropped) = field_value_items(
+            NewField::SpecificField("build cost".into()),
+            &RuleSet::new(),
+            &InfoService::new(),
+            "",
+        );
+        assert_completion_items(
+            &items,
+            &[(
+                "build cost",
+                CompletionItemKind::VALUE,
+                Some("\"build cost\""),
+            )],
+        );
+        assert_eq!(items[0].detail.as_deref(), Some("literal"));
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn complex_type_value_completion_preserves_prefix_and_suffix() {
+        let mut info = InfoService::new();
+        merge_one_instance(&mut info, "focus", "alpha");
+        let field = NewField::TypeField(TypeType::Complex {
+            prefix: "tag_".into(),
+            name: "focus".into(),
+            suffix: "_done".into(),
+        });
+        let (items, dropped) = field_value_items(field.clone(), &RuleSet::new(), &info, "tag_");
+        assert_completion_items(
+            &items,
+            &[("tag_alpha_done", CompletionItemKind::REFERENCE, None)],
+        );
+        assert_eq!(items[0].detail.as_deref(), Some("focus instance"));
+        assert_eq!(dropped, 0);
+        let (items, dropped) = field_value_items(field, &RuleSet::new(), &info, "missing");
+        assert!(items.is_empty());
+        assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn filepath_value_completion_quotes_and_filters_paths() {
+        let (_root, info) = file_completion_info(&[
+            "common/ships/alpha.txt",
+            "common/ships/with space.TXT",
+            "common/shipyard/wrong.txt",
+        ]);
+        let field = NewField::FilepathField {
+            prefix: Some("common/ships/".into()),
+            extension: Some(".txt".into()),
+        };
+        let (items, dropped) = field_value_items(field.clone(), &RuleSet::new(), &info, "");
+        assert_completion_items(
+            &items,
+            &[
+                ("alpha", CompletionItemKind::FILE, None),
+                (
+                    "with space",
+                    CompletionItemKind::FILE,
+                    Some("\"with space\""),
+                ),
+            ],
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| item.detail.as_deref() == Some("file path"))
+        );
+        assert_eq!(dropped, 0);
+        let (items, dropped) = field_value_items(field, &RuleSet::new(), &info, "alpha");
+        assert_completion_items(&items, &[("alpha", CompletionItemKind::FILE, None)]);
+        assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn icon_value_completion_deduplicates_stems_and_quotes_spaces() {
+        let (_root, info) = file_completion_info(&[
+            "gfx/interface/icons/alpha.dds",
+            "gfx/interface/icons/alpha.png",
+            "gfx/interface/icons/with space.tga",
+            "gfx/interface/iconography/wrong.dds",
+        ]);
+        let field = NewField::IconField("gfx\\interface\\icons\\".into());
+        let (items, dropped) = field_value_items(field.clone(), &RuleSet::new(), &info, "");
+        assert_completion_items(
+            &items,
+            &[
+                ("alpha", CompletionItemKind::FILE, None),
+                (
+                    "with space",
+                    CompletionItemKind::FILE,
+                    Some("\"with space\""),
+                ),
+            ],
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| item.detail.as_deref() == Some("icon"))
+        );
+        assert_eq!(dropped, 0);
+        let (items, dropped) = field_value_items(field, &RuleSet::new(), &info, "alpha");
+        assert_completion_items(&items, &[("alpha", CompletionItemKind::FILE, None)]);
+        assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn bool_value_completion_returns_plain_keywords() {
+        let (items, dropped) = field_value_items(
+            NewField::ValueField(ValueType::Bool),
+            &RuleSet::new(),
+            &InfoService::new(),
+            "",
+        );
+        assert_completion_items(
+            &items,
+            &[
+                ("yes", CompletionItemKind::KEYWORD, None),
+                ("no", CompletionItemKind::KEYWORD, None),
+            ],
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| item.detail.as_deref() == Some("bool"))
+        );
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn scope_value_completions_include_the_game_prelude() {
+        for field in [
+            NewField::ScopeField(vec!["country".into()]),
+            NewField::ValueScopeField {
+                is_int: false,
+                min: 0.0,
+                max: 100.0,
+            },
+            NewField::ValueScopeMarkerField {
+                is_int: true,
+                min: 0.0,
+                max: 100.0,
+            },
+        ] {
+            let (items, dropped) =
+                field_value_items(field, &RuleSet::new(), &InfoService::new(), "");
+            assert_completion_items(
+                &items,
+                &[
+                    ("THIS", CompletionItemKind::VALUE, None),
+                    ("ROOT", CompletionItemKind::VALUE, None),
+                    ("PREV", CompletionItemKind::VALUE, None),
+                    ("FROM", CompletionItemKind::VALUE, None),
+                ],
+            );
+            assert!(
+                items
+                    .iter()
+                    .all(|item| item.detail.as_deref() == Some("scope"))
+            );
+            assert_eq!(dropped, 0);
+        }
+    }
+
+    #[test]
+    fn variable_value_completion_uses_and_filters_indexed_variables() {
+        let mut info = InfoService::new();
+        info.variable_counts.insert("score".into(), 1);
+        info.variable_counts.insert("other".into(), 1);
+        let field = NewField::VariableField {
+            is_int: false,
+            is_32bit: false,
+            min: 0.0,
+            max: 100.0,
+        };
+        let (items, dropped) = field_value_items(field, &RuleSet::new(), &info, "score");
+        assert_completion_items(&items, &[("score", CompletionItemKind::CONSTANT, None)]);
+        assert_eq!(items[0].detail.as_deref(), Some("variable"));
+        assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn math_value_completion_includes_prefixed_event_targets() {
+        let mut info = InfoService::new();
+        info.variable_counts.insert("score".into(), 1);
+        info.event_target_counts.insert("leader".into(), 1);
+        let field = NewField::ValueField(ValueType::MathExpr);
+        let (items, dropped) = field_value_items(field.clone(), &RuleSet::new(), &info, "");
+        assert_completion_items(
+            &items,
+            &[
+                ("score", CompletionItemKind::CONSTANT, None),
+                ("event_target:leader", CompletionItemKind::VARIABLE, None),
+            ],
+        );
+        assert_eq!(dropped, 0);
+        let (items, dropped) =
+            field_value_items(field.clone(), &RuleSet::new(), &info, "event_target:le");
+        assert_completion_items(
+            &items,
+            &[("event_target:leader", CompletionItemKind::VARIABLE, None)],
+        );
+        assert_eq!(items[0].detail.as_deref(), Some("event target"));
+        assert_eq!(dropped, 1);
+        let (items, dropped) = field_value_items(field, &RuleSet::new(), &info, "score");
+        assert_completion_items(&items, &[("score", CompletionItemKind::CONSTANT, None)]);
+        assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn ignore_value_completion_preserves_nested_items_and_drop_counts() {
+        let mut info = InfoService::new();
+        merge_one_instance(&mut info, "focus", "alpha");
+        let field = NewField::IgnoreField(Box::new(NewField::TypeField(TypeType::Simple(
+            "focus".into(),
+        ))));
+        let (items, dropped) = field_value_items(field.clone(), &RuleSet::new(), &info, "alpha");
+        assert_completion_items(&items, &[("alpha", CompletionItemKind::REFERENCE, None)]);
+        assert_eq!(items[0].data, Some(serde_json::json!("type:focus")));
+        assert_eq!(dropped, 0);
+        let (items, dropped) = field_value_items(field, &RuleSet::new(), &info, "missing");
+        assert!(items.is_empty());
+        assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn enum_keyed_node_completions_include_block_snippets() {
+        let mut ruleset = RuleSet::new();
+        ruleset.enums.push(EnumDefinition {
+            key: "unit".into(),
+            description: String::new(),
+            values: vec!["army".into(), "navy".into()],
+        });
+        ruleset.reindex();
+        let rule = RuleType::NodeRule {
+            left: NewField::ValueField(ValueType::Enum("unit".into())),
+            rules: Vec::new().into(),
+        };
+        let (items, dropped) = rule_key_items(rule, &ruleset, "army");
+        assert_completion_items(
+            &items,
+            &[(
+                "army",
+                CompletionItemKind::STRUCT,
+                Some("army = {\n\t$0\n}"),
+            )],
+        );
+        assert_eq!(items[0].insert_text_format, Some(InsertTextFormat::SNIPPET));
+        assert_eq!(items[0].data, Some(serde_json::json!("enum:unit")));
+        assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn scope_key_completions_include_the_game_prelude() {
+        let rule = RuleType::LeafValueRule {
+            right: NewField::ScopeField(vec!["country".into()]),
+        };
+        let (items, dropped) = rule_key_items(rule, &RuleSet::new(), "");
+        assert_completion_items(
+            &items,
+            &[
+                ("THIS", CompletionItemKind::VALUE, None),
+                ("ROOT", CompletionItemKind::VALUE, None),
+                ("PREV", CompletionItemKind::VALUE, None),
+                ("FROM", CompletionItemKind::VALUE, None),
+            ],
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| item.detail.as_deref() == Some("scope"))
+        );
+        assert_eq!(dropped, 0);
+    }
+
+    #[test]
+    fn bool_leaf_key_completions_are_plain_keywords() {
+        let rule = RuleType::LeafValueRule {
+            right: NewField::ValueField(ValueType::Bool),
+        };
+        let (items, dropped) = rule_key_items(rule, &RuleSet::new(), "");
+        assert_completion_items(
+            &items,
+            &[
+                ("yes", CompletionItemKind::KEYWORD, None),
+                ("no", CompletionItemKind::KEYWORD, None),
+            ],
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| item.detail.as_deref() == Some("bool"))
+        );
+        assert!(items.iter().all(|item| item.insert_text_format.is_none()));
+        assert_eq!(dropped, 0);
+    }
+
+    fn field_value_items(
+        field: NewField,
+        ruleset: &RuleSet,
+        info: &InfoService,
+        token: &str,
+    ) -> (Vec<CompletionItem>, usize) {
+        let rules = [(
+            RuleType::LeafRule {
+                left: NewField::SpecificField("field".into()),
+                right: field,
+            },
+            Options::default(),
+        )];
+        value_completions(
+            &rules,
+            ruleset,
+            info,
+            None,
+            "hoi4",
+            ValueCompletionSets {
+                modifier_keys: &HashSet::new(),
+                modifier_scopes: &HashMap::new(),
+                loc_keys: &HashSet::new(),
+            },
+            None,
+            token,
+        )
+    }
+
+    fn rule_key_items(
+        rule: RuleType,
+        ruleset: &RuleSet,
+        token: &str,
+    ) -> (Vec<CompletionItem>, usize) {
+        completions_from_rules(
+            &[(rule, Options::default())],
+            ruleset,
+            &InfoService::new(),
+            "hoi4",
+            &HashSet::new(),
+            &HashMap::new(),
+            None,
+            None,
+            token,
+        )
+    }
+
+    fn assert_completion_items(
+        items: &[CompletionItem],
+        expected: &[(&str, CompletionItemKind, Option<&str>)],
+    ) {
+        let mut actual: Vec<_> = items
+            .iter()
+            .map(|item| {
+                (
+                    item.label.as_str(),
+                    item.kind.expect("completion kind"),
+                    item.insert_text.as_deref(),
+                )
+            })
+            .collect();
+        actual.sort_by_key(|item| item.0);
+        let mut expected = expected.to_vec();
+        expected.sort_by_key(|item| item.0);
+        assert_eq!(actual, expected);
+    }
+
+    fn file_completion_info(paths: &[&str]) -> (tempfile::TempDir, InfoService) {
+        let root = tempfile::tempdir().unwrap();
+        for path in paths {
+            let path = root.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let mut info = InfoService::new();
+        Arc::make_mut(&mut info.type_index)
+            .file_index
+            .add_root(root.path());
+        (root, info)
+    }
+
+    #[test]
     fn filepath_and_icon_values_follow_validation_shapes() {
         let root = tempfile::tempdir().unwrap();
         for path in [

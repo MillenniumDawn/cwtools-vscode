@@ -51,7 +51,30 @@ impl FormatOptions {
     }
 }
 
-pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Option<String> {
+/// Why the formatter left a file alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatRefusal {
+    ParseErrors,
+    /// The file parses clean, so no diagnostic explains the refusal.
+    UnclosedQuote {
+        line: u32,
+    },
+}
+
+impl std::fmt::Display for FormatRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ParseErrors => f.write_str("parse errors"),
+            Self::UnclosedQuote { line } => write!(f, "unclosed quote on line {line}"),
+        }
+    }
+}
+
+pub fn format_text(
+    input: &str,
+    table: &StringTable,
+    opts: &FormatOptions,
+) -> Result<String, FormatRefusal> {
     let bom = input.starts_with('\u{FEFF}');
     let body = input.strip_prefix('\u{FEFF}').unwrap_or(input);
     let parsed = parse_ok(body, table)?;
@@ -69,14 +92,18 @@ pub fn format_text(input: &str, table: &StringTable, opts: &FormatOptions) -> Op
     if bom {
         printed.insert(0, '\u{FEFF}');
     }
-    Some(printed)
+    let formatted_body = printed.strip_prefix('\u{FEFF}').unwrap_or(&printed);
+    parse_ok(formatted_body, table)?;
+    Ok(printed)
 }
 
-pub fn format_edits(input: &str, table: &StringTable, opts: &FormatOptions) -> Vec<SpanEdit> {
-    let Some(formatted) = format_text(input, table, opts) else {
-        return Vec::new();
-    };
-    format_edits_from_formatted_text(input, formatted)
+pub fn format_edits(
+    input: &str,
+    table: &StringTable,
+    opts: &FormatOptions,
+) -> Result<Vec<SpanEdit>, FormatRefusal> {
+    let formatted = format_text(input, table, opts)?;
+    Ok(format_edits_from_formatted_text(input, formatted))
 }
 
 pub fn format_edits_from_formatted_text(input: &str, formatted: String) -> Vec<SpanEdit> {
@@ -91,10 +118,8 @@ pub fn format_range_edits(
     table: &StringTable,
     opts: &FormatOptions,
     range: SourceRange,
-) -> Vec<SpanEdit> {
-    let Some(parsed) = parse_ok(input, table) else {
-        return Vec::new();
-    };
+) -> Result<Vec<SpanEdit>, FormatRefusal> {
+    let parsed = parse_ok(input, table)?;
     let mut positions = PositionLookup::new(input, &line_start_bytes(input));
     let range_start = positions.byte_offset(range.start);
     let range_end = positions.byte_offset(range.end);
@@ -111,7 +136,7 @@ pub fn format_range_edits(
         &mut positions,
     );
     if slice.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let first = child_span(&parsed.arena, &slice[0]);
     let last = child_span(&parsed.arena, &slice[slice.len() - 1]);
@@ -135,8 +160,14 @@ pub fn format_range_edits(
     }
     let original = input.get(replace_from..replace_to).unwrap_or("");
     if replacement == original {
-        return Vec::new();
+        return Ok(Vec::new());
     }
+    let mut formatted = String::with_capacity(input.len() + replacement.len());
+    formatted.push_str(input.get(..replace_from).unwrap_or(""));
+    formatted.push_str(&replacement);
+    formatted.push_str(input.get(replace_to..).unwrap_or(""));
+    let formatted_body = formatted.strip_prefix('\u{FEFF}').unwrap_or(&formatted);
+    parse_ok(formatted_body, table)?;
     let (kept, _) = plan_file_edits(
         input,
         vec![(
@@ -150,12 +181,20 @@ pub fn format_range_edits(
             },
         )],
     );
-    kept
+    Ok(kept)
 }
 
-fn parse_ok(input: &str, table: &StringTable) -> Option<ParsedFile> {
+fn parse_ok(input: &str, table: &StringTable) -> Result<ParsedFile, FormatRefusal> {
     let parsed = parse_string(input, table);
-    parsed.errors.is_empty().then_some(parsed)
+    if !parsed.errors.is_empty() {
+        return Err(FormatRefusal::ParseErrors);
+    }
+    // Printing would join the unclosed leaf-value quote into the next lines;
+    // refuse rather than corrupt.
+    if let Some(line) = parsed.unclosed_leaf_value_quote_line {
+        return Err(FormatRefusal::UnclosedQuote { line });
+    }
+    Ok(parsed)
 }
 
 fn newline_of(input: &str) -> &'static str {
@@ -616,6 +655,44 @@ mod tests {
         format_text(input, &table(), &opts).expect("parse")
     }
 
+    #[test]
+    fn unclosed_quote_leafvalue_that_would_break_a_clause_is_not_formatable() {
+        let input = "n = { \"Falke\n Adler }";
+        assert_eq!(
+            format_text(input, &table(), &FormatOptions::default()),
+            Err(FormatRefusal::UnclosedQuote { line: 1 }),
+            "the formatter must refuse output that reparses with errors"
+        );
+        assert_eq!(
+            format_range_edits(
+                input,
+                &table(),
+                &FormatOptions::default(),
+                SourceRange {
+                    start: SourcePos { line: 1, col: 5 },
+                    end: SourcePos { line: 2, col: 7 },
+                },
+            ),
+            Err(FormatRefusal::UnclosedQuote { line: 1 })
+        );
+
+        let paired = "n = {\n \"a\n \"b\n \"c\n \"d\n}";
+        assert_eq!(
+            format_text(paired, &table(), &FormatOptions::default()),
+            Err(FormatRefusal::UnclosedQuote { line: 2 }),
+            "unclosed quotes must not be paired by the printer into different values, \
+             and the refusal names the first one"
+        );
+    }
+
+    #[test]
+    fn quoted_key_characters_are_not_unclosed_quotes_to_the_formatter() {
+        // `KEY_CHAR` includes `"`, so `foo"bar` is one bare key that never
+        // opens a string literal; a quote scanner would wrongly refuse it.
+        let input = "foo\"bar = x\nother = 1\n";
+        assert_eq!(fmt(input), input);
+    }
+
     fn display_width(line: &str, tab_size: usize) -> usize {
         line.chars()
             .fold(0, |width, ch| advance_char(width, ch, tab_size))
@@ -746,10 +823,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_error_returns_none() {
+    fn parse_error_is_refused() {
         let table = table();
-        assert!(format_text("foo = {", &table, &FormatOptions::default()).is_none());
-        assert!(format_edits("foo = {", &table, &FormatOptions::default()).is_empty());
+        assert_eq!(
+            format_text("foo = {", &table, &FormatOptions::default()),
+            Err(FormatRefusal::ParseErrors)
+        );
+        assert_eq!(
+            format_edits("foo = {", &table, &FormatOptions::default()),
+            Err(FormatRefusal::ParseErrors)
+        );
     }
 
     #[test]
@@ -785,7 +868,10 @@ mod tests {
     fn already_formatted_yields_no_edits() {
         let table = table();
         let src = "foo = 1\n";
-        assert!(format_edits(src, &table, &FormatOptions::default()).is_empty());
+        assert_eq!(
+            format_edits(src, &table, &FormatOptions::default()),
+            Ok(Vec::new())
+        );
         assert!(format_edits_from_formatted_text(src, src.to_string()).is_empty());
     }
 
@@ -798,7 +884,7 @@ mod tests {
         let expected = vec![whole_file_edit(formatted.clone())];
 
         assert_eq!(format_edits_from_formatted_text(src, formatted), expected);
-        assert_eq!(format_edits(src, &table, &opts), expected);
+        assert_eq!(format_edits(src, &table, &opts), Ok(expected));
     }
 
     #[test]
@@ -814,7 +900,7 @@ mod tests {
             assert_eq!(edits, vec![whole_file_edit(formatted.clone())]);
             let applied = crate::fix::apply_edits(src, &edits);
             assert_eq!(applied, formatted);
-            assert!(format_edits(&applied, &table, &opts).is_empty());
+            assert_eq!(format_edits(&applied, &table, &opts), Ok(Vec::new()));
         }
     }
 
@@ -962,7 +1048,8 @@ mod tests {
             start: SourcePos { line: 2, col: 0 },
             end: SourcePos { line: 2, col: 5 },
         };
-        let edits = format_range_edits(src, &table, &FormatOptions::default(), range);
+        let edits =
+            format_range_edits(src, &table, &FormatOptions::default(), range).expect("parse");
         assert_eq!(edits.len(), 1);
         let out = crate::fix::apply_edits(src, &edits);
         assert!(out.starts_with("foo=1\n"));
@@ -1034,7 +1121,10 @@ mod tests {
         assert!(out.starts_with('\u{FEFF}'), "{out:?}");
         assert_eq!(out, "\u{FEFF}foo = 1\n");
         let table = table();
-        assert!(format_edits(&out, &table, &FormatOptions::default()).is_empty());
+        assert_eq!(
+            format_edits(&out, &table, &FormatOptions::default()),
+            Ok(Vec::new())
+        );
     }
 
     #[test]
@@ -1053,7 +1143,8 @@ mod tests {
             start: SourcePos { line: 3, col: 0 },
             end: SourcePos { line: 3, col: 5 },
         };
-        let edits = format_range_edits(src, &table, &FormatOptions::default(), range);
+        let edits =
+            format_range_edits(src, &table, &FormatOptions::default(), range).expect("parse");
         let out = crate::fix::apply_edits(src, &edits);
         assert!(
             out.contains("foo=1"),
@@ -1071,7 +1162,8 @@ mod tests {
             start: SourcePos { line: 2, col: 0 },
             end: SourcePos { line: 2, col: 5 },
         };
-        let edits = format_range_edits(src, &table, &FormatOptions::default(), range);
+        let edits =
+            format_range_edits(src, &table, &FormatOptions::default(), range).expect("parse");
         let out = crate::fix::apply_edits(src, &edits);
         assert!(out.starts_with('\u{FEFF}'), "bom dropped: {out:?}");
         assert!(out.contains("foo=1"), "{out}");
@@ -1086,7 +1178,8 @@ mod tests {
             start: SourcePos { line: 1, col: 0 },
             end: SourcePos { line: 1, col: 5 },
         };
-        let edits = format_range_edits(src, &table, &FormatOptions::default(), range);
+        let edits =
+            format_range_edits(src, &table, &FormatOptions::default(), range).expect("parse");
         let out = crate::fix::apply_edits(src, &edits);
         assert!(out.starts_with('\u{FEFF}'), "bom dropped: {out:?}");
         assert_eq!(out, "\u{FEFF}foo = 1\n");
@@ -1096,9 +1189,12 @@ mod tests {
     fn format_edits_is_idempotent_after_apply() {
         let table = table();
         let src = "foo={\nbar=1\n}\n";
-        let edits = format_edits(src, &table, &FormatOptions::default());
+        let edits = format_edits(src, &table, &FormatOptions::default()).expect("parse");
         let once = crate::fix::apply_edits(src, &edits);
-        assert!(format_edits(&once, &table, &FormatOptions::default()).is_empty());
+        assert_eq!(
+            format_edits(&once, &table, &FormatOptions::default()),
+            Ok(Vec::new())
+        );
     }
 
     #[test]
@@ -1107,9 +1203,12 @@ mod tests {
         let comment = format!("#{}", "x".repeat(69_999));
         let src = format!("foo=1\n{comment}");
         let expected = format!("foo = 1\n{comment}\n");
-        let edits = format_edits(&src, &table, &FormatOptions::default());
+        let edits = format_edits(&src, &table, &FormatOptions::default()).expect("parse");
         let once = crate::fix::apply_edits(&src, &edits);
         assert_eq!(once, expected);
-        assert!(format_edits(&once, &table, &FormatOptions::default()).is_empty());
+        assert_eq!(
+            format_edits(&once, &table, &FormatOptions::default()),
+            Ok(Vec::new())
+        );
     }
 }
