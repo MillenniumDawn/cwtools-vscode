@@ -210,6 +210,7 @@ suite("registered workspace commands", () => {
 			["setContext", "cwtoolsGraphAvailable", false],
 			["setContext", "cwtoolsFixAllAvailable", false],
 			["setContext", "cwtoolsFormatWorkspaceAvailable", false],
+			["setContext", "cwtoolsValidateWorkspaceAvailable", false],
 		]);
 	});
 

@@ -4,11 +4,13 @@
 //   unit        fast suites that need the VS Code API but not the language server
 //   smoke       unit + activation, in the sample workspace
 //   multi-root  server-backed descriptor/root selection in a multi-root fixture
+//   watched     served-root exclusions and watched-file updates, in its own workspace
 //   live        the live-settings suite, in sample-live (its own workspace
 //               because .vscode/settings.json attempts to set rules_folder)
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
 //               (see below; its own CI step, not part of test:smoke)
-//   host        full suite excl. live (slower, see below)
+//   host        sample-workspace suites, including smoke, hover and completion;
+//               excludes live, multi-root, rules-sync and watched
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
@@ -23,9 +25,7 @@
 // (added for #185, unrelated to detection) is Stellaris's content marker (see
 // extension/src/host/games.ts), so it already detects as `stellaris` and fetches
 // real rules in the background on activation. `host` needs the built server
-// binary, so it is gated in ci.yml's `build` job rather than `check`; two of
-// its assertions stay `test.skip` against genuine engine gaps
-// (MillenniumDawn/cwtools#317, #318).
+// binary, so it is gated in ci.yml's `build` job rather than `check`.
 //
 // The multi-root fixture needs a staged server, so CI runs it alongside watched
 // after the build step has produced one, and locally it runs with smoke under

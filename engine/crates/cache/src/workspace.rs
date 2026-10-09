@@ -19,7 +19,9 @@ use cwtools_string_table::string_table::StringTable;
 /// v9: invalidates cached `LeafValue` ranges after they became tight.
 /// v10: invalidates cached source positions after leading BOMs began counting
 /// toward their line-1 columns.
-const CACHE_VERSION: u32 = 10;
+/// v11: invalidates speculative unclosed leaf-value quote errors that the parser
+/// now suppresses, so unchanged files receive the current diagnostics.
+const CACHE_VERSION: u32 = 11;
 
 pub const PATH_METADATA_CACHE_SUPPORTED: bool = cfg!(unix);
 
@@ -794,6 +796,46 @@ mod tests {
         let dir = workspace_cache_dir(tmp.path(), fp);
         fs::write(error_cache_path(&dir, content_hash(text)), b"broken").unwrap();
         assert!(load(tmp.path(), fp, text, &table).is_none());
+    }
+
+    #[test]
+    fn previous_parser_version_cannot_serve_speculative_quote_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let table = StringTable::new();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        // Reproduce the v10 fingerprint independently of the current version.
+        let mut old_fp = fnv1a(b"hoi4", FNV_OFFSET);
+        old_fp = fnv1a(b"\x1e", old_fp);
+        old_fp = fnv1a(root.to_string_lossy().as_bytes(), old_fp);
+        old_fp = fnv1a(b"\x1e", old_fp);
+        old_fp = fnv1a(b"en", old_fp);
+        old_fp = fnv1a(b"\x1e", old_fp);
+        old_fp = fnv1a(&10_u32.to_le_bytes(), old_fp);
+        validate_or_clear(tmp.path(), old_fp).unwrap();
+
+        let text = "a = {\n  \"foo\n  b = 1\n}\n";
+        let mut old_parse = parse_string(text, &table);
+        assert!(old_parse.errors.is_empty());
+        old_parse.errors.push(ParseError::Pos(
+            2,
+            2,
+            "unclosed quoted string starting at line 2".into(),
+        ));
+        store(tmp.path(), old_fp, text, &old_parse, &table);
+        let old_hit = load(tmp.path(), old_fp, text, &table).expect("v10 cache hit");
+        assert_eq!(old_hit.errors.len(), 1);
+
+        let current_fp = fingerprint("hoi4", &root, "en");
+        validate_or_clear(tmp.path(), current_fp).unwrap();
+        assert!(
+            load(tmp.path(), current_fp, text, &table).is_none(),
+            "the upgraded parser must miss the v10 entry and its old diagnostic"
+        );
+        let fresh = parse_string(text, &table);
+        assert!(fresh.errors.is_empty());
+        store(tmp.path(), current_fp, text, &fresh, &table);
+        let current_hit = load(tmp.path(), current_fp, text, &table).expect("current cache hit");
+        assert!(current_hit.errors.is_empty());
     }
 
     #[test]
