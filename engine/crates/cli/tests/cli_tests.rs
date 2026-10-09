@@ -3936,3 +3936,21 @@ fn test_format_rejects_an_unknown_indent_style() {
         .code(2)
         .stderr(predicate::str::contains("indent-style"));
 }
+
+#[test]
+fn test_rules_malformed_alias_directive_reports_cw605() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("malformed.cwt");
+    std::fs::write(
+        &file,
+        "# comment\nalias[effect] = { field = scalar }\nordinary_type = { field = scalar }\n",
+    )
+    .unwrap();
+    cwtools()
+        .arg("rules")
+        .arg(&file)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CW605"))
+        .stdout(predicate::str::contains("alias[effect]"));
+}
