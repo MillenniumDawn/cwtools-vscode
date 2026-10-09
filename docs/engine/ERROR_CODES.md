@@ -220,7 +220,6 @@ These are the core rules-engine codes. Severity and message text are computed pe
 | <a id="cw276"></a>CW276 | Warning | Localisation key {} contains invalid characters (spaces or special characters are not allowed) | A loc key contains a space or character not valid in a loc key (only alphanumeric, `_`, `.`, `-` are allowed). Rust-only (no F# equivalent). | Emitted |
 | <a id="cw277"></a>CW277 | Warning | Validation stopped after reaching the alias branch limit | A file's recursive alias overloads exceeded the validator's per-file branch budget. Other diagnostics from that file, and project-wide unused-definition diagnostics from the run, may be incomplete. Rust-only (no F# equivalent). | Emitted |
 
-
 ---
 
 ## CW500 -- Type diagnostics (Rust-only)

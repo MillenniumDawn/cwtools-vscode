@@ -34,6 +34,14 @@ pub(super) fn redundant_block_defaults(table: &StringTable) -> [(StringId, bool)
     [(table.intern("allowed_civil_war").lower, false)]
 }
 
+/// Block keys compared by id when validating raw equipment icons.
+pub(super) fn equipment_icon_keys(table: &StringTable) -> [StringId; 2] {
+    [
+        table.intern("create_equipment_variant").lower,
+        table.intern("pool").lower,
+    ]
+}
+
 pub fn validate_hoi4(
     ast: &ParsedFile,
     _ruleset: &cwtools_rules::rules_types::RuleSet,
@@ -75,8 +83,7 @@ fn validate_equipment_icons(
     file_path: &crate::FilePath,
     errors: &mut Vec<ValidationError>,
 ) {
-    let variant = table.intern("create_equipment_variant").lower;
-    let pool = table.intern("pool").lower;
+    let [variant, pool] = equipment_icon_keys(table);
     let designer_file = file_path.to_ascii_lowercase().ends_with(".txt")
         && file_path
             .replace('\\', "/")
@@ -234,6 +241,45 @@ mod tests {
 mod raw_icon_tests {
     use super::*;
     use cwtools_parser::parser::parse_string;
+
+    #[test]
+    fn raw_icons_warn_after_overlay_parse_and_base_keyword_interning() {
+        for (source, keyword, path) in [
+            (
+                "create_equipment_variant = {\n icon = \"gfx/plane.dds\"\n}",
+                "create_equipment_variant",
+                "events/usa.txt",
+            ),
+            (
+                "pool = { icons = {\n \"gfx/plane.dds\"\n} }",
+                "pool",
+                "gfx/interface/equipmentdesigner/graphic_db/planes.txt",
+            ),
+        ] {
+            let base = StringTable::new();
+            crate::per_game::seed_comparison_literals(&base);
+            let ast = parse_string(source, &base.with_overlay());
+            assert!(ast.errors.is_empty(), "{keyword}: {:?}", ast.errors);
+            base.intern(keyword);
+            let table = base.rebound(ast.overlay());
+            let mut errors = Vec::new();
+            validate_hoi4(
+                &ast,
+                &cwtools_rules::rules_types::RuleSet::new(),
+                &table,
+                &path.into(),
+                &mut errors,
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|error| error.code == Some("CW284"))
+                    .count(),
+                1,
+                "{keyword}: {errors:?}"
+            );
+        }
+    }
 
     fn run(source: &str, path: &str) -> Vec<ValidationError> {
         let table = StringTable::new();

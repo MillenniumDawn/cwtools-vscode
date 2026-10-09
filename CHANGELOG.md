@@ -3,6 +3,7 @@
 #### Engine
 
 * Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
+* Keep CW284 equipment-icon warnings stable when editor documents are parsed in string-table overlays before a workspace scan interns their keywords. (#892)
 * Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
 * Assert ignored-document save publications and typed-path and fallback getFileTypes responses over the LSP wire. (#929)
 * Release string-table read locks before building cached AST records. (#494)
