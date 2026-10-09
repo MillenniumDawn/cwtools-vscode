@@ -12934,6 +12934,183 @@ fn test_formatting_parse_error_returns_no_edits() {
     );
 }
 
+/// Frames up to the response for `id`, as (messages of `method` notifications
+/// that mention an unclosed quote, the response).
+fn unclosed_quote_notices_until_response(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    method: &str,
+    id: i64,
+) -> (Vec<String>, serde_json::Value) {
+    let mut notices = Vec::new();
+    loop {
+        let raw = read_frame(reader).expect("no response");
+        let Ok(frame) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        if frame["method"] == method
+            && let Some(message) = frame["params"]["message"].as_str()
+            && message.contains("unclosed quote")
+        {
+            notices.push(message.to_owned());
+        }
+        if frame["id"] == id && frame.get("method").is_none() {
+            return (notices, frame);
+        }
+    }
+}
+
+#[test]
+fn test_formatting_names_the_unclosed_quote_it_refuses() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("names.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let text = "names = {\n\t\"Falke\n\tAdler\n}\n";
+    std::fs::write(&p, text).unwrap();
+    let uri = path_uri(&p);
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification(
+            "textDocument/didOpen",
+            serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": "hoi4",
+                    "version": 1,
+                    "text": text,
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    // Format on save repeats the request; the toast must not repeat with it.
+    let mut rounds = Vec::new();
+    for id in [2, 3] {
+        write_frame(
+            &mut child,
+            &jsonrpc_request(
+                id,
+                "textDocument/formatting",
+                serde_json::json!({
+                    "textDocument": { "uri": uri },
+                    "options": { "tabSize": 4, "insertSpaces": true },
+                }),
+            ),
+        )
+        .unwrap();
+        rounds.push(unclosed_quote_notices_until_response(
+            &mut reader,
+            "window/showMessage",
+            id,
+        ));
+    }
+    stop_server(&mut child);
+    for (_, resp) in &rounds {
+        assert!(resp.get("error").is_none(), "got: {resp}");
+        assert!(
+            resp["result"].is_null(),
+            "an unclosed leaf-value quote must not rewrite, got: {}",
+            resp["result"]
+        );
+    }
+    let (first, second) = (&rounds[0].0, &rounds[1].0);
+    assert_eq!(first.len(), 1, "one toast for the refusal: {first:?}");
+    assert!(
+        first[0].starts_with("CWTools: did not format ")
+            && first[0].ends_with("names.txt: unclosed quote on line 2."),
+        "{first:?}"
+    );
+    assert!(
+        second.is_empty(),
+        "the second request must not toast again: {second:?}"
+    );
+}
+
+#[test]
+fn test_format_workspace_counts_and_logs_an_unclosed_quote() {
+    let ws = tempfile::tempdir().unwrap();
+    let p = ws.path().join("common").join("names.txt");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    let original = "names = {\n\t\"Falke\n\tAdler\n}\n";
+    std::fs::write(&p, original).unwrap();
+
+    let mut child = cwtools_server_cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            1,
+            "initialize",
+            serde_json::json!({
+                "processId": std::process::id(),
+                "rootUri": path_uri(ws.path()),
+                "capabilities": {},
+            }),
+        ),
+    )
+    .unwrap();
+    let _ = read_response(&mut reader).expect("no init response");
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_request(
+            2,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "formatWorkspace", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    let (notices, resp) =
+        unclosed_quote_notices_until_response(&mut reader, "window/logMessage", 2);
+    stop_server(&mut child);
+    assert_eq!(
+        resp["result"],
+        "No files needed formatting; skipped 1 (unclosed quotes, listed in the output).",
+        "got: {resp}"
+    );
+    assert_eq!(notices.len(), 1, "one log line for the file: {notices:?}");
+    assert!(
+        notices[0].ends_with("names.txt: unclosed quote on line 2"),
+        "{notices:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), original);
+}
+
 #[test]
 fn test_format_workspace_applies_one_edit() {
     let ws = tempfile::tempdir().unwrap();

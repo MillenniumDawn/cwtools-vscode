@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
 * Test completion field variants and enum, scope and boolean key helpers, asserting suggestion labels, kinds, insertion text and filtering. (#925)
 * Report CW605 for malformed reserved alias and single_alias rules directives without rejecting ordinary root type names. (#484)
 * Return RequestFailed for graph requests refused while the workspace index is building, rules are absent, or the index is empty, preserving the pre-initialization handshake rejection and sharing the navigation wire error code. (#833)
@@ -33,6 +34,7 @@
 * A submod can name its parent mods (`parentMods` init option, in load order). The server indexes them between the base game and the workspace with base-game provenance, so their scripted effects, triggers, variables, ideas, flags and localisation resolve and complete, and they never count toward CW261. A workspace file at the same path, or under a `replace_path` in the workspace's `descriptor.mod`, shadows the parent's copy. Parent files are never validated or diagnosed, and are readable but not editable through the server. (#786)
 * Report syntax errors in `.cwt` rules files (an unclosed clause or quote) when loading a rules directory, as the new CW604. They reach `cwtools rules`, `validate` and the editor at startup, not only once the file is opened, and the live lint now reports them with the same code. The rules the parser recovered still load. (#847)
 * Alias `value[...]` patterns now resolve regardless of ASCII case, like the `enum[...]` arm, so `political_power` on rules side matches any casing of a value-set member. (#483)
+* Recover an unclosed quoted key as a leaf value without carrying over the speculative parse error, so an unclosed quote used as a leaf value no longer reports a parse diagnostic of its own. A quote whose missing end swallowed a following operator, a `{` shorthand or a closing `}` still reports its unclosed string, and the formatter keeps refusing any file with an unclosed quote so reformatting cannot corrupt it. Because such a file now parses clean, the refusal says why: `cwtools format` prints `<file>: unclosed quote on line N; skipping`, format document and format selection show a warning naming the line (once per file and line, and logged every time), and Format workspace counts those files apart from parse errors and lists them in the output. (#556)
 * HOI4 `replace_path` now hides only files directly inside the named directory from lower-priority mod layers and the base game; nested descendants remain visible, including in vanilla assets and localisation. Base-game aggregate caches remain enabled and are keyed to the replacement view. When an explicit cache has a different replacement view, `validate` and `fix` warn and use a freshly indexed filtered view with `--vanilla`, then rebuild the cache. Without `--vanilla`, they skip that cache with a warning. (#820)
 * Delete two functions with no callers: `InfoService::index_file` and `is_ignored_file`. (#910)
 

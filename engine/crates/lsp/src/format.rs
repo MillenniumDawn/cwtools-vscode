@@ -6,7 +6,9 @@ use tower_lsp::lsp_types::*;
 
 use cwtools_parser::ast::SourcePos;
 use cwtools_parser::fix::{EOF_POS, SpanEdit};
-use cwtools_parser::format::{format_edits, format_edits_from_formatted_text, format_range_edits};
+use cwtools_parser::format::{
+    FormatRefusal, format_edits, format_edits_from_formatted_text, format_range_edits, format_text,
+};
 
 use crate::command_progress::CommandProgress;
 use crate::lines::DocLines;
@@ -52,7 +54,38 @@ impl Backend {
             .with_editor(params.options.tab_size, params.options.insert_spaces);
         let table = self.state.string_table.clone();
         let edits = tokio::task::block_in_place(|| format_edits(&text, &table, &opts));
+        let edits = self.edits_or_refusal_notice(edits, &uri).await;
         Ok(text_edits_or_none(&edits, &text, &self.position_encoding()))
+    }
+
+    /// A suppressed unclosed quote has no diagnostic, so the refusal has to say so itself.
+    async fn edits_or_refusal_notice(
+        &self,
+        edits: std::result::Result<Vec<SpanEdit>, FormatRefusal>,
+        uri: &str,
+    ) -> Vec<SpanEdit> {
+        match edits {
+            Ok(edits) => edits,
+            Err(FormatRefusal::ParseErrors) => Vec::new(),
+            Err(refusal @ FormatRefusal::UnclosedQuote { line }) => {
+                let message = format!(
+                    "CWTools: did not format {}: {refusal}.",
+                    uri_to_path_str(uri)
+                );
+                let first = self
+                    .state
+                    .format_refusal_toasts
+                    .lock()
+                    .insert((uri.to_string(), line));
+                if first {
+                    self.client
+                        .show_message(MessageType::WARNING, message.clone())
+                        .await;
+                }
+                self.client.log_message(MessageType::WARNING, message).await;
+                Vec::new()
+            }
+        }
     }
 
     pub(crate) async fn range_formatting_impl(
@@ -78,6 +111,7 @@ impl Backend {
         };
         let table = self.state.string_table.clone();
         let edits = tokio::task::block_in_place(|| format_range_edits(&text, &table, &opts, range));
+        let edits = self.edits_or_refusal_notice(edits, &uri).await;
         Ok(text_edits_or_none(&edits, &text, &encoding))
     }
 
@@ -182,6 +216,7 @@ impl Backend {
         let cancel = progress.cancel_flag();
         let planned = tokio::task::spawn_blocking(move || {
             let mut skipped = 0usize;
+            let mut unclosed: Vec<String> = Vec::new();
             let mut changed: Vec<(String, String, Vec<SpanEdit>)> = Vec::new();
             for uri in uris {
                 if cancel.is_cancelled() {
@@ -191,9 +226,12 @@ impl Backend {
                     skipped += 1;
                     continue;
                 };
-                match cwtools_parser::format::format_text(&snapshot.text, &table, &formatting) {
-                    None => skipped += 1,
-                    Some(formatted) => {
+                match format_text(&snapshot.text, &table, &formatting) {
+                    Err(FormatRefusal::ParseErrors) => skipped += 1,
+                    Err(refusal @ FormatRefusal::UnclosedQuote { .. }) => {
+                        unclosed.push(format!("{}: {refusal}", uri_to_path_str(&uri)));
+                    }
+                    Ok(formatted) => {
                         let edits = format_edits_from_formatted_text(&snapshot.text, formatted);
                         if !edits.is_empty() {
                             changed.push((uri, snapshot.text.clone(), edits));
@@ -201,23 +239,28 @@ impl Backend {
                     }
                 }
             }
-            Some((changed, skipped, snapshots))
+            Some((changed, skipped, unclosed, snapshots))
         })
         .await
         .ok()
         .flatten();
 
-        let Some((changed, skipped, snapshots)) = planned else {
+        let Some((changed, skipped, unclosed, snapshots)) = planned else {
             let msg = "Cancelled; no files were changed.".to_string();
             progress.finish(Some(msg.clone())).await;
             return msg;
         };
+        for file in &unclosed {
+            self.client
+                .log_message(
+                    MessageType::WARNING,
+                    format!("CWTools: did not format {file}"),
+                )
+                .await;
+        }
+        let note = skipped_note(skipped, unclosed.len());
         if changed.is_empty() {
-            let msg = if skipped == 0 {
-                "No files needed formatting.".to_string()
-            } else {
-                format!("No files needed formatting; skipped {skipped} (parse errors).")
-            };
+            let msg = format!("No files needed formatting{note}.");
             progress.finish(Some(msg.clone())).await;
             return msg;
         }
@@ -252,11 +295,7 @@ impl Backend {
                 .await;
         let msg = match applied {
             Some(Ok(resp)) if resp.applied => {
-                let mut msg = format!("Formatted {files_changed} file(s)");
-                if skipped > 0 {
-                    msg.push_str(&format!("; skipped {skipped} (parse errors)"));
-                }
-                msg
+                format!("Formatted {files_changed} file(s){note}")
             }
             Some(Ok(resp)) => format!(
                 "The client rejected the workspace edit{}.",
@@ -275,6 +314,19 @@ impl Backend {
     pub(crate) fn position_encoding(&self) -> PositionEncodingKind {
         self.state.config.read().position_encoding.clone()
     }
+}
+
+fn skipped_note(parse_errors: usize, unclosed_quotes: usize) -> String {
+    let mut note = String::new();
+    if parse_errors > 0 {
+        note.push_str(&format!("; skipped {parse_errors} (parse errors)"));
+    }
+    if unclosed_quotes > 0 {
+        note.push_str(&format!(
+            "; skipped {unclosed_quotes} (unclosed quotes, listed in the output)"
+        ));
+    }
+    note
 }
 
 fn text_edits_or_none(
