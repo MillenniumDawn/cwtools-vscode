@@ -221,7 +221,6 @@ const {
 			destroy: vi.fn(),
 			elements: () => ({
 				difference: () => fakeCollection(),
-				components: () => [],
 				boundingBox: () => ({
 					x1: bounds.x1,
 					y1: bounds.y1,
