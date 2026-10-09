@@ -2,7 +2,7 @@
 
 #### Engine
 
-* Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions. (#843)
+* Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions, with deterministic wire coverage using the shared test hold helper. (#843)
 * Recognize inline ignores only in real script and localization comments, preserving quoted examples and applying localization CLI suppression consistently. (#848)
 * Assert ignored-document save publications and typed-path and fallback getFileTypes responses over the LSP wire. (#929)
 * Release string-table read locks before building cached AST records. (#494)

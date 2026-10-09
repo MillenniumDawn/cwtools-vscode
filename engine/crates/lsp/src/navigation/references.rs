@@ -316,7 +316,11 @@ impl Backend {
                 }
             }
         }
-        hold_navigation_snapshots_for_tests().await;
+        crate::scan::hold_for_tests(
+            "CWTOOLS_NAV_SNAPSHOT_HOLD_FILE",
+            Some("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE"),
+        )
+        .await;
         if open.is_empty() && closed.is_empty() {
             return Vec::new();
         }
@@ -737,7 +741,11 @@ impl Backend {
                 }
             }
         }
-        hold_navigation_snapshots_for_tests().await;
+        crate::scan::hold_for_tests(
+            "CWTOOLS_NAV_SNAPSHOT_HOLD_FILE",
+            Some("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE"),
+        )
+        .await;
         if closed.is_empty() {
             return Ok(snapshots);
         }
@@ -859,23 +867,6 @@ impl Backend {
             uri: parse_uri(uri, fallback),
             range: self.source_range_with_lines(lines, line, column, token),
         }
-    }
-}
-
-/// Pause after open buffers are captured so wire tests can interleave a
-/// document notification before closed-file reads finish. Unset in real runs.
-async fn hold_navigation_snapshots_for_tests() {
-    let Ok(gate) = std::env::var("CWTOOLS_NAV_SNAPSHOT_HOLD_FILE") else {
-        return;
-    };
-    let gate = std::path::PathBuf::from(gate);
-    if tokio::fs::try_exists(&gate).await.unwrap_or(false)
-        && let Ok(ready) = std::env::var("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE")
-    {
-        let _ = tokio::fs::write(ready, b"held").await;
-    }
-    while tokio::fs::try_exists(&gate).await.unwrap_or(false) {
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 }
 
