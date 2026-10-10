@@ -44,6 +44,7 @@
 
 #### Extension
 
+* Exercise graph hover classes, drawing and canvas transforms against real headless Cytoscape, including lazy tooltip creation, detail expansion, simple/expanded mouseout behavior and replacement cleanup. (#881)
 * Prefer game content markers over folder names and ignore unrelated ancestor names during game detection. The `common/dynasties` marker CK2 and CK3 share still follows a CK2 name. (#839)
 * Keep server graphs, JSON imports and restored graphs ordered by the latest committed request; cancelling an import dialog preserves pending work. (#840)
 * Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. The summary leaves out codes ignored with `cwtools.errors.ignore`, and says how many closed files the workspace diagnostics budget kept out of Problems. (#603)
