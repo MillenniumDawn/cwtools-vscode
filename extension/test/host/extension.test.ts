@@ -135,10 +135,16 @@ suite(`Debug Integration Test: `, function () {
 			// deepStrictEqual, not `err.called === false`: the boolean form
 			// reports "true !== false" and drops the one thing that says why.
 			const errors = err.getCalls().map((c) => String(c.args[0]));
+			// The pinned Stellaris config's summary (116 errors, first CW605) can
+			// arrive after readiness while this stub is active.
+			// Keep this assertion scoped to command/protocol failures.
+			const protocolErrors = errors.filter(
+				(message) => !message.includes("rules-config error(s)"),
+			);
 			assert.deepStrictEqual(
-				errors,
+				protocolErrors,
 				[],
-				`no raw protocol error should be surfaced (status: ${api.serverStatusText()})`,
+				`no raw protocol error should be surfaced (status: ${api.serverStatusText()}, errors: ${errors.join(" | ")})`,
 			);
 			// A crashed server is restarted silently now (#675), so nothing else
 			// here would notice one. initializeResult is cleared while the client
@@ -185,10 +191,15 @@ suite(`Debug Integration Test: `, function () {
 				`unexpected upgrade warning: ${warnings.join(" | ")}`,
 			);
 			const errors = err.getCalls().map((c) => String(c.args[0]));
+			// As in fixAllWorkspace gating, a delayed rules-config summary is unrelated
+			// to the command result and must not make this timing-sensitive check fail.
+			const protocolErrors = errors.filter(
+				(message) => !message.includes("rules-config error(s)"),
+			);
 			assert.deepStrictEqual(
-				errors,
+				protocolErrors,
 				[],
-				`no raw protocol error should be surfaced (status: ${api.serverStatusText()})`,
+				`no raw protocol error should be surfaced (status: ${api.serverStatusText()}, errors: ${errors.join(" | ")})`,
 			);
 			assert.ok(
 				api.serverCommands().includes("formatWorkspace"),

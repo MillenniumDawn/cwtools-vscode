@@ -52,6 +52,7 @@
 
 #### Extension
 
+* Keep the Fix All and Format Workspace protocol-error tests independent of delayed rules-config error notifications from the pinned Stellaris rules. (#959)
 * Delegate graph tooltips, retain only the active hover neighborhood, and clean up tooltip timers and scratch state when replacing a graph; assert node/core scratch collections stay bounded to the active neighborhood. (#503)
 * Validate optional imported graph details, display names and file locations before replacement, and keep generic nodes safely hoverable without navigation metadata. (#842)
 * Limit automatic plaintext language promotion to the selected mod, configured parent mods and the server's configured or auto-discovered vanilla content roots, including symlink targets used by definitions. Recheck open vanilla scripts after the server reports its install. (#836)
