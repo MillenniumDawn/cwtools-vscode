@@ -21,6 +21,53 @@ pub use references::{
     value_location,
 };
 
+/// Entry points for this crate's `benches/`, which link it as an external crate
+/// and so see only `pub` items. Not an API for anyone else, which is why it is
+/// `doc(hidden)`. `merge` costs tens of nanoseconds per site, so the bench
+/// drives the index directly rather than through `index_file_with_path`, where
+/// parsing and the rest of indexing would hide it (#866).
+#[doc(hidden)]
+pub mod bench_support {
+    use std::sync::Arc;
+
+    use crate::references::CollectedRef;
+    use crate::{ReferenceIndex, SourceLocation};
+
+    /// One file's references to a single type, ready for [`merge`].
+    #[derive(Clone)]
+    pub struct Refs(Vec<CollectedRef>);
+
+    impl Refs {
+        pub fn new(ref_type: &str, names: impl IntoIterator<Item = String>) -> Self {
+            let ref_type: Arc<str> = Arc::from(ref_type);
+            let at = SourceLocation {
+                line: 1,
+                col: 0,
+                end: (1, 0),
+            };
+            Self(
+                names
+                    .into_iter()
+                    .map(|name| CollectedRef {
+                        ref_type: Arc::clone(&ref_type),
+                        name,
+                        key: at,
+                        value: at,
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    pub fn merge(index: &mut ReferenceIndex, file_uri: &str, refs: Refs) {
+        index.merge(file_uri, refs.0);
+    }
+
+    pub fn remove_file(index: &mut ReferenceIndex, file_uri: &str) {
+        index.remove_file(file_uri);
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FileInfo {
     pub type_definitions: HashMap<String, Vec<SourceLocation>>,

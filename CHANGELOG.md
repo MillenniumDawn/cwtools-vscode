@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Key the reference index by type and lowercased name, with a reverse map from each file to its keys, so clearing a file and looking up an instance no longer scan every use site of the type. (#866)
 * Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)
 * Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -18,6 +19,22 @@ struct ReferenceSite {
     name: String,
     location: SourceLocation,
     value: SourceLocation,
+}
+
+/// Every site that names one instance, whatever its ASCII case, in merge order.
+/// `key` is the lowercased name the bucket is filed under, kept so `merge` can
+/// hand the same allocation to `file_keys`.
+#[derive(Debug)]
+struct NameSites {
+    key: Arc<str>,
+    sites: Vec<ReferenceSite>,
+}
+
+/// Where a [`NameSites`] is filed: the referenced type and the lowercased name.
+#[derive(Debug)]
+struct BucketKey {
+    ref_type: Arc<str>,
+    name: Arc<str>,
 }
 
 /// One use site handed back to a caller: the file, the `key = value` leaf's key
@@ -44,16 +61,18 @@ pub(crate) struct CollectedRef {
 /// Workspace-wide reverse index of type-instance USE sites (as opposed to the
 /// definition sites in [`crate::TypeIndex`]). Lets `references`/`rename` find
 /// where an instance is used across files that aren't open in the editor. Keyed
-/// by the referenced type name; the `Arc<str>` type/file keys are shared, so
-/// only the referenced identifier is stored per site.
+/// by the referenced type name, then by the referenced name lowercased (ASCII),
+/// so a lookup or a removal visits the sites of one name rather than every use
+/// of the type. The `Arc<str>` type/file keys are shared, so only the
+/// referenced identifier is stored per site.
 #[derive(Debug, Default)]
 pub struct ReferenceIndex {
-    map: HashMap<Arc<str>, Vec<ReferenceSite>>,
-    /// file_uri → the set of `map` bucket keys (referenced type names) that file
-    /// has use sites under. Lets [`remove_file`](Self::remove_file) touch only
-    /// the file's own buckets instead of scanning the whole workspace, mirroring
-    /// `TypeIndex::file_buckets`.
-    file_types: HashMap<Arc<str>, HashSet<Arc<str>>>,
+    map: HashMap<Arc<str>, HashMap<Arc<str>, NameSites>>,
+    /// file_uri → the `(type, lowercased name)` keys of `map` that file has use
+    /// sites under, each once. Lets [`remove_file`](Self::remove_file) visit
+    /// only the file's own keys instead of scanning the whole workspace,
+    /// mirroring `TypeIndex::file_buckets`.
+    file_keys: HashMap<Arc<str>, Vec<BucketKey>>,
 }
 
 impl ReferenceIndex {
@@ -62,39 +81,77 @@ impl ReferenceIndex {
             return;
         }
         let uri: Arc<str> = Arc::from(file_uri);
-        for collected in refs {
-            self.file_types
-                .entry(Arc::clone(&uri))
-                .or_default()
-                .insert(Arc::clone(&collected.ref_type));
-            self.map
-                .entry(collected.ref_type)
-                .or_default()
-                .push(ReferenceSite {
-                    file: Arc::clone(&uri),
-                    name: collected.name,
-                    location: collected.key,
-                    value: collected.value,
-                });
+        let file_keys = self.file_keys.entry(Arc::clone(&uri)).or_default();
+        for CollectedRef {
+            ref_type,
+            name,
+            key,
+            value,
+        } in refs
+        {
+            let into_site = |name: String| ReferenceSite {
+                file: Arc::clone(&uri),
+                name,
+                location: key,
+                value,
+            };
+            let lower = ascii_lowercase(&name);
+            let by_name = self.map.entry(Arc::clone(&ref_type)).or_default();
+            match by_name.get_mut(&*lower) {
+                Some(bucket) => {
+                    // A file's sites for a name are merged back to back, so the
+                    // last one tells whether `file_keys` already has this key.
+                    if !bucket.sites.last().is_some_and(|s| s.file == uri) {
+                        file_keys.push(BucketKey {
+                            ref_type,
+                            name: Arc::clone(&bucket.key),
+                        });
+                    }
+                    bucket.sites.push(into_site(name));
+                }
+                None => {
+                    let bucket_key: Arc<str> = Arc::from(&*lower);
+                    file_keys.push(BucketKey {
+                        ref_type,
+                        name: Arc::clone(&bucket_key),
+                    });
+                    // Capacity 4, as a plain push gives; `vec![site]` regrows on the second use.
+                    let mut sites = Vec::with_capacity(4);
+                    sites.push(into_site(name));
+                    by_name.insert(
+                        Arc::clone(&bucket_key),
+                        NameSites {
+                            key: bucket_key,
+                            sites,
+                        },
+                    );
+                }
+            }
         }
     }
 
     /// Remove every site contributed by `file_uri` (called on reindex/close).
     ///
-    /// Visits only the referenced-type buckets `file_types` records for this
-    /// file, proportional to its own reference count rather than the whole
-    /// index — same reverse-map removal as `TypeIndex::remove_file`.
+    /// Visits only the `(type, name)` buckets `file_keys` records for this
+    /// file, so the cost is the file's own sites plus the other uses of the
+    /// names it references, never the rest of the type. Same reverse-map
+    /// removal as `TypeIndex::remove_file`.
     pub(crate) fn remove_file(&mut self, file_uri: &str) {
-        let Some(types) = self.file_types.remove(file_uri) else {
+        let Some(keys) = self.file_keys.remove(file_uri) else {
             return;
         };
-        for ty in &types {
-            let Some(sites) = self.map.get_mut(ty) else {
+        for BucketKey { ref_type, name } in keys {
+            let Some(by_name) = self.map.get_mut(&*ref_type) else {
                 continue;
             };
-            sites.retain(|s| s.file.as_ref() != file_uri);
-            if sites.is_empty() {
-                self.map.remove(ty);
+            if let Some(bucket) = by_name.get_mut(&*name) {
+                bucket.sites.retain(|s| s.file.as_ref() != file_uri);
+                if bucket.sites.is_empty() {
+                    by_name.remove(&*name);
+                }
+            }
+            if by_name.is_empty() {
+                self.map.remove(&*ref_type);
             }
         }
     }
@@ -104,11 +161,13 @@ impl ReferenceIndex {
     /// name's own position are returned, so a caller needs no file text to
     /// point at the name.
     pub fn references(&self, type_name: &str, name: &str) -> Vec<UseSite> {
-        self.references_where(type_name, |n| n == name)
+        self.references_where(type_name, name, |n| n == name)
     }
 
+    /// Like [`Self::references`], ignoring ASCII case. A name's bucket holds
+    /// exactly the spellings that match this way, so no per-site check is left.
     pub fn references_ci(&self, type_name: &str, name: &str) -> Vec<UseSite> {
-        self.references_where(type_name, |n| n.eq_ignore_ascii_case(name))
+        self.references_where(type_name, name, |_| true)
     }
 
     /// Return at most `limit` matching sites, together with the total number
@@ -121,7 +180,7 @@ impl ReferenceIndex {
         limit: usize,
         excluded_files: &HashSet<String>,
     ) -> (Vec<UseSite>, usize) {
-        self.references_where_bounded(type_name, |n| n == name, limit, excluded_files)
+        self.references_where_bounded(type_name, name, |n| n == name, limit, excluded_files)
     }
 
     /// Case-insensitive counterpart to [`Self::references_bounded`].
@@ -132,56 +191,68 @@ impl ReferenceIndex {
         limit: usize,
         excluded_files: &HashSet<String>,
     ) -> (Vec<UseSite>, usize) {
-        self.references_where_bounded(
-            type_name,
-            |n| n.eq_ignore_ascii_case(name),
-            limit,
-            excluded_files,
-        )
+        self.references_where_bounded(type_name, name, |_| true, limit, excluded_files)
     }
 
-    fn references_where(&self, type_name: &str, matches: impl Fn(&str) -> bool) -> Vec<UseSite> {
+    /// The sites filed under `name`, whatever its ASCII case, in index order.
+    fn sites_for(&self, type_name: &str, name: &str) -> &[ReferenceSite] {
         self.map
             .get(type_name)
-            .map(|sites| {
-                sites
-                    .iter()
-                    .filter(|s| matches(&s.name))
-                    .map(|s| UseSite {
-                        file: Arc::clone(&s.file),
-                        key: s.location,
-                        value: s.value,
-                    })
-                    .collect()
+            .and_then(|by_name| by_name.get(&*ascii_lowercase(name)))
+            .map_or(&[], |bucket| bucket.sites.as_slice())
+    }
+
+    fn references_where(
+        &self,
+        type_name: &str,
+        name: &str,
+        matches: impl Fn(&str) -> bool,
+    ) -> Vec<UseSite> {
+        self.sites_for(type_name, name)
+            .iter()
+            .filter(|s| matches(&s.name))
+            .map(|s| UseSite {
+                file: Arc::clone(&s.file),
+                key: s.location,
+                value: s.value,
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     fn references_where_bounded(
         &self,
         type_name: &str,
+        name: &str,
         matches: impl Fn(&str) -> bool,
         limit: usize,
         excluded_files: &HashSet<String>,
     ) -> (Vec<UseSite>, usize) {
         let mut sites_out = Vec::new();
         let mut total = 0;
-        if let Some(sites) = self.map.get(type_name) {
-            for site in sites {
-                if !matches(&site.name) || excluded_files.contains(site.file.as_ref()) {
-                    continue;
-                }
-                total += 1;
-                if sites_out.len() < limit {
-                    sites_out.push(UseSite {
-                        file: Arc::clone(&site.file),
-                        key: site.location,
-                        value: site.value,
-                    });
-                }
+        for site in self.sites_for(type_name, name) {
+            if !matches(&site.name) || excluded_files.contains(site.file.as_ref()) {
+                continue;
+            }
+            total += 1;
+            if sites_out.len() < limit {
+                sites_out.push(UseSite {
+                    file: Arc::clone(&site.file),
+                    key: site.location,
+                    value: site.value,
+                });
             }
         }
         (sites_out, total)
+    }
+}
+
+/// The key a name is filed under. Borrows when the name has no uppercase byte,
+/// the common case, so indexing and lookups skip an allocation.
+fn ascii_lowercase(name: &str) -> Cow<'_, str> {
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(name.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(name)
     }
 }
 
@@ -572,12 +643,116 @@ pub(crate) fn classify_alias_key_sites(
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::sync::Arc;
 
     use cwtools_parser::parser::parse_string;
     use cwtools_rules::rules_converter::ast_to_ruleset;
     use cwtools_string_table::string_table::StringTable;
 
-    use crate::InfoService;
+    use super::{CollectedRef, ReferenceIndex};
+    use crate::{InfoService, SourceLocation};
+
+    fn collected(ref_type: &str, name: &str, line: u32) -> CollectedRef {
+        let at = SourceLocation {
+            line,
+            col: 0,
+            end: (line, 0),
+        };
+        CollectedRef {
+            ref_type: Arc::from(ref_type),
+            name: name.to_string(),
+            key: at,
+            value: at,
+        }
+    }
+
+    fn lines(sites: &[super::UseSite]) -> Vec<(&str, u32)> {
+        sites
+            .iter()
+            .map(|site| (site.file.as_ref(), site.key.line))
+            .collect()
+    }
+
+    #[test]
+    fn exact_lookup_filters_spellings_and_ci_lookup_returns_them_all() {
+        let mut index = ReferenceIndex::default();
+        index.merge(
+            "a.txt",
+            vec![collected("t", "Alpha", 1), collected("t", "alpha", 2)],
+        );
+        index.merge(
+            "b.txt",
+            vec![collected("t", "ALPHA", 3), collected("t", "beta", 4)],
+        );
+
+        assert_eq!(lines(&index.references("t", "Alpha")), [("a.txt", 1)]);
+        assert_eq!(lines(&index.references("t", "alpha")), [("a.txt", 2)]);
+        assert_eq!(lines(&index.references("t", "beta")), [("b.txt", 4)]);
+        assert!(index.references("t", "aLPHA").is_empty());
+        let all = [("a.txt", 1), ("a.txt", 2), ("b.txt", 3)];
+        assert_eq!(lines(&index.references_ci("t", "aLpHa")), all);
+        assert_eq!(lines(&index.references_ci("t", "alpha")), all);
+        assert!(index.references_ci("other", "alpha").is_empty());
+
+        let excluded = HashSet::from(["a.txt".to_string()]);
+        let (sites, total) = index.references_ci_bounded("t", "ALPHA", 5, &excluded);
+        assert_eq!((lines(&sites), total), (vec![("b.txt", 3)], 1));
+        let (sites, total) = index.references_bounded("t", "Alpha", 1, &HashSet::new());
+        assert_eq!((lines(&sites), total), (vec![("a.txt", 1)], 1));
+    }
+
+    #[test]
+    fn removing_a_file_keeps_other_sites_for_the_same_name_in_order() {
+        let mut index = ReferenceIndex::default();
+        for (file, line) in [("a.txt", 1), ("b.txt", 2), ("c.txt", 3)] {
+            index.merge(file, vec![collected("t", "shared", line)]);
+        }
+        index.merge("b.txt", vec![collected("t", "shared", 4)]);
+
+        index.remove_file("b.txt");
+        assert_eq!(
+            lines(&index.references("t", "shared")),
+            [("a.txt", 1), ("c.txt", 3)]
+        );
+        index.remove_file("a.txt");
+        assert_eq!(lines(&index.references("t", "shared")), [("c.txt", 3)]);
+    }
+
+    #[test]
+    fn a_file_records_each_name_once_however_often_it_uses_it() {
+        let mut index = ReferenceIndex::default();
+        index.merge(
+            "a.txt",
+            vec![
+                collected("t", "same", 1),
+                collected("t", "SAME", 2),
+                collected("t", "same", 3),
+            ],
+        );
+        assert_eq!(index.file_keys["a.txt"].len(), 1);
+        assert_eq!(index.references_ci("t", "same").len(), 3);
+    }
+
+    #[test]
+    fn removing_the_last_site_drops_the_name_and_type_buckets() {
+        let mut index = ReferenceIndex::default();
+        index.merge("a.txt", vec![collected("t", "only_a", 1)]);
+        index.merge(
+            "b.txt",
+            vec![collected("t", "Both", 1), collected("u", "both", 2)],
+        );
+        index.merge("a.txt", vec![collected("u", "both", 3)]);
+
+        index.remove_file("a.txt");
+        assert!(!index.map["t"].contains_key("only_a"));
+        assert_eq!(index.map["u"].len(), 1);
+        assert_eq!(lines(&index.references_ci("u", "BOTH")), [("b.txt", 2)]);
+
+        index.remove_file("never.txt");
+        index.remove_file("b.txt");
+        assert!(index.map.is_empty(), "{:?}", index.map);
+        assert!(index.file_keys.is_empty(), "{:?}", index.file_keys);
+    }
 
     const RULES: &str = r#"
 types = {

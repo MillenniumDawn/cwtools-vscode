@@ -14,3 +14,10 @@ cwtools_parser = { workspace = true }
 cwtools_string_table = { workspace = true }
 cwtools_rules = { workspace = true }
 cwtools_index = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "reference_index"
+harness = false
