@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Bound typo-suggestion scratch storage to one reusable pair of dynamic-programming rows per scan, with allocation-free ASCII length rejects and a single unknown-key conversion. (#559)
 * Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
 * Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
 * Test completion field variants and enum, scope and boolean key helpers, asserting suggestion labels, kinds, insertion text and filtering. (#925)
