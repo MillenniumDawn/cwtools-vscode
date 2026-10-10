@@ -38,20 +38,8 @@ pub fn scope_matches_required(
     })
 }
 
-pub(crate) fn with_saved_scope_context<R>(
-    scope_context: &mut Option<ScopeContext>,
-    validate: impl FnOnce(&mut Option<ScopeContext>) -> R,
-) -> R {
-    let saved = scope_context.as_ref().map(ScopeContext::save);
-    let result = validate(scope_context);
-    if let (Some(saved), Some(ctx)) = (saved, scope_context.as_mut()) {
-        ctx.restore(saved);
-    }
-    result
-}
-
 pub(crate) fn validate_scope_target(
-    scope_context: &mut Option<ScopeContext>,
+    ctx: &mut ScopeContext,
     value: &str,
     expected: &[String],
     leaf: &cwtools_parser::ast::Leaf,
@@ -61,24 +49,20 @@ pub(crate) fn validate_scope_target(
     if value.is_empty() || looks_like_data_ref(value) {
         return;
     }
-    let Some(ctx) = scope_context.as_mut() else {
-        return;
-    };
-    let reg = std::sync::Arc::clone(&ctx.registry);
-    if reg.is_empty()
-        || expected.iter().any(|s| {
-            !s.eq_ignore_ascii_case("any")
-                && !s.eq_ignore_ascii_case("all")
-                && reg.id_of(s).is_none()
-        })
-    {
+    let reg = ctx.registry.as_ref();
+    if reg.is_empty() {
         return;
     }
-    let Some(result) = with_saved_scope_context(scope_context, |context| {
-        context.as_mut().map(|ctx| ctx.change_scope(value))
-    }) else {
+    if expected.iter().any(|s| {
+        !s.eq_ignore_ascii_case("any") && !s.eq_ignore_ascii_case("all") && reg.id_of(s).is_none()
+    }) {
         return;
-    };
+    }
+    // Probe the live context and put it back, rather than cloning its stacks.
+    let saved = ctx.save();
+    let result = ctx.change_scope(value);
+    ctx.restore(saved);
+    let reg = ctx.registry.as_ref();
     let (code, message) = match result {
         cwtools_game::scope_engine::ScopeResult::WrongScope {
             command,
@@ -93,7 +77,7 @@ pub(crate) fn validate_scope_target(
             )
         }
         cwtools_game::scope_engine::ScopeResult::NewScope { scope, .. }
-            if !expected.is_empty() && !scope_matches_required(scope, &reg, expected) =>
+            if !expected.is_empty() && !scope_matches_required(scope, reg, expected) =>
         {
             let code = &error_codes::CW243_TARGET_WRONG_SCOPE;
             (
@@ -228,33 +212,5 @@ pub(crate) fn apply_replace_scopes(
             &replace.froms,
             &replace.prevs,
         );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::with_saved_scope_context;
-    use cwtools_game::constants::Game;
-    use cwtools_game::scope_engine::{ScopeContext, ScopeId};
-
-    #[test]
-    fn saved_scope_context_restores_root_scopes_and_from_stack() {
-        let mut scope_context = Some(ScopeContext::new(Game::Hoi4, ScopeId(2)));
-        let before = scope_context.as_ref().unwrap().save();
-
-        // Simulate a nested math-clause validator changing every saved field.
-        let result = with_saved_scope_context(&mut scope_context, |context| {
-            let scope = context.as_mut().unwrap();
-            scope.root = ScopeId(3);
-            scope.push_scope(ScopeId(4));
-            scope.from.push(ScopeId(5));
-            "validated"
-        });
-
-        assert_eq!(result, "validated");
-        let restored = scope_context.as_ref().unwrap();
-        assert_eq!(restored.root, before.root);
-        assert_eq!(restored.scopes.as_slice(), before.scopes.as_slice());
-        assert_eq!(restored.from.as_slice(), before.from.as_slice());
     }
 }
