@@ -1,6 +1,5 @@
 import {
 	afterAll,
-	afterEach,
 	beforeAll,
 	beforeEach,
 	suite,
@@ -393,10 +392,6 @@ suite("graph webview", () => {
 		bounds.y2 = 0;
 		offscreenCanvases.length = 0;
 		mergeImages.mockClear();
-	});
-
-	afterEach(() => {
-		vi.useRealTimers();
 	});
 
 	const render = (message: unknown) =>

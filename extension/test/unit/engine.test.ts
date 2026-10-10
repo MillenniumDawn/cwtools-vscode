@@ -2,12 +2,13 @@ import { suite, test, vi } from "vitest";
 import * as assert from "assert";
 
 const logged: { level: string; message: string }[] = [];
-vi.mock("../../src/host/logger", () => ({
-	logInfo: (m: string) => logged.push({ level: "info", message: m }),
-	logWarn: (m: string) => logged.push({ level: "warn", message: m }),
-	logError: (m: string) => logged.push({ level: "error", message: m }),
-	outputChannel: { appendLine: () => {} },
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger({
+		logInfo: (m: string) => logged.push({ level: "info", message: m }),
+		logWarn: (m: string) => logged.push({ level: "warn", message: m }),
+		logError: (m: string) => logged.push({ level: "error", message: m }),
+	}),
+);
 import * as path from "path";
 import { existsSync } from "fs";
 import { EventEmitter } from "events";
