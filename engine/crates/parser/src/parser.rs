@@ -223,7 +223,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_value(&mut self, leafvalue: bool) -> Option<(Value, SourceRange)> {
+    fn parse_value(
+        &mut self,
+        leafvalue: bool,
+    ) -> Option<(Value, SourceRange, Option<ColorPrefix>)> {
         self.skip_whitespace();
         while self.skip_comment() {
             self.skip_whitespace();
@@ -233,12 +236,12 @@ impl<'a> Parser<'a> {
         if self.peek() == Some('{') {
             return self
                 .parse_clause()
-                .map(|value| self.finish_value(start, value));
+                .map(|value| self.finish_value(start, value, None));
         }
 
         if self.peek() == Some('"') {
             let value = self.parse_quoted_value(leafvalue);
-            return Some(self.finish_value(start, value));
+            return Some(self.finish_value(start, value, None));
         }
 
         let (peek7, peek7_len) = match self.peek() {
@@ -267,8 +270,8 @@ impl<'a> Parser<'a> {
             };
             if after.is_none_or(|c| !c.is_alphanumeric()) {
                 let saved = self.save();
-                if let Some(v) = self.parse_color_clause() {
-                    return Some(self.finish_value(start, v));
+                if let Some((v, _)) = self.parse_color_clause() {
+                    return Some(self.finish_value(start, v, Some(ColorPrefix::Rgb)));
                 }
                 self.restore(saved);
             }
@@ -287,29 +290,39 @@ impl<'a> Parser<'a> {
             };
             if after.is_none_or(|c| !c.is_alphanumeric()) {
                 let saved = self.save();
-                if let Some(v) = self.parse_color_clause() {
-                    return Some(self.finish_value(start, v));
+                if let Some((v, has_360_suffix)) = self.parse_color_clause() {
+                    let prefix = if has_360_suffix {
+                        ColorPrefix::Hsv360
+                    } else {
+                        ColorPrefix::Hsv
+                    };
+                    return Some(self.finish_value(start, v, Some(prefix)));
                 }
                 self.restore(saved);
             }
         }
         if let Some(b) = self.parse_bool_keyword(&peek7, peek7_len) {
-            return Some(self.finish_value(start, b));
+            return Some(self.finish_value(start, b, None));
         }
         if peek7_len >= 3 && peek7[0] == '@' && peek7[1] == '\\' && peek7[2] == '[' {
             return self
                 .parse_metaprogramming()
-                .map(|value| self.finish_value(start, value));
+                .map(|value| self.finish_value(start, value, None));
         }
 
         self.parse_number_or_string()
-            .map(|value| self.finish_value(start, value))
+            .map(|value| self.finish_value(start, value, None))
     }
 
-    fn finish_value(&mut self, start: SourcePos, value: Value) -> (Value, SourceRange) {
+    fn finish_value(
+        &mut self,
+        start: SourcePos,
+        value: Value,
+        color_prefix: Option<ColorPrefix>,
+    ) -> (Value, SourceRange, Option<ColorPrefix>) {
         let end = self.pos();
         self.skip_whitespace();
-        (value, SourceRange { start, end })
+        (value, SourceRange { start, end }, color_prefix)
     }
 
     fn parse_quoted_value(&mut self, leafvalue: bool) -> Value {
@@ -565,7 +578,7 @@ impl<'a> Parser<'a> {
                     .any(|c| matches!(c, '=' | '<' | '>' | '!' | '?' | '{' | '}'));
             if let Some(op) = self.parse_operator() {
                 let key = self.table.intern(&raw_key);
-                if let Some((value, value_pos)) = self.parse_value(false) {
+                if let Some((value, value_pos, color_prefix)) = self.parse_value(false) {
                     let end = self.pos();
                     let leaf = Leaf {
                         key,
@@ -573,6 +586,7 @@ impl<'a> Parser<'a> {
                         op,
                         pos: SourceRange { start: saved, end },
                         value_pos,
+                        color_prefix,
                     };
                     let idx = self.arena.push_leaf(leaf);
                     out.push(Child::Leaf(idx));
@@ -585,6 +599,7 @@ impl<'a> Parser<'a> {
                     op,
                     pos: SourceRange { start: saved, end },
                     value_pos: SourceRange { start: end, end },
+                    color_prefix: None,
                 };
                 let idx = self.arena.push_leaf(leaf);
                 out.push(Child::Leaf(idx));
@@ -615,6 +630,7 @@ impl<'a> Parser<'a> {
                             start: value_start,
                             end: value_end,
                         },
+                        color_prefix: None,
                     };
                     let idx = self.arena.push_leaf(leaf);
                     out.push(Child::Leaf(idx));
@@ -624,7 +640,7 @@ impl<'a> Parser<'a> {
             self.restore(saved_cursor);
         }
 
-        if let Some((value, value_pos)) = self.parse_value(true) {
+        if let Some((value, value_pos, color_prefix)) = self.parse_value(true) {
             if unclosed_key_eats_structure {
                 self.errors.push(ParseError::Pos(
                     saved.line,
@@ -635,6 +651,7 @@ impl<'a> Parser<'a> {
             let lv = LeafValue {
                 value,
                 pos: value_pos,
+                color_prefix,
             };
             let idx = self.arena.push_leaf_value(lv);
             out.push(Child::LeafValue(idx));
@@ -644,14 +661,16 @@ impl<'a> Parser<'a> {
         self.advance();
     }
 
-    fn parse_color_clause(&mut self) -> Option<Value> {
+    fn parse_color_clause(&mut self) -> Option<(Value, bool)> {
         for _ in 0..3 {
             self.advance();
         }
         self.skip_whitespace();
+        let mut has_360_suffix = false;
         if self.peek() == Some('3') {
             let (p3, _) = self.peek_n::<3>();
             if p3 == ['3', '6', '0'] {
+                has_360_suffix = true;
                 self.advance();
                 self.advance();
                 self.advance();
@@ -662,7 +681,7 @@ impl<'a> Parser<'a> {
             self.advance();
             self.skip_whitespace();
         }
-        self.parse_clause()
+        self.parse_clause().map(|value| (value, has_360_suffix))
     }
 
     fn parse_metaprogramming(&mut self) -> Option<Value> {
@@ -805,6 +824,29 @@ mod tests {
         let table = StringTable::new();
         let result = parse_string("foo = bar", &table);
         assert_eq!(result.root_children.len(), 1);
+    }
+
+    #[test]
+    fn color_prefixes_are_retained_on_clause_values() {
+        let table = StringTable::new();
+        for (source, expected) in [
+            ("color = rgb { 1 2 3 }", ColorPrefix::Rgb),
+            ("color = HSV { 0.5 1 1 }", ColorPrefix::Hsv),
+            ("color = hsv360 { 340 60 55 }", ColorPrefix::Hsv360),
+            ("color = hsv 360 { 340 60 55 }", ColorPrefix::Hsv360),
+        ] {
+            let parsed = parse_string(source, &table);
+            let Child::Leaf(idx) = &parsed.root_children[0] else {
+                panic!("expected keyed color clause")
+            };
+            let leaf = &parsed.arena.leaves[*idx as usize];
+            assert_eq!(leaf.color_prefix, Some(expected), "{source}");
+            assert!(matches!(leaf.value, Value::Clause(_)), "{source}");
+            assert_eq!(
+                leaf.value_pos.start.col, 8,
+                "range includes the prefix: {source}"
+            );
+        }
     }
 
     #[test]

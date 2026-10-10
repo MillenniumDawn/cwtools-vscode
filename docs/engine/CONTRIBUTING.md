@@ -46,6 +46,9 @@ When parser output changes, bump `CACHE_VERSION` in
 `crates/cache/src/workspace.rs` so unchanged files are reparsed. The parse cache
 stores diagnostics in `.cwe` sidecars as well as ASTs in `.cwb` files; version 11
 invalidates the speculative unclosed leaf-value quote errors stored by version 10.
+Changes to the serialized AST also require bumping `FORMAT_VERSION` in
+`crates/cache/src/io.rs`. Version 5 records explicit `rgb`, `hsv` and `hsv360`
+clause prefixes; version 4 `.cwb` files are rejected and rebuilt from source.
 
 ```sh
 cargo fmt --all

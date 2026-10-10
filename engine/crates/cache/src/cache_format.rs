@@ -46,6 +46,7 @@ pub struct CachedLeaf {
     pub value_start_col: u16,
     pub value_end_line: u32,
     pub value_end_col: u16,
+    pub color_prefix: Option<CachedColorPrefix>,
 }
 
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -56,6 +57,16 @@ pub struct CachedLeafValue {
     pub start_col: u16,
     pub end_line: u32,
     pub end_col: u16,
+    pub color_prefix: Option<CachedColorPrefix>,
+}
+
+#[derive(Debug, Clone, Copy, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(derive(Debug))]
+#[repr(u8)]
+pub enum CachedColorPrefix {
+    Rgb,
+    Hsv,
+    Hsv360,
 }
 
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
