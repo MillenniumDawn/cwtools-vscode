@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { WorkspaceFolder } from "vscode";
 import sinon from "sinon";
-import { detectGameAndVanilla } from "../../src/host/detectGame";
+import { activate } from "../support/utils";
 
 suite("game detection", function () {
 	this.timeout(30_000);
@@ -19,9 +19,11 @@ suite("game detection", function () {
 			name: "HOI4_Mod",
 			index: 0,
 		} as WorkspaceFolder;
+		const api = await activate();
+		assert.ok(api, "extension activation API should be available");
 		const findFiles = sinon.spy(vscode.workspace, "findFiles");
 		try {
-			assert.deepStrictEqual(await detectGameAndVanilla(root), {
+			assert.deepStrictEqual(await api.detectGameAndVanilla(root), {
 				languageId: "hoi4",
 			});
 			assert.strictEqual(findFiles.callCount, 0);
@@ -46,9 +48,11 @@ suite("game detection", function () {
 			name: "unknown-mod-root",
 			index: 0,
 		} as WorkspaceFolder;
+		const api = await activate();
+		assert.ok(api, "extension activation API should be available");
 		const findFiles = sinon.spy(vscode.workspace, "findFiles");
 		try {
-			assert.deepStrictEqual(await detectGameAndVanilla(root), {
+			assert.deepStrictEqual(await api.detectGameAndVanilla(root), {
 				languageId: "hoi4",
 			});
 			assert.ok(findFiles.callCount > 0, "unknown roots should use executable search");
