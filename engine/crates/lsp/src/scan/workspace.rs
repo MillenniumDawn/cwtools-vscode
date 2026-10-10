@@ -46,13 +46,6 @@ const WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET: usize = 2;
 
 const WORKSPACE_PUBLISH_BATCH_SIZE: usize = 50;
 
-#[cfg(not(test))]
-const WORKSPACE_SCAN_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-// Keep the same scan path under test while making the byte-budget regression
-// small enough to exercise with ordinary temporary files.
-#[cfg(test)]
-const WORKSPACE_SCAN_MAX_BYTES: u64 = 1024;
-
 #[derive(Clone)]
 struct WorkspacePublishThrottle {
     interval: std::time::Duration,
@@ -465,6 +458,13 @@ impl Backend {
             InlineIgnoreMap,
         );
         let scan_bytes = cwtools_file_manager::file_manager::ScanBytes::new();
+        let max_scan_bytes = cwtools_file_manager::file_manager::ScanBudget::default().max_bytes;
+        #[cfg(test)]
+        let max_scan_bytes = self
+            .state
+            .workspace_scan_budget_override
+            .lock()
+            .unwrap_or(max_scan_bytes);
         let outcomes: Vec<Option<ParseOutcome>> = tokio::task::block_in_place(|| {
             hold_parse_blocking_for_tests();
             scan_files
@@ -507,7 +507,7 @@ impl Backend {
                         );
                         return None;
                     }
-                    if !scan_bytes.try_reserve(source_size, WORKSPACE_SCAN_MAX_BYTES) {
+                    if !scan_bytes.try_reserve(source_size, max_scan_bytes) {
                         tracing::warn!(
                             path = %file.path.display(),
                             "scan: skipping file, byte budget exceeded"
@@ -520,10 +520,7 @@ impl Backend {
                     ) {
                         Ok((t, n)) => {
                             if n > source_size
-                                && !scan_bytes.try_reserve(
-                                    n - source_size,
-                                    WORKSPACE_SCAN_MAX_BYTES,
-                                )
+                                && !scan_bytes.try_reserve(n - source_size, max_scan_bytes)
                             {
                                 tracing::warn!(
                                     path = %file.path.display(),
@@ -1770,12 +1767,15 @@ mod tests {
         );
     }
 
+    /// Seeds one path-cached `thing` file per `(key, size)`, scans under a 1 KiB
+    /// byte budget, and returns the cache log line, the validated file count,
+    /// and whether cache reconstruction interned each key.
     #[cfg(unix)]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn cached_workspace_files_consume_the_scan_byte_budget() {
+    async fn scan_cached_things(files: &[(&str, usize)]) -> (String, usize, Vec<bool>) {
         use futures_util::stream::StreamExt;
 
         let (backend, socket) = test_backend_with_socket();
+        *backend.state.workspace_scan_budget_override.lock() = Some(1024);
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let things = tmp.path().join("common/things");
         std::fs::create_dir_all(&things).unwrap();
@@ -1811,17 +1811,12 @@ mod tests {
         backend.state.rules.write().ruleset = Some(Arc::new(ruleset));
 
         let mut cached_files = Vec::new();
-        for (name, key, size) in [
-            ("small-a.txt", "cached_unique_small_a", 400),
-            ("small-b.txt", "cached_unique_small_b", 624),
-            ("too-large.txt", "cached_unique_rejected", 1025),
-        ] {
+        for &(key, size) in files {
             let mut text = format!("{key} = {{ }}\n#");
             text.push_str(&"x".repeat(size - text.len()));
-            assert_eq!(text.len(), size);
-            let path = things.join(name);
+            let path = things.join(format!("{key}.txt"));
             std::fs::write(&path, &text).unwrap();
-            cached_files.push((path, text, key));
+            cached_files.push((path, text));
         }
 
         let cache_dir = tmp.path().join("cache");
@@ -1833,7 +1828,7 @@ mod tests {
         let fingerprint = workspace_cache::settings_fingerprint(&language, tmp.path());
         workspace_cache::validate_or_clear(&cache_dir, fingerprint).unwrap();
         let seed_table = cwtools_string_table::string_table::StringTable::new();
-        for (path, text, _) in &cached_files {
+        for (path, text) in &cached_files {
             let source_key = workspace_cache::source_cache_key(path).unwrap();
             let parsed = parse_string_without_comments(text, &seed_table);
             workspace_cache::store_path(
@@ -1873,14 +1868,10 @@ mod tests {
                 .await,
             ScanOutcome::Ran
         );
-        assert_eq!(
-            tokio::time::timeout(std::time::Duration::from_secs(2), logged_rx)
-                .await
-                .expect("scan must log its cache outcome")
-                .expect("cache log collector must receive the message"),
-            "Indexing pass: 2 cache hits, 0 misses",
-            "both in-budget files must use their seeded cache entries"
-        );
+        let log = tokio::time::timeout(std::time::Duration::from_secs(2), logged_rx)
+            .await
+            .expect("scan must log its cache outcome")
+            .expect("cache log collector must receive the message");
         collector.await.expect("cache log collector must finish");
 
         let validated_files = backend
@@ -1890,20 +1881,32 @@ mod tests {
             .as_ref()
             .expect("completed scan must record a summary")
             .validated_files;
-        assert!(
-            validated_files == 2,
-            "the two entries exactly at the byte ceiling are validated"
-        );
+        let interned = files
+            .iter()
+            .map(|(key, _)| {
+                let count = backend.state.string_table.len();
+                backend.state.string_table.intern(key);
+                backend.state.string_table.len() == count
+            })
+            .collect();
+        (log, validated_files, interned)
+    }
 
-        let contains_interned_key = |key: &str| {
-            let count = backend.state.string_table.len();
-            backend.state.string_table.intern(key);
-            backend.state.string_table.len() == count
-        };
-        assert!(contains_interned_key("cached_unique_small_a"));
-        assert!(contains_interned_key("cached_unique_small_b"));
-        assert!(
-            !contains_interned_key("cached_unique_rejected"),
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cached_workspace_files_consume_the_scan_byte_budget() {
+        // The first two fill the 1 KiB budget exactly; the third never fits.
+        let (log, validated_files, interned) = scan_cached_things(&[
+            ("cached_unique_small_a", 400),
+            ("cached_unique_small_b", 624),
+            ("cached_unique_rejected", 1025),
+        ])
+        .await;
+        assert_eq!(log, "Indexing pass: 2 cache hits, 0 misses");
+        assert_eq!(validated_files, 2);
+        assert_eq!(
+            interned,
+            [true, true, false],
             "the over-budget file must be rejected before cache reconstruction interns its key"
         );
     }
@@ -1911,141 +1914,19 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn individually_in_budget_cached_files_cannot_exceed_scan_byte_budget() {
-        use futures_util::stream::StreamExt;
-
-        let (backend, socket) = test_backend_with_socket();
-        let tmp = tempfile::TempDir::new().expect("tmpdir");
-        let things = tmp.path().join("common/things");
-        std::fs::create_dir_all(&things).unwrap();
-        let workspace_uri = Url::from_file_path(tmp.path()).unwrap();
-        {
-            let mut config = backend.state.config.write();
-            config.workspace_uri = Some(workspace_uri.as_str().into());
-            config.workspace_prefix =
-                Some(crate::paths::workspace_prefix_of(workspace_uri.as_str()));
-        }
-        let mut ruleset = RuleSet::new();
-        ruleset.types.push(TypeDefinition {
-            name: "thing".to_string(),
-            name_field: None,
-            path_options: PathOptions {
-                paths: vec!["common/things".to_string()],
-                ..Default::default()
-            },
-            subtypes: Vec::new(),
-            type_key_filter: None,
-            skip_root_key: Vec::new(),
-            starts_with: None,
-            type_per_file: false,
-            key_prefix: None,
-            warning_only: false,
-            unique: false,
-            should_be_referenced: true,
-            localisation: Vec::new(),
-            graph_related_types: Vec::new(),
-            modifiers: Vec::new(),
-        });
-        ruleset.reindex();
-        backend.state.rules.write().ruleset = Some(Arc::new(ruleset));
-
-        let mut cached_files = Vec::new();
-        for (name, key) in [
-            ("cumulative-a.txt", "cumulative_unique_a"),
-            ("cumulative-b.txt", "cumulative_unique_b"),
-            ("cumulative-c.txt", "cumulative_unique_c"),
-        ] {
-            // Each file fits the 1 KiB test budget, while all three together
-            // exceed it. Any two reservations land exactly on the ceiling.
-            let mut text = format!("{key} = {{ }}\n#");
-            text.push_str(&"x".repeat(512 - text.len()));
-            assert_eq!(text.len(), 512);
-            let path = things.join(name);
-            std::fs::write(&path, &text).unwrap();
-            cached_files.push((path, text, key));
-        }
-
-        let cache_dir = tmp.path().join("cache");
-        let language = {
-            let mut config = backend.state.config.write();
-            config.cache_dir = Some(cache_dir.clone());
-            config.language.clone()
-        };
-        let fingerprint = workspace_cache::settings_fingerprint(&language, tmp.path());
-        workspace_cache::validate_or_clear(&cache_dir, fingerprint).unwrap();
-        let seed_table = cwtools_string_table::string_table::StringTable::new();
-        for (path, text, _) in &cached_files {
-            let source_key = workspace_cache::source_cache_key(path).unwrap();
-            let parsed = parse_string_without_comments(text, &seed_table);
-            workspace_cache::store_path(
-                &cache_dir,
-                fingerprint,
-                path,
-                &source_key,
-                &parsed,
-                &seed_table,
-            );
-        }
-
-        let (logged_tx, logged_rx) = tokio::sync::oneshot::channel();
-        let collector = tokio::spawn(async move {
-            let mut socket = socket;
-            while let Some(request) = socket.next().await {
-                if request.method() != "window/logMessage" {
-                    continue;
-                }
-                let Some(message) = request
-                    .params()
-                    .and_then(|params| params["message"].as_str())
-                else {
-                    continue;
-                };
-                if message.starts_with("Indexing pass:") {
-                    let _ = logged_tx.send(message.to_string());
-                    break;
-                }
-            }
-        });
-        let progress =
-            CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
+        // Each file fits the 1 KiB budget and any two land exactly on it, so
+        // the third is refused whichever order the parallel scan takes.
+        let (log, validated_files, interned) = scan_cached_things(&[
+            ("cumulative_unique_a", 512),
+            ("cumulative_unique_b", 512),
+            ("cumulative_unique_c", 512),
+        ])
+        .await;
+        assert_eq!(log, "Indexing pass: 2 cache hits, 0 misses");
+        assert_eq!(validated_files, 2);
         assert_eq!(
-            backend
-                .validate_entire_workspace_tracked(false, Some(&progress))
-                .await,
-            ScanOutcome::Ran
-        );
-        assert_eq!(
-            tokio::time::timeout(std::time::Duration::from_secs(2), logged_rx)
-                .await
-                .expect("scan must log its cache outcome")
-                .expect("cache log collector must receive the message"),
-            "Indexing pass: 2 cache hits, 0 misses",
-            "the two accepted files must use their seeded cache entries"
-        );
-        collector.await.expect("cache log collector must finish");
-
-        let validated_files = backend
-            .state
-            .last_scan_summary
-            .lock()
-            .as_ref()
-            .expect("completed scan must record a summary")
-            .validated_files;
-        assert_eq!(
-            validated_files, 2,
-            "only two of the three individually admissible 512-byte cache entries fit the 1 KiB scan budget"
-        );
-
-        let contains_interned_key = |key: &str| {
-            let count = backend.state.string_table.len();
-            backend.state.string_table.intern(key);
-            backend.state.string_table.len() == count
-        };
-        let interned_count = cached_files
-            .iter()
-            .filter(|(_, _, key)| contains_interned_key(key))
-            .count();
-        assert_eq!(
-            interned_count, 2,
+            interned.iter().filter(|&&hit| hit).count(),
+            2,
             "the rejected cache entry must not be reconstructed and intern its key"
         );
     }
