@@ -432,6 +432,95 @@ suite("registered workspace commands", () => {
 	});
 
 	suite("cwtools.graphFromJson", () => {
+		function selectFile(name = "graph.json") {
+			state.showOpenDialog.mockResolvedValue([{ fsPath: name }]);
+		}
+
+		test("keeps a newer import when an older server graph completes", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			const server = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			selectFile();
+			state.readFile.mockResolvedValue(new TextEncoder().encode("new json"));
+			await handler("cwtools.graphFromJson")();
+			requests[0].result.resolve([{ id: "old" }]);
+			await server;
+			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+				["new json", 1, { source: "json", fileName: "graph.json" }],
+			]);
+		});
+
+		test("keeps a newer server graph when an older import finishes reading", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			selectFile();
+			const bytes = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(bytes.promise);
+			const imported = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			const server = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			requests[0].result.resolve([{ id: "new" }]);
+			await server;
+			bytes.resolve(new TextEncoder().encode("old json"));
+			await imported;
+			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+				[[{ id: "new" }], 1, { source: "server", entityType: "event", depth: 3 }],
+			]);
+		});
+
+		test("renders only the last selected import when reads finish in reverse order", async () => {
+			register(fakeClient([]));
+			state.showOpenDialog.mockResolvedValueOnce([{ fsPath: "first.json" }])
+				.mockResolvedValueOnce([{ fsPath: "second.json" }]);
+			const firstBytes = deferred<Uint8Array>();
+			const secondBytes = deferred<Uint8Array>();
+			state.readFile.mockReturnValueOnce(firstBytes.promise).mockReturnValueOnce(secondBytes.promise);
+			const first = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			const second = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 2));
+			secondBytes.resolve(new TextEncoder().encode("second"));
+			await second;
+			firstBytes.resolve(new TextEncoder().encode("first"));
+			await first;
+			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+				["second", 1, { source: "json", fileName: "second.json" }],
+			]);
+		});
+
+		test("does not supersede a pending server graph when the import dialog is cancelled", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			const server = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			state.showOpenDialog.mockResolvedValue(undefined);
+			await handler("cwtools.graphFromJson")();
+			requests[0].result.resolve([{ id: "pending" }]);
+			await server;
+			assert.strictEqual(state.readFile.mock.calls.length, 0);
+			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+				[[{ id: "pending" }], 1, { source: "server", entityType: "event", depth: 3 }],
+			]);
+		});
+
+		test("does not supersede a pending import when the next dialog is cancelled", async () => {
+			register(fakeClient([]));
+			selectFile();
+			const bytes = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(bytes.promise);
+			const imported = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			state.showOpenDialog.mockResolvedValue(undefined);
+			await handler("cwtools.graphFromJson")();
+			bytes.resolve(new TextEncoder().encode("pending"));
+			await imported;
+			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+				["pending", 1, { source: "json", fileName: "graph.json" }],
+			]);
+		});
+
 		test("forwards the selected JSON file name to the graph panel", async () => {
 			const client = fakeClient([]);
 			state.showOpenDialog.mockResolvedValue([

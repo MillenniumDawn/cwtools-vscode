@@ -12,12 +12,12 @@ export default tseslint.config(
 	// Type-aware rules need the project; scope them (and projectService) to
 	// TypeScript files only, so config/JS files aren't type-checked.
 	{
-		files: ["**/*.ts"],
+		files: ["**/*.ts", "**/*.mts"],
 		extends: [tseslint.configs.recommendedTypeChecked],
 		languageOptions: {
 			parserOptions: {
 				projectService: {
-					allowDefaultProject: ["vitest.config.ts"],
+					allowDefaultProject: ["vitest.config.mts"],
 					maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 16,
 				},
 			},
