@@ -120,34 +120,6 @@ pub(crate) fn validate_scope_target(
     );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::with_saved_scope_context;
-    use cwtools_game::constants::Game;
-    use cwtools_game::scope_engine::{ScopeContext, ScopeId};
-
-    #[test]
-    fn saved_scope_context_restores_root_scopes_and_from_stack() {
-        let mut scope_context = Some(ScopeContext::new(Game::Hoi4, ScopeId(2)));
-        let before = scope_context.as_ref().unwrap().save();
-
-        // Simulate a nested math-clause validator changing every saved field.
-        let result = with_saved_scope_context(&mut scope_context, |context| {
-            let scope = context.as_mut().unwrap();
-            scope.root = ScopeId(3);
-            scope.push_scope(ScopeId(4));
-            scope.from.push(ScopeId(5));
-            "validated"
-        });
-
-        assert_eq!(result, "validated");
-        let restored = scope_context.as_ref().unwrap();
-        assert_eq!(restored.root, before.root);
-        assert_eq!(restored.scopes.as_slice(), before.scopes.as_slice());
-        assert_eq!(restored.from.as_slice(), before.from.as_slice());
-    }
-}
-
 pub(crate) fn seed_root_scope(
     ctx: &mut ScopeContext,
     type_def: &TypeDefinition,
@@ -256,5 +228,33 @@ pub(crate) fn apply_replace_scopes(
             &replace.froms,
             &replace.prevs,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_saved_scope_context;
+    use cwtools_game::constants::Game;
+    use cwtools_game::scope_engine::{ScopeContext, ScopeId};
+
+    #[test]
+    fn saved_scope_context_restores_root_scopes_and_from_stack() {
+        let mut scope_context = Some(ScopeContext::new(Game::Hoi4, ScopeId(2)));
+        let before = scope_context.as_ref().unwrap().save();
+
+        // Simulate a nested math-clause validator changing every saved field.
+        let result = with_saved_scope_context(&mut scope_context, |context| {
+            let scope = context.as_mut().unwrap();
+            scope.root = ScopeId(3);
+            scope.push_scope(ScopeId(4));
+            scope.from.push(ScopeId(5));
+            "validated"
+        });
+
+        assert_eq!(result, "validated");
+        let restored = scope_context.as_ref().unwrap();
+        assert_eq!(restored.root, before.root);
+        assert_eq!(restored.scopes.as_slice(), before.scopes.as_slice());
+        assert_eq!(restored.from.as_slice(), before.from.as_slice());
     }
 }
