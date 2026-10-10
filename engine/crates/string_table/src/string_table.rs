@@ -75,9 +75,21 @@ fn shard_of(s: &str) -> usize {
     (h.finish() >> (u64::BITS - SHARD_BITS)) as usize
 }
 
+/// The lowercase spelling of `s`, or `None` when `s` is already lowercase.
+/// Non-ASCII input always goes through `to_lowercase`: some characters fold
+/// without being uppercase.
+fn lowered(s: &str) -> Option<String> {
+    if s.bytes().all(|b| b.is_ascii() && !b.is_ascii_uppercase()) {
+        return None;
+    }
+    let lower = s.to_lowercase();
+    (lower != s).then_some(lower)
+}
+
+// `exact_map` also holds each word's lowercase form as `{id, id}`, so a
+// lowercase word costs one slot and one entry.
 #[repr(align(64))]
 struct Shard {
-    lower_map: FxHashMap<Arc<str>, StringTokens>,
     exact_map: FxHashMap<Arc<str>, StringTokens>,
     id_to_string: Vec<Arc<str>>,
 }
@@ -85,7 +97,6 @@ struct Shard {
 impl Shard {
     fn new(empty: &Arc<str>) -> Self {
         Self {
-            lower_map: FxHashMap::default(),
             exact_map: FxHashMap::default(),
             id_to_string: vec![Arc::clone(empty)],
         }
@@ -116,7 +127,6 @@ struct OverlayRegion {
 
 #[derive(Default)]
 struct OverlayInner {
-    lower_map: FxHashMap<Arc<str>, StringTokens>,
     exact_map: FxHashMap<Arc<str>, StringTokens>,
     id_to_string: Vec<Arc<str>>,
 }
@@ -135,12 +145,13 @@ impl OverlayRegion {
 
     /// Mirrors `intern_locked`, except the canonical lower id comes from the base
     /// table when it already knows this spelling case-folded — otherwise every
-    /// casing of a word would stop sharing one `lower` id. `None` means the region
-    /// is full and the caller should fall back to the base table.
+    /// casing of a word would stop sharing one `lower` id. `lower_key` is `None`
+    /// for a lowercase `s`. `None` back means the region is full and the caller
+    /// should fall back to the base table.
     fn intern(
         &self,
         s: &str,
-        lower_key: &str,
+        lower_key: Option<&str>,
         base_lower: Option<StringId>,
     ) -> Option<StringTokens> {
         let mut inner = self.inner.write();
@@ -148,7 +159,12 @@ impl OverlayRegion {
             return Some(existing);
         }
 
-        let needs_lower = base_lower.is_none() && !inner.lower_map.contains_key(lower_key);
+        let known_lower = base_lower.or_else(|| {
+            lower_key
+                .and_then(|key| inner.exact_map.get(key))
+                .map(|t| t.lower)
+        });
+        let needs_lower = lower_key.is_some() && known_lower.is_none();
         let needed = if needs_lower { 2 } else { 1 };
         if inner.id_to_string.len() + needed > MAX_OVERLAY_ENTRIES {
             return None;
@@ -157,27 +173,21 @@ impl OverlayRegion {
         let normal_arc: Arc<str> = Arc::from(s);
         let normal_id = self.push(&mut inner, &normal_arc);
 
-        let lower_id = match base_lower {
-            Some(id) => id,
-            None => match inner.lower_map.get(lower_key) {
-                Some(&existing) => existing.lower,
-                None => {
-                    let lower_arc: Arc<str> = if lower_key == s {
-                        Arc::clone(&normal_arc)
-                    } else {
-                        Arc::from(lower_key)
-                    };
-                    let id = self.push(&mut inner, &lower_arc);
-                    inner.lower_map.insert(
-                        lower_arc,
-                        StringTokens {
-                            lower: id,
-                            normal: id,
-                        },
-                    );
-                    id
-                }
-            },
+        let lower_id = match (lower_key, known_lower) {
+            (None, _) => normal_id,
+            (Some(_), Some(id)) => id,
+            (Some(lower_key), None) => {
+                let lower_arc: Arc<str> = Arc::from(lower_key);
+                let id = self.push(&mut inner, &lower_arc);
+                inner.exact_map.insert(
+                    lower_arc,
+                    StringTokens {
+                        lower: id,
+                        normal: id,
+                    },
+                );
+                id
+            }
         };
 
         let token = StringTokens {
@@ -317,12 +327,12 @@ impl StringTable {
         }
 
         if let Some(region) = &self.overlay {
-            let lower_key = s.to_lowercase();
-            let base_lower = {
+            let lower_key = lowered(s);
+            let base_lower = lower_key.as_deref().and_then(|key| {
                 let guard = shard.read();
-                guard.lower_map.get(lower_key.as_str()).map(|t| t.lower)
-            };
-            if let Some(tokens) = region.intern(s, &lower_key, base_lower) {
+                guard.exact_map.get(key).map(|t| t.lower)
+            });
+            if let Some(tokens) = region.intern(s, lower_key.as_deref(), base_lower) {
                 return tokens;
             }
         }
@@ -408,7 +418,17 @@ impl StringTable {
     }
 
     pub fn len(&self) -> usize {
-        self.shards.iter().map(|s| s.read().lower_map.len()).sum()
+        self.shards
+            .iter()
+            .map(|s| {
+                let shard = s.read();
+                shard
+                    .exact_map
+                    .values()
+                    .filter(|t| t.lower == t.normal)
+                    .count()
+            })
+            .sum()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -423,12 +443,7 @@ impl StringTable {
             let shard = shard.read();
             out.entries += shard.id_to_string.len();
             out.id_to_string_bytes += shard.id_to_string.iter().map(|s| s.len()).sum::<usize>();
-            out.map_key_bytes += shard
-                .lower_map
-                .keys()
-                .chain(shard.exact_map.keys())
-                .map(|s| s.len())
-                .sum::<usize>();
+            out.map_key_bytes += shard.exact_map.keys().map(|s| s.len()).sum::<usize>();
         }
         for slot in self.overlays.read().iter() {
             if let Some(region) = slot.region.upgrade() {
@@ -480,38 +495,33 @@ fn intern_locked(shard: &mut Shard, idx: usize, s: &str) -> StringTokens {
         return existing;
     }
 
-    let lower_key = s.to_lowercase();
     let normal_arc: Arc<str> = Arc::from(s);
     let normal_id = shard.push(idx, &normal_arc);
 
-    if let Some(&existing_lower) = shard.lower_map.get(lower_key.as_str()) {
-        let token = StringTokens {
-            lower: existing_lower.lower,
-            normal: normal_id,
-        };
-        shard.exact_map.insert(normal_arc, token);
-        return token;
-    }
-
-    let lower_arc: Arc<str> = if lower_key == s {
-        Arc::clone(&normal_arc)
-    } else {
-        Arc::from(lower_key.as_str())
+    let lower_id = match lowered(s) {
+        None => normal_id,
+        Some(lower_key) => match shard.exact_map.get(lower_key.as_str()) {
+            Some(known) => known.lower,
+            None => {
+                let lower_arc: Arc<str> = Arc::from(lower_key);
+                let id = shard.push(idx, &lower_arc);
+                shard.exact_map.insert(
+                    lower_arc,
+                    StringTokens {
+                        lower: id,
+                        normal: id,
+                    },
+                );
+                id
+            }
+        },
     };
-    let lower_id = shard.push(idx, &lower_arc);
-
-    let lower_token = StringTokens {
-        lower: lower_id,
-        normal: lower_id,
-    };
-    let normal_token = StringTokens {
+    let token = StringTokens {
         lower: lower_id,
         normal: normal_id,
     };
-
-    shard.lower_map.insert(lower_arc, lower_token);
-    shard.exact_map.insert(normal_arc, normal_token);
-    normal_token
+    shard.exact_map.insert(normal_arc, token);
+    token
 }
 
 #[cfg(test)]
@@ -849,7 +859,7 @@ mod tests {
             let scratch = table.with_overlay();
             let novel = scratch.intern("only_while_open");
             let guard = scratch.overlay_guard().expect("overlay handle has a guard");
-            assert_eq!(guard.entries(), 2, "one normal id and one lower id");
+            assert_eq!(guard.entries(), 1, "a lowercase word shares one id");
             assert_eq!(
                 table.get_string(novel.normal).as_deref(),
                 Some("only_while_open")
@@ -962,15 +972,18 @@ mod tests {
                 .resize(MAX_OVERLAY_ENTRIES - 1, Arc::clone(&filler));
         }
 
-        let tokens = scratch.intern("does_not_fit");
+        let tokens = scratch.intern("Does_Not_Fit");
         assert!(
             !is_overlay(tokens.normal),
             "a novel string needing two slots must fall back to base"
         );
         assert_eq!(
             table.get_string(tokens.normal).as_deref(),
-            Some("does_not_fit")
+            Some("Does_Not_Fit")
         );
+
+        let last = scratch.intern("fits_in_the_last_slot");
+        assert!(is_overlay(last.normal), "a lowercase word needs one slot");
     }
 
     #[test]
@@ -980,9 +993,9 @@ mod tests {
         let a = scratch.intern("repeated");
         let b = scratch.intern("repeated");
         assert_eq!(a, b);
-        assert_eq!(scratch.overlay_guard().unwrap().entries(), 2);
+        assert_eq!(scratch.overlay_guard().unwrap().entries(), 1);
         assert_eq!(scratch.intern_batch(["repeated"]), vec![a]);
-        assert_eq!(scratch.overlay_guard().unwrap().entries(), 2);
+        assert_eq!(scratch.overlay_guard().unwrap().entries(), 1);
     }
 
     #[test]
@@ -993,7 +1006,70 @@ mod tests {
         }
         let stats = table.stats();
         assert_eq!(table.len(), 2000);
-        assert_eq!(stats.entries, 4000 + SHARD_COUNT);
+        assert_eq!(stats.entries, 2000 + SHARD_COUNT);
         assert!(stats.total_bytes() > 0);
+    }
+
+    #[test]
+    fn lowercase_words_take_one_slot_and_one_entry() {
+        let table = StringTable::new();
+        let entries = || table.stats().entries;
+        assert_eq!(entries(), SHARD_COUNT, "only the empty slot per shard");
+
+        for i in 0..500 {
+            let token = table.intern(&format!("plain_key_{i}"));
+            assert_eq!(token.lower, token.normal);
+        }
+        assert_eq!(entries(), SHARD_COUNT + 500);
+        let key_bytes = table.stats().map_key_bytes;
+        assert_eq!(key_bytes, table.stats().id_to_string_bytes);
+
+        let accented = table.intern("école");
+        assert_eq!(accented.lower, accented.normal);
+        assert_eq!(entries(), SHARD_COUNT + 501);
+
+        let known = table.intern("plain_key_0");
+        let cased = table.intern("Plain_Key_0");
+        assert_eq!(cased.lower, known.normal);
+        assert_ne!(cased.normal, known.normal);
+        assert_eq!(entries(), SHARD_COUNT + 502, "a casing adds only its slot");
+
+        let mixed = table.intern("Fresh_Word");
+        assert_ne!(mixed.normal, mixed.lower);
+        assert_eq!(entries(), SHARD_COUNT + 504, "its slot plus its lowercase");
+
+        let lower = table.intern("fresh_word");
+        assert_eq!(lower.normal, mixed.lower);
+        assert_eq!(lower.lower, mixed.lower);
+        assert_eq!(entries(), SHARD_COUNT + 504, "the lowercase already exists");
+
+        assert_eq!(table.len(), 502);
+    }
+
+    #[test]
+    fn overlay_lowercase_words_take_one_slot() {
+        let table = StringTable::new();
+        let base = table.intern("known_word");
+        let scratch = table.with_overlay();
+        let guard = scratch.overlay_guard().unwrap();
+
+        let plain = scratch.intern("novel_word");
+        assert!(is_overlay(plain.normal));
+        assert_eq!(plain.lower, plain.normal);
+        assert_eq!(guard.entries(), 1);
+
+        let mixed = scratch.intern("Other_Word");
+        assert_ne!(mixed.normal, mixed.lower);
+        assert_eq!(guard.entries(), 3, "its slot plus its lowercase");
+
+        let lower = scratch.intern("other_word");
+        assert_eq!(lower.normal, mixed.lower);
+        assert_eq!(lower.lower, mixed.lower);
+        assert_eq!(guard.entries(), 3, "the lowercase already exists");
+
+        let cased = scratch.intern("Known_Word");
+        assert_eq!(cased.lower, base.lower);
+        assert!(is_overlay(cased.normal));
+        assert_eq!(guard.entries(), 4, "the base table supplies the lowercase");
     }
 }
