@@ -20,6 +20,7 @@
 * Reclaim removed localisation URI references and recycle file records after sweeping their old sites, bounding metadata growth across repeated refreshes. (#846)
 * Add tests for bare value clauses: CW265 when no rule allows one, and CW242 when their count is out of range. (#924)
 * Avoid interning speculative parser keys, removing discarded numeric and boolean entries from bare clause values. (#547)
+* Preserve explicit `rgb`, `hsv` and `hsv360` color keywords in the parser AST, formatter and color picker; `.cwb` caches with the previous AST layout are invalidated. (#578)
 * Return `RequestFailed` instead of `ServerNotInitialized` for navigation and rename refusals. (#828)
 * LSP wire tests run through the deadline helper now stop their server gracefully, so its coverage is recorded; the helper used to kill it every time. (#923)
 * Hover and go-to-definition on a variable look its definitions up in a name-keyed index instead of scanning every file's defined variables under the info lock. (#872)

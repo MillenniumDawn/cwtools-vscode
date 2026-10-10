@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::ast::{Arena, Child, ParsedFile, SourcePos, SourceRange, Value};
+use crate::ast::{Arena, Child, ColorPrefix, ParsedFile, SourcePos, SourceRange, Value};
 use crate::fix::{EOF_POS, PositionLookup, SpanEdit, line_start_bytes, plan_file_edits};
 use crate::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
@@ -412,17 +412,17 @@ impl<'a> Printer<'a> {
         self.push_char(' ');
         self.push_str(leaf.op.as_str());
         self.push_char(' ');
-        self.emit_value(&leaf.value, leaf.value_pos);
+        self.emit_value(&leaf.value, leaf.value_pos, leaf.color_prefix);
     }
 
     fn emit_leaf_value(&mut self, idx: u32) {
         let lv = &self.arena.leaf_values[idx as usize];
-        self.emit_value(&lv.value, lv.pos);
+        self.emit_value(&lv.value, lv.pos, lv.color_prefix);
     }
 
-    fn emit_value(&mut self, value: &Value, pos: SourceRange) {
+    fn emit_value(&mut self, value: &Value, pos: SourceRange, color_prefix: Option<ColorPrefix>) {
         match value {
-            Value::Clause(children) => self.emit_clause(children, pos),
+            Value::Clause(children) => self.emit_clause(children, color_prefix),
             _ => {
                 if !self.emit_from_range(pos) {
                     self.emit_value_fallback(value);
@@ -431,12 +431,15 @@ impl<'a> Printer<'a> {
         }
     }
 
-    fn emit_clause(&mut self, children: &[Child], pos: SourceRange) {
-        if let Some(prefix) = self.clause_prefix(pos) {
-            self.push_str(&prefix);
-            if !prefix.ends_with(' ') {
-                self.push_char(' ');
-            }
+    fn emit_clause(&mut self, children: &[Child], color_prefix: Option<ColorPrefix>) {
+        let prefix = color_prefix.map(|prefix| match prefix {
+            ColorPrefix::Rgb => "rgb",
+            ColorPrefix::Hsv => "hsv",
+            ColorPrefix::Hsv360 => "hsv360",
+        });
+        if let Some(prefix) = prefix {
+            self.push_str(prefix);
+            self.push_char(' ');
         }
         self.push_char('{');
         if children.is_empty() {
@@ -470,20 +473,6 @@ impl<'a> Printer<'a> {
         self.push_newline();
         self.write_indent();
         self.push_char('}');
-    }
-
-    fn clause_prefix(&mut self, pos: SourceRange) -> Option<String> {
-        let open = find_open_brace(self.input, pos, &mut self.positions)?;
-        let start = self.positions.byte_offset(pos.start);
-        if start >= open {
-            return None;
-        }
-        let prefix = self.input[start..open].trim();
-        if prefix.is_empty() {
-            None
-        } else {
-            Some(prefix.to_string())
-        }
     }
 
     fn can_inline(&self, values: &[Cow<'a, str>]) -> bool {
@@ -716,20 +705,32 @@ mod tests {
         match child {
             Child::Comment(i) => format!("C:{}", arena.comments[*i as usize].text),
             Child::LeafValue(i) => {
+                let leaf_value = &arena.leaf_values[*i as usize];
                 format!(
-                    "V:{}",
-                    dump_value(arena, &arena.leaf_values[*i as usize].value, table)
+                    "V:{}{}",
+                    dump_prefix(leaf_value.color_prefix),
+                    dump_value(arena, &leaf_value.value, table)
                 )
             }
             Child::Leaf(i) => {
                 let leaf = &arena.leaves[*i as usize];
                 let key = table.get_string(leaf.key.normal).unwrap_or_default();
                 format!(
-                    "L:{key}{}{}",
+                    "L:{key}{}{}{}",
                     leaf.op.as_str(),
+                    dump_prefix(leaf.color_prefix),
                     dump_value(arena, &leaf.value, table)
                 )
             }
+        }
+    }
+
+    fn dump_prefix(prefix: Option<ColorPrefix>) -> &'static str {
+        match prefix {
+            Some(ColorPrefix::Rgb) => "rgb ",
+            Some(ColorPrefix::Hsv) => "hsv ",
+            Some(ColorPrefix::Hsv360) => "hsv360 ",
+            None => "",
         }
     }
 
@@ -861,6 +862,14 @@ mod tests {
         let src = "color = rgb { 255 0 0 }\n";
         let out = fmt(src);
         assert!(out.contains("rgb { 255 0 0 }"), "{out}");
+        assert_eq!(dump(src), dump(&out));
+    }
+
+    #[test]
+    fn color_prefix_is_printed_from_ast_metadata() {
+        let src = "color = HSV360 { 340 60 55 }\n";
+        let out = fmt(src);
+        assert_eq!(out, "color = hsv360 { 340 60 55 }\n");
         assert_eq!(dump(src), dump(&out));
     }
 

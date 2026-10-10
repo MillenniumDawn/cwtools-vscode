@@ -8,7 +8,7 @@ use cwtools_string_table::string_table::StringTable;
 use std::fmt::Write as _;
 
 const MAGIC: &[u8; 4] = b"CWB\0";
-const FORMAT_VERSION: u8 = 4;
+const FORMAT_VERSION: u8 = 5;
 const HEADER_LEN: usize = MAGIC.len() + 1;
 const SOURCE: &str = r#"# issue 520 layout fixture
 alpha = "one"
@@ -16,8 +16,11 @@ nested = {
     count = 42
     enabled = yes
 }
+rgb = rgb { 255 0 0 }
+hsv = hsv { 0.5 1.0 1.0 }
+hsv_degrees = hsv360 { 340 60 55 }
 "#;
-const FIXTURE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/layout-v4.cwb");
+const FIXTURE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/layout-v5.cwb");
 
 fn canonical(arena: &Arena, roots: &[Child], table: &StringTable) -> String {
     fn canonical_value(value: &Value, table: &StringTable, out: &mut String) {
@@ -53,10 +56,15 @@ fn canonical(arena: &Arena, roots: &[Child], table: &StringTable) -> String {
             leaf.pos,
             leaf.value_pos
         );
+        let _ = write!(out, "{:?}:", leaf.color_prefix);
         canonical_value(&leaf.value, table, &mut out);
     }
     for leaf_value in &arena.leaf_values {
-        let _ = write!(out, "|leaf_value pos={:?} value=", leaf_value.pos);
+        let _ = write!(
+            out,
+            "|leaf_value pos={:?} prefix={:?} value=",
+            leaf_value.pos, leaf_value.color_prefix
+        );
         canonical_value(&leaf_value.value, table, &mut out);
     }
     for comment in &arena.comments {

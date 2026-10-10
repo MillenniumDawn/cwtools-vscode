@@ -1,7 +1,8 @@
 use crate::cache_format::*;
 use crate::io::CacheError;
 use cwtools_parser::ast::{
-    Arena, Child, Comment, Leaf, LeafValue, Operator, ParseError, SourcePos, SourceRange, Value,
+    Arena, Child, ColorPrefix, Comment, Leaf, LeafValue, Operator, ParseError, SourcePos,
+    SourceRange, Value,
 };
 use cwtools_parser::parser::MAX_CLAUSE_DEPTH;
 use cwtools_string_table::string_table::{StringTable, StringTokens};
@@ -118,6 +119,7 @@ pub fn archived_to_arena(
                 l.value_end_line.to_native(),
                 l.value_end_col.to_native(),
             ),
+            color_prefix: l.color_prefix.as_ref().map(archived_color_prefix),
         });
     }
     for lv in cached.leaf_values.iter() {
@@ -129,6 +131,7 @@ pub fn archived_to_arena(
                 lv.end_line.to_native(),
                 lv.end_col.to_native(),
             ),
+            color_prefix: lv.color_prefix.as_ref().map(archived_color_prefix),
         });
     }
     for c in cached.comments.iter() {
@@ -452,6 +455,7 @@ fn leaf_to_cached(l: &Leaf, strings: &mut impl Iterator<Item = String>) -> Cache
         value_start_col: vsc,
         value_end_line: vel,
         value_end_col: vec_,
+        color_prefix: l.color_prefix.map(color_prefix_to_cached),
     }
 }
 
@@ -466,6 +470,23 @@ fn leaf_value_to_cached(
         start_col: sc,
         end_line: el,
         end_col: ec,
+        color_prefix: lv.color_prefix.map(color_prefix_to_cached),
+    }
+}
+
+fn color_prefix_to_cached(prefix: ColorPrefix) -> CachedColorPrefix {
+    match prefix {
+        ColorPrefix::Rgb => CachedColorPrefix::Rgb,
+        ColorPrefix::Hsv => CachedColorPrefix::Hsv,
+        ColorPrefix::Hsv360 => CachedColorPrefix::Hsv360,
+    }
+}
+
+fn archived_color_prefix(prefix: &ArchivedCachedColorPrefix) -> ColorPrefix {
+    match prefix {
+        ArchivedCachedColorPrefix::Rgb => ColorPrefix::Rgb,
+        ArchivedCachedColorPrefix::Hsv => ColorPrefix::Hsv,
+        ArchivedCachedColorPrefix::Hsv360 => ColorPrefix::Hsv360,
     }
 }
 

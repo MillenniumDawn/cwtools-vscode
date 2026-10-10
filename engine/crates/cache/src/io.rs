@@ -32,7 +32,7 @@ const MAGIC: &[u8; 4] = b"CWB\x00";
 
 /// Format version. Bump whenever the rkyv layout changes (e.g. widening a field
 /// v1: initial versioned format (adds magic+version header to the raw zstd).
-const FORMAT_VERSION: u8 = 4;
+const FORMAT_VERSION: u8 = 5;
 
 const ERRORS_MAGIC: &[u8; 4] = b"CWE\x00";
 const ERRORS_FORMAT_VERSION: u8 = 2;

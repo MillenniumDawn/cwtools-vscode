@@ -15,7 +15,7 @@ use cwtools_string_table::string_table::StringTable;
 use std::path::Path;
 
 const MAGIC: [u8; 4] = *b"CWB\x00";
-const FORMAT_VERSION: u8 = 4;
+const FORMAT_VERSION: u8 = 5;
 
 /// A small but structurally complete cache: leaves, a nested clause, a comment.
 fn sample_bytes() -> Vec<u8> {
@@ -128,6 +128,7 @@ fn leaf(value: CachedValue) -> CachedLeaf {
         value_start_col: 0,
         value_end_line: 1,
         value_end_col: 5,
+        color_prefix: None,
     }
 }
 
@@ -345,6 +346,7 @@ fn out_of_bounds_index_inside_a_clause_is_rejected() {
             value_start_col: 0,
             value_end_line: 1,
             value_end_col: 5,
+            color_prefix: None,
         }],
         leaf_values: vec![],
         comments: vec![],
@@ -425,6 +427,7 @@ fn a_cycle_across_the_two_vectors_is_rejected() {
             start_col: 0,
             end_line: 1,
             end_col: 5,
+            color_prefix: None,
         }],
         comments: vec![],
     };
