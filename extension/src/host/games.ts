@@ -1,5 +1,5 @@
 // Single source of truth for supported games. Everything here is pure data —
-// no vscode import — so vitest owns it (see vitest.config.ts).
+// no vscode import — so vitest owns it (see vitest.config.mts).
 export interface GameDef {
 	id: string;
 	display: string;
