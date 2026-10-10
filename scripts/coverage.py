@@ -179,7 +179,7 @@ def main() -> int:
         return 1
 
     # Floor sits just under the measured baseline; CI pins the same value.
-    threshold = os.environ.get("COVERAGE_THRESHOLD", "91.5")
+    threshold = os.environ.get("COVERAGE_THRESHOLD", "92.3")
     # `crates/lsp/src/lib.rs` is the entrypoint's other half after the bin/lib
     # split (#471): module declarations, `run`, and the `#[cfg(test)] mod tests`
     # that used to sit in `main.rs`. Excluding it alongside `main.rs` keeps the

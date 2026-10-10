@@ -49,7 +49,7 @@ impl<'a> TopK<'a> {
     }
 }
 
-pub(crate) fn select_loc_keys<'a>(
+pub fn select_loc_keys<'a>(
     keys: impl Iterator<Item = &'a str>,
     token: &str,
     cap: usize,
@@ -69,14 +69,14 @@ fn char_mask(text: &str, non_ascii: u64) -> u64 {
         .fold(0u64, |mask, b| mask | 1 << (b.to_ascii_lowercase() & 63))
 }
 
-pub(crate) struct LocKeyIndex {
+pub struct LocKeyIndex {
     blob: String,
     offsets: Vec<usize>,
     masks: Vec<u64>,
 }
 
 impl LocKeyIndex {
-    pub(crate) fn build<'a>(keys: impl Iterator<Item = &'a str>) -> Self {
+    pub fn build<'a>(keys: impl Iterator<Item = &'a str>) -> Self {
         let mut sorted: Vec<&str> = keys.collect();
         sorted.sort_unstable();
         sorted.dedup();
@@ -117,7 +117,7 @@ impl LocKeyIndex {
         lo
     }
 
-    pub(crate) fn select<'a>(
+    pub fn select<'a>(
         &'a self,
         token: &str,
         overlay: impl Iterator<Item = &'a str>,

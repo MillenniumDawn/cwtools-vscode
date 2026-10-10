@@ -23,6 +23,18 @@ path = "src/lib.rs"
 name = "document_symbol"
 harness = false
 
+[[bench]]
+name = "completion"
+harness = false
+
+[[bench]]
+name = "completion_md"
+harness = false
+
+[[bench]]
+name = "validate"
+harness = false
+
 [dependencies]
 cwtools_parser = { workspace = true }
 cwtools_string_table = { workspace = true }

@@ -198,7 +198,7 @@ def test_main_returns_first_cargo_exit_when_llvm_cov_fails(
 
 
 # The default floor must match the value the CI workflow pins.
-DEFAULT_LINE_FLOOR = "91.5"
+DEFAULT_LINE_FLOOR = "92.3"
 
 
 def test_main_uses_the_default_threshold_when_env_is_unset(

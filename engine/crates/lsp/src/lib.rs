@@ -51,8 +51,15 @@ pub(crate) use state::{
 /// items behind it stay in otherwise private modules (#471).
 #[doc(hidden)]
 pub mod bench_support {
+    pub use crate::completion::{
+        CONTEXT_CAP, CONTEXT_COMPLETE_THRESHOLD, LocKeyIndex, ValueCompletionSets,
+        completions_from_rules, expanded_modifier_scopes, prepare_context_items, select_loc_keys,
+        value_completions,
+    };
     pub use crate::lines::DocLines;
     pub use crate::navigation::build_doc_symbols;
+    pub use crate::paths::{logical_path_from_uri, workspace_prefix_of};
+    pub use crate::validate::{collect_doc_tokens, loc_extra_valid_refs, parse_loc_buffer};
 }
 
 /// Serve LSP over stdin/stdout until the client closes stdin. `src/main.rs`
