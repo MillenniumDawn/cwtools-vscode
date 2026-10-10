@@ -38,6 +38,7 @@
 * Recover an unclosed quoted key as a leaf value without carrying over the speculative parse error, so an unclosed quote used as a leaf value no longer reports a parse diagnostic of its own. A quote whose missing end swallowed a following operator, a `{` shorthand or a closing `}` still reports its unclosed string, and the formatter keeps refusing any file with an unclosed quote so reformatting cannot corrupt it. Because such a file now parses clean, the refusal says why: `cwtools format` prints `<file>: unclosed quote on line N; skipping`, format document and format selection show a warning naming the line (once per file and line, and logged every time), and Format workspace counts those files apart from parse errors and lists them in the output. (#556)
 * HOI4 `replace_path` now hides only files directly inside the named directory from lower-priority mod layers and the base game; nested descendants remain visible, including in vanilla assets and localisation. Base-game aggregate caches remain enabled and are keyed to the replacement view. When an explicit cache has a different replacement view, `validate` and `fix` warn and use a freshly indexed filtered view with `--vanilla`, then rebuild the cache. Without `--vanilla`, they skip that cache with a warning. (#820)
 * Delete two functions with no callers: `InfoService::index_file` and `is_ignored_file`. (#910)
+* Empty the 50 `.dds` images in the `performancetest2` test fixture. The engine indexes them by path and no test reads their bytes, so a checkout is 2.8 MB smaller. (#916)
 
 #### Extension
 
@@ -74,6 +75,7 @@
 * Drop four npm overrides (`minimatch@3`, `minimatch@5`, `brace-expansion@1` and `uuid`) that matched nothing in the lockfile. (#911)
 * The build helpers share one `require_executable` for the node and npm lookups, `set_release_version` and `prerelease_notes` have direct tests, and `scripts/pyrightconfig.json` moves to the repo root with `scripts/build` as its extra path. The Python CI job no longer saves an npm cache, which claimed the key the check and build jobs share. (#889)
 * Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
+* Rename `vitest.config.ts` to `vitest.config.mts` so Vite's native config loader can read it. The node test runs no longer print the config-loader warning. (#921)
 
 ### 3.4.7
 
