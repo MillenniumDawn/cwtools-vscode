@@ -729,6 +729,12 @@ mod tests {
                 Space::Hsv360,
                 [340.0, 60.0, 55.0],
             ),
+            (
+                "hsv 360 { 340 60 55 }",
+                ColorPrefix::Hsv360,
+                Space::Hsv360,
+                [340.0, 60.0, 55.0],
+            ),
         ] {
             let source = format!("c = {{\n    color = {value}\n}}\n");
             let ast = cwtools_parser::parser::parse_string(&source, &table);

@@ -270,7 +270,7 @@ impl<'a> Parser<'a> {
             };
             if after.is_none_or(|c| !c.is_alphanumeric()) {
                 let saved = self.save();
-                if let Some(v) = self.parse_color_clause() {
+                if let Some((v, _)) = self.parse_color_clause() {
                     return Some(self.finish_value(start, v, Some(ColorPrefix::Rgb)));
                 }
                 self.restore(saved);
@@ -290,8 +290,8 @@ impl<'a> Parser<'a> {
             };
             if after.is_none_or(|c| !c.is_alphanumeric()) {
                 let saved = self.save();
-                if let Some(v) = self.parse_color_clause() {
-                    let prefix = if kw_len == 6 {
+                if let Some((v, has_360_suffix)) = self.parse_color_clause() {
+                    let prefix = if has_360_suffix {
                         ColorPrefix::Hsv360
                     } else {
                         ColorPrefix::Hsv
@@ -661,14 +661,16 @@ impl<'a> Parser<'a> {
         self.advance();
     }
 
-    fn parse_color_clause(&mut self) -> Option<Value> {
+    fn parse_color_clause(&mut self) -> Option<(Value, bool)> {
         for _ in 0..3 {
             self.advance();
         }
         self.skip_whitespace();
+        let mut has_360_suffix = false;
         if self.peek() == Some('3') {
             let (p3, _) = self.peek_n::<3>();
             if p3 == ['3', '6', '0'] {
+                has_360_suffix = true;
                 self.advance();
                 self.advance();
                 self.advance();
@@ -679,7 +681,7 @@ impl<'a> Parser<'a> {
             self.advance();
             self.skip_whitespace();
         }
-        self.parse_clause()
+        self.parse_clause().map(|value| (value, has_360_suffix))
     }
 
     fn parse_metaprogramming(&mut self) -> Option<Value> {
@@ -831,6 +833,7 @@ mod tests {
             ("color = rgb { 1 2 3 }", ColorPrefix::Rgb),
             ("color = HSV { 0.5 1 1 }", ColorPrefix::Hsv),
             ("color = hsv360 { 340 60 55 }", ColorPrefix::Hsv360),
+            ("color = hsv 360 { 340 60 55 }", ColorPrefix::Hsv360),
         ] {
             let parsed = parse_string(source, &table);
             let Child::Leaf(idx) = &parsed.root_children[0] else {

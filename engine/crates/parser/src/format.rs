@@ -874,6 +874,14 @@ mod tests {
     }
 
     #[test]
+    fn spaced_hsv360_prefix_is_normalized_without_losing_its_color_space() {
+        let src = "color = hsv 360 { 340 60 55 }\n";
+        let out = fmt(src);
+        assert_eq!(out, "color = hsv360 { 340 60 55 }\n");
+        assert_eq!(dump(src), dump(&out));
+    }
+
+    #[test]
     fn already_formatted_yields_no_edits() {
         let table = table();
         let src = "foo = 1\n";
