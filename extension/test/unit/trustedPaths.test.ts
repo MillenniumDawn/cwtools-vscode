@@ -17,9 +17,9 @@ vi.mock("vscode", async (importOriginal) => ({
 	},
 }));
 
-vi.mock("../../src/host/logger", () => ({
-	logWarn: vi.fn(),
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger(),
+);
 
 import {
 	confirmOpen,

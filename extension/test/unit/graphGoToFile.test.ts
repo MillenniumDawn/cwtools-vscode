@@ -4,6 +4,7 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import type { WebviewPanel } from "vscode";
+import type * as VscodeStub from "./_stubs/vscode";
 
 // The goToFile trust gate has no host coverage: a real webview only posts
 // locations the server produced, so the refusal branches never run there, and
@@ -50,42 +51,35 @@ const {
 	roots: { folders: [] as { uri: { fsPath: string } }[] },
 }));
 
-vi.mock("vscode", async (importOriginal) => ({
-	...(await importOriginal<object>()),
-	commands: { executeCommand, registerCommand },
-	Uri: {
-		file: (p: string) => ({
-			scheme: "file",
-			fsPath: p,
-			toString: () => `file://${p}`,
-		}),
-	},
-	ViewColumn: { One: 1 },
-	Range,
-	TextEditorRevealType: textEditorRevealType,
-	window: {
-		activeTextEditor: undefined,
-		showInformationMessage: vi.fn(),
-		showSaveDialog,
-		showTextDocument,
-		showWarningMessage,
-		showErrorMessage,
-	},
-	workspace: {
-		fs: { readFile: vi.fn() },
-		getConfiguration: vi.fn(() => ({ get: () => 1 })),
-		get workspaceFolders() {
-			return roots.folders;
+vi.mock("vscode", async (importOriginal) => {
+	const original = await importOriginal<typeof VscodeStub>();
+	return {
+		...original,
+		commands: { executeCommand, registerCommand },
+		ViewColumn: { One: 1 },
+		Range,
+		TextEditorRevealType: textEditorRevealType,
+		window: {
+			activeTextEditor: undefined,
+			showInformationMessage: vi.fn(),
+			showSaveDialog,
+			showTextDocument,
+			showWarningMessage,
+			showErrorMessage,
 		},
-	},
-}));
+		workspace: {
+			...original.workspace,
+			fs: { readFile: vi.fn() },
+			get workspaceFolders() {
+				return roots.folders;
+			},
+		},
+	};
+});
 
-vi.mock("../../src/host/logger", () => ({
-	logError,
-	logInfo: vi.fn(),
-	logWarn,
-	errorMessage: (err: unknown) => (err instanceof Error ? err.message : ""),
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger({ logError, logWarn }),
+);
 
 import { GraphPanel } from "../../src/host/graphPanel";
 
@@ -129,7 +123,6 @@ suite("graph panel goToFile", () => {
 		showTextDocument.mock.calls[0][0] as { fsPath: string; scheme: string };
 
 	beforeEach(() => {
-		vi.clearAllMocks();
 		roots.folders = [{ uri: { fsPath: "/roots/mod" } }];
 		showTextDocument.mockResolvedValue({ revealRange });
 		showWarningMessage.mockResolvedValue(undefined);
@@ -241,7 +234,6 @@ suite("graph panel save handlers", () => {
 	let fake: ReturnType<typeof fakePanel>;
 
 	beforeEach(async () => {
-		vi.clearAllMocks();
 		roots.folders = [{ uri: { fsPath: "/roots/mod" } }];
 		tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cwtools-graph-save-"));
 		fake = fakePanel();

@@ -1,5 +1,6 @@
 import * as assert from "assert";
 import { beforeEach, suite, test, vi } from "vitest";
+import { CancellationError } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 import {
 	LSPErrorCodes,
@@ -7,8 +8,6 @@ import {
 } from "vscode-languageserver-protocol";
 
 const state = vi.hoisted(() => {
-	class CancellationError extends Error {}
-
 	const token = {
 		isCancellationRequested: false,
 		onCancellationRequested: (_listener: () => void) => ({
@@ -28,12 +27,11 @@ const state = vi.hoisted(() => {
 			task({ report: (v) => void reported.push(v) }, token),
 	);
 
-	return { CancellationError, requestType, token, withProgress, reported };
+	return { requestType, token, withProgress, reported };
 });
 
-vi.mock("vscode", () => ({
-	CancellationError: state.CancellationError,
-	ProgressLocation: { Notification: 15 },
+vi.mock("vscode", async (importOriginal) => ({
+	...(await importOriginal<object>()),
 	window: { withProgress: state.withProgress },
 }));
 
@@ -61,7 +59,6 @@ function progressCapableClient(overrides: Record<string, unknown> = {}) {
 
 suite("commandProgress", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
 		state.token.isCancellationRequested = false;
 		state.token.onCancellationRequested = () => ({
 			dispose: () => undefined,
@@ -323,7 +320,7 @@ suite("commandProgress", () => {
 						[],
 						"CWTools: Re-index workspace",
 					),
-				(err: unknown) => err instanceof state.CancellationError,
+				(err: unknown) => err instanceof CancellationError,
 			);
 		});
 
@@ -341,7 +338,7 @@ suite("commandProgress", () => {
 						[],
 						"CWTools: Re-index workspace",
 					),
-				(err: unknown) => err instanceof state.CancellationError,
+				(err: unknown) => err instanceof CancellationError,
 			);
 		});
 
@@ -358,7 +355,7 @@ suite("commandProgress", () => {
 						[],
 						"CWTools: Re-index workspace",
 					),
-				(err: unknown) => err instanceof state.CancellationError,
+				(err: unknown) => err instanceof CancellationError,
 			);
 		});
 

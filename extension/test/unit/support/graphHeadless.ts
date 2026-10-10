@@ -126,7 +126,6 @@ export function node(id: string, targets: string[] = []): GraphNode {
 export function resetGraphState() {
 	state.layouts.length = 0;
 	state.tips.length = 0;
-	vi.clearAllMocks();
 }
 
 export { state };

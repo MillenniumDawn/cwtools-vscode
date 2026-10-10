@@ -1,9 +1,10 @@
 import { languages, Uri } from "vscode";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import type { TextDocument } from "vscode";
+import type * as VscodeStub from "./_stubs/vscode";
 import * as assert from "assert";
-import { afterEach, beforeEach, suite, test, vi } from "vitest";
+import { beforeEach, suite, test, vi } from "vitest";
 import type { ExtensionContext } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 
@@ -36,56 +37,60 @@ const {
 	onDidChangeActiveTextEditor: vi.fn((_listener: unknown) => disposable),
 }));
 
-vi.mock("vscode", () => ({
-	Uri: {
-		file: (file: string) => ({ toString: () => pathToFileURL(file).toString() }),
-		parse: uriParse.mockImplementation((value: string) => {
-			if (/^file:\/\/(?:[?#]|$)/.test(value)) return { scheme: "file", fsPath: path.sep };
-			if (value.startsWith("file:") && !value.startsWith("file://")) {
-				// VS Code's _referenceResolution prefixes an empty or relative
-				// file path with '/', even when Uri.parse's strict flag is set.
-				const suffix = value.slice("file:".length).replace(/^\//, "");
-				return { scheme: "file", fsPath: path.sep + suffix.replace(/\//g, path.sep) };
+vi.mock("vscode", async (importOriginal) => {
+	const original = await importOriginal<typeof VscodeStub>();
+	return {
+		...original,
+		Uri: {
+			...original.Uri,
+			parse: uriParse.mockImplementation((value: string) => {
+				if (/^file:\/\/(?:[?#]|$)/.test(value)) return { scheme: "file", fsPath: path.sep };
+				if (value.startsWith("file:") && !value.startsWith("file://")) {
+					// VS Code's _referenceResolution prefixes an empty or relative
+					// file path with '/', even when Uri.parse's strict flag is set.
+					const suffix = value.slice("file:".length).replace(/^\//, "");
+					return { scheme: "file", fsPath: path.sep + suffix.replace(/\//g, path.sep) };
+				}
+				return { scheme: new URL(value).protocol.slice(0, -1), fsPath: fileURLToPath(value) };
+			}),
+		},
+		StatusBarAlignment: { Left: 1 },
+		l10n: { t: (message: string) => message },
+		CancellationTokenSource: class {
+			private readonly cancellationListeners: Array<() => void> = [];
+			token = {
+				isCancellationRequested: false,
+				onCancellationRequested: (listener: () => void) => {
+					this.cancellationListeners.push(listener);
+					return { dispose: () => {} };
+				},
+			};
+
+			cancel(): void {
+				this.token.isCancellationRequested = true;
+				for (const listener of this.cancellationListeners) listener();
 			}
-			return { scheme: new URL(value).protocol.slice(0, -1), fsPath: fileURLToPath(value) };
-		}),
-	},
-	StatusBarAlignment: { Left: 1 },
-	l10n: { t: (message: string) => message },
-	CancellationTokenSource: class {
-		private readonly cancellationListeners: Array<() => void> = [];
-		token = {
-			isCancellationRequested: false,
-			onCancellationRequested: (listener: () => void) => {
-				this.cancellationListeners.push(listener);
-				return { dispose: () => {} };
-			},
-		};
 
-		cancel(): void {
-			this.token.isCancellationRequested = true;
-			for (const listener of this.cancellationListeners) listener();
-		}
-
-		dispose(): void {}
-	},
-	commands: {
-		executeCommand,
-		registerCommand: vi.fn(() => disposable),
-	},
-	languages: {
-		setTextDocumentLanguage: vi.fn().mockResolvedValue(undefined),
-	},
-	window: {
-		createStatusBarItem: () => ({ text: "", show() {}, dispose() {} }),
-		activeTextEditor: activeEditor,
-		onDidChangeActiveTextEditor,
-	},
-	workspace: {
-		get textDocuments() { return documentState.documents; },
-		onDidOpenTextDocument,
-	},
-}));
+			dispose(): void {}
+		},
+		commands: {
+			executeCommand,
+			registerCommand: vi.fn(() => disposable),
+		},
+		languages: {
+			setTextDocumentLanguage: vi.fn().mockResolvedValue(undefined),
+		},
+		window: {
+			createStatusBarItem: () => ({ text: "", show() {}, dispose() {} }),
+			activeTextEditor: activeEditor,
+			onDidChangeActiveTextEditor,
+		},
+		workspace: {
+			get textDocuments() { return documentState.documents; },
+			onDidOpenTextDocument,
+		},
+	};
+});
 
 vi.mock("vscode-languageclient/node", () => ({
 	ExecuteCommandRequest: { type: {} },
@@ -96,10 +101,9 @@ vi.mock("../../src/host/fileExplorer", () => ({
 	FileExplorer: class { dispose() {} refresh() {} },
 }));
 
-vi.mock("../../src/host/logger", () => ({
-	logError,
-	logInfo,
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger({ logError, logInfo }),
+);
 
 import { registerDocumentLanguage } from "../../src/host/documentLanguage";
 import { gameContentRoots } from "../../src/host/gameContentRoots";
@@ -110,7 +114,6 @@ const contentRoot = path.resolve("document-language-workspace");
 
 suite("documentLanguage", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
 		documentState.documents = [];
 	});
 
@@ -189,29 +192,25 @@ suite("documentLanguage", () => {
 
 	test("clears the latest type during the active editor debounce", async () => {
 		vi.useFakeTimers();
-		try {
-			const sendNotification = vi.fn().mockResolvedValue(undefined);
-			const sendRequest = vi.fn().mockResolvedValue(["idea"]);
-			const tracker = await registerDocumentLanguage(
-				{ subscriptions: [] } as unknown as ExtensionContext,
-				{ sendNotification, sendRequest } as unknown as LanguageClient,
-				"paradox",
-				() => [contentRoot],
-			);
-			await tracker.classifyActiveEditor();
-			assert.strictEqual(tracker.getLatestType(), "idea");
+		const sendNotification = vi.fn().mockResolvedValue(undefined);
+		const sendRequest = vi.fn().mockResolvedValue(["idea"]);
+		const tracker = await registerDocumentLanguage(
+			{ subscriptions: [] } as unknown as ExtensionContext,
+			{ sendNotification, sendRequest } as unknown as LanguageClient,
+			"paradox",
+			() => [contentRoot],
+		);
+		await tracker.classifyActiveEditor();
+		assert.strictEqual(tracker.getLatestType(), "idea");
 
-			const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
-				| ((editor: typeof activeEditor) => void)
-				| undefined;
-			assert.ok(listener);
-			listener(activeEditor);
+		const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
+			| ((editor: typeof activeEditor) => void)
+			| undefined;
+		assert.ok(listener);
+		listener(activeEditor);
 
-			assert.strictEqual(tracker.getLatestType(), "");
-			await vi.advanceTimersByTimeAsync(200);
-		} finally {
-			vi.useRealTimers();
-		}
+		assert.strictEqual(tracker.getLatestType(), "");
+		await vi.advanceTimersByTimeAsync(200);
 	});
 
 	test("clears the cached type before coalescing an in-flight request", async () => {
@@ -249,73 +248,65 @@ suite("documentLanguage", () => {
 
 	test("cancels and backs off a timed-out getFileTypes request", async () => {
 		vi.useFakeTimers();
-		try {
-			const sendNotification = vi.fn().mockResolvedValue(undefined);
-			const sendRequest = vi.fn(
-				(
-					_type: unknown,
-					_params: unknown,
-					token: {
-						onCancellationRequested: (listener: () => void) => unknown;
-					},
-				) =>
-					new Promise<string[]>((_resolve, reject) => {
-						token.onCancellationRequested(() => reject(new Error("cancelled")));
-					}),
-			);
-			const tracker = await registerDocumentLanguage(
-				{ subscriptions: [] } as unknown as ExtensionContext,
-				{ sendNotification, sendRequest } as unknown as LanguageClient,
-				"paradox",
-				() => [contentRoot],
-			);
+		const sendNotification = vi.fn().mockResolvedValue(undefined);
+		const sendRequest = vi.fn(
+			(
+				_type: unknown,
+				_params: unknown,
+				token: {
+					onCancellationRequested: (listener: () => void) => unknown;
+				},
+			) =>
+				new Promise<string[]>((_resolve, reject) => {
+					token.onCancellationRequested(() => reject(new Error("cancelled")));
+				}),
+		);
+		const tracker = await registerDocumentLanguage(
+			{ subscriptions: [] } as unknown as ExtensionContext,
+			{ sendNotification, sendRequest } as unknown as LanguageClient,
+			"paradox",
+			() => [contentRoot],
+		);
 
-			const classification = tracker.classifyActiveEditor();
-			await vi.advanceTimersByTimeAsync(5000);
-			await vi.advanceTimersByTimeAsync(2000);
-			await classification;
+		const classification = tracker.classifyActiveEditor();
+		await vi.advanceTimersByTimeAsync(5000);
+		await vi.advanceTimersByTimeAsync(2000);
+		await classification;
 
-			assert.strictEqual(tracker.getLatestType(), "");
-			assert.deepStrictEqual(executeCommand.mock.calls, [
-				["setContext", "cwtoolsGraphFile", false],
-			]);
-			assert.deepStrictEqual(logInfo.mock.calls, [
-				["didChangeActiveTextEditor getFileTypes timed out after 5000ms"],
-			]);
-			assert.deepStrictEqual(logError.mock.calls, []);
-		} finally {
-			vi.useRealTimers();
-		}
+		assert.strictEqual(tracker.getLatestType(), "");
+		assert.deepStrictEqual(executeCommand.mock.calls, [
+			["setContext", "cwtoolsGraphFile", false],
+		]);
+		assert.deepStrictEqual(logInfo.mock.calls, [
+			["didChangeActiveTextEditor getFileTypes timed out after 5000ms"],
+		]);
+		assert.deepStrictEqual(logError.mock.calls, []);
 	});
 
 	test("contains a rejected notification from an editor change", async () => {
 		vi.useFakeTimers();
-		try {
-			const failure = new Error("Client is not running");
-			const sendNotification = vi.fn().mockRejectedValue(failure);
-			await registerDocumentLanguage(
-				{ subscriptions: [] } as unknown as ExtensionContext,
-				{ sendNotification, sendRequest: vi.fn() } as unknown as LanguageClient,
-				"paradox",
-				() => [contentRoot],
-			);
-			const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
-				| ((editor: typeof activeEditor) => void)
-				| undefined;
-			assert.ok(listener);
+		const failure = new Error("Client is not running");
+		const sendNotification = vi.fn().mockRejectedValue(failure);
+		await registerDocumentLanguage(
+			{ subscriptions: [] } as unknown as ExtensionContext,
+			{ sendNotification, sendRequest: vi.fn() } as unknown as LanguageClient,
+			"paradox",
+			() => [contentRoot],
+		);
+		const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
+			| ((editor: typeof activeEditor) => void)
+			| undefined;
+		assert.ok(listener);
 
-			listener(activeEditor);
-			await vi.advanceTimersByTimeAsync(200);
+		listener(activeEditor);
+		await vi.advanceTimersByTimeAsync(200);
 
-			assert.deepStrictEqual(sendNotification.mock.calls, [
-				["didFocusFile", { uri: "file:///workspace/events/focus.txt" }],
-			]);
-			assert.deepStrictEqual(logError.mock.calls, [
-				["didChangeActiveTextEditor failed", failure],
-			]);
-		} finally {
-			vi.useRealTimers();
-		}
+		assert.deepStrictEqual(sendNotification.mock.calls, [
+			["didFocusFile", { uri: "file:///workspace/events/focus.txt" }],
+		]);
+		assert.deepStrictEqual(logError.mock.calls, [
+			["didChangeActiveTextEditor failed", failure],
+		]);
 	});
 
 	suite("plaintext promotion", () => {
@@ -517,9 +508,6 @@ suite("documentLanguage", () => {
 
 		beforeEach(() => {
 			vi.useFakeTimers();
-		});
-		afterEach(() => {
-			vi.useRealTimers();
 		});
 
 		for (const dispose of [false, true]) {

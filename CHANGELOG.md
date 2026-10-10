@@ -89,6 +89,7 @@
 * The build helpers share one `require_executable` for the node and npm lookups, `set_release_version` and `prerelease_notes` have direct tests, and `scripts/pyrightconfig.json` moves to the repo root with `scripts/build` as its extra path. The Python CI job no longer saves an npm cache, which claimed the key the check and build jobs share. (#889)
 * Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
 * Rename `vitest.config.ts` to `vitest.config.mts` so Vite's native config loader can read it. The node test runs no longer print the config-loader warning. (#921)
+* The node unit tests share one `vscode` stub, one logger mock and one per-test reset. The stub now provides `Uri`, `CancellationError`, `ProgressLocation`, `RelativePattern`, `EventEmitter`, `TreeItem` and `workspace.getConfiguration`. Vitest clears mocks before every test and restores real timers after it, and the executable test builds its temp files under `fs.mkdtemp`. (#879)
 
 ### 3.4.7
 
