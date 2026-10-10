@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions, with deterministic wire coverage using the shared test hold helper. (#843)
 * Validate rename replacements against constant, the shared localisation-key rule and script type syntax, rejecting constant, macro-parameter and scripted-localisation forms as type names, preserving valid dotted and quoted names and complete quoted target spans. (#845)
 * Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
 * Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
@@ -44,6 +45,8 @@
 #### Extension
 
 * Limit automatic plaintext language promotion to the selected mod, configured parent mods and the server's configured or auto-discovered vanilla content roots, including symlink targets used by definitions. Recheck open vanilla scripts after the server reports its install. (#836)
+* Exercise graph hover classes, drawing and canvas transforms against real headless Cytoscape, including lazy tooltip creation, detail expansion, simple/expanded mouseout behavior and replacement cleanup. (#881)
+* Prefer game content markers over folder names and ignore unrelated ancestor names during game detection. The `common/dynasties` marker CK2 and CK3 share still follows a CK2 name. (#839)
 * Keep server graphs, JSON imports and restored graphs ordered by the latest committed request; cancelling an import dialog preserves pending work. (#840)
 * Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. The summary leaves out codes ignored with `cwtools.errors.ignore`, and says how many closed files the workspace diagnostics budget kept out of Problems. (#603)
 * Fail `npm run check` when a host test file is missing from the configured labels, or when a configured host test no longer has a source file. Assert that an out-of-range hover position returns no results, and remove the stale skipped-test note. (#880)

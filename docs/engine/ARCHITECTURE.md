@@ -119,6 +119,20 @@ against what it pulls in (CW274 and the body's own diagnostics). The LSP keeps n
 such registry yet and passes `inline_scripts: None`, which accepts a call site
 without expanding it.
 
+### Rename snapshots
+
+Rename captures open-document versions, content hashes and the edit generation
+before reading its source and collecting cross-file edits. Every rename path
+uses those captured versions in `documentChanges`. Before returning either
+versioned or unversioned edits, it checks that the edit generation and each
+target's open state, version and content hash still match. A change, open or
+close during the operation returns `ContentModified` (-32801) without edits;
+the client can retry against the new document state.
+
+The localisation scan keeps its existing streaming text lifetime. Rename
+retains only small request metadata alongside the collected edits, rather
+than retaining every scanned file's text.
+
 ### Rename replacement names
 
 Rename validates the replacement for its target before collecting edits.
