@@ -42,6 +42,7 @@
 
 #### Extension
 
+* Keep server graphs, JSON imports and restored graphs ordered by the latest committed request; cancelling an import dialog preserves pending work. (#840)
 * Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. The summary leaves out codes ignored with `cwtools.errors.ignore`, and says how many closed files the workspace diagnostics budget kept out of Problems. (#603)
 * Fail `npm run check` when a host test file is missing from the configured labels, or when a configured host test no longer has a source file. Assert that an out-of-range hover position returns no results, and remove the stale skipped-test note. (#880)
 * Partition isolated and connected graph elements in linear time, preserving self-loops and edges while removing repeated component unions; verify degree checks, difference inputs and preservation with real Cytoscape. (#587)
