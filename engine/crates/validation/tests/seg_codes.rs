@@ -327,12 +327,12 @@ links = {
 }
 types = { type[foo] = { path = "game/common/foo" } }
 foo = {
-    calc = math_expr
     tgt = scope[country]
     alias_name[trigger] = alias_match_left[trigger]
 }
 ## scope = country
 alias[trigger:country_only] = bool
+alias[trigger:check_expr] = math_expr
 alias[mathexpr:add] = math_expr
 "#;
 
@@ -340,7 +340,7 @@ alias[mathexpr:add] = math_expr
 fn math_clause_with_scope_checks_leaves_following_scope_unchanged() {
     let c = codes_hoi4(
         MATH_SCOPE_RULES,
-        "foo = { calc = { value = 1 add = 2 } tgt = faction_leader country_only = yes }",
+        "foo = { check_expr = { value = 1 add = 2 } tgt = faction_leader country_only = yes }",
     );
     assert_eq!(c, Vec::<String>::new());
 }

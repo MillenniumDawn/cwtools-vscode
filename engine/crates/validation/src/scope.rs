@@ -131,6 +131,7 @@ mod tests {
         let mut scope_context = Some(ScopeContext::new(Game::Hoi4, ScopeId(2)));
         let before = scope_context.as_ref().unwrap().save();
 
+        // Simulate a nested math-clause validator changing every saved field.
         let result = with_saved_scope_context(&mut scope_context, |context| {
             let scope = context.as_mut().unwrap();
             scope.root = ScopeId(3);
