@@ -6231,6 +6231,242 @@ fn test_rename_at_constant_renames_file_locally() {
 }
 
 #[test]
+fn test_rename_rejects_invalid_replacement_names_over_the_wire() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let files = [
+        ("common/national_focus/f.txt", "MY_FOCUS = { x = yes }\n"),
+        (
+            "common/decisions/a.txt",
+            "@cost = 1\nadec = {\n    has_focus = MY_FOCUS\n    x = @cost\n}\n",
+        ),
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n my_key:0 \"Hello\"\n",
+        ),
+    ];
+    for (rel, text) in files {
+        let path = ws.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let (mut child, mut reader) = storm_server(ws.path(), rules.path(), vanilla.path());
+    for (rel, text) in &files[1..] {
+        write_frame(
+            &mut child,
+            &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+                "textDocument": { "uri": path_uri(ws.path().join(rel)), "languageId": "hoi4", "version": 1, "text": text }
+            })),
+        ).unwrap();
+        wait_for_diagnostics(&mut reader, rel);
+    }
+    let cases = [
+        (files[1].0, 0, 2, "@new name"),
+        (files[1].0, 0, 2, "@new\n}"),
+        (files[1].0, 0, 2, "plain_name"),
+        (files[1].0, 0, 2, "@"),
+        (files[1].0, 0, 2, "@@new"),
+        (files[1].0, 2, 18, "@foo"),
+        (files[1].0, 2, 18, "$p$"),
+        (files[1].0, 2, 18, "foo$x$"),
+        (files[1].0, 2, 18, "[foo]"),
+        (files[1].0, 2, 18, "\"@foo\""),
+        (files[1].0, 2, 18, "\"[foo]\""),
+        (files[1].0, 2, 18, "new}name"),
+        (files[1].0, 2, 18, "new#comment"),
+        (files[1].0, 2, 18, "new name"),
+        (files[1].0, 2, 18, "\"unclosed"),
+        (files[1].0, 2, 18, ""),
+        (files[2].0, 1, 2, "new:key"),
+        (files[2].0, 1, 2, "new\nkey"),
+        (files[2].0, 1, 2, "new$ref"),
+        (files[2].0, 1, 2, "\"new\""),
+        (files[2].0, 1, 2, ""),
+    ];
+    let mut responses = Vec::new();
+    for (i, (rel, line, character, new_name)) in cases.iter().enumerate() {
+        let id = 600 + i as i64;
+        write_frame(
+            &mut child,
+            &jsonrpc_request(
+                id,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument": { "uri": path_uri(ws.path().join(rel)) },
+                    "position": { "line": line, "character": character }, "newName": new_name
+                }),
+            ),
+        )
+        .unwrap();
+        let raw = read_response_for_id(&mut reader, id).expect("no rename response");
+        responses.push(serde_json::from_str::<serde_json::Value>(&raw).unwrap());
+    }
+    stop_server(&mut child);
+    for ((_, _, _, new_name), response) in cases.iter().zip(responses) {
+        assert_eq!(
+            response["error"]["code"], -32803,
+            "{new_name:?}: {response}"
+        );
+        assert!(response["result"].is_null(), "{new_name:?}: {response}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("replacement name"),
+            "{response}"
+        );
+    }
+}
+
+#[test]
+fn test_rename_valid_constant_name_preserves_parseability() {
+    let files = [("common/decisions/a.txt", "@cost = 1\nx = @cost\n")];
+    let result = feature_request(
+        GOTO_RULES,
+        &files,
+        &[files[0].0],
+        serde_json::json!({}),
+        files[0].0,
+        "textDocument/rename",
+        serde_json::json!({ "position": { "line": 0, "character": 2 }, "newName": "@new.cost_1" }),
+    );
+    let rewritten = apply_rename_changes(&result, &files);
+    assert_eq!(rewritten[files[0].0], "@new.cost_1 = 1\nx = @new.cost_1\n");
+}
+
+#[test]
+fn test_rename_valid_type_names_preserve_parseability() {
+    for new_name in ["NEW_FOCUS", "NEW.focus_1", "\"New focus_1\""] {
+        let files = [
+            ("common/national_focus/f.txt", "MY_FOCUS = { x = yes }\n"),
+            (
+                "common/decisions/a.txt",
+                "adec = {\n    has_focus = MY_FOCUS\n}\n",
+            ),
+        ];
+        let result = feature_request(
+            GOTO_RULES,
+            &files,
+            &[files[1].0],
+            serde_json::json!({}),
+            files[1].0,
+            "textDocument/rename",
+            serde_json::json!({ "position": { "line": 1, "character": 18 }, "newName": new_name }),
+        );
+        let rewritten = apply_rename_changes(&result, &files);
+        assert_eq!(
+            rewritten[files[0].0],
+            format!("{new_name} = {{ x = yes }}\n")
+        );
+        assert_eq!(
+            rewritten[files[1].0],
+            format!("adec = {{\n    has_focus = {new_name}\n}}\n")
+        );
+    }
+}
+
+#[test]
+fn test_rename_quoted_type_targets_preserve_parseability() {
+    let files = [
+        (
+            "common/national_focus/f.txt",
+            "\"MY_FOCUS\" = { x = yes }\n",
+        ),
+        (
+            "common/decisions/a.txt",
+            "adec = {\n    has_focus = \"MY_FOCUS\"\n}\n",
+        ),
+    ];
+    let result = feature_request(
+        GOTO_RULES,
+        &files,
+        &[files[1].0],
+        serde_json::json!({}),
+        files[1].0,
+        "textDocument/rename",
+        serde_json::json!({ "position": { "line": 1, "character": 18 }, "newName": "\"New focus_1\"" }),
+    );
+    let rewritten = apply_rename_changes(&result, &files);
+    assert_eq!(rewritten[files[0].0], "\"New focus_1\" = { x = yes }\n");
+    assert_eq!(
+        rewritten[files[1].0],
+        "adec = {\n    has_focus = \"New focus_1\"\n}\n"
+    );
+}
+
+#[test]
+fn test_rename_valid_localisation_name_preserves_parseability() {
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n my_key:0 \"Hello\"\n my_key_desc:0 \"$my_key$\"\n",
+        ),
+        ("common/test/a.txt", "x = my_key\n"),
+    ];
+    let result = feature_request(
+        GOTO_RULES,
+        &files,
+        &[files[0].0],
+        serde_json::json!({}),
+        files[0].0,
+        "textDocument/rename",
+        serde_json::json!({ "position": { "line": 1, "character": 2 }, "newName": "new.key_1" }),
+    );
+    let rewritten = apply_rename_changes(&result, &files);
+    assert_eq!(
+        rewritten[files[0].0],
+        "l_english:\n new.key_1:0 \"Hello\"\n new.key_1_desc:0 \"$new.key_1$\"\n"
+    );
+    assert_eq!(rewritten[files[1].0], "x = new.key_1\n");
+}
+
+/// Apply the wire edits to ASCII fixtures, then parse every changed document.
+fn apply_rename_changes(
+    result: &serde_json::Value,
+    files: &[(&str, &str)],
+) -> HashMap<String, String> {
+    let changes = result["changes"].as_object().expect("rename changes");
+    let mut rewritten = HashMap::new();
+    for (uri, edits) in changes {
+        let (rel, original) = files.iter().find(|(rel, _)| uri.ends_with(rel)).unwrap();
+        assert!(original.is_ascii());
+        let offset = |position: &serde_json::Value| {
+            original
+                .split_inclusive('\n')
+                .take(position["line"].as_u64().unwrap() as usize)
+                .map(str::len)
+                .sum::<usize>()
+                + position["character"].as_u64().unwrap() as usize
+        };
+        let mut edits: Vec<_> = edits.as_array().unwrap().iter().collect();
+        edits.sort_by_key(|edit| std::cmp::Reverse(offset(&edit["range"]["start"])));
+        let mut text = original.to_string();
+        for edit in edits {
+            text.replace_range(
+                offset(&edit["range"]["start"])..offset(&edit["range"]["end"]),
+                edit["newText"].as_str().unwrap(),
+            );
+        }
+        if rel.ends_with(".yml") {
+            let parsed = cwtools_localization::parse_loc_files(rel, &text, None).unwrap();
+            assert!(!parsed.is_empty());
+            assert!(
+                parsed.iter().all(|file| file.parse_errors.is_empty()),
+                "{text}"
+            );
+        } else {
+            let table = cwtools_string_table::string_table::StringTable::new();
+            let parsed = cwtools_parser::parser::parse_string(&text, &table);
+            assert!(parsed.errors.is_empty(), "{text}: {:?}", parsed.errors);
+        }
+        rewritten.insert(rel.to_string(), text);
+    }
+    rewritten
+}
+
+#[test]
 fn test_prepare_rename_covers_at_constant_token() {
     let doc = "@my_const = 5\nadec = {\n    x = @my_const\n}\n";
     let files = &[("common/decisions/d.txt", doc)];
