@@ -12,6 +12,8 @@ export default defineConfig({
 	test: {
 		include: ["extension/test/unit/**/*.test.ts"],
 		environment: "node",
+		clearMocks: true,
+		setupFiles: ["extension/test/unit/support/setup.ts"],
 		coverage: {
 			provider: "v8",
 			include: [

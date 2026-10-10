@@ -3,6 +3,7 @@
 #### Engine
 
 * Key the reference index by type and lowercased name, with a reverse map from each file to its keys, so clearing a file and looking up an instance no longer scan every use site of the type. (#866)
+* Give a lowercase string one string-table slot and one map entry instead of two, and skip the `to_lowercase` allocation for ASCII input with no uppercase. The Millennium Dawn string table drops from 1,050,164 to 916,655 entries. (#486)
 * Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)
 * Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
@@ -90,6 +91,7 @@
 * The build helpers share one `require_executable` for the node and npm lookups, `set_release_version` and `prerelease_notes` have direct tests, and `scripts/pyrightconfig.json` moves to the repo root with `scripts/build` as its extra path. The Python CI job no longer saves an npm cache, which claimed the key the check and build jobs share. (#889)
 * Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
 * Rename `vitest.config.ts` to `vitest.config.mts` so Vite's native config loader can read it. The node test runs no longer print the config-loader warning. (#921)
+* The node unit tests share one `vscode` stub, one logger mock and one per-test reset. The stub now provides `Uri`, `CancellationError`, `ProgressLocation`, `RelativePattern`, `EventEmitter`, `TreeItem` and `workspace.getConfiguration`. Vitest clears mocks before every test and restores real timers after it, and the executable test builds its temp files under `fs.mkdtemp`. (#879)
 
 ### 3.4.7
 

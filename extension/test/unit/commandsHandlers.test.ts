@@ -1,7 +1,9 @@
 import * as assert from "assert";
 import { beforeEach, suite, test, vi } from "vitest";
 import { LSPErrorCodes } from "vscode-languageserver-protocol";
+import { CancellationError } from "vscode";
 import type { ExtensionContext } from "vscode";
+import type * as VscodeStub from "./_stubs/vscode";
 import type { EditorTracker } from "../../src/host/documentLanguage";
 import type { LanguageClient } from "vscode-languageclient/node";
 
@@ -13,7 +15,6 @@ import type { LanguageClient } from "vscode-languageclient/node";
 // staying green while the workspace command does nothing.
 
 const state = vi.hoisted(() => {
-	class CancellationError extends Error {}
 	const registeredCommands = new Map<string, (...args: never[]) => unknown>();
 	const initialiseGraph = vi.fn();
 	const graphPanel = { initialiseGraph };
@@ -31,7 +32,6 @@ const state = vi.hoisted(() => {
 		): Promise<unknown> => task({ report: () => undefined }, token),
 	);
 	return {
-		CancellationError,
 		registeredCommands,
 		requestType: {},
 		token,
@@ -52,37 +52,38 @@ const state = vi.hoisted(() => {
 	};
 });
 
-vi.mock("vscode", async (importOriginal) => ({
-	...(await importOriginal<object>()),
-	CancellationError: state.CancellationError,
-	ProgressLocation: { Notification: 15 },
-	commands: {
-		registerCommand: vi.fn(
-			(id: string, handler: (...args: never[]) => unknown) => {
-				state.registeredCommands.set(id, handler);
-				return { dispose: () => undefined };
-			},
-		),
-		executeCommand: state.executeCommand,
-	},
-	window: {
-		createOutputChannel: () => ({ appendLine: () => undefined }),
-		withProgress: state.withProgress,
-		showInformationMessage: state.showInformationMessage,
-		showOpenDialog: state.showOpenDialog,
-		showWarningMessage: state.showWarningMessage,
-		showErrorMessage: state.showErrorMessage,
-		showInputBox: state.showInputBox,
-		showSaveDialog: state.showSaveDialog,
-		showTextDocument: state.showTextDocument,
-		registerWebviewPanelSerializer: state.registerWebviewPanelSerializer,
-	},
-	workspace: {
-		getConfiguration: () => ({ get: () => undefined }),
-		fs: { writeFile: state.writeFile, readFile: state.readFile },
-		openTextDocument: state.openTextDocument,
-	},
-}));
+vi.mock("vscode", async (importOriginal) => {
+	const original = await importOriginal<typeof VscodeStub>();
+	return {
+		...original,
+		commands: {
+			registerCommand: vi.fn(
+				(id: string, handler: (...args: never[]) => unknown) => {
+					state.registeredCommands.set(id, handler);
+					return { dispose: () => undefined };
+				},
+			),
+			executeCommand: state.executeCommand,
+		},
+		window: {
+			...original.window,
+			withProgress: state.withProgress,
+			showInformationMessage: state.showInformationMessage,
+			showOpenDialog: state.showOpenDialog,
+			showWarningMessage: state.showWarningMessage,
+			showErrorMessage: state.showErrorMessage,
+			showInputBox: state.showInputBox,
+			showSaveDialog: state.showSaveDialog,
+			showTextDocument: state.showTextDocument,
+			registerWebviewPanelSerializer: state.registerWebviewPanelSerializer,
+		},
+		workspace: {
+			...original.workspace,
+			fs: { writeFile: state.writeFile, readFile: state.readFile },
+			openTextDocument: state.openTextDocument,
+		},
+	};
+});
 
 vi.mock("vscode-languageclient/node", () => ({
 	ExecuteCommandRequest: { type: state.requestType },
@@ -193,7 +194,6 @@ function mockGraphRequests(): GraphRequest[] {
 
 suite("registered workspace commands", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
 		state.executeCommand.mockReset();
 		state.showInputBox.mockReset();
 		state.showOpenDialog.mockReset();
@@ -274,7 +274,7 @@ suite("registered workspace commands", () => {
 			const newRequest = handler("cwtools.setGraphDepth")();
 			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
 
-			requests[1].result.reject(new state.CancellationError());
+			requests[1].result.reject(new CancellationError());
 			await newRequest;
 			requests[0].result.resolve([{ id: "old" }]);
 			await oldRequest;

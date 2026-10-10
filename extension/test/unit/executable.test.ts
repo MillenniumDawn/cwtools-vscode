@@ -1,4 +1,4 @@
-import { suite, test, afterEach } from "vitest";
+import { suite, test, afterAll, afterEach, beforeAll } from "vitest";
 import * as assert from "assert";
 import * as fs from "fs";
 import * as os from "os";
@@ -6,10 +6,18 @@ import * as path from "path";
 import { existAndIsExe } from "../../src/host/executable";
 
 suite("executable — existAndIsExe", () => {
-	const tmpDir = os.tmpdir();
+	let tmpDir: string;
+
+	beforeAll(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cwtools-test-"));
+	});
+
+	afterAll(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
 
 	function tempFile(name: string): string {
-		return path.join(tmpDir, `cwtools-test-${Date.now()}-${name}`);
+		return path.join(tmpDir, name);
 	}
 
 	// Track files we create so cleanup always runs.

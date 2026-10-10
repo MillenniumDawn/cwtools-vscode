@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, suite, test, vi } from "vitest";
 import * as assert from "assert";
 import type { WebviewPanel } from "vscode";
+import type * as VscodeStub from "./_stubs/vscode";
 
 // The one-second no-reply answer #212 added for #210 has no host coverage: a
 // real webview replies, so the host suite only ever walks the happy path. Fake
@@ -11,29 +12,25 @@ const { executeCommand, registerCommand } = vi.hoisted(() => ({
 	registerCommand: vi.fn(() => ({ dispose: () => {} })),
 }));
 
-vi.mock("vscode", async (importOriginal) => ({
-	...(await importOriginal<object>()),
-	commands: { executeCommand, registerCommand },
-	Uri: { file: (p: string) => ({ fsPath: p, toString: () => `file://${p}` }) },
-	ViewColumn: { One: 1 },
-	window: {
-		activeTextEditor: undefined,
-		showInformationMessage: vi.fn(),
-		showSaveDialog: vi.fn(),
-		showWarningMessage: vi.fn(),
-	},
-	workspace: {
-		fs: { readFile: vi.fn() },
-		getConfiguration: vi.fn(() => ({ get: () => 1 })),
-	},
-}));
+vi.mock("vscode", async (importOriginal) => {
+	const original = await importOriginal<typeof VscodeStub>();
+	return {
+		...original,
+		commands: { executeCommand, registerCommand },
+		ViewColumn: { One: 1 },
+		window: {
+			activeTextEditor: undefined,
+			showInformationMessage: vi.fn(),
+			showSaveDialog: vi.fn(),
+			showWarningMessage: vi.fn(),
+		},
+		workspace: { ...original.workspace, fs: { readFile: vi.fn() } },
+	};
+});
 
-vi.mock("../../src/host/logger", () => ({
-	logError: vi.fn(),
-	logInfo: vi.fn(),
-	logWarn: vi.fn(),
-	errorMessage: (err: unknown) => (err instanceof Error ? err.message : ""),
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger(),
+);
 
 import { GraphPanel } from "../../src/host/graphPanel";
 
@@ -77,7 +74,6 @@ suite("graph render check", () => {
 	}
 
 	beforeEach(() => {
-		vi.clearAllMocks();
 		vi.useFakeTimers();
 	});
 
