@@ -31,7 +31,6 @@ pub struct RuleSet {
     pub localisation_commands: rustc_hash::FxHashSet<String>,
     alias_exact: rustc_hash::FxHashMap<String, rustc_hash::FxHashMap<String, Vec<usize>>>,
     alias_categories: rustc_hash::FxHashMap<String, AliasCategoryIndex>,
-    alias_pattern_buckets: rustc_hash::FxHashMap<String, AliasPatternBuckets>,
     type_by_name: rustc_hash::FxHashMap<String, usize>,
     enum_by_name: rustc_hash::FxHashMap<String, usize>,
     type_rules_idx: rustc_hash::FxHashMap<String, usize>,
@@ -126,6 +125,7 @@ impl ParsedAliasPattern {
 pub struct AliasCategoryIndex {
     pub parsed_patterns: Vec<ParsedAliasPattern>,
     pub scope_field_idx: Option<usize>,
+    pattern_buckets: AliasPatternBuckets,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -146,10 +146,6 @@ impl PartialEq for RuleBodyCandidateIndexCache {
 }
 
 impl RuleBodyCandidateIndex {
-    fn new(body: &RuleBody) -> Self {
-        Self::from_rules(body)
-    }
-
     pub fn from_rules(body: &[NewRule]) -> Self {
         let mut index = Self::default();
         for (rule_index, (rule_type, _)) in body.iter().enumerate() {
@@ -200,8 +196,10 @@ fn rule_body_key_hash(key: &str) -> u64 {
 }
 
 impl AliasCategoryIndex {
-    fn push_pattern(&mut self, pattern: ParsedAliasPattern) {
-        self.parsed_patterns.push(pattern);
+    /// The patterns whose prefix can match `key`, in declaration order.
+    pub fn patterns_for_key<'a>(&'a self, key: &str) -> AliasPatternCandidates<'a> {
+        self.pattern_buckets
+            .patterns_for_key(&self.parsed_patterns, key)
     }
 }
 
@@ -373,7 +371,6 @@ impl RuleSet {
             localisation_commands: rustc_hash::FxHashSet::default(),
             alias_exact: rustc_hash::FxHashMap::default(),
             alias_categories: rustc_hash::FxHashMap::default(),
-            alias_pattern_buckets: rustc_hash::FxHashMap::default(),
             type_by_name: rustc_hash::FxHashMap::default(),
             enum_by_name: rustc_hash::FxHashMap::default(),
             type_rules_idx: rustc_hash::FxHashMap::default(),
@@ -520,20 +517,13 @@ impl RuleSet {
                 if rest == "scope_field" {
                     entry.scope_field_idx = Some(i);
                 } else if let Some(parsed) = ParsedAliasPattern::parse(rest, i) {
-                    entry.push_pattern(parsed);
+                    entry.parsed_patterns.push(parsed);
                 }
             }
         }
-        self.alias_pattern_buckets = self
-            .alias_categories
-            .iter()
-            .map(|(category, index)| {
-                (
-                    category.clone(),
-                    AliasPatternBuckets::for_patterns(&index.parsed_patterns),
-                )
-            })
-            .collect();
+        for category in self.alias_categories.values_mut() {
+            category.pattern_buckets = AliasPatternBuckets::for_patterns(&category.parsed_patterns);
+        }
         for td in &mut self.types {
             normalize_path_options(&mut td.path_options);
         }
@@ -734,7 +724,6 @@ impl RuleSet {
                 .all(|(i, td)| { self.type_by_name.get(&td.name).is_some_and(|&idx| idx <= i) })
                 && self.enums.len() == self.enum_by_name.len()
                 && (self.aliases.is_empty() || !self.alias_exact.is_empty())
-                && self.alias_categories.len() == self.alias_pattern_buckets.len()
                 && self.enums.len() == self.enum_values_lower.len()
                 && self.enums.len() == self.enum_has_at.len()
                 && self.values.len() == self.value_sets.len(),
@@ -752,17 +741,6 @@ impl RuleSet {
     pub fn alias_categories(&self) -> &rustc_hash::FxHashMap<String, AliasCategoryIndex> {
         self.assert_reindexed();
         &self.alias_categories
-    }
-
-    pub fn alias_patterns_for_key(
-        &self,
-        category: &str,
-        key: &str,
-    ) -> Option<AliasPatternCandidates<'_>> {
-        self.assert_reindexed();
-        let patterns = &self.alias_categories.get(category)?.parsed_patterns;
-        let buckets = self.alias_pattern_buckets.get(category)?;
-        Some(buckets.patterns_for_key(patterns, key))
     }
 
     pub fn rule_body_candidate_index(
@@ -1211,17 +1189,12 @@ fn build_rule_body_candidate_indexes(ruleset: &RuleSet) -> RuleBodyCandidateInde
                 identity,
                 (
                     std::sync::Arc::clone(body),
-                    std::sync::Arc::new(RuleBodyCandidateIndex::new(body)),
+                    std::sync::Arc::new(RuleBodyCandidateIndex::from_rules(body)),
                 ),
             );
         }
         for (rule_type, _) in body.iter() {
-            match rule_type {
-                RuleType::NodeRule { rules, .. }
-                | RuleType::ValueClauseRule { rules }
-                | RuleType::SubtypeRule { rules, .. } => add_body(rules, indexes, visited),
-                RuleType::LeafRule { .. } | RuleType::LeafValueRule { .. } => {}
-            }
+            add_rule(rule_type, indexes, visited);
         }
     }
 

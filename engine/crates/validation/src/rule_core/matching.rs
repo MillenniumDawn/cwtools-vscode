@@ -323,15 +323,9 @@ pub(crate) fn field_matches_key(
             match ruleset.alias_categories().get(category.as_str()) {
                 None => true,
                 Some(cat) => {
-                    if !cat.parsed_patterns.is_empty() {
-                        for pat in ruleset
-                            .alias_patterns_for_key(category.as_str(), key)
-                            .into_iter()
-                            .flatten()
-                        {
-                            if parsed_pattern_matches(pat, key, ruleset, type_index, true) {
-                                return true;
-                            }
+                    for pat in cat.patterns_for_key(key) {
+                        if parsed_pattern_matches(pat, key, ruleset, type_index, true) {
+                            return true;
                         }
                     }
                     cat.scope_field_idx.is_some() && is_scope_key(key, ruleset, type_index)
