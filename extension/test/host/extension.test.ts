@@ -10,6 +10,7 @@ import {
 	SAMPLE_ROOT,
 } from "../support/utils";
 import type * as GraphPanelNamespace from "../../src/host/graphPanel";
+import { isRulesConfigSummaryNotification } from "../../src/common/rulesConfigNotifications";
 type GraphPanelModule = typeof GraphPanelNamespace;
 import type { GraphData } from "../../src/common/graphTypes";
 import type { ElementsDefinition } from "cytoscape";
@@ -139,8 +140,7 @@ suite(`Debug Integration Test: `, function () {
 			// arrive after readiness while this stub is active.
 			// Keep this assertion scoped to command/protocol failures.
 			const protocolErrors = errors.filter(
-				(message) =>
-					!/^CWTools: \d+ rules-config error\(s\), first:/.test(message),
+				(message) => !isRulesConfigSummaryNotification(message),
 			);
 			assert.deepStrictEqual(
 				protocolErrors,
@@ -195,8 +195,7 @@ suite(`Debug Integration Test: `, function () {
 			// As in fixAllWorkspace gating, a delayed rules-config summary is unrelated
 			// to the command result and must not make this timing-sensitive check fail.
 			const protocolErrors = errors.filter(
-				(message) =>
-					!/^CWTools: \d+ rules-config error\(s\), first:/.test(message),
+				(message) => !isRulesConfigSummaryNotification(message),
 			);
 			assert.deepStrictEqual(
 				protocolErrors,
