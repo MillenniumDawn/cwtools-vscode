@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
 * Reuse one set of scratch buffers per typo-suggestion scan instead of allocating for every candidate, skip candidates of the wrong length before allocating anything, and lowercase the unknown key once. (#559)
 * Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions, with deterministic wire coverage using the shared test hold helper. (#843)
 * Validate rename replacements against constant, the shared localisation-key rule and script type syntax, rejecting constant, macro-parameter and scripted-localisation forms as type names, preserving valid dotted and quoted names and complete quoted target spans. (#845)
