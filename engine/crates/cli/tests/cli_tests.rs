@@ -4030,3 +4030,80 @@ fn test_loc_inline_ignore_real_comment_after_embedded_quotes_suppresses() {
         .success()
         .stdout(predicate::str::contains("CW225").not());
 }
+
+#[test]
+fn test_raw_equipment_icons_reach_cli_sarif_and_suppression() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules = tmp.path().join("rules");
+    let mod_dir = tmp.path().join("mod");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(
+        rules.join("r.cwt"),
+        "types = { type[variant] = { path = \"game/history/countries\" } }",
+    )
+    .unwrap();
+    let variant = mod_dir.join("history/countries/USA.txt");
+    let pool = mod_dir.join("gfx/interface/equipmentdesigner/graphic_db/planes.txt");
+    for file in [&variant, &pool] {
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    }
+    let variant_source = "create_equipment_variant = {\n icon = \"gfx/plane.dds\"\n}\n";
+    let pool_source = "USA = { plane = { pool = { icons = {\n \"gfx/plane.dds\"\n} } } }\n";
+    std::fs::write(&variant, variant_source).unwrap();
+    std::fs::write(&pool, pool_source).unwrap();
+    let command = |report: &str| {
+        let mut cmd = cwtools();
+        cmd.args(["validate", "--game", "hoi4", "--directory"])
+            .arg(&mod_dir)
+            .arg("--rules")
+            .arg(&rules)
+            .args(["--only-code", "CW284", "--report-type", report]);
+        cmd
+    };
+    command("cli")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CW284"))
+        .stdout(predicate::str::contains("macOS and Linux"))
+        .stdout(predicate::str::contains("2 warnings"));
+    let out = command("sarif").output().unwrap();
+    assert!(out.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let results = report["runs"][0]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    for result in results {
+        assert_eq!(result["ruleId"], "CW284");
+        assert_eq!(result["level"], "warning");
+        assert_eq!(
+            result["locations"][0]["physicalLocation"]["region"]["startLine"],
+            2
+        );
+    }
+    assert!(
+        report["runs"][0]["tool"]["driver"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|rule| rule["id"] == "CW284"
+                && rule["helpUri"].as_str().unwrap().ends_with("#cw284"))
+    );
+    command("cli")
+        .args(["--ignore-code", "cw284"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CW284").not());
+    std::fs::write(
+        &variant,
+        variant_source.replace("gfx/plane.dds\"", "gfx/plane.dds\" # cwtools-ignore CW284"),
+    )
+    .unwrap();
+    std::fs::write(
+        &pool,
+        pool_source.replace("gfx/plane.dds\"", "gfx/plane.dds\" # cwtools-ignore CW284"),
+    )
+    .unwrap();
+    command("cli")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CW284").not());
+}

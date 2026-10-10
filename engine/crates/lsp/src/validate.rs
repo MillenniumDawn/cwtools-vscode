@@ -4714,3 +4714,67 @@ mod inline_ignore_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod raw_equipment_icon_tests {
+    use super::*;
+    use cwtools_string_table::string_table::StringTable;
+
+    #[test]
+    fn raw_equipment_icon_warning_reaches_editor_and_suppression() {
+        for (source, path) in [
+            (
+                "create_equipment_variant = {\n icon = \"gfx/plane.dds\"\n}",
+                "history/countries/USA.txt",
+            ),
+            (
+                "USA = { plane = { pool = { icons = {\n \"gfx/plane.dds\"\n} } } }",
+                "gfx/interface/equipmentdesigner/graphic_db/planes.txt",
+            ),
+        ] {
+            let table = StringTable::new();
+            let ast = cwtools_parser::parser::parse_string(source, &table);
+            let mut errors = Vec::new();
+            cwtools_validation::per_game::hoi4::validate_hoi4(
+                &ast,
+                &RuleSet::new(),
+                &table,
+                &path.into(),
+                &mut errors,
+            );
+            let error = errors
+                .iter()
+                .find(|error| error.code == Some("CW284"))
+                .expect("raw path warning");
+            let diagnostic = validation_error_to_diagnostic(
+                error,
+                &DocLines::new(source, tower_lsp::lsp_types::PositionEncodingKind::UTF16),
+            );
+            assert_eq!(
+                diagnostic.code,
+                Some(NumberOrString::String("CW284".into()))
+            );
+            assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::WARNING));
+            assert_eq!(diagnostic.range.start.line, 1);
+            assert!(
+                diagnostic
+                    .code_description
+                    .as_ref()
+                    .unwrap()
+                    .href
+                    .as_str()
+                    .ends_with("#cw284")
+            );
+            assert!(code_is_suppressed(
+                diagnostic.code.as_ref(),
+                &["cw284".into()]
+            ));
+            let map = cwtools_validation::inline_ignore::extract_inline_ignored_codes(
+                "\n# cwtools-ignore CW284",
+            );
+            let mut diagnostics = vec![diagnostic];
+            drop_inline_suppressed(&mut diagnostics, &map);
+            assert!(diagnostics.is_empty());
+        }
+    }
+}

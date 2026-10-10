@@ -10,7 +10,9 @@ code.
 - [Commands and settings reference](extension/reference.md)
 - [Theme authoring](extension/themes.md)
 - [Graph hover wiring and retained state](extension/GRAPH_HOVER_SCALING.md)
+- [Graph webview regression tests](extension/GRAPH_TESTING.md)
 - [Graph layout partition performance](extension/GRAPH_LAYOUT_PERFORMANCE.md)
+- [Imported graph metadata](extension/GRAPH_IMPORTS.md)
 
 ## Engine
 

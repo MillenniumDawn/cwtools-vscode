@@ -21,7 +21,7 @@ const state = vi.hoisted(() => ({
 		offsetWidth: 800, offsetHeight: 600, childNodes: [] as unknown[],
 		appendChild: vi.fn(), replaceChildren: vi.fn(),
 	},
-	tips: [] as { show: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; props: Record<string, unknown> }[],
+	tips: [] as { show: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; setProps: (next: Record<string, unknown>) => void; props: Record<string, unknown> }[],
 }));
 
 vi.mock("cytoscape", async (importOriginal) => {

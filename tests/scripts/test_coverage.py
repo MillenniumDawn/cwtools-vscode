@@ -285,16 +285,16 @@ def test_lists_the_worst_covered_rust_files() -> None:
 
 
 def test_host_coverage_drops_match_vitest_owned_host_modules() -> None:
-    # vitest.config.ts's `coverage.include` is the source of truth for which
+    # vitest.config.mts's `coverage.include` is the source of truth for which
     # host modules the node report already covers accurately. HOST_COVERAGE_
     # DROPS has to mirror the host/common-scoped entries in that list, or a
     # vitest-owned module leaks back into the host report with a misleading
     # partial number (the bug behind #220's commandProgress.ts example).
-    config = (REPO_ROOT / "vitest.config.ts").read_text(encoding="utf-8")
+    config = (REPO_ROOT / "vitest.config.mts").read_text(encoding="utf-8")
     # Assumes double-quoted paths and no `]` (even in a comment) inside the
     # include array; a `]` there would silently truncate the captured list.
     match = re.search(r"coverage:\s*\{.*?include:\s*\[(.*?)\]", config, re.DOTALL)
-    assert match is not None, "could not find coverage.include in vitest.config.ts"
+    assert match is not None, "could not find coverage.include in vitest.config.mts"
     included = re.findall(r'"([^"]+)"', match.group(1))
     host_owned = {
         path

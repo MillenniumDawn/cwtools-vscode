@@ -17,6 +17,7 @@ import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
 import { createLanguageClient } from "./lspClient";
 import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
+import { gameContentRoots } from "./gameContentRoots";
 import { registerCommands } from "./commands";
 import { setTrustedRoots } from "./trustedPaths";
 import { initializeLogger, logInfo, logError, errorMessage } from "./logger";
@@ -201,8 +202,21 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		defaultClient = client;
 		client.registerProposedFeatures();
 
-		const tracker = await registerDocumentLanguage(context, client, "paradox");
-		const notifications = registerServerNotifications(context, client);
+		const readContentRoots = () => {
+			const settings = workspace.getConfiguration("cwtools");
+			return gameContentRoots(
+				workspaceFolder.uri.fsPath,
+				settings.get<string[]>("parentMods"),
+				settings.get<string>(`cache.${language}`),
+			);
+		};
+		const tracker = await registerDocumentLanguage(
+			context,
+			client,
+			"paradox",
+			readContentRoots,
+		);
+		const notifications = registerServerNotifications(context, client, tracker.updateVanillaRoots);
 		initialScanDone = notifications.initialScanDone;
 		statusText = notifications.statusText;
 		notifyStopped = notifications.markStopped;

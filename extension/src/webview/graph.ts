@@ -259,7 +259,8 @@ function setupTooltips(cy: cytoscape.Core) {
 		const buildTip = () => {
 			const tip = document.createElement("div");
 			const strong = document.createElement("strong");
-			strong.textContent = String(node.data("entityTypeDisplayName"));
+			const displayName: unknown = node.data("entityTypeDisplayName");
+			strong.textContent = typeof displayName === "string" ? displayName : "";
 			tip.appendChild(strong);
 			tip.appendChild(document.createTextNode(`: ${String(node.data("id"))}`));
 			return tip;
@@ -268,8 +269,9 @@ function setupTooltips(cy: cytoscape.Core) {
 			const tip = buildTip();
 			const table = document.createElement("table");
 			table.className = "cwtools-table";
-			const detailsArr = node.data("details") as GraphNodeDetail[] | undefined;
-			if (detailsArr && detailsArr.length > 0) {
+			const details: unknown = node.data("details");
+			const detailsArr = Array.isArray(details) ? details.filter(isGraphNodeDetail) : [];
+			if (detailsArr.length > 0) {
 				for (const d of detailsArr) {
 					const tr = document.createElement("tr");
 					const tdKey = document.createElement("td");
@@ -532,11 +534,48 @@ function isCytoscapeJson(value: unknown): value is CytoscapeJson {
 	);
 }
 
-function reportImportError(fileName: string | undefined) {
+function isGraphNodeDetail(value: unknown): value is GraphNodeDetail {
+	return isRecord(value) && typeof value.key === "string" &&
+		Array.isArray(value.values) && value.values.every((v: unknown) => typeof v === "string");
+}
+
+function isGraphLocation(value: unknown): value is GraphLocation {
+	return isRecord(value) && typeof value.filename === "string" && value.filename.length > 0 &&
+		typeof value.line === "number" && Number.isSafeInteger(value.line) && value.line >= 1 &&
+		typeof value.column === "number" && Number.isSafeInteger(value.column) && value.column >= 0;
+}
+
+class GraphMetadataError extends Error {}
+
+function validateImportedMetadata(json: CytoscapeJson) {
+	const elements = Array.isArray(json.elements) ? json.elements : json.elements.nodes ?? [];
+	for (const element of elements) {
+		const data: unknown = element.data;
+		if (!isRecord(data)) {
+			continue;
+		}
+		// Imported IDs may contain command links rendered by host notifications.
+		// Keep validation errors independent of all imported field values.
+		if (data.entityTypeDisplayName !== undefined && typeof data.entityTypeDisplayName !== "string") {
+			throw new GraphMetadataError("a node has an invalid entityTypeDisplayName (expected a string)");
+		}
+		if (data.details !== undefined &&
+			(!Array.isArray(data.details) || !data.details.every(isGraphNodeDetail))) {
+			throw new GraphMetadataError("a node has invalid details (expected string keys and arrays of strings)");
+		}
+		if (data.location !== undefined && !isGraphLocation(data.location)) {
+			throw new GraphMetadataError("a node has an invalid location (expected filename and whole-number line/column coordinates)");
+		}
+	}
+}
+
+function reportImportError(fileName: string | undefined, detail?: string) {
 	const source = fileName ? `"${fileName}"` : "the selected JSON file";
 	vscode.postMessage({
 		command: "showError",
-		message: `CWTools: couldn't import ${source}: it isn't valid Cytoscape graph JSON.`,
+		message: detail
+			? `CWTools: couldn't import ${source}: ${detail}.`
+			: `CWTools: couldn't import ${source}: it isn't valid Cytoscape graph JSON.`,
 	});
 }
 
@@ -580,7 +619,10 @@ function tech(
 	}
 }
 
-function goToNode(location: GraphLocation) {
+function goToNode(location: unknown) {
+	if (!isGraphLocation(location)) {
+		return;
+	}
 	const uri = location.filename;
 	const line = location.line;
 	const column = location.column;
@@ -748,12 +790,14 @@ window.addEventListener("message", (event) => {
 				if (!isCytoscapeJson(json)) {
 					throw new Error("invalid Cytoscape graph JSON");
 				}
+				validateImportedMetadata(json);
 				tech([], [], message.settings, json);
 				persistState(message.persist);
-			} catch {
+			} catch (error) {
 				// Parse and validate before replacing a current graph. A Cytoscape
 				// failure after that still disposes the partial replacement in tech.
-				reportImportError(message.persist?.fileName);
+				reportImportError(message.persist?.fileName,
+					error instanceof GraphMetadataError ? error.message : undefined);
 			}
 			break;
 		case "checkCytoscapeRendered": // Check if cytoscape is initialized and has rendered elements
