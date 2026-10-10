@@ -81,6 +81,9 @@ pub fn has_ascii_case_insensitive_substring(text: &str, needle: &str) -> bool {
             return false;
         };
         offset += found;
+        if text.len() - offset < needle.len() {
+            return false;
+        }
         if text[offset..offset + needle.len()].eq_ignore_ascii_case(needle) {
             return true;
         }
@@ -1047,6 +1050,10 @@ mod tests {
                 true,
             )
             .is_empty()
+        );
+        assert!(
+            loc_script_usage_columns("1234567890t", &keys, PositionEncodingKind::UTF16, true,)
+                .is_empty()
         );
     }
 
