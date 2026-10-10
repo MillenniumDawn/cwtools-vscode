@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "vscode";
-import { window, l10n, commands, StatusBarAlignment } from "vscode";
+import * as path from "node:path";
+import { window, l10n, commands, StatusBarAlignment, Uri } from "vscode";
 import type {
 	LanguageClient,
 	StateChangeEvent,
@@ -24,6 +25,8 @@ interface LoadingBarParams {
 }
 interface UpdateFileList {
 	fileList: FileListItem[];
+	/** Configured/discovered and canonical spellings of the install, as file URIs. */
+	vanillaRoots?: string[];
 }
 
 interface WorkspaceDiagnosticsBudgetReached {
@@ -42,6 +45,7 @@ export interface ServerNotifications {
 export function registerServerNotifications(
 	context: ExtensionContext,
 	client: LanguageClient,
+	updateVanillaRoots?: (roots: readonly string[]) => Promise<void>,
 ): ServerNotifications {
 	const loadingBarNotification = "loadingBar";
 	const updateFileList = "updateFileList";
@@ -50,6 +54,7 @@ export function registerServerNotifications(
 	let initialScanStarted = false;
 	let initialScanPending = true;
 	let budgetNoticeShown = false;
+	let acceptFileList = true;
 	let resolveInitialScan: () => void;
 	const initialScanDone = new Promise<void>(
 		(resolve) => (resolveInitialScan = resolve),
@@ -78,8 +83,17 @@ export function registerServerNotifications(
 	);
 
 	const markStopped = (): void => {
+		acceptFileList = false;
+		setVanillaRoots([]);
 		status.text = l10n.t("CWTools: stopped");
 		clearCommandAvailability();
+	};
+	const setVanillaRoots = (roots: readonly string[]): void => {
+		if (updateVanillaRoots) {
+			void updateVanillaRoots(roots).catch((err: unknown) =>
+				logError("Failed to classify vanilla documents", err),
+			);
+		}
 	};
 
 	context.subscriptions.push(
@@ -89,8 +103,11 @@ export function registerServerNotifications(
 		// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument
 		client.onDidChangeState((e: StateChangeEvent) => {
 			if (e.newState === State.Starting) {
+				acceptFileList = false;
+				setVanillaRoots([]);
 				status.text = l10n.t("CWTools: starting");
 			} else if (e.newState === State.Running) {
+				acceptFileList = true;
 				// The library sets initializeResult just before this event fires,
 				// so this covers activation, manual restarts and automatic ones.
 				publishCommandAvailability(client);
@@ -162,6 +179,22 @@ export function registerServerNotifications(
 		},
 	);
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
+		if (!acceptFileList) return;
+		const roots: string[] = [];
+		if (Array.isArray(params.vanillaRoots)) {
+			for (const root of params.vanillaRoots) {
+				// Uri.parse makes empty/relative file paths absolute. Require the
+				// explicit hierarchical path the server produces before parsing.
+				if (typeof root !== "string" || !/^file:\/\/[^/?#]*\//.test(root)) continue;
+				try {
+					const uri = Uri.parse(root, true);
+					if (uri.scheme === "file" && path.isAbsolute(uri.fsPath)) roots.push(uri.fsPath);
+				} catch {
+					// Ignore malformed root URIs from incompatible server versions.
+				}
+			}
+		}
+		setVanillaRoots(roots);
 		const signature = fileListSignature(params.fileList);
 		if (!fileExplorer) {
 			fileExplorer = new FileExplorer(context, params.fileList);

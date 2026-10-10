@@ -123,9 +123,86 @@ suite("engine — detectFromFolder", () => {
 		}
 	});
 
-	test("prefers folder-name hint over content hint", async () => {
-		const exists = () => true;
-		assert.strictEqual(await detectFromFolder("/mods/HOI4", exists), "hoi4");
+	test("content beats a conflicting root name", async () => {
+		const root = path.resolve("mods", "Stellaris");
+		assert.strictEqual(
+			await detectFromFolder(root, (p) => p === path.join(root, "common", "ai_strategy")),
+			"hoi4",
+		);
+	});
+
+	test.each([
+		"/games/Crusader Kings II",
+		"C:\\games\\Crusader Kings II\\",
+		"/mods/CK2_dynasty_mod",
+		"C:\\mods\\CK2_dynasty_mod",
+		"/games/Crusader Kings II/mod/opaque",
+		"C:\\games\\Crusader Kings II\\mod\\opaque",
+		"/games/Crusader Kings II/game",
+		"C:\\games\\Crusader Kings II\\game",
+	])("shared dynasties content preserves the recognized CK2 root or layout: %s", async (root) => {
+		assert.strictEqual(await detectFromFolder(root, (p) =>
+			p === path.join(root, "common", "dynasties")), "ck2");
+	});
+
+	test.each([
+		"/games/Crusader Kings II",
+		"/games/Crusader Kings II/mod/opaque",
+		"/home/ck2/projects/opaque",
+		"C:\\Users\\Crusader Kings II\\projects\\opaque",
+	])("HOI4 content keeps priority over CK2 names and unrelated ancestors: %s", async (root) => {
+		assert.strictEqual(await detectFromFolder(root, (p) =>
+			p === path.join(root, "common", "dynasties") ||
+			p === path.join(root, "common", "ai_strategy")), "hoi4");
+	});
+
+	test.each([
+		"/home/ck2/projects/opaque",
+		"C:\\Users\\Crusader Kings II\\projects\\opaque",
+		"/games/Crusader Kings III",
+		"/games/Crusader Kings III/mod/opaque",
+	])("shared dynasties default to CK3 without a recognized CK2 root or layout: %s", async (root) => {
+		assert.strictEqual(await detectFromFolder(root, (p) =>
+			p === path.join(root, "common", "dynasties")), "ck3");
+	});
+
+	test("mixed content markers follow game-table order before names", async () => {
+		assert.strictEqual(await detectFromFolder("/mods/HOI4", () => true), "stellaris");
+	});
+
+	test("unrelated ancestors do not provide folder hints on either path style", async () => {
+		for (const root of [
+			"/home/stellaris/mods/Millennium-Dawn",
+			"/home/europa/projects/Millennium-Dawn/",
+			"C:\\Users\\stellaris\\mods\\Millennium-Dawn",
+			"C:\\projects\\europa\\Millennium-Dawn\\",
+		]) {
+			await assertDetects(root, null);
+			assert.strictEqual(await detectFromFolder(root, (p) =>
+				p.replace(/\\/g, "/").endsWith("/common/ai_strategy")), "hoi4");
+		}
+	});
+
+	test("canonical mod and vanilla game-subdirectory layouts retain name hints", async () => {
+		for (const root of [
+			"/games/Crusader Kings III/game",
+			"C:\\games\\Crusader Kings III\\game\\",
+			"/Documents/Paradox Interactive/Hearts of Iron IV/mod/opaque",
+			"C:\\Documents\\Paradox Interactive\\Hearts of Iron IV\\mod\\opaque",
+		]) {
+			await assertDetects(root, root.toLowerCase().includes("crusader") ? "ck3" : "hoi4");
+		}
+		await assertDetects("/projects/stellaris/game", "stellaris");
+		await assertDetects("/projects/stellaris-project/mod/opaque", null);
+	});
+
+	test.each([
+		["/Documents/Paradox Interactive/Hearts of Iron IV/mod/Fall of Rome", "hoi4"],
+		["C:\\Documents\\Paradox Interactive\\Hearts of Iron IV\\mod\\Europa Reborn", "hoi4"],
+		["/Documents/Paradox Interactive/Crusader Kings III/mod/ck2_conversion", "ck3"],
+		["/Documents/Paradox Interactive/Stellaris/mod/Victoria 3 flags", "stellaris"],
+	])("the canonical layout game beats another game's keyword in the mod name: %s", async (root, expected) => {
+		await assertDetects(root, expected);
 	});
 
 	test("first matching folder-name hint wins (order matters)", async () => {
