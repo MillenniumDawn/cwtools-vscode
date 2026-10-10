@@ -477,6 +477,7 @@ dependencies = [
  "cwtools_parser",
  "cwtools_rules",
  "cwtools_string_table",
+ "rustc-hash",
 ]
 
 [[package]]

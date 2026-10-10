@@ -6,6 +6,7 @@ use cwtools_index::TypeIndex;
 use cwtools_parser::ast::{Arena, Child, Value};
 use cwtools_rules::rules_types::{NewField, PatternKind, RootRule, RuleSet, RuleType, TypeType};
 use cwtools_string_table::string_table::StringTable;
+use rustc_hash::FxHashMap;
 
 use crate::{SourceLocation, check_path_dir};
 
@@ -67,12 +68,12 @@ pub(crate) struct CollectedRef {
 /// referenced identifier is stored per site.
 #[derive(Debug, Default)]
 pub struct ReferenceIndex {
-    map: HashMap<Arc<str>, HashMap<Arc<str>, NameSites>>,
+    map: FxHashMap<Arc<str>, FxHashMap<Arc<str>, NameSites>>,
     /// file_uri → the `(type, lowercased name)` keys of `map` that file has use
     /// sites under, each once. Lets [`remove_file`](Self::remove_file) visit
     /// only the file's own keys instead of scanning the whole workspace,
     /// mirroring `TypeIndex::file_buckets`.
-    file_keys: HashMap<Arc<str>, Vec<BucketKey>>,
+    file_keys: FxHashMap<Arc<str>, Vec<BucketKey>>,
 }
 
 impl ReferenceIndex {
