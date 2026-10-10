@@ -162,14 +162,21 @@ const style: StylesheetJsonBlock[] = [
 ];
 let _cy: cytoscape.Core | undefined;
 let _tips: Instance[] = [];
+const _hoverTimers = new Set<NodeJS.Timeout>();
 let _themeObserver: MutationObserver | undefined;
 
 function disposeCytoscape() {
+	_hoverTimers.forEach((timer) => clearTimeout(timer));
+	_hoverTimers.clear();
 	_themeObserver?.disconnect();
 	_themeObserver = undefined;
 	_tips.forEach((t) => t.destroy());
 	_tips = [];
 	if (_cy) {
+		_cy.removeScratch("_hoverHood");
+		_cy.nodes().forEach((node) => {
+			node.removeScratch("_tooltip");
+		});
 		_cy.destroy();
 		_cy = undefined;
 		document.getElementById("cy")!.replaceChildren();
@@ -240,7 +247,15 @@ function populateGraph(
 }
 
 function setupTooltips(cy: cytoscape.Core) {
-	cy.nodes().forEach(function (node) {
+	interface TooltipHandlers {
+		mouseover(): void;
+		mouseout(): void;
+	}
+	const tooltipOf = (node: cytoscape.NodeSingular): TooltipHandlers => {
+		const cached = node.scratch("_tooltip") as TooltipHandlers | undefined;
+		if (cached) {
+			return cached;
+		}
 		const buildTip = () => {
 			const tip = document.createElement("div");
 			const strong = document.createElement("strong");
@@ -301,7 +316,14 @@ function setupTooltips(cy: cytoscape.Core) {
 			trigger: "manual",
 			delay: [null, 200],
 		};
-		let hoverTimeout: NodeJS.Timeout;
+		let hoverTimeout: NodeJS.Timeout | undefined;
+		const cancelExpansion = () => {
+			if (hoverTimeout !== undefined) {
+				clearTimeout(hoverTimeout);
+				_hoverTimers.delete(hoverTimeout);
+				hoverTimeout = undefined;
+			}
+		};
 		const complexOptions = {
 			getReferenceClientRect: () => getRef().getBoundingClientRect(),
 			content: () => {
@@ -310,7 +332,7 @@ function setupTooltips(cy: cytoscape.Core) {
 				return content;
 			},
 			onHidden: (instance: Instance) => {
-				clearTimeout(hoverTimeout);
+				cancelExpansion();
 				instance.setProps(simpleOptions);
 				isSimple = true;
 			},
@@ -331,17 +353,35 @@ function setupTooltips(cy: cytoscape.Core) {
 			element.setProps(complexOptions);
 			isSimple = false;
 		};
-		node.on("mouseover", () => {
-			const instance = getTip();
-			instance.show();
-			hoverTimeout = setTimeout(expandTooltip, 1000, instance);
-		});
-		node.on("mouseout", () => {
-			clearTimeout(hoverTimeout);
-			if (isSimple && tip) {
-				tip.hide();
-			}
-		});
+		const handlers: TooltipHandlers = {
+			mouseover() {
+				cancelExpansion();
+				const instance = getTip();
+				instance.show();
+				const timer = setTimeout(() => {
+					_hoverTimers.delete(timer);
+					hoverTimeout = undefined;
+					expandTooltip(instance);
+				}, 1000);
+				hoverTimeout = timer;
+				_hoverTimers.add(timer);
+			},
+			mouseout() {
+				cancelExpansion();
+				if (isSimple && tip) {
+					tip.hide();
+				}
+			},
+		};
+		node.scratch("_tooltip", handlers);
+		return handlers;
+	};
+	cy.on("mouseover", "node", (event) => {
+		tooltipOf(event.target as cytoscape.NodeSingular).mouseover();
+	});
+	cy.on("mouseout", "node", (event) => {
+		const node = event.target as cytoscape.NodeSingular;
+		(node.scratch("_tooltip") as TooltipHandlers | undefined)?.mouseout();
 	});
 }
 
@@ -410,30 +450,32 @@ function setupInteraction(
 		);
 	});
 
-	// The graph is static after setup, so the neighborhood partition per node
-	// can be computed once instead of on every hover.
-	const hoods = new Map<
-		string,
-		{ hood: CollectionReturnValue; rest: CollectionReturnValue }
-	>();
-	const hoodOf = (sel: cytoscape.NodeSingular) => {
-		let entry = hoods.get(sel.id());
-		if (!entry) {
-			const hood = sel.closedNeighborhood();
-			entry = { hood, rest: cy.elements().difference(hood) };
-			hoods.set(sel.id(), entry);
-		}
-		return entry;
-	};
-	cy.on("mouseover", "node", function (e) {
-		const { hood, rest } = hoodOf(e.target as cytoscape.NodeSingular);
-		rest.addClass("semitransp");
-		hood.addClass("highlight");
+	// Retain only the current closed neighborhood. Dimming uses classes on
+	// the graph; no complement collection survives an interaction.
+	let hovered: cytoscape.NodeSingular | undefined;
+	cy.on("mouseover", "node", function (event) {
+		const selected = event.target as cytoscape.NodeSingular;
+		const previous = cy.scratch("_hoverHood") as CollectionReturnValue | undefined;
+		const hood = selected.closedNeighborhood();
+		cy.batch(() => {
+			previous?.removeClass("highlight");
+			cy.elements().difference(hood).addClass("semitransp");
+			hood.removeClass("semitransp").addClass("highlight");
+		});
+		hovered = selected;
+		cy.scratch("_hoverHood", hood);
 	});
-	cy.on("mouseout", "node", function (e) {
-		const { hood, rest } = hoodOf(e.target as cytoscape.NodeSingular);
-		rest.removeClass("semitransp");
-		hood.removeClass("highlight");
+	cy.on("mouseout", "node", function (event) {
+		if (event.target !== hovered) {
+			return;
+		}
+		const hood = cy.scratch("_hoverHood") as CollectionReturnValue | undefined;
+		cy.batch(() => {
+			cy.elements().removeClass("semitransp");
+			hood?.removeClass("highlight");
+		});
+		cy.removeScratch("_hoverHood");
+		hovered = undefined;
 	});
 
 	cy.on("render", function () {
