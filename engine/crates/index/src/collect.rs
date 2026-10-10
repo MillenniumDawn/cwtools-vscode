@@ -683,6 +683,12 @@ mod tests {
     }
 
     #[cfg(unix)]
+    // macOS filesystems reject filenames with invalid UTF-8 bytes (EILSEQ),
+    // so skip before the test attempts to create its fixture files there.
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS rejects non-UTF-8 filenames with EILSEQ"
+    )]
     #[test]
     fn non_utf8_paths_keep_distinct_file_index_entries() {
         use std::os::unix::ffi::OsStringExt;

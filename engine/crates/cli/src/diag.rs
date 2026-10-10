@@ -555,6 +555,12 @@ mod tests {
     /// hashing their encoded absolute spelling makes baselines depend on the
     /// checkout location and on whether the root was passed relatively.
     #[cfg(unix)]
+    // macOS filesystems reject filenames with invalid UTF-8 bytes (EILSEQ),
+    // so skip before the test attempts to create its fixture files there.
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS rejects non-UTF-8 filenames with EILSEQ"
+    )]
     #[test]
     fn non_utf8_diagnostic_hash_is_stable_across_roots_and_root_spellings() {
         use std::os::unix::ffi::OsStringExt;
