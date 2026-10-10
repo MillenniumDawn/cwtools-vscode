@@ -2,46 +2,31 @@ const MAX_DISTANCE: usize = 2;
 
 const MIN_CANDIDATE_LEN: usize = 3;
 
-#[derive(Default)]
-struct DistanceScratch {
-    key_chars: Vec<char>,
-    candidate_chars: Vec<char>,
-    prev: Vec<usize>,
-    cur: Vec<usize>,
+fn lowercase_into(text: &str, chars: &mut Vec<char>) {
+    chars.clear();
+    chars.extend(text.chars().map(|c| c.to_ascii_lowercase()));
 }
 
-#[cfg(test)]
-fn text_len(text: &str) -> usize {
-    if text.is_ascii() {
-        text.len()
-    } else {
-        text.chars().count()
-    }
-}
-
-fn bounded_distance_slices<T>(
-    a: &[T],
-    b: &[T],
+/// `prev` and `cur` are scratch rows, reused across the candidates of one scan.
+fn bounded_distance(
+    a: &[char],
+    b: &[char],
     max: usize,
     prev: &mut Vec<usize>,
     cur: &mut Vec<usize>,
-    equal: impl Fn(&T, &T) -> bool,
 ) -> Option<usize> {
     let (n, m) = (a.len(), b.len());
     if n.abs_diff(m) > max {
         return None;
     }
-
-    prev.resize(m + 1, 0);
+    prev.clear();
+    prev.extend(0..=m);
     cur.resize(m + 1, 0);
-    for (j, value) in prev.iter_mut().enumerate() {
-        *value = j;
-    }
     for i in 1..=n {
         cur[0] = i;
         let mut row_min = cur[0];
         for j in 1..=m {
-            let cost = usize::from(!equal(&a[i - 1], &b[j - 1]));
+            let cost = usize::from(a[i - 1] != b[j - 1]);
             cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
             row_min = row_min.min(cur[j]);
         }
@@ -53,111 +38,27 @@ fn bounded_distance_slices<T>(
     Some(prev[m]).filter(|&d| d <= max)
 }
 
-#[cfg(test)]
-fn bounded_distance(a: &str, b: &str, max: usize) -> Option<usize> {
-    let (n, m) = (text_len(a), text_len(b));
-    // Reject a length mismatch before creating any character buffers or DP rows.
-    if n.abs_diff(m) > max {
-        return None;
-    }
-
-    let mut scratch = DistanceScratch::default();
-    if a.is_ascii() && b.is_ascii() {
-        return bounded_distance_slices(
-            a.as_bytes(),
-            b.as_bytes(),
-            max,
-            &mut scratch.prev,
-            &mut scratch.cur,
-            |x, y| x.eq_ignore_ascii_case(y),
-        );
-    }
-
-    scratch
-        .key_chars
-        .extend(a.chars().map(|c| c.to_ascii_lowercase()));
-    scratch
-        .candidate_chars
-        .extend(b.chars().map(|c| c.to_ascii_lowercase()));
-    bounded_distance_slices(
-        &scratch.key_chars,
-        &scratch.candidate_chars,
-        max,
-        &mut scratch.prev,
-        &mut scratch.cur,
-        |x, y| x == y,
-    )
-}
-
 pub(super) fn best_suggestion<'a, I>(key: &str, candidates: I) -> Option<&'a str>
 where
     I: IntoIterator<Item = &'a str>,
 {
-    best_suggestion_with_scratch(key, candidates, &mut DistanceScratch::default())
-}
-
-fn best_suggestion_with_scratch<'a, I>(
-    key: &str,
-    candidates: I,
-    scratch: &mut DistanceScratch,
-) -> Option<&'a str>
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let key_ascii = key.is_ascii();
-    let key_len = if key_ascii {
-        key.len()
-    } else {
-        key.chars().count()
-    };
-    let mut key_chars_ready = false;
+    let key_len = key.chars().count();
+    let (mut key_chars, mut cand_chars) = (Vec::new(), Vec::new());
+    let (mut prev, mut cur) = (Vec::new(), Vec::new());
     let mut best: Option<(&'a str, usize)> = None;
     let mut tied = false;
-
     for cand in candidates {
-        let cand_ascii = cand.is_ascii();
-        let cand_len = if cand_ascii {
-            cand.len()
-        } else {
-            cand.chars().count()
-        };
+        let cand_len = cand.chars().count();
         if cand_len < MIN_CANDIDATE_LEN || key_len.abs_diff(cand_len) > MAX_DISTANCE {
             continue;
         }
-
-        let d = if key_ascii && cand_ascii {
-            bounded_distance_slices(
-                key.as_bytes(),
-                cand.as_bytes(),
-                MAX_DISTANCE,
-                &mut scratch.prev,
-                &mut scratch.cur,
-                |x, y| x.eq_ignore_ascii_case(y),
-            )
-        } else {
-            // The unknown key is the same for every candidate. Materialize it at most once,
-            // and only after a candidate survives the allocation-free length filter.
-            if !key_chars_ready {
-                scratch.key_chars.clear();
-                scratch
-                    .key_chars
-                    .extend(key.chars().map(|c| c.to_ascii_lowercase()));
-                key_chars_ready = true;
-            }
-            scratch.candidate_chars.clear();
-            scratch
-                .candidate_chars
-                .extend(cand.chars().map(|c| c.to_ascii_lowercase()));
-            bounded_distance_slices(
-                &scratch.key_chars,
-                &scratch.candidate_chars,
-                MAX_DISTANCE,
-                &mut scratch.prev,
-                &mut scratch.cur,
-                |x, y| x == y,
-            )
-        };
-        let Some(d) = d else {
+        // Lowercase the key once, and only when a candidate passes the length filter.
+        if key_chars.is_empty() {
+            lowercase_into(key, &mut key_chars);
+        }
+        lowercase_into(cand, &mut cand_chars);
+        let Some(d) = bounded_distance(&key_chars, &cand_chars, MAX_DISTANCE, &mut prev, &mut cur)
+        else {
             continue;
         };
         match best {
@@ -241,6 +142,13 @@ mod tests {
         ALLOCATION_COUNT.with(Cell::get)
     }
 
+    fn bounded_distance(a: &str, b: &str, max: usize) -> Option<usize> {
+        let (mut a_chars, mut b_chars) = (Vec::new(), Vec::new());
+        lowercase_into(a, &mut a_chars);
+        lowercase_into(b, &mut b_chars);
+        super::bounded_distance(&a_chars, &b_chars, max, &mut Vec::new(), &mut Vec::new())
+    }
+
     #[test]
     fn distance_basic_edits() {
         assert_eq!(bounded_distance("name", "name", 2), Some(0));
@@ -305,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn long_ascii_key_with_short_candidates_allocates_nothing_in_the_scan() {
+    fn long_key_with_short_candidates_allocates_nothing() {
         let key = "x".repeat(2 * 1024 * 1024);
         let candidates = ["name", "count", "required_field"];
         let result = Cell::new(Some("sentinel"));
@@ -314,90 +222,30 @@ mod tests {
             result.set(best_suggestion(&key, candidates));
         });
         assert_eq!(result.get(), None);
-        println!("rejected_2MiB_ascii_key_allocations={allocations}");
-        assert_eq!(
-            allocations, 0,
-            "length rejects should not allocate scan scratch"
-        );
+        assert_eq!(allocations, 0, "length rejects should not allocate");
     }
 
     #[test]
     fn allocation_count_is_flat_from_one_to_twenty_thousand_candidates() {
-        let small = ["counx"];
-        let large = vec!["counx"; 20_000];
-        let small_result = Cell::new(None);
-        let large_result = Cell::new(None);
+        for (key, cand) in [("count", "counx"), ("cönt", "cöunt")] {
+            let large = vec![cand; 20_000];
+            let small_result = Cell::new(None);
+            let large_result = Cell::new(None);
 
-        let small_allocations = count_allocations(|| {
-            small_result.set(best_suggestion("count", small));
-        });
-        let large_allocations = count_allocations(|| {
-            large_result.set(best_suggestion("count", large.iter().copied()));
-        });
+            let small_allocations = count_allocations(|| {
+                small_result.set(best_suggestion(key, [cand]));
+            });
+            let large_allocations = count_allocations(|| {
+                large_result.set(best_suggestion(key, large.iter().copied()));
+            });
 
-        assert_eq!(small_result.get(), Some("counx"));
-        assert_eq!(large_result.get(), Some("counx"));
-        println!(
-            "suggestion_scan_allocations candidates=1:{small_allocations} candidates=20000:{large_allocations}"
-        );
-        assert!(
-            small_allocations > 0,
-            "the counter must observe DP row allocation"
-        );
-        assert_eq!(large_allocations, small_allocations);
-    }
-
-    #[test]
-    fn many_ascii_candidates_reuse_the_same_dp_rows() {
-        let candidates = vec!["counx"; 20_000];
-        let mut scratch = DistanceScratch::default();
-        assert_eq!(
-            best_suggestion_with_scratch("count", candidates.iter().copied(), &mut scratch),
-            Some("counx")
-        );
-        let first_capacities = (scratch.prev.capacity(), scratch.cur.capacity());
-        assert!(first_capacities.0 >= 6 && first_capacities.1 >= 6);
-
-        let many_unexpected_keys = ["coubt", "counx", "coutn", "contx"];
-        for key in many_unexpected_keys {
-            let _ = best_suggestion_with_scratch(key, candidates.iter().copied(), &mut scratch);
-            assert_eq!(
-                (scratch.prev.capacity(), scratch.cur.capacity()),
-                first_capacities
+            assert_eq!(small_result.get(), Some(cand));
+            assert_eq!(large_result.get(), Some(cand));
+            assert!(
+                small_allocations > 0,
+                "the counter must observe the scratch buffers"
             );
+            assert_eq!(large_allocations, small_allocations, "{key}");
         }
-    }
-
-    #[test]
-    fn unicode_candidates_reuse_character_buffers_and_dp_rows() {
-        let candidates = vec!["cöunt"; 20_000];
-        let mut scratch = DistanceScratch::default();
-
-        assert_eq!(
-            best_suggestion_with_scratch("cönt", candidates.iter().copied(), &mut scratch),
-            Some("cöunt")
-        );
-        let capacities = (
-            scratch.key_chars.capacity(),
-            scratch.candidate_chars.capacity(),
-            scratch.prev.capacity(),
-            scratch.cur.capacity(),
-        );
-        assert!(capacities.0 >= 4 && capacities.1 >= 5);
-        assert!(capacities.2 >= 6 && capacities.3 >= 6);
-
-        assert_eq!(
-            best_suggestion_with_scratch("cönt", candidates.iter().copied(), &mut scratch),
-            Some("cöunt")
-        );
-        assert_eq!(
-            (
-                scratch.key_chars.capacity(),
-                scratch.candidate_chars.capacity(),
-                scratch.prev.capacity(),
-                scratch.cur.capacity(),
-            ),
-            capacities
-        );
     }
 }
