@@ -6,6 +6,7 @@
 * Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)
 * Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
+* Key the reference index by type and lowercased name, with a reverse map from each file to its keys, so clearing a file and looking up an instance no longer scan every use site of the type. (#866)
 * Reuse one set of scratch buffers per typo-suggestion scan instead of allocating for every candidate, skip candidates of the wrong length before allocating anything, and lowercase the unknown key once. (#559)
 * Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions, with deterministic wire coverage using the shared test hold helper. (#843)
 * Validate rename replacements against constant, the shared localisation-key rule and script type syntax, rejecting constant, macro-parameter and scripted-localisation forms as type names, preserving valid dotted and quoted names and complete quoted target spans. (#845)

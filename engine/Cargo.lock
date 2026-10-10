@@ -472,10 +472,12 @@ dependencies = [
 name = "cwtools_info"
 version = "3.4.0"
 dependencies = [
+ "criterion",
  "cwtools_index",
  "cwtools_parser",
  "cwtools_rules",
  "cwtools_string_table",
+ "rustc-hash",
 ]
 
 [[package]]
