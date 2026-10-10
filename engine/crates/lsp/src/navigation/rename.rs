@@ -14,6 +14,97 @@ use super::{
 };
 use crate::navigation::helpers::{REQUEST_FAILED, TokenCase, loc_ref_key_cols_in_line, loc_root};
 
+struct RenameRequestSnapshot {
+    generation: u64,
+    open_documents: HashMap<String, (i32, Option<u64>)>,
+}
+
+enum RenameNameKind {
+    Constant,
+    Localisation,
+    Type,
+}
+
+fn validate_replacement_name(name: &str, kind: RenameNameKind) -> Result<()> {
+    let (valid, expected) = match kind {
+        RenameNameKind::Constant => (
+            name.strip_prefix('@').is_some_and(|name| {
+                !name.is_empty() && name.chars().all(super::helpers::is_ident_char)
+            }),
+            "an @constant with a non-empty identifier after @",
+        ),
+        RenameNameKind::Localisation => (
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(cwtools_localization::is_valid_loc_key_char),
+            "a localisation key containing letters, digits, underscores, dots or hyphens",
+        ),
+        RenameNameKind::Type => (
+            valid_type_replacement(name),
+            "one script identifier or a complete quoted name",
+        ),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(tower_lsp::jsonrpc::Error {
+            code: tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED),
+            message: format!("Rename cancelled: replacement name must be {expected}").into(),
+            data: None,
+        })
+    }
+}
+
+fn valid_type_replacement(name: &str) -> bool {
+    use cwtools_parser::ast::{Child, Operator, Value};
+    if name.is_empty()
+        || name == "\"\""
+        || cwtools_parser::unquote(name).starts_with(['@', '['])
+        || name.contains('$')
+        || name.chars().any(char::is_control)
+    {
+        return false;
+    }
+    // A type name must fit both a definition key and a reference value. Let
+    // the script parser check both grammars, including complete quoted forms.
+    let table = cwtools_string_table::string_table::StringTable::new();
+    let parsed = cwtools_parser::parser::parse_string(&format!("{name} = {name}"), &table);
+    let [Child::Leaf(idx)] = parsed.root_children.as_slice() else {
+        return false;
+    };
+    let leaf = &parsed.arena.leaves[*idx as usize];
+    let len = name.chars().count();
+    parsed.errors.is_empty()
+        && leaf.op == Operator::Equals
+        && !matches!(leaf.value, Value::Clause(_))
+        && leaf.pos.start.col == 0
+        && usize::from(leaf.value_pos.start.col) == len + 3
+        && usize::from(leaf.value_pos.end.col) == len * 2 + 3
+}
+
+// Definitions point at the opening quote, whereas resolved references point
+// at the name inside it. Replace the entire token in either case.
+fn type_rename_range(lines: &DocLines, line: u32, col: u32, name: &str) -> Range {
+    let chars: Vec<char> = lines.line(line).chars().collect();
+    let len = name.chars().count() as u32;
+    let body_col = if chars.get(col as usize) == Some(&'"') {
+        col + 1
+    } else {
+        col
+    };
+    if body_col > 0
+        && chars.get(body_col as usize - 1) == Some(&'"')
+        && chars.get((body_col + len) as usize) == Some(&'"')
+    {
+        return Range::new(
+            lines.position(line, body_col - 1),
+            lines.position(line, body_col + len + 1),
+        );
+    }
+    lines.token_range(line, col, name)
+}
+
 impl Backend {
     pub(crate) async fn prepare_rename_impl(
         &self,
@@ -68,6 +159,7 @@ impl Backend {
         lines: &DocLines,
         name: &str,
         new_name: &str,
+        snapshot: &RenameRequestSnapshot,
     ) -> Result<Option<WorkspaceEdit>> {
         let edits: Vec<TextEdit> = lines
             .iter()
@@ -87,7 +179,7 @@ impl Backend {
         if let Some(refused) = self.first_refused_edit_target(&by_uri, uri) {
             return Err(refused);
         }
-        Ok(Some(self.build_workspace_edit(by_uri)))
+        Ok(Some(self.build_workspace_edit(by_uri, snapshot)?))
     }
 
     fn at_var_rename_target(
@@ -106,6 +198,7 @@ impl Backend {
         uri: &str,
         key_lower: &str,
         new_name: &str,
+        snapshot: &RenameRequestSnapshot,
     ) -> Result<Option<WorkspaceEdit>> {
         let root = loc_root(key_lower);
         let trigger_suffix = key_lower.strip_prefix(&root).unwrap_or("");
@@ -166,7 +259,7 @@ impl Backend {
         if let Some(err) = self.first_refused_edit_target(&by_uri, uri) {
             return Err(err);
         }
-        Ok(Some(self.build_workspace_edit(by_uri)))
+        Ok(Some(self.build_workspace_edit(by_uri, snapshot)?))
     }
 
     /// The edits inside loc files: each key's definition lines, and every
@@ -287,13 +380,50 @@ impl Backend {
         })
     }
 
-    fn build_workspace_edit(&self, by_uri: Vec<(String, Vec<TextEdit>)>) -> WorkspaceEdit {
+    fn capture_rename_request(&self) -> RenameRequestSnapshot {
+        let docs = self.state.documents.lock();
+        RenameRequestSnapshot {
+            generation: self
+                .state
+                .edit_generation
+                .load(std::sync::atomic::Ordering::Relaxed),
+            open_documents: docs
+                .iter()
+                .map(|(uri, doc)| (uri.clone(), (doc.version, docs.content_hash(uri))))
+                .collect(),
+        }
+    }
+
+    fn build_workspace_edit(
+        &self,
+        by_uri: Vec<(String, Vec<TextEdit>)>,
+        snapshot: &RenameRequestSnapshot,
+    ) -> Result<WorkspaceEdit> {
+        // Hold the store through construction. Versions alone miss a close /
+        // reopen with the same version, and unversioned clients need a refusal.
+        let docs = self.state.documents.lock();
+        let generation = self
+            .state
+            .edit_generation
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let target_changed = by_uri.iter().any(|(uri, _)| {
+            let current = docs
+                .get(uri)
+                .map(|doc| (doc.version, docs.content_hash(uri)));
+            snapshot.open_documents.get(uri).copied() != current
+        });
+        if generation != snapshot.generation || target_changed {
+            return Err(tower_lsp::jsonrpc::Error {
+                code: tower_lsp::jsonrpc::ErrorCode::ContentModified,
+                message: "Rename cancelled: documents changed while rename edits were being collected; try again".into(),
+                data: None,
+            });
+        }
         if self
             .state
             .workspace_edit_document_changes
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            let docs = self.state.documents.lock();
             let edits = by_uri
                 .into_iter()
                 .filter_map(|(uri, edits)| {
@@ -301,17 +431,20 @@ impl Backend {
                     Some(TextDocumentEdit {
                         text_document: OptionalVersionedTextDocumentIdentifier {
                             uri: url,
-                            version: docs.get(&uri).map(|d| d.version),
+                            version: snapshot
+                                .open_documents
+                                .get(&uri)
+                                .map(|(version, _)| *version),
                         },
                         edits: edits.into_iter().map(OneOf::Left).collect(),
                     })
                 })
                 .collect();
-            WorkspaceEdit {
+            Ok(WorkspaceEdit {
                 changes: None,
                 document_changes: Some(DocumentChanges::Edits(edits)),
                 change_annotations: None,
-            }
+            })
         } else {
             let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
             for (uri, edits) in by_uri {
@@ -319,15 +452,16 @@ impl Backend {
                     changes.entry(url).or_default().extend(edits);
                 }
             }
-            WorkspaceEdit {
+            Ok(WorkspaceEdit {
                 changes: Some(changes),
                 document_changes: None,
                 change_annotations: None,
-            }
+            })
         }
     }
 
     pub(crate) async fn rename_impl(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let snapshot = self.capture_rename_request();
         let uri = params.text_document_position.text_document.uri.to_string();
         let pos = params.text_document_position.position;
         let new_name = params.new_name.clone();
@@ -342,11 +476,16 @@ impl Backend {
         if let (Some(text), Some(lines)) = (source_text.as_deref(), source_lines.as_ref())
             && let Some((name, _)) = Self::at_var_rename_target(text, lines, pos)
         {
-            return self.rename_at_var(&uri, lines, &name, &new_name);
+            validate_replacement_name(&new_name, RenameNameKind::Constant)?;
+            return self.rename_at_var(&uri, lines, &name, &new_name, &snapshot);
         }
 
         if let Some(key_lower) = self.loc_key_at_cursor(&uri, pos, &logical_path).await {
-            match self.rename_loc(&uri, &key_lower, &new_name).await {
+            validate_replacement_name(&new_name, RenameNameKind::Localisation)?;
+            match self
+                .rename_loc(&uri, &key_lower, &new_name, &snapshot)
+                .await
+            {
                 Ok(Some(edit)) => return Ok(Some(edit)),
                 Ok(None) => {}
                 Err(e) => return Err(e),
@@ -359,6 +498,7 @@ impl Backend {
             Some(r) => r,
             None => return Ok(None),
         };
+        validate_replacement_name(&new_name, RenameNameKind::Type)?;
 
         let mut edits: Vec<(String, u32, u32)> = Vec::new();
 
@@ -408,11 +548,9 @@ impl Backend {
                 continue;
             }
             let edit = TextEdit {
-                range: self.source_range_with_lines(
-                    indexed.get(file_uri.as_str()),
-                    line0,
-                    col,
-                    &instance_name,
+                range: indexed.get(file_uri.as_str()).map_or_else(
+                    || self.source_range_with_lines(None, line0, col, &instance_name),
+                    |lines| type_rename_range(lines, line0, col, &instance_name),
                 ),
                 new_text: new_name.clone(),
             };
@@ -423,6 +561,6 @@ impl Backend {
         if let Some(refused) = self.first_refused_edit_target(&by_uri, &uri) {
             return Err(refused);
         }
-        Ok(Some(self.build_workspace_edit(by_uri)))
+        Ok(Some(self.build_workspace_edit(by_uri, &snapshot)?))
     }
 }

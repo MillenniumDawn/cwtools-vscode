@@ -65,13 +65,26 @@ not count. Standalone files, metadata-only mods, and vanilla folders do not star
 the server. If you add a descriptor after activation, reload the VS Code window.
 
 1. Install this extension
-2. Open your mod folder directly, which should be within a folder containing the game name:
+2. Open your mod folder directly. The usual game mod layout also supplies a game-name hint:
 
 * `C:\Users\name\Documents\Paradox Interactive\Stellaris\mod\your_mod`
 
 1. Set the `cwtools.cache.<game>` setting (e.g. `cwtools.cache.hoi4`) to the game's install folder
 2. Edit files and watch syntax errors show up when you make mistakes
 3. Wait up to a minute for the extension to scan your mod and find errors
+
+Game detection checks the fixed content markers first (for
+example, `common/ai_strategy` selects HOI4), then names. In the
+`<game>/mod/<mod>` and `<game>/game` layouts the recognized game folder names
+the game, ahead of any keyword in the opened folder's own name. Otherwise the
+opened folder's name is the hint; unrelated ancestor names are ignored. Conflicting
+content markers use this order: Stellaris, HOI4, EU4, CK3. Content takes
+precedence over conflicting names, and overlapping names prefer the newer
+game (CK3 before CK2, EU5 before EU4). The shared `common/dynasties` marker
+selects CK2 when that name hint is CK2; otherwise it
+defaults to CK3. Earlier content markers, including HOI4, still take precedence.
+If neither content nor names identify a game, detection checks supported game
+executables before using generic Paradox mode. Detection does not recursively scan content for hints.
 
 ### Submods
 
@@ -91,6 +104,19 @@ reindex, not live. Reload the window after changing the setting.
 
 The server scans only the first workspace folder, so adding a parent mod as a
 second folder of a multi-root workspace does not make its definitions visible.
+
+Plaintext game scripts are automatically promoted to the Paradox language only
+inside the selected descriptor-bearing mod, its configured `cwtools.parentMods`,
+and the base-game install used by the server, either configured through
+`cwtools.cache.<game>` or auto-discovered from Steam. The server reports its
+resolved install after the scan, including its canonical path when Steam uses
+symlinks, then already-open vanilla scripts are rechecked.
+Parent mods overlapping the selected mod are excluded, matching the server's
+startup rules. Directory hints are checked relative to these roots; unrelated
+workspace folders, external files, and scratch buffers keep their language. This
+applies to both documents already open at activation and documents opened later.
+Changes to these root settings require reloading the window, as they do for
+server indexing.
 
 If you want to browse vanilla files, you can use the "CWTOOLS LOADED FILES" section in the Explorer tab.
 

@@ -39,7 +39,7 @@ pub fn scope_matches_required(
 }
 
 pub(crate) fn validate_scope_target(
-    ctx: &ScopeContext,
+    ctx: &mut ScopeContext,
     value: &str,
     expected: &[String],
     leaf: &cwtools_parser::ast::Leaf,
@@ -58,8 +58,12 @@ pub(crate) fn validate_scope_target(
     }) {
         return;
     }
-    let mut probe = ctx.clone();
-    let (code, message) = match probe.change_scope(value) {
+    // Probe the live context and put it back, rather than cloning its stacks.
+    let saved = ctx.save();
+    let result = ctx.change_scope(value);
+    ctx.restore(saved);
+    let reg = ctx.registry.as_ref();
+    let (code, message) = match result {
         cwtools_game::scope_engine::ScopeResult::WrongScope {
             command,
             current,
