@@ -180,7 +180,66 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
     use super::*;
+
+    struct CountingAllocator;
+
+    #[global_allocator]
+    static TEST_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    thread_local! {
+        static COUNT_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
+        static ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn record_allocation() {
+        if COUNT_ALLOCATIONS.try_with(Cell::get).unwrap_or(false) {
+            let _ = ALLOCATION_COUNT.try_with(|count| count.set(count.get() + 1));
+        }
+    }
+
+    // The thread-local gate confines allocation counts to the test's calling thread, so
+    // concurrent tests and test-harness bookkeeping do not affect the measurement.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record_allocation();
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            record_allocation();
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            record_allocation();
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    struct StopCounting;
+
+    impl Drop for StopCounting {
+        fn drop(&mut self) {
+            COUNT_ALLOCATIONS.with(|enabled| enabled.set(false));
+        }
+    }
+
+    fn count_allocations(f: impl FnOnce()) -> usize {
+        ALLOCATION_COUNT.with(|count| count.set(0));
+        COUNT_ALLOCATIONS.with(|enabled| enabled.set(true));
+        let stop = StopCounting;
+        f();
+        drop(stop);
+        ALLOCATION_COUNT.with(Cell::get)
+    }
 
     #[test]
     fn distance_basic_edits() {
@@ -246,19 +305,46 @@ mod tests {
     }
 
     #[test]
-    fn long_ascii_key_with_short_candidates_allocates_no_distance_buffers() {
+    fn long_ascii_key_with_short_candidates_allocates_nothing_in_the_scan() {
         let key = "x".repeat(2 * 1024 * 1024);
         let candidates = ["name", "count", "required_field"];
-        let mut scratch = DistanceScratch::default();
+        let result = Cell::new(Some("sentinel"));
 
+        let allocations = count_allocations(|| {
+            result.set(best_suggestion(&key, candidates));
+        });
+        assert_eq!(result.get(), None);
+        println!("rejected_2MiB_ascii_key_allocations={allocations}");
         assert_eq!(
-            best_suggestion_with_scratch(&key, candidates, &mut scratch),
-            None
+            allocations, 0,
+            "length rejects should not allocate scan scratch"
         );
-        assert!(scratch.key_chars.is_empty());
-        assert!(scratch.candidate_chars.is_empty());
-        assert!(scratch.prev.is_empty());
-        assert!(scratch.cur.is_empty());
+    }
+
+    #[test]
+    fn allocation_count_is_flat_from_one_to_twenty_thousand_candidates() {
+        let small = ["counx"];
+        let large = vec!["counx"; 20_000];
+        let small_result = Cell::new(None);
+        let large_result = Cell::new(None);
+
+        let small_allocations = count_allocations(|| {
+            small_result.set(best_suggestion("count", small));
+        });
+        let large_allocations = count_allocations(|| {
+            large_result.set(best_suggestion("count", large.iter().copied()));
+        });
+
+        assert_eq!(small_result.get(), Some("counx"));
+        assert_eq!(large_result.get(), Some("counx"));
+        println!(
+            "suggestion_scan_allocations candidates=1:{small_allocations} candidates=20000:{large_allocations}"
+        );
+        assert!(
+            small_allocations > 0,
+            "the counter must observe DP row allocation"
+        );
+        assert_eq!(large_allocations, small_allocations);
     }
 
     #[test]
