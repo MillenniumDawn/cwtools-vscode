@@ -316,6 +316,11 @@ impl Backend {
                 }
             }
         }
+        crate::scan::hold_for_tests(
+            "CWTOOLS_NAV_SNAPSHOT_HOLD_FILE",
+            Some("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE"),
+        )
+        .await;
         if open.is_empty() && closed.is_empty() {
             return Vec::new();
         }
@@ -736,6 +741,11 @@ impl Backend {
                 }
             }
         }
+        crate::scan::hold_for_tests(
+            "CWTOOLS_NAV_SNAPSHOT_HOLD_FILE",
+            Some("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE"),
+        )
+        .await;
         if closed.is_empty() {
             return Ok(snapshots);
         }
