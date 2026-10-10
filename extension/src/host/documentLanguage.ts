@@ -28,7 +28,7 @@ export async function registerDocumentLanguage(
 	context: ExtensionContext,
 	client: LanguageClient,
 	languageId: string,
-	roots: readonly string[] | (() => readonly string[]),
+	readContentRoots: () => readonly string[],
 ): Promise<EditorTracker> {
 	const didFocusFile = "didFocusFile";
 	let latestType: string = "";
@@ -41,8 +41,7 @@ export async function registerDocumentLanguage(
 	let graphFileContext: boolean | undefined;
 	const getFileTypesTimeoutMs = 5000;
 	const getFileTypesBackoffMs = 2000;
-	const readContentRoots = () => typeof roots === "function" ? roots() : roots;
-	// A roots callback builds a new array per call, so compare by value.
+	// The roots callback builds a new array per call, so compare by value.
 	const sameRoots = (a: readonly string[], b: readonly string[]) =>
 		a.length === b.length && a.every((root, i) => root === b[i]);
 	let contentRoots = readContentRoots();

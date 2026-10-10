@@ -122,7 +122,7 @@ suite("documentLanguage", () => {
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification, sendRequest } as unknown as LanguageClient,
 			"paradox",
-			[contentRoot],
+			() => [contentRoot],
 		);
 
 		await assert.doesNotReject(() => tracker.classifyActiveEditor());
@@ -145,7 +145,7 @@ suite("documentLanguage", () => {
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification, sendRequest } as unknown as LanguageClient,
 			"paradox",
-			[contentRoot],
+			() => [contentRoot],
 		);
 
 		await tracker.classifyActiveEditor();
@@ -170,7 +170,7 @@ suite("documentLanguage", () => {
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification, sendRequest } as unknown as LanguageClient,
 			"paradox",
-			[contentRoot],
+			() => [contentRoot],
 		);
 
 		await tracker.classifyActiveEditor();
@@ -196,7 +196,7 @@ suite("documentLanguage", () => {
 				{ subscriptions: [] } as unknown as ExtensionContext,
 				{ sendNotification, sendRequest } as unknown as LanguageClient,
 				"paradox",
-				[contentRoot],
+				() => [contentRoot],
 			);
 			await tracker.classifyActiveEditor();
 			assert.strictEqual(tracker.getLatestType(), "idea");
@@ -230,7 +230,7 @@ suite("documentLanguage", () => {
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification, sendRequest } as unknown as LanguageClient,
 			"paradox",
-			[contentRoot],
+			() => [contentRoot],
 		);
 
 		await tracker.classifyActiveEditor();
@@ -267,7 +267,7 @@ suite("documentLanguage", () => {
 				{ subscriptions: [] } as unknown as ExtensionContext,
 				{ sendNotification, sendRequest } as unknown as LanguageClient,
 				"paradox",
-				[contentRoot],
+				() => [contentRoot],
 			);
 
 			const classification = tracker.classifyActiveEditor();
@@ -297,7 +297,7 @@ suite("documentLanguage", () => {
 				{ subscriptions: [] } as unknown as ExtensionContext,
 				{ sendNotification, sendRequest: vi.fn() } as unknown as LanguageClient,
 				"paradox",
-				[contentRoot],
+				() => [contentRoot],
 			);
 			const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
 				| ((editor: typeof activeEditor) => void)
@@ -342,7 +342,7 @@ suite("documentLanguage", () => {
 		const register = () => registerDocumentLanguage(
 			{ subscriptions: [] } as unknown as ExtensionContext,
 			{ sendNotification: vi.fn(), sendRequest: vi.fn() } as unknown as LanguageClient,
-			"paradox", roots,
+			"paradox", () => roots,
 		);
 
 		test("promotes auto-discovered vanilla with the cache setting unset and keeps unrelated roots plaintext", async () => {
@@ -371,7 +371,7 @@ suite("documentLanguage", () => {
 			const context = { subscriptions: [] } as unknown as ExtensionContext;
 			const tracker = await registerDocumentLanguage(
 				context, client,
-				"paradox", gameContentRoots(contentRoot),
+				"paradox", () => gameContentRoots(contentRoot),
 			);
 			registerServerNotifications(context, client, tracker.updateVanillaRoots);
 			const updateFileList = handlers.get("updateFileList");
@@ -452,7 +452,7 @@ suite("documentLanguage", () => {
 			await registerDocumentLanguage(
 				{ subscriptions: [] } as unknown as ExtensionContext,
 				{ sendNotification: vi.fn(), sendRequest: vi.fn() } as unknown as LanguageClient,
-				"paradox", [root],
+				"paradox", () => [root],
 			);
 			assert.deepStrictEqual(vi.mocked(languages.setTextDocumentLanguage).mock.calls, []);
 		});
@@ -506,7 +506,7 @@ suite("documentLanguage", () => {
 				{ subscriptions } as unknown as ExtensionContext,
 				{ sendNotification, sendRequest } as unknown as LanguageClient,
 				"paradox",
-				[contentRoot],
+				() => [contentRoot],
 			);
 			const listener = onDidChangeActiveTextEditor.mock.calls[0]?.[0] as
 				| ((editor: Editor | undefined) => void)
