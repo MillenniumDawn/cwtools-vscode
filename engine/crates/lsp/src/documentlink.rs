@@ -8,7 +8,7 @@ use cwtools_parser::{
 use cwtools_rules::rules_types::{NewField, Options, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::Prepared;
-use cwtools_validation::position::value_rules_for_key;
+use cwtools_validation::position::RuleBodyMatcher;
 
 use crate::Backend;
 use crate::lines::DocLines;
@@ -144,6 +144,7 @@ impl LinkWalk<'_> {
         block_rules: Option<&[(RuleType, Options)]>,
         out: &mut Vec<LinkCandidate>,
     ) {
+        let matcher = block_rules.map(|rules| RuleBodyMatcher::new(rules, self.ruleset));
         for child in children {
             match child {
                 Child::Comment(_) => {}
@@ -158,9 +159,9 @@ impl LinkWalk<'_> {
                     let leaf = &self.ast.arena.leaves[*idx as usize];
                     let raw_key = self.table.get_string(leaf.key.normal).unwrap_or_default();
                     let key = raw_key.trim_matches('"');
-                    let matched = match block_rules {
-                        Some(rules) => {
-                            value_rules_for_key(self.ruleset, self.prepared.type_index, rules, key)
+                    let matched = match matcher.as_ref() {
+                        Some(matcher) => {
+                            matcher.value_rules_for_key(self.ruleset, self.prepared.type_index, key)
                         }
                         None => Vec::new(),
                     };

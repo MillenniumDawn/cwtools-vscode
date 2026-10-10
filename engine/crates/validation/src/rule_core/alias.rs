@@ -85,21 +85,27 @@ pub(crate) fn alias_overloads_with_confidence<'a>(
         }
     }
     if let Some(cat) = ruleset.alias_categories().get(category) {
-        for pat in &cat.parsed_patterns {
-            match classify_pattern_match(pat, key, ruleset, type_index) {
-                PatternMatch::Confident => push_overload(
-                    &mut overloads,
-                    &ruleset.aliases[pat.alias_idx].1,
-                    true,
-                    coalesce_equivalent,
-                ),
-                PatternMatch::PermissiveOnly => push_overload(
-                    &mut overloads,
-                    &ruleset.aliases[pat.alias_idx].1,
-                    false,
-                    coalesce_equivalent,
-                ),
-                PatternMatch::No => {}
+        if !cat.parsed_patterns.is_empty() {
+            for pat in ruleset
+                .alias_patterns_for_key(category, key)
+                .into_iter()
+                .flatten()
+            {
+                match classify_pattern_match(pat, key, ruleset, type_index) {
+                    PatternMatch::Confident => push_overload(
+                        &mut overloads,
+                        &ruleset.aliases[pat.alias_idx].1,
+                        true,
+                        coalesce_equivalent,
+                    ),
+                    PatternMatch::PermissiveOnly => push_overload(
+                        &mut overloads,
+                        &ruleset.aliases[pat.alias_idx].1,
+                        false,
+                        coalesce_equivalent,
+                    ),
+                    PatternMatch::No => {}
+                }
             }
         }
         if let Some(sf_idx) = cat.scope_field_idx

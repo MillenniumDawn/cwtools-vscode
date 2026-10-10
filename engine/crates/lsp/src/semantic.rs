@@ -10,7 +10,7 @@ use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
 use cwtools_rules::rules_types::{NewField, Options, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::Prepared;
-use cwtools_validation::position::{rules_at_pos, value_rules_for_key};
+use cwtools_validation::position::{RuleBodyMatcher, rules_at_pos};
 
 use crate::Backend;
 
@@ -245,6 +245,9 @@ fn collect(
     block_rules: Option<&[(RuleType, Options)]>,
     out: &mut Vec<AbsToken>,
 ) {
+    let matcher = block_rules
+        .zip(cx.rules.as_ref())
+        .map(|(rules, ctx)| RuleBodyMatcher::new(rules, ctx.ruleset));
     for child in children {
         if !cx.worth_entering(child) {
             continue;
@@ -263,7 +266,7 @@ fn collect(
                     out.push(t);
                 }
             }
-            Child::Leaf(idx) => collect_leaf(*idx, cx, block_rules, out),
+            Child::Leaf(idx) => collect_leaf(*idx, cx, block_rules, matcher.as_ref(), out),
             Child::LeafValue(idx) => {
                 let lv = &cx.arena.leaf_values[*idx as usize];
                 let line0 = lv.pos.start.line.saturating_sub(1);
@@ -289,6 +292,7 @@ fn collect_leaf(
     idx: u32,
     cx: &Ctx<'_>,
     block_rules: Option<&[(RuleType, Options)]>,
+    matcher: Option<&RuleBodyMatcher<'_>>,
     out: &mut Vec<AbsToken>,
 ) {
     let leaf = &cx.arena.leaves[idx as usize];
@@ -299,12 +303,14 @@ fn collect_leaf(
     let key_len = raw_key.chars().count();
     let key = raw_key.trim_matches('"');
 
-    let matched = match (cx.rules.as_ref(), block_rules) {
-        (Some(r), Some(rules)) => value_rules_for_key(r.ruleset, r.prepared.type_index, rules, key),
+    let matched = match (cx.rules.as_ref(), block_rules, matcher) {
+        (Some(r), Some(_), Some(matcher)) => {
+            matcher.value_rules_for_key(r.ruleset, r.prepared.type_index, key)
+        }
         _ => Vec::new(),
     };
 
-    let (key_ty, key_mods) = key_token_class(cx, block_rules, &matched, key);
+    let (key_ty, key_mods) = key_token_class(cx, block_rules, matcher, &matched, key);
     if let Some(t) = cx.token(line0, key_col, key_col + key_len, key_ty, key_mods) {
         out.push(t);
     }
@@ -346,20 +352,18 @@ fn collect_leaf(
 fn key_token_class(
     cx: &Ctx<'_>,
     block_rules: Option<&[(RuleType, Options)]>,
+    matcher: Option<&RuleBodyMatcher<'_>>,
     matched: &[&(RuleType, Options)],
     key: &str,
 ) -> (u32, u32) {
-    let (Some(r), Some(rules)) = (cx.rules.as_ref(), block_rules) else {
+    let (Some(r), Some(_rules)) = (cx.rules.as_ref(), block_rules) else {
         return (TY_PROPERTY, MOD_NONE);
     };
-    if cwtools_validation::position::alias_category_for_key(
-        r.ruleset,
-        r.prepared.type_index,
-        rules,
-        key,
-    )
-    .is_some()
-    {
+    if matcher.is_some_and(|matcher| {
+        matcher
+            .alias_category_for_key(r.ruleset, r.prepared.type_index, key)
+            .is_some()
+    }) {
         return (TY_FUNCTION, MOD_NONE);
     }
     let declares_type = matched.iter().any(|(rt, _)| {

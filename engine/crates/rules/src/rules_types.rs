@@ -31,6 +31,7 @@ pub struct RuleSet {
     pub localisation_commands: rustc_hash::FxHashSet<String>,
     alias_exact: rustc_hash::FxHashMap<String, rustc_hash::FxHashMap<String, Vec<usize>>>,
     alias_categories: rustc_hash::FxHashMap<String, AliasCategoryIndex>,
+    alias_pattern_buckets: rustc_hash::FxHashMap<String, AliasPatternBuckets>,
     type_by_name: rustc_hash::FxHashMap<String, usize>,
     enum_by_name: rustc_hash::FxHashMap<String, usize>,
     type_rules_idx: rustc_hash::FxHashMap<String, usize>,
@@ -40,6 +41,7 @@ pub struct RuleSet {
     enum_values_lower: Vec<rustc_hash::FxHashSet<String>>,
     enum_has_at: Vec<bool>,
     value_sets: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<String>>,
+    rule_body_candidate_indexes: RuleBodyCandidateIndexCache,
     builtin_variable_bases: rustc_hash::FxHashSet<String>,
     pretriggers: rustc_hash::FxHashMap<String, rustc_hash::FxHashSet<String>>,
     subtype_rule_key_groups: Vec<Vec<Vec<SubtypeRuleKeyGroup>>>,
@@ -124,6 +126,159 @@ impl ParsedAliasPattern {
 pub struct AliasCategoryIndex {
     pub parsed_patterns: Vec<ParsedAliasPattern>,
     pub scope_field_idx: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RuleBodyCandidateIndex {
+    specific_by_hash: rustc_hash::FxHashMap<u64, Vec<usize>>,
+    non_specific: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuleBodyCandidateIndexCache(
+    rustc_hash::FxHashMap<(usize, usize), (RuleBody, std::sync::Arc<RuleBodyCandidateIndex>)>,
+);
+
+impl PartialEq for RuleBodyCandidateIndexCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl RuleBodyCandidateIndex {
+    fn new(body: &RuleBody) -> Self {
+        Self::from_rules(body)
+    }
+
+    pub fn from_rules(body: &[NewRule]) -> Self {
+        let mut index = Self::default();
+        for (rule_index, (rule_type, _)) in body.iter().enumerate() {
+            let specific_key = match rule_type {
+                RuleType::LeafRule {
+                    left: NewField::SpecificField(key),
+                    ..
+                }
+                | RuleType::NodeRule {
+                    left: NewField::SpecificField(key),
+                    ..
+                } => Some(key.as_str()),
+                _ => None,
+            };
+            if let Some(key) = specific_key {
+                index
+                    .specific_by_hash
+                    .entry(rule_body_key_hash(key))
+                    .or_default()
+                    .push(rule_index);
+            } else {
+                index.non_specific.push(rule_index);
+            }
+        }
+        index
+    }
+
+    pub fn specific_indices_for_key(&self, key: &str) -> &[usize] {
+        self.specific_by_hash
+            .get(&rule_body_key_hash(key))
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+    }
+
+    pub fn non_specific_indices(&self) -> &[usize] {
+        &self.non_specific
+    }
+}
+
+fn rule_body_key_hash(key: &str) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write_usize(key.len());
+    for byte in key.bytes() {
+        hasher.write_u8(byte.to_ascii_lowercase());
+    }
+    hasher.finish()
+}
+
+impl AliasCategoryIndex {
+    fn push_pattern(&mut self, pattern: ParsedAliasPattern) {
+        self.parsed_patterns.push(pattern);
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct AliasPatternBuckets {
+    unprefixed: Vec<usize>,
+    by_first_byte: rustc_hash::FxHashMap<u8, Vec<usize>>,
+}
+
+impl AliasPatternBuckets {
+    fn for_patterns(patterns: &[ParsedAliasPattern]) -> Self {
+        let mut buckets = Self::default();
+        for (idx, pattern) in patterns.iter().enumerate() {
+            match pattern.prefix.as_bytes().first() {
+                Some(first) => buckets.by_first_byte.entry(*first).or_default().push(idx),
+                None => buckets.unprefixed.push(idx),
+            }
+        }
+        buckets
+    }
+
+    fn patterns_for_key<'a>(
+        &'a self,
+        patterns: &'a [ParsedAliasPattern],
+        key: &str,
+    ) -> AliasPatternCandidates<'a> {
+        let keyed = key
+            .as_bytes()
+            .first()
+            .and_then(|first| self.by_first_byte.get(first))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        AliasPatternCandidates {
+            patterns,
+            unprefixed: &self.unprefixed,
+            keyed,
+            unprefixed_pos: 0,
+            keyed_pos: 0,
+        }
+    }
+}
+
+pub struct AliasPatternCandidates<'a> {
+    patterns: &'a [ParsedAliasPattern],
+    unprefixed: &'a [usize],
+    keyed: &'a [usize],
+    unprefixed_pos: usize,
+    keyed_pos: usize,
+}
+
+impl<'a> Iterator for AliasPatternCandidates<'a> {
+    type Item = &'a ParsedAliasPattern;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let unprefixed_idx = self.unprefixed.get(self.unprefixed_pos).copied();
+        let keyed_idx = self.keyed.get(self.keyed_pos).copied();
+        let idx = match (unprefixed_idx, keyed_idx) {
+            (Some(a), Some(b)) if a < b => {
+                self.unprefixed_pos += 1;
+                a
+            }
+            (Some(_), Some(b)) => {
+                self.keyed_pos += 1;
+                b
+            }
+            (Some(a), None) => {
+                self.unprefixed_pos += 1;
+                a
+            }
+            (None, Some(b)) => {
+                self.keyed_pos += 1;
+                b
+            }
+            (None, None) => return None,
+        };
+        self.patterns.get(idx)
+    }
 }
 
 fn normalize_path_lower(p: &str) -> String {
@@ -218,6 +373,7 @@ impl RuleSet {
             localisation_commands: rustc_hash::FxHashSet::default(),
             alias_exact: rustc_hash::FxHashMap::default(),
             alias_categories: rustc_hash::FxHashMap::default(),
+            alias_pattern_buckets: rustc_hash::FxHashMap::default(),
             type_by_name: rustc_hash::FxHashMap::default(),
             enum_by_name: rustc_hash::FxHashMap::default(),
             type_rules_idx: rustc_hash::FxHashMap::default(),
@@ -227,6 +383,7 @@ impl RuleSet {
             enum_values_lower: Vec::new(),
             enum_has_at: Vec::new(),
             value_sets: rustc_hash::FxHashMap::default(),
+            rule_body_candidate_indexes: RuleBodyCandidateIndexCache::default(),
             builtin_variable_bases: rustc_hash::FxHashSet::default(),
             pretriggers: rustc_hash::FxHashMap::default(),
             subtype_rule_key_groups: Vec::new(),
@@ -363,10 +520,20 @@ impl RuleSet {
                 if rest == "scope_field" {
                     entry.scope_field_idx = Some(i);
                 } else if let Some(parsed) = ParsedAliasPattern::parse(rest, i) {
-                    entry.parsed_patterns.push(parsed);
+                    entry.push_pattern(parsed);
                 }
             }
         }
+        self.alias_pattern_buckets = self
+            .alias_categories
+            .iter()
+            .map(|(category, index)| {
+                (
+                    category.clone(),
+                    AliasPatternBuckets::for_patterns(&index.parsed_patterns),
+                )
+            })
+            .collect();
         for td in &mut self.types {
             normalize_path_options(&mut td.path_options);
         }
@@ -452,6 +619,7 @@ impl RuleSet {
                     .collect()
             })
             .collect();
+        self.rule_body_candidate_indexes = build_rule_body_candidate_indexes(self);
     }
 
     #[doc(hidden)]
@@ -566,6 +734,7 @@ impl RuleSet {
                 .all(|(i, td)| { self.type_by_name.get(&td.name).is_some_and(|&idx| idx <= i) })
                 && self.enums.len() == self.enum_by_name.len()
                 && (self.aliases.is_empty() || !self.alias_exact.is_empty())
+                && self.alias_categories.len() == self.alias_pattern_buckets.len()
                 && self.enums.len() == self.enum_values_lower.len()
                 && self.enums.len() == self.enum_has_at.len()
                 && self.values.len() == self.value_sets.len(),
@@ -583,6 +752,27 @@ impl RuleSet {
     pub fn alias_categories(&self) -> &rustc_hash::FxHashMap<String, AliasCategoryIndex> {
         self.assert_reindexed();
         &self.alias_categories
+    }
+
+    pub fn alias_patterns_for_key(
+        &self,
+        category: &str,
+        key: &str,
+    ) -> Option<AliasPatternCandidates<'_>> {
+        self.assert_reindexed();
+        let patterns = &self.alias_categories.get(category)?.parsed_patterns;
+        let buckets = self.alias_pattern_buckets.get(category)?;
+        Some(buckets.patterns_for_key(patterns, key))
+    }
+
+    pub fn rule_body_candidate_index(
+        &self,
+        body: &[NewRule],
+    ) -> Option<&std::sync::Arc<RuleBodyCandidateIndex>> {
+        self.rule_body_candidate_indexes
+            .0
+            .get(&(body.as_ptr() as usize, body.len()))
+            .map(|(_, index)| index)
     }
 
     pub fn type_by_name(&self) -> &rustc_hash::FxHashMap<String, usize> {
@@ -823,6 +1013,26 @@ mod tests {
     }
 
     #[test]
+    fn reindex_caches_wide_rule_bodies_nested_under_subtypes() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let fields = (0..=RULE_BODY_INDEX_MIN_RULES)
+            .map(|i| format!("field_{i} = yes"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source = format!(
+            "types = {{ type[thing] = {{ path = \"common/thing\" subtype[match] = {{ nested = {{ {fields} }} }} }} }}"
+        );
+        let parsed = cwtools_parser::parser::parse_string(&source, &table);
+        let ruleset = crate::rules_converter::ast_to_ruleset(&parsed, &table);
+        let nested_body = match &ruleset.types[0].subtypes[0].rules[0].0 {
+            RuleType::NodeRule { rules, .. } => rules,
+            other => panic!("expected nested node rule, found {other:?}"),
+        };
+        assert_eq!(nested_body.len(), RULE_BODY_INDEX_MIN_RULES + 1);
+        assert!(ruleset.rule_body_candidate_index(nested_body).is_some());
+    }
+
+    #[test]
     fn base_name_strips_only_the_subtype_qualifier() {
         let simple = |n: &str| TypeType::Simple(n.to_string()).base_name().to_string();
         assert_eq!(simple("equipment"), "equipment");
@@ -975,6 +1185,85 @@ pub struct ReplaceScopes {
 pub type NewRule = (RuleType, Options);
 
 pub type RuleBody = std::sync::Arc<[NewRule]>;
+
+/// Bodies at or below this size are cheaper to scan than to index. Reindexing
+/// still walks them so any wide nested Arc body receives a reusable index.
+pub const RULE_BODY_INDEX_MIN_RULES: usize = 8;
+
+fn build_rule_body_candidate_indexes(ruleset: &RuleSet) -> RuleBodyCandidateIndexCache {
+    fn add_body(
+        body: &RuleBody,
+        indexes: &mut rustc_hash::FxHashMap<
+            (usize, usize),
+            (RuleBody, std::sync::Arc<RuleBodyCandidateIndex>),
+        >,
+        visited: &mut rustc_hash::FxHashSet<(usize, usize)>,
+    ) {
+        let identity = (
+            std::sync::Arc::as_ptr(body) as *const NewRule as usize,
+            body.len(),
+        );
+        if !visited.insert(identity) {
+            return;
+        }
+        if body.len() > RULE_BODY_INDEX_MIN_RULES {
+            indexes.insert(
+                identity,
+                (
+                    std::sync::Arc::clone(body),
+                    std::sync::Arc::new(RuleBodyCandidateIndex::new(body)),
+                ),
+            );
+        }
+        for (rule_type, _) in body.iter() {
+            match rule_type {
+                RuleType::NodeRule { rules, .. }
+                | RuleType::ValueClauseRule { rules }
+                | RuleType::SubtypeRule { rules, .. } => add_body(rules, indexes, visited),
+                RuleType::LeafRule { .. } | RuleType::LeafValueRule { .. } => {}
+            }
+        }
+    }
+
+    fn add_rule(
+        rule_type: &RuleType,
+        indexes: &mut rustc_hash::FxHashMap<
+            (usize, usize),
+            (RuleBody, std::sync::Arc<RuleBodyCandidateIndex>),
+        >,
+        visited: &mut rustc_hash::FxHashSet<(usize, usize)>,
+    ) {
+        match rule_type {
+            RuleType::NodeRule { rules, .. }
+            | RuleType::ValueClauseRule { rules }
+            | RuleType::SubtypeRule { rules, .. } => add_body(rules, indexes, visited),
+            RuleType::LeafRule { .. } | RuleType::LeafValueRule { .. } => {}
+        }
+    }
+
+    let mut indexes = rustc_hash::FxHashMap::default();
+    let mut visited = rustc_hash::FxHashSet::default();
+    for (_, (rule_type, _)) in ruleset.aliases.iter().chain(&ruleset.single_aliases) {
+        add_rule(rule_type, &mut indexes, &mut visited);
+    }
+    for type_def in &ruleset.types {
+        for subtype in &type_def.subtypes {
+            for (rule_type, _) in &subtype.rules {
+                add_rule(rule_type, &mut indexes, &mut visited);
+            }
+        }
+    }
+    for root_rule in &ruleset.root_rules {
+        match root_rule {
+            RootRule::AliasRule(_, (rule_type, _))
+            | RootRule::SingleAliasRule(_, (rule_type, _))
+            | RootRule::TypeRule(_, (rule_type, _)) => {
+                add_rule(rule_type, &mut indexes, &mut visited)
+            }
+        }
+    }
+    RuleBodyCandidateIndexCache(indexes)
+}
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq)]
@@ -1177,4 +1466,169 @@ pub enum RootRule {
     AliasRule(String, NewRule),
     SingleAliasRule(String, NewRule),
     TypeRule(String, NewRule),
+}
+
+#[cfg(test)]
+mod alias_pattern_index_tests {
+    use super::{
+        AliasPatternBuckets, NewField, Options, ParsedAliasPattern, PatternKind,
+        RULE_BODY_INDEX_MIN_RULES, RootRule, RuleBody, RuleSet, RuleType,
+    };
+    use std::sync::Arc;
+
+    fn pattern(prefix: &str, idx: usize) -> ParsedAliasPattern {
+        ParsedAliasPattern {
+            alias_idx: idx,
+            prefix: prefix.to_string(),
+            suffix: String::new(),
+            kind: PatternKind::Type,
+            placeholder_name: "type".to_string(),
+        }
+    }
+
+    #[test]
+    fn prefix_buckets_return_candidates_in_original_order() {
+        let patterns = [
+            pattern("", 0),
+            pattern("other_", 1),
+            pattern("foo_", 2),
+            pattern("f", 3),
+            pattern("", 4),
+        ];
+        let buckets = AliasPatternBuckets::for_patterns(&patterns);
+
+        let candidates: Vec<_> = buckets
+            .patterns_for_key(&patterns, "foo_bar")
+            .map(|pattern| pattern.alias_idx)
+            .collect();
+        assert_eq!(candidates, [0, 2, 3, 4]);
+        assert_eq!(
+            buckets
+                .patterns_for_key(&patterns, "other_value")
+                .map(|pattern| pattern.alias_idx)
+                .collect::<Vec<_>>(),
+            [0, 1, 4]
+        );
+        assert_eq!(
+            buckets
+                .patterns_for_key(&patterns, "")
+                .map(|pattern| pattern.alias_idx)
+                .collect::<Vec<_>>(),
+            [0, 4]
+        );
+    }
+
+    #[test]
+    fn rule_body_candidate_cache_survives_ruleset_clone() {
+        let body: RuleBody = (0..=RULE_BODY_INDEX_MIN_RULES)
+            .map(|i| {
+                (
+                    RuleType::LeafRule {
+                        left: NewField::SpecificField(if i == 0 {
+                            "icon".to_string()
+                        } else {
+                            format!("field_{i}")
+                        }),
+                        right: NewField::ScalarField,
+                    },
+                    Options::default(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let parent_body: RuleBody = vec![(
+            RuleType::NodeRule {
+                left: NewField::SpecificField("nested".to_string()),
+                rules: Arc::clone(&body),
+            },
+            Options::default(),
+        )]
+        .into();
+        let top = RuleType::NodeRule {
+            left: NewField::SpecificField("thing".to_string()),
+            rules: Arc::clone(&parent_body),
+        };
+        let mut ruleset = RuleSet::new();
+        ruleset.root_rules.push(RootRule::TypeRule(
+            "thing".to_string(),
+            (top, Options::default()),
+        ));
+        ruleset.reindex();
+
+        assert!(ruleset.rule_body_candidate_index(&parent_body).is_none());
+        let original = ruleset
+            .rule_body_candidate_index(&body)
+            .expect("reindex skips small bodies but reaches wide descendants");
+        assert_eq!(original.specific_indices_for_key("ICON"), [0]);
+        assert!(original.non_specific_indices().is_empty());
+        assert!(ruleset.rule_body_candidate_index(&body[..1]).is_none());
+
+        let cloned = ruleset.clone();
+        let cloned_body = match &cloned.root_rules[0] {
+            RootRule::TypeRule(_, (RuleType::NodeRule { rules, .. }, _)) => match &rules[0].0 {
+                RuleType::NodeRule { rules, .. } => rules,
+                _ => unreachable!("test parent body contains a node"),
+            },
+            _ => unreachable!("test root is a node body"),
+        };
+        let cloned_index = cloned
+            .rule_body_candidate_index(cloned_body)
+            .expect("cloned Arc body keeps its cached identity");
+        assert!(Arc::ptr_eq(original, cloned_index));
+    }
+
+    #[test]
+    fn reindex_replaces_cached_rule_body_indexes() {
+        let old_body: RuleBody = (0..=RULE_BODY_INDEX_MIN_RULES)
+            .map(|i| {
+                (
+                    RuleType::LeafRule {
+                        left: NewField::SpecificField(format!("old_{i}")),
+                        right: NewField::ScalarField,
+                    },
+                    Options::default(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let mut ruleset = RuleSet::new();
+        ruleset.root_rules.push(RootRule::TypeRule(
+            "thing".to_string(),
+            (
+                RuleType::NodeRule {
+                    left: NewField::SpecificField("thing".to_string()),
+                    rules: Arc::clone(&old_body),
+                },
+                Options::default(),
+            ),
+        ));
+        ruleset.reindex();
+        assert!(ruleset.rule_body_candidate_index(&old_body).is_some());
+
+        let new_body: RuleBody = (0..=RULE_BODY_INDEX_MIN_RULES)
+            .map(|i| {
+                (
+                    RuleType::LeafRule {
+                        left: NewField::SpecificField(format!("new_{i}")),
+                        right: NewField::ScalarField,
+                    },
+                    Options::default(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .into();
+        ruleset.root_rules[0] = RootRule::TypeRule(
+            "thing".to_string(),
+            (
+                RuleType::NodeRule {
+                    left: NewField::SpecificField("thing".to_string()),
+                    rules: Arc::clone(&new_body),
+                },
+                Options::default(),
+            ),
+        );
+        ruleset.reindex();
+        assert!(ruleset.rule_body_candidate_index(&old_body).is_none());
+        assert!(ruleset.rule_body_candidate_index(&new_body).is_some());
+    }
 }

@@ -13,8 +13,8 @@ use crate::resolve::{
     resolve_root_child, type_has_content,
 };
 use crate::rule_core::{
-    alias_overloads, alias_overloads_with_confidence, flatten_nested_subtype_rules,
-    matching_candidates, merged_rules_for_type, rule_matches_leaf_key,
+    MatchingCandidatesIndex, alias_overloads, alias_overloads_with_confidence,
+    flatten_nested_subtype_rules, matching_candidates, merged_rules_for_type,
 };
 use crate::scope::{enter_block_scope, seed_root_scope};
 use crate::{Prepared, initial_scope_context};
@@ -43,6 +43,68 @@ pub struct RuleContext {
     pub value_rules: Vec<(RuleType, Options)>,
     pub leaf: Option<LeafAtPos>,
     pub scope: Option<ScopeContext>,
+}
+
+/// A rule-body-bound matcher that reuses its immutable key index across queries.
+/// Construct one when walking the same body repeatedly (for example, semantic tokens).
+pub struct RuleBodyMatcher<'a> {
+    rules: &'a [(RuleType, Options)],
+    index: Option<MatchingCandidatesIndex>,
+}
+
+impl<'a> RuleBodyMatcher<'a> {
+    pub fn new(rules: &'a [(RuleType, Options)], ruleset: &RuleSet) -> Self {
+        let index = (rules.len() > RULE_BODY_INDEX_MIN_RULES)
+            .then(|| MatchingCandidatesIndex::new(rules, ruleset));
+        Self { rules, index }
+    }
+
+    fn candidates(
+        &self,
+        key: &str,
+        ruleset: &RuleSet,
+        type_index: Option<&cwtools_index::TypeIndex>,
+    ) -> smallvec::SmallVec<[&'a (RuleType, Options); 4]> {
+        self.index.as_ref().map_or_else(
+            || matching_candidates(self.rules, key, ruleset, type_index),
+            |index| index.matching_candidates(self.rules, key, ruleset, type_index),
+        )
+    }
+
+    pub fn alias_category_for_key(
+        &self,
+        ruleset: &RuleSet,
+        type_index: Option<&cwtools_index::TypeIndex>,
+        key: &str,
+    ) -> Option<String> {
+        self.candidates(key, ruleset, type_index)
+            .iter()
+            .find_map(|(rt, _)| match rt {
+                RuleType::LeafRule {
+                    left: NewField::AliasField(cat),
+                    ..
+                }
+                | RuleType::NodeRule {
+                    left: NewField::AliasField(cat),
+                    ..
+                } => Some(cat.clone()),
+                _ => None,
+            })
+    }
+
+    pub fn value_rules_for_key(
+        &self,
+        ruleset: &'a RuleSet,
+        type_index: Option<&cwtools_index::TypeIndex>,
+        key: &str,
+    ) -> Vec<&'a (RuleType, Options)> {
+        value_rules_for_candidates(
+            ruleset,
+            type_index,
+            key,
+            self.candidates(key, ruleset, type_index),
+        )
+    }
 }
 
 fn pos_in_range(line: u32, col: u16, range: &SourceRange) -> bool {
@@ -463,6 +525,7 @@ fn collect_scope_children(
     } else {
         rules
     };
+    let matcher = RuleBodyMatcher::new(rules, ctx.ruleset);
     for child in children {
         if out.len() >= max_transitions {
             return;
@@ -497,13 +560,7 @@ fn collect_scope_children(
         };
         let raw_key = ctx.table.get_string(leaf.key.normal).unwrap_or_default();
         let key = unquote(&raw_key);
-        let candidates = matching_candidates(
-            rules,
-            key,
-            ctx.ruleset,
-            ctx.type_index,
-            rule_matches_leaf_key,
-        );
+        let candidates = matcher.candidates(key, ctx.ruleset, ctx.type_index);
         let mut next = Vec::new();
         let mut scope_options: Vec<(&Options, bool)> = Vec::new();
         let mut math_expression = false;
@@ -751,6 +808,7 @@ fn descend(
     } else {
         rules
     };
+    let matcher = RuleBodyMatcher::new(rules, ctx.ruleset);
 
     for child in children {
         match child {
@@ -793,13 +851,7 @@ fn descend(
                             continue;
                         }
                     }
-                    let candidates = matching_candidates(
-                        rules,
-                        &key,
-                        ctx.ruleset,
-                        ctx.type_index,
-                        rule_matches_leaf_key,
-                    );
+                    let candidates = matcher.candidates(&key, ctx.ruleset, ctx.type_index);
                     let mut next: Vec<(RuleType, Options)> = Vec::new();
                     let mut entered: Option<&Options> = None;
                     let mut entered_via_alias = false;
@@ -949,19 +1001,7 @@ pub fn alias_category_for_key(
     child_rules: &[(RuleType, Options)],
     key: &str,
 ) -> Option<String> {
-    let candidates =
-        matching_candidates(child_rules, key, ruleset, type_index, rule_matches_leaf_key);
-    candidates.iter().find_map(|(rt, _)| match rt {
-        RuleType::LeafRule {
-            left: NewField::AliasField(cat),
-            ..
-        }
-        | RuleType::NodeRule {
-            left: NewField::AliasField(cat),
-            ..
-        } => Some(cat.clone()),
-        _ => None,
-    })
+    RuleBodyMatcher::new(child_rules, ruleset).alias_category_for_key(ruleset, type_index, key)
 }
 
 pub fn value_rules_for_key<'a>(
@@ -970,8 +1010,15 @@ pub fn value_rules_for_key<'a>(
     child_rules: &'a [(RuleType, Options)],
     key: &str,
 ) -> Vec<&'a (RuleType, Options)> {
-    let candidates =
-        matching_candidates(child_rules, key, ruleset, type_index, rule_matches_leaf_key);
+    RuleBodyMatcher::new(child_rules, ruleset).value_rules_for_key(ruleset, type_index, key)
+}
+
+fn value_rules_for_candidates<'a>(
+    ruleset: &'a RuleSet,
+    type_index: Option<&cwtools_index::TypeIndex>,
+    key: &str,
+    candidates: impl IntoIterator<Item = &'a (RuleType, Options)>,
+) -> Vec<&'a (RuleType, Options)> {
     let mut out: Vec<&(RuleType, Options)> = Vec::new();
     for rule in candidates {
         match &rule.0 {
