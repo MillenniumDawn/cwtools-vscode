@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions, with deterministic wire coverage using the shared test hold helper. (#843)
 * Validate rename replacements against constant, the shared localisation-key rule and script type syntax, rejecting constant, macro-parameter and scripted-localisation forms as type names, preserving valid dotted and quoted names and complete quoted target spans. (#845)
 * Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
 * Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
