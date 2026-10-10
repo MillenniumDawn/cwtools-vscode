@@ -297,63 +297,56 @@ impl Backend {
     }
 
     /// Runs `scan` over the current text of every `uri` — open buffers as
-    /// they are, closed files read one at a time — on the blocking pool, and
-    /// returns only what `scan` found. No file's text outlives its own `scan`
-    /// call, so the request never holds the workspace's text at once (#474).
-    pub(crate) async fn scan_workspace_texts<T, F>(&self, uris: Vec<String>, scan: F) -> Vec<T>
+    /// they are, closed files read on the blocking pool — under one cumulative
+    /// request budget. Exhaustion fails the whole operation instead of
+    /// returning incomplete navigation results (#823).
+    pub(crate) async fn scan_workspace_texts<T, F>(
+        &self,
+        uris: Vec<String>,
+        scan: F,
+    ) -> Result<Vec<T>>
     where
         T: Send + 'static,
         F: Fn(&str, &str) -> Vec<T> + Send + Sync + 'static,
     {
-        let mut open: Vec<(String, Arc<str>)> = Vec::new();
-        let mut closed: Vec<String> = Vec::new();
-        {
-            let docs = self.state.documents.lock();
-            for uri in uris {
-                match docs.text_of(&uri) {
-                    Some(text) => open.push((uri, text)),
-                    None => closed.push(uri),
-                }
-            }
+        let unique_uri_count = uris
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>()
+            .len();
+        let texts = self.file_text_snapshots_for_navigation(&uris).await?;
+        if texts.len() != unique_uri_count {
+            return Err(navigation_snapshot_read_error());
         }
         crate::scan::hold_for_tests(
             "CWTOOLS_NAV_SNAPSHOT_HOLD_FILE",
             Some("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE"),
         )
         .await;
-        if open.is_empty() && closed.is_empty() {
-            return Vec::new();
-        }
-        let roots = self.state.config.read().authorized_roots.clone();
-        tokio::task::spawn_blocking(move || {
+        let scanned = tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
-            let mut out: Vec<T> = open
+            texts
                 .par_iter()
-                .flat_map_iter(|(uri, text)| scan(uri, text))
-                .collect();
-            out.par_extend(closed.into_par_iter().flat_map_iter(|uri| {
-                crate::access::read_authorized_text(&uri, &roots, crate::access::MAX_URI_READ_BYTES)
-                    .map(|text| scan(&uri, &text))
-                    .unwrap_or_default()
-            }));
-            out
+                .flat_map_iter(|(uri, snapshot)| scan(uri, &snapshot.text))
+                .collect()
         })
         .await
-        .unwrap_or_default()
+        .map_err(|_| navigation_snapshot_read_error())?;
+        Ok(scanned)
     }
 
-    /// Script-side uses of `keys`, from a streamed scan of every script file.
+    /// Script-side uses of `keys`, from a budgeted scan of every script file.
     pub(crate) async fn collect_loc_script_usages(
         &self,
         keys: &HashSet<String>,
         fallback: &Url,
-    ) -> Vec<Location> {
+    ) -> Result<Vec<Location>> {
         if keys.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let script_uris = self.script_uris();
         if script_uris.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let keys: Vec<String> = keys.iter().cloned().collect();
         let encoding = self.position_encoding();
@@ -383,9 +376,9 @@ impl Backend {
                 }
                 hits
             })
-            .await;
+            .await?;
         out.sort_by(|a, b| (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start)));
-        out
+        Ok(out)
     }
 
     pub(crate) async fn references_impl(
@@ -407,7 +400,7 @@ impl Backend {
             if include_declaration {
                 all_locs.extend(self.collect_loc_definitions(&keys, fallback).await?);
             }
-            all_locs.extend(self.collect_loc_script_usages(&keys, fallback).await);
+            all_locs.extend(self.collect_loc_script_usages(&keys, fallback).await?);
             let all_locs = dedup_locations(all_locs);
             if !all_locs.is_empty() {
                 return Ok(Some(all_locs));
@@ -1252,16 +1245,14 @@ mod tests {
             .expect("the store accepts one small doc");
 
         let mut hits = backend
-            .scan_workspace_texts(
-                vec![uri_of(&on_disk), uri_of(&open_path), uri_of(&stray)],
-                |uri, text| {
-                    text.lines()
-                        .filter(|line| line.contains("needle"))
-                        .map(|line| format!("{}:{}", uri.rsplit('/').next().unwrap(), line))
-                        .collect()
-                },
-            )
-            .await;
+            .scan_workspace_texts(vec![uri_of(&on_disk), uri_of(&open_path)], |uri, text| {
+                text.lines()
+                    .filter(|line| line.contains("needle"))
+                    .map(|line| format!("{}:{}", uri.rsplit('/').next().unwrap(), line))
+                    .collect()
+            })
+            .await
+            .expect("open and authorized closed files are scanned");
         hits.sort();
         assert_eq!(
             hits,
@@ -1270,6 +1261,73 @@ mod tests {
                 "open.txt:edited = needle".to_string(),
             ]
         );
+        let error = backend
+            .scan_workspace_texts(vec![uri_of(&stray)], |_, _| Vec::<String>::new())
+            .await
+            .expect_err("an unauthorized scan target must not become a partial result");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED)
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_text_scan_refuses_aggregate_budget_exhaustion() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        let uri_of = |path: &std::path::Path| {
+            Url::from_file_path(path)
+                .expect("absolute path")
+                .to_string()
+        };
+        let open_path = ws.path().join("open.txt");
+        let open_uri = uri_of(&open_path);
+        let open_text = "o=1\n";
+        let closed_text = "c=1\n";
+        let closed_uris = (0..2)
+            .map(|idx| {
+                let path = ws.path().join(format!("closed-{idx}.txt"));
+                std::fs::write(&path, closed_text).unwrap();
+                uri_of(&path)
+            })
+            .collect::<Vec<_>>();
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(open_text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts the open buffer");
+        let limit = open_text.len() + (closed_text.len() + 1) * 5;
+        *state.navigation_snapshot_budget_override.lock() = Some(limit);
+
+        for closed_uri in &closed_uris {
+            let one_closed = vec![open_uri.clone(), closed_uri.clone()];
+            let hits = backend
+                .scan_workspace_texts(one_closed, |uri, text| {
+                    vec![format!("{uri}:{}", text.trim())]
+                })
+                .await
+                .expect("either individually fitting closed file can be scanned");
+            assert_eq!(hits.len(), 2);
+        }
+
+        let all_uris = vec![open_uri, closed_uris[0].clone(), closed_uris[1].clone()];
+        let error = backend
+            .scan_workspace_texts(all_uris, |_, text| vec![text.to_string()])
+            .await
+            .expect_err("the open buffer and both closed reads exceed the shared cap");
+        assert!(error.message.contains("total text read budget exceeded"));
     }
 
     #[tokio::test]

@@ -37,6 +37,7 @@
 * Remove three test-only public wrappers (`scope_transitions`, `LocService::from_folders`, `LocService::discover_files`) and two stale `too_many_arguments` allows. (#912)
 * The per-edit ignored-file check reads the default exclude patterns from a shared static instead of building a whole `FileManagerConfig` per call. (#873)
 * Cap cumulative text snapshots for references and rename requests, refusing incomplete navigation when the request budget is exhausted. The conservative 5× peak-memory reservation means a closed UTF-8 file larger than 25.6 MiB cannot fit within the 128 MiB request budget. (#569)
+* Apply the cumulative navigation memory budget to localization references and renames, counting open buffers and decoded closed-file text; abort exhausted requests instead of returning partial rename edits. (#823)
 * Reuse formatted text when constructing whole-file format edits, avoiding reparsing and the multi-edit planner. (#557)
 * Share one `workspace_edit_for_snapshots` between format and fix-all instead of keeping two copies. (#909)
 * Memoize subtype merges per file and precompute matcher key groups. (#492)
