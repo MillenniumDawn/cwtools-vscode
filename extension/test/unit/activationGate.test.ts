@@ -53,11 +53,9 @@ vi.mock("fs/promises", async (importOriginal) => ({
 	stat: mocks.fsStat,
 	chmod: mocks.fsChmod,
 }));
-vi.mock("vscode", () => ({
+vi.mock("vscode", async (importOriginal) => ({
+	...await importOriginal<object>(),
 	workspace: mocks.workspace,
-	RelativePattern: class RelativePattern {
-		constructor(public readonly root: unknown, public readonly pattern: string) {}
-	},
 	commands: { executeCommand: mocks.executeCommand },
 	Uri: { joinPath: (uri: string, name: string) => `${uri}/${name}` },
 	FileType: { File: 1, Directory: 2 },
@@ -92,12 +90,11 @@ vi.mock("../../src/host/commands", () => ({
 	registerCommands: mocks.registerCommands,
 }));
 vi.mock("../../src/host/trustedPaths", () => ({ setTrustedRoots: vi.fn() }));
-vi.mock("../../src/host/logger", () => ({
-	initializeLogger: mocks.initializeLogger,
-	logInfo: vi.fn(),
-	logError: vi.fn(),
-	errorMessage: vi.fn(),
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger({
+		initializeLogger: mocks.initializeLogger,
+	}),
+);
 vi.mock("../../src/host/serverBlockedDialog", () => ({
 	showServerBlockedDialog: vi.fn(),
 }));
@@ -105,7 +102,6 @@ vi.mock("../../src/host/serverBlockedDialog", () => ({
 suite("descriptor startup gate", () => {
 	beforeEach(() => {
 		vi.resetModules();
-		vi.clearAllMocks();
 		mocks.registerDocumentLanguage.mockReturnValue(mocks.tracker);
 		mocks.detectGameAndVanilla.mockResolvedValue({ languageId: "paradox" });
 		mocks.workspace.getConfiguration.mockImplementation(() => ({

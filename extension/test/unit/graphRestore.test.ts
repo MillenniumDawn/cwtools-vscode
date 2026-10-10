@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, suite, test, vi } from "vitest";
 import * as assert from "assert";
 import type { ExtensionContext, WebviewPanel } from "vscode";
+import type * as VscodeStub from "./_stubs/vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 import type { EditorTracker } from "../../src/host/documentLanguage";
 import type { GraphData } from "../../src/common/graphTypes";
@@ -72,34 +73,30 @@ const {
 	};
 });
 
-vi.mock("vscode", async (importOriginal) => ({
-	...(await importOriginal<object>()),
-	commands: { executeCommand, registerCommand },
-	Uri: { file: (p: string) => ({ fsPath: p, toString: () => `file://${p}` }) },
-	ViewColumn: { One: 1 },
-	window: {
-		activeTextEditor: undefined,
-		registerWebviewPanelSerializer,
-		showInformationMessage,
-		showOpenDialog,
-		showWarningMessage,
-	},
-	workspace: {
-		fs: { readFile },
-		getConfiguration: vi.fn(() => ({ get: () => 1 })),
-	},
-}));
+vi.mock("vscode", async (importOriginal) => {
+	const original = await importOriginal<typeof VscodeStub>();
+	return {
+		...original,
+		commands: { executeCommand, registerCommand },
+		ViewColumn: { One: 1 },
+		window: {
+			activeTextEditor: undefined,
+			registerWebviewPanelSerializer,
+			showInformationMessage,
+			showOpenDialog,
+			showWarningMessage,
+		},
+		workspace: { ...original.workspace, fs: { readFile } },
+	};
+});
 
 vi.mock("vscode-languageclient/node", () => ({
 	ExecuteCommandRequest: { type: {} },
 }));
 
-vi.mock("../../src/host/logger", () => ({
-	logError,
-	logInfo: vi.fn(),
-	logWarn: vi.fn(),
-	errorMessage: (err: unknown) => (err instanceof Error ? err.message : ""),
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger({ logError }),
+);
 
 import { registerCommands } from "../../src/host/commands";
 import { GraphPanel } from "../../src/host/graphPanel";
@@ -198,7 +195,6 @@ suite("graph panel restore", () => {
 		serializer!.deserializeWebviewPanel(panel, state);
 
 	beforeEach(() => {
-		vi.clearAllMocks();
 		lifecycleEvents.length = 0;
 		client.initializeResult = {
 			capabilities: {

@@ -4,6 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, suite, test, vi } from "vitest";
 import type { Memento } from "vscode";
+import type * as VscodeStub from "./_stubs/vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 
 const state = vi.hoisted(() => ({
@@ -37,38 +38,34 @@ vi.mock("fs", () => ({
 	existsSync: () => state.hasGitDirectory,
 }));
 
-vi.mock("vscode", async (importOriginal) => ({
-	...(await importOriginal<object>()),
-	ProgressLocation: { Window: 10 },
-	window: {
-		createOutputChannel: () => ({ appendLine: () => {} }),
-		showWarningMessage: vscode.showWarningMessage,
-		showInformationMessage: vscode.showInformationMessage,
-		withProgress: (
-			_options: unknown,
-			task: () => Promise<void>,
-		): Promise<void> => {
-			const progress = task();
-			state.progress = progress;
-			state.resolveProgressStarted!();
-			return progress;
+vi.mock("vscode", async (importOriginal) => {
+	const original = await importOriginal<typeof VscodeStub>();
+	return {
+		...original,
+		window: {
+			...original.window,
+			showWarningMessage: vscode.showWarningMessage,
+			showInformationMessage: vscode.showInformationMessage,
+			withProgress: (
+				_options: unknown,
+				task: () => Promise<void>,
+			): Promise<void> => {
+				const progress = task();
+				state.progress = progress;
+				state.resolveProgressStarted!();
+				return progress;
+			},
 		},
-	},
-	workspace: {
-		getConfiguration: () => ({ get: () => undefined }),
-		workspaceFolders: undefined,
-	},
-}));
+	};
+});
 
 vi.mock("vscode-languageclient/node", () => ({
 	ExecuteCommandRequest: { type: {} },
 }));
 
-vi.mock("../../src/host/logger", () => ({
-	...logger,
-	errorMessage: (err: unknown) =>
-		err instanceof Error ? err.message : String(err),
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger(logger),
+);
 
 vi.mock("../../src/host/engine", async () => {
 	const { LANGUAGE_REPOS } = await import("../../src/host/games");
@@ -204,7 +201,6 @@ async function waitForProgress(): Promise<void> {
 
 suite("rulesSetup — reviewed manifest sync", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
 		vi.unstubAllGlobals();
 		state.hasGitDirectory = false;
 		state.head = null;
@@ -562,42 +558,38 @@ suite("rulesSetup — reviewed manifest sync", () => {
 
 	test("uses a cached pin after the manifest request times out", async () => {
 		vi.useFakeTimers();
-		try {
-			let signal: AbortSignal | null | undefined;
-			vi.stubGlobal(
-				"fetch",
-				vi.fn(
-					(_url: string, init?: RequestInit) =>
-						new Promise<Response>((_resolve, reject) => {
-							signal = init?.signal;
-							signal?.addEventListener(
-								"abort",
-								() => reject(new Error("aborted")),
-								{ once: true },
-							);
-						}),
-				),
-			);
-			const cached = manifest("c".repeat(40), RULES_MANIFEST_REVISION + 1);
-			const { globalState, updates } = memento(cached);
-			const { client: languageClient } = client();
+		let signal: AbortSignal | null | undefined;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(
+				(_url: string, init?: RequestInit) =>
+					new Promise<Response>((_resolve, reject) => {
+						signal = init?.signal;
+						signal?.addEventListener(
+							"abort",
+							() => reject(new Error("aborted")),
+							{ once: true },
+						);
+					}),
+			),
+		);
+		const cached = manifest("c".repeat(40), RULES_MANIFEST_REVISION + 1);
+		const { globalState, updates } = memento(cached);
+		const { client: languageClient } = client();
 
-			const pendingFetch = fetchRulesInBackground(
-				"hoi4",
-				"/cache",
-				languageClient,
-				Promise.resolve(),
-				globalState,
-			);
+		const pendingFetch = fetchRulesInBackground(
+			"hoi4",
+			"/cache",
+			languageClient,
+			Promise.resolve(),
+			globalState,
+		);
 
-			await vi.advanceTimersByTimeAsync(RULES_MANIFEST_TIMEOUT_MS);
-			await Promise.all([pendingFetch, waitForProgress()]);
-			assert.strictEqual(signal?.aborted, true);
-			assert.deepStrictEqual(updates, []);
-			assert.strictEqual(state.rulesFetches[0]?.ref, cached.pins.hoi4);
-		} finally {
-			vi.useRealTimers();
-		}
+		await vi.advanceTimersByTimeAsync(RULES_MANIFEST_TIMEOUT_MS);
+		await Promise.all([pendingFetch, waitForProgress()]);
+		assert.strictEqual(signal?.aborted, true);
+		assert.deepStrictEqual(updates, []);
+		assert.strictEqual(state.rulesFetches[0]?.ref, cached.pins.hoi4);
 	});
 
 	test("does not reload rules when checkout lands on another commit", async () => {

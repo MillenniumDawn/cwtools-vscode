@@ -2,13 +2,14 @@ import * as assert from "assert";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { minimatch } from "minimatch";
 import { beforeEach, suite, test, vi } from "vitest";
 import type { Mock } from "vitest";
 import { LSPErrorCodes } from "vscode-languageserver-protocol";
 import type { ExtensionContext } from "vscode";
 import type { LanguageClientOptions } from "vscode-languageclient/node";
+import type * as VscodeStub from "./_stubs/vscode";
 
 const {
 	createdWatchers,
@@ -131,56 +132,37 @@ const {
 	};
 });
 
-vi.mock("vscode", async (importOriginal) => ({
-	...(await importOriginal<object>()),
-	CancellationError: class extends Error {},
-	ProgressLocation: { Notification: 15 },
-	Uri: {
-		file: (fsPath: string) => ({
-			fsPath,
-			toString: () => pathToFileURL(fsPath).toString(),
-		}),
-		parse: (value: string) => ({
-			fsPath: fileURLToPath(value),
-			toString: () => value,
-		}),
-	},
-	RelativePattern: class {
-		constructor(
-			readonly baseUri: { fsPath: string },
-			readonly pattern: string,
-		) {}
-	},
-	window: {
-		createOutputChannel: () => ({ appendLine: () => {} }),
-		withProgress,
-		showInformationMessage,
-		showWarningMessage,
-		showErrorMessage,
-		showTextDocument,
-	},
-	commands: { executeCommand },
-	workspace: {
-		createFileSystemWatcher,
-		getWorkspaceFolder: (uri: { fsPath: string }) =>
-			uri.fsPath.startsWith("/workspace/") || uri.fsPath === "/workspace"
-				? { uri: { fsPath: "/workspace" } }
-				: undefined,
-		getConfiguration: () => ({
-			get: (key: string) => configurationValues.get(key),
-		}),
-		onDidChangeConfiguration,
-		openTextDocument,
-	},
-}));
+vi.mock("vscode", async (importOriginal) => {
+	const original = await importOriginal<typeof VscodeStub>();
+	return {
+		...original,
+		window: {
+			...original.window,
+			withProgress,
+			showInformationMessage,
+			showWarningMessage,
+			showErrorMessage,
+			showTextDocument,
+		},
+		commands: { executeCommand },
+		workspace: {
+			createFileSystemWatcher,
+			getWorkspaceFolder: (uri: { fsPath: string }) =>
+				uri.fsPath.startsWith("/workspace/") || uri.fsPath === "/workspace"
+					? { uri: { fsPath: "/workspace" } }
+					: undefined,
+			getConfiguration: () => ({
+				get: (key: string) => configurationValues.get(key),
+			}),
+			onDidChangeConfiguration,
+			openTextDocument,
+		},
+	};
+});
 
-vi.mock("../../src/host/logger", () => ({
-	errorMessage: (err: unknown) =>
-		err instanceof Error ? err.message : String(err),
-	logError,
-	logInfo,
-	outputChannel: { appendLine: () => undefined },
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger({ logError, logInfo }),
+);
 
 vi.mock("vscode-languageclient/node", () => ({
 	DidChangeConfigurationNotification: { type: {} },
@@ -464,71 +446,59 @@ suite("lspClient — watched files", () => {
 
 	test("debounces a 50-file rules checkout into one reload command", async () => {
 		vi.useFakeTimers();
-		try {
-			create();
-			const watcher = rulesWatcherAt("/rules");
-			assert.ok(watcher, "selected rules folder has no scoped watcher");
-			for (let index = 0; index < 50; index++) {
-				watcher.fire("change", fileUri(`/rules/part${index}.cwt`));
-			}
-			await vi.advanceTimersByTimeAsync(500);
-			assert.strictEqual(sendRequest.mock.calls.length, 1);
-			assert.deepStrictEqual(sendRequest.mock.calls[0], [
-				requestType,
-				{ command: "reloadrulesconfig", arguments: [] },
-			]);
-			assert.strictEqual(sendNotification.mock.calls.length, 50);
-		} finally {
-			vi.useRealTimers();
+		create();
+		const watcher = rulesWatcherAt("/rules");
+		assert.ok(watcher, "selected rules folder has no scoped watcher");
+		for (let index = 0; index < 50; index++) {
+			watcher.fire("change", fileUri(`/rules/part${index}.cwt`));
 		}
+		await vi.advanceTimersByTimeAsync(500);
+		assert.strictEqual(sendRequest.mock.calls.length, 1);
+		assert.deepStrictEqual(sendRequest.mock.calls[0], [
+			requestType,
+			{ command: "reloadrulesconfig", arguments: [] },
+		]);
+		assert.strictEqual(sendNotification.mock.calls.length, 50);
 	});
 
 	test("autoReload false forwards file changes without running a reload", async () => {
 		vi.useFakeTimers();
-		try {
-			configurationValues.set("rules.autoReload", false);
-			create();
-			const watcher = rulesWatcherAt("/rules");
-			assert.ok(watcher);
-			watcher.fire("change", fileUri("/rules/test.cwt"));
-			await vi.advanceTimersByTimeAsync(1_000);
-			assert.strictEqual(sendRequest.mock.calls.length, 0);
-			assert.strictEqual(sendNotification.mock.calls.length, 1);
-		} finally {
-			vi.useRealTimers();
-		}
+		configurationValues.set("rules.autoReload", false);
+		create();
+		const watcher = rulesWatcherAt("/rules");
+		assert.ok(watcher);
+		watcher.fire("change", fileUri("/rules/test.cwt"));
+		await vi.advanceTimersByTimeAsync(1_000);
+		assert.strictEqual(sendRequest.mock.calls.length, 0);
+		assert.strictEqual(sendNotification.mock.calls.length, 1);
 	});
 
 	test("workspace rules reload from the global watcher without duplicate forwarding", async () => {
 		vi.useFakeTimers();
-		try {
-			create();
-			resolveRulesCache.mockResolvedValue({
-				rulesCache: "/workspace/Config",
-				fetchUpstream: false,
-			});
-			configurationChangeHandler()(
-				configurationChangeEvent(["cwtools.rules_folder"]),
-			);
-			await vi.waitFor(() =>
-				assert.strictEqual(lastSettingsPayload().settings.rulesCache, "/workspace/Config"),
-			);
-			assert.strictEqual(rulesWatcherAt("/workspace/Config"), undefined);
-			const forwarded = sendNotification.mock.calls.length;
-			const globalWatcher = createdWatchers.find(
-				(watcher) => watcher.glob === "**/*.cwt",
-			);
-			assert.ok(globalWatcher);
-			globalWatcher.fire("change", fileUri("/workspace/Other/test.cwt"));
-			await vi.advanceTimersByTimeAsync(500);
-			assert.strictEqual(sendRequest.mock.calls.length, 0);
-			globalWatcher.fire("change", fileUri("/workspace/Config/test.cwt"));
-			await vi.advanceTimersByTimeAsync(500);
-			assert.strictEqual(sendRequest.mock.calls.length, 1);
-			assert.strictEqual(sendNotification.mock.calls.length, forwarded);
-		} finally {
-			vi.useRealTimers();
-		}
+		create();
+		resolveRulesCache.mockResolvedValue({
+			rulesCache: "/workspace/Config",
+			fetchUpstream: false,
+		});
+		configurationChangeHandler()(
+			configurationChangeEvent(["cwtools.rules_folder"]),
+		);
+		await vi.waitFor(() =>
+			assert.strictEqual(lastSettingsPayload().settings.rulesCache, "/workspace/Config"),
+		);
+		assert.strictEqual(rulesWatcherAt("/workspace/Config"), undefined);
+		const forwarded = sendNotification.mock.calls.length;
+		const globalWatcher = createdWatchers.find(
+			(watcher) => watcher.glob === "**/*.cwt",
+		);
+		assert.ok(globalWatcher);
+		globalWatcher.fire("change", fileUri("/workspace/Other/test.cwt"));
+		await vi.advanceTimersByTimeAsync(500);
+		assert.strictEqual(sendRequest.mock.calls.length, 0);
+		globalWatcher.fire("change", fileUri("/workspace/Config/test.cwt"));
+		await vi.advanceTimersByTimeAsync(500);
+		assert.strictEqual(sendRequest.mock.calls.length, 1);
+		assert.strictEqual(sendNotification.mock.calls.length, forwarded);
 	});
 
 	test("rules folder changes swap the external watcher and cancel its pending timer", async () => {
@@ -585,7 +555,6 @@ suite("lspClient — watched files", () => {
 			}
 			assert.strictEqual(restartedWatcher.dispose.mock.calls.length, 1);
 		} finally {
-			vi.useRealTimers();
 			fs.rmSync(rulesRoot, { recursive: true, force: true });
 		}
 	});
@@ -690,18 +659,14 @@ suite("lspClient — watched files", () => {
 
 	test("server stop disposes the rules watcher and pending reload timer", async () => {
 		vi.useFakeTimers();
-		try {
-			create();
-			const watcher = rulesWatcherAt("/rules");
-			assert.ok(watcher);
-			watcher.fire("change", fileUri("/rules/pending.cwt"));
-			stateChangeHandlers[0]?.({ oldState: 2, newState: 0 });
-			assert.strictEqual(watcher.dispose.mock.calls.length, 1);
-			await vi.advanceTimersByTimeAsync(1_000);
-			assert.strictEqual(sendRequest.mock.calls.length, 0);
-		} finally {
-			vi.useRealTimers();
-		}
+		create();
+		const watcher = rulesWatcherAt("/rules");
+		assert.ok(watcher);
+		watcher.fire("change", fileUri("/rules/pending.cwt"));
+		stateChangeHandlers[0]?.({ oldState: 2, newState: 0 });
+		assert.strictEqual(watcher.dispose.mock.calls.length, 1);
+		await vi.advanceTimersByTimeAsync(1_000);
+		assert.strictEqual(sendRequest.mock.calls.length, 0);
 	});
 
 	async function forwardedWatchedEvents(uris: string[]): Promise<string[]> {
@@ -856,7 +821,6 @@ suite("lspClient — watched files", () => {
 
 suite("lspClient — reload settings", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
 		lastClientOptions.value = undefined;
 		configurationValues.clear();
 		resolveRulesCache.mockReset();
@@ -939,25 +903,21 @@ suite("lspClient — restart-limiting error handler", () => {
 
 	test("crashes spread past the 3-minute window keep restarting", async () => {
 		vi.useFakeTimers();
-		try {
-			vi.setSystemTime(0);
-			const stopped: number[] = [];
-			create(() => stopped.push(1));
-			const errorHandler = lastClientOptions.value?.errorHandler;
-			assert.ok(errorHandler, "no errorHandler set on clientOptions");
-			for (let i = 0; i < 4; i++) {
-				const result = await errorHandler.closed();
-				assert.strictEqual(result.action, 2 /* CloseAction.Restart */);
-			}
-			// The 5th crash lands after the first has left the window, so the
-			// oldest is shifted out and the client restarts again.
-			vi.setSystemTime(3 * 60 * 1000 + 1);
+		vi.setSystemTime(0);
+		const stopped: number[] = [];
+		create(() => stopped.push(1));
+		const errorHandler = lastClientOptions.value?.errorHandler;
+		assert.ok(errorHandler, "no errorHandler set on clientOptions");
+		for (let i = 0; i < 4; i++) {
 			const result = await errorHandler.closed();
 			assert.strictEqual(result.action, 2 /* CloseAction.Restart */);
-			assert.strictEqual(stopped.length, 0, "onStopped must not fire");
-		} finally {
-			vi.useRealTimers();
 		}
+		// The 5th crash lands after the first has left the window, so the
+		// oldest is shifted out and the client restarts again.
+		vi.setSystemTime(3 * 60 * 1000 + 1);
+		const result = await errorHandler.closed();
+		assert.strictEqual(result.action, 2 /* CloseAction.Restart */);
+		assert.strictEqual(stopped.length, 0, "onStopped must not fire");
 	});
 
 	// Shutdown stops the client, and the library skips the close handler for a
@@ -1031,7 +991,6 @@ suite("lspClient — executeCommand middleware", () => {
 	}
 
 	beforeEach(() => {
-		vi.clearAllMocks();
 		lastClientOptions.value = undefined;
 		configurationValues.clear();
 		progressToken.isCancellationRequested = false;

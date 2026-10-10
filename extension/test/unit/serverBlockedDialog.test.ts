@@ -7,30 +7,18 @@ const state = vi.hoisted(() => ({
 	openExternal: vi.fn(),
 }));
 
-vi.mock("vscode", () => ({
+vi.mock("vscode", async (importOriginal) => ({
+	...(await importOriginal<object>()),
 	window: { showErrorMessage: state.showErrorMessage },
 	commands: { executeCommand: state.executeCommand },
 	env: { openExternal: state.openExternal },
-	Uri: {
-		file: (fsPath: string) => ({ fsPath }),
-		parse: (value: string) => ({ toString: () => value }),
-	},
-	l10n: {
-		t(message: string, ...args: Array<string | number | boolean>): string {
-			return message.replace(/\{(\d+)\}/g, (placeholder, index: string) => {
-				const arg = args[Number(index)];
-				return arg === undefined ? placeholder : String(arg);
-			});
-		},
-	},
 }));
 
 import { showServerBlockedDialog } from "../../src/host/serverBlockedDialog";
 
 suite("serverBlockedDialog", () => {
 	beforeEach(() => {
-		vi.clearAllMocks();
-		// clearAllMocks only wipes call history, not the implementation set by
+		// clearMocks only wipes call history, not the implementation set by
 		// mockResolvedValue, so every test starts from the same "no button
 		// chosen" default and opts in to a specific choice where it matters.
 		state.showErrorMessage.mockResolvedValue(undefined);

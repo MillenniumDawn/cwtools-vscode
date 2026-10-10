@@ -1,6 +1,7 @@
 import { suite, test, vi } from "vitest";
 import * as assert from "assert";
 import type { Uri } from "vscode";
+import type * as VscodeStub from "./_stubs/vscode";
 
 const { uriParse } = vi.hoisted(() => ({
 	uriParse: vi.fn((value: string) => ({
@@ -9,17 +10,14 @@ const { uriParse } = vi.hoisted(() => ({
 	})),
 }));
 
-vi.mock("vscode", () => ({
-	Uri: { parse: uriParse },
-	EventEmitter: class {
-		readonly event = () => ({ dispose: () => {} });
-		fire(): void {}
-		dispose(): void {}
-	},
-	TreeItem: class {},
-	TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
-	l10n: { t: (message: string) => message },
-}));
+vi.mock("vscode", async (importOriginal) => {
+	const original = await importOriginal<typeof VscodeStub>();
+	return {
+		...original,
+		Uri: { ...original.Uri, parse: uriParse },
+		l10n: { t: (message: string) => message },
+	};
+});
 
 import { FilesProvider, filesToTreeNodes } from "../../src/host/fileExplorer";
 import type { FileListItem } from "../../src/host/fileExplorer";

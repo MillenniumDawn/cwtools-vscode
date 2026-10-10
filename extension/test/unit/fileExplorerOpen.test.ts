@@ -33,54 +33,19 @@ const {
 	};
 });
 
-vi.mock("vscode", () => ({
+vi.mock("vscode", async (importOriginal) => ({
+	...(await importOriginal<object>()),
 	commands: { executeCommand, registerCommand },
 	window: {
 		createTreeView,
 		showTextDocument,
 		showErrorMessage,
 	},
-	l10n: {
-		t(message: string, ...args: Array<string | number | boolean>): string {
-			return message.replace(/\{(\d+)\}/g, (placeholder, index: string) => {
-				const arg = args[Number(index)];
-				return arg === undefined ? placeholder : String(arg);
-			});
-		},
-	},
-	Uri: {
-		file: (p: string) => ({ fsPath: p, toString: () => `file://${p}` }),
-		parse: (value: string) => {
-			const fsPath = value.replace(/^file:\/\//, "");
-			return { fsPath, toString: () => value };
-		},
-	},
-	TreeItem: class {
-		label: string;
-		collapsibleState: number;
-		command?: unknown;
-		contextValue?: string;
-		resourceUri?: unknown;
-		constructor(label: string, collapsibleState: number) {
-			this.label = label;
-			this.collapsibleState = collapsibleState;
-		}
-	},
-	TreeItemCollapsibleState: {
-		None: 0,
-		Collapsed: 1,
-		Expanded: 2,
-	},
-	EventEmitter: class {
-		readonly event = () => ({ dispose: () => {} });
-		fire(): void {}
-		dispose(): void {}
-	},
 }));
 
-vi.mock("../../src/host/logger", () => ({
-	logError,
-}));
+vi.mock("../../src/host/logger", async () =>
+	(await import("./support/loggerMock")).mockLogger({ logError }),
+);
 
 vi.mock("../../src/host/trustedPaths", () => ({
 	confirmOpen,
@@ -93,7 +58,6 @@ suite("FileExplorer — openFile", () => {
 	let openFile: (resource: Uri) => unknown;
 
 	beforeEach(() => {
-		vi.clearAllMocks();
 		confirmOpen.mockResolvedValue(true);
 		registeredCommands.clear();
 		const context = { subscriptions: [] } as unknown as ExtensionContext;
