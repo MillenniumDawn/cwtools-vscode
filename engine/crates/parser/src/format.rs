@@ -763,6 +763,66 @@ mod tests {
         assert_eq!(once, twice);
     }
 
+    fn generated_round_trip_input(seed: u64) -> String {
+        let mut state = seed.wrapping_add(1);
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let newline = "\n";
+        let mut input = format!("# generated seed {seed}{newline}");
+        let operators = ["=", "==", "?=", ">="];
+
+        for index in 0..24 {
+            let choice = next() % 6;
+            let key = format!("key_{index}");
+            let op = operators[(next() as usize) % operators.len()];
+            match choice {
+                0 => input.push_str(&format!("{key} {op} yes{newline}")),
+                1 => input.push_str(&format!("{key} {op} {}{newline}", next() % 1000)),
+                2 => input.push_str(&format!("{key} {op} \"value_{:x}\"{newline}", next())),
+                3 => input.push_str(&format!(
+                    "{key} {op} {{ nested = {}; flag = no }}{newline}",
+                    next() % 100
+                )),
+                4 => {
+                    let color = ["rgb", "hsv", "hsv360"][(next() as usize) % 3];
+                    input.push_str(&format!(
+                        "{key} {op} {color} {{ {} {} {} }}{newline}",
+                        next() % 256,
+                        next() % 256,
+                        next() % 256
+                    ));
+                }
+                _ => input.push_str(&format!("{key} {op} bare_value{newline}")),
+            }
+        }
+
+        input
+    }
+
+    #[test]
+    fn generated_format_parse_round_trip_preserves_ast() {
+        for seed in 0..128 {
+            let input = generated_round_trip_input(seed);
+            let parsed = parse_string(&input, &table());
+            assert!(
+                parsed.errors.is_empty(),
+                "generated input for seed {seed}: {input}"
+            );
+
+            let formatted = fmt(&input);
+            let reparsed = parse_string(&formatted, &table());
+            assert!(
+                reparsed.errors.is_empty(),
+                "formatted input for seed {seed}: {formatted}"
+            );
+            assert_eq!(dump(&input), dump(&formatted), "seed {seed}");
+        }
+    }
+
     #[test]
     fn tabs_vs_spaces() {
         let src = "a = {\n b = 1\n}\n";
