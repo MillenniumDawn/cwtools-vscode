@@ -477,52 +477,54 @@ impl Backend {
                     if open_uris.contains(&file.uri) {
                         return None;
                     }
-                    if let Some((ref cd, fp)) = cache_info
-                        && let Some((parsed, source_key)) = workspace_cache::load_path(
-                            cd,
-                            fp,
-                            &file.path,
-                            &self.state.string_table,
-                        )
-                    {
-                        let (source_hash, inline_ignored) =
-                            match cwtools_file_manager::file_manager::read_text_capped(
-                                &file.path,
-                                crate::access::MAX_URI_READ_BYTES,
-                            ) {
-                            Ok((text, bytes_read)) => {
-                                if !scan_bytes.try_reserve(bytes_read, WORKSPACE_SCAN_MAX_BYTES) {
-                                    tracing::warn!(
-                                        path = %file.path.display(),
-                                        "scan: skipping file, byte budget exceeded"
-                                    );
-                                    return None;
-                                }
-                                (
-                                    (workspace_cache::source_cache_key(&file.path).as_ref()
-                                        == Some(&source_key))
-                                    .then(|| cwtools_cache::workspace::content_hash(&text)),
-                                    extract_inline_ignored_codes(&text),
-                                )
-                            }
-                                Err(_) => (None, InlineIgnoreMap::new()),
-                            };
-                        return Some((true, parsed, source_hash, inline_ignored));
-                    }
                     let source_key = (workspace_cache::PATH_METADATA_CACHE_SUPPORTED)
                         .then(|| workspace_cache::source_cache_key(&file.path))
                         .flatten();
                     let use_content_cache =
                         !workspace_cache::PATH_METADATA_CACHE_SUPPORTED || source_key.is_none();
+                    let source_size = match std::fs::metadata(&file.path) {
+                        Ok(metadata) if metadata.is_file() => metadata.len(),
+                        Ok(_) => {
+                            tracing::warn!(
+                                path = %file.path.display(),
+                                "scan: skipping non-regular file"
+                            );
+                            return None;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                path = %file.path.display(),
+                                error = %error,
+                                "scan: skipping unreadable file"
+                            );
+                            return None;
+                        }
+                    };
+                    if source_size > crate::access::MAX_URI_READ_BYTES {
+                        tracing::warn!(
+                            path = %file.path.display(),
+                            "scan: skipping file, read cap exceeded"
+                        );
+                        return None;
+                    }
+                    if !scan_bytes.try_reserve(source_size, WORKSPACE_SCAN_MAX_BYTES) {
+                        tracing::warn!(
+                            path = %file.path.display(),
+                            "scan: skipping file, byte budget exceeded"
+                        );
+                        return None;
+                    }
                     let text = match cwtools_file_manager::file_manager::read_text_capped(
                         &file.path,
                         crate::access::MAX_URI_READ_BYTES,
                     ) {
                         Ok((t, n)) => {
-                            if !scan_bytes.try_reserve(
-                                n,
-                                WORKSPACE_SCAN_MAX_BYTES,
-                            ) {
+                            if n > source_size
+                                && !scan_bytes.try_reserve(
+                                    n - source_size,
+                                    WORKSPACE_SCAN_MAX_BYTES,
+                                )
+                            {
                                 tracing::warn!(
                                     path = %file.path.display(),
                                     "scan: skipping file, byte budget exceeded"
@@ -536,6 +538,25 @@ impl Backend {
                             return None;
                         }
                     };
+                    if let Some((cd, fp)) = cache_info.as_ref()
+                        && let Some((parsed, loaded_source_key)) = workspace_cache::load_path(
+                            cd,
+                            *fp,
+                            &file.path,
+                            &self.state.string_table,
+                        )
+                        && source_key.as_ref() == Some(&loaded_source_key)
+                    {
+                        let source_hash = (workspace_cache::source_cache_key(&file.path).as_ref()
+                            == Some(&loaded_source_key))
+                        .then(|| cwtools_cache::workspace::content_hash(&text));
+                        return Some((
+                            true,
+                            parsed,
+                            source_hash,
+                            extract_inline_ignored_codes(&text),
+                        ));
+                    }
                     if use_content_cache
                         && let Some((cd, fp)) = cache_info.as_ref()
                         && let Some(parsed) = workspace_cache::load(
@@ -1752,14 +1773,55 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn cached_workspace_files_consume_the_scan_byte_budget() {
-        let (backend, tmp) = setup_workspace(None);
+        use futures_util::stream::StreamExt;
+
+        let (backend, socket) = test_backend_with_socket();
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
         let things = tmp.path().join("common/things");
-        for i in 3..80 {
-            std::fs::write(
-                things.join(format!("{i}.txt")),
-                format!("thing_{i} = {{ }}\n"),
-            )
-            .unwrap();
+        std::fs::create_dir_all(&things).unwrap();
+        let workspace_uri = Url::from_file_path(tmp.path()).unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_uri = Some(workspace_uri.as_str().into());
+            config.workspace_prefix =
+                Some(crate::paths::workspace_prefix_of(workspace_uri.as_str()));
+        }
+        let mut ruleset = RuleSet::new();
+        ruleset.types.push(TypeDefinition {
+            name: "thing".to_string(),
+            name_field: None,
+            path_options: PathOptions {
+                paths: vec!["common/things".to_string()],
+                ..Default::default()
+            },
+            subtypes: Vec::new(),
+            type_key_filter: None,
+            skip_root_key: Vec::new(),
+            starts_with: None,
+            type_per_file: false,
+            key_prefix: None,
+            warning_only: false,
+            unique: false,
+            should_be_referenced: true,
+            localisation: Vec::new(),
+            graph_related_types: Vec::new(),
+            modifiers: Vec::new(),
+        });
+        ruleset.reindex();
+        backend.state.rules.write().ruleset = Some(Arc::new(ruleset));
+
+        let mut cached_files = Vec::new();
+        for (name, key, size) in [
+            ("small-a.txt", "cached_unique_small_a", 400),
+            ("small-b.txt", "cached_unique_small_b", 624),
+            ("too-large.txt", "cached_unique_rejected", 1025),
+        ] {
+            let mut text = format!("{key} = {{ }}\n#");
+            text.push_str(&"x".repeat(size - text.len()));
+            assert_eq!(text.len(), size);
+            let path = things.join(name);
+            std::fs::write(&path, &text).unwrap();
+            cached_files.push((path, text, key));
         }
 
         let cache_dir = tmp.path().join("cache");
@@ -1770,21 +1832,39 @@ mod tests {
         };
         let fingerprint = workspace_cache::settings_fingerprint(&language, tmp.path());
         workspace_cache::validate_or_clear(&cache_dir, fingerprint).unwrap();
-        for entry in std::fs::read_dir(&things).unwrap() {
-            let path = entry.unwrap().path();
-            let text = std::fs::read_to_string(&path).unwrap();
-            let source_key = workspace_cache::source_cache_key(&path).unwrap();
-            let parsed = parse_string_without_comments(&text, &backend.state.string_table);
+        let seed_table = cwtools_string_table::string_table::StringTable::new();
+        for (path, text, _) in &cached_files {
+            let source_key = workspace_cache::source_cache_key(path).unwrap();
+            let parsed = parse_string_without_comments(text, &seed_table);
             workspace_cache::store_path(
                 &cache_dir,
                 fingerprint,
-                &path,
+                path,
                 &source_key,
                 &parsed,
-                &backend.state.string_table,
+                &seed_table,
             );
         }
 
+        let (logged_tx, logged_rx) = tokio::sync::oneshot::channel();
+        let collector = tokio::spawn(async move {
+            let mut socket = socket;
+            while let Some(request) = socket.next().await {
+                if request.method() != "window/logMessage" {
+                    continue;
+                }
+                let Some(message) = request
+                    .params()
+                    .and_then(|params| params["message"].as_str())
+                else {
+                    continue;
+                };
+                if message.starts_with("Indexing pass:") {
+                    let _ = logged_tx.send(message.to_string());
+                    break;
+                }
+            }
+        });
         let progress =
             CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
         assert_eq!(
@@ -1793,18 +1873,38 @@ mod tests {
                 .await,
             ScanOutcome::Ran
         );
-        let summary = backend.state.last_scan_summary.lock();
-        let validated_files = summary
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), logged_rx)
+                .await
+                .expect("scan must log its cache outcome")
+                .expect("cache log collector must receive the message"),
+            "Indexing pass: 2 cache hits, 0 misses",
+            "both in-budget files must use their seeded cache entries"
+        );
+        collector.await.expect("cache log collector must finish");
+
+        let validated_files = backend
+            .state
+            .last_scan_summary
+            .lock()
             .as_ref()
             .expect("completed scan must record a summary")
             .validated_files;
         assert!(
-            validated_files > 0,
-            "some cached files fit within the budget"
+            validated_files == 2,
+            "the two entries exactly at the byte ceiling are validated"
         );
+
+        let contains_interned_key = |key: &str| {
+            let count = backend.state.string_table.len();
+            backend.state.string_table.intern(key);
+            backend.state.string_table.len() == count
+        };
+        assert!(contains_interned_key("cached_unique_small_a"));
+        assert!(contains_interned_key("cached_unique_small_b"));
         assert!(
-            validated_files < 80,
-            "cached files beyond the scan-byte budget must be skipped"
+            !contains_interned_key("cached_unique_rejected"),
+            "the over-budget file must be rejected before cache reconstruction interns its key"
         );
     }
 
