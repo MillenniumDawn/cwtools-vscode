@@ -447,6 +447,14 @@ pub const CW283_SCRIPTED_GUI_CALLBACK_NOT_FOUND: ErrorCode = ErrorCode {
     message_template: "Localisation key \"{}\" calls scripted GUI callback \"{}\" which does not exist",
 };
 
+/// HOI4 equipment-variant/designer icons must use registered sprites to avoid
+/// crashing the air battle window on macOS and Linux. Arg is the raw path.
+pub const CW284_RAW_EQUIPMENT_ICON: ErrorCode = ErrorCode {
+    id: "CW284",
+    severity: ErrorSeverity::Warning,
+    message_template: "Icon \"{}\" is a raw texture path; use a GFX_ sprite registered in interface/*.gfx. Raw paths crash the air battle window on macOS and Linux.",
+};
+
 // ── Tier B — Stellaris-specific if/else + set_name (per_game::stellaris) ────
 
 /// Nested `if`/`else` in effects, deprecated with Stellaris 2.1. F# `DeprecatedElse`.
@@ -815,6 +823,7 @@ catalog![
     CW281_EMPTY_LIMIT,
     CW282_REDUNDANT_DEFAULT_BOOL,
     CW283_SCRIPTED_GUI_CALLBACK_NOT_FOUND,
+    CW284_RAW_EQUIPMENT_ICON,
     CW500_TYPE_NOT_FOUND,
     CW600_RULES_FILE_UNREADABLE,
     CW601_RULES_UNDEFINED_REFERENCE,
