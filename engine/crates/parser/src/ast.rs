@@ -59,6 +59,14 @@ pub enum Value {
     Clause(Vec<Child>),
 }
 
+/// Explicit Paradox color-space marker preceding a clause value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorPrefix {
+    Rgb,
+    Hsv,
+    Hsv360,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Child {
     Leaf(LeafIdx),
@@ -72,11 +80,15 @@ pub struct Leaf {
     pub op: Operator,
     pub pos: SourceRange,
     pub value_pos: SourceRange,
+    /// Color-space keyword parsed before a clause, when present.
+    pub color_prefix: Option<ColorPrefix>,
 }
 
 pub struct LeafValue {
     pub value: Value,
     pub pos: SourceRange,
+    /// Color-space keyword parsed before a clause, when present.
+    pub color_prefix: Option<ColorPrefix>,
 }
 
 pub struct Comment {

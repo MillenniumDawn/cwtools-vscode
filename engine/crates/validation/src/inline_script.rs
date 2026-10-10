@@ -188,12 +188,17 @@ fn clone_children(
                     op: leaf.op,
                     pos: leaf.pos,
                     value_pos: leaf.value_pos,
+                    color_prefix: leaf.color_prefix,
                 }))
             }
             Child::LeafValue(idx) => {
                 let lv = &src.leaf_values[*idx as usize];
                 let value = clone_value(&lv.value, src, table, args, out);
-                Child::LeafValue(out.push_leaf_value(LeafValue { value, pos: lv.pos }))
+                Child::LeafValue(out.push_leaf_value(LeafValue {
+                    value,
+                    pos: lv.pos,
+                    color_prefix: lv.color_prefix,
+                }))
             }
             Child::Comment(idx) => {
                 let comment = &src.comments[*idx as usize];

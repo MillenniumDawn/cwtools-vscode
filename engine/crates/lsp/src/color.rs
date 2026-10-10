@@ -29,25 +29,21 @@
 //! | `color = hsv { 0.5 1 1 }`      | HSV floats 0-1            |
 //! | `color = hsv360 { 340 60 55 }` | HSV degrees + percentages |
 //!
-//! The parser SWALLOWS the `rgb`/`hsv` keyword — `color = rgb { 51 102 153 }`
-//! and `color = { 51 102 153 }` produce identical ASTs — so the convention is
-//! recovered by re-reading the source span, not from the tree. That is also what
-//! makes `colorPresentation` stateless: it is handed the range it produced, reads
-//! the convention back out of the document, and writes the same one. Emitting the
-//! other convention there is the failure mode that matters — the picker would
-//! silently rewrite `{ 0.2 0.4 0.6 }` into `{ 51 102 153 }` on first use.
+//! The parser retains the optional color-space keyword on the clause value. Both
+//! the swatch and picker presentation derive their convention and channels from
+//! that tree metadata, so cache reloads do not need to rescan source.
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
-use cwtools_parser::ast::{Arena, Child, ParsedFile, SourceRange, Value};
+use cwtools_parser::ast::{Arena, Child, ColorPrefix, ParsedFile, SourceRange, Value};
 use cwtools_rules::rules_types::{Options, RuleType, ValueType};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::Prepared;
 use cwtools_validation::position::RuleBodyMatcher;
 
 use crate::Backend;
-use crate::paths::{position_byte_index, source_column_to_lsp};
+use crate::paths::source_column_to_lsp;
 
 /// What the three channels mean numerically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,59 +96,55 @@ pub(crate) struct ColourLiteral {
     pub(crate) channels: [f32; 3],
 }
 
-/// Read a colour literal out of its source text — everything from the prefix (or
-/// `{`) through the closing `}`. `None` when the span isn't a three-channel
-/// literal, so a malformed or edited range yields no presentation rather than a
-/// wrong rewrite.
+/// Construct a colour literal from the parser's clause children and retained
+/// keyword metadata. Comments are ignored; any nonnumeric child invalidates the
+/// literal rather than allowing the picker to rewrite only part of it.
 ///
 /// Convention detection, in order:
 /// 1. An explicit `hsv360` / `hsv` / `rgb` prefix wins.
-/// 2. Otherwise a decimal point anywhere means floats.
+/// 2. Otherwise a float channel anywhere means floats.
 /// 3. Otherwise all-integer values that are all `<= 1` are still floats —
 ///    `{ 1 0 0 }` is pure red, and nobody writes near-black as `{ 1 1 1 }`.
 /// 4. Otherwise ints 0-255.
-pub(crate) fn parse_literal(text: &str) -> Option<ColourLiteral> {
-    let trimmed = text.trim();
-    let brace = trimmed.find('{')?;
-    let (prefix, rest) = (
-        trimmed[..brace].trim().to_ascii_lowercase(),
-        &trimmed[brace..],
-    );
-    let body = rest.strip_prefix('{')?.strip_suffix('}')?;
-    // Strip comments so `{ 1 2 3 # note }` doesn't parse the note.
-    let body: String = body
-        .lines()
-        .map(|l| l.split('#').next().unwrap_or(""))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let parts: Vec<&str> = body.split_whitespace().collect();
-    if parts.len() != 3 {
+fn literal_from_ast(
+    value: &Value,
+    prefix: Option<ColorPrefix>,
+    arena: &Arena,
+) -> Option<ColourLiteral> {
+    let Value::Clause(children) = value else {
         return None;
+    };
+    let mut channels = Vec::with_capacity(3);
+    let mut has_float = false;
+    for child in children {
+        match child {
+            Child::LeafValue(idx) => match &arena.leaf_values.get(*idx as usize)?.value {
+                Value::Float(channel) => {
+                    channels.push(*channel as f32);
+                    has_float = true;
+                }
+                Value::Int(channel) => channels.push(*channel as f32),
+                _ => return None,
+            },
+            Child::Comment(_) => {}
+            Child::Leaf(_) => return None,
+        }
     }
-    let mut channels = [0f32; 3];
-    for (slot, part) in channels.iter_mut().zip(&parts) {
-        *slot = part.parse::<f32>().ok()?;
-    }
-    let has_decimal = parts.iter().any(|p| p.contains('.'));
-    // Bare integers that all fit in 0-1 are the float spelling of a saturated
-    // colour, not a near-black 0-255 triple.
-    let looks_float = has_decimal || channels.iter().all(|c| *c <= 1.0);
-    let convention = match prefix.as_str() {
-        "hsv360" => Convention::new(Space::Hsv360),
-        "hsv" => Convention::new(Space::HsvFloat),
-        "rgb" => Convention {
-            space: if has_decimal {
+    let channels: [f32; 3] = channels.try_into().ok()?;
+    let looks_float = has_float || channels.iter().all(|channel| *channel <= 1.0);
+    let convention = match prefix {
+        Some(ColorPrefix::Hsv360) => Convention::new(Space::Hsv360),
+        Some(ColorPrefix::Hsv) => Convention::new(Space::HsvFloat),
+        Some(ColorPrefix::Rgb) => Convention {
+            space: if has_float {
                 Space::RgbFloat
             } else {
                 Space::RgbInt
             },
             rgb_prefix: true,
         },
-        "" if looks_float => Convention::new(Space::RgbFloat),
-        "" => Convention::new(Space::RgbInt),
-        // An unrecognised keyword is not a colour we know how to rewrite;
-        // dropping it would be a silent edit.
-        _ => return None,
+        None if looks_float => Convention::new(Space::RgbFloat),
+        None => Convention::new(Space::RgbInt),
     };
     Some(ColourLiteral {
         convention,
@@ -287,7 +279,6 @@ pub(crate) struct FoundColour {
 pub(crate) fn document_colours(
     file: &ParsedFile,
     table: &StringTable,
-    text: &str,
     rules: Option<(&Prepared<'_>, &str)>,
 ) -> Vec<FoundColour> {
     let mut out = Vec::new();
@@ -298,7 +289,6 @@ pub(crate) fn document_colours(
         ast: file,
         arena: &file.arena,
         table,
-        lines: text.lines().collect(),
         prepared,
         logical_path,
     };
@@ -314,7 +304,6 @@ struct Cx<'a> {
     ast: &'a ParsedFile,
     arena: &'a Arena,
     table: &'a StringTable,
-    lines: Vec<&'a str>,
     prepared: &'a Prepared<'a>,
     logical_path: &'a str,
 }
@@ -341,9 +330,12 @@ fn collect(
             )
         });
         if matched.iter().any(|(rt, _)| is_colour_rule(rt))
-            && let Some(found) = read_colour(leaf.pos, &raw_key, &cx.lines)
+            && let Some(literal) = literal_from_ast(&leaf.value, leaf.color_prefix, cx.arena)
         {
-            out.push(found);
+            out.push(FoundColour {
+                range: leaf.value_pos,
+                literal,
+            });
             // A colour block's children are bare numbers; nothing to recurse for.
             continue;
         }
@@ -368,72 +360,6 @@ fn collect(
     }
 }
 
-/// The literal's source span and parsed value for a leaf known to be a colour.
-/// The span starts after the leaf's `=` (so the picker replaces the value, not
-/// the key) and ends at the matching `}`. Scanning from the source is required:
-/// the parser drops the `rgb`/`hsv` prefix and its leaf range over-runs the `}`.
-fn read_colour(pos: SourceRange, raw_key: &str, lines: &[&str]) -> Option<FoundColour> {
-    let start_line = pos.start.line.saturating_sub(1) as usize;
-    let key_end = pos.start.col as usize + raw_key.chars().count();
-    let eq = lines
-        .get(start_line)?
-        .chars()
-        .enumerate()
-        .skip(key_end)
-        .find(|(_, c)| *c == '=')
-        .map(|(i, _)| i + 1)?;
-
-    // Walk from just past the `=` to the matching `}`, collecting the text.
-    let mut text = String::new();
-    let mut value_start: Option<(usize, usize)> = None;
-    let mut depth = 0usize;
-    for (line_no, line) in lines.iter().enumerate().skip(start_line) {
-        let from = if line_no == start_line { eq } else { 0 };
-        for (col, ch) in line.chars().enumerate().skip(from) {
-            if value_start.is_none() {
-                if ch.is_whitespace() {
-                    continue;
-                }
-                // A comment before the value means the literal isn't here.
-                if ch == '#' {
-                    break;
-                }
-                value_start = Some((line_no, col));
-            }
-            text.push(ch);
-            match ch {
-                '{' => depth += 1,
-                // A `}` before any `{` is malformed source, not a literal.
-                '}' if depth == 0 => return None,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let (sl, sc) = value_start?;
-                        return parse_literal(&text).map(|literal| FoundColour {
-                            range: SourceRange {
-                                start: cwtools_parser::ast::SourcePos {
-                                    line: sl as u32 + 1,
-                                    col: sc.min(u16::MAX as usize) as u16,
-                                },
-                                end: cwtools_parser::ast::SourcePos {
-                                    line: line_no as u32 + 1,
-                                    col: col.saturating_add(1).min(u16::MAX as usize) as u16,
-                                },
-                            },
-                            literal,
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
-        if value_start.is_some() {
-            text.push(' ');
-        }
-    }
-    None
-}
-
 /// Parser range (1-based line, 0-based char col) to an LSP range in the
 /// negotiated encoding, against the already-split lines.
 fn to_lsp_range(range: SourceRange, lines: &[&str], encoding: &PositionEncodingKind) -> Range {
@@ -448,34 +374,77 @@ fn to_lsp_range(range: SourceRange, lines: &[&str], encoding: &PositionEncodingK
     }
 }
 
-/// The source text an LSP `range` covers, used by `colorPresentation` to recover
-/// the convention the document actually uses. `None` when the range spans lines
-/// the document doesn't have.
-pub(crate) fn text_in_range(text: &str, range: Range, encoding: &PositionEncodingKind) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let mut out = String::new();
-    for line_no in range.start.line..=range.end.line {
-        let Some(line) = lines.get(line_no as usize) else {
-            break;
+/// Parser columns saturate at `u16::MAX`, and the parser does not count lone
+/// carriage returns while LSP positions do. Either can make a projected range
+/// point into only part of the AST value, so decline it for both swatches and
+/// edits when the source coordinates cannot be trusted.
+fn is_color_range_safe(range: SourceRange, lines: &[&str]) -> bool {
+    if range.start.col == u16::MAX || range.end.col == u16::MAX {
+        return false;
+    }
+
+    let Some(start_line) = range.start.line.checked_sub(1).map(|line| line as usize) else {
+        return false;
+    };
+    let Some(end_line) = range.end.line.checked_sub(1).map(|line| line as usize) else {
+        return false;
+    };
+    if start_line > end_line || (start_line == end_line && range.start.col > range.end.col) {
+        return false;
+    }
+    let Some(covered_lines) = lines.get(start_line..=end_line) else {
+        return false;
+    };
+
+    if start_line == end_line {
+        // Include the character at the exclusive endpoint: a CR there may be
+        // the character the parser skipped before reaching the AST endpoint.
+        !covered_lines[0]
+            .chars()
+            .take(range.end.col as usize + 1)
+            .any(|ch| ch == '\r')
+    } else {
+        // For a multi-line value, any CR on a covered line can shift the LSP
+        // projection relative to parser columns.
+        !covered_lines.iter().any(|line| line.contains('\r'))
+    }
+}
+
+fn colour_at_range(
+    children: &[Child],
+    arena: &Arena,
+    lines: &[&str],
+    encoding: &PositionEncodingKind,
+    target: Range,
+) -> Option<ColourLiteral> {
+    for child in children {
+        let (value, prefix, range) = match child {
+            Child::Leaf(idx) => {
+                let leaf = arena.leaves.get(*idx as usize)?;
+                (&leaf.value, leaf.color_prefix, leaf.value_pos)
+            }
+            Child::LeafValue(idx) => {
+                let leaf_value = arena.leaf_values.get(*idx as usize)?;
+                (&leaf_value.value, leaf_value.color_prefix, leaf_value.pos)
+            }
+            Child::Comment(_) => continue,
         };
-        let from = if line_no == range.start.line {
-            position_byte_index(line, range.start.character, encoding)
-        } else {
-            0
-        };
-        let to = if line_no == range.end.line {
-            position_byte_index(line, range.end.character, encoding)
-        } else {
-            line.len()
-        };
-        if from <= to && to <= line.len() {
-            out.push_str(&line[from..to]);
+        // Lines compare without a column conversion, which rules out most nodes.
+        if range.start.line.checked_sub(1) == Some(target.start.line)
+            && range.end.line.checked_sub(1) == Some(target.end.line)
+            && is_color_range_safe(range, lines)
+            && to_lsp_range(range, lines, encoding) == target
+            && let Some(literal) = literal_from_ast(value, prefix, arena)
+        {
+            return Some(literal);
         }
-        if line_no != range.end.line {
-            out.push(' ');
+        if let Value::Clause(nested) = value
+            && let Some(literal) = colour_at_range(nested, arena, lines, encoding, target)
+        {
+            return Some(literal);
         }
     }
-    out
+    None
 }
 
 impl Backend {
@@ -533,17 +502,13 @@ impl Backend {
                 scope_checks,
                 var_checks,
             );
-            document_colours(
-                &ast,
-                &table,
-                &text,
-                Some((&prepared, logical_path.as_str())),
-            )
+            document_colours(&ast, &table, Some((&prepared, logical_path.as_str())))
         };
 
         let lines: Vec<&str> = text.lines().collect();
         Ok(found
             .iter()
+            .filter(|found| is_color_range_safe(found.range, &lines))
             .map(|f| ColorInformation {
                 range: to_lsp_range(f.range, &lines, &encoding),
                 color: to_color(&f.literal),
@@ -560,11 +525,19 @@ impl Backend {
             return Ok(Vec::new());
         };
         let encoding = self.state.config.read().position_encoding.clone();
-        // Re-read the span the picker is editing so the rewrite keeps the
-        // convention the file already uses. No convention, no presentation —
-        // better than guessing and rewriting the file into the other one.
-        let source = text_in_range(&text, params.range, &encoding);
-        let Some(literal) = parse_literal(&source) else {
+        let Some(ast) = self.ast_for(&uri) else {
+            return Ok(Vec::new());
+        };
+        // Match the documentColor range against parser-owned value ranges so the
+        // picker preserves the AST's color-space metadata and numeric types.
+        let lines: Vec<&str> = text.lines().collect();
+        let Some(literal) = colour_at_range(
+            &ast.root_children,
+            &ast.arena,
+            &lines,
+            &encoding,
+            params.range,
+        ) else {
             return Ok(Vec::new());
         };
         let new_text = format_literal(&params.color, literal.convention);
@@ -582,6 +555,17 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The literal the provider reads for `c = <text>`, through the parser.
+    fn parse_literal(text: &str) -> Option<ColourLiteral> {
+        let table = StringTable::new();
+        let ast = cwtools_parser::parser::parse_string(&format!("c = {text}"), &table);
+        let [Child::Leaf(idx)] = ast.root_children.as_slice() else {
+            return None;
+        };
+        let leaf = &ast.arena.leaves[*idx as usize];
+        literal_from_ast(&leaf.value, leaf.color_prefix, &ast.arena)
+    }
 
     fn lit(text: &str) -> ColourLiteral {
         parse_literal(text).unwrap_or_else(|| panic!("{text:?} should parse as a colour"))
@@ -630,6 +614,63 @@ mod tests {
             lit("rgb { 51 102 153 }").convention.space,
             lit("{ 51 102 153 }").convention.space
         );
+    }
+
+    #[test]
+    fn picker_convention_is_recovered_from_the_ast_and_range() {
+        let table = StringTable::new();
+        for (value, prefix, space, channels) in [
+            (
+                "rgb { 51 102 153 }",
+                ColorPrefix::Rgb,
+                Space::RgbInt,
+                [51.0, 102.0, 153.0],
+            ),
+            (
+                "hsv { 0.5 1.0 1.0 }",
+                ColorPrefix::Hsv,
+                Space::HsvFloat,
+                [0.5, 1.0, 1.0],
+            ),
+            (
+                "hsv360 { 340 60 55 }",
+                ColorPrefix::Hsv360,
+                Space::Hsv360,
+                [340.0, 60.0, 55.0],
+            ),
+            (
+                "hsv 360 { 340 60 55 }",
+                ColorPrefix::Hsv360,
+                Space::Hsv360,
+                [340.0, 60.0, 55.0],
+            ),
+        ] {
+            let source = format!("c = {{\n    color = {value}\n}}\n");
+            let ast = cwtools_parser::parser::parse_string(&source, &table);
+            let lines: Vec<&str> = source.lines().collect();
+            let Child::Leaf(root) = &ast.root_children[0] else {
+                panic!("expected root clause")
+            };
+            let Value::Clause(children) = &ast.arena.leaves[*root as usize].value else {
+                panic!("expected root body")
+            };
+            let Child::Leaf(color) = &children[0] else {
+                panic!("expected keyed color clause")
+            };
+            let leaf = &ast.arena.leaves[*color as usize];
+            assert_eq!(leaf.color_prefix, Some(prefix));
+            let range = to_lsp_range(leaf.value_pos, &lines, &PositionEncodingKind::UTF16);
+            let literal = colour_at_range(
+                &ast.root_children,
+                &ast.arena,
+                &lines,
+                &PositionEncodingKind::UTF16,
+                range,
+            )
+            .expect("picker range should find its parsed literal");
+            assert_eq!(literal.convention.space, space);
+            assert_eq!(literal.channels, channels);
+        }
     }
 
     #[test]
@@ -792,7 +833,6 @@ mod tests {
     fn find(text: &str, key: &str) -> FoundColour {
         let table = StringTable::new();
         let ast = cwtools_parser::parser::parse_string(text, &table);
-        let lines: Vec<&str> = text.lines().collect();
         // The colour leaf is the first nested leaf of the first root child.
         let Child::Leaf(root) = ast.root_children[0] else {
             panic!("expected a root clause")
@@ -804,11 +844,42 @@ mod tests {
             if let Child::Leaf(i) = c {
                 let leaf = &ast.arena.leaves[*i as usize];
                 if table.get_string(leaf.key.normal).as_deref() == Some(key) {
-                    return read_colour(leaf.pos, key, &lines).expect("colour span");
+                    return FoundColour {
+                        range: leaf.value_pos,
+                        literal: literal_from_ast(&leaf.value, leaf.color_prefix, &ast.arena)
+                            .expect("color literal"),
+                    };
                 }
             }
         }
         panic!("no {key} leaf");
+    }
+
+    fn runtime_literal_at_key(text: &str, key: &str) -> Option<ColourLiteral> {
+        let table = StringTable::new();
+        let ast = cwtools_parser::parser::parse_string(text, &table);
+        let lines: Vec<&str> = text.lines().collect();
+        let Child::Leaf(root) = &ast.root_children[0] else {
+            panic!("expected a root clause")
+        };
+        let Value::Clause(children) = &ast.arena.leaves[*root as usize].value else {
+            panic!("expected a clause")
+        };
+        for child in children {
+            let Child::Leaf(idx) = child else { continue };
+            let leaf = &ast.arena.leaves[*idx as usize];
+            if table.get_string(leaf.key.normal).as_deref() == Some(key) {
+                let target = to_lsp_range(leaf.value_pos, &lines, &PositionEncodingKind::UTF16);
+                return colour_at_range(
+                    &ast.root_children,
+                    &ast.arena,
+                    &lines,
+                    &PositionEncodingKind::UTF16,
+                    target,
+                );
+            }
+        }
+        None
     }
 
     #[test]
@@ -856,6 +927,45 @@ mod tests {
         assert_eq!(found.range.start.col, u16::MAX);
         assert_eq!(found.range.end.col, u16::MAX);
         assert!(found.range.start.col <= found.range.end.col);
+        assert!(
+            runtime_literal_at_key(&text, "color").is_none(),
+            "the runtime picker must decline a range clamped at both ends"
+        );
+    }
+
+    #[test]
+    fn a_carriage_return_skipped_by_the_parser_is_rejected_for_swatches_and_picking() {
+        let text = "c = {\ncolor = \r{ 1 0 0 }\n}\n";
+        let table = StringTable::new();
+        let ast = cwtools_parser::parser::parse_string(text, &table);
+        let Child::Leaf(root) = ast.root_children[0] else {
+            panic!("expected a root clause")
+        };
+        let Value::Clause(children) = &ast.arena.leaves[root as usize].value else {
+            panic!("expected a clause")
+        };
+        let color = children.iter().find_map(|child| {
+            let Child::Leaf(idx) = child else {
+                return None;
+            };
+            let leaf = &ast.arena.leaves[*idx as usize];
+            (table.get_string(leaf.key.normal).as_deref() == Some("color")).then_some(leaf)
+        });
+        let color = color.expect("color leaf");
+        assert_eq!(
+            (color.value_pos.start.col, color.value_pos.end.col),
+            (8, 17)
+        );
+
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            !is_color_range_safe(color.value_pos, &lines),
+            "documentColor must not publish the AST range as a swatch"
+        );
+        assert!(
+            runtime_literal_at_key(text, "color").is_none(),
+            "colorPresentation must decline a projected range that omits the closing brace"
+        );
     }
 
     #[test]
@@ -868,52 +978,13 @@ mod tests {
         let found = find(&text, "color");
         assert_eq!(found.range.start.col, 65_527, "just past `color = `");
         assert_eq!(found.range.end.col, u16::MAX);
+        assert!(
+            runtime_literal_at_key(&text, "color").is_none(),
+            "the runtime picker must decline a range with a saturated end"
+        );
         let lines: Vec<&str> = text.lines().collect();
         let range = to_lsp_range(found.range, &lines, &PositionEncodingKind::UTF16);
         assert_eq!(range.end.character, u16::MAX as u32);
-        assert!(
-            parse_literal(&text_in_range(&text, range, &PositionEncodingKind::UTF16)).is_none(),
-            "truncated range reads back as no literal, so the picker rewrites nothing"
-        );
-    }
-
-    // ── Reading a range back out of the document ─────────────────────────────
-
-    #[test]
-    fn range_text_extracts_the_literal_for_the_presentation_step() {
-        let text = "c = {\n    color = { 0.2 0.4 0.6 }\n}\n";
-        let range = Range::new(Position::new(1, 12), Position::new(1, 27));
-        let got = text_in_range(text, range, &PositionEncodingKind::UTF16);
-        assert_eq!(got, "{ 0.2 0.4 0.6 }");
-        assert_eq!(
-            parse_literal(&got).unwrap().convention,
-            Convention::new(Space::RgbFloat)
-        );
-    }
-
-    #[test]
-    fn range_text_joins_a_multi_line_literal() {
-        let text = "c = {\n    color = {\n        51 102 153\n    }\n}\n";
-        let range = Range::new(Position::new(1, 12), Position::new(3, 5));
-        let got = text_in_range(text, range, &PositionEncodingKind::UTF16);
-        assert_eq!(parse_literal(&got).unwrap().channels, [51.0, 102.0, 153.0]);
-    }
-
-    #[test]
-    fn range_text_uses_the_negotiated_encoding() {
-        // 😀 is two UTF-16 code units, so the literal starts at UTF-16 column 14
-        // but char column 13.
-        let text = "c = {\n    😀 = { 1 0 0 }\n}\n";
-        let utf16 = Range::new(Position::new(1, 9), Position::new(1, 20));
-        assert_eq!(
-            text_in_range(text, utf16, &PositionEncodingKind::UTF16),
-            "{ 1 0 0 }"
-        );
-        let utf32 = Range::new(Position::new(1, 8), Position::new(1, 19));
-        assert_eq!(
-            text_in_range(text, utf32, &PositionEncodingKind::UTF32),
-            "{ 1 0 0 }"
-        );
     }
 
     // ── The rule predicate ───────────────────────────────────────────────────

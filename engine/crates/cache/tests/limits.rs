@@ -14,7 +14,7 @@ use std::io::Write;
 use std::path::Path;
 
 const MAGIC: [u8; 4] = *b"CWB\x00";
-const FORMAT_VERSION: u8 = 4;
+const FORMAT_VERSION: u8 = 5;
 const ERRORS_MAGIC: [u8; 4] = *b"CWE\x00";
 const ERRORS_FORMAT_VERSION: u8 = 2;
 

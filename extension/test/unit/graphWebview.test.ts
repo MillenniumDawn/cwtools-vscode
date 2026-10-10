@@ -30,9 +30,9 @@ interface FakeElementDefinition {
 
 interface FakeGraphNode {
 	data(key: string): unknown;
-	on(event: string, handler: () => void): void;
+	scratch(key: string, value?: unknown): unknown;
+	removeScratch(key: string): void;
 	popperRef(): { getBoundingClientRect: () => Record<string, number> };
-	handlers: Map<string, () => void>;
 }
 
 interface FakeTippyProps {
@@ -49,6 +49,7 @@ interface FakeTippyInstance {
 }
 
 interface FakeCytoscapeCore {
+	tooltipEvents: Map<string, (event: { target: FakeGraphNode }) => void>;
 	destroy: ReturnType<typeof vi.fn>;
 	json: ReturnType<typeof vi.fn>;
 	png: ReturnType<typeof vi.fn>;
@@ -108,7 +109,7 @@ const {
 	const jsonFailure: { error?: Error } = {};
 	const fileReaderFailure: { error?: Error } = {};
 	const makeNode = (id: string): FakeGraphNode => {
-		const handlers = new Map<string, () => void>();
+		const scratch = new Map<string, unknown>();
 		const data: Record<string, unknown> = {
 			id,
 			entityTypeDisplayName: "Idea",
@@ -116,11 +117,12 @@ const {
 		};
 		return {
 			data: (key: string) => data[key],
-			on: (event: string, handler: () => void) => {
-				handlers.set(event, handler);
+			scratch: (key: string, value?: unknown) => {
+				if (value !== undefined) scratch.set(key, value);
+				return scratch.get(key);
 			},
+			removeScratch: (key: string) => { scratch.delete(key); },
 			popperRef: () => ({ getBoundingClientRect: () => ({}) }),
-			handlers,
 		};
 	};
 	const pngSignature = Buffer.from([
@@ -207,7 +209,10 @@ const {
 		union: () => fakeCollection(),
 	});
 	const fakeCy = () => {
+		const tooltipEvents = new Map<string, (event: { target: FakeGraphNode }) => void>();
 		const cy = {
+			tooltipEvents,
+			removeScratch: vi.fn(),
 			add: (elements: FakeElementDefinition[]) => {
 				added.push(...elements);
 			},
@@ -243,7 +248,13 @@ const {
 					graphNodes.nodes.forEach(fn);
 				},
 			}),
-			on: vi.fn(),
+			// This focused fake dispatches the first delegated pair (tooltips).
+			// Real propagation and highlighting run in the headless suites.
+			on: vi.fn((event: string, selector: unknown, listener?: (event: { target: FakeGraphNode }) => void) => {
+				if (selector === "node" && listener && !tooltipEvents.has(event)) {
+					tooltipEvents.set(event, listener);
+				}
+			}),
 			style: vi.fn(() => ({ update: styleUpdate })),
 			width: () => 800,
 		};
@@ -390,6 +401,10 @@ suite("graph webview", () => {
 
 	const render = (message: unknown) =>
 		messageListener.listener?.({ data: message });
+
+	function triggerTooltip(event: string, node: FakeGraphNode) {
+		cytoscapeCores[cytoscapeCores.length - 1].tooltipEvents.get(event)?.({ target: node });
+	}
 
 	function clearGraph() {
 		jsonFailure.error = new Error("clear graph");
@@ -689,7 +704,7 @@ suite("graph webview", () => {
 			data: [graphNode],
 			settings: { wheelSensitivity: 1 },
 		});
-		node.handlers.get("mouseover")?.();
+		triggerTooltip("mouseover", node);
 		const previous = cytoscapeCores[0];
 		const observer = themeObservers[themeObservers.length - 1];
 		const tip = tippyInstances[0];
@@ -758,7 +773,7 @@ suite("graph webview", () => {
 			data: [graphNode],
 			settings: { wheelSensitivity: 1 },
 		});
-		node.handlers.get("mouseover")?.();
+		triggerTooltip("mouseover", node);
 
 		assert.strictEqual(tippyInstances.length, 1);
 		assert.ok(createdTags.includes("strong"));
@@ -774,7 +789,7 @@ suite("graph webview", () => {
 			data: [graphNode],
 			settings: { wheelSensitivity: 1 },
 		});
-		node.handlers.get("mouseover")?.();
+		triggerTooltip("mouseover", node);
 		assert.ok(!createdTags.includes("table"));
 
 		// One tick short of the expand timeout the table must still be absent, or
@@ -798,8 +813,8 @@ suite("graph webview", () => {
 			data: [graphNode],
 			settings: { wheelSensitivity: 1 },
 		});
-		node.handlers.get("mouseover")?.();
-		node.handlers.get("mouseout")?.();
+		triggerTooltip("mouseover", node);
+		triggerTooltip("mouseout", node);
 		vi.advanceTimersByTime(5000);
 
 		assert.ok(!createdTags.includes("table"));
@@ -814,7 +829,7 @@ suite("graph webview", () => {
 			data: [graphNode],
 			settings: { wheelSensitivity: 1 },
 		});
-		node.handlers.get("mouseover")?.();
+		triggerTooltip("mouseover", node);
 		vi.advanceTimersByTime(1000);
 		const instance = tippyInstances[0];
 		createdTags.length = 0;
