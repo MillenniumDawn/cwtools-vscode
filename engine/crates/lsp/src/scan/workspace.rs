@@ -1908,6 +1908,148 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn individually_in_budget_cached_files_cannot_exceed_scan_byte_budget() {
+        use futures_util::stream::StreamExt;
+
+        let (backend, socket) = test_backend_with_socket();
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let things = tmp.path().join("common/things");
+        std::fs::create_dir_all(&things).unwrap();
+        let workspace_uri = Url::from_file_path(tmp.path()).unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_uri = Some(workspace_uri.as_str().into());
+            config.workspace_prefix =
+                Some(crate::paths::workspace_prefix_of(workspace_uri.as_str()));
+        }
+        let mut ruleset = RuleSet::new();
+        ruleset.types.push(TypeDefinition {
+            name: "thing".to_string(),
+            name_field: None,
+            path_options: PathOptions {
+                paths: vec!["common/things".to_string()],
+                ..Default::default()
+            },
+            subtypes: Vec::new(),
+            type_key_filter: None,
+            skip_root_key: Vec::new(),
+            starts_with: None,
+            type_per_file: false,
+            key_prefix: None,
+            warning_only: false,
+            unique: false,
+            should_be_referenced: true,
+            localisation: Vec::new(),
+            graph_related_types: Vec::new(),
+            modifiers: Vec::new(),
+        });
+        ruleset.reindex();
+        backend.state.rules.write().ruleset = Some(Arc::new(ruleset));
+
+        let mut cached_files = Vec::new();
+        for (name, key) in [
+            ("cumulative-a.txt", "cumulative_unique_a"),
+            ("cumulative-b.txt", "cumulative_unique_b"),
+            ("cumulative-c.txt", "cumulative_unique_c"),
+        ] {
+            // Each file fits the 1 KiB test budget, while all three together
+            // exceed it. Any two reservations land exactly on the ceiling.
+            let mut text = format!("{key} = {{ }}\n#");
+            text.push_str(&"x".repeat(512 - text.len()));
+            assert_eq!(text.len(), 512);
+            let path = things.join(name);
+            std::fs::write(&path, &text).unwrap();
+            cached_files.push((path, text, key));
+        }
+
+        let cache_dir = tmp.path().join("cache");
+        let language = {
+            let mut config = backend.state.config.write();
+            config.cache_dir = Some(cache_dir.clone());
+            config.language.clone()
+        };
+        let fingerprint = workspace_cache::settings_fingerprint(&language, tmp.path());
+        workspace_cache::validate_or_clear(&cache_dir, fingerprint).unwrap();
+        let seed_table = cwtools_string_table::string_table::StringTable::new();
+        for (path, text, _) in &cached_files {
+            let source_key = workspace_cache::source_cache_key(path).unwrap();
+            let parsed = parse_string_without_comments(text, &seed_table);
+            workspace_cache::store_path(
+                &cache_dir,
+                fingerprint,
+                path,
+                &source_key,
+                &parsed,
+                &seed_table,
+            );
+        }
+
+        let (logged_tx, logged_rx) = tokio::sync::oneshot::channel();
+        let collector = tokio::spawn(async move {
+            let mut socket = socket;
+            while let Some(request) = socket.next().await {
+                if request.method() != "window/logMessage" {
+                    continue;
+                }
+                let Some(message) = request
+                    .params()
+                    .and_then(|params| params["message"].as_str())
+                else {
+                    continue;
+                };
+                if message.starts_with("Indexing pass:") {
+                    let _ = logged_tx.send(message.to_string());
+                    break;
+                }
+            }
+        });
+        let progress =
+            CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
+        assert_eq!(
+            backend
+                .validate_entire_workspace_tracked(false, Some(&progress))
+                .await,
+            ScanOutcome::Ran
+        );
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), logged_rx)
+                .await
+                .expect("scan must log its cache outcome")
+                .expect("cache log collector must receive the message"),
+            "Indexing pass: 2 cache hits, 0 misses",
+            "the two accepted files must use their seeded cache entries"
+        );
+        collector.await.expect("cache log collector must finish");
+
+        let validated_files = backend
+            .state
+            .last_scan_summary
+            .lock()
+            .as_ref()
+            .expect("completed scan must record a summary")
+            .validated_files;
+        assert_eq!(
+            validated_files, 2,
+            "only two of the three individually admissible 512-byte cache entries fit the 1 KiB scan budget"
+        );
+
+        let contains_interned_key = |key: &str| {
+            let count = backend.state.string_table.len();
+            backend.state.string_table.intern(key);
+            backend.state.string_table.len() == count
+        };
+        let interned_count = cached_files
+            .iter()
+            .filter(|(_, _, key)| contains_interned_key(key))
+            .count();
+        assert_eq!(
+            interned_count, 2,
+            "the rejected cache entry must not be reconstructed and intern its key"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_scan_summary_leaves_out_ignored_codes() {
         let (backend, _tmp) = setup_workspace(None);
