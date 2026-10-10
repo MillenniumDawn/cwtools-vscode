@@ -46,6 +46,13 @@ const WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET: usize = 2;
 
 const WORKSPACE_PUBLISH_BATCH_SIZE: usize = 50;
 
+#[cfg(not(test))]
+const WORKSPACE_SCAN_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// Keep the same scan path under test while making the byte-budget regression
+// small enough to exercise with ordinary temporary files.
+#[cfg(test)]
+const WORKSPACE_SCAN_MAX_BYTES: u64 = 1024;
+
 #[derive(Clone)]
 struct WorkspacePublishThrottle {
     interval: std::time::Duration,
@@ -483,12 +490,21 @@ impl Backend {
                                 &file.path,
                                 crate::access::MAX_URI_READ_BYTES,
                             ) {
-                                Ok((text, _)) => (
+                            Ok((text, bytes_read)) => {
+                                if !scan_bytes.try_reserve(bytes_read, WORKSPACE_SCAN_MAX_BYTES) {
+                                    tracing::warn!(
+                                        path = %file.path.display(),
+                                        "scan: skipping file, byte budget exceeded"
+                                    );
+                                    return None;
+                                }
+                                (
                                     (workspace_cache::source_cache_key(&file.path).as_ref()
                                         == Some(&source_key))
                                     .then(|| cwtools_cache::workspace::content_hash(&text)),
                                     extract_inline_ignored_codes(&text),
-                                ),
+                                )
+                            }
                                 Err(_) => (None, InlineIgnoreMap::new()),
                             };
                         return Some((true, parsed, source_hash, inline_ignored));
@@ -505,7 +521,7 @@ impl Backend {
                         Ok((t, n)) => {
                             if !scan_bytes.try_reserve(
                                 n,
-                                cwtools_file_manager::file_manager::ScanBudget::default().max_bytes,
+                                WORKSPACE_SCAN_MAX_BYTES,
                             ) {
                                 tracing::warn!(
                                     path = %file.path.display(),
@@ -1730,6 +1746,65 @@ mod tests {
         assert!(
             summary.total_errors > 0,
             "summary must record positive error count"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cached_workspace_files_consume_the_scan_byte_budget() {
+        let (backend, tmp) = setup_workspace(None);
+        let things = tmp.path().join("common/things");
+        for i in 3..80 {
+            std::fs::write(
+                things.join(format!("{i}.txt")),
+                format!("thing_{i} = {{ }}\n"),
+            )
+            .unwrap();
+        }
+
+        let cache_dir = tmp.path().join("cache");
+        let language = {
+            let mut config = backend.state.config.write();
+            config.cache_dir = Some(cache_dir.clone());
+            config.language.clone()
+        };
+        let fingerprint = workspace_cache::settings_fingerprint(&language, tmp.path());
+        workspace_cache::validate_or_clear(&cache_dir, fingerprint).unwrap();
+        for entry in std::fs::read_dir(&things).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let source_key = workspace_cache::source_cache_key(&path).unwrap();
+            let parsed = parse_string_without_comments(&text, &backend.state.string_table);
+            workspace_cache::store_path(
+                &cache_dir,
+                fingerprint,
+                &path,
+                &source_key,
+                &parsed,
+                &backend.state.string_table,
+            );
+        }
+
+        let progress =
+            CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
+        assert_eq!(
+            backend
+                .validate_entire_workspace_tracked(false, Some(&progress))
+                .await,
+            ScanOutcome::Ran
+        );
+        let summary = backend.state.last_scan_summary.lock();
+        let validated_files = summary
+            .as_ref()
+            .expect("completed scan must record a summary")
+            .validated_files;
+        assert!(
+            validated_files > 0,
+            "some cached files fit within the budget"
+        );
+        assert!(
+            validated_files < 80,
+            "cached files beyond the scan-byte budget must be skipped"
         );
     }
 
