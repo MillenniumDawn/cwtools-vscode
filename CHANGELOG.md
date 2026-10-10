@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)
 * Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
 * Reuse one set of scratch buffers per typo-suggestion scan instead of allocating for every candidate, skip candidates of the wrong length before allocating anything, and lowercase the unknown key once. (#559)

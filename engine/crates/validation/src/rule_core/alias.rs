@@ -85,7 +85,7 @@ pub(crate) fn alias_overloads_with_confidence<'a>(
         }
     }
     if let Some(cat) = ruleset.alias_categories().get(category) {
-        for pat in &cat.parsed_patterns {
+        for pat in cat.patterns_for_key(key) {
             match classify_pattern_match(pat, key, ruleset, type_index) {
                 PatternMatch::Confident => push_overload(
                     &mut overloads,

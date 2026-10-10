@@ -1,31 +1,85 @@
 use cwtools_rules::rules_types::*;
 use smallvec::SmallVec;
+use std::sync::Arc;
+
+/// Immutable SpecificField candidates for one rule body. Validation retains this
+/// beside its mutable cardinality state; cursor traversal builds it for each
+/// transient merged body it visits.
+pub(crate) struct MatchingCandidatesIndex {
+    index: Arc<RuleBodyCandidateIndex>,
+}
+
+impl MatchingCandidatesIndex {
+    pub(crate) fn new(rules: &[(RuleType, Options)], ruleset: &RuleSet) -> Self {
+        let index = ruleset
+            .rule_body_candidate_index(rules)
+            .cloned()
+            .unwrap_or_else(|| Arc::new(RuleBodyCandidateIndex::from_rules(rules)));
+        Self { index }
+    }
+
+    pub(crate) fn matching_candidates<'a>(
+        &self,
+        rules: &'a [(RuleType, Options)],
+        key: &str,
+        ruleset: &RuleSet,
+        type_index: Option<&cwtools_index::TypeIndex>,
+    ) -> SmallVec<[&'a (RuleType, Options); 4]> {
+        let specific = self
+            .index
+            .specific_indices_for_key(key)
+            .iter()
+            .filter_map(|&idx| {
+                let rule = &rules[idx];
+                get_rule_key(&rule.0)
+                    .is_some_and(|name| name.eq_ignore_ascii_case(key))
+                    .then_some(rule)
+            })
+            .collect::<SmallVec<[&'a (RuleType, Options); 4]>>();
+        if !specific.is_empty() {
+            return specific;
+        }
+        self.index
+            .non_specific_indices()
+            .iter()
+            .filter_map(|&idx| {
+                let rule = &rules[idx];
+                rule_matches_leaf_key(&rule.0, key, ruleset, type_index).then_some(rule)
+            })
+            .collect()
+    }
+}
 
 use crate::common::*;
 
-pub(crate) fn matching_candidates<'a, F>(
+pub(crate) fn matching_candidates<'a>(
     rules: &'a [(RuleType, Options)],
     key: &str,
     ruleset: &RuleSet,
     type_index: Option<&cwtools_index::TypeIndex>,
-    matcher: F,
-) -> SmallVec<[&'a (RuleType, Options); 4]>
-where
-    F: Fn(&RuleType, &str, &RuleSet, Option<&cwtools_index::TypeIndex>) -> bool,
-{
-    let is_specific = |rt: &RuleType| {
-        matches!(rt,
-        RuleType::LeafRule { left: NewField::SpecificField(s), .. }
-        | RuleType::NodeRule { left: NewField::SpecificField(s), .. } if s.eq_ignore_ascii_case(key))
-    };
-    let has_specific = rules
-        .iter()
-        .any(|(rt, _)| is_specific(rt) && matcher(rt, key, ruleset, type_index));
-    rules
-        .iter()
-        .filter(|(rt, _)| {
-            (!has_specific || is_specific(rt)) && matcher(rt, key, ruleset, type_index)
-        })
+) -> SmallVec<[&'a (RuleType, Options); 4]> {
+    if rules.len() > RULE_BODY_INDEX_MIN_RULES {
+        return MatchingCandidatesIndex::new(rules, ruleset)
+            .matching_candidates(rules, key, ruleset, type_index);
+    }
+    let mut specific = SmallVec::<[&'a (RuleType, Options); 4]>::new();
+    let mut fallback = SmallVec::<[&'a (RuleType, Options); 4]>::new();
+    for rule in rules {
+        let (rule_type, _) = rule;
+        if let Some(name) = get_rule_key(rule_type) {
+            if name.eq_ignore_ascii_case(key) {
+                specific.push(rule);
+            }
+        } else {
+            fallback.push(rule);
+        }
+    }
+    if !specific.is_empty() {
+        return specific;
+    }
+    fallback
+        .into_iter()
+        .filter(|(rule_type, _)| rule_matches_leaf_key(rule_type, key, ruleset, type_index))
         .collect()
 }
 
@@ -269,7 +323,7 @@ pub(crate) fn field_matches_key(
             match ruleset.alias_categories().get(category.as_str()) {
                 None => true,
                 Some(cat) => {
-                    for pat in &cat.parsed_patterns {
+                    for pat in cat.patterns_for_key(key) {
                         if parsed_pattern_matches(pat, key, ruleset, type_index, true) {
                             return true;
                         }
@@ -380,6 +434,56 @@ mod tests {
             name: "resource".to_string(),
             suffix: String::new(),
         })
+    }
+
+    fn left_rule(left: NewField) -> (RuleType, Options) {
+        (
+            RuleType::LeafRule {
+                left,
+                right: NewField::ScalarField,
+            },
+            Options::default(),
+        )
+    }
+
+    #[test]
+    fn matching_candidates_preserve_specific_duplicates_and_skip_fallbacks() {
+        let rules = vec![
+            left_rule(NewField::ScalarField),
+            left_rule(NewField::SpecificField("focus".to_string())),
+            left_rule(NewField::SpecificField("FOCUS".to_string())),
+        ];
+        let candidates = matching_candidates(&rules, "Focus", &RuleSet::default(), None);
+        assert_eq!(candidates.as_slice(), [&rules[1], &rules[2]]);
+    }
+
+    #[test]
+    fn matching_candidates_keep_alias_and_fallback_when_specific_does_not_match() {
+        let rules = vec![
+            left_rule(NewField::SpecificField("other".to_string())),
+            left_rule(NewField::AliasField("unknown".to_string())),
+            left_rule(NewField::ScalarField),
+        ];
+        let candidates = matching_candidates(&rules, "Focus", &RuleSet::default(), None);
+        assert_eq!(candidates.as_slice(), [&rules[1], &rules[2]]);
+    }
+
+    #[test]
+    fn indexed_matching_candidates_preserve_specific_and_alias_order() {
+        let mut rules = vec![
+            left_rule(NewField::ScalarField),
+            left_rule(NewField::SpecificField("focus".to_string())),
+            left_rule(NewField::AliasField("unknown".to_string())),
+            left_rule(NewField::SpecificField("FOCUS".to_string())),
+        ];
+        rules.extend((0..8).map(|i| left_rule(NewField::SpecificField(format!("unrelated_{i}")))));
+
+        let ruleset = RuleSet::default();
+        let candidates = matching_candidates(&rules, "Focus", &ruleset, None);
+        assert_eq!(candidates.as_slice(), [&rules[1], &rules[3]]);
+
+        let candidates = matching_candidates(&rules, "Missing", &ruleset, None);
+        assert_eq!(candidates.as_slice(), [&rules[0], &rules[2]]);
     }
 
     #[test]

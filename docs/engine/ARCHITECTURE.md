@@ -199,6 +199,17 @@ per game. `scopes.cwt` and `links.cwt` load through `ScopeRegistry`
 (`game/src/scope_registry.rs`), so the scope checks (CW104/105/106, CW243-245,
 CW247, CW248, CW260) work for any game that ships those files.
 
+`RuleSet::reindex` builds an immutable candidate index beside each stable
+`RuleBody` allocation. The RuleSet owns the Arc body with its index, so the
+pointer key stays valid across RuleSet clones and cannot be reused while cached.
+Case-insensitive specific keys use hash buckets and fallback rules stay in
+source order. Validation retains the index beside mutable cardinality state;
+semantic, color, document-link and cursor walks reuse it across each body
+traversal. Transient merged subtype/alias bodies get a traversal-local index.
+Narrow bodies use a single ordered scan to avoid paying to build a map. Alias
+patterns are bucketed by their first prefix byte; duplicate rules and overload
+precedence are preserved.
+
 ## Adding a new game
 
 A new `Game` variant touches these sites, in lockstep:

@@ -40,7 +40,7 @@ use cwtools_parser::ast::{Arena, Child, ColorPrefix, ParsedFile, SourceRange, Va
 use cwtools_rules::rules_types::{Options, RuleType, ValueType};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::Prepared;
-use cwtools_validation::position::value_rules_for_key;
+use cwtools_validation::position::RuleBodyMatcher;
 
 use crate::Backend;
 use crate::paths::source_column_to_lsp;
@@ -314,6 +314,7 @@ fn collect(
     block_rules: Option<&[(RuleType, Options)]>,
     out: &mut Vec<FoundColour>,
 ) {
+    let matcher = block_rules.map(|rules| RuleBodyMatcher::new(rules, cx.prepared.ruleset));
     for child in children {
         let Child::Leaf(idx) = child else { continue };
         let leaf = &cx.arena.leaves[*idx as usize];
@@ -321,11 +322,10 @@ fn collect(
             continue;
         };
         let raw_key = cx.table.get_string(leaf.key.normal).unwrap_or_default();
-        let matched = block_rules.map_or_else(Vec::new, |rules| {
-            value_rules_for_key(
+        let matched = matcher.as_ref().map_or_else(Vec::new, |matcher| {
+            matcher.value_rules_for_key(
                 cx.prepared.ruleset,
                 cx.prepared.type_index,
-                rules,
                 raw_key.trim_matches('"'),
             )
         });

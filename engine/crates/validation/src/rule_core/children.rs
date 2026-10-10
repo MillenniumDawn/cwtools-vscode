@@ -19,7 +19,7 @@ const INLINE_SCRIPT: &str = "inline_script";
 
 use super::alias::validate_alias_usage;
 use super::leaf::{check_variable_get, field_matches_value, validate_leaf};
-use super::matching::{get_rule_key, matching_candidates, rule_matches_leaf_key};
+use super::matching::{MatchingCandidatesIndex, get_rule_key, matching_candidates};
 use super::subtype_merge::flatten_nested_subtype_rules;
 use super::suggest::best_suggestion;
 
@@ -245,7 +245,7 @@ pub(crate) fn validate_children(
         rules
     };
 
-    let mut block = BlockRules::of(rules);
+    let mut block = BlockRules::of(rules, ctx.ruleset);
 
     let (leafvalue_counts, valueclause_counts) =
         count_and_validate_children(ctx, children, rules, &mut block, scope_context, errors);
@@ -277,6 +277,7 @@ struct KeyCard<'a> {
 struct BlockRules<'a> {
     cards: SmallVec<[KeyCard<'a>; 8]>,
     by_key: FxHashMap<u64, SmallVec<[u32; 1]>>,
+    candidate_index: Option<MatchingCandidatesIndex>,
     leafvalue: bool,
     valueclause: bool,
 }
@@ -292,14 +293,15 @@ fn ascii_ci_hash(key: &str) -> u64 {
 }
 
 // A map allocation loses to a linear scan until the rule list is wide.
-const KEY_MAP_MIN_RULES: usize = 8;
+const KEY_MAP_MIN_RULES: usize = RULE_BODY_INDEX_MIN_RULES;
 
 impl<'a> BlockRules<'a> {
-    fn of(rules: &'a [(RuleType, Options)]) -> Self {
+    fn of(rules: &'a [(RuleType, Options)], ruleset: &RuleSet) -> Self {
         let use_map = rules.len() > KEY_MAP_MIN_RULES;
         let mut out = BlockRules {
             cards: SmallVec::new(),
             by_key: FxHashMap::default(),
+            candidate_index: use_map.then(|| MatchingCandidatesIndex::new(rules, ruleset)),
             leafvalue: false,
             valueclause: false,
         };
@@ -364,6 +366,19 @@ impl<'a> BlockRules<'a> {
 
     fn any(&self) -> bool {
         !self.cards.is_empty() || self.leafvalue || self.valueclause
+    }
+
+    fn matching_candidates(
+        &self,
+        rules: &'a [(RuleType, Options)],
+        key: &str,
+        ruleset: &RuleSet,
+        type_index: Option<&cwtools_index::TypeIndex>,
+    ) -> SmallVec<[&'a (RuleType, Options); 4]> {
+        self.candidate_index.as_ref().map_or_else(
+            || matching_candidates(rules, key, ruleset, type_index),
+            |index| index.matching_candidates(rules, key, ruleset, type_index),
+        )
     }
 }
 
@@ -535,8 +550,7 @@ fn count_and_validate_children<'r>(
                 if any_keyed && let Some(i) = block.card_index(key) {
                     block.cards[i].count += 1;
                 }
-                let candidates =
-                    matching_candidates(rules, key, ruleset, type_index, rule_matches_leaf_key);
+                let candidates = block.matching_candidates(rules, key, ruleset, type_index);
                 if let Value::Clause(math_children) = &leaf.value
                     && candidates.iter().any(|(rt, _)| rule_right_is_math_expr(rt))
                 {
@@ -950,7 +964,7 @@ fn enforce_cardinality(
 #[cfg(test)]
 mod tests {
     use super::{BlockRules, KEY_MAP_MIN_RULES};
-    use cwtools_rules::rules_types::{NewField, Options, RuleType};
+    use cwtools_rules::rules_types::{NewField, Options, RuleSet, RuleType};
 
     fn specific(name: &str) -> (RuleType, Options) {
         (
@@ -967,16 +981,42 @@ mod tests {
         let rules: Vec<_> = (0..KEY_MAP_MIN_RULES + 1)
             .map(|i| specific(&format!("field_{i}")))
             .collect();
-        let block = BlockRules::of(&rules);
+        let block = BlockRules::of(&rules, &RuleSet::default());
         assert!(!block.by_key.is_empty());
         assert_eq!(block.card_index("FIELD_0"), Some(0));
         assert_eq!(block.card_index("no_such_field"), None);
     }
 
     #[test]
+    fn matching_candidates_keep_duplicates_and_original_order() {
+        let mut rules: Vec<_> = (0..KEY_MAP_MIN_RULES + 1)
+            .map(|i| specific(&format!("field_{i}")))
+            .collect();
+        rules.insert(1, specific("FIELD_0"));
+        let fallback = (
+            RuleType::LeafRule {
+                left: NewField::ScalarField,
+                right: NewField::ScalarField,
+            },
+            Options::default(),
+        );
+        rules.insert(0, fallback.clone());
+        let block = BlockRules::of(&rules, &RuleSet::default());
+        let candidates = block.matching_candidates(&rules, "Field_0", &RuleSet::default(), None);
+
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0], &rules[1]);
+        assert_eq!(candidates[1], &rules[2]);
+
+        let candidates = block.matching_candidates(&rules, "missing", &RuleSet::default(), None);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0], &fallback);
+    }
+
+    #[test]
     fn short_rule_list_keeps_the_linear_scan() {
         let rules = vec![specific("icon")];
-        let block = BlockRules::of(&rules);
+        let block = BlockRules::of(&rules, &RuleSet::default());
         assert!(block.by_key.is_empty());
         assert_eq!(block.card_index("ICON"), Some(0));
     }
