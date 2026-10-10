@@ -3,6 +3,7 @@
 #### Engine
 
 * Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions, with deterministic wire coverage using the shared test hold helper. (#843)
+* Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
 * Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
 * Test completion field variants and enum, scope and boolean key helpers, asserting suggestion labels, kinds, insertion text and filtering. (#925)
 * Report CW605 for malformed reserved alias and single_alias rules directives without rejecting ordinary root type names. (#484)

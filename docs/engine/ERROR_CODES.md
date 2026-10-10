@@ -173,7 +173,7 @@ These are the core rules-engine codes. Severity and message text are computed pe
 | <a id="cw247"></a>CW247 | Error | Trigger/Effect/Modifier {} used in wrong scope. In {} but expect {} | A trigger, effect, or modifier rule was used in the wrong scope. | Emitted |
 | <a id="cw248"></a>CW248 | Error | Invalid scope command {} | A scope command is not valid here. | Emitted (escape hatch `CWTOOLS_NO_SCOPE_CHECKS=1`) |
 
-### CW250-CW253, CW280-CW283 -- Game-specific and cleanup hints
+### CW250-CW253, CW280-CW284 -- Game-specific and cleanup hints
 
 | ID | Severity | Message | Meaning | Status |
 |---|---|---|---|---|
@@ -184,6 +184,7 @@ These are the core rules-engine codes. Severity and message text are computed pe
 | <a id="cw281"></a>CW281 | Warning | This 'limit' contains no triggers | A `limit = { }` block with no conditions. An empty limit matches everything, so it is almost always forgotten conditions or dead weight. Rust-original (no F# equivalent); emitted from `per_game::structural`. | Emitted |
 | <a id="cw282"></a>CW282 | Information | This is the default value ({}) and can be omitted | A bool field explicitly set to the engine default declared by the rule's `## default_bool` directive, so the line is redundant. Rust-original (no F# equivalent); emitted from `rule_core::children`. | Emitted |
 | <a id="cw283"></a>CW283 | Error | Localisation key "{}" calls scripted GUI callback "{}" which does not exist | A HOI4 `[!name]` localisation call names no direct callback key under an indexed scripted GUI's `effects` or `triggers` container. Rust-only (no F# equivalent). | Emitted when the workspace or vanilla callback registry is populated |
+| <a id="cw284"></a>CW284 | Warning | Icon "{}" is a raw texture path; use a GFX_ sprite registered in interface/*.gfx. Raw paths crash the air battle window on macOS and Linux. | A value beginning with `gfx/` or ending in `.dds`, `.tga`, or `.png` in an `icon` directly inside `create_equipment_variant`, wherever the effect is called, or a bare entry in `pool.icons` in `.txt` files under `gfx/interface/equipmentdesigner/graphic_db/`. Dynamic `$...$`, `[...]`, `<...>`, and `@...` values are exempt. Unregistered sprite names are a separate reference check. Reported in the editor, CLI, and SARIF; the usual inline, CLI code, and workspace suppression routes apply. | Emitted |
 
 ### CW254-CW268 -- Localisation file headers and content
 
