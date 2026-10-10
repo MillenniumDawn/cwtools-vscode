@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Validate rename replacements against constant, the shared localisation-key rule and script type syntax, rejecting constant, macro-parameter and scripted-localisation forms as type names, preserving valid dotted and quoted names and complete quoted target spans. (#845)
 * Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
 * Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
 * Test completion field variants and enum, scope and boolean key helpers, asserting suggestion labels, kinds, insertion text and filtering. (#925)
