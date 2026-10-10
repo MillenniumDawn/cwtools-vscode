@@ -198,7 +198,7 @@ def test_main_returns_first_cargo_exit_when_llvm_cov_fails(
 
 
 # The default floor must match the value the CI workflow pins.
-DEFAULT_LINE_FLOOR = "92.3"
+DEFAULT_LINE_FLOOR = "94.4"
 
 
 def test_main_uses_the_default_threshold_when_env_is_unset(
@@ -247,6 +247,53 @@ def test_main_uses_the_default_threshold_when_env_is_unset(
     lcov_command = next(cmd for cmd in captured if "--output-path" in cmd)
     fail_under_index = lcov_command.index("--fail-under-lines") + 1
     assert lcov_command[fail_under_index] == DEFAULT_LINE_FLOOR
+
+
+@pytest.mark.parametrize(
+    ("measured_percent", "expected_rc"),
+    [(94.85, 0), (93.85, 2)],
+    ids=["measured-baseline-passes", "one-point-drop-fails"],
+)
+def test_coverage_gate_accepts_baseline_and_rejects_one_point_drop(
+    rust_coverage: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    measured_percent: float,
+    expected_rc: int,
+) -> None:
+    captured_thresholds: list[str] = []
+
+    class _FakeCompleted:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+
+    def fake_run(
+        command: object,
+        *_args: object,
+        **_kwargs: object,
+    ) -> object:
+        if not isinstance(command, list) or "--output-path" not in command:
+            return _FakeCompleted(0)
+
+        threshold_index = command.index("--fail-under-lines") + 1
+        threshold = command[threshold_index]
+        captured_thresholds.append(threshold)
+        output_index = command.index("--output-path") + 1
+        Path(command[output_index]).write_text(
+            "TN:\nSF:placeholder\nend_of_record\n", encoding="utf-8"
+        )
+        return _FakeCompleted(0 if measured_percent >= float(threshold) else 2)
+
+    monkeypatch.setattr(
+        rust_coverage.shutil, "which", lambda _name: "/usr/bin/cargo-llvm-cov"
+    )
+    monkeypatch.setattr(rust_coverage.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        rust_coverage.os, "environ", {"CWTOOLS_RS": str(tmp_path / "engine")}
+    )
+
+    assert rust_coverage.main() == expected_rc
+    assert captured_thresholds == [DEFAULT_LINE_FLOOR]
 
 
 def test_ignore_regex_excludes_both_lsp_entrypoint_halves(
