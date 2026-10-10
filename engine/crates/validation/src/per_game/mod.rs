@@ -16,6 +16,7 @@ pub fn seed_comparison_literals(table: &cwtools_string_table::string_table::Stri
     let _ = structural::Keywords::new(table);
     let _ = stellaris::Keys::new(table);
     let _ = hoi4::redundant_block_defaults(table);
+    let _ = hoi4::equipment_icon_keys(table);
 }
 
 pub(crate) fn run_game_validators(ctx: &ValidationCtx, game: Game) -> Vec<ValidationError> {

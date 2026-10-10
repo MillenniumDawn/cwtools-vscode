@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import type { ExtensionContext } from "vscode";
 import { existsSync as fsExistsSync } from "fs";
 import { logInfo, logWarn, logError } from "./logger";
-import { FOLDER_HINTS, CONTENT_HINTS } from "./games";
+import { GAMES, FOLDER_HINTS, CONTENT_HINTS } from "./games";
 import type { RulesRepo } from "./games";
 
 export { LANGUAGE_REPOS } from "./games";
@@ -32,20 +32,34 @@ export async function detectFromFolder(
 	root: string,
 	fileExists: (p: string) => boolean | Promise<boolean>,
 ): Promise<string | null> {
-	const lower = root.toLowerCase();
-	for (const [pattern, id] of FOLDER_HINTS) {
-		if (
-			typeof pattern === "string"
-				? lower.includes(pattern)
-				: pattern.test(lower)
-		) {
-			return id;
+	const parts = root.toLowerCase().split(/[\\/]+/).filter(Boolean);
+	const name = parts[parts.length - 1] ?? "";
+	const rootHint = FOLDER_HINTS.find(([pattern]) =>
+		typeof pattern === "string" ? name.includes(pattern) : pattern.test(name),
+	)?.[1];
+	// The root name is relevant. Ancestors count only in the conventional
+	// <vanilla>/game and <game>/mod/<mod> layouts, with exact game folder names.
+	// That exact game beats a keyword in the mod's own name.
+	const layoutGame =
+		name === "game"
+			? parts[parts.length - 2]
+			: parts[parts.length - 2] === "mod"
+				? parts[parts.length - 3]
+				: undefined;
+	const vanilla = GAMES.find((game) =>
+		game.vanillaFolders.includes(layoutGame ?? ""),
+	);
+	const nameHint = vanilla?.id ?? rootHint;
+
+	// Inspect only the fixed set of content markers, never the whole tree.
+	// Content is stronger than names; mixed trees use GAMES order. Dynasties
+	// are shared by CK2 and CK3, so a recognized CK2 root/layout resolves them.
+	for (const [sub, id] of CONTENT_HINTS) {
+		if (await fileExists(path.join(root, sub))) {
+			return sub === "common/dynasties" && nameHint === "ck2" ? "ck2" : id;
 		}
 	}
-	for (const [sub, id] of CONTENT_HINTS) {
-		if (await fileExists(path.join(root, sub))) return id;
-	}
-	return null;
+	return nameHint ?? null;
 }
 
 function serverPlatformDir(): string {

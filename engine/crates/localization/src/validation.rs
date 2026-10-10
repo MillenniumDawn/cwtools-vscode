@@ -183,7 +183,8 @@ pub fn validate_key_chars(entry: &LocEntry, errors: &mut Vec<LocValidationError>
     }
 }
 
-fn is_valid_loc_key_char(c: char) -> bool {
+/// Whether a character is supported in a localisation key.
+pub fn is_valid_loc_key_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')
 }
 

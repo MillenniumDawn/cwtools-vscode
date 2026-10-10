@@ -19,6 +19,7 @@ import type {
 	LanguageClientOptions,
 	ServerOptions,
 } from "vscode-languageclient/node";
+import { gameContentRoots } from "./gameContentRoots";
 import {
 	LanguageClient,
 	TransportKind,
@@ -482,17 +483,11 @@ export function createLanguageClient(
 	const workspaceRoot = cfg.workspaceFolder.uri.fsPath;
 	const readStartupRoots = () => {
 		const settings = workspace.getConfiguration("cwtools");
-		const parents = (settings.get<string[]>("parentMods") ?? [])
-			.map((root) => path.resolve(workspaceRoot, root))
-			// The server rejects parent mods overlapping its selected workspace.
-			.filter((root) => {
-				const relative = path.relative(workspaceRoot, root);
-				const reverse = path.relative(root, workspaceRoot);
-				const outside = (value: string) => value === ".." || value.startsWith(`..${path.sep}`) || path.isAbsolute(value);
-				return outside(relative) && outside(reverse);
-			});
-		const vanilla = settings.get<string>("cache." + cfg.language);
-		return [workspaceRoot, ...parents, ...(vanilla ? [vanilla] : [])];
+		return gameContentRoots(
+			workspaceRoot,
+			settings.get<string[]>("parentMods"),
+			settings.get<string>("cache." + cfg.language),
+		);
 	};
 	let startupRoots = readStartupRoots();
 	let isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
