@@ -38,6 +38,18 @@ pub fn scope_matches_required(
     })
 }
 
+pub(crate) fn with_saved_scope_context<R>(
+    scope_context: &mut Option<ScopeContext>,
+    validate: impl FnOnce(&mut Option<ScopeContext>) -> R,
+) -> R {
+    let saved = scope_context.as_ref().map(ScopeContext::save);
+    let result = validate(scope_context);
+    if let (Some(saved), Some(ctx)) = (saved, scope_context.as_mut()) {
+        ctx.restore(saved);
+    }
+    result
+}
+
 pub(crate) fn validate_scope_target(
     scope_context: &mut Option<ScopeContext>,
     value: &str,
@@ -62,9 +74,11 @@ pub(crate) fn validate_scope_target(
     {
         return;
     }
-    let saved = ctx.save();
-    let result = ctx.change_scope(value);
-    ctx.restore(saved);
+    let Some(result) = with_saved_scope_context(scope_context, |context| {
+        context.as_mut().map(|ctx| ctx.change_scope(value))
+    }) else {
+        return;
+    };
     let (code, message) = match result {
         cwtools_game::scope_engine::ScopeResult::WrongScope {
             command,
@@ -104,6 +118,33 @@ pub(crate) fn validate_scope_target(
         )
         .with_end(leaf.pos.end),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_saved_scope_context;
+    use cwtools_game::constants::Game;
+    use cwtools_game::scope_engine::{ScopeContext, ScopeId};
+
+    #[test]
+    fn saved_scope_context_restores_root_scopes_and_from_stack() {
+        let mut scope_context = Some(ScopeContext::new(Game::Hoi4, ScopeId(2)));
+        let before = scope_context.as_ref().unwrap().save();
+
+        let result = with_saved_scope_context(&mut scope_context, |context| {
+            let scope = context.as_mut().unwrap();
+            scope.root = ScopeId(3);
+            scope.push_scope(ScopeId(4));
+            scope.from.push(ScopeId(5));
+            "validated"
+        });
+
+        assert_eq!(result, "validated");
+        let restored = scope_context.as_ref().unwrap();
+        assert_eq!(restored.root, before.root);
+        assert_eq!(restored.scopes.as_slice(), before.scopes.as_slice());
+        assert_eq!(restored.from.as_slice(), before.from.as_slice());
+    }
 }
 
 pub(crate) fn seed_root_scope(

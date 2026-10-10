@@ -9,7 +9,7 @@ use cwtools_string_table::string_table::StringTable;
 use crate::common::*;
 use crate::ctx::ValidationCtx;
 use crate::loc_field::validate_localisation_field;
-use crate::scope::validate_scope_target;
+use crate::scope::{validate_scope_target, with_saved_scope_context};
 use cwtools_error_codes as error_codes;
 
 use super::children::validate_math_clause;
@@ -93,11 +93,9 @@ pub(super) fn validate_leaf(
         if let NewField::ValueField(ValueType::MathExpr) = right {
             if let Value::Clause(math_children) = &leaf.value {
                 let pos = (leaf.pos.start.line, leaf.pos.start.col);
-                let saved = scope_context.as_ref().map(ScopeContext::save);
-                validate_math_clause(ctx, math_children, scope_context, pos, errors);
-                if let (Some(saved), Some(sc)) = (saved, scope_context.as_mut()) {
-                    sc.restore(saved);
-                }
+                with_saved_scope_context(scope_context, |scope_context| {
+                    validate_math_clause(ctx, math_children, scope_context, pos, errors);
+                });
             }
             return;
         }
