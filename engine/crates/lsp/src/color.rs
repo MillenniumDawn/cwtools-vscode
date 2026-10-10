@@ -386,7 +386,8 @@ fn collect(
             )
         });
         if matched.iter().any(|(rt, _)| is_colour_rule(rt))
-            && let Some(literal) = literal_from_ast(&leaf.value, leaf.color_prefix, cx.arena)
+            && let Some(literal) =
+                colour_from_ast_range(leaf.value_pos, &leaf.value, leaf.color_prefix, cx.arena)
         {
             out.push(FoundColour {
                 range: leaf.value_pos,
@@ -430,6 +431,23 @@ fn to_lsp_range(range: SourceRange, lines: &[&str], encoding: &PositionEncodingK
     }
 }
 
+/// Parser columns saturate at `u16::MAX`. Such a range may cover only a suffix
+/// of a color literal or point into whitespace, so never expose it to the LSP.
+fn is_color_range_representable(range: SourceRange) -> bool {
+    range.start.col != u16::MAX && range.end.col != u16::MAX
+}
+
+fn colour_from_ast_range(
+    range: SourceRange,
+    value: &Value,
+    prefix: Option<ColorPrefix>,
+    arena: &Arena,
+) -> Option<ColourLiteral> {
+    is_color_range_representable(range)
+        .then(|| literal_from_ast(value, prefix, arena))
+        .flatten()
+}
+
 fn colour_at_range(
     children: &[Child],
     arena: &Arena,
@@ -450,7 +468,7 @@ fn colour_at_range(
             Child::Comment(_) => continue,
         };
         if to_lsp_range(range, lines, encoding) == target
-            && let Some(literal) = literal_from_ast(value, prefix, arena)
+            && let Some(literal) = colour_from_ast_range(range, value, prefix, arena)
         {
             return Some(literal);
         }
@@ -884,6 +902,33 @@ mod tests {
         panic!("no {key} leaf");
     }
 
+    fn runtime_literal_at_key(text: &str, key: &str) -> Option<ColourLiteral> {
+        let table = StringTable::new();
+        let ast = cwtools_parser::parser::parse_string(text, &table);
+        let lines: Vec<&str> = text.lines().collect();
+        let Child::Leaf(root) = &ast.root_children[0] else {
+            panic!("expected a root clause")
+        };
+        let Value::Clause(children) = &ast.arena.leaves[*root as usize].value else {
+            panic!("expected a clause")
+        };
+        for child in children {
+            let Child::Leaf(idx) = child else { continue };
+            let leaf = &ast.arena.leaves[*idx as usize];
+            if table.get_string(leaf.key.normal).as_deref() == Some(key) {
+                let target = to_lsp_range(leaf.value_pos, &lines, &PositionEncodingKind::UTF16);
+                return colour_at_range(
+                    &ast.root_children,
+                    &ast.arena,
+                    &lines,
+                    &PositionEncodingKind::UTF16,
+                    target,
+                );
+            }
+        }
+        None
+    }
+
     #[test]
     fn the_span_covers_the_value_only_not_the_key() {
         let text = "c = {\n    color = { 0.2 0.4 0.6 }\n}\n";
@@ -929,6 +974,10 @@ mod tests {
         assert_eq!(found.range.start.col, u16::MAX);
         assert_eq!(found.range.end.col, u16::MAX);
         assert!(found.range.start.col <= found.range.end.col);
+        assert!(
+            runtime_literal_at_key(&text, "color").is_none(),
+            "the runtime picker must decline a range clamped at both ends"
+        );
     }
 
     #[test]
@@ -941,6 +990,10 @@ mod tests {
         let found = find(&text, "color");
         assert_eq!(found.range.start.col, 65_527, "just past `color = `");
         assert_eq!(found.range.end.col, u16::MAX);
+        assert!(
+            runtime_literal_at_key(&text, "color").is_none(),
+            "the runtime picker must decline a range with a saturated end"
+        );
         let lines: Vec<&str> = text.lines().collect();
         let range = to_lsp_range(found.range, &lines, &PositionEncodingKind::UTF16);
         assert_eq!(range.end.character, u16::MAX as u32);
