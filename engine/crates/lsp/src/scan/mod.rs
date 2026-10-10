@@ -460,7 +460,7 @@ pub(crate) fn hold_parse_blocking_for_tests() {
     }
 }
 
-async fn hold_for_tests(file_var: &str, ready_var: Option<&str>) {
+pub(crate) async fn hold_for_tests(file_var: &str, ready_var: Option<&str>) {
     let Ok(gate) = std::env::var(file_var) else {
         return;
     };

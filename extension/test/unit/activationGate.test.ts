@@ -1,10 +1,16 @@
 import { beforeEach, expect, suite, test, vi } from "vitest";
 import type { ExtensionContext } from "vscode";
+import * as path from "node:path";
+import * as os from "node:os";
+import type * as NodeFs from "fs/promises";
+import type * as Engine from "../../src/host/engine";
+import type * as Detection from "../../src/host/detectGame";
 
 const mocks = vi.hoisted(() => ({
 	workspace: {
 		workspaceFolders: undefined as { uri: unknown }[] | undefined,
 		fs: { stat: vi.fn() },
+		findFiles: vi.fn().mockResolvedValue([]),
 		getConfiguration: vi.fn(() => ({
 			get: vi.fn((_key: string, defaultValue?: unknown) => defaultValue),
 		})),
@@ -41,12 +47,16 @@ const mocks = vi.hoisted(() => ({
 	},
 }));
 
-vi.mock("fs/promises", () => ({
+vi.mock("fs/promises", async (importOriginal) => ({
+	...await importOriginal<typeof NodeFs>(),
 	stat: mocks.fsStat,
 	chmod: mocks.fsChmod,
 }));
 vi.mock("vscode", () => ({
 	workspace: mocks.workspace,
+	RelativePattern: class RelativePattern {
+		constructor(public readonly root: unknown, public readonly pattern: string) {}
+	},
 	commands: { executeCommand: mocks.executeCommand },
 	Uri: { joinPath: (uri: string, name: string) => `${uri}/${name}` },
 	FileType: { File: 1, Directory: 2 },
@@ -57,7 +67,10 @@ vi.mock("vscode", () => ({
 	},
 	l10n: { t: (message: string) => message },
 }));
-vi.mock("../../src/host/engine", () => ({ serverExe: mocks.serverExe }));
+vi.mock("../../src/host/engine", async (importOriginal) => ({
+	...await importOriginal<typeof Engine>(),
+	serverExe: mocks.serverExe,
+}));
 vi.mock("../../src/host/detectGame", () => ({
 	detectGameAndVanilla: mocks.detectGameAndVanilla,
 }));
@@ -92,6 +105,7 @@ suite("descriptor startup gate", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		vi.clearAllMocks();
+		mocks.detectGameAndVanilla.mockResolvedValue({ languageId: "paradox" });
 		mocks.workspace.getConfiguration.mockImplementation(() => ({
 			get: vi.fn((_key: string, defaultValue?: unknown) => defaultValue),
 		}));
@@ -245,4 +259,27 @@ suite("descriptor startup gate", () => {
 		expect(context.subscriptions).toContain(mocks.client);
 		expect(mocks.client.start).toHaveBeenCalledOnce();
 	});
+	test("initializes HOI4 from real content under a misleading ancestor without remote rules", async () => {
+		const fs = await import("node:fs/promises");
+		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "cwtools-init-"));
+		try {
+			const root = path.join(temp, "stellaris", "Millennium-Dawn");
+			await fs.mkdir(path.join(root, "common", "ai_strategy"), { recursive: true });
+			await fs.writeFile(path.join(root, "descriptor.mod"), 'name="MD fixture"');
+			const mod = { uri: { fsPath: root, toString: () => `file://${root}` }, name: "Millennium-Dawn", index: 0 };
+			mocks.workspace.workspaceFolders = [mod];
+			mocks.workspace.fs.stat.mockResolvedValue({ type: 1 });
+			const { detectGameAndVanilla } = await vi.importActual<typeof Detection>("../../src/host/detectGame");
+			mocks.detectGameAndVanilla.mockImplementation(detectGameAndVanilla);
+			const { activate } = await import("../../src/host/extension");
+			await activate({ globalStorageUri: { fsPath: "cache" }, subscriptions: [] } as unknown as ExtensionContext);
+			expect(mocks.resolveRulesCache).toHaveBeenCalledWith("hoi4", expect.any(String), root);
+			expect(mocks.createLanguageClient).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+				language: "hoi4", workspaceFolder: mod,
+			}), expect.any(Function));
+		} finally {
+			await fs.rm(temp, { recursive: true, force: true });
+		}
+	});
+
 });

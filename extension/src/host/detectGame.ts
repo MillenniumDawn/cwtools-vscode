@@ -54,7 +54,7 @@ export async function detectGameAndVanilla(
 ): Promise<GameDetection> {
 	let languageId = (await detectLanguageId(root)) ?? "paradox";
 
-	// Once folder hints pin a specific game we don't need to scan the workspace
+	// Once content or root-name hints pin a specific game we don't need to scan the workspace
 	// for the other exes; the generic "paradox" case still checks all of them.
 	const gamesToCheck =
 		languageId === "paradox" ? GAMES : GAMES.filter((g) => g.id === languageId);
