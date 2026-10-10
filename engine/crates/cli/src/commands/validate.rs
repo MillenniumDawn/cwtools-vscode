@@ -9,7 +9,7 @@ use cwtools_rules::ruleset_loader::RuleParseError;
 use crate::cli::ValidateArgs;
 use crate::diag::{
     Diag, SourceLines, cli_row, csv_row, is_ignored, json_row, loc_diagnostic_to_diag,
-    rule_error_to_diag, severity_rank, validation_to_diag_with_display,
+    rule_error_to_diag, severity_rank, validation_to_diag_with_path,
 };
 use crate::report::ReportType;
 use crate::run::{
@@ -328,9 +328,10 @@ pub(super) fn run(args: ValidateArgs) {
                 continue;
             }
             let line_text = sources.trimmed_path(&file_key, &path, err.line);
-            let d = validation_to_diag_with_display(
+            let d = validation_to_diag_with_path(
                 &directory,
                 err,
+                &path,
                 display_file.clone(),
                 line_text,
                 want_legacy_hash,
