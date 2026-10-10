@@ -148,7 +148,7 @@ pub(crate) fn apply_label_details(items: &mut [CompletionItem]) {
 
 #[tracing::instrument(skip_all, fields(rules = rules.len()))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn completions_from_rules(
+pub fn completions_from_rules(
     rules: &[(RuleType, cwtools_rules::rules_types::Options)],
     ruleset: &RuleSet,
     info: &InfoService,
@@ -697,7 +697,7 @@ fn push_alias_keys(
     }
 }
 
-pub(crate) fn expanded_modifier_scopes(
+pub fn expanded_modifier_scopes(
     ruleset: &RuleSet,
     type_index: &cwtools_info::TypeIndex,
 ) -> HashMap<String, Vec<String>> {
@@ -937,7 +937,7 @@ fn icon_values(index: &cwtools_info::FileIndex, folder: &str) -> Vec<String> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ValueCompletionSets<'a> {
+pub struct ValueCompletionSets<'a> {
     pub modifier_keys: &'a HashSet<String>,
     pub modifier_scopes: &'a HashMap<String, Vec<String>>,
     pub loc_keys: &'a HashSet<String>,
@@ -964,7 +964,7 @@ pub(crate) fn value_rules_need_loc_keys(
 
 #[tracing::instrument(skip_all, fields(value_rules = value_rules.len()))]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn value_completions(
+pub fn value_completions(
     value_rules: &[(RuleType, cwtools_rules::rules_types::Options)],
     ruleset: &RuleSet,
     info: &InfoService,

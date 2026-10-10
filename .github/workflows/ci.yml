@@ -465,9 +465,9 @@ jobs:
       - name: Install cargo-llvm-cov
         if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
         run: cargo install cargo-llvm-cov --locked --version 0.8.7
-      - name: Run coverage (91.5% line floor)
+      - name: Run coverage (92.3% line floor)
         env:
-          COVERAGE_THRESHOLD: 91.5
+          COVERAGE_THRESHOLD: 92.3
         run: python3 ../scripts/coverage.py
       - name: Upload rust coverage
         # v7.0.1

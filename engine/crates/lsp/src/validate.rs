@@ -138,7 +138,7 @@ fn try_parse_loc_buffer(
     cwtools_localization::parse_loc_files(path, text, None)
 }
 
-fn parse_loc_buffer(text: &str, path: &str) -> Vec<cwtools_localization::LocFile> {
+pub fn parse_loc_buffer(text: &str, path: &str) -> Vec<cwtools_localization::LocFile> {
     try_parse_loc_buffer(text, path).unwrap_or_default()
 }
 
@@ -264,7 +264,7 @@ pub(crate) fn truncate_validation_errors(
     total
 }
 
-pub(crate) fn loc_extra_valid_refs(
+pub fn loc_extra_valid_refs(
     modifier_keys: &HashSet<String>,
     type_index: &cwtools_info::TypeIndex,
 ) -> HashSet<String> {
@@ -532,7 +532,7 @@ pub(crate) fn doc_token_hash(lowered: &str) -> u64 {
     hasher.finish()
 }
 
-pub(crate) fn collect_doc_tokens(
+pub fn collect_doc_tokens(
     ast: &ParsedFile,
     table: &cwtools_string_table::string_table::StringTable,
 ) -> HashSet<u64> {
@@ -1781,268 +1781,6 @@ impl Backend {
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
             (diagnostics, Some(parsed))
         })
-    }
-}
-
-#[cfg(test)]
-mod perf_bench {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn bench<F: FnMut() -> usize>(label: &str, iters: usize, mut f: F) {
-        for _ in 0..3 {
-            f();
-        }
-        let mut times = Vec::with_capacity(iters);
-        let mut n = 0;
-        for _ in 0..iters {
-            let t = std::time::Instant::now();
-            n = f();
-            times.push(t.elapsed());
-        }
-        times.sort();
-        let mean = times.iter().sum::<std::time::Duration>() / iters as u32;
-        eprintln!(
-            "{:>28}: mean {:>10.1?}  min {:>10.1?}  max {:>10.1?}  (count {}, n={})",
-            label,
-            mean,
-            times[0],
-            times[iters - 1],
-            n,
-            iters
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn perf_keystroke_validate() {
-        let fixture = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../testfiles/performancetest2/events/cc_colony_events.txt"
-        );
-        let text = std::fs::read_to_string(fixture).expect("fixture").repeat(8);
-        eprintln!("fixture: {} bytes", text.len());
-        let table = cwtools_string_table::string_table::StringTable::new();
-        let parsed = parse_string(&text, &table);
-
-        bench("collect_doc_tokens", 30, || {
-            collect_doc_tokens(&parsed, &table).len()
-        });
-
-        let ws: Option<Arc<str>> = Some(crate::paths::workspace_prefix_of(
-            "file:///mnt/mods/millennium_dawn",
-        ));
-        let uri = "file:///mnt/mods/millennium_dawn/events/some_event_file.txt";
-        bench("logical_path_from_uri x1000", 30, || {
-            let mut total = 0usize;
-            for _ in 0..1000 {
-                total += logical_path_from_uri(uri, &ws).len();
-            }
-            total
-        });
-    }
-
-    /// The parse a loc keystroke pays, before and after #87. The edited buffer
-    #[test]
-    #[ignore]
-    fn perf_loc_edit_parse() {
-        const ENTRIES: usize = 4_000;
-        let path = "localisation/bench_l_english.yml";
-        let mut text = String::from("\u{FEFF}l_english:\n");
-        for i in 0..ENTRIES {
-            text.push_str(&format!(
-                " key_{i:05}:0 \"Localised text for $other_key_{i:05}$ with [GetName] in it\"\n"
-            ));
-        }
-        eprintln!("fixture: {} bytes, {ENTRIES} entries", text.len());
-
-        bench("loc parse x1 (after)", 20, || {
-            parse_loc_buffer(&text, path).len()
-        });
-        bench("loc parse x3 + 2 copies (before)", 20, || {
-            let owned = text.to_string();
-            let a = parse_loc_buffer(&owned, path);
-            let b = parse_loc_buffer(&text, path);
-            let owned = text.to_string();
-            let c = parse_loc_buffer(&owned, path);
-            a.len() + b.len() + c.len()
-        });
-    }
-
-    #[test]
-    #[ignore]
-    fn perf_loc_ref_names() {
-        const MODIFIER_KEYS: usize = 50_000;
-        const TYPE_INSTANCES: usize = 190_000;
-
-        let modifier_keys: HashSet<String> = (0..MODIFIER_KEYS)
-            .map(|i| format!("modifier_key_{:06}", i))
-            .collect();
-        let mut type_index = cwtools_info::TypeIndex::new();
-        let mut per_type: HashMap<String, Vec<cwtools_info::TypeInstance>> = HashMap::new();
-        for i in 0..TYPE_INSTANCES {
-            per_type
-                .entry(format!("type_{:02}", i % 40))
-                .or_default()
-                .push(cwtools_info::TypeInstance {
-                    name: format!("instance_name_{:06}", i),
-                    location: cwtools_info::SourceLocation {
-                        line: 1,
-                        col: 0,
-                        end: (1, 0),
-                    },
-                    primary_loc_key: None,
-                    required_loc_keys: Vec::new(),
-                });
-        }
-        type_index.merge("file:///bench/defs.txt", per_type);
-        eprintln!(
-            "fixture: {} modifier keys, {} type instances",
-            modifier_keys.len(),
-            TYPE_INSTANCES
-        );
-
-        bench("loc_extra_valid_refs", 20, || {
-            loc_extra_valid_refs(&modifier_keys, &type_index).len()
-        });
-
-        let base = loc_extra_valid_refs(&modifier_keys, &type_index);
-        let overlay: HashSet<String> = (0..4_000).map(|i| format!("overlay_key_{i:06}")).collect();
-        bench("overlay merge (before)", 20, || {
-            let mut combined = base.clone();
-            combined.extend(overlay.iter().cloned());
-            combined.len()
-        });
-        bench("overlay rebuild (after)", 20, || {
-            let mut keys = HashSet::new();
-            keys.extend(overlay.iter().cloned());
-            keys.len()
-        });
-    }
-
-    #[test]
-    #[ignore]
-    fn perf_index_parsed_file() {
-        let expand = |p: &str| -> std::path::PathBuf {
-            match p.strip_prefix("~/") {
-                Some(rest) => std::path::PathBuf::from(std::env::var("HOME").unwrap()).join(rest),
-                None => std::path::PathBuf::from(p),
-            }
-        };
-        let rules_dir = expand(
-            &std::env::var("CWTOOLS_PERF_RULES")
-                .unwrap_or_else(|_| "~/Documents/github-projects/cwtools-hoi4-config".to_string()),
-        )
-        .join("Config");
-        let vanilla = expand(&std::env::var("CWTOOLS_PERF_VANILLA").unwrap_or_else(|_| {
-            "~/.local/share/Steam/steamapps/common/Hearts of Iron IV".to_string()
-        }));
-        if !rules_dir.is_dir() || !vanilla.is_dir() {
-            eprintln!(
-                "perf_index_parsed_file: skipping, need {} and {}",
-                rules_dir.display(),
-                vanilla.display()
-            );
-            return;
-        }
-
-        let table = cwtools_string_table::string_table::StringTable::new();
-        let (ruleset, _errors) = cwtools_rules::ruleset_loader::load_ruleset_from_dir(
-            &rules_dir,
-            &table,
-            cwtools_file_manager::file_manager::ScanBudget::default(),
-        );
-        eprintln!(
-            "ruleset: {} types / {} aliases from {}",
-            ruleset.types.len(),
-            ruleset.aliases.len(),
-            rules_dir.display()
-        );
-
-        for logical_path in [
-            "common/national_focus/germany.txt",
-            "events/WUW_Germany.txt",
-            "common/units/equipment/plane_airframes.txt",
-        ] {
-            let game_file = vanilla.join(logical_path);
-            let Ok(text) = std::fs::read_to_string(&game_file) else {
-                eprintln!("  skipping missing fixture {}", game_file.display());
-                continue;
-            };
-            let parsed = parse_string(&text, &table);
-            let uri = format!("file:///bench/{}", logical_path);
-            eprintln!("fixture: {} ({} bytes)", logical_path, text.len());
-
-            bench("collect_type_instances_with_subtypes", 20, || {
-                let collected = cwtools_info::collect_type_instances_with_subtypes(
-                    &ruleset,
-                    &parsed,
-                    logical_path,
-                    &table,
-                    cwtools_validation::subtype_membership_for_instance,
-                );
-                collected.instances.len() + collected.subtype_instances.len()
-            });
-            let mut info = cwtools_info::InfoService::new();
-            bench("collect + clear_file + index_file", 20, || {
-                let collected = cwtools_info::collect_type_instances_with_subtypes(
-                    &ruleset,
-                    &parsed,
-                    logical_path,
-                    &table,
-                    cwtools_validation::subtype_membership_for_instance,
-                );
-                info.clear_file(&uri);
-                info.index_file_with_precomputed_instances(
-                    &uri,
-                    &parsed,
-                    &table,
-                    &ruleset,
-                    logical_path,
-                    collected.instances,
-                    collected.subtype_instances,
-                    false,
-                );
-                info.export_fingerprint(&uri) as usize
-            });
-
-            let mut type_index = cwtools_info::TypeIndex::new();
-            type_index.merge(
-                &uri,
-                cwtools_info::collect_type_instances(&ruleset, &parsed, logical_path, &table),
-            );
-            bench("CW100 recollect + check", 20, || {
-                let per_type =
-                    cwtools_info::collect_type_instances(&ruleset, &parsed, logical_path, &table);
-                let instances: Vec<_> = per_type
-                    .iter()
-                    .flat_map(|(type_name, values)| {
-                        values
-                            .iter()
-                            .map(move |instance| (type_name.as_str(), instance))
-                    })
-                    .collect();
-                cwtools_validation::missing_loc::check_missing_localisation(
-                    &instances,
-                    logical_path,
-                    &logical_path.into(),
-                    &ruleset,
-                    |_| true,
-                )
-                .len()
-            });
-            bench("CW100 indexed check", 20, || {
-                let instances = type_index.instances_in_file(&uri);
-                cwtools_validation::missing_loc::check_missing_localisation(
-                    &instances,
-                    logical_path,
-                    &logical_path.into(),
-                    &ruleset,
-                    |_| true,
-                )
-                .len()
-            });
-        }
     }
 }
 

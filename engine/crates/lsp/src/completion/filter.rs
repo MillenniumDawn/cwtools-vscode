@@ -29,8 +29,8 @@ pub(crate) fn anchor_items(items: &mut [CompletionItem], range: Range) {
     }
 }
 
-pub(crate) const CONTEXT_COMPLETE_THRESHOLD: usize = 750;
-pub(crate) const CONTEXT_CAP: usize = 1000;
+pub const CONTEXT_COMPLETE_THRESHOLD: usize = 750;
+pub const CONTEXT_CAP: usize = 1000;
 
 pub(crate) fn subsequence_match(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
@@ -117,7 +117,7 @@ pub(crate) fn filter_and_cap(
     (filtered, dropped)
 }
 
-pub(crate) fn prepare_context_items(
+pub fn prepare_context_items(
     items: Vec<CompletionItem>,
     built_dropped: usize,
     token: &str,

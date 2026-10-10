@@ -59,15 +59,12 @@ pub(crate) fn canonicalize_uri_string(uri: &mut String) {
     }
 }
 
-pub(crate) fn workspace_prefix_of(workspace_uri: &str) -> std::sync::Arc<str> {
+pub fn workspace_prefix_of(workspace_uri: &str) -> std::sync::Arc<str> {
     let ws_path = normalize_separators(uri_to_path_str(workspace_uri));
     std::sync::Arc::from(ws_path.trim_end_matches('/'))
 }
 
-pub(crate) fn logical_path_from_uri(
-    uri: &str,
-    workspace_prefix: &Option<std::sync::Arc<str>>,
-) -> String {
+pub fn logical_path_from_uri(uri: &str, workspace_prefix: &Option<std::sync::Arc<str>>) -> String {
     // indexing, path matching). On Windows `uri_to_path_str` yields backslashes,
     let path = normalize_separators(uri_to_path_str(uri));
     if let Some(prefix) = workspace_prefix
