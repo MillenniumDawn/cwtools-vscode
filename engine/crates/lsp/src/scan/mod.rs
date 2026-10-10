@@ -365,7 +365,30 @@ impl Backend {
     }
 
     async fn send_update_file_list(&self, file_list: Vec<serde_json::Value>) {
-        let payload = serde_json::json!({ "fileList": file_list });
+        // Discovery has already written the install back into config. Share
+        // that result so the client does not duplicate Steam path discovery.
+        let vanilla_dir = self.state.config.read().vanilla_dir.clone();
+        let mut vanilla_roots = Vec::new();
+        if let Some(dir) = vanilla_dir {
+            // Definition URIs use canonical paths, while documents opened
+            // directly can retain a symlinked Steam install's alias.
+            for root in [
+                std::path::absolute(&dir).ok(),
+                std::fs::canonicalize(&dir).ok(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let uri = crate::paths::path_to_uri(&root);
+                if !vanilla_roots.contains(&uri) {
+                    vanilla_roots.push(uri);
+                }
+            }
+        }
+        let payload = serde_json::json!({
+            "fileList": file_list,
+            "vanillaRoots": vanilla_roots,
+        });
         self.client
             .send_notification::<UpdateFileList>(payload)
             .await;

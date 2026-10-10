@@ -19153,6 +19153,123 @@ fn test_access_boundary_refuses_a_character_device() {
     assert_refused(&response, "/dev/zero");
 }
 
+enum VanillaRootFixture {
+    AutoDiscovered,
+    RelativeSetting,
+    #[cfg(unix)]
+    SymlinkedSteam,
+}
+
+fn assert_loaded_files_reports_resolved_vanilla_roots(fixture: VanillaRootFixture) {
+    let home = tempfile::tempdir().unwrap();
+    let vanilla = home
+        .path()
+        .join(".steam/steam/steamapps/common/Hearts of Iron IV");
+    #[cfg(unix)]
+    if matches!(fixture, VanillaRootFixture::SymlinkedSteam) {
+        let steam = home.path().join(".local/share/Steam");
+        std::fs::create_dir_all(&steam).unwrap();
+        std::fs::create_dir_all(home.path().join(".steam")).unwrap();
+        std::os::unix::fs::symlink(steam, home.path().join(".steam/steam")).unwrap();
+    }
+    std::fs::create_dir_all(vanilla.join("common/national_focus")).unwrap();
+    std::fs::write(
+        vanilla.join("common/national_focus/base.txt"),
+        "focus_tree = { id = base }\n",
+    )
+    .unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let rules = tempfile::tempdir().unwrap();
+    std::fs::write(rules.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let mut init_options = serde_json::json!({
+        "language": "hoi4",
+        "rulesCache": rules.path().to_string_lossy(),
+    });
+    if matches!(fixture, VanillaRootFixture::RelativeSetting) {
+        init_options["vanilla"] = serde_json::json!(
+            std::path::Path::new(".steam").join("steam/steamapps/common/Hearts of Iron IV")
+        );
+    }
+    let mut child = cwtools_server_cmd()
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let stdin = child.stdin.take().unwrap();
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let root_uri = path_uri(ws.path());
+    let notification = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                1,
+                "initialize",
+                serde_json::json!({
+                    "processId": std::process::id(),
+                    "rootUri": root_uri,
+                    "capabilities": {},
+                    "initializationOptions": init_options,
+                }),
+            ),
+        )
+        .unwrap();
+        read_response(reader).expect("no init response");
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+        loop {
+            let raw = read_frame(reader).expect("server exited before loaded files arrived");
+            let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if frame["method"] == "updateFileList" {
+                break frame["params"].clone();
+            }
+        }
+    })
+    .expect("timed out waiting for loaded files");
+    assert!(notification["fileList"].is_array());
+    let roots = notification["vanillaRoots"]
+        .as_array()
+        .expect("loaded files must include the resolved vanilla roots");
+    let roots: Vec<&str> = roots.iter().map(|root| root.as_str().unwrap()).collect();
+    let physical = std::fs::canonicalize(&vanilla).unwrap();
+    assert!(roots.contains(&path_uri(&physical).as_str()));
+    if !matches!(fixture, VanillaRootFixture::RelativeSetting) {
+        assert!(roots.contains(&path_uri(&vanilla).as_str()));
+    }
+    for root in roots {
+        let path = tower_lsp::lsp_types::Url::parse(root)
+            .unwrap()
+            .to_file_path()
+            .unwrap();
+        assert!(path.is_absolute());
+        // A relative config may resolve a symlinked temp-dir prefix through
+        // the child's cwd, such as /private/var on macOS.
+        assert_eq!(std::fs::canonicalize(path).unwrap(), physical);
+    }
+}
+
+#[test]
+fn test_loaded_files_reports_auto_discovered_vanilla_without_an_init_setting() {
+    // Matches an unset cwtools.cache.hoi4 setting in the client.
+    assert_loaded_files_reports_resolved_vanilla_roots(VanillaRootFixture::AutoDiscovered);
+}
+
+#[test]
+fn test_loaded_files_reports_absolute_vanilla_root_for_a_relative_init_setting() {
+    assert_loaded_files_reports_resolved_vanilla_roots(VanillaRootFixture::RelativeSetting);
+}
+
+#[cfg(unix)] // Creating the Steam symlink is Unix-only; the URI protocol is portable.
+#[test]
+fn test_loaded_files_reports_alias_and_physical_roots_for_symlinked_steam() {
+    assert_loaded_files_reports_resolved_vanilla_roots(VanillaRootFixture::SymlinkedSteam);
+}
+
 #[cfg(unix)]
 #[test]
 fn test_access_boundary_allows_an_auto_discovered_vanilla_install() {

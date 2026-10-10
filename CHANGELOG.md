@@ -44,6 +44,7 @@
 
 #### Extension
 
+* Limit automatic plaintext language promotion to the selected mod, configured parent mods and the server's configured or auto-discovered vanilla content roots, including symlink targets used by definitions. Recheck open vanilla scripts after the server reports its install. (#836)
 * Exercise graph hover classes, drawing and canvas transforms against real headless Cytoscape, including lazy tooltip creation, detail expansion, simple/expanded mouseout behavior and replacement cleanup. (#881)
 * Prefer game content markers over folder names and ignore unrelated ancestor names during game detection. The `common/dynasties` marker CK2 and CK3 share still follows a CK2 name. (#839)
 * Keep server graphs, JSON imports and restored graphs ordered by the latest committed request; cancelling an import dialog preserves pending work. (#840)

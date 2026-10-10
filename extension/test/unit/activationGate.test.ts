@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
 	resolveRulesCache: vi.fn(),
 	createLanguageClient: vi.fn(),
 	registerCommands: vi.fn(),
+	registerDocumentLanguage: vi.fn(),
 	fsStat: vi.fn(),
 	fsChmod: vi.fn(),
 	client: {
@@ -39,7 +40,7 @@ const mocks = vi.hoisted(() => ({
 		start: vi.fn(),
 		dispose: vi.fn(),
 	},
-	tracker: { classifyActiveEditor: vi.fn() },
+	tracker: { classifyActiveEditor: vi.fn(), updateVanillaRoots: vi.fn() },
 	notifications: {
 		initialScanDone: Promise.resolve(),
 		statusText: vi.fn(),
@@ -85,7 +86,7 @@ vi.mock("../../src/host/serverNotifications", () => ({
 	registerServerNotifications: vi.fn(() => mocks.notifications),
 }));
 vi.mock("../../src/host/documentLanguage", () => ({
-	registerDocumentLanguage: vi.fn(() => mocks.tracker),
+	registerDocumentLanguage: mocks.registerDocumentLanguage,
 }));
 vi.mock("../../src/host/commands", () => ({
 	registerCommands: mocks.registerCommands,
@@ -105,6 +106,7 @@ suite("descriptor startup gate", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		vi.clearAllMocks();
+		mocks.registerDocumentLanguage.mockReturnValue(mocks.tracker);
 		mocks.detectGameAndVanilla.mockResolvedValue({ languageId: "paradox" });
 		mocks.workspace.getConfiguration.mockImplementation(() => ({
 			get: vi.fn((_key: string, defaultValue?: unknown) => defaultValue),
@@ -250,6 +252,11 @@ suite("descriptor startup gate", () => {
 			expect.any(Function),
 		);
 		expect(mocks.client.registerProposedFeatures).toHaveBeenCalledOnce();
+		expect(mocks.registerDocumentLanguage).toHaveBeenCalledWith(
+			context, mocks.client, "paradox", expect.any(Function),
+		);
+		const roots = mocks.registerDocumentLanguage.mock.calls[0][3] as () => string[];
+		expect(roots()).toEqual(["/mod"]);
 		expect(mocks.registerCommands).toHaveBeenCalledWith(
 			context,
 			mocks.client,
