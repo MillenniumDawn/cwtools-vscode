@@ -431,8 +431,44 @@ fn to_lsp_range(range: SourceRange, lines: &[&str], encoding: &PositionEncodingK
     }
 }
 
-/// Parser columns saturate at `u16::MAX`. Such a range may cover only a suffix
-/// of a color literal or point into whitespace, so never expose it to the LSP.
+/// Parser columns saturate at `u16::MAX`, and the parser does not count lone
+/// carriage returns while LSP positions do. Either can make a projected range
+/// point into only part of the AST value, so decline it for both swatches and
+/// edits when the source coordinates cannot be trusted.
+fn is_color_range_safe(range: SourceRange, lines: &[&str]) -> bool {
+    if range.start.col == u16::MAX || range.end.col == u16::MAX {
+        return false;
+    }
+
+    let Some(start_line) = range.start.line.checked_sub(1).map(|line| line as usize) else {
+        return false;
+    };
+    let Some(end_line) = range.end.line.checked_sub(1).map(|line| line as usize) else {
+        return false;
+    };
+    if start_line > end_line || (start_line == end_line && range.start.col > range.end.col) {
+        return false;
+    }
+    let Some(covered_lines) = lines.get(start_line..=end_line) else {
+        return false;
+    };
+
+    if start_line == end_line {
+        // Include the character at the exclusive endpoint: a CR there may be
+        // the character the parser skipped before reaching the AST endpoint.
+        !covered_lines[0]
+            .chars()
+            .take(range.end.col as usize + 1)
+            .any(|ch| ch == '\r')
+    } else {
+        // For a multi-line value, any CR on a covered line can shift the LSP
+        // projection relative to parser columns.
+        !covered_lines.iter().any(|line| line.contains('\r'))
+    }
+}
+
+/// Parser columns saturate at `u16::MAX`; such a range may cover only a suffix
+/// of a color literal or point into whitespace, so never build a literal from it.
 fn is_color_range_representable(range: SourceRange) -> bool {
     range.start.col != u16::MAX && range.end.col != u16::MAX
 }
@@ -467,7 +503,8 @@ fn colour_at_range(
             }
             Child::Comment(_) => continue,
         };
-        if to_lsp_range(range, lines, encoding) == target
+        if is_color_range_safe(range, lines)
+            && to_lsp_range(range, lines, encoding) == target
             && let Some(literal) = colour_from_ast_range(range, value, prefix, arena)
         {
             return Some(literal);
@@ -573,6 +610,7 @@ impl Backend {
         let lines: Vec<&str> = text.lines().collect();
         Ok(found
             .iter()
+            .filter(|found| is_color_range_safe(found.range, &lines))
             .map(|f| ColorInformation {
                 range: to_lsp_range(f.range, &lines, &encoding),
                 color: to_color(&f.literal),
@@ -977,6 +1015,46 @@ mod tests {
         assert!(
             runtime_literal_at_key(&text, "color").is_none(),
             "the runtime picker must decline a range clamped at both ends"
+        );
+    }
+
+    #[test]
+    fn a_carriage_return_skipped_by_the_parser_is_rejected_for_swatches_and_picking() {
+        let text = "c = {\ncolor = \r{ 1 0 0 }\n}\n";
+        let table = StringTable::new();
+        let ast = cwtools_parser::parser::parse_string(text, &table);
+        let Child::Leaf(root) = ast.root_children[0] else {
+            panic!("expected a root clause")
+        };
+        let Value::Clause(children) = &ast.arena.leaves[root as usize].value else {
+            panic!("expected a clause")
+        };
+        let color = children.iter().find_map(|child| {
+            let Child::Leaf(idx) = child else {
+                return None;
+            };
+            let leaf = &ast.arena.leaves[*idx as usize];
+            (table.get_string(leaf.key.normal).as_deref() == Some("color")).then_some(leaf)
+        });
+        let color = color.expect("color leaf");
+        assert_eq!(
+            (color.value_pos.start.col, color.value_pos.end.col),
+            (8, 17)
+        );
+
+        let lines: Vec<&str> = text.lines().collect();
+        let lsp_range = to_lsp_range(color.value_pos, &lines, &PositionEncodingKind::UTF16);
+        assert_eq!(
+            text_in_range(text, lsp_range, &PositionEncodingKind::UTF16),
+            "\r{ 1 0 0 "
+        );
+        assert!(
+            !is_color_range_safe(color.value_pos, &lines),
+            "documentColor must not publish the AST range as a swatch"
+        );
+        assert!(
+            runtime_literal_at_key(text, "color").is_none(),
+            "colorPresentation must decline a projected range that omits the closing brace"
         );
     }
 
