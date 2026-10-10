@@ -92,7 +92,7 @@ fn validate_leaf_against_rule(
                     errors,
                 );
             } else {
-                validate_leaf(ctx, leaf, rule_type, scope_context.as_ref(), errors);
+                validate_leaf(ctx, leaf, rule_type, scope_context, errors);
                 if let Some(default) = opts.default_bool {
                     with_leaf_value_str(&leaf.value, ctx.table, |raw| {
                         let v = raw.trim_matches('"').trim();

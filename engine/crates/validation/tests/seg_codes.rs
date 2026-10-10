@@ -279,6 +279,8 @@ types = { type[foo] = { path = "game/common/foo" } }
 foo = {
     tgt = scope[country]
 }
+## scope = country
+alias[trigger:country_only] = bool
 "#;
 
 #[test]
@@ -301,6 +303,18 @@ fn target_resolving_to_country_is_clean() {
     let c = codes_hoi4(TARGET_RULES, "foo = { tgt = faction_leader }");
     assert!(!c.contains(&"CW243".to_string()), "got: {:?}", c);
     assert!(!c.contains(&"CW245".to_string()), "got: {:?}", c);
+}
+
+#[test]
+fn target_scope_probe_does_not_change_following_scope() {
+    // The wrong-scope probe temporarily reaches state, but the next trigger is
+    // still validated in foo's country scope.
+    let c = codes_hoi4(
+        TARGET_RULES,
+        "foo = { tgt = capital_scope country_only = yes }",
+    );
+    assert!(c.contains(&"CW243".to_string()), "got: {:?}", c);
+    assert!(!c.contains(&"CW104".to_string()), "got: {:?}", c);
 }
 
 /// A config with links and triggers but NO `scopes = { … }` block — reachable

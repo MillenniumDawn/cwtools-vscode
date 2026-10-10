@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
 * Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
 * Test completion field variants and enum, scope and boolean key helpers, asserting suggestion labels, kinds, insertion text and filtering. (#925)

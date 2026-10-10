@@ -83,7 +83,7 @@ pub(super) fn validate_leaf(
     ctx: &ValidationCtx,
     leaf: &cwtools_parser::ast::Leaf,
     rule_type: &RuleType,
-    scope_context: Option<&ScopeContext>,
+    scope_context: &mut Option<ScopeContext>,
     errors: &mut Vec<ValidationError>,
 ) {
     let table = ctx.table;
@@ -93,12 +93,23 @@ pub(super) fn validate_leaf(
         if let NewField::ValueField(ValueType::MathExpr) = right {
             if let Value::Clause(math_children) = &leaf.value {
                 let pos = (leaf.pos.start.line, leaf.pos.start.col);
-                validate_math_clause(ctx, math_children, &mut scope_context.cloned(), pos, errors);
+                let saved = scope_context.as_ref().map(ScopeContext::save);
+                validate_math_clause(ctx, math_children, scope_context, pos, errors);
+                if let (Some(saved), Some(sc)) = (saved, scope_context.as_mut()) {
+                    sc.restore(saved);
+                }
             }
             return;
         }
         if let NewField::LocalisationField { synced, is_inline } = right {
-            validate_localisation_field(ctx, leaf, *synced, *is_inline, scope_context, errors);
+            validate_localisation_field(
+                ctx,
+                leaf,
+                *synced,
+                *is_inline,
+                scope_context.as_ref(),
+                errors,
+            );
             return;
         }
         if let NewField::TypeField(type_type) = right {
@@ -276,6 +287,7 @@ pub(super) fn validate_leaf(
                     } else if ctx.var_checks {
                         let single_token = !core.contains('.') && !core.contains(':');
                         let is_scopeish = scope_context
+                            .as_ref()
                             .map(|sc| resolves_as_scope_key(sc, core))
                             .unwrap_or(false);
                         if single_token
@@ -321,10 +333,10 @@ pub(super) fn validate_leaf(
 
         if let NewField::ScopeField(expected) = right
             && ctx.scope_checks
-            && let Some(ctx) = scope_context
+            && scope_context.is_some()
         {
             with_leaf_value_str(&leaf.value, table, |value| {
-                validate_scope_target(ctx, value, expected, leaf, file_path, errors);
+                validate_scope_target(scope_context, value, expected, leaf, file_path, errors);
             });
         }
 

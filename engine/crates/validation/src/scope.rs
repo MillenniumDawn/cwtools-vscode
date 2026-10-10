@@ -39,7 +39,7 @@ pub fn scope_matches_required(
 }
 
 pub(crate) fn validate_scope_target(
-    ctx: &ScopeContext,
+    scope_context: &mut Option<ScopeContext>,
     value: &str,
     expected: &[String],
     leaf: &cwtools_parser::ast::Leaf,
@@ -49,17 +49,23 @@ pub(crate) fn validate_scope_target(
     if value.is_empty() || looks_like_data_ref(value) {
         return;
     }
-    let reg = ctx.registry.as_ref();
-    if reg.is_empty() {
+    let Some(ctx) = scope_context.as_mut() else {
+        return;
+    };
+    let reg = std::sync::Arc::clone(&ctx.registry);
+    if reg.is_empty()
+        || expected.iter().any(|s| {
+            !s.eq_ignore_ascii_case("any")
+                && !s.eq_ignore_ascii_case("all")
+                && reg.id_of(s).is_none()
+        })
+    {
         return;
     }
-    if expected.iter().any(|s| {
-        !s.eq_ignore_ascii_case("any") && !s.eq_ignore_ascii_case("all") && reg.id_of(s).is_none()
-    }) {
-        return;
-    }
-    let mut probe = ctx.clone();
-    let (code, message) = match probe.change_scope(value) {
+    let saved = ctx.save();
+    let result = ctx.change_scope(value);
+    ctx.restore(saved);
+    let (code, message) = match result {
         cwtools_game::scope_engine::ScopeResult::WrongScope {
             command,
             current,
@@ -73,7 +79,7 @@ pub(crate) fn validate_scope_target(
             )
         }
         cwtools_game::scope_engine::ScopeResult::NewScope { scope, .. }
-            if !expected.is_empty() && !scope_matches_required(scope, reg, expected) =>
+            if !expected.is_empty() && !scope_matches_required(scope, &reg, expected) =>
         {
             let code = &error_codes::CW243_TARGET_WRONG_SCOPE;
             (
