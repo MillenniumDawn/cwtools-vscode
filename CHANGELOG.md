@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
 * Reuse one set of scratch buffers per typo-suggestion scan instead of allocating for every candidate, skip candidates of the wrong length before allocating anything, and lowercase the unknown key once. (#559)
 * Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions, with deterministic wire coverage using the shared test hold helper. (#843)

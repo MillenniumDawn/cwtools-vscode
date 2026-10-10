@@ -318,7 +318,7 @@ fn validate_alias_usage_uncached(
             .iter()
             .find(|((rt, _), _)| rule_right_is_math_expr(rt))
     {
-        validate_leaf(ctx, leaf, mrt, scope_context.as_ref(), errors);
+        validate_leaf(ctx, leaf, mrt, scope_context, errors);
         return;
     }
 
@@ -330,7 +330,7 @@ fn validate_alias_usage_uncached(
         match rule_type {
             RuleType::LeafRule { .. } => {
                 if let Some(leaf) = leaf {
-                    validate_leaf(ctx, leaf, rule_type, scope_context.as_ref(), &mut temp);
+                    validate_leaf(ctx, leaf, rule_type, scope_context, &mut temp);
                 } else {
                     let (line, col) = fallback_pos;
                     temp.push(alias_mismatch_error(
