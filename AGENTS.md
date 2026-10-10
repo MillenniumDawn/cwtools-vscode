@@ -122,7 +122,7 @@ Three things to know about them:
 - `scripts/build/esbuild.py`: esbuild bundler driver for the client (extension + webview)
 - `.vscode-test.mjs`: host test runner config (labeled: unit/smoke/host)
 - `scripts/build/hosttest.py`: display-backend picker in front of `vscode-test`
-- `vitest.config.ts`: node-only unit test config
+- `vitest.config.mts`: node-only unit test config
 - `pyproject.toml`: ruff/black/pylint/mypy/pytest config for `scripts/` and `tests/scripts/`
 - `requirements-dev.txt`: the pinned versions of those five
 - `engine/Cargo.toml`: the Rust workspace manifest; all crates inherit its version

@@ -5796,6 +5796,184 @@ fn test_rename_emits_versioned_document_changes_when_supported() {
     );
 }
 
+#[derive(Clone, Copy, Debug)]
+enum RenameInterleave {
+    Change,
+    Close,
+    Open,
+    CloseReopen,
+}
+
+#[test]
+fn test_rename_refuses_changes_after_snapshot_capture() {
+    for localisation in [false, true] {
+        for document_changes in [true, false] {
+            let response = rename_during_document_transition(
+                localisation,
+                document_changes,
+                RenameInterleave::Change,
+            );
+            assert_eq!(
+                response["error"]["code"], -32801,
+                "localisation={localisation}, documentChanges={document_changes}: {response}"
+            );
+            assert!(response["result"].is_null(), "got: {response}");
+        }
+    }
+}
+
+#[test]
+fn test_rename_refuses_open_close_transitions_after_snapshot_capture() {
+    for localisation in [false, true] {
+        for transition in [
+            RenameInterleave::Close,
+            RenameInterleave::Open,
+            RenameInterleave::CloseReopen,
+        ] {
+            let response = rename_during_document_transition(localisation, true, transition);
+            assert_eq!(
+                response["error"]["code"], -32801,
+                "localisation={localisation}, {transition:?}: {response}"
+            );
+            assert!(response["result"].is_null(), "got: {response}");
+        }
+    }
+}
+
+fn rename_during_document_transition(
+    localisation: bool,
+    document_changes: bool,
+    transition: RenameInterleave,
+) -> serde_json::Value {
+    let ws = tempfile::tempdir().unwrap();
+    let rules = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    let markers = tempfile::tempdir().unwrap();
+    let gate = markers.path().join("snapshot-hold");
+    let ready = markers.path().join("snapshot-ready");
+    std::fs::write(rules.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let files = [
+        ("common/national_focus/f.txt", "MY_FOCUS = { x = yes }\n"),
+        (
+            "common/decisions/a.txt",
+            "adec = {\n    has_focus = MY_FOCUS\n}\n",
+        ),
+        (
+            "common/decisions/b.txt",
+            "bdec = {\n    has_focus = MY_FOCUS\n}\n",
+        ),
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n my_key:0 \"Hello\"\n",
+        ),
+        (
+            "localisation/test_l_french.yml",
+            "l_french:\n my_key:0 \"Bonjour\"\n",
+        ),
+    ];
+    for (rel, text) in files {
+        let path = ws.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let source = if localisation { files[3] } else { files[1] };
+    let closed = if localisation { files[4] } else { files[2] };
+    let source_uri = path_uri(ws.path().join(source.0));
+    let closed_uri = path_uri(ws.path().join(closed.0));
+    let mut child = cwtools_server_cmd()
+        .env("CWTOOLS_NAV_SNAPSHOT_HOLD_FILE", &gate)
+        .env("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE", &ready)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    write_frame(&mut child, &jsonrpc_request(1, "initialize", serde_json::json!({
+        "processId": std::process::id(), "rootUri": path_uri(ws.path()),
+        "capabilities": { "workspace": { "workspaceEdit": { "documentChanges": document_changes } } },
+        "initializationOptions": { "language": "hoi4", "rulesCache": rules.path().to_string_lossy(), "vanilla": vanilla.path().to_string_lossy() }
+    }))).unwrap();
+    let _ = read_response_for_id(&mut reader, 1).unwrap();
+    write_frame(
+        &mut child,
+        &jsonrpc_notification("initialized", serde_json::json!({})),
+    )
+    .unwrap();
+    wait_for_scan_done(&mut reader);
+    write_frame(&mut child, &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+        "textDocument": { "uri": source_uri, "languageId": "hoi4", "version": 1, "text": source.1 }
+    }))).unwrap();
+    wait_for_diagnostics(&mut reader, source.0);
+    let stdin = child.stdin.take().unwrap();
+    run_child_with_deadline(child, stdin, reader, 45, move |stdin, reader| {
+        std::fs::write(&gate, b"hold").unwrap();
+        write_frame_to(stdin, &jsonrpc_request(700, "textDocument/rename", serde_json::json!({
+            "textDocument": { "uri": source_uri },
+            "position": { "line": 1, "character": if localisation { 2 } else { 18 } },
+            "newName": if localisation { "renamed_key" } else { "RENAMED_FOCUS" }
+        }))).unwrap();
+        assert!(poll_until(std::time::Instant::now() + std::time::Duration::from_secs(20), std::time::Duration::from_millis(10), || ready.exists().then_some(())).is_some(), "rename did not capture its open-buffer snapshot");
+        let shifted_source = if localisation {
+            "l_english:\n\n my_key:0 \"Hello\"\n"
+        } else {
+            "# inserted line\nadec = {\n    has_focus = MY_FOCUS\n}\n"
+        };
+        match transition {
+            RenameInterleave::Change => {
+                write_frame_to(stdin, &jsonrpc_notification("textDocument/didChange", serde_json::json!({
+                    "textDocument": { "uri": source_uri, "version": 2 },
+                    "contentChanges": [{ "text": shifted_source }]
+                }))).unwrap();
+            }
+            RenameInterleave::Close | RenameInterleave::CloseReopen => {
+                write_frame_to(stdin, &jsonrpc_notification("textDocument/didClose", serde_json::json!({ "textDocument": { "uri": source_uri } }))).unwrap();
+                if matches!(transition, RenameInterleave::CloseReopen) {
+                    rename_notification_barrier(stdin, reader, 701);
+                    write_frame_to(stdin, &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+                        "textDocument": { "uri": source_uri, "languageId": "hoi4", "version": 1, "text": shifted_source }
+                    }))).unwrap();
+                }
+            }
+            RenameInterleave::Open => {
+                let text = if localisation { "l_french:\n\n my_key:0 \"Bonjour\"\n" } else { "# inserted line\nbdec = {\n    has_focus = MY_FOCUS\n}\n" };
+                write_frame_to(stdin, &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+                    "textDocument": { "uri": closed_uri, "languageId": "hoi4", "version": 1, "text": text }
+                }))).unwrap();
+            }
+        }
+        // This command waits for the notification handlers, so the transition
+        // is observed while the snapshot gate is still held.
+        rename_notification_barrier(stdin, reader, 702);
+        assert!(gate.exists(), "snapshot hold released before the transition");
+        std::fs::remove_file(&gate).unwrap();
+        let raw = read_response_for_id(reader, 700).unwrap();
+        serde_json::from_str::<serde_json::Value>(&raw).unwrap()
+    }).expect("rename interleaving timed out")
+}
+
+fn rename_notification_barrier(
+    stdin: &mut std::process::ChildStdin,
+    reader: &mut BufReader<std::process::ChildStdout>,
+    id: i64,
+) {
+    write_frame_to(
+        stdin,
+        &jsonrpc_request(
+            id,
+            "workspace/executeCommand",
+            serde_json::json!({ "command": "getFileTypes", "arguments": [] }),
+        ),
+    )
+    .unwrap();
+    let raw = read_response_for_id(reader, id).unwrap();
+    let response: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert!(
+        response["error"].is_null(),
+        "notification barrier failed: {response}"
+    );
+}
+
 /// One `@const` rename in a session with NO workspace folder, driven straight
 /// through the wire so a refusal (`error`) is visible instead of being
 /// flattened into a null `result` the way [`feature_request`] does. Nothing is
@@ -6050,6 +6228,242 @@ fn test_rename_at_constant_renames_file_locally() {
         result
     );
     assert!(edits.iter().all(|e| e["newText"] == "@renamed"));
+}
+
+#[test]
+fn test_rename_rejects_invalid_replacement_names_over_the_wire() {
+    let ws = tempfile::tempdir().unwrap();
+    let rules = tempfile::tempdir().unwrap();
+    let vanilla = tempfile::tempdir().unwrap();
+    std::fs::write(rules.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let files = [
+        ("common/national_focus/f.txt", "MY_FOCUS = { x = yes }\n"),
+        (
+            "common/decisions/a.txt",
+            "@cost = 1\nadec = {\n    has_focus = MY_FOCUS\n    x = @cost\n}\n",
+        ),
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n my_key:0 \"Hello\"\n",
+        ),
+    ];
+    for (rel, text) in files {
+        let path = ws.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let (mut child, mut reader) = storm_server(ws.path(), rules.path(), vanilla.path());
+    for (rel, text) in &files[1..] {
+        write_frame(
+            &mut child,
+            &jsonrpc_notification("textDocument/didOpen", serde_json::json!({
+                "textDocument": { "uri": path_uri(ws.path().join(rel)), "languageId": "hoi4", "version": 1, "text": text }
+            })),
+        ).unwrap();
+        wait_for_diagnostics(&mut reader, rel);
+    }
+    let cases = [
+        (files[1].0, 0, 2, "@new name"),
+        (files[1].0, 0, 2, "@new\n}"),
+        (files[1].0, 0, 2, "plain_name"),
+        (files[1].0, 0, 2, "@"),
+        (files[1].0, 0, 2, "@@new"),
+        (files[1].0, 2, 18, "@foo"),
+        (files[1].0, 2, 18, "$p$"),
+        (files[1].0, 2, 18, "foo$x$"),
+        (files[1].0, 2, 18, "[foo]"),
+        (files[1].0, 2, 18, "\"@foo\""),
+        (files[1].0, 2, 18, "\"[foo]\""),
+        (files[1].0, 2, 18, "new}name"),
+        (files[1].0, 2, 18, "new#comment"),
+        (files[1].0, 2, 18, "new name"),
+        (files[1].0, 2, 18, "\"unclosed"),
+        (files[1].0, 2, 18, ""),
+        (files[2].0, 1, 2, "new:key"),
+        (files[2].0, 1, 2, "new\nkey"),
+        (files[2].0, 1, 2, "new$ref"),
+        (files[2].0, 1, 2, "\"new\""),
+        (files[2].0, 1, 2, ""),
+    ];
+    let mut responses = Vec::new();
+    for (i, (rel, line, character, new_name)) in cases.iter().enumerate() {
+        let id = 600 + i as i64;
+        write_frame(
+            &mut child,
+            &jsonrpc_request(
+                id,
+                "textDocument/rename",
+                serde_json::json!({
+                    "textDocument": { "uri": path_uri(ws.path().join(rel)) },
+                    "position": { "line": line, "character": character }, "newName": new_name
+                }),
+            ),
+        )
+        .unwrap();
+        let raw = read_response_for_id(&mut reader, id).expect("no rename response");
+        responses.push(serde_json::from_str::<serde_json::Value>(&raw).unwrap());
+    }
+    stop_server(&mut child);
+    for ((_, _, _, new_name), response) in cases.iter().zip(responses) {
+        assert_eq!(
+            response["error"]["code"], -32803,
+            "{new_name:?}: {response}"
+        );
+        assert!(response["result"].is_null(), "{new_name:?}: {response}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("replacement name"),
+            "{response}"
+        );
+    }
+}
+
+#[test]
+fn test_rename_valid_constant_name_preserves_parseability() {
+    let files = [("common/decisions/a.txt", "@cost = 1\nx = @cost\n")];
+    let result = feature_request(
+        GOTO_RULES,
+        &files,
+        &[files[0].0],
+        serde_json::json!({}),
+        files[0].0,
+        "textDocument/rename",
+        serde_json::json!({ "position": { "line": 0, "character": 2 }, "newName": "@new.cost_1" }),
+    );
+    let rewritten = apply_rename_changes(&result, &files);
+    assert_eq!(rewritten[files[0].0], "@new.cost_1 = 1\nx = @new.cost_1\n");
+}
+
+#[test]
+fn test_rename_valid_type_names_preserve_parseability() {
+    for new_name in ["NEW_FOCUS", "NEW.focus_1", "\"New focus_1\""] {
+        let files = [
+            ("common/national_focus/f.txt", "MY_FOCUS = { x = yes }\n"),
+            (
+                "common/decisions/a.txt",
+                "adec = {\n    has_focus = MY_FOCUS\n}\n",
+            ),
+        ];
+        let result = feature_request(
+            GOTO_RULES,
+            &files,
+            &[files[1].0],
+            serde_json::json!({}),
+            files[1].0,
+            "textDocument/rename",
+            serde_json::json!({ "position": { "line": 1, "character": 18 }, "newName": new_name }),
+        );
+        let rewritten = apply_rename_changes(&result, &files);
+        assert_eq!(
+            rewritten[files[0].0],
+            format!("{new_name} = {{ x = yes }}\n")
+        );
+        assert_eq!(
+            rewritten[files[1].0],
+            format!("adec = {{\n    has_focus = {new_name}\n}}\n")
+        );
+    }
+}
+
+#[test]
+fn test_rename_quoted_type_targets_preserve_parseability() {
+    let files = [
+        (
+            "common/national_focus/f.txt",
+            "\"MY_FOCUS\" = { x = yes }\n",
+        ),
+        (
+            "common/decisions/a.txt",
+            "adec = {\n    has_focus = \"MY_FOCUS\"\n}\n",
+        ),
+    ];
+    let result = feature_request(
+        GOTO_RULES,
+        &files,
+        &[files[1].0],
+        serde_json::json!({}),
+        files[1].0,
+        "textDocument/rename",
+        serde_json::json!({ "position": { "line": 1, "character": 18 }, "newName": "\"New focus_1\"" }),
+    );
+    let rewritten = apply_rename_changes(&result, &files);
+    assert_eq!(rewritten[files[0].0], "\"New focus_1\" = { x = yes }\n");
+    assert_eq!(
+        rewritten[files[1].0],
+        "adec = {\n    has_focus = \"New focus_1\"\n}\n"
+    );
+}
+
+#[test]
+fn test_rename_valid_localisation_name_preserves_parseability() {
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n my_key:0 \"Hello\"\n my_key_desc:0 \"$my_key$\"\n",
+        ),
+        ("common/test/a.txt", "x = my_key\n"),
+    ];
+    let result = feature_request(
+        GOTO_RULES,
+        &files,
+        &[files[0].0],
+        serde_json::json!({}),
+        files[0].0,
+        "textDocument/rename",
+        serde_json::json!({ "position": { "line": 1, "character": 2 }, "newName": "new.key_1" }),
+    );
+    let rewritten = apply_rename_changes(&result, &files);
+    assert_eq!(
+        rewritten[files[0].0],
+        "l_english:\n new.key_1:0 \"Hello\"\n new.key_1_desc:0 \"$new.key_1$\"\n"
+    );
+    assert_eq!(rewritten[files[1].0], "x = new.key_1\n");
+}
+
+/// Apply the wire edits to ASCII fixtures, then parse every changed document.
+fn apply_rename_changes(
+    result: &serde_json::Value,
+    files: &[(&str, &str)],
+) -> HashMap<String, String> {
+    let changes = result["changes"].as_object().expect("rename changes");
+    let mut rewritten = HashMap::new();
+    for (uri, edits) in changes {
+        let (rel, original) = files.iter().find(|(rel, _)| uri.ends_with(rel)).unwrap();
+        assert!(original.is_ascii());
+        let offset = |position: &serde_json::Value| {
+            original
+                .split_inclusive('\n')
+                .take(position["line"].as_u64().unwrap() as usize)
+                .map(str::len)
+                .sum::<usize>()
+                + position["character"].as_u64().unwrap() as usize
+        };
+        let mut edits: Vec<_> = edits.as_array().unwrap().iter().collect();
+        edits.sort_by_key(|edit| std::cmp::Reverse(offset(&edit["range"]["start"])));
+        let mut text = original.to_string();
+        for edit in edits {
+            text.replace_range(
+                offset(&edit["range"]["start"])..offset(&edit["range"]["end"]),
+                edit["newText"].as_str().unwrap(),
+            );
+        }
+        if rel.ends_with(".yml") {
+            let parsed = cwtools_localization::parse_loc_files(rel, &text, None).unwrap();
+            assert!(!parsed.is_empty());
+            assert!(
+                parsed.iter().all(|file| file.parse_errors.is_empty()),
+                "{text}"
+            );
+        } else {
+            let table = cwtools_string_table::string_table::StringTable::new();
+            let parsed = cwtools_parser::parser::parse_string(&text, &table);
+            assert!(parsed.errors.is_empty(), "{text}: {:?}", parsed.errors);
+        }
+        rewritten.insert(rel.to_string(), text);
+    }
+    rewritten
 }
 
 #[test]
@@ -18737,6 +19151,123 @@ fn test_access_boundary_refuses_a_character_device() {
     let response =
         folding_ranges_for(ws.path(), &[], "file:///dev/zero").expect("server hung on /dev/zero");
     assert_refused(&response, "/dev/zero");
+}
+
+enum VanillaRootFixture {
+    AutoDiscovered,
+    RelativeSetting,
+    #[cfg(unix)]
+    SymlinkedSteam,
+}
+
+fn assert_loaded_files_reports_resolved_vanilla_roots(fixture: VanillaRootFixture) {
+    let home = tempfile::tempdir().unwrap();
+    let vanilla = home
+        .path()
+        .join(".steam/steam/steamapps/common/Hearts of Iron IV");
+    #[cfg(unix)]
+    if matches!(fixture, VanillaRootFixture::SymlinkedSteam) {
+        let steam = home.path().join(".local/share/Steam");
+        std::fs::create_dir_all(&steam).unwrap();
+        std::fs::create_dir_all(home.path().join(".steam")).unwrap();
+        std::os::unix::fs::symlink(steam, home.path().join(".steam/steam")).unwrap();
+    }
+    std::fs::create_dir_all(vanilla.join("common/national_focus")).unwrap();
+    std::fs::write(
+        vanilla.join("common/national_focus/base.txt"),
+        "focus_tree = { id = base }\n",
+    )
+    .unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let rules = tempfile::tempdir().unwrap();
+    std::fs::write(rules.path().join("r.cwt"), GOTO_RULES).unwrap();
+    let mut init_options = serde_json::json!({
+        "language": "hoi4",
+        "rulesCache": rules.path().to_string_lossy(),
+    });
+    if matches!(fixture, VanillaRootFixture::RelativeSetting) {
+        init_options["vanilla"] = serde_json::json!(
+            std::path::Path::new(".steam").join("steam/steamapps/common/Hearts of Iron IV")
+        );
+    }
+    let mut child = cwtools_server_cmd()
+        .env("HOME", home.path())
+        .current_dir(home.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("failed to spawn");
+    let stdin = child.stdin.take().unwrap();
+    let reader = BufReader::new(child.stdout.take().unwrap());
+    let root_uri = path_uri(ws.path());
+    let notification = run_child_with_deadline(child, stdin, reader, 30, move |stdin, reader| {
+        write_frame_to(
+            stdin,
+            &jsonrpc_request(
+                1,
+                "initialize",
+                serde_json::json!({
+                    "processId": std::process::id(),
+                    "rootUri": root_uri,
+                    "capabilities": {},
+                    "initializationOptions": init_options,
+                }),
+            ),
+        )
+        .unwrap();
+        read_response(reader).expect("no init response");
+        write_frame_to(
+            stdin,
+            &jsonrpc_notification("initialized", serde_json::json!({})),
+        )
+        .unwrap();
+        loop {
+            let raw = read_frame(reader).expect("server exited before loaded files arrived");
+            let frame: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            if frame["method"] == "updateFileList" {
+                break frame["params"].clone();
+            }
+        }
+    })
+    .expect("timed out waiting for loaded files");
+    assert!(notification["fileList"].is_array());
+    let roots = notification["vanillaRoots"]
+        .as_array()
+        .expect("loaded files must include the resolved vanilla roots");
+    let roots: Vec<&str> = roots.iter().map(|root| root.as_str().unwrap()).collect();
+    let physical = std::fs::canonicalize(&vanilla).unwrap();
+    assert!(roots.contains(&path_uri(&physical).as_str()));
+    if !matches!(fixture, VanillaRootFixture::RelativeSetting) {
+        assert!(roots.contains(&path_uri(&vanilla).as_str()));
+    }
+    for root in roots {
+        let path = tower_lsp::lsp_types::Url::parse(root)
+            .unwrap()
+            .to_file_path()
+            .unwrap();
+        assert!(path.is_absolute());
+        // A relative config may resolve a symlinked temp-dir prefix through
+        // the child's cwd, such as /private/var on macOS.
+        assert_eq!(std::fs::canonicalize(path).unwrap(), physical);
+    }
+}
+
+#[test]
+fn test_loaded_files_reports_auto_discovered_vanilla_without_an_init_setting() {
+    // Matches an unset cwtools.cache.hoi4 setting in the client.
+    assert_loaded_files_reports_resolved_vanilla_roots(VanillaRootFixture::AutoDiscovered);
+}
+
+#[test]
+fn test_loaded_files_reports_absolute_vanilla_root_for_a_relative_init_setting() {
+    assert_loaded_files_reports_resolved_vanilla_roots(VanillaRootFixture::RelativeSetting);
+}
+
+#[cfg(unix)] // Creating the Steam symlink is Unix-only; the URI protocol is portable.
+#[test]
+fn test_loaded_files_reports_alias_and_physical_roots_for_symlinked_steam() {
+    assert_loaded_files_reports_resolved_vanilla_roots(VanillaRootFixture::SymlinkedSteam);
 }
 
 #[cfg(unix)]

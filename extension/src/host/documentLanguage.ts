@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import type { ExtensionContext } from "vscode";
 import { workspace, window, commands } from "vscode";
 import { ExecuteCommandRequest } from "vscode-languageclient/node";
@@ -6,6 +7,7 @@ import type { LanguageClient } from "vscode-languageclient/node";
 import { serverCommand } from "../common/serverCommandContract";
 import { shouldNotifyFocus, pendingProcessDelayMs } from "./focusTracking";
 import { logError, logInfo } from "./logger";
+import { isTrustedPath } from "./trustedPaths";
 
 export interface EditorTracker {
 	getLatestType(): string;
@@ -14,6 +16,8 @@ export interface EditorTracker {
 	// type stays unknown until the user switches tabs once. Call it after the
 	// client is running, since it makes a getFileTypes request.
 	classifyActiveEditor(): Promise<void>;
+	/** Recheck open documents when the server resolves its base-game install. */
+	updateVanillaRoots(this: void, roots: readonly string[]): Promise<void>;
 }
 
 // Trailing debounce on tab switches: rapid cycling otherwise sends a
@@ -24,6 +28,7 @@ export async function registerDocumentLanguage(
 	context: ExtensionContext,
 	client: LanguageClient,
 	languageId: string,
+	readContentRoots: () => readonly string[],
 ): Promise<EditorTracker> {
 	const didFocusFile = "didFocusFile";
 	let latestType: string = "";
@@ -36,19 +41,29 @@ export async function registerDocumentLanguage(
 	let graphFileContext: boolean | undefined;
 	const getFileTypesTimeoutMs = 5000;
 	const getFileTypesBackoffMs = 2000;
+	// The roots callback builds a new array per call, so compare by value.
+	const sameRoots = (a: readonly string[], b: readonly string[]) =>
+		a.length === b.length && a.every((root, i) => root === b[i]);
+	let contentRoots = readContentRoots();
+	let vanillaRoots: readonly string[] = [];
 
 	// The static filenamePatterns in package.json only match game files under a
 	// folder named like the game ("hearts of iron iv"), so a mod workspace with
 	// any other name opens its .txt files as plaintext (no grammar, no LSP).
 	// Upgrade plaintext docs that look like game script to the detected language.
-	// Scoped to the usual game dirs (and known extensions) so unrelated .txt
-	// notes and scratch buffers aren't hijacked, in both the concrete-game and
-	// generic "paradox" cases.
+	// Only the selected mod, configured parents and the resolved vanilla qualify.
+	// Test directory hints relative to those roots, so an ancestor named common
+	// cannot turn ordinary notes into script.
 	const gameScriptDirs =
-		/[\\/](events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
+		/(?:^|[\\/])(events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
 	function looksLikeGameScript(doc: vscode.TextDocument): boolean {
 		if (doc.uri.scheme !== "file") return false;
-		const p = doc.uri.fsPath;
+		const roots = [...contentRoots, ...vanillaRoots];
+		const root = roots.find((root) =>
+			isTrustedPath(doc.uri.fsPath, [root]),
+		);
+		if (!root) return false;
+		const p = path.relative(root, doc.uri.fsPath);
 		if (/\.(gui|gfx|asset|sfx)$/i.test(p)) return true;
 		return /\.txt$/i.test(p) && gameScriptDirs.test(p);
 	}
@@ -182,5 +197,12 @@ export async function registerDocumentLanguage(
 		getLatestType: () => latestType,
 		classifyActiveEditor: () =>
 			didChangeActiveTextEditor(window.activeTextEditor, ++generation),
+		updateVanillaRoots: async (roots) => {
+			const nextRoots = readContentRoots();
+			if (sameRoots(contentRoots, nextRoots) && sameRoots(vanillaRoots, roots)) return;
+			contentRoots = nextRoots;
+			vanillaRoots = roots;
+			await Promise.all(workspace.textDocuments.map(upgradePlaintextDocument));
+		},
 	};
 }

@@ -3,6 +3,9 @@
 #### Engine
 
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
+* Reuse one set of scratch buffers per typo-suggestion scan instead of allocating for every candidate, skip candidates of the wrong length before allocating anything, and lowercase the unknown key once. (#559)
+* Preserve captured document versions when building rename edits and refuse stale results after edits or target open/close transitions, with deterministic wire coverage using the shared test hold helper. (#843)
+* Validate rename replacements against constant, the shared localisation-key rule and script type syntax, rejecting constant, macro-parameter and scripted-localisation forms as type names, preserving valid dotted and quoted names and complete quoted target spans. (#845)
 * Warn with CW284 when HOI4 equipment variant or designer-pool icons use raw texture paths that crash the air battle window on macOS/Linux. (#892)
 * Invalidate parse caches from before speculative unclosed leaf-value quote diagnostics were suppressed, so unchanged files receive the current parser diagnostics after upgrading. (#556)
 * Test completion field variants and enum, scope and boolean key helpers, asserting suggestion labels, kinds, insertion text and filtering. (#925)
@@ -39,9 +42,14 @@
 * Recover an unclosed quoted key as a leaf value without carrying over the speculative parse error, so an unclosed quote used as a leaf value no longer reports a parse diagnostic of its own. A quote whose missing end swallowed a following operator, a `{` shorthand or a closing `}` still reports its unclosed string, and the formatter keeps refusing any file with an unclosed quote so reformatting cannot corrupt it. Because such a file now parses clean, the refusal says why: `cwtools format` prints `<file>: unclosed quote on line N; skipping`, format document and format selection show a warning naming the line (once per file and line, and logged every time), and Format workspace counts those files apart from parse errors and lists them in the output. (#556)
 * HOI4 `replace_path` now hides only files directly inside the named directory from lower-priority mod layers and the base game; nested descendants remain visible, including in vanilla assets and localisation. Base-game aggregate caches remain enabled and are keyed to the replacement view. When an explicit cache has a different replacement view, `validate` and `fix` warn and use a freshly indexed filtered view with `--vanilla`, then rebuild the cache. Without `--vanilla`, they skip that cache with a warning. (#820)
 * Delete two functions with no callers: `InfoService::index_file` and `is_ignored_file`. (#910)
+* Empty the 50 `.dds` images in the `performancetest2` test fixture. The engine indexes them by path and no test reads their bytes, so a checkout is 2.8 MB smaller. (#916)
 
 #### Extension
 
+* Limit automatic plaintext language promotion to the selected mod, configured parent mods and the server's configured or auto-discovered vanilla content roots, including symlink targets used by definitions. Recheck open vanilla scripts after the server reports its install. (#836)
+* Exercise graph hover classes, drawing and canvas transforms against real headless Cytoscape, including lazy tooltip creation, detail expansion, simple/expanded mouseout behavior and replacement cleanup. (#881)
+* Prefer game content markers over folder names and ignore unrelated ancestor names during game detection. The `common/dynasties` marker CK2 and CK3 share still follows a CK2 name. (#839)
+* Keep server graphs, JSON imports and restored graphs ordered by the latest committed request; cancelling an import dialog preserves pending work. (#840)
 * Add a capability-gated Validate workspace command with cancellable progress, a diagnostic summary, and a Show Problems action. The summary leaves out codes ignored with `cwtools.errors.ignore`, and says how many closed files the workspace diagnostics budget kept out of Problems. (#603)
 * Fail `npm run check` when a host test file is missing from the configured labels, or when a configured host test no longer has a source file. Assert that an out-of-range hover position returns no results, and remove the stale skipped-test note. (#880)
 * Partition isolated and connected graph elements in linear time, preserving self-loops and edges while removing repeated component unions; verify degree checks, difference inputs and preservation with real Cytoscape. (#587)
@@ -75,6 +83,7 @@
 * Drop four npm overrides (`minimatch@3`, `minimatch@5`, `brace-expansion@1` and `uuid`) that matched nothing in the lockfile. (#911)
 * The build helpers share one `require_executable` for the node and npm lookups, `set_release_version` and `prerelease_notes` have direct tests, and `scripts/pyrightconfig.json` moves to the repo root with `scripts/build` as its extra path. The Python CI job no longer saves an npm cache, which claimed the key the check and build jobs share. (#889)
 * Compare release bundle defines with `CWTOOLS_TEST_*` reads in `extension/src`, and exercise the production esbuild arguments in CI. (#889)
+* Rename `vitest.config.ts` to `vitest.config.mts` so Vite's native config loader can read it. The node test runs no longer print the config-loader warning. (#921)
 
 ### 3.4.7
 
