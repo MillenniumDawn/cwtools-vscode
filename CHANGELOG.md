@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Give a lowercase string one string-table slot and one map entry instead of two, and skip the `to_lowercase` allocation for ASCII input with no uppercase. The Millennium Dawn string table drops from 1,050,164 to 916,655 entries. (#486)
 * Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)
 * Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
