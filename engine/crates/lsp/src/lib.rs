@@ -58,6 +58,7 @@ pub mod bench_support {
     };
     pub use crate::lines::DocLines;
     pub use crate::navigation::build_doc_symbols;
+    pub use crate::navigation::loc_script_usage_columns;
     pub use crate::paths::{logical_path_from_uri, workspace_prefix_of};
     pub use crate::validate::{collect_doc_tokens, loc_extra_valid_refs, parse_loc_buffer};
 }
