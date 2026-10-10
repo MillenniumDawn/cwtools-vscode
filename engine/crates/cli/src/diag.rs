@@ -95,11 +95,22 @@ impl SourceLines {
     /// Trimmed text of 1-based `line` in `file`; `""` when the file can't be
     /// read or the line doesn't exist (whole-file diagnostics report line 0).
     pub(crate) fn trimmed(&mut self, file: &str, line: u32) -> &str {
-        if self.file != file {
-            self.lines = std::fs::read_to_string(file)
+        self.trimmed_from(file, Path::new(file), line)
+    }
+
+    /// Read through the native path while memoizing by its lossless identity
+    /// key. This lets reports display a lossy spelling without conflating two
+    /// distinct non-UTF-8 filenames internally.
+    pub(crate) fn trimmed_path(&mut self, key: &str, path: &Path, line: u32) -> &str {
+        self.trimmed_from(key, path, line)
+    }
+
+    fn trimmed_from(&mut self, key: &str, path: &Path, line: u32) -> &str {
+        if self.file != key {
+            self.lines = std::fs::read_to_string(path)
                 .map(|text| text.lines().map(|l| l.trim().to_string()).collect())
                 .unwrap_or_default();
-            self.file = file.to_string();
+            self.file = key.to_string();
             // Built from the same trimmed lines the hash path reads, so a
             // directive costs nothing extra; trimming cannot hide one (it
             // only strips leading/trailing whitespace around the line).
@@ -122,6 +133,17 @@ impl SourceLines {
     /// trimmed-line lookup maintains, so per file it is one read at most.
     pub(crate) fn inline_suppressed(&mut self, file: &str, line: u32, code: &str) -> bool {
         self.trimmed(file, line);
+        cwtools_validation::inline_ignore::inline_suppressed(&self.inline_ignored, line, code)
+    }
+
+    pub(crate) fn inline_suppressed_path(
+        &mut self,
+        key: &str,
+        path: &Path,
+        line: u32,
+        code: &str,
+    ) -> bool {
+        self.trimmed_path(key, path, line);
         cwtools_validation::inline_ignore::inline_suppressed(&self.inline_ignored, line, code)
     }
 }
@@ -200,14 +222,26 @@ fn legacy_hash_if_wanted(
 }
 
 /// Map a `ValidationError` to a report `Diag`, computing its hash from the
-/// trimmed source line. Consumes the error (moves the message and the shared
-/// file path). The `fix` field is deliberately dropped. `root` is the mod root
-/// the hash is relativized against; the emitted `file` column is untouched.
-/// `legacy` requests the older line-number digest, needed only when matching an
-/// `--ignore-hashes` baseline.
+/// trimmed source line. The `fix` field is deliberately dropped. `root` is the
+/// mod root the hash is relativized against.
+#[cfg(test)]
 pub(crate) fn validation_to_diag(
     root: &Path,
     err: ValidationError,
+    line_text: &str,
+    legacy: bool,
+) -> Diag {
+    let display_file = err.file.clone();
+    validation_to_diag_with_display(root, err, display_file, line_text, legacy)
+}
+
+/// Map a `ValidationError` to a report `Diag`, computing its hash from the
+/// trimmed source line and retaining a readable path display separately from
+/// the lossless identity key carried by the error. The `fix` field is dropped.
+pub(crate) fn validation_to_diag_with_display(
+    root: &Path,
+    err: ValidationError,
+    display_file: impl Into<cwtools_validation::FilePath>,
     line_text: &str,
     legacy: bool,
 ) -> Diag {
@@ -215,7 +249,7 @@ pub(crate) fn validation_to_diag(
     let hash = diag_hash(root, &err.file, code, &err.message, line_text);
     let legacy_hash = legacy_hash_if_wanted(legacy, root, &err.file, code, &err.message, err.line);
     Diag {
-        file: err.file,
+        file: display_file.into(),
         severity: err.severity,
         code,
         message: err.message,

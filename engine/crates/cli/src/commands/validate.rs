@@ -1,6 +1,7 @@
 //! `validate`: run the whole engine over a mod directory and render a report.
 
 use cwtools_driver::{RulesInput, Session, SessionConfig, VanillaCacheAuto};
+use cwtools_file_manager::path_identity;
 use cwtools_game::Game;
 use cwtools_info::vanilla_cache;
 use cwtools_rules::ruleset_loader::RuleParseError;
@@ -8,7 +9,7 @@ use cwtools_rules::ruleset_loader::RuleParseError;
 use crate::cli::ValidateArgs;
 use crate::diag::{
     Diag, SourceLines, cli_row, csv_row, is_ignored, json_row, loc_diagnostic_to_diag,
-    rule_error_to_diag, severity_rank, validation_to_diag,
+    rule_error_to_diag, severity_rank, validation_to_diag_with_display,
 };
 use crate::report::ReportType;
 use crate::run::{
@@ -306,8 +307,9 @@ pub(super) fn run(args: ValidateArgs) {
     }
 
     for (path, errors) in session.validate_selected(selected.as_ref()) {
-        let file_str = path.to_str().unwrap_or("");
-        if !scope::wanted(scope.as_ref(), file_str) {
+        let file_key = path_identity(&path);
+        let display_file = path.display().to_string();
+        if !scope::wanted(scope.as_ref(), &display_file) {
             continue;
         }
         for err in errors {
@@ -316,12 +318,23 @@ pub(super) fn run(args: ValidateArgs) {
             // The inline `# cwtools-ignore` directive suppresses the same
             // way, scoped to the diagnostic's own line and its neighbours.
             if !codes::wanted(err.code.unwrap_or_default(), &only_codes, &ignore_codes)
-                || sources.inline_suppressed(file_str, err.line, err.code.unwrap_or_default())
+                || sources.inline_suppressed_path(
+                    &file_key,
+                    &path,
+                    err.line,
+                    err.code.unwrap_or_default(),
+                )
             {
                 continue;
             }
-            let line_text = sources.trimmed(file_str, err.line);
-            let d = validation_to_diag(&directory, err, line_text, want_legacy_hash);
+            let line_text = sources.trimmed_path(&file_key, &path, err.line);
+            let d = validation_to_diag_with_display(
+                &directory,
+                err,
+                display_file.clone(),
+                line_text,
+                want_legacy_hash,
+            );
             if is_ignored(&ignored, &d) {
                 continue;
             }
