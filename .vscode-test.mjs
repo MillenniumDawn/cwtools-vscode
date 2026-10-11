@@ -137,7 +137,7 @@ const headless =
 		: [];
 
 const base = {
-	vscode: "stable",
+	version: "stable",
 	extensionDevelopmentPath: "dist/extension",
 };
 
@@ -153,7 +153,7 @@ export default defineConfig({
 		},
 		{
 			...base,
-			vscode: vscodeCompatibilityFloor,
+			version: vscodeCompatibilityFloor,
 			label: "vscode-floor",
 			files: [
 				abortDiagnostics,
