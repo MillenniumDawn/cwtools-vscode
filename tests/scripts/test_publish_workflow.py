@@ -4,6 +4,7 @@ written to fix.
 Text assertions rather than a YAML parse: PyYAML is not a dev dependency.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -161,6 +162,32 @@ def test_registry_tokens_reach_only_the_publish_step() -> None:
         assert block.count(f"secrets.{secret}") == 1, job
         last_step = block.rsplit("      - name:", maxsplit=1)[1]
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in last_step, job
+
+
+def test_registry_publishers_skip_dependency_scripts_but_keep_optional_clis() -> None:
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    for job in ("marketplace", "open-vsx"):
+        block = _job(workflow, job)
+        assert "ignore-scripts: true" in block, job
+        assert "npx --no-install vsce --version" in block
+        assert "npx --no-install ovsx --version" in block
+
+    # The shared install action remains full-featured for packaging, where
+    # platform-specific optional dependencies such as esbuild are required.
+    package_job = _job(workflow, "package")
+    assert "ignore-scripts" not in package_job
+    assert "npm run build -- package-prebuilt" in package_job
+    assert "python3 scripts/smoke_test_vsix.py artifacts/vsix" in package_job
+
+    package_lock = json.loads((REPO_ROOT / "package-lock.json").read_text())
+    nested_vsce = package_lock["packages"][
+        "node_modules/ovsx/node_modules/@vscode/vsce"
+    ]
+    assert nested_vsce["optionalDependencies"]["keytar"] == "^7.7.0"
+    keytar = package_lock["packages"]["node_modules/keytar"]
+    assert keytar["version"] == "7.9.0"
+    assert keytar["hasInstallScript"] is True
+    assert "prebuild-install" in keytar["dependencies"]
 
 
 def test_release_failed_guards_every_job_it_waits_on() -> None:
