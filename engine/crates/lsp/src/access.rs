@@ -308,6 +308,84 @@ pub(crate) fn read_authorized_text_with_budget(
     read_text_with_budget(file, source_bytes, budget)
 }
 
+/// Runs a workspace scan while the read, decoding and scanner allocations are
+/// covered by one reservation. The allowance is deliberately based on the
+/// source size, rather than bytes processed over the whole request, so callers
+/// can stream many files without retaining them all.
+pub(crate) fn scan_authorized_text_with_budget<T>(
+    uri: &str,
+    roots: &[PathBuf],
+    max_file_bytes: u64,
+    budget: &ReadBudget,
+    scan: impl FnOnce(&str) -> T,
+) -> Result<Option<T>, ReadBudgetExceeded> {
+    let Some(path) = authorized_path(uri, roots) else {
+        return Ok(None);
+    };
+    #[cfg(test)]
+    RECORDED_READS.lock().push(path.clone());
+    let Ok(file) = std::fs::File::open(path) else {
+        return Ok(None);
+    };
+    let Ok(metadata) = file.metadata() else {
+        return Ok(None);
+    };
+    let source_bytes = metadata.len();
+    if !metadata.is_file() || source_bytes > max_file_bytes {
+        return Ok(None);
+    }
+    let Some(source_bytes) = usize::try_from(source_bytes).ok() else {
+        return Ok(None);
+    };
+    let Some(reservation) = budget.reserve(scan_peak_bytes(source_bytes)) else {
+        return Err(ReadBudgetExceeded);
+    };
+    use std::io::Read as _;
+    let read_limit = source_bytes.saturating_add(1);
+    let mut bytes = Vec::with_capacity(read_limit);
+    let Ok(read) = file.take(read_limit as u64).read_to_end(&mut bytes) else {
+        return Ok(None);
+    };
+    if read > source_bytes {
+        return Ok(None);
+    }
+    let (text, _) = cwtools_file_manager::file_manager::decode_bytes(bytes);
+    let result = scan(&text);
+    drop(reservation);
+    Ok(Some(result))
+}
+
+/// Runs a scan while holding a reservation for its peak temporary memory.
+pub(crate) fn with_read_budget<T>(
+    budget: &ReadBudget,
+    bytes: usize,
+    scan: impl FnOnce() -> T,
+) -> Result<T, ReadBudgetExceeded> {
+    let Some(reservation) = budget.reserve(bytes) else {
+        return Err(ReadBudgetExceeded);
+    };
+    let result = scan();
+    drop(reservation);
+    Ok(result)
+}
+
+/// Peak bytes needed by a streamed navigation scan of a file. This includes
+/// the bounded input buffer, worst-case decoded text, a lowercase copy, and
+/// the `DocLines` slice capacity. The latter is based on source newlines and
+/// uses the next power-of-two vector bound, so newline-heavy input is charged.
+pub(crate) fn scan_peak_bytes(source_bytes: usize) -> usize {
+    let input = source_bytes.saturating_add(1);
+    let decoded = input.saturating_mul(4);
+    let lowercase = decoded;
+    let line_slices = input
+        .saturating_mul(2)
+        .saturating_mul(std::mem::size_of::<&str>());
+    input
+        .saturating_add(decoded)
+        .saturating_add(lowercase)
+        .saturating_add(line_slices)
+}
+
 fn read_text_with_budget(
     reader: impl std::io::Read,
     source_bytes: u64,
