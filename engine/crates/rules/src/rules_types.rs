@@ -123,6 +123,8 @@ impl ParsedAliasPattern {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AliasCategoryIndex {
+    /// Alias definitions in declaration order, scoped to this category.
+    pub alias_indices: Vec<usize>,
     pub parsed_patterns: Vec<ParsedAliasPattern>,
     pub scope_field_idx: Option<usize>,
     pattern_buckets: AliasPatternBuckets,
@@ -514,6 +516,7 @@ impl RuleSet {
             }
             if let Some((cat, rest)) = name.split_once(':') {
                 let entry = self.alias_categories.entry(cat.to_string()).or_default();
+                entry.alias_indices.push(i);
                 if rest == "scope_field" {
                     entry.scope_field_idx = Some(i);
                 } else if let Some(parsed) = ParsedAliasPattern::parse(rest, i) {
