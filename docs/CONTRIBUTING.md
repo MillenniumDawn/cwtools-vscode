@@ -120,7 +120,7 @@ npm test               # unit label: VS Code API, no language server
 npm run test:smoke     # smoke, live, multi-root and watched host labels
 npm run test:host      # host label except live; includes hover and completion
 npm run test:rules-sync  # network-free rules sync host label
-npm run test:coverage  # host and live labels with validated V8 coverage
+npm run test:coverage  # host, live, and restart labels with validated V8 coverage
 npm run test:node:coverage  # vitest coverage into coverage-node/
 npm run test:native    # unit label in a visible window, on purpose
 npm run bench:node     # client hot-path benchmarks
@@ -211,10 +211,10 @@ pinned input revisions and when re-blessing a baseline is appropriate.
 CI runs the node tests and the VS Code `unit` label in the fast client job.
 After building the server and client, it runs `rules-sync` against the checked-in
 offline fixture, then runs `multi-root` and `watched` in a separate host-test
-step. The `live` label runs once, together with `host` under coverage; `host`
-includes the smoke, hover and completion suites against the real server. The
-engine suite, cargo-deny and diagnostics guards run alongside these client
-checks. See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+step. The `live` label runs once, together with `host` and isolated `restart`
+under coverage; `host` includes the smoke, hover and completion suites against
+the real server. The engine suite, cargo-deny and diagnostics guards run
+alongside these client checks. See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
 The structural package gate, `python3 scripts/smoke_test_vsix.py artifacts/vsix`,
 requires the exact nonempty executable the host resolves in each platform
@@ -227,4 +227,4 @@ platform. Optional platform arguments require those platforms to be packaged.
 These checks establish file presence and size, not executable architecture or
 successful native execution.
 
-`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/`. Open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The command removes the previous host report first, runs the `host` and `live` labels together to preserve their separate workspaces (and needs a built `cwtools-server` binary and network access), and fails if the run produces no host/common source coverage or a zero statement, branch, function, or line total. Its rendered summary names the measured labels and counts only `extension/src/host` and `extension/src/common`; bundled dependencies and modules measured only by Vitest are filtered out. After mocha finishes, the instrumented host exits so V8 can flush; a leftover process tree is killed if Electron hangs. CI runs `scripts/build/host_coverage.py --skip-compile` after its development build to reuse the compiled client, then renders rust, host, and node coverage as one compact overview in the job summary and sticky PR comment, with per-file tables in collapsed sections. The raw reports are the `rust-coverage`, `coverage-html`, and `coverage-node` artifacts. It's all local/OSS, no external service. No percentage threshold gates a merge, but CI's host coverage validation step runs without continue-on-error, so a failure fails the build.
+`test:coverage` uses c8 (V8 coverage) to write an HTML report to `coverage/`. Open `coverage/index.html` for line-by-line browsing, or point the [Coverage Gutters](https://marketplace.visualstudio.com/items?itemName=ryanluker.vscode-coverage-gutters) extension at `coverage/lcov.info` to see it inline. The command removes the previous host report first, runs the `host`, `live`, and isolated `restart` labels together to preserve their separate workspaces (and needs a built `cwtools-server` binary and network access), and fails if the run produces no host/common source coverage or a zero statement, branch, function, or line total. Its rendered summary names the measured labels and counts only `extension/src/host` and `extension/src/common`; bundled dependencies and modules measured only by Vitest are filtered out. After mocha finishes, the instrumented host exits so V8 can flush; a leftover process tree is killed if Electron hangs. CI runs `scripts/build/host_coverage.py --skip-compile` after its development build to reuse the compiled client, then renders rust, host, and node coverage as one compact overview in the job summary and sticky PR comment, with per-file tables in collapsed sections. The raw reports are the `rust-coverage`, `coverage-html`, and `coverage-node` artifacts. It's all local/OSS, no external service. No percentage threshold gates a merge, but CI's host coverage validation step runs without continue-on-error, so a failure fails the build.
