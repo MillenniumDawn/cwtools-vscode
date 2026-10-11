@@ -202,6 +202,7 @@ const {
 		return instance;
 	});
 	const fakeCollection = () => ({
+		length: 0,
 		boundingBox: () => ({ y2: 0 }),
 		layout: () => ({ run: () => {} }),
 		shift: () => {},

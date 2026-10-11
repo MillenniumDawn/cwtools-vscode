@@ -8,6 +8,10 @@ import type { GraphNode } from "../../../src/common/graphTypes";
 const state = vi.hoisted(() => ({
 	cores: [] as cytoscape.Core[],
 	layouts: [] as { name: string; ids: string[] }[],
+	layoutCallbacks: [] as Array<{ name: string; callback: () => void }>,
+	layoutFailure: undefined as Error | undefined,
+	layoutEvents: [] as string[],
+	windowListeners: new Map<string, (event: { reason: unknown; preventDefault: () => void }) => void>(),
 	listener: undefined as ((event: { data: unknown }) => void) | undefined,
 	postMessage: vi.fn(),
 	setState: vi.fn(),
@@ -49,12 +53,29 @@ vi.mock("cytoscape", async (importOriginal) => {
 vi.mock("cytoscape-elk", () => ({
 	default: (factory: typeof cytoscape) => {
 		for (const name of ["elk", "grid"]) {
-			function Layout(this: { options: { eles: cytoscape.CollectionReturnValue } }, options: { eles: cytoscape.CollectionReturnValue }) {
+			function Layout(this: {
+				options: { eles: cytoscape.CollectionReturnValue };
+				callback?: () => void;
+				one: (event: string, callback: () => void) => void;
+				removeListener: (event: string, callback: () => void) => void;
+			}, options: { eles: cytoscape.CollectionReturnValue }) {
 				this.options = options;
+				this.one = (_event, callback) => { this.callback = callback; };
+				this.removeListener = (_event, callback) => {
+					if (this.callback === callback) this.callback = undefined;
+				};
 			}
 			Object.defineProperty(Layout.prototype as object, "run", {
-				value: function (this: { options: { eles: cytoscape.CollectionReturnValue } }) {
+				value: function (this: { options: { eles: cytoscape.CollectionReturnValue }; callback?: () => void }) {
+					if (name === "elk" && state.layoutFailure) throw state.layoutFailure;
 					state.layouts.push({ name, ids: this.options.eles.map((e) => e.id()) });
+					state.layoutEvents.push(`${name}:run`);
+					if (name === "elk") {
+						state.layoutCallbacks.push({
+							name,
+							callback: this.callback ?? (() => {}),
+						});
+					}
 					return this;
 				},
 			});
@@ -96,7 +117,11 @@ export async function installGraph() {
 	});
 	vi.stubGlobal("window", {
 		devicePixelRatio: 2,
-		addEventListener: (_type: string, listener: typeof state.listener) => { state.listener = listener; },
+		addEventListener: (type: string, listener: (event: unknown) => void) => {
+			if (type === "message") state.listener = listener;
+			else if (listener) state.windowListeners.set(type, listener);
+		},
+		removeEventListener: (type: string) => { state.windowListeners.delete(type); },
 	});
 	vi.stubGlobal("MutationObserver", class {
 		observe() {}
@@ -110,9 +135,23 @@ export function send(message: unknown) {
 	state.listener!({ data: message });
 }
 
-export function render(nodes: GraphNode[]): cytoscape.Core {
+export function render(nodes: GraphNode[], options: { completeLayouts?: boolean } = {}): cytoscape.Core {
 	send({ command: "go", data: nodes, settings: { wheelSensitivity: 1 } });
+	if (options.completeLayouts !== false) completeLayout("elk");
 	return state.cores[state.cores.length - 1];
+}
+
+export function completeLayout(name: string) {
+	const pending = state.layoutCallbacks.find((layout) => layout.name === name);
+	if (pending) {
+		state.layoutCallbacks.splice(state.layoutCallbacks.indexOf(pending), 1);
+		state.layoutEvents.push(`${name}:stop`);
+		pending.callback();
+	}
+}
+
+export function rejectLayout(reason: unknown) {
+	state.windowListeners.get("unhandledrejection")?.({ reason, preventDefault: vi.fn() });
 }
 
 export function node(id: string, targets: string[] = []): GraphNode {
@@ -125,6 +164,11 @@ export function node(id: string, targets: string[] = []): GraphNode {
 
 export function resetGraphState() {
 	state.layouts.length = 0;
+	state.layoutCallbacks.length = 0;
+	state.layoutFailure = undefined;
+	state.layoutEvents.length = 0;
+	state.windowListeners.clear();
+	state.postMessage.mockClear();
 	state.tips.length = 0;
 }
 

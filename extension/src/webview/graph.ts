@@ -386,7 +386,6 @@ function setupTooltips(cy: cytoscape.Core) {
 }
 
 function runLayout(cy: cytoscape.Core) {
-	cy.fit();
 	const opts = {
 		name: "elk",
 		nodeDimensionsIncludeLabels: true,
@@ -406,17 +405,52 @@ function runLayout(cy: cytoscape.Core) {
 	const singles2 = cy.nodes().filter((node) => node.degree() === 0);
 	const rest2 = cy.elements().difference(singles2);
 
-	const lrest = rest2.layout(opts);
-	lrest.run();
 	const opts2 = {
 		name: "grid",
 		condense: true,
 		nodeDimensionsIncludeLabels: true,
 	};
-	const lsingles = singles2.layout(opts2);
-	lsingles.run();
-	singles2.shift("y", (singles2.boundingBox({}).y2 + 10) * -1);
-	cy.fit();
+	const layoutSingles = () => {
+		try {
+			if (singles2.length > 0) {
+				const lsingles = singles2.layout(opts2);
+				lsingles.run();
+				singles2.shift("y", (singles2.boundingBox({}).y2 + 10) * -1);
+			}
+			cy.fit();
+		} catch (error) {
+			reportLayoutError(error);
+		}
+	};
+
+	if (rest2.length === 0) {
+		layoutSingles();
+		return;
+	}
+
+	let connectedLayout: ReturnType<typeof rest2.layout> | undefined;
+	const finishConnectedLayout = () => {
+		window.removeEventListener("unhandledrejection", handleAsyncLayoutFailure);
+		layoutSingles();
+	};
+	const failConnectedLayout = (error: unknown) => {
+		window.removeEventListener("unhandledrejection", handleAsyncLayoutFailure);
+		connectedLayout?.removeListener("layoutstop", finishConnectedLayout);
+		reportLayoutError(error);
+		layoutSingles();
+	};
+	const handleAsyncLayoutFailure = (event: PromiseRejectionEvent) => {
+		event.preventDefault();
+		failConnectedLayout(event.reason);
+	};
+	window.addEventListener("unhandledrejection", handleAsyncLayoutFailure);
+	try {
+		connectedLayout = rest2.layout(opts);
+		connectedLayout.one("layoutstop", finishConnectedLayout);
+		connectedLayout.run();
+	} catch (error) {
+		failConnectedLayout(error);
+	}
 }
 
 function setupInteraction(
@@ -638,6 +672,14 @@ function reportUnavailableExport(kind: "an image" | "a JSON file") {
 	vscode.postMessage({
 		command: "showError",
 		message: `CWTools: no graph is available to export as ${kind}.`,
+	});
+}
+
+function reportLayoutError(error: unknown) {
+	const detail = error instanceof Error ? error.message : String(error);
+	vscode.postMessage({
+		command: "showError",
+		message: `CWTools: couldn't lay out graph: ${detail}.`,
 	});
 }
 

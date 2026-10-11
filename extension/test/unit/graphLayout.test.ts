@@ -1,6 +1,6 @@
 import type cytoscape from "cytoscape";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { installGraph, node, render, resetGraphState, state } from "./support/graphHeadless";
+import { completeLayout, installGraph, node, rejectLayout, render, resetGraphState, state } from "./support/graphHeadless";
 
 beforeAll(installGraph);
 beforeEach(() => { vi.useFakeTimers(); resetGraphState(); });
@@ -43,6 +43,45 @@ test("a large graph draws each node once and disables expensive shadows", () => 
 	expect(state.ctx.arc).toHaveBeenCalledTimes(500);
 	expect(state.ctx.shadowBlur).toBe(0);
 	expect(state.layouts.find((l) => l.name === "grid")!.ids.length).toBe(500);
+});
+
+test("waits for ELK before laying out isolated nodes and fitting the graph", () => {
+	const cy = render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
+	const fit = vi.spyOn(Object.getPrototypeOf(cy) as { fit: cytoscape.Core["fit"] }, "fit");
+
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk"]);
+	expect(fit).not.toHaveBeenCalled();
+
+	completeLayout("elk");
+
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk", "grid"]);
+	expect(state.layouts.find((layout) => layout.name === "grid")?.ids).toEqual(["isolated"]);
+	expect(state.layoutEvents).toEqual(["elk:run", "elk:stop", "grid:run"]);
+	expect(fit).toHaveBeenCalledTimes(1);
+});
+
+test("reports a synchronous layout failure to the extension host", () => {
+	state.layoutFailure = new Error("ELK failed");
+	render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
+
+	expect(state.postMessage).toHaveBeenCalledWith({
+		command: "showError",
+		message: "CWTools: couldn't lay out graph: ELK failed.",
+	});
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["grid"]);
+});
+
+test("reports an asynchronous ELK rejection to the extension host", () => {
+	render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
+	rejectLayout(new Error("ELK rejected the graph"));
+
+	expect(state.postMessage).toHaveBeenCalledWith({
+		command: "showError",
+		message: "CWTools: couldn't lay out graph: ELK rejected the graph.",
+	});
+	expect(state.windowListeners.has("unhandledrejection")).toBe(false);
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk", "grid"]);
+	expect(state.layouts.find((layout) => layout.name === "grid")?.ids).toEqual(["isolated"]);
 });
 
 test("real hover creates tooltips lazily and replacement destroys them", () => {
