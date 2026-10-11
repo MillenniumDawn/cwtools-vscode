@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -11,7 +12,12 @@ from typing import Self, cast
 import pytest
 
 import esbuild
-from paths import EXTENSION_HOST_ROOT, EXTENSION_SOURCE_ROOT, EXTENSION_WEBVIEW_ROOT
+from paths import (
+    EXTENSION_HOST_ROOT,
+    EXTENSION_SOURCE_ROOT,
+    EXTENSION_WEBVIEW_ROOT,
+    REPO_ROOT,
+)
 
 
 # wait_for_watcher_exit only ever calls poll(), so a stub keeps the test from
@@ -187,6 +193,17 @@ def test_bundle_modes_minify_production_and_only_map_development() -> None:
     ):
         assert "--sourcemap" in args
         assert "--minify" not in args
+
+
+def test_regular_compile_preserves_maps_but_release_compile_minifies() -> None:
+    scripts = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))[
+        "scripts"
+    ]
+    assert scripts["compile:code"].endswith("scripts/build/esbuild.py --dev")
+    assert scripts["compile:code:release"].endswith(
+        "scripts/build/esbuild.py --release"
+    )
+    assert "--dev" not in scripts["compile:code:release"]
 
 
 def test_release_defines_match_test_env_reads() -> None:
