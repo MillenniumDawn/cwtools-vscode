@@ -593,6 +593,81 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn loc_rename_discards_definition_edits_when_usage_scan_exceeds_budget() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("workspace");
+        let loc_dir = ws.path().join("localisation");
+        std::fs::create_dir_all(&loc_dir).unwrap();
+        let content = "l_english:\nx:0 \"x\"\n";
+        let open_uri = Url::from_file_path(loc_dir.join("open_l_english.yml"))
+            .expect("open URI")
+            .to_string();
+        let root = std::fs::canonicalize(ws.path()).expect("canonical root");
+        {
+            let mut config = state.config.write();
+            config.authorized_roots = Arc::from([root.clone()]);
+            config.workspace_roots = vec![root.clone()];
+            config.editable_roots = Arc::from([root]);
+        }
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(content),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        *state.navigation_snapshot_budget_override.lock() =
+            Some(crate::access::scan_peak_bytes(content.len()));
+        let snapshot = backend.capture_rename_request();
+        let edit = backend
+            .rename_loc(&open_uri, "x", "renamed_x", &snapshot)
+            .await
+            .expect("the definition scan fits the peak cap")
+            .expect("the definition produces an edit");
+        let changes = edit.changes.expect("the client uses unversioned changes");
+        let definition_edits = changes.get(&open_uri.parse().unwrap()).unwrap();
+        assert_eq!(definition_edits.len(), 1);
+        assert_eq!(definition_edits[0].new_text, "renamed_x");
+
+        let script_uri = Url::from_file_path(ws.path().join("large.txt"))
+            .expect("script URI")
+            .to_string();
+        state
+            .documents
+            .lock()
+            .open(
+                script_uri,
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from("value = x\n".repeat(4)),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let snapshot = backend.capture_rename_request();
+        let error = backend
+            .rename_loc(&open_uri, "x", "renamed_x", &snapshot)
+            .await
+            .expect_err("usage exhaustion must discard the already collected definition edits");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED)
+        );
+        assert!(error.message.contains("total text read budget exceeded"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn loc_rename_refuses_shared_budget_exhaustion_without_partial_edits() {
         let (backend, state) = backend();
         let ws = tempfile::TempDir::new().expect("workspace");

@@ -308,10 +308,7 @@ pub(crate) fn read_authorized_text_with_budget(
     read_text_with_budget(file, source_bytes, budget)
 }
 
-/// Runs a workspace scan while the read, decoding and scanner allocations are
-/// covered by one reservation. The allowance is deliberately based on the
-/// source size, rather than bytes processed over the whole request, so callers
-/// can stream many files without retaining them all.
+/// Keep the read, decoding and scan reservation until temporary text is freed.
 pub(crate) fn scan_authorized_text_with_budget<T>(
     uri: &str,
     roots: &[PathBuf],
@@ -351,6 +348,7 @@ pub(crate) fn scan_authorized_text_with_budget<T>(
     }
     let (text, _) = cwtools_file_manager::file_manager::decode_bytes(bytes);
     let result = scan(&text);
+    drop(text);
     drop(reservation);
     Ok(Some(result))
 }
@@ -369,10 +367,7 @@ pub(crate) fn with_read_budget<T>(
     Ok(result)
 }
 
-/// Peak bytes needed by a streamed navigation scan of a file. This includes
-/// the bounded input buffer, worst-case decoded text, a lowercase copy, and
-/// the `DocLines` slice capacity. The latter is based on source newlines and
-/// uses the next power-of-two vector bound, so newline-heavy input is charged.
+/// Charge input, decoded/lowercase copies and worst-case `DocLines` capacity.
 pub(crate) fn scan_peak_bytes(source_bytes: usize) -> usize {
     let input = source_bytes.saturating_add(1);
     let decoded = input.saturating_mul(4);

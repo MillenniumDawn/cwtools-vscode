@@ -54,7 +54,7 @@ fn navigation_snapshot_changed_error() -> tower_lsp::jsonrpc::Error {
     tower_lsp::jsonrpc::Error {
         code: tower_lsp::jsonrpc::ErrorCode::ContentModified,
         message:
-            "Rename cancelled: documents changed while rename edits were being collected; try again"
+            "Navigation cancelled: documents changed while results were being collected; try again"
                 .into(),
         data: None,
     }
