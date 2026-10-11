@@ -18,6 +18,12 @@ fn ascii_lowercase_if_needed(value: &str) -> Cow<'_, str> {
     }
 }
 
+static NEXT_TYPE_INSTANCE_MAP_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_type_instance_map_revision() -> u64 {
+    NEXT_TYPE_INSTANCE_MAP_REVISION.fetch_add(1, Ordering::Relaxed)
+}
+
 #[derive(Debug, Default, Clone)]
 struct InstanceNamePositions {
     /// Type ids keep each name bucket compact. Most instance names occur once,
@@ -85,7 +91,7 @@ pub struct TypeInstance {
 /// Public, mutation-tracked view of the instance map. Immutable access remains
 /// map-compatible; any mutable borrow advances a generation so TypeIndex can
 /// lazily rebuild its derived lookup data after callers edit the public map.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TypeInstanceMap {
     inner: FxHashMap<String, Vec<(Arc<str>, TypeInstance)>>,
     revision: AtomicU64,
@@ -95,7 +101,16 @@ impl Clone for TypeInstanceMap {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            revision: AtomicU64::new(self.revision.load(Ordering::Relaxed)),
+            revision: AtomicU64::new(next_type_instance_map_revision()),
+        }
+    }
+}
+
+impl Default for TypeInstanceMap {
+    fn default() -> Self {
+        Self {
+            inner: FxHashMap::default(),
+            revision: AtomicU64::new(next_type_instance_map_revision()),
         }
     }
 }
@@ -110,7 +125,8 @@ impl Deref for TypeInstanceMap {
 
 impl DerefMut for TypeInstanceMap {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.revision.fetch_add(1, Ordering::Relaxed);
+        self.revision
+            .store(next_type_instance_map_revision(), Ordering::Release);
         &mut self.inner
     }
 }
@@ -145,7 +161,8 @@ impl<'a> IntoIterator for &'a mut TypeInstanceMap {
     type IntoIter = std::collections::hash_map::IterMut<'a, String, Vec<(Arc<str>, TypeInstance)>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.revision.fetch_add(1, Ordering::Relaxed);
+        self.revision
+            .store(next_type_instance_map_revision(), Ordering::Release);
         self.inner.iter_mut()
     }
 }
@@ -611,12 +628,15 @@ pub struct TypeIndex {
 
 impl Clone for TypeIndex {
     fn clone(&self) -> Self {
+        self.ensure_instance_positions_current();
+        let map = self.map.clone();
+        let map_revision = map.revision.load(Ordering::Acquire);
         Self {
-            map: self.map.clone(),
+            map,
             instance_positions_by_name: RwLock::new(
                 self.instance_positions_by_name.read().unwrap().clone(),
             ),
-            indexed_map_revision: AtomicU64::new(self.indexed_map_revision.load(Ordering::Acquire)),
+            indexed_map_revision: AtomicU64::new(map_revision),
             name_counts: self.name_counts.clone(),
             instance_sets: self.instance_sets.clone(),
             base_game_uris: self.base_game_uris.clone(),
@@ -1342,6 +1362,46 @@ mod tests {
         idx.map.get_mut("event").unwrap().swap_remove(0);
         assert_eq!(idx.instance_locations("direct").len(), 0);
         assert_eq!(idx.instance_locations("first")[0].1.line, 1);
+    }
+
+    #[test]
+    fn assigning_another_type_instance_map_invalidates_keyed_lookups() {
+        let mut first = TypeIndex::new();
+        first.merge(
+            "file://first.txt",
+            HashMap::from([(
+                "event".to_string(),
+                vec![TypeInstance {
+                    primary_loc_key: Some("first_title".into()),
+                    ..inst("first", 1)
+                }],
+            )]),
+        );
+        let mut second = TypeIndex::new();
+        second.merge(
+            "file://second.txt",
+            HashMap::from([(
+                "event".to_string(),
+                vec![TypeInstance {
+                    primary_loc_key: Some("second_title".into()),
+                    ..inst("second", 2)
+                }],
+            )]),
+        );
+
+        assert_eq!(first.primary_loc_key("event", "first"), Some("first_title"));
+        assert_eq!(
+            second.primary_loc_key("event", "second"),
+            Some("second_title")
+        );
+        first.map = second.map;
+
+        assert!(first.instance_locations("first").is_empty());
+        assert_eq!(first.instance_locations("second")[0].1.line, 2);
+        assert_eq!(
+            first.primary_loc_key("event", "second"),
+            Some("second_title")
+        );
     }
 
     #[test]
