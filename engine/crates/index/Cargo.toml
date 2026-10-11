@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 rustc-hash = { workspace = true }
+smallvec = { workspace = true }
 tracing = { workspace = true }
 cwtools_parser = { workspace = true }
 cwtools_file_manager = { workspace = true }

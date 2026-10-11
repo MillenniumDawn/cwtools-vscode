@@ -1802,7 +1802,7 @@ fn filter_vanilla_index_passes_everything_through_without_replace_paths() {
     let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
     assert!(!shadow.has_replace_paths());
 
-    let filtered = cwtools_driver::filter_vanilla_index(index.map.clone(), &vanilla, &shadow);
+    let filtered = cwtools_driver::filter_vanilla_index((*index.map).clone(), &vanilla, &shadow);
     assert!(
         filtered.get("thing").is_some_and(|instances| instances
             .iter()

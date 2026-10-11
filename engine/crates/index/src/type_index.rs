@@ -1,7 +1,10 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use crate::dynamic_values;
 use crate::{SourceLocation, dec_ref, is_subtype_key};
@@ -15,6 +18,58 @@ fn ascii_lowercase_if_needed(value: &str) -> Cow<'_, str> {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+struct InstanceNamePositions {
+    /// Type ids keep each name bucket compact. Most instance names occur once,
+    /// so SmallVec avoids a second heap allocation for the common case.
+    by_name: FxHashMap<String, SmallVec<[(usize, usize); 2]>>,
+    type_ids: FxHashMap<String, usize>,
+    type_names: Vec<String>,
+}
+
+impl InstanceNamePositions {
+    fn type_id(&mut self, type_name: &str) -> usize {
+        if let Some(&id) = self.type_ids.get(type_name) {
+            return id;
+        }
+        let id = self.type_names.len();
+        let owned = type_name.to_string();
+        self.type_names.push(owned.clone());
+        self.type_ids.insert(owned, id);
+        id
+    }
+
+    fn add(&mut self, name: &str, type_name: &str, position: usize) {
+        let type_id = self.type_id(type_name);
+        self.by_name
+            .entry(name.to_string())
+            .or_default()
+            .push((type_id, position));
+    }
+
+    fn remove(&mut self, name: &str, type_name: &str, position: usize) {
+        let Some(&type_id) = self.type_ids.get(type_name) else {
+            return;
+        };
+        let remove_name = if let Some(positions) = self.by_name.get_mut(name) {
+            if let Some(index) = positions
+                .iter()
+                .position(|&(candidate_type, candidate_pos)| {
+                    candidate_type == type_id && candidate_pos == position
+                })
+            {
+                positions.swap_remove(index);
+            }
+            positions.is_empty()
+        } else {
+            false
+        };
+        if remove_name {
+            self.by_name.remove(name);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TypeInstance {
     pub name: String,
@@ -25,6 +80,74 @@ pub struct TypeInstance {
     /// Loc keys this instance must provide that a `## required` localisation
     /// entry takes from a child field's value (`## required title = title`)
     pub required_loc_keys: Vec<String>,
+}
+
+/// Public, mutation-tracked view of the instance map. Immutable access remains
+/// map-compatible; any mutable borrow advances a generation so TypeIndex can
+/// lazily rebuild its derived lookup data after callers edit the public map.
+#[derive(Debug, Default)]
+pub struct TypeInstanceMap {
+    inner: FxHashMap<String, Vec<(Arc<str>, TypeInstance)>>,
+    revision: AtomicU64,
+}
+
+impl Clone for TypeInstanceMap {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            revision: AtomicU64::new(self.revision.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl Deref for TypeInstanceMap {
+    type Target = FxHashMap<String, Vec<(Arc<str>, TypeInstance)>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for TypeInstanceMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.revision.fetch_add(1, Ordering::Relaxed);
+        &mut self.inner
+    }
+}
+
+impl TypeInstanceMap {
+    /// Consume the tracked wrapper and return the underlying map.
+    pub fn into_inner(self) -> FxHashMap<String, Vec<(Arc<str>, TypeInstance)>> {
+        self.inner
+    }
+}
+
+impl IntoIterator for TypeInstanceMap {
+    type Item = (String, Vec<(Arc<str>, TypeInstance)>);
+    type IntoIter = std::collections::hash_map::IntoIter<String, Vec<(Arc<str>, TypeInstance)>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a TypeInstanceMap {
+    type Item = (&'a String, &'a Vec<(Arc<str>, TypeInstance)>);
+    type IntoIter = std::collections::hash_map::Iter<'a, String, Vec<(Arc<str>, TypeInstance)>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut TypeInstanceMap {
+    type Item = (&'a String, &'a mut Vec<(Arc<str>, TypeInstance)>);
+    type IntoIter = std::collections::hash_map::IterMut<'a, String, Vec<(Arc<str>, TypeInstance)>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.revision.fetch_add(1, Ordering::Relaxed);
+        self.inner.iter_mut()
+    }
 }
 
 /// default (Windows-authored mods); after [`FileIndex::set_case_sensitive`] the
@@ -465,13 +588,14 @@ impl NameRefs {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct TypeIndex {
-    pub map: FxHashMap<String, Vec<(Arc<str>, TypeInstance)>>,
+    pub map: TypeInstanceMap,
     /// Case-folded name to type and current `map[type]` positions. Positions
     /// track swap-removals, avoiding scans through unrelated instances while
     /// preserving duplicate ordering.
-    instance_positions_by_name: FxHashMap<String, FxHashMap<String, FxHashSet<usize>>>,
+    instance_positions_by_name: RwLock<InstanceNamePositions>,
+    indexed_map_revision: AtomicU64,
     name_counts: FxHashMap<Arc<str>, usize>,
     instance_sets: FxHashMap<String, FxHashMap<Arc<str>, NameRefs>>,
     base_game_uris: FxHashSet<Arc<str>>,
@@ -483,6 +607,29 @@ pub struct TypeIndex {
     pub complete: bool,
     pub complex_enum_values: dynamic_values::NamedValueIndex,
     pub value_set_values: dynamic_values::NamedValueIndex,
+}
+
+impl Clone for TypeIndex {
+    fn clone(&self) -> Self {
+        Self {
+            map: self.map.clone(),
+            instance_positions_by_name: RwLock::new(
+                self.instance_positions_by_name.read().unwrap().clone(),
+            ),
+            indexed_map_revision: AtomicU64::new(self.indexed_map_revision.load(Ordering::Acquire)),
+            name_counts: self.name_counts.clone(),
+            instance_sets: self.instance_sets.clone(),
+            base_game_uris: self.base_game_uris.clone(),
+            file_positions: self.file_positions.clone(),
+            file_index: self.file_index.clone(),
+            var_index: self.var_index.clone(),
+            scripted_loc_index: self.scripted_loc_index.clone(),
+            scripted_gui_index: self.scripted_gui_index.clone(),
+            complete: self.complete,
+            complex_enum_values: self.complex_enum_values.clone(),
+            value_set_values: self.value_set_values.clone(),
+        }
+    }
 }
 
 impl TypeIndex {
@@ -554,18 +701,28 @@ impl TypeIndex {
     }
 
     pub fn instance_locations(&self, name: &str) -> Vec<(Arc<str>, SourceLocation)> {
+        self.ensure_instance_positions_current();
         let name = ascii_lowercase_if_needed(name);
-        let Some(by_type) = self.instance_positions_by_name.get(name.as_ref()) else {
+        let positions_by_name = self.instance_positions_by_name.read().unwrap();
+        let Some(name_positions) = positions_by_name.by_name.get(name.as_ref()) else {
             return Vec::new();
         };
         let mut locations = Vec::new();
         // This preserves the legacy cross-type map order while keyed positions
         // avoid walking unrelated instances inside any type bucket.
         for (type_name, entries) in &self.map {
-            let Some(positions) = by_type.get(type_name) else {
+            let Some(&type_id) = positions_by_name.type_ids.get(type_name) else {
                 continue;
             };
-            let mut positions: Vec<_> = positions.iter().copied().collect();
+            let mut positions: Vec<_> = name_positions
+                .iter()
+                .filter_map(|&(candidate_type, position)| {
+                    (candidate_type == type_id).then_some(position)
+                })
+                .collect();
+            if positions.is_empty() {
+                continue;
+            }
             positions.sort_unstable();
             locations.extend(positions.into_iter().map(|position| {
                 let (uri, instance) = &entries[position];
@@ -577,13 +734,17 @@ impl TypeIndex {
 
     /// The explicit-field primary loc key captured for `name`'s instance of
     pub fn primary_loc_key(&self, type_name: &str, name: &str) -> Option<&str> {
+        self.ensure_instance_positions_current();
         let name = ascii_lowercase_if_needed(name);
         let entries = self.map.get(type_name)?;
-        self.instance_positions_by_name
+        let positions_by_name = self.instance_positions_by_name.read().unwrap();
+        let type_id = *positions_by_name.type_ids.get(type_name)?;
+        positions_by_name
+            .by_name
             .get(name.as_ref())?
-            .get(type_name)?
             .iter()
-            .filter_map(|&position| {
+            .filter_map(|&(candidate_type, position)| {
+                (candidate_type == type_id).then_some(position)?;
                 entries[position]
                     .1
                     .primary_loc_key
@@ -592,6 +753,70 @@ impl TypeIndex {
             })
             .min_by_key(|(position, _)| *position)
             .map(|(_, key)| key)
+    }
+
+    fn ensure_instance_positions_current(&self) {
+        let revision = self.map.revision.load(Ordering::Acquire);
+        if self.indexed_map_revision.load(Ordering::Acquire) == revision {
+            return;
+        }
+        let mut positions_by_name = self.instance_positions_by_name.write().unwrap();
+        let revision = self.map.revision.load(Ordering::Acquire);
+        if self.indexed_map_revision.load(Ordering::Acquire) != revision {
+            *positions_by_name = InstanceNamePositions::default();
+            for (type_name, entries) in &self.map {
+                for (position, (_, instance)) in entries.iter().enumerate() {
+                    positions_by_name.add(&instance.name.to_ascii_lowercase(), type_name, position);
+                }
+            }
+            self.indexed_map_revision.store(revision, Ordering::Release);
+        }
+    }
+
+    /// Approximate capacity-backed bytes used by the derived name lookup.
+    /// This excludes allocator metadata and hash-table control bytes, so it is
+    /// intended for comparative benchmarks rather than process-memory claims.
+    #[doc(hidden)]
+    pub fn approximate_instance_name_index_storage_bytes(&self) -> usize {
+        let index = self.instance_positions_by_name.read().unwrap();
+        let map_overhead = std::mem::size_of::<usize>();
+        let name_map = index.by_name.capacity()
+            * (std::mem::size_of::<(String, SmallVec<[(usize, usize); 2]>)>() + map_overhead)
+            + index
+                .by_name
+                .keys()
+                .map(|name| name.capacity())
+                .sum::<usize>()
+            + index
+                .by_name
+                .values()
+                .map(|positions| {
+                    if positions.spilled() {
+                        positions.capacity() * std::mem::size_of::<(usize, usize)>()
+                    } else {
+                        0
+                    }
+                })
+                .sum::<usize>();
+        let type_map = index.type_ids.capacity()
+            * (std::mem::size_of::<(String, usize)>() + map_overhead)
+            + index
+                .type_ids
+                .keys()
+                .map(|name| name.capacity())
+                .sum::<usize>();
+        let type_names = index.type_names.capacity() * std::mem::size_of::<String>()
+            + index
+                .type_names
+                .iter()
+                .map(|name| name.capacity())
+                .sum::<usize>();
+        name_map + type_map + type_names
+    }
+
+    fn mark_instance_positions_current(&self) {
+        self.indexed_map_revision
+            .store(self.map.revision.load(Ordering::Acquire), Ordering::Release);
     }
 
     pub fn loc_bindable_names(&self) -> impl Iterator<Item = String> + '_ {
@@ -678,6 +903,7 @@ impl TypeIndex {
         per_type: HashMap<String, Vec<TypeInstance>>,
         base_game: bool,
     ) {
+        self.ensure_instance_positions_current();
         let uri: Arc<str> = Arc::from(file_uri);
         if base_game {
             self.base_game_uris.insert(Arc::clone(&uri));
@@ -711,22 +937,24 @@ impl TypeIndex {
                 };
                 set.entry(lower).or_default().add(base_game);
                 let position = entry.len();
-                self.instance_positions_by_name
-                    .entry(inst.name.to_ascii_lowercase())
-                    .or_default()
-                    .entry(type_name.clone())
-                    .or_default()
-                    .insert(position);
+                Self::add_instance_position(
+                    &mut self.instance_positions_by_name,
+                    &inst.name.to_ascii_lowercase(),
+                    &type_name,
+                    position,
+                );
                 positions.push(position);
                 entry.push((Arc::clone(&uri), inst));
             }
         }
+        self.mark_instance_positions_current();
     }
 
     pub fn merge_base_game_with_uris(
         &mut self,
         per_type: impl IntoIterator<Item = (String, Vec<(Arc<str>, TypeInstance)>)>,
     ) {
+        self.ensure_instance_positions_current();
         for (type_name, instances) in per_type {
             let subtype_key = is_subtype_key(&type_name);
             let set = self.instance_sets.entry(type_name.clone()).or_default();
@@ -750,12 +978,12 @@ impl TypeIndex {
                 };
                 set.entry(lower).or_default().add(true);
                 let pos = entry.len();
-                self.instance_positions_by_name
-                    .entry(inst.name.to_ascii_lowercase())
-                    .or_default()
-                    .entry(type_name.clone())
-                    .or_default()
-                    .insert(pos);
+                Self::add_instance_position(
+                    &mut self.instance_positions_by_name,
+                    &inst.name.to_ascii_lowercase(),
+                    &type_name,
+                    pos,
+                );
                 self.base_game_uris.insert(Arc::clone(&uri));
                 let type_positions = self.file_positions.entry(Arc::clone(&uri)).or_default();
                 match type_positions.get_mut(type_name.as_str()) {
@@ -767,12 +995,14 @@ impl TypeIndex {
                 entry.push((uri, inst));
             }
         }
+        self.mark_instance_positions_current();
     }
 
     pub fn remove_files(&mut self, file_uris: &HashSet<Arc<str>>) {
         if file_uris.is_empty() {
             return;
         }
+        self.ensure_instance_positions_current();
         for (type_name, v) in self.map.iter_mut() {
             let subtype_key = is_subtype_key(type_name);
             v.retain(|(uri, inst)| {
@@ -807,9 +1037,11 @@ impl TypeIndex {
                     .push(i);
             }
         }
+        self.mark_instance_positions_current();
     }
 
     pub fn remove_file(&mut self, file_uri: &str) {
+        self.ensure_instance_positions_current();
         self.complex_enum_values.remove_file(file_uri);
         self.value_set_values.remove_file(file_uri);
         self.scripted_loc_index.remove_file(file_uri);
@@ -839,6 +1071,7 @@ impl TypeIndex {
                 self.instance_sets.remove(&type_name);
             }
         }
+        self.mark_instance_positions_current();
     }
 
     fn swap_remove_instance(&mut self, type_name: &str, index: usize) {
@@ -848,10 +1081,13 @@ impl TypeIndex {
         let last = entries.len() - 1;
         let removed_name = entries[index].1.name.to_ascii_lowercase();
         let moved_name = (index != last).then(|| entries[last].1.name.to_ascii_lowercase());
-        self.remove_instance_position(&removed_name, type_name, index);
-        if let Some(moved_name) = moved_name {
-            self.remove_instance_position(&moved_name, type_name, last);
-            self.add_instance_position(&moved_name, type_name, index);
+        {
+            let positions_by_name = self.instance_positions_by_name.get_mut().unwrap();
+            Self::remove_instance_position(positions_by_name, &removed_name, type_name, index);
+            if let Some(moved_name) = moved_name.as_deref() {
+                Self::remove_instance_position(positions_by_name, moved_name, type_name, last);
+                positions_by_name.add(moved_name, type_name, index);
+            }
         }
         let Some(v) = self.map.get_mut(type_name) else {
             return;
@@ -871,47 +1107,36 @@ impl TypeIndex {
         }
     }
 
-    fn add_instance_position(&mut self, name: &str, type_name: &str, position: usize) {
-        self.instance_positions_by_name
-            .entry(name.to_string())
-            .or_default()
-            .entry(type_name.to_string())
-            .or_default()
-            .insert(position);
+    fn add_instance_position(
+        positions_by_name: &mut RwLock<InstanceNamePositions>,
+        name: &str,
+        type_name: &str,
+        position: usize,
+    ) {
+        positions_by_name
+            .get_mut()
+            .unwrap()
+            .add(name, type_name, position);
     }
 
-    fn remove_instance_position(&mut self, name: &str, type_name: &str, position: usize) {
-        let remove_type = if let Some(types) = self.instance_positions_by_name.get_mut(name) {
-            let remove_type = if let Some(positions) = types.get_mut(type_name) {
-                positions.remove(&position);
-                positions.is_empty()
-            } else {
-                false
-            };
-            if remove_type {
-                types.remove(type_name);
-            }
-            types.is_empty()
-        } else {
-            false
-        };
-        if remove_type {
-            self.instance_positions_by_name.remove(name);
-        }
+    fn remove_instance_position(
+        positions_by_name: &mut InstanceNamePositions,
+        name: &str,
+        type_name: &str,
+        position: usize,
+    ) {
+        positions_by_name.remove(name, type_name, position);
     }
 
     fn rebuild_instance_positions(&mut self) {
-        self.instance_positions_by_name.clear();
+        let positions_by_name = self.instance_positions_by_name.get_mut().unwrap();
+        *positions_by_name = InstanceNamePositions::default();
         for (type_name, entries) in &self.map {
             for (position, (_, instance)) in entries.iter().enumerate() {
-                self.instance_positions_by_name
-                    .entry(instance.name.to_ascii_lowercase())
-                    .or_default()
-                    .entry(type_name.clone())
-                    .or_default()
-                    .insert(position);
+                positions_by_name.add(&instance.name.to_ascii_lowercase(), type_name, position);
             }
         }
+        self.mark_instance_positions_current();
     }
 }
 
@@ -1084,6 +1309,39 @@ mod tests {
             "removed type/name entries must not remain in the keyed view"
         );
         assert!(idx.instance_locations("missing").is_empty());
+    }
+
+    #[test]
+    fn direct_public_map_mutations_refresh_keyed_lookups() {
+        let mut idx = TypeIndex::new();
+        idx.merge(
+            "file://one.txt",
+            HashMap::from([("event".to_string(), vec![inst("first", 1)])]),
+        );
+
+        assert_eq!(idx.instance_locations("first").len(), 1);
+        let mut direct = inst("direct", 2);
+        direct.primary_loc_key = Some("direct_title".to_string());
+        idx.map
+            .entry("event".to_string())
+            .or_default()
+            .push((Arc::from("file://direct.txt"), direct));
+        idx.merge(
+            "file://later.txt",
+            HashMap::from([("event".to_string(), vec![inst("later", 3)])]),
+        );
+        assert_eq!(idx.instance_locations("DIRECT")[0].1.line, 2);
+        assert_eq!(idx.instance_locations("later")[0].1.line, 3);
+        assert_eq!(idx.primary_loc_key("event", "DIRECT"), Some("direct_title"));
+
+        // Mutable access can reorder or remove entries without changing the
+        // public map's shape; the revision must still invalidate positions.
+        idx.map.get_mut("event").unwrap().swap(0, 1);
+        assert_eq!(idx.instance_locations("first")[0].1.line, 1);
+        assert_eq!(idx.instance_locations("direct")[0].1.line, 2);
+        idx.map.get_mut("event").unwrap().swap_remove(0);
+        assert_eq!(idx.instance_locations("direct").len(), 0);
+        assert_eq!(idx.instance_locations("first")[0].1.line, 1);
     }
 
     #[test]

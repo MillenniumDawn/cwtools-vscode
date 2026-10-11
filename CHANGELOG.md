@@ -2,7 +2,7 @@
 
 #### Engine
 
-* Index instance locations and explicit primary localisation keys by ASCII-case-insensitive instance name, so navigation and hover lookups avoid scanning unrelated instances while preserving duplicate and removal behavior. (#485)
+* Index instance locations and explicit primary localisation keys by ASCII-case-insensitive instance name, so navigation and hover lookups avoid scanning unrelated instances while preserving duplicate and removal behavior. Direct mutable access to the public instance map now invalidates and lazily rebuilds the keyed lookup index. (#485)
 * Move the eight ignored perf tests into `cwtools_lsp` and `cwtools_cache` benches that find their checkouts under `CWTOOLS_PROJECTS`, like the existing benches. The per-test path variables and home-directory defaults are gone, and the indexing bench now reads Millennium Dawn files instead of a base-game install. With those unrun test bodies gone, the Rust line-coverage floor rises from 91.5 to 92.3. (#886)
 * Give a lowercase string one string-table slot and one map entry instead of two, and skip the `to_lowercase` allocation for ASCII input with no uppercase. The Millennium Dawn string table drops from 1,050,164 to 916,655 entries. (#486)
 * Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)

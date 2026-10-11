@@ -20,7 +20,8 @@ pub use path_match::{
     NormalizedPath, check_path_dir, check_path_dir_norm, dir_matches_pattern, path_contains_segment,
 };
 pub use type_index::{
-    FileIndex, ScriptedGuiIndex, ScriptedLocIndex, TypeIndex, TypeInstance, VarIndex,
+    FileIndex, ScriptedGuiIndex, ScriptedLocIndex, TypeIndex, TypeInstance, TypeInstanceMap,
+    VarIndex,
 };
 pub use variables::{
     DefinedVariable, collect_defined_variables_from_rules, collect_set_variable_defs,
