@@ -117,7 +117,7 @@ Open the repo in VS Code and launch **Quick update, Build and Launch Extension**
 ```bash
 npm run test:node      # node-only unit tests for the pure modules (vitest, fast)
 npm test               # unit label: VS Code API, no language server
-npm run test:smoke     # smoke, live, multi-root and watched host labels
+npm run test:smoke     # smoke, live, multi-root, watched, and restart host labels
 npm run test:host      # host label except live; includes hover and completion
 npm run test:rules-sync  # network-free rules sync host label
 npm run test:coverage  # host, live, and restart labels with validated V8 coverage
