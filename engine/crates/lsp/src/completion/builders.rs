@@ -7,8 +7,7 @@ use cwtools_game::scope_engine::{SCOPE_ANY, ScopeId};
 use cwtools_game::scope_registry::ScopeRegistry;
 use cwtools_info::InfoService;
 use cwtools_rules::rules_types::{
-    NewField, ParsedAliasPattern, PatternKind, RootRule, RuleSet, RuleType, SubTypeDefinition,
-    TypeType, ValueType,
+    NewField, PatternKind, RootRule, RuleSet, RuleType, SubTypeDefinition, TypeType, ValueType,
 };
 use cwtools_validation::scope_matches_required;
 
@@ -416,7 +415,7 @@ fn push_enum_keyed_leaf<'a>(
         NewField::ValueField(ValueType::Bool) => "${1|yes,no|}".to_string(),
         _ => "${1}".to_string(),
     };
-    for v in all_enum_values_cached(enum_cache, ruleset, info, e) {
+    for v in all_enum_values_cached(enum_cache, ruleset, info, e, flt) {
         if !flt.admit(v) {
             continue;
         }
@@ -440,7 +439,7 @@ fn push_enum_keyed_node<'a>(
     e: &str,
     flt: &mut BuildFilter,
 ) {
-    for v in all_enum_values_cached(enum_cache, ruleset, info, e) {
+    for v in all_enum_values_cached(enum_cache, ruleset, info, e, flt) {
         if !flt.admit(v) {
             continue;
         }
@@ -464,7 +463,7 @@ fn push_enum_leaf_values<'a>(
     e: &str,
     flt: &mut BuildFilter,
 ) {
-    for v in all_enum_values_cached(enum_cache, ruleset, info, e) {
+    for v in all_enum_values_cached(enum_cache, ruleset, info, e, flt) {
         if !flt.admit(v) {
             continue;
         }
@@ -564,19 +563,18 @@ fn push_alias_keys<'a>(
     enum_cache: &mut HashMap<String, Vec<&'a str>>,
 ) {
     let prefix = format!("{}:", cat);
-    let alias_indices = ruleset
-        .alias_categories()
-        .get(cat)
-        .map(|index| index.alias_indices.as_slice())
+    let alias_index = ruleset.alias_categories().get(cat);
+    let plain_alias_indices = alias_index
+        .map(|index| index.plain_alias_indices.as_slice())
         .unwrap_or(&[]);
     let verdicts: Option<HashMap<&str, (bool, bool)>> = scope.map(|(current, reg)| {
         let mut m: HashMap<&str, (bool, bool)> = HashMap::new();
-        for &alias_idx in alias_indices {
+        for &alias_idx in plain_alias_indices {
             let (alias_name, (_, opts)) = &ruleset.aliases[alias_idx];
             let Some(k) = alias_name.strip_prefix(&prefix) else {
                 continue;
             };
-            if k == "scope_field" || ParsedAliasPattern::parse(k, 0).is_some() {
+            if !flt.matches(k) {
                 continue;
             }
             let matches = scope_matches_required(current, reg, &opts.required_scopes);
@@ -588,17 +586,11 @@ fn push_alias_keys<'a>(
         m
     });
     let mut seen: HashMap<&str, usize> = HashMap::new();
-    for &alias_idx in alias_indices {
+    for &alias_idx in plain_alias_indices {
         let (alias_name, (rule, _)) = &ruleset.aliases[alias_idx];
         let Some(k) = alias_name.strip_prefix(&prefix) else {
             continue;
         };
-        if k == "scope_field" {
-            continue;
-        }
-        if ParsedAliasPattern::parse(k, 0).is_some() {
-            continue;
-        }
         // Plain alias labels are filtered by the request builder too. Check
         // here before allocating snippets/details while preserving its budget.
         if !flt.retain_token_match(k) {
@@ -648,7 +640,7 @@ fn push_alias_keys<'a>(
         });
     }
 
-    if let Some(cat_idx) = ruleset.alias_categories().get(cat) {
+    if let Some(cat_idx) = alias_index {
         for pattern in &cat_idx.parsed_patterns {
             if !pattern.prefix.is_empty() || !pattern.suffix.is_empty() {
                 continue;
@@ -676,9 +668,13 @@ fn push_alias_keys<'a>(
                     }
                 }
                 PatternKind::Enum => {
-                    for v in
-                        all_enum_values_cached(enum_cache, ruleset, info, &pattern.placeholder_name)
-                    {
+                    for v in all_enum_values_cached(
+                        enum_cache,
+                        ruleset,
+                        info,
+                        &pattern.placeholder_name,
+                        flt,
+                    ) {
                         if seen.contains_key(v) {
                             continue;
                         }
@@ -883,30 +879,31 @@ pub(crate) fn enum_values_for<'a>(ruleset: &'a RuleSet, enum_name: &str) -> &'a 
     &[]
 }
 
-pub(crate) fn all_enum_values<'a>(
-    ruleset: &'a RuleSet,
-    info: &'a InfoService,
-    enum_name: &str,
-) -> Vec<&'a str> {
-    let mut vals: Vec<&'a str> = enum_values_for(ruleset, enum_name)
-        .iter()
-        .map(String::as_str)
-        .collect();
-    vals.extend(info.type_index.complex_enum_values.values(enum_name));
-    vals.sort_unstable();
-    vals.dedup();
-    vals
-}
-
 fn all_enum_values_cached<'c, 'a>(
     cache: &'c mut HashMap<String, Vec<&'a str>>,
     ruleset: &'a RuleSet,
     info: &'a InfoService,
     enum_name: &str,
+    flt: &mut BuildFilter,
 ) -> &'c [&'a str] {
-    cache
-        .entry(enum_name.to_string())
-        .or_insert_with(|| all_enum_values(ruleset, info, enum_name))
+    if !cache.contains_key(enum_name) {
+        let mut values = Vec::new();
+        let mut consider = |value: &'a str| {
+            if flt.retain_token_match(value) {
+                values.push(value);
+            }
+        };
+        for value in enum_values_for(ruleset, enum_name) {
+            consider(value);
+        }
+        for value in info.type_index.complex_enum_values.values(enum_name) {
+            consider(value);
+        }
+        values.sort_unstable();
+        values.dedup();
+        cache.insert(enum_name.to_string(), values);
+    }
+    cache.get(enum_name).expect("enum cache entry was inserted")
 }
 
 pub(crate) fn enum_member_detail(
@@ -931,6 +928,7 @@ fn filepath_values<'a>(
     index: &'a cwtools_info::FileIndex,
     prefix: Option<&str>,
     extension: Option<&str>,
+    flt: &mut BuildFilter,
 ) -> Vec<&'a str> {
     let prefix = prefix
         .map(normalized_path_part)
@@ -960,7 +958,10 @@ fn filepath_values<'a>(
                 value = value.strip_suffix(&extension)?;
             }
             let value = value.trim_start_matches('/');
-            (!value.is_empty()).then_some(value)
+            if value.is_empty() || !flt.retain_token_match(value) {
+                return None;
+            }
+            Some(value)
         })
         .collect();
     values.sort_unstable();
@@ -968,7 +969,11 @@ fn filepath_values<'a>(
     values
 }
 
-fn icon_values<'a>(index: &'a cwtools_info::FileIndex, folder: &str) -> Vec<&'a str> {
+fn icon_values<'a>(
+    index: &'a cwtools_info::FileIndex,
+    folder: &str,
+    flt: &mut BuildFilter,
+) -> Vec<&'a str> {
     let prefix = normalized_path_part(folder)
         .trim_end_matches('/')
         .to_string();
@@ -987,7 +992,10 @@ fn icon_values<'a>(index: &'a cwtools_info::FileIndex, folder: &str) -> Vec<&'a 
                 .into_iter()
                 .find(|extension| value.ends_with(extension))?;
             let value = value.strip_suffix(extension)?;
-            (!value.is_empty()).then_some(value)
+            if value.is_empty() || !flt.retain_token_match(value) {
+                return None;
+            }
+            Some(value)
         })
         .collect();
     values.sort_unstable();
@@ -1115,7 +1123,7 @@ pub fn value_completions(
                 }
             }
             NewField::ValueField(ValueType::Enum(e)) => {
-                for v in all_enum_values_cached(&mut enum_cache, ruleset, info, e) {
+                for v in all_enum_values_cached(&mut enum_cache, ruleset, info, e, &mut flt) {
                     if !flt.admit(v) {
                         continue;
                     }
@@ -1152,6 +1160,7 @@ pub fn value_completions(
                     &info.type_index.file_index,
                     prefix.as_deref(),
                     extension.as_deref(),
+                    &mut flt,
                 ) {
                     if !flt.admit(value) {
                         continue;
@@ -1169,7 +1178,7 @@ pub fn value_completions(
                 }
             }
             NewField::IconField(folder) => {
-                for value in icon_values(&info.type_index.file_index, folder) {
+                for value in icon_values(&info.type_index.file_index, folder, &mut flt) {
                     if !flt.admit(value) {
                         continue;
                     }
@@ -1573,7 +1582,12 @@ mod resolve_data_tests {
     #[test]
     fn alias_completion_uses_category_index_and_filters_before_snippets() {
         let mut rs = RuleSet::new();
-        for name in ["effect:focus_power", "effect:other", "unused:focus_noise"] {
+        for (name, required_scopes) in [
+            ("effect:focus_power", vec!["state"]),
+            ("effect:other", vec![]),
+            ("unused:focus_noise", vec![]),
+            ("effect:focus_power", vec!["country"]),
+        ] {
             rs.aliases.push((
                 name.to_string(),
                 (
@@ -1581,11 +1595,24 @@ mod resolve_data_tests {
                         left: NewField::SpecificField(format!("alias[{name}]")),
                         right: NewField::ScalarField,
                     },
-                    Options::default(),
+                    Options {
+                        required_scopes: required_scopes.into_iter().map(str::to_string).collect(),
+                        ..Options::default()
+                    },
                 ),
             ));
         }
         rs.reindex();
+        let registry = ScopeRegistry::from_config(
+            &[cwtools_game::scope_registry::ScopeInput {
+                name: "Country".to_string(),
+                aliases: vec!["country".to_string()],
+                is_subscope_of: Vec::new(),
+            }],
+            &[],
+            cwtools_game::constants::Game::Stellaris,
+        );
+        let country = registry.id_of("country").unwrap();
         let rule = vec![(
             RuleType::LeafRule {
                 left: NewField::AliasField("effect".to_string()),
@@ -1600,8 +1627,8 @@ mod resolve_data_tests {
             "hoi4",
             &HashSet::new(),
             &Default::default(),
-            None,
-            None,
+            Some(&registry),
+            Some(country),
             "focus",
         );
         assert_eq!(
@@ -1612,6 +1639,7 @@ mod resolve_data_tests {
             ["focus_power"]
         );
         assert!(items[0].insert_text.is_some());
+        assert_eq!(items[0].sort_text.as_deref(), Some("0_focus_power"));
         assert_eq!(dropped, 1);
         let (items, incomplete, strategy) = prepare_context_items(
             items,
@@ -1625,7 +1653,8 @@ mod resolve_data_tests {
         assert!(incomplete);
         assert_eq!(strategy, "filtered");
         assert_eq!(items.len(), 1);
-        assert_eq!(rs.alias_categories()["effect"].alias_indices.len(), 2);
+        assert_eq!(rs.alias_categories()["effect"].alias_indices.len(), 3);
+        assert_eq!(rs.alias_categories()["effect"].plain_alias_indices.len(), 3);
     }
 
     #[test]
@@ -1646,6 +1675,60 @@ mod resolve_data_tests {
         assert_eq!(filter.dropped(), 1);
         assert!(filter.admit_parts(&["pre", "MATCH"]));
         assert_eq!(filter.dropped(), 1);
+    }
+
+    #[test]
+    fn no_match_filtering_does_not_store_large_candidate_universes() {
+        const CANDIDATES: usize = 10_000;
+        let mut index = cwtools_info::FileIndex::new();
+        index.add_paths(
+            (0..CANDIDATES)
+                .map(|i| format!("common/ships/ship_{i:05}.txt"))
+                .chain((0..CANDIDATES).map(|i| format!("gfx/interface/icons/icon_{i:05}.dds"))),
+        );
+
+        let mut filepath_filter = BuildFilter::new("no_such_candidate");
+        let paths = filepath_values(
+            &index,
+            Some("common/ships"),
+            Some("txt"),
+            &mut filepath_filter,
+        );
+        assert!(paths.is_empty());
+        assert_eq!(
+            paths.capacity(),
+            0,
+            "unmatched paths should not allocate a candidate buffer"
+        );
+        assert_eq!(filepath_filter.dropped(), CANDIDATES);
+
+        let mut icon_filter = BuildFilter::new("no_such_candidate");
+        let icons = icon_values(&index, "gfx/interface/icons", &mut icon_filter);
+        assert!(icons.is_empty());
+        assert_eq!(
+            icons.capacity(),
+            0,
+            "unmatched icons should not allocate a candidate buffer"
+        );
+        assert_eq!(icon_filter.dropped(), CANDIDATES);
+
+        let mut ruleset = RuleSet::new();
+        ruleset.enums.push(EnumDefinition {
+            key: "large".to_string(),
+            description: String::new(),
+            values: (0..CANDIDATES)
+                .map(|i| format!("enum_value_{i:05}"))
+                .collect(),
+        });
+        ruleset.reindex();
+        let info = InfoService::new();
+        let mut enum_filter = BuildFilter::new("no_such_candidate");
+        let mut enum_cache = HashMap::new();
+        let values =
+            all_enum_values_cached(&mut enum_cache, &ruleset, &info, "large", &mut enum_filter);
+        assert!(values.is_empty());
+        assert_eq!(enum_cache["large"].capacity(), 0);
+        assert_eq!(enum_filter.dropped(), CANDIDATES);
     }
 
     #[test]
@@ -2170,15 +2253,24 @@ mod resolve_data_tests {
         }
         let mut index = cwtools_info::FileIndex::new();
         index.add_root(root.path());
+        let mut file_filter = BuildFilter::new("");
 
         assert_eq!(
-            filepath_values(&index, Some("common/ships/"), Some(".txt")),
+            filepath_values(
+                &index,
+                Some("common/ships/"),
+                Some(".txt"),
+                &mut file_filter,
+            ),
             vec!["alpha", "nested/beta", "with space"]
         );
+        assert_eq!(file_filter.dropped(), 0);
+        let mut icon_filter = BuildFilter::new("");
         assert_eq!(
-            icon_values(&index, "gfx\\interface\\icons\\"),
+            icon_values(&index, "gfx\\interface\\icons\\", &mut icon_filter),
             vec!["alpha", "nested/beta"]
         );
+        assert_eq!(icon_filter.dropped(), 0);
     }
 
     #[test]
