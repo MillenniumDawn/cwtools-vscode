@@ -27,6 +27,7 @@ pub(super) fn run(args: FixArgs) {
         game,
         directory,
         rules,
+        parents,
         vanilla,
         vanilla_cache,
         no_vanilla_cache,
@@ -72,6 +73,13 @@ pub(super) fn run(args: FixArgs) {
         list ignore_codes => ignore_codes "ignore-codes";
         flag allow_empty => allow_empty "allow-empty";
     );
+    let parent_roots = config::pick_configured_list(
+        parents,
+        fc.map(|c| c.parents.clone()).unwrap_or_default(),
+        fc.is_some_and(|c| c.present.contains(&"parents")),
+        "parents",
+        &mut applied,
+    );
     announce_config("fix", fc, &applied, config::FIX_KEYS);
 
     let game = game.unwrap_or_else(|| missing_required("fix", "--game <GAME>", "game", fc));
@@ -109,7 +117,7 @@ pub(super) fn run(args: FixArgs) {
                 loaded,
                 ModLayers {
                     primary: &directory,
-                    parents: &[],
+                    parents: &parent_roots,
                 },
                 vanilla.as_deref(),
             )
@@ -131,7 +139,7 @@ pub(super) fn run(args: FixArgs) {
             game: game_id,
             rules: RulesInput::from_path(rules.clone()),
             directory: directory.clone(),
-            parent_roots: Vec::new(),
+            parent_roots: parent_roots.clone(),
             vanilla: vanilla.clone(),
             vanilla_cache: vanilla_cache_index,
             vanilla_cache_auto,
@@ -159,7 +167,7 @@ pub(super) fn run(args: FixArgs) {
             cached_fp,
             ModLayers {
                 primary: &directory,
-                parents: &[],
+                parents: &parent_roots,
             },
             vanilla_dir,
             game_id,

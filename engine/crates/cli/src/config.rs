@@ -40,6 +40,7 @@ pub(crate) const FIX_KEYS: &[&str] = &[
     "refresh-vanilla-cache",
     "ignore-files",
     "ignore-dirs",
+    "parents",
     "loc-languages",
     "case-sensitive-files",
     "ignore-codes",

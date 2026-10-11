@@ -4336,6 +4336,37 @@ fn parent_replace_path_is_applied_to_explicit_vanilla_cache_with_or_without_inst
             .any(|(_, keys)| keys.iter().any(|key| key == "hidden_key"))
     );
 
+    let config = tmp.path().join("cwtools.toml");
+    std::fs::write(&config, "parents = [\"parent\"]\n").unwrap();
+    let filtered_bytes = std::fs::read(&cache).unwrap();
+    for use_config in [false, true] {
+        let mut command = cwtools();
+        command.args([
+            "fix",
+            "--game",
+            "hoi4",
+            "--directory",
+            mod_dir.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--vanilla",
+            vanilla_dir.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ]);
+        if use_config {
+            command.args(["--config", config.to_str().unwrap()]);
+        } else {
+            command.args(["--parent", parent_dir.to_str().unwrap()]);
+        }
+        command
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("does not read config key `parents`").not())
+            .stderr(predicate::str::contains("stale").not());
+        assert_eq!(std::fs::read(&cache).unwrap(), filtered_bytes);
+    }
+
     cwtools()
         .args([
             "validate",

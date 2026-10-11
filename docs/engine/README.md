@@ -62,6 +62,9 @@ cwtools validate --game hoi4 --directory path/to/submod --rules path/to/Config \
   --parent path/to/base-mod --parent path/to/next-parent
 ```
 
+`fix` accepts the same parent flags and configuration, including the same
+parent-aware vanilla cache, while fixing only the primary mod's files.
+
 The primary mod has highest priority, followed by parent directories in the
 order given, then vanilla. When parents conflict, a later-listed parent wins.
 Parent scripts and localisation contribute to reference resolution, while only

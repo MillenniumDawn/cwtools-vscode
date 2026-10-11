@@ -340,6 +340,9 @@ pub(crate) struct FixArgs {
     /// Path to a .cwt rules file OR a directory containing .cwt rule files
     #[arg(long, short)]
     pub(crate) rules: Option<PathBuf>,
+    /// Parent mod directories loaded below this mod (see `validate --parent`).
+    #[arg(long = "parent", value_name = "DIR")]
+    pub(crate) parents: Vec<PathBuf>,
     /// Optional path to the base game install, indexed for reference
     /// resolution (see `validate --vanilla`).
     #[arg(long)]
