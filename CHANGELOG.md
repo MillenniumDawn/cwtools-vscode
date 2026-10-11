@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Extension
+
+* Declare VS Code 1.91.0 as the minimum host version required by the shipped vscode-languageclient, and exercise activation plus language-server initialization at that floor in CI. (#849)
+
 #### Engine
 
 * Move the eight ignored perf tests into `cwtools_lsp` and `cwtools_cache` benches that find their checkouts under `CWTOOLS_PROJECTS`, like the existing benches. The per-test path variables and home-directory defaults are gone, and the indexing bench now reads Millennium Dawn files instead of a base-game install. With those unrun test bodies gone, the Rust line-coverage floor rises from 91.5 to 92.3. (#886)
