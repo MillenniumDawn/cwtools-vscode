@@ -1670,27 +1670,18 @@ fn parent_mods_are_ordered_reference_layers_but_not_validation_targets() {
         .instances("thing")
         .iter()
         .filter(|(_, instance)| instance.name == "shared")
-        .map(|(uri, _)| uri.to_string())
+        .map(|(uri, _)| PathBuf::from(uri.as_ref()))
         .collect();
     assert_eq!(
         shared_sources,
         [
-            mod_root
-                .join("common/things/main.txt")
-                .to_string_lossy()
-                .to_string(),
-            first_parent
-                .join("common/things/first.txt")
-                .to_string_lossy()
-                .to_string(),
+            mod_root.join("common").join("things").join("main.txt"),
+            first_parent.join("common").join("things").join("first.txt"),
             second_parent
-                .join("common/things/second.txt")
-                .to_string_lossy()
-                .to_string(),
-            vanilla
-                .join("common/things/vanilla.txt")
-                .to_string_lossy()
-                .to_string(),
+                .join("common")
+                .join("things")
+                .join("second.txt"),
+            vanilla.join("common").join("things").join("vanilla.txt"),
         ],
         "priority is workspace, parents in declaration order, then vanilla"
     );
