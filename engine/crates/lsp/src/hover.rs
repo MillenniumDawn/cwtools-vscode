@@ -835,11 +835,11 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
         use cwtools_rules::rules_types::RuleSet;
 
         let mut type_index = TypeIndex::new();
-        type_index.map.insert(
-            "idea".to_string(),
-            vec![(
-                std::sync::Arc::<str>::from("file:///ideas/test.txt"),
-                TypeInstance {
+        type_index.merge(
+            "file:///ideas/test.txt",
+            std::collections::HashMap::from([(
+                "idea".to_string(),
+                vec![TypeInstance {
                     name: "my_idea".to_string(),
                     location: SourceLocation {
                         line: 0,
@@ -848,8 +848,8 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
                     },
                     primary_loc_key: Some("my_idea".to_string()),
                     required_loc_keys: Vec::new(),
-                },
-            )],
+                }],
+            )]),
         );
 
         let mut md = String::new();
