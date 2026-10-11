@@ -7,11 +7,11 @@ import type { GraphNode } from "../../../src/common/graphTypes";
 // execute through their normal message dispatcher.
 const state = vi.hoisted(() => ({
 	cores: [] as cytoscape.Core[],
-	layouts: [] as { name: string; ids: string[] }[],
-	layoutCallbacks: [] as Array<{ name: string; callback: () => void }>,
+	layouts: [] as { name: string; ids: string[]; owner: number }[],
+	layoutCallbacks: [] as Array<{ name: string; owner: number; callback: () => void; active: boolean }>,
 	layoutFailure: undefined as Error | undefined,
 	layoutEvents: [] as string[],
-	windowListeners: new Map<string, (event: { reason: unknown; preventDefault: () => void }) => void>(),
+	windowListeners: new Map<string, Set<(event: { reason: unknown; preventDefault: () => void }) => void>>(),
 	listener: undefined as ((event: { data: unknown }) => void) | undefined,
 	postMessage: vi.fn(),
 	setState: vi.fn(),
@@ -56,25 +56,39 @@ vi.mock("cytoscape-elk", () => ({
 			function Layout(this: {
 				options: { eles: cytoscape.CollectionReturnValue };
 				callback?: () => void;
+				callbackRecord?: (typeof state.layoutCallbacks)[number];
+				owner: number;
 				one: (event: string, callback: () => void) => void;
 				removeListener: (event: string, callback: () => void) => void;
 			}, options: { eles: cytoscape.CollectionReturnValue }) {
 				this.options = options;
+				this.owner = state.cores.length - 1;
 				this.one = (_event, callback) => { this.callback = callback; };
 				this.removeListener = (_event, callback) => {
-					if (this.callback === callback) this.callback = undefined;
+					if (this.callback === callback) {
+						this.callback = undefined;
+						if (this.callbackRecord) this.callbackRecord.active = false;
+					}
 				};
 			}
 			Object.defineProperty(Layout.prototype as object, "run", {
-				value: function (this: { options: { eles: cytoscape.CollectionReturnValue }; callback?: () => void }) {
+				value: function (this: {
+					options: { eles: cytoscape.CollectionReturnValue };
+					callback?: () => void;
+					callbackRecord?: (typeof state.layoutCallbacks)[number];
+					owner: number;
+				}) {
 					if (name === "elk" && state.layoutFailure) throw state.layoutFailure;
-					state.layouts.push({ name, ids: this.options.eles.map((e) => e.id()) });
+					state.layouts.push({ name, owner: this.owner, ids: this.options.eles.map((e) => e.id()) });
 					state.layoutEvents.push(`${name}:run`);
 					if (name === "elk") {
-						state.layoutCallbacks.push({
+						this.callbackRecord = {
 							name,
+							owner: this.owner,
 							callback: this.callback ?? (() => {}),
-						});
+							active: true,
+						};
+						state.layoutCallbacks.push(this.callbackRecord);
 					}
 					return this;
 				},
@@ -119,9 +133,20 @@ export async function installGraph() {
 		devicePixelRatio: 2,
 		addEventListener: (type: string, listener: (event: unknown) => void) => {
 			if (type === "message") state.listener = listener;
-			else if (listener) state.windowListeners.set(type, listener);
+			else if (listener) {
+				const listeners = state.windowListeners.get(type) ?? new Set();
+				listeners.add(listener);
+				state.windowListeners.set(type, listeners);
+			}
 		},
-		removeEventListener: (type: string) => { state.windowListeners.delete(type); },
+		removeEventListener: (type: string, listener?: (event: unknown) => void) => {
+			if (!listener) state.windowListeners.delete(type);
+			else {
+				const listeners = state.windowListeners.get(type);
+				listeners?.delete(listener);
+				if (listeners?.size === 0) state.windowListeners.delete(type);
+			}
+		},
 	});
 	vi.stubGlobal("MutationObserver", class {
 		observe() {}
@@ -141,17 +166,18 @@ export function render(nodes: GraphNode[], options: { completeLayouts?: boolean 
 	return state.cores[state.cores.length - 1];
 }
 
-export function completeLayout(name: string) {
-	const pending = state.layoutCallbacks.find((layout) => layout.name === name);
+export function completeLayout(name: string, owner = state.cores.length - 1) {
+	const pending = state.layoutCallbacks.find((layout) => layout.name === name && layout.owner === owner && layout.active);
 	if (pending) {
 		state.layoutCallbacks.splice(state.layoutCallbacks.indexOf(pending), 1);
+		pending.active = false;
 		state.layoutEvents.push(`${name}:stop`);
 		pending.callback();
 	}
 }
 
 export function rejectLayout(reason: unknown) {
-	state.windowListeners.get("unhandledrejection")?.({ reason, preventDefault: vi.fn() });
+	state.windowListeners.get("unhandledrejection")?.forEach((listener) => listener({ reason, preventDefault: vi.fn() }));
 }
 
 export function node(id: string, targets: string[] = []): GraphNode {

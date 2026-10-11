@@ -52,6 +52,7 @@ const vscodeBg = () =>
 // pass per draw call, so drop it.
 const SHADOW_NODE_LIMIT = 300;
 const SHADOW_MIN_ZOOM = 0.4;
+const GRAPH_LAYOUT_TIMEOUT_MS = 60_000;
 
 function drawExtra(
 	nodes: cytoscape.NodeCollection,
@@ -164,8 +165,29 @@ let _cy: cytoscape.Core | undefined;
 let _tips: Instance[] = [];
 const _hoverTimers = new Set<NodeJS.Timeout>();
 let _themeObserver: MutationObserver | undefined;
+let _pendingGraphLayout: {
+	cy: cytoscape.Core;
+	layout?: ReturnType<CollectionReturnValue["layout"]>;
+	timeout?: NodeJS.Timeout;
+	onStop?: () => void;
+	cancelled: boolean;
+	timedOut?: boolean;
+} | undefined;
+
+function cancelPendingGraphLayout() {
+	const pending = _pendingGraphLayout;
+	if (!pending) return;
+	_pendingGraphLayout = undefined;
+	pending.cancelled = true;
+	if (pending.timeout) clearTimeout(pending.timeout);
+	if (pending.layout && pending.onStop) {
+		pending.layout.removeListener("layoutstop", pending.onStop);
+	}
+	pending.layout?.stop();
+}
 
 function disposeCytoscape() {
+	cancelPendingGraphLayout();
 	_hoverTimers.forEach((timer) => clearTimeout(timer));
 	_hoverTimers.clear();
 	_themeObserver?.disconnect();
@@ -428,28 +450,40 @@ function runLayout(cy: cytoscape.Core) {
 		return;
 	}
 
-	let connectedLayout: ReturnType<typeof rest2.layout> | undefined;
-	const finishConnectedLayout = () => {
-		window.removeEventListener("unhandledrejection", handleAsyncLayoutFailure);
-		layoutSingles();
+	const pending: NonNullable<typeof _pendingGraphLayout> = { cy, cancelled: false };
+	_pendingGraphLayout = pending;
+	const isActive = () =>
+		!pending.cancelled && _pendingGraphLayout === pending && _cy === cy && !cy.destroyed();
+	const detach = () => {
+		if (pending.timeout) clearTimeout(pending.timeout);
+		if (pending.layout && pending.onStop) {
+			pending.layout.removeListener("layoutstop", pending.onStop);
+		}
+		if (_pendingGraphLayout === pending) _pendingGraphLayout = undefined;
 	};
-	const failConnectedLayout = (error: unknown) => {
-		window.removeEventListener("unhandledrejection", handleAsyncLayoutFailure);
-		connectedLayout?.removeListener("layoutstop", finishConnectedLayout);
+	pending.onStop = () => {
+		if (!isActive()) return;
+		const timedOut = pending.timedOut === true;
+		detach();
+		if (timedOut) cy.fit();
+		else layoutSingles();
+	};
+	pending.timeout = setTimeout(() => {
+		if (!isActive()) return;
+		pending.timeout = undefined;
+		pending.timedOut = true;
+		reportLayoutError(new Error("ELK layout did not finish within 60 seconds"));
+		layoutSingles();
+	}, GRAPH_LAYOUT_TIMEOUT_MS);
+	try {
+		pending.layout = rest2.layout(opts);
+		pending.layout.one("layoutstop", pending.onStop);
+		pending.layout.run();
+	} catch (error) {
+		if (!isActive()) return;
+		cancelPendingGraphLayout();
 		reportLayoutError(error);
 		layoutSingles();
-	};
-	const handleAsyncLayoutFailure = (event: PromiseRejectionEvent) => {
-		event.preventDefault();
-		failConnectedLayout(event.reason);
-	};
-	window.addEventListener("unhandledrejection", handleAsyncLayoutFailure);
-	try {
-		connectedLayout = rest2.layout(opts);
-		connectedLayout.one("layoutstop", finishConnectedLayout);
-		connectedLayout.run();
-	} catch (error) {
-		failConnectedLayout(error);
 	}
 }
 

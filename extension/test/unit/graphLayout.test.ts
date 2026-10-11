@@ -4,7 +4,7 @@ import { completeLayout, installGraph, node, rejectLayout, render, resetGraphSta
 
 beforeAll(installGraph);
 beforeEach(() => { vi.useFakeTimers(); resetGraphState(); });
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+afterEach(() => { vi.restoreAllMocks(); vi.clearAllTimers(); vi.useRealTimers(); });
 afterAll(() => { state.cores.forEach((core) => core.destroy()); vi.unstubAllGlobals(); });
 
 test("real delegated hover highlights the closed neighborhood and restores classes", () => {
@@ -71,17 +71,67 @@ test("reports a synchronous layout failure to the extension host", () => {
 	expect(state.layouts.map((layout) => layout.name)).toEqual(["grid"]);
 });
 
-test("reports an asynchronous ELK rejection to the extension host", () => {
-	render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
-	rejectLayout(new Error("ELK rejected the graph"));
+test("an unrelated promise rejection does not finish the pending layout", () => {
+	const cy = render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
+	const fit = vi.spyOn(cy, "fit");
+	const unrelatedListener = vi.fn();
+	window.addEventListener("unhandledrejection", unrelatedListener);
+	rejectLayout(new Error("unrelated promise failed"));
+
+	expect(unrelatedListener).toHaveBeenCalledTimes(1);
+	expect(state.windowListeners.get("unhandledrejection")).toHaveLength(1);
+	expect(state.postMessage).not.toHaveBeenCalled();
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk"]);
+	expect(fit).not.toHaveBeenCalled();
+
+	completeLayout("elk");
+
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk", "grid"]);
+	expect(state.layouts.find((layout) => layout.name === "grid")?.ids).toEqual(["isolated"]);
+	expect(fit).toHaveBeenCalledTimes(1);
+});
+
+test("reports an ELK layout that does not complete and accepts a late completion", () => {
+	const timerSpy = vi.spyOn(globalThis, "setTimeout");
+	const cy = render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
+	const fit = vi.spyOn(cy, "fit");
+	const timeout = timerSpy.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+	expect(timeout).toBeDefined();
+	(timeout as () => void)();
+	timerSpy.mockRestore();
+	vi.clearAllTimers();
 
 	expect(state.postMessage).toHaveBeenCalledWith({
 		command: "showError",
-		message: "CWTools: couldn't lay out graph: ELK rejected the graph.",
+		message: "CWTools: couldn't lay out graph: ELK layout did not finish within 60 seconds.",
 	});
-	expect(state.windowListeners.has("unhandledrejection")).toBe(false);
 	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk", "grid"]);
-	expect(state.layouts.find((layout) => layout.name === "grid")?.ids).toEqual(["isolated"]);
+	expect(fit).toHaveBeenCalledTimes(1);
+
+	completeLayout("elk");
+	expect(fit).toHaveBeenCalledTimes(2);
+});
+
+test("discarded layout callbacks cannot finalize a replacement graph", () => {
+	const oldCy = render([node("old", ["oldTarget"]), node("oldTarget")], { completeLayouts: false });
+	const oldOwner = state.cores.length - 1;
+	const oldFit = vi.spyOn(oldCy, "fit");
+	const newCy = render([node("newIsolated"), node("new", ["newTarget"]), node("newTarget")], { completeLayouts: false });
+	const newOwner = state.cores.length - 1;
+	const newFit = vi.spyOn(newCy, "fit");
+
+	rejectLayout(new Error("old graph rejected"));
+	completeLayout("elk", oldOwner);
+
+	expect(state.postMessage).not.toHaveBeenCalled();
+	expect(state.layoutCallbacks.some((layout) => layout.owner === oldOwner && layout.active)).toBe(false);
+	expect(oldFit).not.toHaveBeenCalled();
+	expect(newFit).not.toHaveBeenCalled();
+
+	completeLayout("elk", newOwner);
+
+	expect(state.layouts.filter((layout) => layout.name === "grid").map((layout) => layout.owner)).toEqual([newOwner]);
+	expect(newFit).toHaveBeenCalledTimes(1);
 });
 
 test("real hover creates tooltips lazily and replacement destroys them", () => {
