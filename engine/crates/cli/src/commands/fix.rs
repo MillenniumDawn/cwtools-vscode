@@ -9,7 +9,7 @@ use std::io::Write as _;
 
 use crate::cli::FixArgs;
 use crate::run::{
-    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty,
+    EXIT_DISCOVERY_FAILED, EXIT_USAGE, ModLayers, announce_config, exit_if_empty,
     gate_vanilla_cache_for_replacements, load_config, missing_required, note, parse_game,
     rebuild_vanilla_cache_if_stale, vanilla_notice,
 };
@@ -104,7 +104,15 @@ pub(super) fn run(args: FixArgs) {
                     None
                 }
             };
-            gate_vanilla_cache_for_replacements(p, loaded, &directory, vanilla.as_deref())
+            gate_vanilla_cache_for_replacements(
+                p,
+                loaded,
+                ModLayers {
+                    primary: &directory,
+                    parents: &[],
+                },
+                vanilla.as_deref(),
+            )
         });
 
     // Same automatic base-game cache as `validate`, so both commands see
@@ -149,7 +157,10 @@ pub(super) fn run(args: FixArgs) {
             &session,
             cache_path,
             cached_fp,
-            &directory,
+            ModLayers {
+                primary: &directory,
+                parents: &[],
+            },
             vanilla_dir,
             game_id,
             !no_vanilla_cache,

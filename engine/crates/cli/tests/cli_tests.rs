@@ -4242,3 +4242,115 @@ fn an_explicit_empty_config_parent_list_clears_parent_resolution() {
         .stdout(predicate::str::contains("CW113"))
         .stderr(predicate::str::contains("does not read config key `parents`").not());
 }
+
+#[test]
+fn parent_replace_path_is_applied_to_explicit_vanilla_cache_with_or_without_install() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mod_dir = tmp.path().join("mod");
+    let parent_dir = tmp.path().join("parent");
+    let rules_dir = tmp.path().join("rules");
+    let vanilla_dir = tmp.path().join("vanilla");
+    std::fs::create_dir_all(mod_dir.join("common/things")).unwrap();
+    std::fs::create_dir_all(mod_dir.join("localisation")).unwrap();
+    std::fs::create_dir_all(&parent_dir).unwrap();
+    std::fs::create_dir_all(&rules_dir).unwrap();
+    std::fs::create_dir_all(vanilla_dir.join("localisation")).unwrap();
+    std::fs::write(
+        parent_dir.join("descriptor.mod"),
+        "name = \"Parent\"\nreplace_path = \"localisation\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        mod_dir.join("common/things/test.txt"),
+        "thing = { name = hidden_key }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        mod_dir.join("localisation/mod_l_english.yml"),
+        "l_english:\n visible_key:0 \"Visible\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vanilla_dir.join("localisation/hidden_l_english.yml"),
+        "l_english:\n hidden_key:0 \"Hidden\"\n",
+    )
+    .unwrap();
+    std::fs::write(mod_dir.join("script.txt"), "anyway_valid = { }\n").unwrap();
+    std::fs::write(
+        rules_dir.join("things.cwt"),
+        "types = { type[thing] = { path = \"game/common/things\" } }\nthing = { name = localisation }\n",
+    )
+    .unwrap();
+    let cache = tmp.path().join("vanilla.cwv");
+
+    cwtools()
+        .args([
+            "cache-vanilla",
+            "--game",
+            "hoi4",
+            "--vanilla",
+            vanilla_dir.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--output",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let (_, initial_fingerprint, initial) = cwtools_info::vanilla_cache::load(&cache).unwrap();
+    assert!(!initial_fingerprint.contains("|rp:"));
+    assert!(
+        initial
+            .aux
+            .loc_keys
+            .iter()
+            .any(|(_, keys)| keys.iter().any(|key| key == "hidden_key"))
+    );
+
+    cwtools()
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            mod_dir.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--parent",
+            parent_dir.to_str().unwrap(),
+            "--vanilla",
+            vanilla_dir.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CW100"));
+    let (_, filtered_fingerprint, filtered) = cwtools_info::vanilla_cache::load(&cache).unwrap();
+    assert!(filtered_fingerprint.contains("|rp:"));
+    assert!(
+        !filtered
+            .aux
+            .loc_keys
+            .iter()
+            .any(|(_, keys)| keys.iter().any(|key| key == "hidden_key"))
+    );
+
+    cwtools()
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            mod_dir.to_str().unwrap(),
+            "--rules",
+            rules_dir.to_str().unwrap(),
+            "--parent",
+            parent_dir.to_str().unwrap(),
+            "--vanilla-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("CW100"));
+}

@@ -1258,14 +1258,29 @@ pub fn build_file_index_with_vanilla_shadow(
 ) -> FileIndex {
     let mut index = FileIndex::new();
     index.set_case_sensitive(case_sensitive);
-    for root in std::iter::once(workspace_root).chain(parent_roots.iter().map(PathBuf::as_path)) {
-        index.add_paths(discover_file_index_paths(
-            root,
-            workspace_ignore_files,
-            workspace_ignore_dirs,
-            DiscoveryPolicy::Workspace,
-        ));
-    }
+    let workspace_paths = discover_file_index_paths(
+        workspace_root,
+        workspace_ignore_files,
+        workspace_ignore_dirs,
+        DiscoveryPolicy::Workspace,
+    );
+    let workspace_logical_paths: Vec<&str> = workspace_paths.iter().map(String::as_str).collect();
+    let parent_paths = visible_parent_files(
+        parent_roots,
+        workspace_root,
+        &workspace_logical_paths,
+        |root| {
+            discover_file_index_paths(
+                root,
+                workspace_ignore_files,
+                workspace_ignore_dirs,
+                DiscoveryPolicy::Workspace,
+            )
+        },
+        String::as_str,
+    );
+    index.add_paths(workspace_paths);
+    index.add_paths(parent_paths);
     match vanilla {
         VanillaFiles::Cached(paths) => index.add_paths(
             paths

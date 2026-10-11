@@ -422,6 +422,7 @@ scripted_gui = {
         case_sensitive_files: false,
         on_rules_diagnostic: None,
     });
+
     let callbacks = &session.type_index().scripted_gui_index;
     assert!(callbacks.contains("topbar_icon_click"));
     assert!(!callbacks.contains("outer_gui"));
@@ -952,6 +953,66 @@ fn cw113_case_mismatch_only_flagged_in_case_sensitive_mode() {
         cw113_count(tmp.path(), true),
         1,
         "case-sensitive mode must flag a reference that only differs by case"
+    );
+}
+
+#[test]
+fn primary_replace_path_hides_parent_resources_from_file_references() {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules = tmp.path().join("rules");
+    let primary = tmp.path().join("mod");
+    let parent = tmp.path().join("parent");
+    let vanilla = tmp.path().join("vanilla");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::create_dir_all(primary.join("gfx")).unwrap();
+    std::fs::create_dir_all(parent.join("gfx")).unwrap();
+    std::fs::create_dir_all(&vanilla).unwrap();
+    std::fs::write(rules.join("gfx.cwt"), FILEPATH_RULES).unwrap();
+    std::fs::write(
+        primary.join("descriptor.mod"),
+        "name = \"Primary\"\nreplace_path = \"gfx\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        primary.join("gfx/ref.gfx"),
+        "spriteType = { texturefile = \"gfx/hidden.dds\" }\n",
+    )
+    .unwrap();
+    std::fs::write(parent.join("gfx/hidden.dds"), b"").unwrap();
+
+    assert!(
+        cwtools_driver::vanilla_replacement_shadow(&primary, &[]).hides("gfx/hidden.dds"),
+        "the primary descriptor should establish the gfx replacement shadow"
+    );
+
+    let session = Session::load(SessionConfig {
+        game: Game::Hoi4,
+        rules: RulesInput::Dir(rules),
+        directory: primary,
+        parent_roots: vec![parent],
+        vanilla: Some(vanilla),
+        vanilla_cache: None,
+        vanilla_cache_auto: None,
+        ignore_files: &[],
+        ignore_dirs: &[],
+        loc_languages: None,
+        case_sensitive_files: false,
+        on_rules_diagnostic: None,
+    });
+
+    assert!(
+        !session.type_index().file_index.contains("gfx/hidden.dds"),
+        "a parent resource under the primary mod's replace_path is shadowed"
+    );
+    let diagnostics = session.validate_all();
+    assert_eq!(
+        diagnostics
+            .iter()
+            .flat_map(|(_, errors)| errors.iter())
+            .filter(|error| error.code == Some("CW113"))
+            .count(),
+        1,
+        "the reference to a hidden parent resource must retain CW113: {diagnostics:?}"
     );
 }
 
