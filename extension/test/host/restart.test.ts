@@ -46,7 +46,27 @@ suite("automatic server restart", function () {
 					// process; hold the terminal status long enough to distinguish it.
 					await new Promise((resolve) => setTimeout(resolve, 1_000));
 					assert.strictEqual(api.serverProcessId(), undefined);
-					assert.deepStrictEqual(api.serverCommands(), []);
+					// initializeResult remains cached after a terminal close. Check the
+					// user-facing command contexts instead: markStopped must hide them.
+					for (const key of [
+						"cwtoolsGraphAvailable",
+						"cwtoolsFixAllAvailable",
+						"cwtoolsFormatWorkspaceAvailable",
+						"cwtoolsValidateWorkspaceAvailable",
+					]) {
+						const values = execute
+							.getCalls()
+							.filter(
+								(call) =>
+									call.args[0] === "setContext" && call.args[1] === key,
+							)
+							.map((call): unknown => call.args[2]);
+						assert.strictEqual(
+							values[values.length - 1],
+							false,
+							`${key} must be unavailable after the restart limit is reached`,
+						);
+					}
 				} else {
 					assert.ok(
 						await waitUntil(() => {
