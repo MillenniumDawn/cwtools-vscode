@@ -11,7 +11,7 @@ from typing import Self, cast
 import pytest
 
 import esbuild
-from paths import EXTENSION_HOST_ROOT, EXTENSION_SOURCE_ROOT
+from paths import EXTENSION_HOST_ROOT, EXTENSION_SOURCE_ROOT, EXTENSION_WEBVIEW_ROOT
 
 
 # wait_for_watcher_exit only ever calls poll(), so a stub keeps the test from
@@ -93,9 +93,22 @@ def _test_env_defines(args: list[str]) -> dict[str, str]:
     return defines
 
 
-def _esbuild_test_args(source: Path, outfile: Path, *, release: bool) -> list[str]:
-    args = esbuild.bundle_commands(watch=False, dev=False, release=release)[0]
-    entrypoint = str(EXTENSION_HOST_ROOT / "extension.ts")
+def _esbuild_test_args(
+    source: Path,
+    outfile: Path,
+    *,
+    release: bool = False,
+    dev: bool = False,
+    webview: bool = False,
+) -> list[str]:
+    commands = esbuild.bundle_commands(watch=False, dev=dev, release=release)
+    index = 1 if webview else 0
+    args = commands[index]
+    entrypoint = str(
+        (EXTENSION_WEBVIEW_ROOT / "graph.ts")
+        if webview
+        else (EXTENSION_HOST_ROOT / "extension.ts")
+    )
     args[args.index(entrypoint)] = str(source)
     outfile_index = next(
         index for index, arg in enumerate(args) if arg.startswith("--outfile=")
@@ -155,7 +168,25 @@ def test_extension_bundle_is_node_cjs() -> None:
     assert "--external:vscode" in args
     assert "extension.ts" in args
     assert "--watch" not in args
+    assert "--minify" in args
+    assert "--sourcemap" not in args
     assert not _test_env_defines(extension_args)
+
+
+def test_bundle_modes_minify_production_and_only_map_development() -> None:
+    for args in (
+        esbuild.extension_args(watch=False, dev=False),
+        esbuild.webview_args(watch=False, dev=False),
+    ):
+        assert "--minify" in args
+        assert "--sourcemap" not in args
+
+    for args in (
+        esbuild.extension_args(watch=False, dev=True),
+        esbuild.webview_args(watch=False, dev=True),
+    ):
+        assert "--sourcemap" in args
+        assert "--minify" not in args
 
 
 def test_release_defines_match_test_env_reads() -> None:
@@ -172,6 +203,8 @@ def test_webview_bundle_is_browser_iife() -> None:
     assert 'process.env.NODE_ENV="production"' in args
     assert 'window.process = { env: { NODE_ENV: "production" } };' in args
     assert "graph.ts" in args
+    assert "--minify" in args
+    assert "--sourcemap" not in args
 
 
 def test_dev_and_watch_flags() -> None:
@@ -207,7 +240,10 @@ def test_watch_implies_dev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(subprocess, "Popen", StubProcess)
     assert esbuild.main(["--watch"]) == 0
     webview = " ".join(commands[1])
+    extension = " ".join(commands[0])
     assert "--watch" in webview
+    assert "--sourcemap" in extension
+    assert "--minify" not in extension
     assert 'window.process = { env: { NODE_ENV: "development" } };' in webview
 
 
@@ -223,6 +259,8 @@ def test_dev_flag_sets_development_without_watch(
     assert 'window.process = { env: { NODE_ENV: "development" } };' in " ".join(
         commands[1]
     )
+    assert "--sourcemap" in commands[0]
+    assert "--minify" not in commands[0]
     assert "--watch" not in " ".join(commands[0])
     assert "--watch" not in " ".join(commands[1])
     assert not _test_env_defines(commands[0])
@@ -317,3 +355,33 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
     assert "CWTOOLS_TEST" not in dropped_js
     assert "https://ok.example" in dropped_js
     assert "CWTOOLS_TEST" in kept_js
+
+
+@pytest.mark.parametrize("webview", [False, True], ids=["extension", "webview"])
+def test_bundle_mode_controls_source_map_output(tmp_path: Path, webview: bool) -> None:
+    binary = esbuild.esbuild_bin()
+    if not binary.is_file():
+        if os.environ.get("CI"):
+            pytest.fail("esbuild is not installed in CI; real-esbuild smoke must run")
+        pytest.skip("esbuild is not installed")
+
+    source = tmp_path / "bundle.ts"
+    source.write_text("export const answer = 40 + 2;\n", encoding="utf-8")
+    production = tmp_path / "production.js"
+    development = tmp_path / "development.js"
+
+    for dev, outfile in ((False, production), (True, development)):
+        result = subprocess.run(
+            _esbuild_test_args(source, outfile, dev=dev, webview=webview),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+
+    assert not production.with_suffix(".js.map").exists()
+    assert development.with_suffix(".js.map").is_file()
+    production_js = production.read_text(encoding="utf-8")
+    development_js = development.read_text(encoding="utf-8")
+    assert "sourceMappingURL" not in production_js
+    assert len(production_js) < len(development_js)

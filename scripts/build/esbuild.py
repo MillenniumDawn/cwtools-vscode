@@ -19,7 +19,9 @@ def esbuild_bin() -> Path:
     return REPO_ROOT / "node_modules" / "esbuild" / "bin" / "esbuild"
 
 
-def extension_args(*, watch: bool, release: bool = False) -> list[str]:
+def extension_args(
+    *, watch: bool, dev: bool = False, release: bool = False
+) -> list[str]:
     outfile = EXTENSION_DIST_ROOT / "bin" / "client" / "extension" / "extension.js"
     args = [
         str(esbuild_bin()),
@@ -30,9 +32,12 @@ def extension_args(*, watch: bool, release: bool = False) -> list[str]:
         "--format=cjs",
         "--target=node18",
         "--external:vscode",
-        "--sourcemap",
         "--log-level=info",
     ]
+    if dev:
+        args.append("--sourcemap")
+    else:
+        args.append("--minify")
     if release:
         args.extend(
             [
@@ -59,9 +64,12 @@ def webview_args(*, watch: bool, dev: bool) -> list[str]:
         "--global-name=cwtoolsgraph",
         f'--define:process.env.NODE_ENV="{node_env}"',
         f'--banner:js=window.process = {{ env: {{ NODE_ENV: "{node_env}" }} }};',
-        "--sourcemap",
         "--log-level=info",
     ]
+    if dev:
+        args.append("--sourcemap")
+    else:
+        args.append("--minify")
     if watch:
         args.append("--watch")
     return args
@@ -71,7 +79,7 @@ def bundle_commands(
     *, watch: bool, dev: bool, release: bool = False
 ) -> list[list[str]]:
     commands = [
-        extension_args(watch=watch, release=release),
+        extension_args(watch=watch, dev=dev, release=release),
         webview_args(watch=watch, dev=dev),
     ]
     if sys.platform == "win32":
