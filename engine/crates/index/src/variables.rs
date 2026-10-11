@@ -1,5 +1,5 @@
 use cwtools_parser::ast::{Arena, Child, ParsedFile, SourceRange, Value};
-use cwtools_rules::rules_types::{NewField, RuleSet, RuleType};
+use cwtools_rules::rules_types::{NewField, NewRule, RootRule, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
 use std::collections::{HashMap, HashSet};
 
@@ -34,35 +34,35 @@ pub fn collect_defined_variables_from_rules(
         }
     }
 
-    let mut type_rules: HashMap<&str, Vec<&RuleType>> = HashMap::new();
-    for root_rule in &ruleset.root_rules {
-        if let cwtools_rules::rules_types::RootRule::TypeRule(name, (rule_type, _opts)) = root_rule
-        {
-            type_rules.entry(name.as_str()).or_default().push(rule_type);
-        }
-    }
-
     let np = NormalizedPath::new(logical_path);
+    let root_type_rules = ruleset.root_type_rules_idx();
+    let mut applicable_rules: Vec<&[NewRule]> = Vec::new();
     for td in &ruleset.types {
         if !check_path_dir_norm(&td.path_options, &np) {
             continue;
         }
-        let Some(rules_for_type) = type_rules.get(td.name.as_str()) else {
+        let Some(root_indices) = root_type_rules.get(td.name.as_str()) else {
             continue;
         };
-        for rule_type in rules_for_type {
-            if let RuleType::NodeRule { rules, .. } = rule_type {
-                for child in &file.root_children {
-                    if let Some(kc) = file.arena.keyed_clause(child) {
-                        scan_children_for_varset(
-                            kc.children,
-                            &file.arena,
-                            table,
-                            rules,
-                            &mut result,
-                        );
-                    }
-                }
+        for &root_index in root_indices {
+            let Some(RootRule::TypeRule(_, (RuleType::NodeRule { rules, .. }, _))) =
+                ruleset.root_rules.get(root_index)
+            else {
+                continue;
+            };
+            applicable_rules.push(rules.as_ref());
+        }
+    }
+    if !applicable_rules.is_empty() {
+        for child in &file.root_children {
+            if let Some(root_clause) = file.arena.keyed_clause(child) {
+                scan_children_for_varset(
+                    root_clause.children,
+                    &file.arena,
+                    table,
+                    &applicable_rules,
+                    &mut result,
+                );
             }
         }
     }
@@ -135,106 +135,149 @@ fn scan_children_for_varset(
     children: &[Child],
     arena: &Arena,
     table: &StringTable,
-    rules: &[(
-        cwtools_rules::rules_types::RuleType,
-        cwtools_rules::rules_types::Options,
-    )],
+    rule_bodies: &[&[NewRule]],
     out: &mut HashMap<String, Vec<DefinedVariable>>,
 ) {
     // the assigned value lives in a sibling `value` leaf of the same block.
     // Computed lazily: most blocks never hit the arm that needs it.
-    let sibling_value = std::cell::OnceCell::new();
+    let sibling_value = std::cell::OnceCell::<Option<String>>::new();
+    // Reuse these small work lists for siblings instead of allocating per AST
+    // child. Their entries borrow from immutable rule bodies.
+    let mut captures = Vec::<&str>::new();
+    let mut nested_bodies = Vec::<&[NewRule]>::new();
+    let mut key_captures = Vec::<&str>::new();
+    let mut value_captures = Vec::<&str>::new();
     for child in children {
         if let Some(kc) = arena.keyed_clause(child) {
-            // lock) rather than holding `with_string` across the recursive
-            // lock, which would risk a re-entrant read-lock deadlock under writer
-            let child_key = get_string_or_empty(table, kc.key.normal);
-            for (rule_type, _) in rules {
-                // variable name (F# InfoService fNode).
-                if let RuleType::NodeRule {
-                    left: NewField::VariableSetField(ns),
-                    ..
-                } = rule_type
-                {
-                    if !child_key.is_empty() {
-                        out.entry(ns.clone()).or_default().push(DefinedVariable {
-                            name: child_key.clone(),
-                            namespace: Some(ns.clone()),
-                            location: SourceLocation {
-                                line: kc.pos.start.line,
-                                col: kc.pos.start.col,
-                                end: (kc.pos.end.line, kc.pos.end.col),
-                            },
+            captures.clear();
+            nested_bodies.clear();
+            let key_name = match table.with_string(kc.key.normal, |child_key| {
+                for rules in rule_bodies {
+                    for (rule_type, _) in *rules {
+                        let RuleType::NodeRule { left, rules } = rule_type else {
+                            continue;
+                        };
+                        match left {
+                            NewField::VariableSetField(namespace) => {
+                                if !child_key.is_empty() {
+                                    captures.push(namespace.as_str());
+                                }
+                            }
+                            NewField::SpecificField(expected)
+                                if child_key.eq_ignore_ascii_case(expected) =>
+                            {
+                                nested_bodies.push(rules.as_ref());
+                            }
+                            NewField::SpecificField(_) => {}
+                            _ => nested_bodies.push(rules.as_ref()),
+                        }
+                    }
+                }
+                (!captures.is_empty()).then(|| child_key.to_string())
+            }) {
+                Some(name) => name,
+                None => {
+                    // A missing interned key still follows generic node rules,
+                    // as the previous recursive scan did with an empty key.
+                    for rules in rule_bodies {
+                        for (rule_type, _) in *rules {
+                            if let RuleType::NodeRule { left, rules } = rule_type
+                                && !matches!(
+                                    left,
+                                    NewField::VariableSetField(_) | NewField::SpecificField(_)
+                                )
+                            {
+                                nested_bodies.push(rules.as_ref());
+                            }
+                        }
+                    }
+                    None
+                }
+            };
+            if let Some(name) = key_name {
+                let location = SourceLocation {
+                    line: kc.pos.start.line,
+                    col: kc.pos.start.col,
+                    end: (kc.pos.end.line, kc.pos.end.col),
+                };
+                for &namespace in &captures {
+                    out.entry(namespace.to_string())
+                        .or_default()
+                        .push(DefinedVariable {
+                            name: name.clone(),
+                            namespace: Some(namespace.to_string()),
+                            location,
                             value: None,
                         });
-                    }
-                } else if let RuleType::NodeRule {
-                    left: NewField::SpecificField(expected_key),
-                    rules: inner,
-                    ..
-                } = rule_type
-                {
-                    if child_key.eq_ignore_ascii_case(expected_key) {
-                        scan_children_for_varset(kc.children, arena, table, inner, out);
-                    }
-                } else if let RuleType::NodeRule { rules: inner, .. } = rule_type {
-                    scan_children_for_varset(kc.children, arena, table, inner, out);
                 }
+            }
+            if !nested_bodies.is_empty() {
+                scan_children_for_varset(kc.children, arena, table, &nested_bodies, out);
             }
             continue;
         }
         match child {
             Child::Leaf(li) => {
                 let leaf = &arena.leaves[*li as usize];
-                // resolution releases the table lock, avoiding the re-entrant
-                // read-lock hazard of nesting `with_string` borrows). Most leaves
-                let key = std::cell::OnceCell::new();
-                let val = std::cell::OnceCell::new();
-                for (rule_type, _opts) in rules {
-                    match rule_type {
-                        RuleType::LeafRule {
-                            left: NewField::VariableSetField(ns),
-                            ..
-                        } => {
-                            let key =
-                                key.get_or_init(|| get_string_or_empty(table, leaf.key.normal));
-                            let val = val.get_or_init(|| leaf_value_string(&leaf.value, table));
-                            out.entry(ns.clone()).or_default().push(DefinedVariable {
-                                name: key.clone(),
-                                namespace: Some(ns.clone()),
-                                location: SourceLocation {
-                                    line: leaf.pos.start.line,
-                                    col: leaf.pos.start.col,
-                                    end: (leaf.pos.end.line, leaf.pos.end.col),
-                                },
-                                value: (!val.is_empty()).then(|| val.clone()),
-                            });
-                        }
-                        RuleType::LeafRule {
-                            left: NewField::SpecificField(expected_key),
-                            right: NewField::VariableSetField(ns),
-                        } => {
-                            let val = val.get_or_init(|| leaf_value_string(&leaf.value, table));
-                            let key =
-                                key.get_or_init(|| get_string_or_empty(table, leaf.key.normal));
-                            if !val.is_empty() && key.eq_ignore_ascii_case(expected_key) {
-                                out.entry(ns.clone()).or_default().push(DefinedVariable {
-                                    name: val.clone(),
-                                    namespace: Some(ns.clone()),
-                                    location: SourceLocation {
-                                        line: leaf.pos.start.line,
-                                        col: leaf.pos.start.col,
-                                        end: (leaf.pos.end.line, leaf.pos.end.col),
-                                    },
-                                    value: sibling_value
-                                        .get_or_init(|| {
-                                            sibling_value_in_children(children, arena, table)
-                                        })
-                                        .clone(),
-                                });
+                key_captures.clear();
+                value_captures.clear();
+                let key_name = table
+                    .with_string(leaf.key.normal, |key| {
+                        for rules in rule_bodies {
+                            for (rule_type, _) in *rules {
+                                match rule_type {
+                                    RuleType::LeafRule {
+                                        left: NewField::VariableSetField(namespace),
+                                        ..
+                                    } => key_captures.push(namespace.as_str()),
+                                    RuleType::LeafRule {
+                                        left: NewField::SpecificField(expected),
+                                        right: NewField::VariableSetField(namespace),
+                                    } if key.eq_ignore_ascii_case(expected) => {
+                                        value_captures.push(namespace.as_str());
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
-                        _ => {}
+                        (!key_captures.is_empty()).then(|| key.to_string())
+                    })
+                    .flatten();
+                if key_captures.is_empty() && value_captures.is_empty() {
+                    continue;
+                }
+                let leaf_value = leaf_value_string(&leaf.value, table);
+                let location = SourceLocation {
+                    line: leaf.pos.start.line,
+                    col: leaf.pos.start.col,
+                    end: (leaf.pos.end.line, leaf.pos.end.col),
+                };
+                for &namespace in &key_captures {
+                    if let Some(name) = key_name.as_ref() {
+                        out.entry(namespace.to_string())
+                            .or_default()
+                            .push(DefinedVariable {
+                                name: name.clone(),
+                                namespace: Some(namespace.to_string()),
+                                location,
+                                value: (!leaf_value.is_empty()).then(|| leaf_value.clone()),
+                            });
+                    }
+                }
+                if !leaf_value.is_empty() {
+                    for &namespace in &value_captures {
+                        out.entry(namespace.to_string())
+                            .or_default()
+                            .push(DefinedVariable {
+                                name: leaf_value.clone(),
+                                namespace: Some(namespace.to_string()),
+                                location,
+                                value: sibling_value
+                                    .get_or_init(|| {
+                                        sibling_value_in_children(children, arena, table)
+                                    })
+                                    .clone(),
+                            });
                     }
                 }
             }
@@ -244,21 +287,23 @@ fn scan_children_for_varset(
                 let lv = &arena.leaf_values[*lvi as usize];
                 with_leaf_value_str(&lv.value, table, |val| {
                     if !val.is_empty() {
-                        for (rule_type, _opts) in rules {
-                            if let RuleType::LeafValueRule {
-                                right: NewField::VariableSetField(ns),
-                            } = rule_type
-                            {
-                                out.entry(ns.clone()).or_default().push(DefinedVariable {
-                                    name: val.to_string(),
-                                    namespace: Some(ns.clone()),
-                                    location: SourceLocation {
-                                        line: lv.pos.start.line,
-                                        col: lv.pos.start.col,
-                                        end: (lv.pos.end.line, lv.pos.end.col),
-                                    },
-                                    value: None,
-                                });
+                        for rules in rule_bodies {
+                            for (rule_type, _opts) in *rules {
+                                if let RuleType::LeafValueRule {
+                                    right: NewField::VariableSetField(ns),
+                                } = rule_type
+                                {
+                                    out.entry(ns.clone()).or_default().push(DefinedVariable {
+                                        name: val.to_string(),
+                                        namespace: Some(ns.clone()),
+                                        location: SourceLocation {
+                                            line: lv.pos.start.line,
+                                            col: lv.pos.start.col,
+                                            end: (lv.pos.end.line, lv.pos.end.col),
+                                        },
+                                        value: None,
+                                    });
+                                }
                             }
                         }
                     }
@@ -403,5 +448,153 @@ pub(crate) fn extract_set_variable_defs_block(
         if !SKIP_KEYS.iter().any(|k| key.eq_ignore_ascii_case(k)) {
             out.push(variable_def(key, value, pos));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use cwtools_parser::parser::parse_string;
+    use cwtools_rules::rules_types::{Options, PathOptions, TypeDefinition};
+
+    use super::*;
+
+    fn type_def(name: &str, path: &str) -> TypeDefinition {
+        TypeDefinition {
+            name: name.to_string(),
+            name_field: None,
+            path_options: PathOptions {
+                paths: vec![path.to_string()],
+                ..Default::default()
+            },
+            subtypes: Vec::new(),
+            type_key_filter: None,
+            skip_root_key: Vec::new(),
+            starts_with: None,
+            type_per_file: false,
+            key_prefix: None,
+            warning_only: false,
+            unique: false,
+            should_be_referenced: false,
+            localisation: Vec::new(),
+            graph_related_types: Vec::new(),
+            modifiers: Vec::new(),
+        }
+    }
+
+    fn node(left: NewField, rules: Vec<NewRule>) -> NewRule {
+        (
+            RuleType::NodeRule {
+                left,
+                rules: Arc::from(rules),
+            },
+            Options::default(),
+        )
+    }
+
+    fn leaf(left: NewField, right: NewField) -> NewRule {
+        (RuleType::LeafRule { left, right }, Options::default())
+    }
+
+    fn root_type(name: &str, nested: Vec<NewRule>) -> RootRule {
+        RootRule::TypeRule(name.to_string(), node(NewField::ScalarField, nested))
+    }
+
+    #[test]
+    fn matching_root_types_share_one_walk_and_keep_path_scoped_definitions() {
+        let table = StringTable::new();
+        let parsed = parse_string(
+            "root = {\n\
+                section_a = {\n\
+                variable = leaf_name\n\
+                array = { element_name = {} }\n\
+                other = { bare_name }\n\
+                }\n\
+                section_b = { plain_name = {} }\n\
+                section_c = { wrong_path_name = yes }\n\
+            }\n",
+            &table,
+        );
+
+        let variable = NewField::VariableSetField("variable".to_string());
+        let array = NewField::VariableSetField("array".to_string());
+        let mut rules = RuleSet::new();
+        rules.types.extend([
+            type_def("first", "common/test"),
+            type_def("second", "common/test"),
+            type_def("other_path", "common/elsewhere"),
+        ]);
+        rules.root_rules.extend([
+            root_type(
+                "first",
+                vec![node(
+                    NewField::SpecificField("section_a".to_string()),
+                    vec![
+                        leaf(
+                            NewField::SpecificField("variable".to_string()),
+                            variable.clone(),
+                        ),
+                        node(
+                            NewField::SpecificField("array".to_string()),
+                            vec![node(array.clone(), Vec::new())],
+                        ),
+                        node(
+                            NewField::ScalarField,
+                            vec![(
+                                RuleType::LeafValueRule {
+                                    right: variable.clone(),
+                                },
+                                Options::default(),
+                            )],
+                        ),
+                    ],
+                )],
+            ),
+            root_type(
+                "second",
+                vec![node(
+                    NewField::SpecificField("section_b".to_string()),
+                    vec![node(variable, Vec::new())],
+                )],
+            ),
+            root_type(
+                "other_path",
+                vec![node(
+                    NewField::SpecificField("section_c".to_string()),
+                    vec![node(array, Vec::new())],
+                )],
+            ),
+        ]);
+        rules.reindex();
+
+        assert_eq!(rules.root_type_rules_idx()["first"], [0]);
+        assert_eq!(rules.root_type_rules_idx()["second"], [1]);
+
+        let vars = collect_defined_variables_from_rules(
+            &rules,
+            &parsed,
+            "common/test/example.txt",
+            &table,
+            None,
+        );
+        let mut definitions: Vec<_> = vars
+            .iter()
+            .flat_map(|(namespace, values)| {
+                values
+                    .iter()
+                    .map(move |value| (namespace.as_str(), value.name.as_str()))
+            })
+            .collect();
+        definitions.sort_unstable();
+        assert_eq!(
+            definitions,
+            [
+                ("array", "element_name"),
+                ("variable", "bare_name"),
+                ("variable", "leaf_name"),
+                ("variable", "plain_name"),
+            ]
+        );
     }
 }
