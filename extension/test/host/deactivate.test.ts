@@ -1,7 +1,7 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
 import sinon from "sinon";
-import { activate } from "../support/utils";
+import { activate, waitForServerReady } from "../support/utils";
 
 // Last file in the labels that run it: it stops the shared language client, so
 // any suite after it would find no server.
@@ -14,6 +14,10 @@ suite("deactivate", function () {
 	test("stops the running client and tolerates a second call", async function () {
 		const api = await activate();
 		assert.ok(api, "activation API should be exposed");
+		assert.ok(
+			await waitForServerReady(api),
+			"the shared client should finish starting before deactivation",
+		);
 		assert.ok(
 			api.serverCommands().length > 0,
 			"the client should be running before deactivate",

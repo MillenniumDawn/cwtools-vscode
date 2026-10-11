@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-# Run the host and isolated live-settings labels together so one coverage
-# session measures both workspaces (see .vscode-test.mjs).
-HOST_COVERAGE_LABELS = ("host", "live")
+# Run the host, isolated live-settings, and restart labels together so one
+# coverage session measures all three workspaces (see .vscode-test.mjs).
+HOST_COVERAGE_LABELS = ("host", "live", "restart")
 HOST_COVERAGE_SCOPES = (
     "extension/src/host",
     "extension/src/common",

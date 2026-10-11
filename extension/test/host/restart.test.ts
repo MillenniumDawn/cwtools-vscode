@@ -55,6 +55,10 @@ suite("automatic server restart", function () {
 						}, 30_000),
 						`client did not restart after crash ${crash}`,
 					);
+					assert.ok(
+						await waitForServerReady(api),
+						`server was still starting after crash ${crash}`,
+					);
 				}
 			}
 
