@@ -127,8 +127,8 @@ pub(crate) struct ValidateArgs {
     /// file, never turn one off.
     /// Recognised keys: game, directory, rules, vanilla, vanilla-cache,
     /// no-vanilla-cache, refresh-vanilla-cache, report-type, min-severity,
-    /// ignore-files, ignore-dirs, loc-languages, ignore-codes, only-codes,
-    /// allow-empty. Relative paths resolve against the config file.
+    /// ignore-files, ignore-dirs, parents, loc-languages, ignore-codes,
+    /// only-codes, allow-empty. Relative paths resolve against the config file.
     #[arg(long, value_name = "FILE")]
     pub(crate) config: Option<PathBuf>,
     /// Game identifier (hoi4, stellaris, eu4, ck2, ck3, vic2, vic3, ir, eu5, custom)
@@ -145,6 +145,11 @@ pub(crate) struct ValidateArgs {
     /// Path to a .cwt rules file OR a directory containing .cwt rule files
     #[arg(long, short)]
     pub(crate) rules: Option<PathBuf>,
+    /// Parent mod directories loaded in order below this mod. May be repeated;
+    /// CLI paths are relative to the current working directory and replace the
+    /// `parents` list from cwtools.toml.
+    #[arg(long = "parent", value_name = "DIR")]
+    pub(crate) parents: Vec<PathBuf>,
     /// Optional path to the base game install (e.g. the vanilla HOI4 folder).
     /// Its files are indexed for reference resolution but not validated, so a
     /// mod can reference base-game content (operation_tokens, ship_names, …)

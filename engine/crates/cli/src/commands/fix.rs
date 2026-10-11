@@ -123,6 +123,7 @@ pub(super) fn run(args: FixArgs) {
             game: game_id,
             rules: RulesInput::from_path(rules.clone()),
             directory: directory.clone(),
+            parent_roots: Vec::new(),
             vanilla: vanilla.clone(),
             vanilla_cache: vanilla_cache_index,
             vanilla_cache_auto,

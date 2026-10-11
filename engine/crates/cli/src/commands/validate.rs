@@ -26,6 +26,7 @@ pub(super) fn run(args: ValidateArgs) {
         directory,
         rules,
         vanilla,
+        parents,
         vanilla_cache,
         no_vanilla_cache,
         refresh_vanilla_cache,
@@ -67,6 +68,13 @@ pub(super) fn run(args: ValidateArgs) {
         list ignore_codes => ignore_codes "ignore-codes";
         list only_codes => only_codes "only-codes";
         flag allow_empty => allow_empty "allow-empty";
+    );
+    let parent_roots = config::pick_configured_list(
+        parents,
+        fc.map(|c| c.parents.clone()).unwrap_or_default(),
+        fc.is_some_and(|c| c.present.contains(&"parents")),
+        "parents",
+        &mut applied,
     );
     let report_type = report_type.unwrap_or(ReportType::Cli);
     let fail_on = fail_on.unwrap_or_default();
@@ -193,6 +201,7 @@ pub(super) fn run(args: ValidateArgs) {
             game: game_id,
             rules: RulesInput::from_path(rules.clone()),
             directory: directory.clone(),
+            parent_roots,
             vanilla: vanilla.clone(),
             vanilla_cache: vanilla_cache_index,
             vanilla_cache_auto,

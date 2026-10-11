@@ -40,6 +40,32 @@ fn cwtools() -> Command {
     cmd
 }
 
+fn parent_file_reference_workspace() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    let rules = tmp.path().join("rules");
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(
+        rules.join("gfx.cwt"),
+        r#"
+spriteType = { texturefile = filepath }
+types = { type[spriteType] = { path = "gfx" } }
+"#,
+    )
+    .unwrap();
+    let mod_gfx = tmp.path().join("mod/gfx");
+    std::fs::create_dir_all(&mod_gfx).unwrap();
+    std::fs::write(
+        mod_gfx.join("ref.gfx"),
+        "spriteType = { texturefile = \"gfx/parent_icon.dds\" }\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.path().join("parent/gfx")).unwrap();
+    std::fs::write(tmp.path().join("parent/gfx/parent_icon.dds"), b"").unwrap();
+    std::fs::create_dir_all(tmp.path().join("other-parent")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("vanilla")).unwrap();
+    tmp
+}
+
 // ── Help / version ───────────────────────────────────────────────────────────
 
 #[test]
@@ -4106,4 +4132,113 @@ fn test_raw_equipment_icons_reach_cli_sarif_and_suppression() {
         .assert()
         .success()
         .stdout(predicate::str::contains("CW284").not());
+}
+
+#[test]
+fn validate_parent_flag_loads_a_relative_parent_from_the_working_directory() {
+    let tmp = parent_file_reference_workspace();
+    cwtools()
+        .current_dir(tmp.path())
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            "mod",
+            "--rules",
+            "rules",
+            "--vanilla",
+            "vanilla",
+            "--parent",
+            "other-parent",
+            "--parent",
+            "parent",
+            "--report-type",
+            "cli",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CW113").not());
+}
+
+#[test]
+fn validate_config_loads_relative_parent_paths_from_the_config_directory() {
+    let tmp = parent_file_reference_workspace();
+    let config = tmp.path().join("cwtools.toml");
+    std::fs::write(
+        &config,
+        "game = \"hoi4\"\ndirectory = \"mod\"\nrules = \"rules\"\nvanilla = \"vanilla\"\nparents = [\"parent\"]\n",
+    )
+    .unwrap();
+    cwtools()
+        .args([
+            "validate",
+            "--config",
+            config.to_str().unwrap(),
+            "--report-type",
+            "cli",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CW113").not());
+}
+
+#[test]
+fn validate_missing_parent_keeps_the_normal_missing_file_diagnostic() {
+    let tmp = parent_file_reference_workspace();
+    cwtools()
+        .current_dir(tmp.path())
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            "mod",
+            "--rules",
+            "rules",
+            "--vanilla",
+            "vanilla",
+            "--parent",
+            "missing-parent",
+            "--report-type",
+            "cli",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("CW113"));
+}
+
+#[test]
+fn validate_rejects_an_empty_parent_path_in_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("cwtools.toml");
+    std::fs::write(&config, "parents = [\"\"]\n").unwrap();
+    cwtools()
+        .args(["validate", "--config", config.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("parents").and(predicate::str::contains("empty path")));
+}
+
+#[test]
+fn an_explicit_empty_config_parent_list_clears_parent_resolution() {
+    let tmp = parent_file_reference_workspace();
+    let config = tmp.path().join("cwtools.toml");
+    std::fs::write(
+        &config,
+        "game = \"hoi4\"\ndirectory = \"mod\"\nrules = \"rules\"\nvanilla = \"vanilla\"\nparents = []\n",
+    )
+    .unwrap();
+    cwtools()
+        .args([
+            "validate",
+            "--config",
+            config.to_str().unwrap(),
+            "--report-type",
+            "cli",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("CW113"))
+        .stderr(predicate::str::contains("does not read config key `parents`").not());
 }
