@@ -13,8 +13,8 @@ mod references;
 
 pub use position::{PositionElement, ReferenceHint, element_at_position};
 use references::{
-    AliasKeyCache, TypeRefRule, build_schema_keys, build_type_ref_keys, classify_alias_key_sites,
-    collect_alias_key_candidates, collect_type_ref_uses,
+    AliasKeyCache, CollectedRef, TypeRefRule, build_schema_keys, build_type_ref_keys,
+    classify_alias_key_sites, collect_alias_key_candidates, collect_type_ref_uses, strip_affix,
 };
 pub use references::{
     ReferenceIndex, TypePatternAlias, UseSite, build_type_patterns, key_matches_type_pattern,
@@ -160,6 +160,17 @@ impl InfoService {
             self.event_target_counts.len(),
             self.all_type_defs.len(),
         )
+    }
+
+    /// Coalesce membership transitions made while one file is removed and
+    /// reindexed under the caller's exclusive InfoService lock.
+    pub fn begin_file_replacement(&mut self, uri: &str) {
+        Arc::make_mut(&mut self.type_index).begin_file_replacement(uri);
+    }
+
+    /// Publish net name-membership changes after an atomic file replacement.
+    pub fn finish_file_replacement(&mut self, uri: &str) {
+        Arc::make_mut(&mut self.type_index).finish_file_replacement(uri);
     }
 
     pub fn index_file_with_path(
@@ -347,6 +358,9 @@ impl InfoService {
         if self.schema_keys.is_none() {
             self.schema_keys = Some(build_schema_keys(ruleset));
         }
+        if self.type_patterns.is_none() {
+            self.type_patterns = Some(build_type_patterns(ruleset));
+        }
         let mut candidates = Vec::new();
         collect_alias_key_candidates(
             &ast.root_children,
@@ -355,7 +369,21 @@ impl InfoService {
             self.schema_keys.as_ref().expect("schema keys just set"),
             &mut candidates,
         );
-        self.alias_key_cache.merge_file(uri, candidates);
+        let candidate_names = self.alias_key_cache.merge_file(
+            uri,
+            candidates,
+            self.type_patterns.as_deref().unwrap_or_default(),
+        );
+        for (type_name, lower_name) in candidate_names {
+            if !self.type_index.contains(&type_name, &lower_name)
+                && self
+                    .type_index
+                    .has_pending_instance_name_change(&type_name, &lower_name)
+            {
+                self.type_index
+                    .mark_instance_name_dirty(&type_name, Arc::from(lower_name));
+            }
+        }
         self.classify_file_alias_keys(uri, ruleset);
 
         self.files.insert(uri.to_string(), info);
@@ -393,37 +421,71 @@ impl InfoService {
         for uri in uris {
             self.classify_file_alias_keys(&uri, ruleset);
         }
+        // A full rebuild covers every name that was still pending.
+        self.type_index.take_instance_name_changes();
     }
 
-    pub fn pattern_instance_fingerprint(&mut self, ruleset: &RuleSet) -> u64 {
-        use std::hash::{Hash, Hasher};
+    /// Reclassify only the alias references whose candidate keys carry an
+    /// instance name that entered or left the index since the last refresh.
+    /// The reverse site map keeps the work proportional to those candidates,
+    /// not to the workspace. Returns the candidate sites visited, or `None`
+    /// when no name was pending.
+    pub fn refresh_alias_key_names(&mut self, ruleset: &RuleSet) -> Option<usize> {
+        let changes = self.type_index.take_instance_name_changes();
+        if changes.is_empty() {
+            return None;
+        }
         if self.type_patterns.is_none() {
             self.type_patterns = Some(build_type_patterns(ruleset));
         }
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        let mut types: Vec<&str> = self
-            .type_patterns
-            .as_ref()
-            .expect("type patterns just set")
-            .iter()
-            .map(|pattern| pattern.type_name.as_str())
-            .collect();
-        types.sort_unstable();
-        types.dedup();
-        for type_name in types {
-            type_name.hash(&mut hasher);
-            let mut names: Vec<String> = self
-                .type_index
-                .instances(type_name)
-                .iter()
-                .map(|(_, inst)| inst.name.to_ascii_lowercase())
-                .collect();
-            names.sort_unstable();
-            for name in names {
-                name.hash(&mut hasher);
+        let patterns = self.type_patterns.as_deref().unwrap_or_default();
+        let mut refs_by_file: HashMap<Arc<str>, Vec<CollectedRef>> = HashMap::new();
+        let mut visited = 0;
+        for (type_name, name) in &changes {
+            self.alias_key_index.remove_name(type_name, name);
+            let candidates = self.alias_key_cache.candidates_for(type_name, name);
+            visited += candidates.len();
+            if !self.type_index.contains(type_name, name) {
+                continue;
+            }
+            for candidate in candidates {
+                let Some(site) = self
+                    .alias_key_cache
+                    .site(&candidate.file, candidate.site_index)
+                else {
+                    continue;
+                };
+                let Some(pattern) = patterns.get(candidate.pattern_index) else {
+                    continue;
+                };
+                let Some(middle) = strip_affix(&site.key, &pattern.prefix, &pattern.suffix) else {
+                    continue;
+                };
+                // The definition itself is not a reference to the name.
+                if self.type_index.is_instance_at(
+                    type_name,
+                    &candidate.file,
+                    middle,
+                    site.location.line,
+                    site.location.col,
+                ) {
+                    continue;
+                }
+                refs_by_file
+                    .entry(Arc::clone(&candidate.file))
+                    .or_default()
+                    .push(CollectedRef {
+                        ref_type: Arc::from(type_name.as_str()),
+                        name: middle.to_string(),
+                        key: site.location,
+                        value: site.location,
+                    });
             }
         }
-        hasher.finish()
+        for (file, refs) in refs_by_file {
+            self.alias_key_index.merge(&file, refs);
+        }
+        Some(visited)
     }
 
     pub fn export_fingerprint(&self, uri: &str) -> u64 {

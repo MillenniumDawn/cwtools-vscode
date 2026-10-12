@@ -444,12 +444,14 @@ struct NameRefs {
     positions: SmallVec<[usize; 2]>,
 }
 
-fn release_name(set: &mut FxHashMap<Arc<str>, NameRefs>, name: &str, base_game: bool) {
+fn release_name(set: &mut FxHashMap<Arc<str>, NameRefs>, name: &str, base_game: bool) -> bool {
     if let Some(refs) = set.get_mut(name)
         && refs.release(base_game)
     {
         set.remove(name);
+        return true;
     }
+    false
 }
 
 /// [`release_name`] for one instance whose `map` position is known.
@@ -458,16 +460,18 @@ fn release_name_at(
     name: &str,
     base_game: bool,
     position: usize,
-) {
+) -> bool {
     let Some(refs) = set.get_mut(name) else {
-        return;
+        return false;
     };
     if let Some(slot) = refs.positions.iter().position(|&p| p == position) {
         refs.positions.swap_remove(slot);
     }
-    if refs.release(base_game) {
+    let gone = refs.release(base_game);
+    if gone {
         set.remove(name);
     }
+    gone
 }
 
 impl NameRefs {
@@ -495,6 +499,13 @@ pub struct TypeIndex {
     map: FxHashMap<String, Vec<(Arc<str>, TypeInstance)>>,
     name_counts: FxHashMap<Arc<str>, usize>,
     instance_sets: FxHashMap<String, FxHashMap<Arc<str>, NameRefs>>,
+    /// Membership changes since the alias-key consumer last drained them.
+    /// Shared and lockable so draining through `&self` never copy-on-writes
+    /// an `Arc<TypeIndex>` that a snapshot still holds.
+    instance_name_changes: Arc<std::sync::Mutex<InstanceNameChanges>>,
+    /// Names touched by the current atomic file replacement, paired with their
+    /// membership before its first transition.
+    file_replacement: Option<FileReplacementChanges>,
     base_game_uris: FxHashSet<Arc<str>>,
     file_positions: FxHashMap<Arc<str>, FxHashMap<String, Vec<usize>>>,
     pub file_index: FileIndex,
@@ -504,6 +515,22 @@ pub struct TypeIndex {
     pub complete: bool,
     pub complex_enum_values: dynamic_values::NamedValueIndex,
     pub value_set_values: dynamic_values::NamedValueIndex,
+}
+
+#[derive(Debug, Clone, Default)]
+struct FileReplacementChanges {
+    file_uri: String,
+    touched: FxHashMap<(String, Arc<str>), bool>,
+}
+
+#[derive(Debug, Default)]
+struct InstanceNameChanges {
+    /// Net membership changes. Opposing transitions coalesce within a file
+    /// replacement, so an unchanged export set causes no refresh work.
+    changed: FxHashMap<String, FxHashSet<Arc<str>>>,
+    /// Names whose alias classification became dirty while absent. Unlike
+    /// `changed`, these survive a later add/remove parity cancellation.
+    dirty: FxHashMap<String, FxHashSet<Arc<str>>>,
 }
 
 impl TypeIndex {
@@ -555,6 +582,97 @@ impl TypeIndex {
 
     pub fn instances(&self, type_name: &str) -> &[(Arc<str>, TypeInstance)] {
         self.map.get(type_name).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Drain the names whose membership changed or was marked dirty since the
+    /// last drain, sorted and deduplicated.
+    pub fn take_instance_name_changes(&self) -> Vec<(String, Arc<str>)> {
+        let mut changes = self.instance_name_changes.lock().unwrap();
+        let InstanceNameChanges { changed, dirty } = std::mem::take(&mut *changes);
+        let mut out: Vec<(String, Arc<str>)> = changed
+            .into_iter()
+            .chain(dirty)
+            .flat_map(|(type_name, names)| {
+                names.into_iter().map(move |name| (type_name.clone(), name))
+            })
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Whether [`TypeIndex::take_instance_name_changes`] would return anything.
+    pub fn has_instance_name_changes(&self) -> bool {
+        let changes = self.instance_name_changes.lock().unwrap();
+        !changes.changed.is_empty() || !changes.dirty.is_empty()
+    }
+
+    /// Whether one specific name is waiting for alias reclassification.
+    pub fn has_pending_instance_name_change(&self, type_name: &str, lower_name: &str) -> bool {
+        let changes = self.instance_name_changes.lock().unwrap();
+        changes
+            .changed
+            .get(type_name)
+            .is_some_and(|names| names.contains(lower_name))
+            || changes
+                .dirty
+                .get(type_name)
+                .is_some_and(|names| names.contains(lower_name))
+    }
+
+    /// Mark a name for reclassification when an alias candidate was indexed
+    /// while the export was absent. This survives a later restore of the name.
+    pub fn mark_instance_name_dirty(&self, type_name: &str, lower_name: Arc<str>) {
+        self.instance_name_changes
+            .lock()
+            .unwrap()
+            .dirty
+            .entry(type_name.to_string())
+            .or_default()
+            .insert(lower_name);
+    }
+
+    /// Begin an atomic remove/reindex/merge operation for one file. Membership
+    /// changes are diffed at the end so unchanged exports coalesce locally.
+    pub fn begin_file_replacement(&mut self, file_uri: &str) {
+        debug_assert!(self.file_replacement.is_none());
+        self.file_replacement = Some(FileReplacementChanges {
+            file_uri: file_uri.to_string(),
+            touched: FxHashMap::default(),
+        });
+    }
+
+    /// End the current atomic file replacement and journal only names whose
+    /// global membership differs from its starting state.
+    pub fn finish_file_replacement(&mut self, file_uri: &str) {
+        let Some(replacement) = self.file_replacement.take() else {
+            return;
+        };
+        debug_assert_eq!(replacement.file_uri, file_uri);
+        let mut changes = self.instance_name_changes.lock().unwrap();
+        for ((type_name, name), was_present) in replacement.touched {
+            if self.contains(&type_name, &name) != was_present {
+                changes.changed.entry(type_name).or_default().insert(name);
+            }
+        }
+    }
+
+    /// Record that `lower_name` entered (`added`) or left the type's name set.
+    fn toggle_instance_name(&mut self, type_name: &str, lower_name: Arc<str>, added: bool) {
+        if let Some(touched) = self.file_replacement.as_mut() {
+            touched
+                .touched
+                .entry((type_name.to_string(), lower_name))
+                .or_insert(!added);
+        } else {
+            self.instance_name_changes
+                .lock()
+                .unwrap()
+                .changed
+                .entry(type_name.to_string())
+                .or_default()
+                .insert(lower_name);
+        }
     }
 
     pub fn is_instance_at(
@@ -721,8 +839,9 @@ impl TypeIndex {
                 .file_positions
                 .entry(Arc::clone(&uri))
                 .or_default()
-                .entry(type_name)
+                .entry(type_name.clone())
                 .or_default();
+            let mut added_names = Vec::new();
             for inst in instances {
                 let lower = Arc::<str>::from(inst.name.to_ascii_lowercase());
                 let lower = if subtype_key {
@@ -741,9 +860,16 @@ impl TypeIndex {
                     }
                 };
                 let position = entry.len();
-                set.entry(lower).or_default().add(base_game, position);
+                let refs = set.entry(Arc::clone(&lower)).or_default();
+                if refs.total == 0 {
+                    added_names.push(lower);
+                }
+                refs.add(base_game, position);
                 positions.push(position);
                 entry.push((Arc::clone(&uri), inst));
+            }
+            for name in added_names {
+                self.toggle_instance_name(&type_name, name, true);
             }
         }
     }
@@ -756,6 +882,7 @@ impl TypeIndex {
             let subtype_key = is_subtype_key(&type_name);
             let set = self.instance_sets.entry(type_name.clone()).or_default();
             let entry = self.map.entry(type_name.clone()).or_default();
+            let mut added_names = Vec::new();
             for (uri, inst) in instances {
                 let lower = Arc::<str>::from(inst.name.to_ascii_lowercase());
                 let lower = if subtype_key {
@@ -774,7 +901,11 @@ impl TypeIndex {
                     }
                 };
                 let pos = entry.len();
-                set.entry(lower).or_default().add(true, pos);
+                let refs = set.entry(Arc::clone(&lower)).or_default();
+                if refs.total == 0 {
+                    added_names.push(lower);
+                }
+                refs.add(true, pos);
                 self.base_game_uris.insert(Arc::clone(&uri));
                 let type_positions = self.file_positions.entry(Arc::clone(&uri)).or_default();
                 match type_positions.get_mut(type_name.as_str()) {
@@ -785,6 +916,9 @@ impl TypeIndex {
                 }
                 entry.push((uri, inst));
             }
+            for name in added_names {
+                self.toggle_instance_name(&type_name, name, true);
+            }
         }
     }
 
@@ -792,6 +926,7 @@ impl TypeIndex {
         if file_uris.is_empty() {
             return;
         }
+        let mut membership_changes = Vec::new();
         for (type_name, v) in self.map.iter_mut() {
             let subtype_key = is_subtype_key(type_name);
             v.retain(|(uri, inst)| {
@@ -802,8 +937,10 @@ impl TypeIndex {
                     if !subtype_key {
                         dec_ref(&mut self.name_counts, lower.as_str());
                     }
-                    if let Some(set) = self.instance_sets.get_mut(type_name) {
-                        release_name(set, lower.as_str(), base_game);
+                    if let Some(set) = self.instance_sets.get_mut(type_name)
+                        && release_name(set, lower.as_str(), base_game)
+                    {
+                        membership_changes.push((type_name.clone(), Arc::<str>::from(lower)));
                     }
                 }
                 keep
@@ -814,6 +951,9 @@ impl TypeIndex {
         }
         self.map.retain(|_, v| !v.is_empty());
         self.instance_sets.retain(|_, names| !names.is_empty());
+        for (type_name, lower_name) in membership_changes {
+            self.toggle_instance_name(&type_name, lower_name, false);
+        }
         // `retain` shifted the survivors, so both position indexes start over.
         self.file_positions.clear();
         for (type_name, entries) in &self.map {
@@ -858,8 +998,12 @@ impl TypeIndex {
                 if !subtype_key {
                     dec_ref(&mut self.name_counts, lower.as_str());
                 }
-                if let Some(set) = self.instance_sets.get_mut(&type_name) {
-                    release_name_at(set, lower.as_str(), base_game, index);
+                let removed_name = self
+                    .instance_sets
+                    .get_mut(&type_name)
+                    .is_some_and(|set| release_name_at(set, lower.as_str(), base_game, index));
+                if removed_name {
+                    self.toggle_instance_name(&type_name, Arc::from(lower), false);
                 }
                 self.swap_remove_instance(&type_name, index);
             }
@@ -1278,6 +1422,36 @@ mod tests {
             primary_loc_key: None,
             required_loc_keys: Vec::new(),
         }
+    }
+
+    #[test]
+    fn name_changes_track_distinct_membership_transitions() {
+        let mut idx = TypeIndex::new();
+        idx.merge(
+            "a.txt",
+            HashMap::from([(
+                "effect".to_string(),
+                vec![inst("Alpha", 0), inst("ALPHA", 1), inst("Beta", 2)],
+            )]),
+        );
+        let added = idx.take_instance_name_changes();
+        assert_eq!(added.len(), 2, "case-only duplicate is not a new name");
+
+        idx.merge(
+            "b.txt",
+            HashMap::from([("effect".to_string(), vec![inst("alpha", 0)])]),
+        );
+        assert!(idx.take_instance_name_changes().is_empty());
+        idx.remove_file("a.txt");
+        let removed_beta = idx.take_instance_name_changes();
+        assert_eq!(removed_beta.len(), 1);
+        assert_eq!(removed_beta[0].0, "effect");
+        assert_eq!(removed_beta[0].1.as_ref(), "beta");
+        assert!(idx.contains("effect", "alpha"));
+
+        idx.remove_file("b.txt");
+        assert_eq!(idx.take_instance_name_changes().len(), 1);
+        assert!(!idx.contains("effect", "alpha"));
     }
 
     #[test]
@@ -2088,5 +2262,38 @@ mod tests {
         }
         assert!(snap.instances_in_file("file://f9.txt").is_empty());
         assert!(names(&idx, "file://f0.txt").is_empty());
+    }
+
+    #[test]
+    fn clone_preserves_replacement_coalescing_and_shares_the_alias_journal() {
+        let mut idx = TypeIndex::new();
+        idx.merge(
+            "file://a.txt",
+            HashMap::from([("state".to_string(), vec![inst("kept", 1)])]),
+        );
+        idx.take_instance_name_changes();
+        idx.begin_file_replacement("file://a.txt");
+        idx.remove_file("file://a.txt");
+
+        let mut cloned = idx.clone();
+        assert!(Arc::ptr_eq(
+            &idx.instance_name_changes,
+            &cloned.instance_name_changes,
+        ));
+        cloned.merge(
+            "file://a.txt",
+            HashMap::from([("state".to_string(), vec![inst("kept", 5)])]),
+        );
+        cloned.finish_file_replacement("file://a.txt");
+        assert!(!cloned.has_instance_name_changes());
+        assert_eq!(cloned.instance_locations("kept")[0].1.line, 5);
+        assert!(idx.instance_locations("kept").is_empty());
+
+        cloned.remove_file("file://a.txt");
+        assert_eq!(
+            idx.take_instance_name_changes(),
+            vec![("state".to_string(), Arc::<str>::from("kept"))],
+        );
+        assert!(!cloned.has_instance_name_changes());
     }
 }
