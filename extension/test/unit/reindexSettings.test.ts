@@ -14,213 +14,97 @@ import {
 } from "../../src/host/reindexSettings";
 import type { LiveServerSettings } from "../../src/host/reindexSettings";
 
-suite("reindexSettings — normalizeBackgroundReindexMinutes", () => {
-	test("defaults to 30 when the setting is unset", () => {
+suite("reindexSettings — normalization", () => {
+	test("an unset interval or idle window takes the server default, an explicit 0 survives", () => {
 		assert.strictEqual(normalizeBackgroundReindexMinutes(undefined), 30);
-	});
-
-	test("preserves an explicit 0 (disabled)", () => {
 		assert.strictEqual(normalizeBackgroundReindexMinutes(0), 0);
-	});
-
-	test("passes a normal value through", () => {
 		assert.strictEqual(normalizeBackgroundReindexMinutes(45), 45);
-	});
-});
-
-suite("reindexSettings — normalizeBackgroundReindexIdleSeconds", () => {
-	test("defaults to the server's 15s when the setting is unset", () => {
 		assert.strictEqual(normalizeBackgroundReindexIdleSeconds(undefined), 15);
-	});
-
-	test("passes a normal value through", () => {
+		assert.strictEqual(normalizeBackgroundReindexIdleSeconds(0), 0);
 		assert.strictEqual(normalizeBackgroundReindexIdleSeconds(60), 60);
 	});
 
-	test("preserves an explicit 0 (no idle wait)", () => {
-		assert.strictEqual(normalizeBackgroundReindexIdleSeconds(0), 0);
-	});
-});
-
-suite("reindexSettings — mapIgnoreOptions", () => {
-	test("passes bare file names through unprefixed", () => {
-		const result = mapIgnoreOptions([], ["README.txt", "credits.txt"], []);
-		assert.deepStrictEqual(result.ignoreFilePatterns, [
-			"README.txt",
-			"credits.txt",
-		]);
-	});
-
-	test("passes a slashless glob through unchanged (*.txt stays *.txt)", () => {
-		const result = mapIgnoreOptions([], ["*.txt"], []);
-		assert.deepStrictEqual(result.ignoreFilePatterns, ["*.txt"]);
-	});
-
-	test("passes names that already contain a path through unchanged", () => {
-		const result = mapIgnoreOptions([], ["docs/README.txt"], []);
-		assert.deepStrictEqual(result.ignoreFilePatterns, ["docs/README.txt"]);
+	test("ignore_patterns globs come ahead of file names, which pass through unprefixed", () => {
+		assert.deepStrictEqual(
+			mapIgnoreOptions(
+				["**/99_README**.txt"],
+				["credits.txt", "*.txt", "docs/README.txt"],
+				["CW100", "CW222"],
+			),
+			{
+				ignoreFilePatterns: [
+					"**/99_README**.txt",
+					"credits.txt",
+					"*.txt",
+					"docs/README.txt",
+				],
+				ignoredErrorCodes: ["CW100", "CW222"],
+			},
+		);
 	});
 
-	test("empty or missing settings produce empty lists", () => {
+	test("missing ignore settings produce empty lists", () => {
 		assert.deepStrictEqual(mapIgnoreOptions(undefined, undefined, undefined), {
 			ignoreFilePatterns: [],
 			ignoredErrorCodes: [],
 		});
-		assert.deepStrictEqual(mapIgnoreOptions([], [], []), {
-			ignoreFilePatterns: [],
-			ignoredErrorCodes: [],
-		});
-	});
-
-	test("merges ignore_patterns globs ahead of the passed-through file names", () => {
-		const result = mapIgnoreOptions(
-			["**/99_README**.txt"],
-			["credits.txt"],
-			[],
-		);
-		assert.deepStrictEqual(result.ignoreFilePatterns, [
-			"**/99_README**.txt",
-			"credits.txt",
-		]);
-	});
-
-	test("passes ignored error codes through", () => {
-		const result = mapIgnoreOptions([], [], ["CW100", "CW222"]);
-		assert.deepStrictEqual(result.ignoredErrorCodes, ["CW100", "CW222"]);
 	});
 });
 
 suite("reindexSettings — buildSettingsPayload", () => {
 	const liveSettings: LiveServerSettings = {
-		localisationLanguages: ["English"],
+		localisationLanguages: ["English", "French"],
 		workspaceWideDiagnostics: true,
 		hoverShowAllLanguages: false,
 		hoverDebug: false,
-		hoverScopeDisplay: "context",
-		formattingIndentStyle: "space",
-		formattingIndentSize: 4,
-		formattingMaxLineWidth: 120,
-		formattingTrimTrailingWhitespace: true,
+		hoverScopeDisplay: "resolved",
+		formattingIndentStyle: "tab",
+		formattingIndentSize: 2,
+		formattingMaxLineWidth: 80,
+		formattingTrimTrailingWhitespace: false,
 		formattingInsertFinalNewline: true,
 	};
 
-	test("carries the server keys and spreads the ignore options", () => {
+	test("carries the server keys, the ignore options and every live setting", () => {
 		const ignore = {
 			ignoreFilePatterns: ["**/x.txt"],
 			ignoredErrorCodes: ["CW100"],
 		};
-		const payload = buildSettingsPayload(ignore, 10, 45, liveSettings);
-		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 10);
-		assert.strictEqual(payload.backgroundReindexIdleSeconds, 45);
-		assert.deepStrictEqual(payload.ignoreFilePatterns, ["**/x.txt"]);
-		assert.deepStrictEqual(payload.ignoredErrorCodes, ["CW100"]);
-		assert.deepStrictEqual(payload.localisationLanguages, ["English"]);
-		assert.strictEqual(payload.workspaceWideDiagnostics, true);
-		assert.strictEqual(payload.hoverShowAllLanguages, false);
-		assert.strictEqual(payload.hoverDebug, false);
-		assert.strictEqual(payload.hoverScopeDisplay, "context");
-		assert.strictEqual(payload.formattingMaxLineWidth, 120);
+		assert.deepStrictEqual(buildSettingsPayload(ignore, 10, 45, liveSettings), {
+			...ignore,
+			...liveSettings,
+			backgroundReindexIntervalMinutes: 10,
+			backgroundReindexIdleSeconds: 45,
+		});
 	});
 
-	test("defaults the interval and idle window when unset in the payload too", () => {
-		const payload = buildSettingsPayload(
-			{},
-			undefined,
-			undefined,
-			liveSettings,
-		);
+	// The server reads an empty language list as "no language", so it must not
+	// be dropped or defaulted on the way out.
+	test("defaults the interval and idle window and preserves an empty language list", () => {
+		const payload = buildSettingsPayload({}, undefined, undefined, {
+			...liveSettings,
+			localisationLanguages: [],
+		});
 		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 30);
 		assert.strictEqual(payload.backgroundReindexIdleSeconds, 15);
-	});
-
-	test("does not mutate the inputs and lets live settings overwrite collisions", () => {
-		const ignore = {
-			ignoreFilePatterns: ["**/x.txt"],
-			backgroundReindexIntervalMinutes: 999,
-		} as unknown as {
-			ignoreFilePatterns: string[];
-			ignoredErrorCodes?: string[];
-		};
-		const live: LiveServerSettings = {
-			localisationLanguages: ["French"],
-			workspaceWideDiagnostics: false,
-			hoverShowAllLanguages: true,
-			hoverDebug: true,
-			hoverScopeDisplay: "resolved",
-			formattingIndentStyle: "space",
-			formattingIndentSize: 4,
-			formattingMaxLineWidth: 120,
-			formattingTrimTrailingWhitespace: true,
-			formattingInsertFinalNewline: true,
-		};
-		const payload = buildSettingsPayload(ignore, 10, 20, live);
-		// payload wins over the stale key in ignoreOptions
-		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 10);
-		assert.strictEqual(payload.backgroundReindexIdleSeconds, 20);
-		assert.deepStrictEqual(payload.localisationLanguages, ["French"]);
-		assert.strictEqual(payload.workspaceWideDiagnostics, false);
-		// inputs untouched
-		assert.strictEqual(
-			(ignore as unknown as Record<string, unknown>)
-				.backgroundReindexIntervalMinutes,
-			999,
-		);
-		assert.deepStrictEqual(live.localisationLanguages, ["French"]);
-	});
-
-	test("preserves empty localisation list (server interprets as no language)", () => {
-		const payload = buildSettingsPayload({}, undefined, undefined, {
-			localisationLanguages: [],
-			workspaceWideDiagnostics: true,
-			hoverShowAllLanguages: false,
-			hoverDebug: false,
-			hoverScopeDisplay: "context",
-			formattingIndentStyle: "space",
-			formattingIndentSize: 4,
-			formattingMaxLineWidth: 120,
-			formattingTrimTrailingWhitespace: true,
-			formattingInsertFinalNewline: true,
-		} satisfies LiveServerSettings);
 		assert.deepStrictEqual(payload.localisationLanguages, []);
 	});
 
-	test("passes through multiple languages and resolved scope", () => {
-		const payload = buildSettingsPayload(
-			{ ignoreFilePatterns: [] as string[], ignoredErrorCodes: [] as string[] },
-			30,
-			15,
-			{
-				localisationLanguages: ["English", "French"],
-				workspaceWideDiagnostics: true,
-				hoverShowAllLanguages: true,
-				hoverDebug: true,
-				hoverScopeDisplay: "resolved",
-				formattingIndentStyle: "tab",
-				formattingIndentSize: 2,
-				formattingMaxLineWidth: 80,
-				formattingTrimTrailingWhitespace: false,
-				formattingInsertFinalNewline: false,
-			} satisfies LiveServerSettings,
-		);
-		assert.deepStrictEqual(payload.localisationLanguages, [
-			"English",
-			"French",
-		]);
-		assert.strictEqual(payload.workspaceWideDiagnostics, true);
-		assert.strictEqual(payload.hoverShowAllLanguages, true);
-		assert.strictEqual(payload.hoverScopeDisplay, "resolved");
-		assert.strictEqual(payload.formattingMaxLineWidth, 80);
+	test("does not mutate the ignore options and overwrites a colliding key", () => {
+		const ignore = {
+			ignoreFilePatterns: ["**/x.txt"],
+			backgroundReindexIntervalMinutes: 999,
+		};
+		const payload = buildSettingsPayload(ignore, 10, 20, liveSettings);
+		assert.strictEqual(payload.backgroundReindexIntervalMinutes, 10);
+		assert.strictEqual(ignore.backgroundReindexIntervalMinutes, 999);
 	});
 });
 
 suite("reindexSettings — settings change classification", () => {
-	function fakeEvent(touched: string[]) {
-		return {
-			affectsConfiguration(section: string): boolean {
-				return touched.includes(section);
-			},
-		};
-	}
+	const touching = (...touched: string[]) => ({
+		affectsConfiguration: (section: string) => touched.includes(section),
+	});
 
 	test("classifies every manifest cwtools setting exactly once", () => {
 		const manifest = JSON.parse(
@@ -230,9 +114,7 @@ suite("reindexSettings — settings change classification", () => {
 			),
 		) as {
 			contributes: {
-				configuration: Array<{
-					properties: Record<string, unknown>;
-				}>;
+				configuration: Array<{ properties: Record<string, unknown> }>;
 			};
 		};
 		const settings = manifest.contributes.configuration.flatMap((section) =>
@@ -240,103 +122,34 @@ suite("reindexSettings — settings change classification", () => {
 				key.startsWith("cwtools."),
 			),
 		);
-		const overlap = LIVE_SETTINGS_KEYS.filter((key) =>
-			RELOAD_SETTINGS_KEYS.includes(
-				key as (typeof RELOAD_SETTINGS_KEYS)[number],
-			),
+		const live: readonly string[] = LIVE_SETTINGS_KEYS;
+		const reload: readonly string[] = RELOAD_SETTINGS_KEYS;
+		assert.deepStrictEqual(
+			settings.filter((key) => live.includes(key) === reload.includes(key)),
+			[],
+			"each setting must be live or reload, not both and not neither",
 		);
-		assert.deepStrictEqual(overlap, []);
-		for (const setting of settings) {
-			const classifications = [
-				LIVE_SETTINGS_KEYS.includes(
-					setting as (typeof LIVE_SETTINGS_KEYS)[number],
-				),
-				RELOAD_SETTINGS_KEYS.includes(
-					setting as (typeof RELOAD_SETTINGS_KEYS)[number],
-				),
-			].filter(Boolean);
-			assert.strictEqual(
-				classifications.length,
-				1,
-				`${setting} must be classified as live or reload`,
-			);
-		}
 	});
 
-	test("returns true for each reload key", () => {
+	test("each reload key asks for a window reload, live and unrelated keys do not", () => {
 		for (const key of RELOAD_SETTINGS_KEYS) {
-			assert.strictEqual(
-				isReloadSettingsChange(fakeEvent([key])),
-				true,
-				`${key} should require a window reload`,
-			);
+			assert.strictEqual(isReloadSettingsChange(touching(key)), true, key);
 		}
-	});
-
-	test("rules folder changes do not request a window reload", () => {
-		assert.strictEqual(
-			isReloadSettingsChange(fakeEvent(["cwtools.rules_folder"])),
-			false,
-		);
-	});
-
-	test("returns false for live and unrelated keys", () => {
-		assert.strictEqual(
-			isReloadSettingsChange(fakeEvent(["cwtools.hover.debug"])),
-			false,
-		);
-		assert.strictEqual(
-			isReloadSettingsChange(fakeEvent(["cwtools.notASetting"])),
-			false,
-		);
-		assert.strictEqual(isReloadSettingsChange(fakeEvent([])), false);
-	});
-});
-
-suite("reindexSettings — isLiveSettingsChange", () => {
-	function fakeEvent(touched: string[]) {
-		return {
-			affectsConfiguration(section: string): boolean {
-				return touched.includes(section);
-			},
-		};
-	}
-
-	test("returns true for each live key", () => {
-		for (const key of LIVE_SETTINGS_KEYS) {
-			assert.strictEqual(
-				isLiveSettingsChange(fakeEvent([key])),
-				true,
-				`${key} should be considered live`,
-			);
+		for (const key of ["cwtools.rules_folder", "cwtools.hover.debug", "cwtools.notASetting"]) {
+			assert.strictEqual(isReloadSettingsChange(touching(key)), false, key);
 		}
+		assert.strictEqual(isReloadSettingsChange(touching()), false);
 	});
 
-	test("returns true when any live key is among many", () => {
+	test("each live key applies live, including the rules settings, reload keys do not", () => {
+		for (const key of [...LIVE_SETTINGS_KEYS, "cwtools.rules_folder", "cwtools.rules.autoReload"]) {
+			assert.strictEqual(isLiveSettingsChange(touching(key)), true, key);
+		}
 		assert.strictEqual(
-			isLiveSettingsChange(
-				fakeEvent(["cwtools.cache.hoi4", "cwtools.hover.debug"]),
-			),
+			isLiveSettingsChange(touching("cwtools.cache.hoi4", "cwtools.hover.debug")),
 			true,
 		);
-	});
-
-	test("routes rules settings live and leaves unrelated keys alone", () => {
-		for (const key of ["cwtools.rules_folder", "cwtools.rules.autoReload"]) {
-			assert.strictEqual(
-				isLiveSettingsChange(fakeEvent([key])),
-				true,
-				`${key} should apply live`,
-			);
-		}
-		assert.strictEqual(
-			isLiveSettingsChange(fakeEvent(["cwtools.cache.hoi4"])),
-			false,
-		);
-		assert.strictEqual(
-			isLiveSettingsChange(fakeEvent(["cwtools.cache.eu4"])),
-			false,
-		);
-		assert.strictEqual(isLiveSettingsChange(fakeEvent([])), false);
+		assert.strictEqual(isLiveSettingsChange(touching("cwtools.cache.hoi4")), false);
+		assert.strictEqual(isLiveSettingsChange(touching()), false);
 	});
 });

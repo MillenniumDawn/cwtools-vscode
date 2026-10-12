@@ -177,7 +177,7 @@ def run_main_fixture(
     return run
 
 
-def test_defaults_to_the_unit_label_under_the_display_prefix(
+def test_defaults_to_the_smoke_label_under_the_display_prefix(
     run_main: Callable[..., Run],
 ) -> None:
     result = run_main([])
@@ -185,7 +185,7 @@ def test_defaults_to_the_unit_label_under_the_display_prefix(
     assert result.status == 0
     assert result.command[:2] == ["/usr/bin/xvfb-run", "-a"]
     assert result.command[2] == "/usr/bin/node"
-    assert result.command[-2:] == ["--label", "unit"]
+    assert result.command[-2:] == ["--label", "smoke"]
 
 
 def test_passes_unrecognized_arguments_through(run_main: Callable[..., Run]) -> None:

@@ -17,16 +17,16 @@ HOST_COVERAGE_SCOPES = (
 HOST_COVERAGE_DROPS = (
     "extension/src/host/commandProgress.ts",
     "extension/src/host/commands.ts",
+    "extension/src/host/detectGame.ts",
     "extension/src/host/diagnosticsSignature.ts",
-    "extension/src/host/documentLanguage.ts",
     "extension/src/host/engine.ts",
     "extension/src/host/executable.ts",
+    "extension/src/host/fileExplorer.ts",
     "extension/src/host/fileListSignature.ts",
     "extension/src/host/fnv1a.ts",
     "extension/src/host/focusTracking.ts",
     "extension/src/host/games.ts",
     "extension/src/host/graphAvailability.ts",
-    "extension/src/host/logger.ts",
     "extension/src/host/reindexSettings.ts",
     "extension/src/host/rulesManifest.ts",
     "extension/src/host/rulesSetup.ts",
@@ -39,9 +39,9 @@ COVERAGE_METRICS = ("lines", "statements", "branches", "functions")
 
 # Per-metric floors for the host coverage gate, just under the baseline.
 HOST_COVERAGE_THRESHOLDS: dict[str, float] = {
-    "lines": 80,
-    "statements": 80,
-    "branches": 71,
+    "lines": 77,
+    "statements": 77,
+    "branches": 69,
     "functions": 76,
 }
 

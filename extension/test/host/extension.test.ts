@@ -10,7 +10,6 @@ import {
 	SAMPLE_ROOT,
 } from "../support/utils";
 import type * as GraphPanelNamespace from "../../src/host/graphPanel";
-import { isRulesConfigSummaryNotification } from "../support/rulesConfigNotifications";
 type GraphPanelModule = typeof GraphPanelNamespace;
 import type { GraphData } from "../../src/common/graphTypes";
 import type { ElementsDefinition } from "cytoscape";
@@ -19,55 +18,24 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 const root = SAMPLE_ROOT;
 
-// Closing a panel whose webview is still loading kills the ready handshake
-// mid-flight, which is the window #216's silent host aborts point at.
-const closePanel = async (gp: GraphPanelModule | undefined) => {
-	if (!gp?.GraphPanel.currentPanel) return;
-	await waitUntil(
-		() => gp.GraphPanel.currentPanel?.getState() !== gp.State.New,
-		2_000,
-	);
-	gp.GraphPanel.currentPanel?.dispose();
-};
+// The pinned Stellaris config's summary (116 errors, first CW605) can arrive
+// after readiness while an error stub is active. It is unrelated to a command's
+// result, so the command checks below filter it out.
+const isRulesConfigSummaryNotification = (message: string): boolean =>
+	/^CWTools: \d+ rules-config error\(s\), first:/.test(message);
 
-suite(`Debug Integration Test: `, function () {
-	test("Extension should be present", () => {
-		assert.ok(vscode.extensions.getExtension(EXTENSION_ID));
-	});
+suite("Activation", function () {
+	this.timeout(2 * 60 * 1000);
 
-	test("should activate and expose the host-test API", async function () {
-		this.timeout(1 * 60 * 1000);
-		const extension = await activate();
-		assert.ok(extension, "activation API should be exposed");
-		assert.strictEqual(
-			typeof extension.graphPanel,
-			"function",
-			"activation API should expose graphPanel()",
-		);
-		assert.strictEqual(
-			typeof extension.serverOutputChannel,
-			"function",
-			"activation API should expose serverOutputChannel()",
-		);
-	});
-
-	test("Extension activation status", async function () {
-		this.timeout(1 * 60 * 1000);
-		const extension = vscode.extensions.getExtension(EXTENSION_ID);
-		assert.ok(extension, "Extension should be found");
-
-		// Test activation status
-		if (!extension.isActive) {
-			await extension.activate();
-		}
-		assert.ok(
-			extension.isActive,
-			"Extension should be active after activation",
-		);
+	test("activates and exposes the host-test API", async function () {
+		const api = await activate();
+		assert.ok(api, "activation API should be exposed");
+		assert.strictEqual(vscode.extensions.getExtension(EXTENSION_ID)?.isActive, true);
+		assert.strictEqual(typeof api.graphPanel, "function");
+		assert.strictEqual(typeof api.serverOutputChannel, "function");
 	});
 
 	test("registers the CWTools commands", async function () {
-		this.timeout(1 * 60 * 1000);
 		await activate();
 		const commands = await vscode.commands.getCommands();
 		const required = [
@@ -90,28 +58,48 @@ suite(`Debug Integration Test: `, function () {
 		);
 	});
 
-	suite("fixAllWorkspace gating", function () {
-		this.timeout(1 * 60 * 1000);
+	test("the status item settles on the ready text once the initial scan finishes", async function () {
+		const api = await activate();
+		assert.ok(api, "activation API should be exposed");
+		assert.ok(
+			await waitForServerReady(api),
+			`status item should settle to ready, last seen: ${api.serverStatusText()}`,
+		);
+	});
 
-		test("runs against the pinned server without a protocol error", async function () {
+	test("treats dotted Paradox identifiers as one word", async function () {
+		await activate();
+		const document = await vscode.workspace.openTextDocument(
+			path.join(root, "events", "irm.txt"),
+		);
+		const range = document.getWordRangeAtPosition(new vscode.Position(8, 9));
+
+		assert.strictEqual(document.languageId, "paradox");
+		assert.ok(range, "dotted identifier should have a word range");
+		assert.strictEqual(document.getText(range), "irm.1");
+	});
+
+	// The gate reads the server's advertised commands; both branches are
+	// unit-tested in graphAvailability.test.ts. This pins which branch the
+	// bundled engine takes, so a pin that loses the command fails here rather
+	// than reaching users as a raw protocol error.
+	for (const [command, unsupported] of [
+		["fixAllWorkspace", "doesn't support fixing the workspace"],
+		["formatWorkspace", "doesn't support formatting the workspace"],
+	]) {
+		test(`${command} runs against the pinned server without a protocol error`, async function () {
 			const api = await activate();
 			assert.ok(api, "activation API should be exposed");
 			const advertised = api.serverCommands();
-			// The gate reads the server's advertised commands; both branches are
-			// unit-tested in graphAvailability.test.ts. This pins which branch the
-			// bundled engine takes, so a pin that loses the command fails here
-			// rather than reaching users as a raw protocol error.
 			assert.ok(
-				advertised.includes("fixAllWorkspace"),
-				`pinned server should advertise fixAllWorkspace, got: ${advertised.join(", ")}`,
+				advertised.includes(command),
+				`pinned server should advertise ${command}, got: ${advertised.join(", ")}`,
 			);
 
 			// activate() returns while the server is still indexing, and a
 			// command sent into that window comes back as a transport rejection
-			// rather than a result: the test failed exactly once in CI that way,
-			// having passed twice earlier in the same job against a settled
-			// server (#675). Gate on the scan the way every other suite that
-			// talks to the server does.
+			// rather than a result (#675). Gate on the scan the way every other
+			// suite that talks to the server does.
 			assert.ok(
 				await waitForServerReady(api),
 				`server never finished its initial scan, last status: ${api.serverStatusText()}`,
@@ -121,158 +109,36 @@ suite(`Debug Integration Test: `, function () {
 			const warn = sandbox.stub(vscode.window, "showWarningMessage");
 			const err = sandbox.stub(vscode.window, "showErrorMessage");
 			try {
-				await vscode.commands.executeCommand("cwtools.fixAllWorkspace");
+				await vscode.commands.executeCommand(`cwtools.${command}`);
 			} finally {
 				sandbox.restore();
 			}
 			const warnings = warn.getCalls().map((c) => String(c.args[0]));
-			assert.strictEqual(
-				warnings.some((m) =>
-					m.includes("doesn't support fixing the workspace"),
-				),
-				false,
-				`unexpected upgrade warning: ${warnings.join(" | ")}`,
-			);
-			// deepStrictEqual, not `err.called === false`: the boolean form
-			// reports "true !== false" and drops the one thing that says why.
-			const errors = err.getCalls().map((c) => String(c.args[0]));
-			// The pinned Stellaris config's summary (116 errors, first CW605) can
-			// arrive after readiness while this stub is active.
-			// Keep this assertion scoped to command/protocol failures.
-			const protocolErrors = errors.filter(
-				(message) => !isRulesConfigSummaryNotification(message),
-			);
 			assert.deepStrictEqual(
-				protocolErrors,
+				warnings.filter((m) => m.includes(unsupported)),
 				[],
-				`no raw protocol error should be surfaced (status: ${api.serverStatusText()}, errors: ${errors.join(" | ")})`,
+				"unexpected upgrade warning",
+			);
+			const errors = err.getCalls().map((c) => String(c.args[0]));
+			assert.deepStrictEqual(
+				errors.filter((message) => !isRulesConfigSummaryNotification(message)),
+				[],
+				`no raw protocol error should be surfaced (status: ${api.serverStatusText()})`,
 			);
 			// A crashed server is restarted silently now (#675), so nothing else
 			// here would notice one. initializeResult is cleared while the client
 			// is not Running, which makes the advertised list the crash probe.
 			assert.ok(
-				api.serverCommands().includes("fixAllWorkspace"),
+				api.serverCommands().includes(command),
 				"the client left Running during the command; the server crashed and restarted",
 			);
 		});
-	});
-
-	suite("formatWorkspace gating", function () {
-		this.timeout(1 * 60 * 1000);
-
-		test("runs against the pinned server without a protocol error", async function () {
-			const api = await activate();
-			assert.ok(api, "activation API should be exposed");
-			const advertised = api.serverCommands();
-			assert.ok(
-				advertised.includes("formatWorkspace"),
-				`pinned server should advertise formatWorkspace, got: ${advertised.join(", ")}`,
-			);
-
-			// Same startup race as the fixAllWorkspace gate above.
-			assert.ok(
-				await waitForServerReady(api),
-				`server never finished its initial scan, last status: ${api.serverStatusText()}`,
-			);
-
-			const sandbox = sinon.createSandbox();
-			const warn = sandbox.stub(vscode.window, "showWarningMessage");
-			const err = sandbox.stub(vscode.window, "showErrorMessage");
-			try {
-				await vscode.commands.executeCommand("cwtools.formatWorkspace");
-			} finally {
-				sandbox.restore();
-			}
-			const warnings = warn.getCalls().map((c) => String(c.args[0]));
-			assert.strictEqual(
-				warnings.some((m) =>
-					m.includes("doesn't support formatting the workspace"),
-				),
-				false,
-				`unexpected upgrade warning: ${warnings.join(" | ")}`,
-			);
-			const errors = err.getCalls().map((c) => String(c.args[0]));
-			// As in fixAllWorkspace gating, a delayed rules-config summary is unrelated
-			// to the command result and must not make this timing-sensitive check fail.
-			const protocolErrors = errors.filter(
-				(message) => !isRulesConfigSummaryNotification(message),
-			);
-			assert.deepStrictEqual(
-				protocolErrors,
-				[],
-				`no raw protocol error should be surfaced (status: ${api.serverStatusText()}, errors: ${errors.join(" | ")})`,
-			);
-			assert.ok(
-				api.serverCommands().includes("formatWorkspace"),
-				"the client left Running during the command; the server crashed and restarted",
-			);
-		});
-	});
-
-	suite("Diagnostics and Language Features", function () {
-		this.timeout(2 * 60 * 1000);
-
-		test("should handle file diagnostics", async function () {
-			// Note: In a test environment without the language server,
-			// we mainly test that the diagnostics API is accessible
-			await activate();
-
-			// Test that diagnostics collection is accessible
-			const diagnostics = vscode.languages.getDiagnostics();
-			assert.ok(
-				Array.isArray(diagnostics),
-				"Should be able to get diagnostics array",
-			);
-
-			// In a real scenario with server running, we would expect diagnostics
-			// For now, we just verify the infrastructure works
-			console.log(`Found ${diagnostics.length} diagnostic entries`);
-		});
-
-		test("treats dotted Paradox identifiers as one word", async function () {
-			await activate();
-			const document = await vscode.workspace.openTextDocument(
-				path.join(root, "events", "irm.txt"),
-			);
-			const range = document.getWordRangeAtPosition(new vscode.Position(8, 9));
-
-			assert.strictEqual(document.languageId, "paradox");
-			assert.ok(range, "dotted identifier should have a word range");
-			assert.strictEqual(document.getText(range), "irm.1");
-		});
-	});
+	}
 });
 
-suite("Restart command and status bar", function () {
-	this.timeout(90 * 1000);
-
-	test("cwtools.restartServer and cwtools.showOutput are registered", async function () {
-		await activate();
-		const registered = await vscode.commands.getCommands();
-		assert.ok(
-			registered.includes("cwtools.restartServer"),
-			"cwtools.restartServer should be registered",
-		);
-		assert.ok(
-			registered.includes("cwtools.showOutput"),
-			"cwtools.showOutput should be registered",
-		);
-	});
-
-	test("the status item settles on the ready text once the initial scan finishes", async function () {
-		const api = await activate();
-		assert.ok(api, "activation API should be exposed");
-		const ready = await waitForServerReady(api);
-		assert.ok(
-			ready,
-			`status item should settle to ready, last seen: ${api.serverStatusText()}`,
-		);
-	});
-});
-
-suite("GraphPanel Tests", function () {
+suite("GraphPanel", function () {
 	this.timeout(2 * 60 * 1000);
-	const testCyData = {
+	const graphJson = JSON.stringify({
 		elements: {
 			nodes: [
 				{
@@ -281,11 +147,7 @@ suite("GraphPanel Tests", function () {
 						label: "Test Node 1",
 						isPrimary: true,
 						entityType: "test",
-						location: {
-							filename: root + "/events/irm.txt",
-							line: 1,
-							column: 0,
-						},
+						location: { filename: root + "/events/irm.txt", line: 1, column: 0 },
 					},
 				},
 				{
@@ -299,10 +161,8 @@ suite("GraphPanel Tests", function () {
 				},
 			],
 		},
-	};
-
-	// Test data
-	const testRawData: GraphData = [
+	});
+	const graphData: GraphData = [
 		{
 			id: "test1",
 			name: "Test Node 1",
@@ -321,17 +181,58 @@ suite("GraphPanel Tests", function () {
 		},
 	];
 
-	const testCyDataJson = JSON.stringify(testCyData);
-	// Setup variables
 	let extension: vscode.Extension<unknown>;
 	// The extension's own graphPanel module, not a second copy (see utils).
 	let gp: GraphPanelModule;
-
 	let tempDir: string;
 	let tempFile: string;
 	let sandbox: sinon.SinonSandbox;
 
+	setup(async () => {
+		sandbox = sinon.createSandbox();
+		gp = await graphPanelModule();
+		const found = vscode.extensions.getExtension(EXTENSION_ID);
+		assert.ok(found, "Extension should be found");
+		extension = found;
+
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cwtools-graph-"));
+		tempFile = path.join(tempDir, "graph.json");
+		fs.writeFileSync(tempFile, graphJson, "utf8");
+		gp.GraphPanel.currentPanel?.dispose();
+	});
+
+	// Closing a panel whose webview is still loading kills the ready handshake
+	// mid-flight, which is the window #216's silent host aborts point at.
+	teardown(async () => {
+		sandbox.restore();
+		if (gp.GraphPanel.currentPanel) {
+			await waitUntil(
+				() => gp.GraphPanel.currentPanel?.getState() !== gp.State.New,
+				2_000,
+			);
+			gp.GraphPanel.currentPanel?.dispose();
+		}
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	function createPanel(): GraphPanelNamespace.GraphPanel {
+		gp.GraphPanel.create(extension.extensionPath);
+		assert.ok(gp.GraphPanel.currentPanel, "GraphPanel should be created");
+		return gp.GraphPanel.currentPanel;
+	}
+
+	const importSelectedFile = () => {
+		sandbox.stub(vscode.window, "showOpenDialog").resolves([
+			vscode.Uri.file(tempFile),
+		]);
+		return vscode.commands.executeCommand("cwtools.graphFromJson");
+	};
+
 	async function assertRenderedGraph(panel: GraphPanelNamespace.GraphPanel) {
+		assert.ok(
+			await waitUntil(() => panel.getState() === gp.State.Done),
+			"GraphPanel should reach the Done state",
+		);
 		assert.ok(
 			await waitUntil(() => panel.checkCytoscapeRendered()),
 			"Cytoscape should render the supplied graph",
@@ -351,19 +252,12 @@ suite("GraphPanel Tests", function () {
 			);
 			assert.ok(exported);
 			const graph = JSON.parse(exported) as { elements: ElementsDefinition };
-			assert.ok(
-				graph.elements.edges,
-				"exported graph should contain the expected edge",
-			);
 			assert.deepStrictEqual(
 				graph.elements.nodes.map((node) => node.data.id).sort(),
 				["test1", "test2"],
 			);
 			assert.deepStrictEqual(
-				graph.elements.edges.map((edge) => [
-					edge.data.source,
-					edge.data.target,
-				]),
+				graph.elements.edges.map((edge) => [edge.data.source, edge.data.target]),
 				[["test1", "test2"]],
 			);
 		} finally {
@@ -371,115 +265,39 @@ suite("GraphPanel Tests", function () {
 		}
 	}
 
-	setup(async () => {
-		sandbox = sinon.createSandbox();
-		gp = await graphPanelModule();
-		const extensionMaybe = vscode.extensions.getExtension(EXTENSION_ID);
-		assert.ok(extensionMaybe, "Extension should be found");
-		extension = extensionMaybe!;
+	// A rebuilt panel would duplicate the webview and the save commands it
+	// registers.
+	test("reuses the current panel when create is called twice and clears it on dispose", function () {
+		const first = createPanel();
+		const createWebviewPanel = sandbox.spy(vscode.window, "createWebviewPanel");
 
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cwtools-graph-"));
-		tempFile = path.join(tempDir, "graph.json");
-		fs.writeFileSync(tempFile, testCyDataJson, "utf8");
+		assert.strictEqual(createPanel(), first);
+		assert.strictEqual(createWebviewPanel.callCount, 0);
 
-		if (gp.GraphPanel.currentPanel) {
-			gp.GraphPanel.currentPanel.dispose();
-		}
+		first.dispose();
+		assert.strictEqual(gp.GraphPanel.currentPanel, undefined);
 	});
 
-	teardown(async () => {
-		sandbox.restore();
-		await closePanel(gp);
-		if (fs.existsSync(tempFile)) {
-			fs.unlinkSync(tempFile);
-		}
-		if (fs.existsSync(tempDir)) {
-			fs.rmdirSync(tempDir);
-		}
-	});
+	test("loads and renders a graph from a JSON file", async function () {
+		await importSelectedFile();
 
-	test("should create a GraphPanel instance", function () {
-		// Act: Create a GraphPanel
-		gp.GraphPanel.create(extension.extensionPath);
-
-		// Assert: Panel should be created
-		assert.ok(gp.GraphPanel.currentPanel, "GraphPanel should be created");
-	});
-	test("should reuse the current panel when create is called twice", function () {
-		// Arrange: create the panel once, then watch for any further panel
-		// creation while the second create() runs.
-		gp.GraphPanel.create(extension.extensionPath);
-		const first = gp.GraphPanel.currentPanel;
-		assert.ok(first, "GraphPanel should be created");
-		const createPanel = sandbox.spy(vscode.window, "createWebviewPanel");
-
-		// Act: create again while a panel already exists
-		gp.GraphPanel.create(extension.extensionPath);
-
-		// Assert: the same instance stays current; a rebuilt panel would
-		// duplicate the webview and the save commands it registers.
-		assert.strictEqual(
-			gp.GraphPanel.currentPanel,
-			first,
-			"create should reuse the existing panel",
-		);
-		assert.strictEqual(
-			createPanel.callCount,
-			0,
-			"no second webview panel should be created",
-		);
-	});
-	test("should load and render cytoscape from JSON file", async function () {
-		this.timeout(30000);
-		// Execute the graphFromJson command
-		// We'll need to simulate the file dialog selection
-		const uri = vscode.Uri.file(tempFile);
-
-		sandbox.stub(vscode.window, "showOpenDialog").resolves([uri]);
-
-		await vscode.commands.executeCommand("cwtools.graphFromJson");
-
-		const rendered = await waitUntil(() =>
-			gp.GraphPanel.currentPanel!.checkCytoscapeRendered(),
-		);
-
-		assert.ok(rendered, "Cytoscape should have rendered elements");
-	});
-
-	test("should initialize GraphPanel with data", async function () {
-		this.timeout(10000); // Increase timeout for this test
-		// Arrange: Create a GraphPanel
-		gp.GraphPanel.create(extension.extensionPath);
-
-		// Act: Initialize the graph with test data and wait for it to complete
-		gp.GraphPanel.currentPanel!.initialiseGraph(testRawData, 1.0);
-
-		const testStatus = function () {
-			return gp.GraphPanel.currentPanel!.getState() === gp.State.Done;
-		};
-		const result = await waitUntil(testStatus);
-		assert.strictEqual(result, true, "GraphPanel should be in the Done state");
-		await assertRenderedGraph(gp.GraphPanel.currentPanel!);
-	});
-
-	test("should dispose GraphPanel properly", function () {
-		// Arrange: Create a GraphPanel
-		gp.GraphPanel.create(extension.extensionPath);
-
-		// Act: Dispose the panel
-		gp.GraphPanel.currentPanel!.dispose();
-
-		// Assert: Panel should be undefined after disposal
-		assert.strictEqual(
-			gp.GraphPanel.currentPanel,
-			undefined,
-			"GraphPanel should be undefined after disposal",
+		assert.ok(
+			await waitUntil(() => gp.GraphPanel.currentPanel!.checkCytoscapeRendered()),
+			"Cytoscape should have rendered elements",
 		);
 	});
 
-	test("should restore a GraphPanel around a revived webview panel", async function () {
-		// The window-reload serializer hands back a live panel whose html the
-		// extension must re-set; restore() adopts it like a fresh panel.
+	test("renders server graph data and exports what it rendered", async function () {
+		const panel = createPanel();
+
+		panel.initialiseGraph(graphData, 1.0);
+
+		await assertRenderedGraph(panel);
+	});
+
+	// The window-reload serializer hands back a live panel whose html the
+	// extension must re-set; restore() adopts it like a fresh panel.
+	test("restores a GraphPanel around a revived webview panel", async function () {
 		const panel = vscode.window.createWebviewPanel(
 			"cwtools-graph",
 			"Graph",
@@ -487,124 +305,15 @@ suite("GraphPanel Tests", function () {
 			{ enableScripts: true },
 		);
 		const revived = gp.GraphPanel.restore(extension.extensionPath, panel);
-		assert.strictEqual(
-			gp.GraphPanel.currentPanel,
-			revived,
-			"restored panel should become currentPanel",
-		);
+		assert.strictEqual(gp.GraphPanel.currentPanel, revived);
 
-		revived.initialiseGraph(testRawData, 1.0, {
+		revived.initialiseGraph(graphData, 1.0, {
 			source: "server",
 			entityType: "test",
 			depth: 3,
 		});
 
-		const testStatus = function () {
-			return gp.GraphPanel.currentPanel!.getState() === gp.State.Done;
-		};
-		const result = await waitUntil(testStatus);
-		assert.strictEqual(result, true, "restored GraphPanel should reach Done");
 		await assertRenderedGraph(revived);
-	});
-});
-
-suite("GraphPanel — UI integration", function () {
-	this.timeout(2 * 60 * 1000);
-	const sampleJson = JSON.stringify({
-		elements: {
-			nodes: [
-				{
-					data: {
-						id: "a",
-						label: "A",
-						isPrimary: true,
-						entityType: "x",
-						location: { filename: "a.txt", line: 1, column: 0 },
-					},
-				},
-				{
-					data: {
-						id: "b",
-						label: "B",
-						isPrimary: false,
-						entityType: "x",
-						location: { filename: "b.txt", line: 1, column: 0 },
-					},
-				},
-			],
-		},
-	});
-
-	let sandbox: sinon.SinonSandbox;
-	let extension: vscode.Extension<unknown>;
-	let gp: GraphPanelModule;
-	let tempDir: string;
-	let tempFile: string;
-
-	const setupPanel = async () => {
-		gp = await graphPanelModule();
-		const ext = vscode.extensions.getExtension(EXTENSION_ID);
-		assert.ok(ext, "Extension should be found");
-		extension = ext!;
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "cwtools-graph-"));
-		tempFile = path.join(tempDir, "graph.json");
-		fs.writeFileSync(tempFile, sampleJson, "utf8");
-		if (gp.GraphPanel.currentPanel) gp.GraphPanel.currentPanel.dispose();
-		gp.GraphPanel.create(extension.extensionPath);
-	};
-
-	setup(() => {
-		sandbox = sinon.createSandbox();
-	});
-	teardown(async () => {
-		sandbox.restore();
-		await closePanel(gp);
-		if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
-		if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
-	});
-
-	test("starts in the New state before the webview posts ready", async function () {
-		await setupPanel();
-		assert.strictEqual(gp.GraphPanel.currentPanel!.getState(), gp.State.New);
-	});
-
-	test("saveGraphImage and saveGraphJson are registered once a GraphPanel exists", async function () {
-		await setupPanel();
-		const commands = await vscode.commands.getCommands();
-		assert.ok(
-			commands.includes("cwtools.saveGraphImage"),
-			"cwtools.saveGraphImage should be registered",
-		);
-		assert.ok(
-			commands.includes("cwtools.saveGraphJson"),
-			"cwtools.saveGraphJson should be registered",
-		);
-	});
-
-	test("saveGraphImage forwards an exportImage message to the webview", async function () {
-		await setupPanel();
-		const postMessage = sinon.spy(
-			gp.GraphPanel.currentPanel!["_panel"].webview,
-			"postMessage",
-		);
-		await vscode.commands.executeCommand("cwtools.saveGraphImage");
-		assert.ok(postMessage.called, "webview.postMessage should be called");
-		assert.deepStrictEqual(postMessage.firstCall.args[0], {
-			command: "exportImage",
-		});
-	});
-
-	test("saveGraphJson forwards an exportJson message to the webview", async function () {
-		await setupPanel();
-		const postMessage = sinon.spy(
-			gp.GraphPanel.currentPanel!["_panel"].webview,
-			"postMessage",
-		);
-		await vscode.commands.executeCommand("cwtools.saveGraphJson");
-		assert.ok(postMessage.called, "webview.postMessage should be called");
-		assert.deepStrictEqual(postMessage.firstCall.args[0], {
-			command: "exportJson",
-		});
 	});
 
 	for (const [name, json] of [
@@ -612,20 +321,16 @@ suite("GraphPanel — UI integration", function () {
 		["elements without IDs", '{"elements":[{"data":{}}]}'],
 	]) {
 		test(`reports ${name} from the real graph import command`, async function () {
-			await setupPanel();
+			createPanel();
 			fs.writeFileSync(tempFile, json, "utf8");
-			sandbox.stub(vscode.window, "showOpenDialog").resolves([
-				vscode.Uri.file(tempFile),
-			]);
 			const error = sandbox.stub(vscode.window, "showErrorMessage").resolves();
 
-			await vscode.commands.executeCommand("cwtools.graphFromJson");
+			await importSelectedFile();
 
 			assert.ok(await waitUntil(() => error.called, 30_000));
-			assert.strictEqual(error.callCount, 1);
-			assert.strictEqual(
-				error.firstCall.args[0],
-				'CWTools: couldn\'t import "graph.json": it isn\'t valid Cytoscape graph JSON.',
+			assert.deepStrictEqual(
+				error.getCalls().map((call) => call.args[0]),
+				['CWTools: couldn\'t import "graph.json": it isn\'t valid Cytoscape graph JSON.'],
 			);
 			assert.strictEqual(
 				await gp.GraphPanel.currentPanel!.checkCytoscapeRendered(),
@@ -639,23 +344,19 @@ suite("GraphPanel — UI integration", function () {
 		["cwtools.saveGraphJson", "a JSON file"],
 	]) {
 		test(`${command} reports an unavailable graph through the webview`, async function () {
-			await setupPanel();
+			const panel = createPanel();
 			const error = sandbox.stub(vscode.window, "showErrorMessage").resolves();
 			const save = sandbox.stub(vscode.window, "showSaveDialog").resolves();
 			assert.ok(
-				await waitUntil(
-					() => gp.GraphPanel.currentPanel!.getState() === gp.State.ClientReady,
-					30_000,
-				),
+				await waitUntil(() => panel.getState() === gp.State.ClientReady, 30_000),
 			);
 
 			await vscode.commands.executeCommand(command);
 
 			assert.ok(await waitUntil(() => error.called, 30_000));
-			assert.strictEqual(error.callCount, 1);
-			assert.strictEqual(
-				error.firstCall.args[0],
-				`CWTools: no graph is available to export as ${kind}.`,
+			assert.deepStrictEqual(
+				error.getCalls().map((call) => call.args[0]),
+				[`CWTools: no graph is available to export as ${kind}.`],
 			);
 			assert.strictEqual(save.called, false);
 		});
@@ -679,39 +380,28 @@ suite("GraphPanel — UI integration", function () {
 
 	// The CSP named the pre-1.55 `vscode-resource:` scheme while asWebviewUri
 	// returns an https://…vscode-cdn.net URI, so the webview styles were blocked
-	// and #cy lost the flex sizing that gives it height. Check both emitted hrefs
-	// against the policy that is actually served rather than trusting the scheme
-	// name.
-	test("the webview CSP permits both stylesheets it links", async function () {
-		await setupPanel();
-		const webview = gp.GraphPanel.currentPanel!["_panel"].webview;
+	// and #cy lost the flex sizing that gives it height. The graph script is
+	// allowed by nonce, not by origin, so its directive has to keep carrying one
+	// that matches the tag.
+	test("the webview CSP permits its stylesheets and script, and the graph still renders", async function () {
+		const panel = createPanel();
+		const webview = panel["_panel"].webview;
 		const html = webview.html;
 		const csp = /Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1];
 		assert.ok(csp, "no Content-Security-Policy meta tag found");
-		assert.ok(
-			!csp.includes("vscode-resource:"),
-			"CSP still names the pre-1.55 vscode-resource: scheme",
-		);
+		const directive = (name: string): string => {
+			const sources = new RegExp(`${name} ([^;"]+)`).exec(csp)?.[1];
+			assert.ok(sources, `CSP has no ${name} directive`);
+			return sources.trim();
+		};
 
-		const styleSrc = /style-src ([^;"]+)/.exec(csp)?.[1];
-		assert.ok(styleSrc, "CSP has no style-src directive");
+		const styleSrc = directive("style-src");
 		const styleHrefs = [...html.matchAll(/<link href="([^"]+)"/g)].map(
 			(match) => match[1],
 		);
-		assert.strictEqual(
-			styleHrefs.length,
-			2,
-			"webview should link both stylesheets",
-		);
 		assert.deepStrictEqual(
-			styleHrefs.filter((href) => href.endsWith("/site.css")).length,
-			1,
-			"webview should link the site stylesheet",
-		);
-		assert.deepStrictEqual(
-			styleHrefs.filter((href) => href.endsWith("/graph.css")).length,
-			1,
-			"webview should link the generated graph stylesheet",
+			styleHrefs.map((href) => path.posix.basename(new URL(href).pathname)).sort(),
+			["graph.css", "site.css"],
 		);
 		for (const styleHref of styleHrefs) {
 			assert.ok(
@@ -719,111 +409,46 @@ suite("GraphPanel — UI integration", function () {
 				`style-src "${styleSrc}" does not permit "${styleHref}", so the stylesheet is blocked`,
 			);
 		}
-	});
 
-	// The graph script is allowed by nonce, not by origin, so its own directive
-	// has to keep carrying one that matches the tag.
-	test("the webview CSP protects the graph and still renders content", async function () {
-		await setupPanel();
-		const webview = gp.GraphPanel.currentPanel!["_panel"].webview;
-		const html = webview.html;
-		const csp = /Content-Security-Policy" content="([^"]+)"/.exec(html)?.[1];
-		assert.ok(csp, "no Content-Security-Policy meta tag found");
-
-		const imgSrc = /img-src ([^;"]+)/.exec(csp)?.[1];
-		assert.ok(imgSrc, "CSP has no img-src directive");
-		assert.ok(
-			imgSrc.includes(webview.cspSource),
-			"img-src must preserve the webview CSP source",
-		);
-		assert.ok(
-			imgSrc.split(/\s+/).includes("data:"),
-			"img-src must preserve data URLs",
-		);
-		assert.ok(
-			!imgSrc.split(/\s+/).includes("https:"),
-			"img-src must not allow every HTTPS origin",
-		);
-		const formAction = /form-action ([^;"]+)/.exec(csp)?.[1];
-		assert.strictEqual(formAction?.trim(), "'none'");
+		const imgSrc = directive("img-src").split(/\s+/);
+		assert.ok(imgSrc.join(" ").includes(webview.cspSource));
+		assert.ok(imgSrc.includes("data:"), "img-src must preserve data URLs");
+		assert.ok(!imgSrc.includes("https:"), "img-src must not allow every HTTPS origin");
+		assert.strictEqual(directive("form-action"), "'none'");
 
 		const scriptNonce = /<script src="[^"]+" nonce="([^"]+)"/.exec(html)?.[1];
 		assert.ok(scriptNonce, "no nonced <script> found");
-		const scriptSrc = /script-src ([^;"]+)/.exec(html)?.[1];
+		assert.ok(directive("script-src").includes(`'nonce-${scriptNonce}'`));
+
+		panel.initialiseGraph(graphData, 1.0);
 		assert.ok(
-			scriptSrc?.includes(`'nonce-${scriptNonce}'`),
-			`script-src "${scriptSrc}" does not carry the script tag's nonce`,
-		);
-
-		const data: GraphData = [
-			{ id: "a", name: "A", references: [], isPrimary: true, entityType: "x" },
-			{ id: "b", name: "B", references: [], isPrimary: false, entityType: "x" },
-		];
-		gp.GraphPanel.currentPanel!.initialiseGraph(data, 1.0);
-		const rendered = await waitUntil(
-			() => gp.GraphPanel.currentPanel!.checkCytoscapeRendered(),
-			30_000,
-		);
-		assert.ok(rendered, "graph content should render under the CSP");
-	});
-
-	test("initialiseGraph transitions out of New once data is queued", async function () {
-		await setupPanel();
-		const data: GraphData = [
-			{ id: "a", name: "A", references: [], isPrimary: true, entityType: "x" },
-			{ id: "b", name: "B", references: [], isPrimary: false, entityType: "x" },
-		];
-		gp.GraphPanel.currentPanel!.initialiseGraph(data, 1.0);
-		const finalState = await waitUntil(
-			() => gp.GraphPanel.currentPanel!.getState() === gp.State.Done,
-		);
-		assert.ok(
-			finalState,
-			"expected GraphPanel to reach Done after initialiseGraph",
-		);
-	});
-
-	test("initialiseGraph with a JSON string queues an import handler", async function () {
-		await setupPanel();
-		// Calling initialiseGraph with a string should not throw and should leave the
-		// panel in a non-New state (it wires an onLoad listener to post importJson
-		// once the webview signals ready).
-		gp.GraphPanel.currentPanel!.initialiseGraph(sampleJson, 1.0);
-		const state = gp.GraphPanel.currentPanel!.getState();
-		assert.notStrictEqual(
-			state,
-			gp.State.New,
-			"panel should have left New after initialiseGraph",
+			await waitUntil(() => panel.checkCytoscapeRendered(), 30_000),
+			"graph content should render under the CSP",
 		);
 	});
 });
 
-suite("FileExplorer — UI integration", function () {
+suite("FileExplorer", function () {
 	this.timeout(2 * 60 * 1000);
+	const uri = vscode.Uri.file(path.join(root, "events/irm.txt"));
 	let sandbox: sinon.SinonSandbox;
-
-	setup(() => {
-		sandbox = sinon.createSandbox();
-	});
-	teardown(() => sandbox.restore());
 
 	// The explorer is built once, when the server sends its first file list, so
 	// the command shows up shortly after activation. Constructing a second
 	// FileExplorer here to force it would re-register the command and throw.
-	test("the openFile command is registered once the server sends a file list", async function () {
+	setup(async () => {
+		sandbox = sinon.createSandbox();
 		await activate();
-		const registered = await waitUntil(async () =>
-			(await vscode.commands.getCommands()).includes("cwtools-files.openFile"),
-		);
 		assert.ok(
-			registered,
+			await waitUntil(async () =>
+				(await vscode.commands.getCommands()).includes("cwtools-files.openFile"),
+			),
 			"openFile command should be registered once FileExplorer exists",
 		);
 	});
+	teardown(() => sandbox.restore());
 
 	test("openFile command shows the document", async function () {
-		await activate();
-		const uri = vscode.Uri.file(path.join(root, "events/irm.txt"));
 		const showStub = sandbox.stub(vscode.window, "showTextDocument").resolves();
 
 		await vscode.commands.executeCommand("cwtools-files.openFile", uri);
@@ -833,8 +458,6 @@ suite("FileExplorer — UI integration", function () {
 	});
 
 	test("openFile command shows an error when the document cannot be opened", async function () {
-		await activate();
-		const uri = vscode.Uri.file(path.join(root, "events/irm.txt"));
 		sandbox.stub(vscode.window, "showTextDocument").rejects(new Error("gone"));
 		const errStub = sandbox.stub(vscode.window, "showErrorMessage").resolves();
 

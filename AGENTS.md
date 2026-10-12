@@ -53,7 +53,7 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 npm install
 npm run compile    # tsc + esbuild (bundle extension + webview)
 npm run check      # host-test inventory, typecheck + lint
-npm test           # Run VS Code extension tests
+npm test           # Node unit tests (same as npm run test:node)
 ```
 
 The Rust server builds from the in-repo `engine` workspace. Set `CWTOOLS_RUST_WORKSPACE` to build from another checkout.
@@ -71,11 +71,11 @@ Run as `npm run build -- <command>` or `./build.sh <command>`:
 
 ### Testing
 
-Two test layers. `npm run test:node` runs the fast node-only unit tests under `extension/test/unit/`. The rest run in a real extension host and are picked by label from `.vscode-test.mjs`: `npm test` runs the `unit` label, `npm run test:smoke` adds activation against the real server, and `npm run test:host` adds hover and completion. CI runs node and unit tests in its fast client job; after building the server and client it runs `rules-sync`, then the distinct `multi-root` and `watched` labels. Host coverage runs `host` (including smoke, hover and completion), the separate `live` workspace, and the isolated `restart` suite under coverage.
+Two test layers. `npm run test:node` (also `npm test`) runs the fast node-only unit tests under `extension/test/unit/`: pure logic and package invariants on the shared `vscode` stub. The rest run in a real extension host against the real server and are picked by label from `.vscode-test.mjs`: `npm run test:smoke` covers activation and the graph panel, and `npm run test:host` adds diagnostics, hover and completion. A module that takes more than a few lines of faked VS Code to test belongs in the host layer, not behind a mock in the node layer. CI runs the node tests in its fast client job; after building the server and client it runs `rules-sync`, then the distinct `multi-root` and `watched` labels. Host coverage runs `host` (including smoke, hover and completion), the separate `live` workspace, and the isolated `restart` suite under coverage.
 
 Every host label goes through `scripts/build/hosttest.py`, which picks a display backend so a local run does not open a VS Code window on your desktop. On Linux that is `xvfb-run -a`, and a missing `xvfb-run` fails with install instructions rather than falling back to a visible window. macOS and Windows have no such backend yet, so they run natively and print a notice (#406). `CWTOOLS_TEST_DISPLAY` overrides the choice with `xvfb`, `ozone` (Electron's headless Ozone backend, no system package), or `native`. `npm run test:native` is the explicit visible-window runner for platform debugging.
 
-Single test: `npx --no-install vitest run extension/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `node scripts/build/python.mjs scripts/build/hosttest.py --label unit --grep 'name'` (unrecognized arguments pass through to `vscode-test`). Watch modes: `npm run test:watch` and `npm run test:node:watch`.
+Single test: `npx --no-install vitest run extension/test/unit/engine.test.ts -t 'name'` for the node layer; for the host layer, `npm run compile` then `node scripts/build/python.mjs scripts/build/hosttest.py --label smoke --grep 'name'` (unrecognized arguments pass through to `vscode-test`). Watch mode: `npm run test:node:watch`.
 
 Coverage: `npm run test:coverage` (the `host`, `live`, and isolated `restart` labels together, needs a built server binary; V8 coverage into `coverage/`) and `npm run test:node:coverage` (into `coverage-node/`). CI calls `scripts/build/host_coverage.py --skip-compile` after its development build so coverage reuses the compiled client, then `scripts/build/coverage_summary.py` renders rust, host, and node into the PR comment. The host and node runs cover disjoint modules (engine.ts and executable.ts are vitest-owned, and `HOST_COVERAGE_DROPS` in `scripts/build/coverage_metrics.py` keeps them out of the host report).
 

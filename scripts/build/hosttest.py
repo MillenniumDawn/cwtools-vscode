@@ -13,7 +13,7 @@ from paths import REPO_ROOT
 TEST_CLI = REPO_ROOT / "node_modules" / "@vscode" / "test-cli" / "out" / "bin.mjs"
 
 BACKENDS = ("xvfb", "ozone", "native")
-DEFAULT_LABEL = "unit"
+DEFAULT_LABEL = "smoke"
 
 XVFB_MISSING = """\
 xvfb-run is not on PATH. The extension-host suites run under a virtual display

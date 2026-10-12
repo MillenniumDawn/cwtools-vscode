@@ -116,13 +116,13 @@ Open the repo in VS Code and launch **Quick update, Build and Launch Extension**
 
 ```bash
 npm run test:node      # node-only unit tests for the pure modules (vitest, fast)
-npm test               # unit label: VS Code API, no language server
+npm test               # the same node tests
 npm run test:smoke     # smoke, live, multi-root, watched, and restart host labels
 npm run test:host      # host label except live; includes hover and completion
 npm run test:rules-sync  # network-free rules sync host label
 npm run test:coverage  # host, live, and restart labels with validated V8 coverage
 npm run test:node:coverage  # vitest coverage into coverage-node/
-npm run test:native    # unit label in a visible window, on purpose
+npm run test:native    # smoke label in a visible window, on purpose
 npm run bench:node     # client hot-path benchmarks
 pytest                 # the Python helpers under scripts/
 ```
@@ -130,8 +130,10 @@ pytest                 # the Python helpers under scripts/
 Two layers. `test:node` runs under vitest with no Electron and owns the pure
 modules (`engine.ts`, `executable.ts`, `games.ts`, the signature/settings
 helpers, the manifest and nls guards). The rest run in a real extension host
-against the sample mod in `extension/test/workspaces/stellaris/`, picked by label from
-`.vscode-test.mjs`. Helper scripts under `scripts/` (including `scripts/build/`)
+against the real server and the sample mod in
+`extension/test/workspaces/stellaris/`, picked by label from `.vscode-test.mjs`.
+A module that takes more than a few lines of faked VS Code to test belongs in
+the host layer, not behind a mock in the node layer. Helper scripts under `scripts/` (including `scripts/build/`)
 are tested from `tests/scripts/`.
 
 ### The Python helpers

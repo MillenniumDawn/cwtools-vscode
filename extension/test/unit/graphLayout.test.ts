@@ -1,5 +1,6 @@
 import type cytoscape from "cytoscape";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import type { GraphNode } from "../../src/common/graphTypes";
 import { completeLayout, installGraph, node, render, resetGraphState, state } from "./support/graphHeadless";
 
 beforeAll(installGraph);
@@ -168,6 +169,22 @@ test("hover class updates touch at most the graph size for a fixed-degree node",
 	} finally {
 		spy.mockRestore();
 	}
+});
+
+const ref = (key: string, isOutgoing: boolean, label: string) => ({ key, isOutgoing, label });
+
+test.each([
+	["collapses a repeated source, target and label", [ref("b", true, "needs"), ref("b", true, "needs")], [["a", "b", "needs"]]],
+	["keeps the same pair when the labels differ", [ref("b", true, "needs"), ref("b", true, "unlocks")], [["a", "b", "needs"], ["a", "b", "unlocks"]]],
+	["reverses the endpoints of an incoming reference", [ref("b", false, "needs")], [["b", "a", "needs"]]],
+	["treats outgoing and incoming as distinct edges", [ref("b", true, ""), ref("b", false, "")], [["a", "b", ""], ["b", "a", ""]]],
+	// A printable separator in the dedup key would collapse these two into one edge.
+	["keeps edges distinct when ids and labels contain delimiters", [ref("b", true, "c|d"), ref("b|c", true, "d")], [["a", "b", "c|d"], ["a", "b|c", "d"]]],
+	["drops a reference to an id that is not in the graph", [ref("gone", true, "")], []],
+	["renders a node whose references the server omitted", undefined, []],
+])("edge building %s", (_name, references, expected) => {
+	const cy = render([{ ...node("a"), references } as GraphNode, node("b"), node("b|c")]);
+	expect(cy.edges().map((edge): unknown[] => [edge.data("source"), edge.data("target"), edge.data("label")])).toEqual(expected);
 });
 
 test("canvas resize honors explicit pixel ratio and zero z-index defaults", () => {

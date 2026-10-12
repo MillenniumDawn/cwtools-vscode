@@ -1,4 +1,4 @@
-import { suite, test, afterAll, afterEach, beforeAll } from "vitest";
+import { suite, test, afterAll, beforeAll } from "vitest";
 import * as assert from "assert";
 import * as fs from "fs";
 import * as os from "os";
@@ -16,129 +16,45 @@ suite("executable — existAndIsExe", () => {
 		fs.rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	function tempFile(name: string): string {
-		return path.join(tmpDir, name);
+	function makeFile(name: string, mode: number): string {
+		const file = path.join(tmpDir, name);
+		fs.writeFileSync(file, "test", { mode });
+		return file;
 	}
 
-	// Track files we create so cleanup always runs.
-	const created: string[] = [];
-
-	function makeFile(
-		name: string,
-		opts?: { executable?: boolean; mode?: number },
-	): string {
-		const p = tempFile(name);
-		const mode = opts?.mode ?? (opts?.executable ? 0o755 : 0o644);
-		fs.writeFileSync(p, "test", { mode });
-		created.push(p);
-		return p;
-	}
-
-	afterEach(() => {
-		for (const p of created) {
-			try {
-				fs.unlinkSync(p);
-			} catch {
-				/* already gone */
-			}
-		}
-		created.length = 0;
-	});
-
-	async function assertPermission(
-		mode: number,
-		expected: boolean,
-		name: string,
-	) {
-		const p = makeFile(name, { mode });
-		const result = await existAndIsExe(p);
-		assert.strictEqual(result, expected);
-	}
-
-	async function assertSymlink(
-		targetOpts: { executable: boolean },
-		expected: boolean,
-		name: string,
-	) {
-		const target = makeFile("symlink-target-" + name, targetOpts);
-		const link = tempFile("symlink-" + name);
-		try {
-			fs.symlinkSync(target, link);
-			created.push(link);
-			const result = await existAndIsExe(link);
-			assert.strictEqual(result, expected);
-		} catch {
-			if (!created.includes(link)) created.push(link);
-		}
-	}
-
-	test("throws TypeError when called with a non-string argument", async () => {
-		await assert.rejects(() => existAndIsExe(123 as unknown as string), {
+	test.each([123, undefined, null])("rejects the non-string argument %j", async (value) => {
+		await assert.rejects(() => existAndIsExe(value as unknown as string), {
 			name: "TypeError",
 			message: "Expected a string",
 		});
 	});
 
-	test("throws TypeError for undefined", async () => {
-		await assert.rejects(() => existAndIsExe(undefined as unknown as string), {
-			name: "TypeError",
-			message: "Expected a string",
-		});
+	test.each([
+		["no-exec", 0o644, false],
+		["owner-exec", 0o744, true],
+		["group-exec", 0o710, true],
+		["others-exec", 0o701, true],
+	])("a %s file with mode %o is executable: %s", async (name, mode, expected) => {
+		assert.strictEqual(await existAndIsExe(makeFile(name, mode)), expected);
 	});
 
-	test("throws TypeError for null", async () => {
-		await assert.rejects(() => existAndIsExe(null as unknown as string), {
-			name: "TypeError",
-			message: "Expected a string",
-		});
+	test("returns false for a missing path and for a directory", async () => {
+		assert.strictEqual(await existAndIsExe(path.join(tmpDir, "missing")), false);
+		assert.strictEqual(await existAndIsExe(tmpDir), false);
 	});
 
-	test("returns false for a non-existent path", async () => {
-		const result = await existAndIsExe(
-			path.join(tmpDir, "cwtools-no-such-file-does-not-exist"),
-		);
-		assert.strictEqual(result, false);
+	test.each([
+		["exec-target", 0o755, true],
+		["plain-target", 0o644, false],
+	])("follows a symlink to %s", async (name, mode, expected) => {
+		const link = path.join(tmpDir, `link-to-${name}`);
+		fs.symlinkSync(makeFile(name, mode), link);
+		assert.strictEqual(await existAndIsExe(link), expected);
 	});
 
-	test("returns false for a regular file without execute permission", async () => {
-		const p = makeFile("noexec.txt", { executable: false });
-		const result = await existAndIsExe(p);
-		assert.strictEqual(result, false);
+	test("returns false for a symlink to a missing target", async () => {
+		const link = path.join(tmpDir, "broken-link");
+		fs.symlinkSync(path.join(tmpDir, "no-such-target"), link);
+		assert.strictEqual(await existAndIsExe(link), false);
 	});
-
-	test("returns true for an executable file", async () => {
-		const p = makeFile("executable.txt", { executable: true });
-		const result = await existAndIsExe(p);
-		assert.strictEqual(result, true);
-	});
-
-	test("returns true for a file with only owner execute permission", () =>
-		assertPermission(0o744, true, "owner-exec"));
-	test("returns true for a file with only group execute permission", () =>
-		assertPermission(0o710, true, "group-exec"));
-	test("returns true for a file with only others execute permission", () =>
-		assertPermission(0o701, true, "others-exec"));
-
-	test("returns false for a directory (not a file)", async () => {
-		// Directories pass stat() but fail isFile().
-		const result = await existAndIsExe(tmpDir);
-		assert.strictEqual(result, false);
-	});
-
-	test("returns false for a symlink to a non-existent target", async () => {
-		const p = tempFile("broken-symlink");
-		try {
-			fs.symlinkSync("/no/such/target", p);
-			created.push(p);
-			const result = await existAndIsExe(p);
-			assert.strictEqual(result, false);
-		} catch {
-			if (!created.includes(p)) created.push(p);
-		}
-	});
-
-	test("returns true for a symlink to an executable file", () =>
-		assertSymlink({ executable: true }, true, "working"));
-	test("returns false for a symlink to a non-executable file", () =>
-		assertSymlink({ executable: false }, false, "noexec"));
 });

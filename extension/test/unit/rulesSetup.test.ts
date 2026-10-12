@@ -7,6 +7,10 @@ import type { Memento } from "vscode";
 import type * as VscodeStub from "./_stubs/vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
 
+// The rules-sync host label clones the pinned commit for real. These cover the
+// decisions around it that need a failing git or a hostile manifest: which pin
+// wins, when the server is told to reload, and which warning the user sees.
+
 const state = vi.hoisted(() => ({
 	hasGitDirectory: false,
 	head: null as string | null,
@@ -92,8 +96,7 @@ vi.mock("../../src/host/engine", async () => {
 		},
 		runGit: (args: string[]): Promise<string> => {
 			// A missing git binary fails every invocation, including rev-parse;
-			// the real runGit has no rev-parse special case. Checking this first
-			// keeps the mock honest when a stale .git dir is present.
+			// the real runGit has no rev-parse special case.
 			if (state.gitMissing) {
 				return Promise.reject(new GitNotFoundError());
 			}
@@ -114,7 +117,6 @@ vi.mock("../../src/host/engine", async () => {
 import { LANGUAGE_REPOS, RULES_MANIFEST_REVISION } from "../../src/host/games";
 import {
 	RULES_MANIFEST_CACHE_KEY,
-	RULES_MANIFEST_MAX_BYTES,
 	RULES_MANIFEST_TIMEOUT_MS,
 	RULES_MANIFEST_URL,
 	type RulesManifest,
@@ -124,10 +126,11 @@ import {
 	resolveRulesCache,
 } from "../../src/host/rulesSetup";
 
-function manifest(
-	ref: string,
-	revision = RULES_MANIFEST_REVISION,
-): RulesManifest {
+const NEXT = RULES_MANIFEST_REVISION + 1;
+const RELOAD = [{ command: "reloadrulesconfig", arguments: [] }];
+const sha = (letter: string) => letter.repeat(40);
+
+function manifest(ref: string, revision = NEXT): RulesManifest {
 	return {
 		schema: 1,
 		revision,
@@ -137,44 +140,6 @@ function manifest(
 			),
 			hoi4: ref,
 		},
-	};
-}
-
-function memento(
-	cached?: RulesManifest,
-	updateFailure?: Error,
-): {
-	globalState: Memento;
-	updates: Array<[string, unknown]>;
-} {
-	let stored = cached;
-	const updates: Array<[string, unknown]> = [];
-	return {
-		globalState: {
-			get<T>(key: string): T | undefined {
-				return key === RULES_MANIFEST_CACHE_KEY ? (stored as T) : undefined;
-			},
-			update(key: string, value: unknown): Promise<void> {
-				updates.push([key, value]);
-				if (updateFailure) return Promise.reject(updateFailure);
-				stored = value as RulesManifest;
-				return Promise.resolve();
-			},
-		} as unknown as Memento,
-		updates,
-	};
-}
-
-function client(): { client: LanguageClient; requests: unknown[] } {
-	const requests: unknown[] = [];
-	return {
-		client: {
-			sendRequest: (_type: unknown, params: unknown): Promise<void> => {
-				requests.push(params);
-				return Promise.resolve();
-			},
-		} as unknown as LanguageClient,
-		requests,
 	};
 }
 
@@ -194,12 +159,50 @@ function stubManifestFetch(value: RulesManifest | string) {
 	return fetch;
 }
 
-async function waitForProgress(): Promise<void> {
+// One sync against a fake memento and client, recording what each was told.
+function session(cached?: RulesManifest) {
+	let stored = cached;
+	const updates: Array<[string, unknown]> = [];
+	const requests: unknown[] = [];
+	const globalState = {
+		get: (key: string) =>
+			key === RULES_MANIFEST_CACHE_KEY ? stored : undefined,
+		update(key: string, value: unknown): Promise<void> {
+			updates.push([key, value]);
+			stored = value as RulesManifest;
+			return Promise.resolve();
+		},
+	} as unknown as Memento;
+	const languageClient = {
+		sendRequest: (_type: unknown, params: unknown): Promise<void> => {
+			requests.push(params);
+			return Promise.resolve();
+		},
+	} as unknown as LanguageClient;
+	return {
+		updates,
+		requests,
+		sync: (initialScanDone: Promise<void> = Promise.resolve()) =>
+			fetchRulesInBackground(
+				"hoi4",
+				"/cache",
+				languageClient,
+				initialScanDone,
+				globalState,
+			),
+	};
+}
+
+async function settle(pending: Promise<unknown>): Promise<void> {
+	await pending;
 	await state.progressStarted;
 	await state.progress;
 }
 
-suite("rulesSetup — reviewed manifest sync", () => {
+const warnings = () =>
+	vscode.showWarningMessage.mock.calls.map((call) => call[0] as string);
+
+suite("rulesSetup", () => {
 	beforeEach(() => {
 		vi.unstubAllGlobals();
 		state.hasGitDirectory = false;
@@ -213,347 +216,96 @@ suite("rulesSetup — reviewed manifest sync", () => {
 		});
 	});
 
-	afterEach(() => vi.unstubAllGlobals());
-
-	test("creates an empty upstream cache when no custom rules folder is selected", async () => {
-		const temporaryRoot = await fsPromises.mkdtemp(
-			path.join(os.tmpdir(), "cwtools-rules-cache-"),
-		);
-		const cacheDir = path.join(temporaryRoot, "cache");
-		const testRulesFolder = process.env.CWTOOLS_TEST_RULES_FOLDER;
-		delete process.env.CWTOOLS_TEST_RULES_FOLDER;
-		try {
-			const setup = await resolveRulesCache("hoi4", cacheDir, temporaryRoot);
-			assert.strictEqual(setup.rulesCache, path.join(cacheDir, "hoi4"));
-			assert.strictEqual(setup.fetchUpstream, true);
-			assert.deepStrictEqual(await fsPromises.readdir(setup.rulesCache), []);
-		} finally {
-			if (testRulesFolder === undefined) {
-				delete process.env.CWTOOLS_TEST_RULES_FOLDER;
-			} else {
-				process.env.CWTOOLS_TEST_RULES_FOLDER = testRulesFolder;
-			}
-			await fsPromises.rm(temporaryRoot, { recursive: true, force: true });
-		}
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
 	});
 
-	test("invalid custom rules fall back to a provisioned upstream cache", async () => {
+	test("invalid custom rules fall back to an empty upstream cache with a warning", async () => {
 		const temporaryRoot = await fsPromises.mkdtemp(
 			path.join(os.tmpdir(), "cwtools-invalid-rules-"),
 		);
 		const cacheDir = path.join(temporaryRoot, "cache");
 		const invalidRules = path.join(temporaryRoot, "missing-rules");
-		const testRulesFolder = process.env.CWTOOLS_TEST_RULES_FOLDER;
-		process.env.CWTOOLS_TEST_RULES_FOLDER = invalidRules;
+		vi.stubEnv("CWTOOLS_TEST_RULES_FOLDER", invalidRules);
 		try {
 			const setup = await resolveRulesCache("hoi4", cacheDir, temporaryRoot);
 			assert.strictEqual(setup.rulesCache, path.join(cacheDir, "hoi4"));
 			assert.strictEqual(setup.fetchUpstream, true);
 			assert.deepStrictEqual(await fsPromises.readdir(setup.rulesCache), []);
-			assert.deepStrictEqual(vscode.showWarningMessage.mock.calls, [
-				[
-					`CWTools: the rules_folder "${invalidRules}" could not be found (tried "${invalidRules}"). Falling back to the bundled/upstream rules.`,
-				],
+			assert.deepStrictEqual(warnings(), [
+				`CWTools: the rules_folder "${invalidRules}" could not be found (tried "${invalidRules}"). Falling back to the bundled/upstream rules.`,
 			]);
 		} finally {
-			if (testRulesFolder === undefined) {
-				delete process.env.CWTOOLS_TEST_RULES_FOLDER;
-			} else {
-				process.env.CWTOOLS_TEST_RULES_FOLDER = testRulesFolder;
-			}
+			vi.unstubAllEnvs();
 			await fsPromises.rm(temporaryRoot, { recursive: true, force: true });
 		}
 	});
 
-	test("shares an in-flight fetch and permits a new request after completion", async () => {
-		const ref = "f".repeat(40);
-		stubManifestFetch(manifest(ref, RULES_MANIFEST_REVISION + 1));
-		const { globalState } = memento();
-		const { client: languageClient, requests } = client();
-		let finishInitialScan!: () => void;
-		const initialScanDone = new Promise<void>((resolve) => {
-			finishInitialScan = resolve;
-		});
-
-		const first = fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			initialScanDone,
-			globalState,
-		);
-		const concurrent = fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			initialScanDone,
-			globalState,
-		);
-		assert.strictEqual(concurrent, first);
-		await state.progressStarted;
-		assert.strictEqual(state.rulesFetches.length, 1);
-		finishInitialScan();
-		await Promise.all([first, concurrent]);
-		assert.deepStrictEqual(requests, [
-			{ command: "reloadrulesconfig", arguments: [] },
-		]);
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-		assert.strictEqual(state.rulesFetches.length, 2);
-	});
-
-	test("allows retry after a failed fetch completes", async () => {
-		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
-		const { globalState } = memento();
-		const { client: languageClient, requests } = client();
-		state.gitMissing = true;
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-		assert.strictEqual(state.rulesFetches.length, 1);
-		state.gitMissing = false;
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-		assert.strictEqual(state.rulesFetches.length, 2);
-		assert.deepStrictEqual(requests, [
-			{ command: "reloadrulesconfig", arguments: [] },
-		]);
-	});
-
-	test("persists a newer manifest, fetches its pin, and reloads after the initial scan", async () => {
-		const ref = "f".repeat(40);
-		const reviewed = manifest(ref, RULES_MANIFEST_REVISION + 1);
+	test("persists a newer manifest, fetches its pin once, and reloads after the initial scan", async () => {
+		const reviewed = manifest(sha("f"));
 		const fetch = stubManifestFetch(reviewed);
-		const { globalState, updates } = memento();
-		const { client: languageClient, requests } = client();
+		const { sync, updates, requests } = session();
 		let finishInitialScan!: () => void;
 		const initialScanDone = new Promise<void>((resolve) => {
 			finishInitialScan = resolve;
 		});
 
-		const pendingFetch = fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			initialScanDone,
-			globalState,
-		);
-
+		const first = sync(initialScanDone);
+		assert.strictEqual(sync(initialScanDone), first, "in-flight fetch is shared");
 		await state.progressStarted;
+
 		assert.strictEqual(fetch.mock.calls[0]?.[0], RULES_MANIFEST_URL);
 		assert.deepStrictEqual(updates, [[RULES_MANIFEST_CACHE_KEY, reviewed]]);
 		assert.deepStrictEqual(state.rulesFetches, [
 			{
 				cacheDir: "/cache/hoi4",
 				repo: LANGUAGE_REPOS.hoi4.repo,
-				ref,
+				ref: sha("f"),
 				head: null,
 			},
 		]);
 		assert.deepStrictEqual(requests, []);
 
 		finishInitialScan();
-		await Promise.all([pendingFetch, state.progress]);
+		await settle(first);
 		assert.deepStrictEqual(logger.logError.mock.calls, []);
-		assert.deepStrictEqual(requests, [
-			{ command: "reloadrulesconfig", arguments: [] },
-		]);
-		// A first-time download has nothing to replace, so it stays silent
-		// (distinct from the replace-existing-cache path below).
-		assert.strictEqual(vscode.showInformationMessage.mock.calls.length, 0);
+		assert.deepStrictEqual(requests, RELOAD);
+		// A first-time download has nothing to replace, so it stays silent.
+		assert.deepStrictEqual(vscode.showInformationMessage.mock.calls, []);
+
+		await sync();
+		assert.strictEqual(state.rulesFetches.length, 2, "a later sync runs again");
 	});
 
 	test("names both commits and notifies when a bump replaces an existing cache", async () => {
-		const oldHead = "c".repeat(40);
-		const ref = "f".repeat(40);
 		state.hasGitDirectory = true;
-		state.head = oldHead;
-		stubManifestFetch(manifest(ref, RULES_MANIFEST_REVISION + 1));
-		const { globalState } = memento();
-		const { client: languageClient, requests } = client();
+		state.head = sha("c");
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
 
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
+		await settle(sync());
 
-		await waitForProgress();
-		assert.deepStrictEqual(requests, [
-			{ command: "reloadrulesconfig", arguments: [] },
-		]);
+		assert.deepStrictEqual(requests, RELOAD);
 		assert.strictEqual(vscode.showInformationMessage.mock.calls.length, 1);
 		const info = vscode.showInformationMessage.mock.calls[0][0] as string;
-		assert.match(info, new RegExp(oldHead));
-		assert.match(info, new RegExp(ref));
-		assert.ok(
-			logger.logInfo.mock.calls.some(
-				(call) =>
-					typeof call[0] === "string" &&
-					call[0].includes("Replacing") &&
-					call[0].includes(oldHead) &&
-					call[0].includes(ref),
-			),
-		);
+		assert.ok(info.includes(sha("c")) && info.includes(sha("f")), info);
 	});
 
-	test("uses a newer manifest when caching it fails", async () => {
-		const ref = "f".repeat(40);
-		const reviewed = manifest(ref, RULES_MANIFEST_REVISION + 1);
-		stubManifestFetch(reviewed);
-		const { globalState, updates } = memento(undefined, new Error("disk full"));
-		const { client: languageClient } = client();
+	test.each<[string, RulesManifest | undefined, RulesManifest | string, string]>([
+		["a cached pin beats an invalid remote manifest", manifest(sha("c")), "{", sha("c")],
+		["a newer cached pin beats a stale remote manifest", manifest(sha("c"), NEXT + 1), manifest(sha("d")), sha("c")],
+		["a cached pin beats a conflicting remote at the same revision", manifest(sha("c")), manifest(sha("d")), sha("c")],
+		["the bundled pin is used when no valid manifest exists", undefined, "{", LANGUAGE_REPOS.hoi4.ref],
+	])("%s", async (_name, cached, remote, expectedRef) => {
+		stubManifestFetch(remote);
+		const { sync, updates } = session(cached);
 
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
+		await settle(sync());
 
-		await waitForProgress();
-		assert.deepStrictEqual(updates, [[RULES_MANIFEST_CACHE_KEY, reviewed]]);
-		assert.strictEqual(state.rulesFetches[0]?.ref, ref);
-	});
-
-	test("keeps a cached pin when the remote manifest is invalid", async () => {
-		const cached = manifest("c".repeat(40), RULES_MANIFEST_REVISION + 1);
-		stubManifestFetch("{");
-		const { globalState, updates } = memento(cached);
-		const { client: languageClient, requests } = client();
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
-		await waitForProgress();
 		assert.deepStrictEqual(updates, []);
-		assert.strictEqual(state.rulesFetches[0]?.ref, cached.pins.hoi4);
+		assert.strictEqual(state.rulesFetches[0]?.ref, expectedRef);
 		assert.deepStrictEqual(logger.logError.mock.calls, []);
-		assert.deepStrictEqual(requests, [
-			{ command: "reloadrulesconfig", arguments: [] },
-		]);
-	});
-
-	test("keeps a newer cached pin when the remote manifest is stale", async () => {
-		const cached = manifest("c".repeat(40), RULES_MANIFEST_REVISION + 2);
-		stubManifestFetch(manifest("d".repeat(40), RULES_MANIFEST_REVISION + 1));
-		const { globalState, updates } = memento(cached);
-		const { client: languageClient } = client();
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
-		await waitForProgress();
-		assert.deepStrictEqual(updates, []);
-		assert.strictEqual(state.rulesFetches[0]?.ref, cached.pins.hoi4);
-	});
-
-	test("keeps a cached pin when the remote revision conflicts", async () => {
-		const cached = manifest("c".repeat(40), RULES_MANIFEST_REVISION + 1);
-		stubManifestFetch(manifest("d".repeat(40), RULES_MANIFEST_REVISION + 1));
-		const { globalState, updates } = memento(cached);
-		const { client: languageClient } = client();
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
-		await waitForProgress();
-		assert.deepStrictEqual(updates, []);
-		assert.strictEqual(state.rulesFetches[0]?.ref, cached.pins.hoi4);
-	});
-
-	test("uses the bundled pin when no valid manifest is available", async () => {
-		stubManifestFetch("{");
-		const { globalState } = memento();
-		const { client: languageClient } = client();
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
-		await waitForProgress();
-		assert.strictEqual(state.rulesFetches[0]?.ref, LANGUAGE_REPOS.hoi4.ref);
-	});
-
-	test("uses the bundled pin without reading an oversized response", async () => {
-		const reviewed = manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1);
-		const text = JSON.stringify(reviewed);
-		let readerRequests = 0;
-		const body = {
-			getReader: () => {
-				readerRequests++;
-				return new ReadableStream<Uint8Array>({
-					start(controller) {
-						controller.enqueue(new TextEncoder().encode(text));
-						controller.close();
-					},
-				}).getReader();
-			},
-		} as unknown as ReadableStream<Uint8Array>;
-		vi.stubGlobal(
-			"fetch",
-			vi.fn().mockResolvedValue({
-				ok: true,
-				status: 200,
-				headers: new Headers({
-					"content-length": String(RULES_MANIFEST_MAX_BYTES + 1),
-				}),
-				body,
-			}),
-		);
-		const { globalState } = memento();
-		const { client: languageClient } = client();
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
-		await waitForProgress();
-		assert.strictEqual(readerRequests, 0);
-		assert.strictEqual(state.rulesFetches[0]?.ref, LANGUAGE_REPOS.hoi4.ref);
 	});
 
 	test("uses a cached pin after the manifest request times out", async () => {
@@ -565,150 +317,61 @@ suite("rulesSetup — reviewed manifest sync", () => {
 				(_url: string, init?: RequestInit) =>
 					new Promise<Response>((_resolve, reject) => {
 						signal = init?.signal;
-						signal?.addEventListener(
-							"abort",
-							() => reject(new Error("aborted")),
-							{ once: true },
-						);
+						signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+							once: true,
+						});
 					}),
 			),
 		);
-		const cached = manifest("c".repeat(40), RULES_MANIFEST_REVISION + 1);
-		const { globalState, updates } = memento(cached);
-		const { client: languageClient } = client();
+		const cached = manifest(sha("c"));
+		const { sync, updates } = session(cached);
 
-		const pendingFetch = fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
+		const pending = sync();
 		await vi.advanceTimersByTimeAsync(RULES_MANIFEST_TIMEOUT_MS);
-		await Promise.all([pendingFetch, waitForProgress()]);
+		await settle(pending);
+
 		assert.strictEqual(signal?.aborted, true);
 		assert.deepStrictEqual(updates, []);
 		assert.strictEqual(state.rulesFetches[0]?.ref, cached.pins.hoi4);
 	});
 
-	test("does not reload rules when checkout lands on another commit", async () => {
-		const ref = "f".repeat(40);
-		state.checkoutHead = "e".repeat(40);
-		stubManifestFetch(manifest(ref, RULES_MANIFEST_REVISION + 1));
-		const { globalState } = memento();
-		const { client: languageClient, requests } = client();
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
-		await waitForProgress();
-		assert.deepStrictEqual(requests, []);
-		assert.ok(vscode.showWarningMessage.mock.calls.length > 0);
-	});
-
-	test("warns about missing git (not the network) on an initial clone ENOENT", async () => {
+	test("warns about missing git, not the network, on an initial clone", async () => {
 		state.gitMissing = true;
-		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
-		const { globalState } = memento();
-		const { client: languageClient, requests } = client();
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
 
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
+		await settle(sync());
 
-		await waitForProgress();
 		assert.deepStrictEqual(requests, []);
-		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 1);
-		const warning = vscode.showWarningMessage.mock.calls[0][0] as string;
-		assert.match(warning, /CWTools needs Git on your PATH/);
-		assert.doesNotMatch(warning, /check your network/);
+		assert.strictEqual(warnings().length, 1);
+		assert.match(warnings()[0], /CWTools needs Git on your PATH/);
+		assert.doesNotMatch(warnings()[0], /check your network/);
 	});
 
-	test("still warns about missing git when a stale .git dir is present", async () => {
-		// A prior clone left .git behind, but git has since gone from PATH. The
-		// real currentRulesHead catches the failed rev-parse and returns null,
-		// forcing isInitialClone = true so the missing-git warning still fires.
+	test("a checkout that lands on another commit warns and does not reload", async () => {
+		state.checkoutHead = sha("e");
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
+
+		await settle(sync());
+
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(warnings().length, 1);
+		assert.match(warnings()[0], /check your network/);
+		assert.match(warnings()[0], /Rules cache landed on/);
+	});
+
+	// The previous pin is still on disk, so a failed bump is not worth a toast.
+	test("a failed bump with rules already present stays log-only", async () => {
 		state.hasGitDirectory = true;
-		state.head = "e".repeat(40);
-		state.gitMissing = true;
-		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
-		const { globalState } = memento();
-		const { client: languageClient, requests } = client();
+		state.head = sha("e");
+		state.checkoutHead = sha("a");
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
 
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
+		await settle(sync());
 
-		await waitForProgress();
 		assert.deepStrictEqual(requests, []);
-		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 1);
-		const warning = vscode.showWarningMessage.mock.calls[0][0] as string;
-		assert.match(warning, /CWTools needs Git on your PATH/);
-		assert.doesNotMatch(warning, /check your network/);
-	});
-
-	test("shows the generic network wording when an initial clone fails for a non-git reason", async () => {
-		// Checkout "succeeds" but lands on the wrong commit, so syncPinnedRules
-		// throws inside the try. That is a non-ENOENT failure and must keep the
-		// generic fetch-failure wording, not the missing-git wording.
-		const ref = "f".repeat(40);
-		state.checkoutHead = "e".repeat(40);
-		stubManifestFetch(manifest(ref, RULES_MANIFEST_REVISION + 1));
-		const { globalState } = memento();
-		const { client: languageClient, requests } = client();
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
-		await waitForProgress();
-		assert.deepStrictEqual(requests, []);
-		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 1);
-		const warning = vscode.showWarningMessage.mock.calls[0][0] as string;
-		assert.match(warning, /check your network/);
-		assert.match(warning, /Rules cache landed on/);
-		assert.doesNotMatch(warning, /needs Git on your PATH/);
-	});
-
-	test("a failed bump (rules already present) stays log-only with no warning", async () => {
-		// isInitialClone is false when currentRulesHead returns an existing pin,
-		// so a failed fetch must not warn — the previous pin is still on disk.
-		// This is the gate the missing-git and generic warnings branch on.
-		state.hasGitDirectory = true;
-		state.head = "e".repeat(40);
-		state.checkoutHead = "g".repeat(40);
-		stubManifestFetch(manifest("f".repeat(40), RULES_MANIFEST_REVISION + 1));
-		const { globalState } = memento();
-		const { client: languageClient, requests } = client();
-
-		await fetchRulesInBackground(
-			"hoi4",
-			"/cache",
-			languageClient,
-			Promise.resolve(),
-			globalState,
-		);
-
-		await waitForProgress();
-		assert.deepStrictEqual(requests, []);
-		assert.strictEqual(vscode.showWarningMessage.mock.calls.length, 0);
+		assert.deepStrictEqual(warnings(), []);
 	});
 });

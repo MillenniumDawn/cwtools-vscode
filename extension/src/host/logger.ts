@@ -39,7 +39,7 @@ export function errorMessage(err: unknown): string {
 	if (err instanceof Error) return err.message;
 	if (err === undefined || err === null) return "";
 	// Intentional: fall back to Object's default stringification ("[object
-	// Object]") for unknown thrown values; covered by logger.test.ts.
+	// Object]") for unknown thrown values.
 	// eslint-disable-next-line @typescript-eslint/no-base-to-string
 	return String(err);
 }

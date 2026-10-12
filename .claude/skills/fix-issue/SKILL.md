@@ -195,7 +195,7 @@ capture a before-baseline on a clean tree
 (`CWTOOLS_BASELINE=<scratch>/before.csv python3 scripts/guard.py md --bless`)
 and diff against that.
 
-Extension: `npm run check` and `npm run test:node`; `npm test` for host-level
+Extension: `npm run check` and `npm run test:node`; `npm run test:smoke` for host-level
 changes. Tooling: `ruff check scripts tests/scripts`, `black --check scripts
 tests/scripts`, `pylint scripts tests/scripts`, `mypy scripts tests/scripts`,
 `pytest`.

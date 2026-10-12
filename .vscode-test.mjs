@@ -1,8 +1,7 @@
 // Single source for the host-based extension tests. Pick a config with
 // `vscode-test --label <name>` (see the npm `test:*` scripts):
 //
-//   unit        fast suites that need the VS Code API but not the language server
-//   smoke       unit + activation, in the sample workspace
+//   smoke       activation, the graph panel and deactivation, in the sample workspace
 //   vscode-floor activation and server initialization on the declared minimum
 //   multi-root  server-backed descriptor/root selection in a multi-root fixture
 //   watched     served-root exclusions and watched-file updates, in its own workspace
@@ -31,7 +30,8 @@
 //
 // The multi-root fixture needs a staged server, so CI runs it alongside watched
 // after the build step has produced one, and locally it runs with smoke under
-// test:smoke; unit remains server-free for fast client tests.
+// test:smoke. Every label needs the server; the server-free tests are the
+// vitest suites under extension/test/unit.
 //
 // rules-sync exercises the opposite gap: sample-hoi4's folder name and
 // common/ai_strategy dir make it detect as hoi4, so activation's real
@@ -77,11 +77,6 @@ const hoi4RulesFixture = path.resolve(
 // on `live` as well as `host`.
 const abortDiagnostics =
 	"./dist/extension/bin/client/test/support/abortDiagnostics.js";
-const unitFiles = [
-	abortDiagnostics,
-	"./dist/extension/bin/client/test/host/graphTypes.test.js",
-	"./dist/extension/bin/client/test/host/fileExplorer.test.js",
-];
 const multiRootFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/multiroot.test.js",
@@ -91,7 +86,7 @@ const multiRootFiles = [
 const deactivateFile =
 	"./dist/extension/bin/client/test/host/deactivate.test.js";
 const smokeFiles = [
-	...unitFiles,
+	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/extension.test.js",
 	deactivateFile,
 ];
@@ -102,7 +97,7 @@ const restartFiles = [
 // Live-settings fixture is isolated: its .vscode/settings.json attempts to set
 // cwtools.rules_folder to .cwtools-test-rules, while the test environment
 // supplies the absolute fixture path before activation. Running it in the
-// shared sample workspace would pollute the host/unit suites (they expect the
+// shared sample workspace would pollute the host suites (they expect the
 // generic paradox ruleset), so it lives in extension/test/workspaces/live.
 const liveFiles = [
 	abortDiagnostics,
@@ -114,14 +109,11 @@ const rulesSyncFiles = [
 ];
 const hostFiles = [
 	abortDiagnostics,
-	"./dist/extension/bin/client/test/host/graphTypes.test.js",
-	"./dist/extension/bin/client/test/host/fileExplorer.test.js",
 	"./dist/extension/bin/client/test/host/extension.test.js",
 	"./dist/extension/bin/client/test/host/diagnostics.test.js",
 	"./dist/extension/bin/client/test/host/hover.test.js",
 	"./dist/extension/bin/client/test/host/completion.test.js",
 	"./dist/extension/bin/client/test/host/codeLens.test.js",
-	"./dist/extension/bin/client/test/host/detectGame.test.js",
 	"./dist/extension/bin/client/test/host/commands.test.js",
 	deactivateFile,
 ];
@@ -164,18 +156,6 @@ export default defineConfig({
 				abortDiagnostics,
 				"./dist/extension/bin/client/test/host/vscodeCompatibilityFloor.test.js",
 			],
-			workspaceFolder: sampleWorkspace,
-			launchArgs: [
-				sampleFile,
-				softwareRendering,
-				disableCrashReporter,
-				...headless,
-			],
-		},
-		{
-			...base,
-			label: "unit",
-			files: unitFiles,
 			workspaceFolder: sampleWorkspace,
 			launchArgs: [
 				sampleFile,
