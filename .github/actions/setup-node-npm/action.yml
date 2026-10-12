@@ -27,7 +27,7 @@ runs:
         IGNORE_SCRIPTS: ${{ inputs.ignore-scripts }}
       run: |
         if [[ "$IGNORE_SCRIPTS" == "true" ]]; then
-          npm ci --ignore-scripts --foreground-scripts
+          npm ci --ignore-scripts
         else
           npm ci
         fi

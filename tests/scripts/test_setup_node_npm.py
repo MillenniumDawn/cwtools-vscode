@@ -102,7 +102,7 @@ def test_vscode_version_validation_writes_expected_output(
 
 @pytest.mark.parametrize(
     ("ignore_scripts", "expected"),
-    [("false", "ci"), ("true", "ci --ignore-scripts --foreground-scripts")],
+    [("false", "ci"), ("true", "ci --ignore-scripts")],
 )
 def test_dependency_install_mode(
     ignore_scripts: str, expected: str, tmp_path: Path

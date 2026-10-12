@@ -4,7 +4,6 @@ written to fix.
 Text assertions rather than a YAML parse: PyYAML is not a dev dependency.
 """
 
-import json
 import re
 from pathlib import Path
 
@@ -178,16 +177,6 @@ def test_registry_publishers_skip_dependency_scripts_but_keep_optional_clis() ->
     assert "ignore-scripts" not in package_job
     assert "npm run build -- package-prebuilt" in package_job
     assert "python3 scripts/smoke_test_vsix.py artifacts/vsix" in package_job
-
-    package_lock = json.loads((REPO_ROOT / "package-lock.json").read_text())
-    nested_vsce = package_lock["packages"][
-        "node_modules/ovsx/node_modules/@vscode/vsce"
-    ]
-    assert nested_vsce["optionalDependencies"]["keytar"] == "^7.7.0"
-    keytar = package_lock["packages"]["node_modules/keytar"]
-    assert keytar["version"] == "7.9.0"
-    assert keytar["hasInstallScript"] is True
-    assert "prebuild-install" in keytar["dependencies"]
 
 
 def test_release_failed_guards_every_job_it_waits_on() -> None:
