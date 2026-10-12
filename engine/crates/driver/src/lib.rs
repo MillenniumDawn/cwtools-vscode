@@ -709,8 +709,11 @@ impl Session {
                             .map(str::to_string)
                             .collect(),
                     );
-                    let vanilla_per_type =
-                        filter_vanilla_index(vanilla_index.map, vanilla_dir, &vanilla_shadow);
+                    let vanilla_per_type = filter_vanilla_index(
+                        vanilla_index.into_map(),
+                        vanilla_dir,
+                        &vanilla_shadow,
+                    );
                     type_index.merge_base_game_with_uris(vanilla_per_type);
                     type_index.file_index = build_file_index_with_vanilla_shadow(
                         &directory,

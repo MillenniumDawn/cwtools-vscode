@@ -38,7 +38,7 @@ fn perf_rules() -> PathBuf {
 }
 
 fn total_instances(index: &cwtools_index::TypeIndex) -> usize {
-    index.map.values().map(|v| v.len()).sum()
+    index.map().values().map(|v| v.len()).sum()
 }
 
 // ── search_config_for ────────────────────────────────────────────────────────
@@ -645,9 +645,9 @@ fn index_game_dir_is_populated_and_stable() {
     );
     // Events are the largest type in the fixture; the config defines `event`.
     assert!(
-        first.map.contains_key("event"),
+        first.map().contains_key("event"),
         "expected `event` instances, got types: {:?}",
-        first.map.keys().collect::<Vec<_>>()
+        first.map().keys().collect::<Vec<_>>()
     );
 }
 
@@ -703,7 +703,7 @@ fn session_load_builds_indexes() {
     assert!(!session.discovery_failed, "discovery should not fail");
     assert!(!session.parsed_files().is_empty(), "mod files should parse");
     assert!(
-        !session.type_index().map.is_empty(),
+        !session.type_index().map().is_empty(),
         "type index should be populated"
     );
     assert!(
@@ -2095,7 +2095,7 @@ fn filter_vanilla_index_passes_everything_through_without_replace_paths() {
     let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
     assert!(!shadow.has_replace_paths());
 
-    let filtered = cwtools_driver::filter_vanilla_index((*index.map).clone(), &vanilla, &shadow);
+    let filtered = cwtools_driver::filter_vanilla_index(index.map().clone(), &vanilla, &shadow);
     assert!(
         filtered.get("thing").is_some_and(|instances| instances
             .iter()
@@ -2143,7 +2143,7 @@ fn filter_vanilla_index_matches_cached_sources_through_a_root_alias() {
     let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
     assert!(shadow.has_replace_paths());
 
-    let filtered = cwtools_driver::filter_vanilla_index(index.map, &alias, &shadow);
+    let filtered = cwtools_driver::filter_vanilla_index(index.into_map(), &alias, &shadow);
     let things: Vec<String> = filtered
         .get("thing")
         .map(|instances| {
@@ -2197,7 +2197,7 @@ fn filter_vanilla_index_matches_sources_under_the_given_root_without_resolving_t
     std::fs::remove_file(vanilla.join("common/things/x.txt")).unwrap();
 
     let shadow = cwtools_driver::vanilla_replacement_shadow(&ws.path().join("mod"), &[]);
-    let filtered = cwtools_driver::filter_vanilla_index(index.map, &alias, &shadow);
+    let filtered = cwtools_driver::filter_vanilla_index(index.into_map(), &alias, &shadow);
     assert!(
         !filtered.get("thing").is_some_and(|instances| instances
             .iter()

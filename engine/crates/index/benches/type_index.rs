@@ -101,78 +101,29 @@ fn build_primary_loc_index(instance_count: usize) -> TypeIndex {
     idx
 }
 
-fn bench_primary_loc_key_scaling(c: &mut Criterion) {
-    let mut group = c.benchmark_group("type_index/primary_loc_key_scaling");
+// The lookups should stay flat as the type grows (#485). `build` and `clone`
+// are here because the name index is paid for on every merge and snapshot.
+fn bench_name_lookups(c: &mut Criterion) {
     for count in [100, 10_000, 100_000] {
         let idx = build_primary_loc_index(count);
-        group.bench_function(format!("indexed_instances_{count}"), |b| {
-            b.iter(|| idx.primary_loc_key(black_box("event"), black_box("TARGET_INSTANCE")))
-        });
-        group.bench_function(format!("scan_instances_{count}"), |b| {
-            b.iter(|| {
-                idx.map.get("event").and_then(|entries| {
-                    entries.iter().find_map(|(_, instance)| {
-                        (instance
-                            .name
-                            .eq_ignore_ascii_case(black_box("TARGET_INSTANCE")))
-                        .then_some(instance.primary_loc_key.as_deref())
-                        .flatten()
-                    })
-                })
-            })
-        });
-    }
-    group.finish();
-}
-
-fn bench_instance_locations_scaling(c: &mut Criterion) {
-    let mut group = c.benchmark_group("type_index/instance_locations_scaling");
-    for count in [100, 10_000, 100_000] {
-        let idx = build_primary_loc_index(count);
-        group.bench_function(format!("indexed_instances_{count}"), |b| {
-            b.iter(|| idx.instance_locations(black_box("TARGET_INSTANCE")))
-        });
-        group.bench_function(format!("scan_instances_{count}"), |b| {
-            b.iter(|| {
-                idx.map
-                    .values()
-                    .flatten()
-                    .filter(|(_, instance)| {
-                        instance
-                            .name
-                            .eq_ignore_ascii_case(black_box("TARGET_INSTANCE"))
-                    })
-                    .map(|(uri, instance)| (std::sync::Arc::clone(uri), instance.location))
-                    .collect::<Vec<_>>()
-            })
-        });
-    }
-    group.finish();
-}
-
-fn bench_primary_loc_index_build(c: &mut Criterion) {
-    let mut group = c.benchmark_group("type_index/primary_loc_index_build");
-    for count in [10_000, 100_000] {
-        group.bench_function(format!("instances_{count}"), |b| {
-            b.iter(|| black_box(build_primary_loc_index(black_box(count))))
-        });
-        let index = build_primary_loc_index(count);
-        eprintln!(
-            "name_index_capacity_estimate_bytes[{count}]: {}",
-            index.approximate_instance_name_index_storage_bytes()
+        c.bench_function(
+            &format!("type_index/primary_loc_key/instances_{count}"),
+            |b| b.iter(|| idx.primary_loc_key(black_box("event"), black_box("TARGET_INSTANCE"))),
+        );
+        c.bench_function(
+            &format!("type_index/instance_locations/instances_{count}"),
+            |b| b.iter(|| idx.instance_locations(black_box("TARGET_INSTANCE"))),
         );
     }
-    eprintln!(
-        "type_index_size_bytes: {} (the per-name hash-index storage is additional)",
-        std::mem::size_of::<TypeIndex>()
-    );
-    group.finish();
 }
 
-fn bench_primary_loc_index_clone(c: &mut Criterion) {
+fn bench_build_and_clone(c: &mut Criterion) {
+    c.bench_function("type_index/build/instances_100000", |b| {
+        b.iter(|| build_primary_loc_index(black_box(100_000)))
+    });
     let index = build_primary_loc_index(100_000);
-    c.bench_function("type_index/primary_loc_index_clone/instances_100000", |b| {
-        b.iter(|| black_box(index.clone()))
+    c.bench_function("type_index/clone/instances_100000", |b| {
+        b.iter(|| index.clone())
     });
 }
 
@@ -181,9 +132,7 @@ criterion_group! {
     config = Criterion::default().sample_size(30);
     targets = bench_instances_in_file,
         bench_remove_file,
-        bench_primary_loc_key_scaling,
-        bench_instance_locations_scaling,
-        bench_primary_loc_index_build,
-        bench_primary_loc_index_clone
+        bench_name_lookups,
+        bench_build_and_clone
 }
 criterion_main!(benches);

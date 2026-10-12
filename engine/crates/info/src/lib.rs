@@ -150,12 +150,12 @@ impl InfoService {
     }
 
     pub fn profile_summary(&self) -> String {
-        let cross_file: usize = self.type_index.map.values().map(|v| v.len()).sum();
+        let cross_file: usize = self.type_index.map().values().map(|v| v.len()).sum();
         format!(
             "info: {} files | type_index {} instances / {} types | {} vars | {} targets | {} type_defs",
             self.files.len(),
             cross_file,
-            self.type_index.map.len(),
+            self.type_index.map().len(),
             self.variable_counts.len(),
             self.event_target_counts.len(),
             self.all_type_defs.len(),

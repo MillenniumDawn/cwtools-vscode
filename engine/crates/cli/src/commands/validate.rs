@@ -424,7 +424,7 @@ pub(super) fn run(args: ValidateArgs) {
             st.overlay_entries,
             st.overlay_regions,
         );
-        let type_instances: usize = type_index.map.values().map(|v| v.len()).sum();
+        let type_instances: usize = type_index.map().values().map(|v| v.len()).sum();
         eprintln!(
             "  [profile]   parsed ASTs released after indexing ({} files)",
             parsed.len()
@@ -432,7 +432,7 @@ pub(super) fn run(args: ValidateArgs) {
         eprintln!(
             "  [profile]   type_index: {} instances in {} types; loc union: {} keys",
             type_instances,
-            type_index.map.len(),
+            type_index.map().len(),
             loc_index.union().len()
         );
     }

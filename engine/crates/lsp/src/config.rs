@@ -2167,7 +2167,7 @@ mod tests {
         let index = backend.state.info_service.read();
         let entries = index
             .type_index
-            .map
+            .map()
             .get("test_type")
             .expect("restaged base-game instance");
         assert_eq!(entries.len(), 1);

@@ -270,7 +270,7 @@ pub fn save(
     aux: VanillaCacheAux,
 ) -> std::io::Result<usize> {
     let instances = index
-        .map
+        .map()
         .iter()
         .flat_map(|(type_name, entries)| {
             entries.iter().map(move |(file_uri, inst)| CachedInstance {

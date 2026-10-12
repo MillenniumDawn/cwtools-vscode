@@ -665,10 +665,10 @@ impl Backend {
 
         let (entity_type, index_empty) = {
             let info = self.state.info_service.read();
-            let index_empty = info.type_index.map.values().all(Vec::is_empty);
+            let index_empty = info.type_index.map().values().all(Vec::is_empty);
             let resolved = canonical.or_else(|| {
                 info.type_index
-                    .map
+                    .map()
                     .keys()
                     .find(|k| k.eq_ignore_ascii_case(&requested_type))
                     .cloned()
