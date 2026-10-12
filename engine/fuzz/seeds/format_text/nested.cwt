@@ -1,0 +1,5 @@
+# nested values and comments
+root={
+  first=yes # trailing comment
+  child={ inner="text" }
+}
