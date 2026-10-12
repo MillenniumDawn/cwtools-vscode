@@ -7,8 +7,7 @@ use cwtools_game::scope_engine::{SCOPE_ANY, ScopeId};
 use cwtools_game::scope_registry::ScopeRegistry;
 use cwtools_info::InfoService;
 use cwtools_rules::rules_types::{
-    NewField, ParsedAliasPattern, PatternKind, RootRule, RuleSet, RuleType, SubTypeDefinition,
-    TypeType, ValueType,
+    NewField, PatternKind, RootRule, RuleSet, RuleType, SubTypeDefinition, TypeType, ValueType,
 };
 use cwtools_validation::scope_matches_required;
 
@@ -65,14 +64,58 @@ impl<'a> BuildFilter<'a> {
     }
 
     fn admit(&mut self, label: &str) -> bool {
-        let ok = self.budget > 0
-            && (self.token.is_empty() || super::subsequence_match(label, self.token));
+        let ok = self.budget > 0 && self.matches(label);
         if ok {
             self.budget -= 1;
         } else {
             self.dropped += 1;
         }
         ok
+    }
+
+    fn matches(&self, label: &str) -> bool {
+        self.token.is_empty() || super::subsequence_match(label, self.token)
+    }
+
+    /// Filter a candidate without charging the completion budget, but retain
+    /// the dropped signal so the caller still marks a filtered list incomplete.
+    fn retain_token_match(&mut self, label: &str) -> bool {
+        if self.matches(label) {
+            true
+        } else {
+            self.dropped += 1;
+            false
+        }
+    }
+
+    fn admit_parts(&mut self, parts: &[&str]) -> bool {
+        let ok = self.budget > 0 && self.matches_parts(parts);
+        if ok {
+            self.budget -= 1;
+        } else {
+            self.dropped += 1;
+        }
+        ok
+    }
+
+    fn matches_parts(&self, parts: &[&str]) -> bool {
+        if self.token.is_empty() {
+            return true;
+        }
+        let mut needle = self.token.chars().flat_map(char::to_lowercase).peekable();
+        for ch in parts
+            .iter()
+            .flat_map(|part| part.chars())
+            .flat_map(char::to_lowercase)
+        {
+            let Some(&want) = needle.peek() else {
+                return true;
+            };
+            if ch == want {
+                needle.next();
+            }
+        }
+        needle.peek().is_none()
     }
 }
 
@@ -162,7 +205,7 @@ pub fn completions_from_rules(
     let mut flt = BuildFilter::new(token);
     let mut items: Vec<CompletionItem> = Vec::new();
     // Per-request memo so a repeated enum is only collected/sorted once (#46).
-    let mut enum_cache: HashMap<String, Vec<String>> = HashMap::new();
+    let mut enum_cache: HashMap<String, Vec<&str>> = HashMap::new();
     // appear in this block (#44).
     let mut scope_names: Option<Vec<String>> = None;
     let scope_ctx: ScopeCtx = match (current_scope, registry) {
@@ -245,6 +288,7 @@ pub fn completions_from_rules(
                         cat,
                         scope_ctx,
                         &mut flt,
+                        &mut enum_cache,
                     );
                 }
                 // (#76). The resolution machinery already backs goto/hover.
@@ -271,6 +315,7 @@ pub fn completions_from_rules(
                 cat,
                 scope_ctx,
                 &mut flt,
+                &mut enum_cache,
             ),
             RuleType::LeafRule {
                 right: NewField::ScopeField(_),
@@ -357,11 +402,11 @@ fn push_specific_node_key(
     });
 }
 
-fn push_enum_keyed_leaf(
+fn push_enum_keyed_leaf<'a>(
     items: &mut Vec<CompletionItem>,
-    enum_cache: &mut HashMap<String, Vec<String>>,
-    ruleset: &RuleSet,
-    info: &InfoService,
+    enum_cache: &mut HashMap<String, Vec<&'a str>>,
+    ruleset: &'a RuleSet,
+    info: &'a InfoService,
     e: &str,
     right: &NewField,
     flt: &mut BuildFilter,
@@ -370,12 +415,12 @@ fn push_enum_keyed_leaf(
         NewField::ValueField(ValueType::Bool) => "${1|yes,no|}".to_string(),
         _ => "${1}".to_string(),
     };
-    for v in all_enum_values_cached(enum_cache, ruleset, info, e) {
+    for v in all_enum_values_cached(enum_cache, ruleset, info, e, flt) {
         if !flt.admit(v) {
             continue;
         }
         items.push(CompletionItem {
-            label: v.clone(),
+            label: v.to_string(),
             kind: Some(CompletionItemKind::FIELD),
             data: ResolveData::Enum { id: e.to_string() }.into_value(),
             insert_text: Some(format!("{} = {}", v, snippet_value)),
@@ -386,20 +431,20 @@ fn push_enum_keyed_leaf(
     }
 }
 
-fn push_enum_keyed_node(
+fn push_enum_keyed_node<'a>(
     items: &mut Vec<CompletionItem>,
-    enum_cache: &mut HashMap<String, Vec<String>>,
-    ruleset: &RuleSet,
-    info: &InfoService,
+    enum_cache: &mut HashMap<String, Vec<&'a str>>,
+    ruleset: &'a RuleSet,
+    info: &'a InfoService,
     e: &str,
     flt: &mut BuildFilter,
 ) {
-    for v in all_enum_values_cached(enum_cache, ruleset, info, e) {
+    for v in all_enum_values_cached(enum_cache, ruleset, info, e, flt) {
         if !flt.admit(v) {
             continue;
         }
         items.push(CompletionItem {
-            label: v.clone(),
+            label: v.to_string(),
             kind: Some(CompletionItemKind::STRUCT),
             data: ResolveData::Enum { id: e.to_string() }.into_value(),
             insert_text: Some(format!("{} = {{\n\t$0\n}}", v)),
@@ -410,20 +455,20 @@ fn push_enum_keyed_node(
     }
 }
 
-fn push_enum_leaf_values(
+fn push_enum_leaf_values<'a>(
     items: &mut Vec<CompletionItem>,
-    enum_cache: &mut HashMap<String, Vec<String>>,
-    ruleset: &RuleSet,
-    info: &InfoService,
+    enum_cache: &mut HashMap<String, Vec<&'a str>>,
+    ruleset: &'a RuleSet,
+    info: &'a InfoService,
     e: &str,
     flt: &mut BuildFilter,
 ) {
-    for v in all_enum_values_cached(enum_cache, ruleset, info, e) {
+    for v in all_enum_values_cached(enum_cache, ruleset, info, e, flt) {
         if !flt.admit(v) {
             continue;
         }
         items.push(CompletionItem {
-            label: v.clone(),
+            label: v.to_string(),
             kind: Some(CompletionItemKind::ENUM_MEMBER),
             data: ResolveData::Enum { id: e.to_string() }.into_value(),
             sort_text: sort_for_kind(Some(CompletionItemKind::ENUM_MEMBER), v),
@@ -506,24 +551,30 @@ pub(crate) fn type_instance_detail(
 /// KEYWORD item (cwtools-vscode#64).
 /// scope-specific requirement is ranked into the top bucket (#78). The scope test
 #[allow(clippy::too_many_arguments)]
-fn push_alias_keys(
+fn push_alias_keys<'a>(
     items: &mut Vec<CompletionItem>,
-    ruleset: &RuleSet,
-    info: &InfoService,
+    ruleset: &'a RuleSet,
+    info: &'a InfoService,
     modifier_keys: &HashSet<String>,
     modifier_scopes: &HashMap<String, Vec<String>>,
     cat: &str,
     scope: ScopeCtx,
     flt: &mut BuildFilter,
+    enum_cache: &mut HashMap<String, Vec<&'a str>>,
 ) {
     let prefix = format!("{}:", cat);
+    let alias_index = ruleset.alias_categories().get(cat);
+    let plain_alias_indices = alias_index
+        .map(|index| index.plain_alias_indices.as_slice())
+        .unwrap_or(&[]);
     let verdicts: Option<HashMap<&str, (bool, bool)>> = scope.map(|(current, reg)| {
         let mut m: HashMap<&str, (bool, bool)> = HashMap::new();
-        for (alias_name, (_, opts)) in &ruleset.aliases {
+        for &alias_idx in plain_alias_indices {
+            let (alias_name, (_, opts)) = &ruleset.aliases[alias_idx];
             let Some(k) = alias_name.strip_prefix(&prefix) else {
                 continue;
             };
-            if k == "scope_field" || ParsedAliasPattern::parse(k, 0).is_some() {
+            if !flt.matches(k) {
                 continue;
             }
             let matches = scope_matches_required(current, reg, &opts.required_scopes);
@@ -534,15 +585,15 @@ fn push_alias_keys(
         }
         m
     });
-    let mut seen: HashMap<String, usize> = HashMap::new();
-    for (alias_name, (rule, _)) in &ruleset.aliases {
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    for &alias_idx in plain_alias_indices {
+        let (alias_name, (rule, _)) = &ruleset.aliases[alias_idx];
         let Some(k) = alias_name.strip_prefix(&prefix) else {
             continue;
         };
-        if k == "scope_field" {
-            continue;
-        }
-        if ParsedAliasPattern::parse(k, 0).is_some() {
+        // Plain alias labels are filtered by the request builder too. Check
+        // here before allocating snippets/details while preserving its budget.
+        if !flt.retain_token_match(k) {
             continue;
         }
         // contexts), so a valid key must never silently vanish (#78).
@@ -565,7 +616,7 @@ fn push_alias_keys(
             }
             continue;
         }
-        seen.insert(k.to_string(), items.len());
+        seen.insert(k, items.len());
         let snippet = alias_completion_snippet(k, rule, ruleset);
         let sort_text = scope_rank.sort_text(Some(CompletionItemKind::KEYWORD), k);
         let data = if alias_has_description(ruleset, cat, k) {
@@ -589,7 +640,7 @@ fn push_alias_keys(
         });
     }
 
-    if let Some(cat_idx) = ruleset.alias_categories().get(cat) {
+    if let Some(cat_idx) = alias_index {
         for pattern in &cat_idx.parsed_patterns {
             if !pattern.prefix.is_empty() || !pattern.suffix.is_empty() {
                 continue;
@@ -598,7 +649,7 @@ fn push_alias_keys(
             match pattern.kind {
                 PatternKind::Type => {
                     for (_, inst) in info.type_index.instances(&pattern.placeholder_name) {
-                        if seen.contains_key(&inst.name) {
+                        if seen.contains_key(inst.name.as_str()) {
                             continue;
                         }
                         if !flt.admit(&inst.name) {
@@ -617,21 +668,27 @@ fn push_alias_keys(
                     }
                 }
                 PatternKind::Enum => {
-                    for v in all_enum_values(ruleset, info, &pattern.placeholder_name) {
-                        if seen.contains_key(&v) {
+                    for v in all_enum_values_cached(
+                        enum_cache,
+                        ruleset,
+                        info,
+                        &pattern.placeholder_name,
+                        flt,
+                    ) {
+                        if seen.contains_key(v) {
                             continue;
                         }
-                        if !flt.admit(&v) {
+                        if !flt.admit(v) {
                             continue;
                         }
-                        let snippet = alias_completion_snippet(&v, rule, ruleset);
+                        let snippet = alias_completion_snippet(v, rule, ruleset);
                         items.push(CompletionItem {
-                            label: v.clone(),
+                            label: v.to_string(),
                             kind: Some(CompletionItemKind::KEYWORD),
                             detail: Some(cat.to_string()),
                             insert_text_format: snippet.as_ref().map(|_| InsertTextFormat::SNIPPET),
                             insert_text: snippet,
-                            sort_text: sort_for_kind(Some(CompletionItemKind::KEYWORD), &v),
+                            sort_text: sort_for_kind(Some(CompletionItemKind::KEYWORD), v),
                             ..Default::default()
                         });
                     }
@@ -753,10 +810,10 @@ fn push_scope_link_keys(
                     flt.dropped += 1;
                     return;
                 }
-                let label = format!("{}{}", prefix, inst.name);
-                if !flt.admit(&label) {
+                if !flt.admit_parts(&[prefix, &inst.name]) {
                     continue;
                 }
+                let label = format!("{}{}", prefix, inst.name);
                 items.push(CompletionItem {
                     label: label.clone(),
                     kind: Some(CompletionItemKind::REFERENCE),
@@ -822,32 +879,31 @@ pub(crate) fn enum_values_for<'a>(ruleset: &'a RuleSet, enum_name: &str) -> &'a 
     &[]
 }
 
-pub(crate) fn all_enum_values(
-    ruleset: &RuleSet,
-    info: &InfoService,
+fn all_enum_values_cached<'c, 'a>(
+    cache: &'c mut HashMap<String, Vec<&'a str>>,
+    ruleset: &'a RuleSet,
+    info: &'a InfoService,
     enum_name: &str,
-) -> Vec<String> {
-    let mut vals = enum_values_for(ruleset, enum_name).to_vec();
-    vals.extend(
-        info.type_index
-            .complex_enum_values
-            .values(enum_name)
-            .map(str::to_string),
-    );
-    vals.sort_unstable();
-    vals.dedup();
-    vals
-}
-
-fn all_enum_values_cached<'c>(
-    cache: &'c mut HashMap<String, Vec<String>>,
-    ruleset: &RuleSet,
-    info: &InfoService,
-    enum_name: &str,
-) -> &'c [String] {
-    cache
-        .entry(enum_name.to_string())
-        .or_insert_with(|| all_enum_values(ruleset, info, enum_name))
+    flt: &mut BuildFilter,
+) -> &'c [&'a str] {
+    if !cache.contains_key(enum_name) {
+        let mut values = Vec::new();
+        let mut consider = |value: &'a str| {
+            if flt.retain_token_match(value) {
+                values.push(value);
+            }
+        };
+        for value in enum_values_for(ruleset, enum_name) {
+            consider(value);
+        }
+        for value in info.type_index.complex_enum_values.values(enum_name) {
+            consider(value);
+        }
+        values.sort_unstable();
+        values.dedup();
+        cache.insert(enum_name.to_string(), values);
+    }
+    cache.get(enum_name).expect("enum cache entry was inserted")
 }
 
 pub(crate) fn enum_member_detail(
@@ -868,11 +924,12 @@ fn normalized_path_part(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn filepath_values(
-    index: &cwtools_info::FileIndex,
+fn filepath_values<'a>(
+    index: &'a cwtools_info::FileIndex,
     prefix: Option<&str>,
     extension: Option<&str>,
-) -> Vec<String> {
+    flt: &mut BuildFilter,
+) -> Vec<&'a str> {
     let prefix = prefix
         .map(normalized_path_part)
         .unwrap_or_default()
@@ -887,7 +944,7 @@ fn filepath_values(
             )
         })
         .unwrap_or_default();
-    let mut values: Vec<String> = index
+    let mut values: Vec<&str> = index
         .paths()
         .filter_map(|path| {
             let mut value = path.as_str();
@@ -901,7 +958,10 @@ fn filepath_values(
                 value = value.strip_suffix(&extension)?;
             }
             let value = value.trim_start_matches('/');
-            (!value.is_empty()).then(|| value.to_string())
+            if value.is_empty() || !flt.retain_token_match(value) {
+                return None;
+            }
+            Some(value)
         })
         .collect();
     values.sort_unstable();
@@ -909,11 +969,15 @@ fn filepath_values(
     values
 }
 
-fn icon_values(index: &cwtools_info::FileIndex, folder: &str) -> Vec<String> {
+fn icon_values<'a>(
+    index: &'a cwtools_info::FileIndex,
+    folder: &str,
+    flt: &mut BuildFilter,
+) -> Vec<&'a str> {
     let prefix = normalized_path_part(folder)
         .trim_end_matches('/')
         .to_string();
-    let mut values: Vec<String> = index
+    let mut values: Vec<&str> = index
         .paths()
         .filter_map(|path| {
             let mut value = path.as_str();
@@ -928,7 +992,10 @@ fn icon_values(index: &cwtools_info::FileIndex, folder: &str) -> Vec<String> {
                 .into_iter()
                 .find(|extension| value.ends_with(extension))?;
             let value = value.strip_suffix(extension)?;
-            (!value.is_empty()).then(|| value.to_string())
+            if value.is_empty() || !flt.retain_token_match(value) {
+                return None;
+            }
+            Some(value)
         })
         .collect();
     values.sort_unstable();
@@ -979,7 +1046,7 @@ pub fn value_completions(
     let mut seen: HashSet<String> = HashSet::new();
     let mut seen_alias_cats: HashSet<&str> = HashSet::new();
     // Per-request memo so a repeated enum is only collected/sorted once (#46).
-    let mut enum_cache: HashMap<String, Vec<String>> = HashMap::new();
+    let mut enum_cache: HashMap<String, Vec<&str>> = HashMap::new();
     // value rules arrive here (#44).
     let mut scope_names: Option<Vec<String>> = None;
     let mut push = |label: String,
@@ -1041,10 +1108,10 @@ pub fn value_completions(
                 suffix,
             }) => {
                 for (_, inst) in info.type_index.instances(name) {
-                    let label = format!("{}{}{}", prefix, inst.name, suffix);
-                    if !flt.admit(&label) {
+                    if !flt.admit_parts(&[prefix, &inst.name, suffix]) {
                         continue;
                     }
+                    let label = format!("{}{}{}", prefix, inst.name, suffix);
                     push(
                         label,
                         CompletionItemKind::REFERENCE,
@@ -1056,14 +1123,14 @@ pub fn value_completions(
                 }
             }
             NewField::ValueField(ValueType::Enum(e)) => {
-                for v in all_enum_values_cached(&mut enum_cache, ruleset, info, e) {
+                for v in all_enum_values_cached(&mut enum_cache, ruleset, info, e, &mut flt) {
                     if !flt.admit(v) {
                         continue;
                     }
                     let quoted = quote_if_needed(v);
                     let insert_text = (quoted != *v).then_some(quoted);
                     push(
-                        v.clone(),
+                        v.to_string(),
                         CompletionItemKind::ENUM_MEMBER,
                         None,
                         ResolveData::Enum { id: e.to_string() }.into_value(),
@@ -1075,6 +1142,9 @@ pub fn value_completions(
             // variable dump (cwtools-vscode#74).
             NewField::LocalisationField { .. } => {
                 for k in sets.loc_keys {
+                    if !flt.retain_token_match(k) {
+                        continue;
+                    }
                     push(
                         k.clone(),
                         CompletionItemKind::TEXT,
@@ -1090,11 +1160,13 @@ pub fn value_completions(
                     &info.type_index.file_index,
                     prefix.as_deref(),
                     extension.as_deref(),
+                    &mut flt,
                 ) {
-                    if !flt.admit(&value) {
+                    if !flt.admit(value) {
                         continue;
                     }
-                    let quoted = quote_if_needed(&value);
+                    let quoted = quote_if_needed(value);
+                    let value = value.to_string();
                     push(
                         value.clone(),
                         CompletionItemKind::FILE,
@@ -1106,11 +1178,12 @@ pub fn value_completions(
                 }
             }
             NewField::IconField(folder) => {
-                for value in icon_values(&info.type_index.file_index, folder) {
-                    if !flt.admit(&value) {
+                for value in icon_values(&info.type_index.file_index, folder, &mut flt) {
+                    if !flt.admit(value) {
                         continue;
                     }
-                    let quoted = quote_if_needed(&value);
+                    let quoted = quote_if_needed(value);
+                    let value = value.to_string();
                     push(
                         value.clone(),
                         CompletionItemKind::FILE,
@@ -1195,6 +1268,7 @@ pub fn value_completions(
                     cat,
                     scope_ctx,
                     &mut flt,
+                    &mut enum_cache,
                 );
                 for item in &mut aliases {
                     let quoted = quote_if_needed(&item.label);
@@ -1233,10 +1307,10 @@ pub fn value_completions(
                     );
                 }
                 for et in info.event_target_counts.keys() {
-                    let label = format!("event_target:{}", et);
-                    if !flt.admit(&label) {
+                    if !flt.admit_parts(&["event_target:", et]) {
                         continue;
                     }
+                    let label = format!("event_target:{}", et);
                     push(
                         label,
                         CompletionItemKind::VARIABLE,
@@ -1351,6 +1425,7 @@ mod resolve_data_tests {
 
     use std::sync::Arc;
 
+    use crate::completion::prepare_context_items;
     use cwtools_rules::rules_types::{EnumDefinition, Options};
 
     use super::*;
@@ -1505,6 +1580,157 @@ mod resolve_data_tests {
     }
 
     #[test]
+    fn alias_completion_uses_category_index_and_filters_before_snippets() {
+        let mut rs = RuleSet::new();
+        for (name, required_scopes) in [
+            ("effect:focus_power", vec!["state"]),
+            ("effect:other", vec![]),
+            ("unused:focus_noise", vec![]),
+            ("effect:focus_power", vec!["country"]),
+        ] {
+            rs.aliases.push((
+                name.to_string(),
+                (
+                    RuleType::LeafRule {
+                        left: NewField::SpecificField(format!("alias[{name}]")),
+                        right: NewField::ScalarField,
+                    },
+                    Options {
+                        required_scopes: required_scopes.into_iter().map(str::to_string).collect(),
+                        ..Options::default()
+                    },
+                ),
+            ));
+        }
+        rs.reindex();
+        let registry = ScopeRegistry::from_config(
+            &[cwtools_game::scope_registry::ScopeInput {
+                name: "Country".to_string(),
+                aliases: vec!["country".to_string()],
+                is_subscope_of: Vec::new(),
+            }],
+            &[],
+            cwtools_game::constants::Game::Stellaris,
+        );
+        let country = registry.id_of("country").unwrap();
+        let rule = vec![(
+            RuleType::LeafRule {
+                left: NewField::AliasField("effect".to_string()),
+                right: NewField::AliasField("effect".to_string()),
+            },
+            Options::default(),
+        )];
+        let (items, dropped) = completions_from_rules(
+            &rule,
+            &rs,
+            &InfoService::new(),
+            "hoi4",
+            &HashSet::new(),
+            &Default::default(),
+            Some(&registry),
+            Some(country),
+            "focus",
+        );
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            ["focus_power"]
+        );
+        assert!(items[0].insert_text.is_some());
+        assert_eq!(items[0].sort_text.as_deref(), Some("0_focus_power"));
+        assert_eq!(dropped, 1);
+        let (items, incomplete, strategy) = prepare_context_items(
+            items,
+            dropped,
+            "focus",
+            true,
+            true,
+            super::super::CONTEXT_COMPLETE_THRESHOLD,
+            super::super::CONTEXT_CAP,
+        );
+        assert!(incomplete);
+        assert_eq!(strategy, "filtered");
+        assert_eq!(items.len(), 1);
+        assert_eq!(rs.alias_categories()["effect"].plain_alias_indices.len(), 3);
+    }
+
+    #[test]
+    fn filter_admits_concatenated_parts_like_the_allocated_label() {
+        for (parts, token) in [
+            (&["event_target:", "Leader"] as &[&str], "event_le"),
+            (&["tag_", "München", "_done"], "tag_mün"),
+            (&["prefix", "suffix"], "xqz"),
+            (&["plain"], ""),
+        ] {
+            let label = parts.concat();
+            let expected = super::super::subsequence_match(&label, token);
+            assert_eq!(BuildFilter::new(token).matches_parts(parts), expected);
+        }
+
+        let mut filter = BuildFilter::new("match");
+        assert!(!filter.admit_parts(&["unrelated", "name"]));
+        assert_eq!(filter.dropped(), 1);
+        assert!(filter.admit_parts(&["pre", "MATCH"]));
+        assert_eq!(filter.dropped(), 1);
+    }
+
+    #[test]
+    fn no_match_filtering_does_not_store_large_candidate_universes() {
+        const CANDIDATES: usize = 10_000;
+        let mut index = cwtools_info::FileIndex::new();
+        index.add_paths(
+            (0..CANDIDATES)
+                .map(|i| format!("common/ships/ship_{i:05}.txt"))
+                .chain((0..CANDIDATES).map(|i| format!("gfx/interface/icons/icon_{i:05}.dds"))),
+        );
+
+        let mut filepath_filter = BuildFilter::new("no_such_candidate");
+        let paths = filepath_values(
+            &index,
+            Some("common/ships"),
+            Some("txt"),
+            &mut filepath_filter,
+        );
+        assert!(paths.is_empty());
+        assert_eq!(
+            paths.capacity(),
+            0,
+            "unmatched paths should not allocate a candidate buffer"
+        );
+        assert_eq!(filepath_filter.dropped(), CANDIDATES);
+
+        let mut icon_filter = BuildFilter::new("no_such_candidate");
+        let icons = icon_values(&index, "gfx/interface/icons", &mut icon_filter);
+        assert!(icons.is_empty());
+        assert_eq!(
+            icons.capacity(),
+            0,
+            "unmatched icons should not allocate a candidate buffer"
+        );
+        assert_eq!(icon_filter.dropped(), CANDIDATES);
+
+        let mut ruleset = RuleSet::new();
+        ruleset.enums.push(EnumDefinition {
+            key: "large".to_string(),
+            description: String::new(),
+            values: (0..CANDIDATES)
+                .map(|i| format!("enum_value_{i:05}"))
+                .collect(),
+        });
+        ruleset.reindex();
+        let info = InfoService::new();
+        let mut enum_filter = BuildFilter::new("no_such_candidate");
+        let mut enum_cache = HashMap::new();
+        let values =
+            all_enum_values_cached(&mut enum_cache, &ruleset, &info, "large", &mut enum_filter);
+        assert!(values.is_empty());
+        assert_eq!(enum_cache["large"].capacity(), 0);
+        assert_eq!(enum_filter.dropped(), CANDIDATES);
+    }
+
+    #[test]
     fn alias_value_items_insert_bare_values() {
         let mut rs = RuleSet::new();
         rs.aliases.push((
@@ -1579,6 +1805,53 @@ mod resolve_data_tests {
         .0;
         assert!(items.iter().any(|item| item.label == "known_key"));
         assert!(value_rules_need_loc_keys(&rules));
+    }
+
+    #[test]
+    fn localisation_token_filter_preserves_incomplete_signal() {
+        let rules = vec![(
+            RuleType::LeafValueRule {
+                right: NewField::LocalisationField {
+                    synced: false,
+                    is_inline: false,
+                },
+            },
+            Options::default(),
+        )];
+        let loc_keys = HashSet::from(["focus_name".to_string(), "unrelated_name".to_string()]);
+        let (items, dropped) = value_completions(
+            &rules,
+            &RuleSet::new(),
+            &InfoService::new(),
+            None,
+            "hoi4",
+            ValueCompletionSets {
+                modifier_keys: &HashSet::new(),
+                modifier_scopes: &Default::default(),
+                loc_keys: &loc_keys,
+            },
+            None,
+            "focus",
+        );
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            ["focus_name"]
+        );
+        assert_eq!(dropped, 1);
+        let (_, incomplete, strategy) = prepare_context_items(
+            items,
+            dropped,
+            "focus",
+            true,
+            true,
+            super::super::CONTEXT_COMPLETE_THRESHOLD,
+            super::super::CONTEXT_CAP,
+        );
+        assert!(incomplete);
+        assert_eq!(strategy, "filtered");
     }
 
     #[test]
@@ -1979,15 +2252,24 @@ mod resolve_data_tests {
         }
         let mut index = cwtools_info::FileIndex::new();
         index.add_root(root.path());
+        let mut file_filter = BuildFilter::new("");
 
         assert_eq!(
-            filepath_values(&index, Some("common/ships/"), Some(".txt")),
+            filepath_values(
+                &index,
+                Some("common/ships/"),
+                Some(".txt"),
+                &mut file_filter,
+            ),
             vec!["alpha", "nested/beta", "with space"]
         );
+        assert_eq!(file_filter.dropped(), 0);
+        let mut icon_filter = BuildFilter::new("");
         assert_eq!(
-            icon_values(&index, "gfx\\interface\\icons\\"),
+            icon_values(&index, "gfx\\interface\\icons\\", &mut icon_filter),
             vec!["alpha", "nested/beta"]
         );
+        assert_eq!(icon_filter.dropped(), 0);
     }
 
     #[test]
