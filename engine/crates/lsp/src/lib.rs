@@ -129,6 +129,7 @@ mod tests {
         LocDocumentCache, MAX_DOCUMENT_BYTES, MAX_OPEN_DOCUMENTS, MAX_RETAINED_DOCUMENT_BYTES,
         ParsedDoc, remove_debounce_task,
     };
+    use cwtools_info::{IndexedUseSite, SourceLocation, UseSite};
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
 
@@ -193,6 +194,27 @@ mod tests {
             ast_version: None,
             ast_source_bytes: 0,
             loc_cache: None,
+        }
+    }
+
+    fn indexed_site(uri: &str, name: &str) -> IndexedUseSite {
+        IndexedUseSite {
+            type_name: "focus".to_string(),
+            name: name.to_string(),
+            case_insensitive: false,
+            site: UseSite {
+                file: Arc::from(uri),
+                key: SourceLocation {
+                    line: 0,
+                    col: 0,
+                    end: (0, 1),
+                },
+                value: SourceLocation {
+                    line: 0,
+                    col: 2,
+                    end: (0, 3),
+                },
+            },
         }
     }
 
@@ -275,10 +297,12 @@ mod tests {
             Ok(true)
         );
         assert_eq!(store.retained_text_bytes, "text".len() + 10);
+        let retained_before_rejected_cache = store.retained_text_bytes;
         assert_eq!(
             store.set_loc_cache("file:///doc", 1, loc_document_cache(1, MAX_DOCUMENT_BYTES)),
             Err(DocumentRejection::TooLarge)
         );
+        assert_eq!(store.retained_text_bytes, retained_before_rejected_cache);
         store
             .open("file:///cached".to_string(), document("z"))
             .unwrap();
@@ -311,6 +335,266 @@ mod tests {
         store.change("file:///doc", 2, Arc::from("x")).unwrap();
 
         assert_eq!(store.retained_text_bytes, source.len());
+    }
+
+    #[test]
+    fn open_reference_overlay_changes_only_with_the_matching_ast_version() {
+        let uri = "file:///doc.txt";
+        let table = StringTable::new();
+        let mut store = DocumentStore::new();
+        store
+            .open(uri.to_string(), document("old = { base = first }"))
+            .unwrap();
+        let first = IndexedUseSite {
+            type_name: "focus".to_string(),
+            name: "first".to_string(),
+            case_insensitive: false,
+            site: UseSite {
+                file: Arc::from(uri),
+                key: SourceLocation {
+                    line: 0,
+                    col: 7,
+                    end: (0, 11),
+                },
+                value: SourceLocation {
+                    line: 0,
+                    col: 14,
+                    end: (0, 19),
+                },
+            },
+        };
+        assert!(store.set_ast_with_use_sites(
+            uri,
+            1,
+            Arc::new(parse_string("old = { base = first }", &table)),
+            vec![first.clone()],
+        ));
+        let one_site_bytes = store.retained_text_bytes;
+        assert!(one_site_bytes > "old = { base = first }".len());
+        let alias = IndexedUseSite {
+            name: "FIRST".to_string(),
+            case_insensitive: true,
+            ..first.clone()
+        };
+        assert!(store.replace_reference_sites(uri, 1, vec![first.clone(), alias.clone()]));
+        assert!(store.retained_text_bytes > one_site_bytes);
+        assert_eq!(store.reference_sites("focus", "first").len(), 2);
+        assert_eq!(store.reference_sites("focus", "FIRST").len(), 1);
+        assert!(store.replace_reference_sites(uri, 1, vec![first.clone()]));
+        assert_eq!(store.retained_text_bytes, one_site_bytes);
+        assert!(store.replace_reference_sites(uri, 1, vec![first.clone(), alias]));
+        store
+            .change(uri, 2, Arc::from("new = { base = second }"))
+            .unwrap();
+        assert!(!store.set_ast_with_use_sites(
+            uri,
+            1,
+            Arc::new(parse_string("stale = { base = wrong }", &table)),
+            Vec::new(),
+        ));
+        assert!(
+            !store.replace_reference_sites(uri, 1, Vec::new()),
+            "a post-scan alias refresh must not replace references for a stale AST version"
+        );
+        assert_eq!(
+            store.reference_sites("focus", "FIRST").len(),
+            1,
+            "the last accepted overlay remains available while the new version is parsed"
+        );
+        let second = IndexedUseSite {
+            name: "second".to_string(),
+            site: UseSite {
+                file: Arc::from(uri),
+                key: SourceLocation {
+                    line: 0,
+                    col: 7,
+                    end: (0, 11),
+                },
+                value: SourceLocation {
+                    line: 0,
+                    col: 14,
+                    end: (0, 20),
+                },
+            },
+            ..first.clone()
+        };
+        assert!(store.set_ast_with_use_sites(
+            uri,
+            2,
+            Arc::new(parse_string("new = { base = second }", &table)),
+            vec![second.clone()],
+        ));
+        assert!(store.replace_reference_sites(uri, 2, vec![second]));
+        assert!(store.reference_sites("focus", "first").is_empty());
+        assert_eq!(store.reference_sites("focus", "second").len(), 1);
+
+        store.remove(uri);
+        assert_eq!(store.retained_text_bytes, 0);
+        assert!(store.reference_sites("focus", "second").is_empty());
+        store.open(uri.to_string(), document("reopened")).unwrap();
+        assert_eq!(store.retained_text_bytes, "reopened".len());
+        store.remove(uri);
+        assert_eq!(store.retained_text_bytes, 0);
+    }
+
+    #[test]
+    fn document_store_rejects_over_budget_index_without_partial_publication() {
+        let uri = "file:///doc.txt";
+        let table = StringTable::new();
+        let first = indexed_site(uri, "first");
+        let second = indexed_site(uri, "second");
+
+        let mut ast_store = DocumentStore::new();
+        ast_store
+            .open(uri.to_string(), document("root = first"))
+            .unwrap();
+        ast_store.retained_text_bytes = MAX_RETAINED_DOCUMENT_BYTES - 1;
+        assert!(!ast_store.set_ast_with_use_sites(
+            uri,
+            1,
+            Arc::new(parse_string("root = first", &table)),
+            vec![first.clone()],
+        ));
+        assert!(ast_store.get(uri).unwrap().ast.is_none());
+        assert!(ast_store.reference_sites("focus", "first").is_empty());
+
+        let mut reference_store = DocumentStore::new();
+        reference_store
+            .open(uri.to_string(), document("root = first"))
+            .unwrap();
+        assert!(reference_store.set_ast_with_use_sites(
+            uri,
+            1,
+            Arc::new(parse_string("root = first", &table)),
+            vec![first.clone()],
+        ));
+        reference_store.retained_text_bytes = MAX_RETAINED_DOCUMENT_BYTES - 1;
+        assert!(!reference_store.replace_reference_sites(uri, 1, vec![first.clone(), second],));
+        assert_eq!(reference_store.reference_sites("focus", "first").len(), 1);
+        assert!(
+            reference_store
+                .reference_sites("focus", "second")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn document_store_charges_uri_arcs_and_retains_sparse_index_capacity() {
+        let large_uri = format!("file:///{}", "l".repeat(1024));
+        let small_uri = format!("file:///{}", "s".repeat(1024));
+        let table = StringTable::new();
+        let large_sites: Vec<_> = (0..3_600)
+            .map(|i| indexed_site(&large_uri, &format!("large_{i}")))
+            .collect();
+        let small_sites: Vec<_> = (0..3_000)
+            .map(|i| indexed_site(&small_uri, &format!("small_{i}")))
+            .collect();
+
+        let mut store = DocumentStore::new();
+        store
+            .open(large_uri.clone(), document("root = large_0"))
+            .unwrap();
+        store
+            .open(small_uri.clone(), document("root = small_0"))
+            .unwrap();
+        assert!(store.set_ast_with_use_sites(
+            &large_uri,
+            1,
+            Arc::new(parse_string("root = large_0", &table)),
+            large_sites.clone(),
+        ));
+        assert!(store.set_ast_with_use_sites(
+            &small_uri,
+            1,
+            Arc::new(parse_string("root = small_0", &table)),
+            small_sites.clone(),
+        ));
+        assert!(store.retained_text_bytes > large_sites.len() * large_uri.len() * 2);
+
+        let mut small_only = DocumentStore::new();
+        small_only
+            .open(small_uri.clone(), document("root = small_0"))
+            .unwrap();
+        assert!(small_only.set_ast_with_use_sites(
+            &small_uri,
+            1,
+            Arc::new(parse_string("root = small_0", &table)),
+            small_sites,
+        ));
+        let small_retained = small_only.retained_text_bytes;
+
+        store.remove(&large_uri);
+        assert!(
+            store.retained_text_bytes > small_retained,
+            "closing a large overlay must not discard spare index capacity"
+        );
+        store.remove(&small_uri);
+        assert_eq!(store.retained_text_bytes, 0);
+    }
+
+    #[test]
+    fn document_store_shared_reference_capacity_is_stable_across_reindexing() {
+        let table = StringTable::new();
+        let mut store = DocumentStore::new();
+        for uri in ["file:///first.txt", "file:///second.txt"] {
+            store
+                .open(uri.to_string(), document("root = shared"))
+                .unwrap();
+            assert!(store.set_ast_with_use_sites(
+                uri,
+                1,
+                Arc::new(parse_string("root = shared", &table)),
+                vec![indexed_site(uri, "shared")],
+            ));
+        }
+        let retained = store.retained_text_bytes;
+        for _ in 0..20 {
+            assert!(store.replace_reference_sites(
+                "file:///first.txt",
+                1,
+                vec![indexed_site("file:///first.txt", "shared")],
+            ));
+            assert_eq!(store.retained_text_bytes, retained);
+        }
+        store.remove("file:///first.txt");
+        store.remove("file:///second.txt");
+        assert_eq!(store.retained_text_bytes, 0);
+    }
+
+    #[test]
+    fn document_store_global_reference_capacity_does_not_reject_small_documents() {
+        let table = StringTable::new();
+        let mut store = DocumentStore::new();
+        for file in 0..8 {
+            let uri = format!("file:///indexed_{file}.txt");
+            store.open(uri.clone(), document("root = value")).unwrap();
+            let sites = (0..2_500)
+                .map(|site| indexed_site(&uri, &format!("value_{file}_{site}")))
+                .collect();
+            assert!(store.set_ast_with_use_sites(
+                &uri,
+                1,
+                Arc::new(parse_string("root = value", &table)),
+                sites,
+            ));
+        }
+        assert!(store.retained_text_bytes > MAX_DOCUMENT_BYTES);
+        assert!(store.retained_text_bytes < MAX_RETAINED_DOCUMENT_BYTES);
+        let uri = "file:///small.txt";
+        store.open(uri.to_string(), document("x")).unwrap();
+        store.change(uri, 2, Arc::from("y")).unwrap();
+        assert!(store.set_ast(uri, 2, Arc::new(parse_string("y", &table))));
+        assert!(store.replace_reference_sites(uri, 2, vec![indexed_site(uri, "value")]));
+        assert_eq!(
+            store.set_loc_cache(uri, 2, loc_document_cache(2, 10)),
+            Ok(true)
+        );
+        store.open(uri.to_string(), document("reopened")).unwrap();
+        for file in 0..8 {
+            store.remove(&format!("file:///indexed_{file}.txt"));
+        }
+        store.remove(uri);
+        assert_eq!(store.retained_text_bytes, 0);
     }
 
     #[test]

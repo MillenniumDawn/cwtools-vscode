@@ -18,6 +18,28 @@ use crate::lines::DocLines;
 use crate::paths::{logical_path_from_uri, uri_to_path_str};
 use crate::state::LocDocumentCache;
 
+pub(crate) fn code_lens_refresh_needed(
+    first_accepted_ast: bool,
+    exports_changed: bool,
+    references_before: u64,
+    references_after: u64,
+) -> bool {
+    first_accepted_ast || exports_changed || references_before != references_after
+}
+
+#[cfg(test)]
+mod code_lens_refresh_tests {
+    use super::code_lens_refresh_needed;
+
+    #[test]
+    fn unchanged_exports_and_references_skip_refresh() {
+        assert!(!code_lens_refresh_needed(false, false, 42, 42));
+        assert!(code_lens_refresh_needed(false, true, 42, 42));
+        assert!(code_lens_refresh_needed(false, false, 42, 43));
+        assert!(code_lens_refresh_needed(true, false, 42, 42));
+    }
+}
+
 #[cfg(test)]
 mod loc_sweep_test_hook {
     use super::Backend;
@@ -653,12 +675,15 @@ impl Backend {
     ) {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(uri, &ws_prefix);
-        self.index_parsed_file_as(uri, parsed, parsed_version, &logical_path, false);
+        if self.index_parsed_file_as(uri, parsed, parsed_version, &logical_path, false) {
+            self.refresh_open_reference_sites();
+        }
     }
 
     /// Index a file under an explicit root-relative `logical_path`: a parent
     /// mod's file sits outside the workspace root, and `base_game` keeps its
     /// definitions out of the workspace's own counts (#786).
+    /// Returns whether alias publication requires an unlocked overlay refresh.
     #[tracing::instrument(skip_all, fields(uri = %uri))]
     pub(crate) fn index_parsed_file_as(
         &self,
@@ -667,7 +692,7 @@ impl Backend {
         parsed_version: Option<i32>,
         logical_path: &str,
         base_game: bool,
-    ) {
+    ) -> bool {
         let ignored = {
             let cfg = self.state.config.read();
             cwtools_file_manager::file_manager::is_ignored_path(
@@ -678,7 +703,7 @@ impl Backend {
         };
         if ignored {
             self.clear_ignored_file_state(uri);
-            return;
+            return false;
         }
         let ruleset = self.state.rules.read().ruleset.clone();
         let collected = ruleset.as_ref().map(|ruleset| {
@@ -698,7 +723,7 @@ impl Backend {
                 .get(uri)
                 .is_some_and(|doc| doc.version != version)
         {
-            return;
+            return false;
         }
         let mut info = self.state.info_service.write();
         let exports_before = info.export_fingerprint(uri);
@@ -722,19 +747,19 @@ impl Backend {
         if exports_changed {
             self.bump_info_revision();
         }
-        self.refresh_alias_key_index();
+        self.refresh_alias_key_index()
     }
 
-    pub(crate) fn refresh_alias_key_index(&self) {
+    pub(crate) fn refresh_alias_key_index(&self) -> bool {
         if self
             .state
             .scan_in_progress
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            return;
+            return false;
         }
         let Some(ruleset) = self.state.rules.read().ruleset.clone() else {
-            return;
+            return false;
         };
         // Most edits change no instance name; skip the write lock for those.
         if !self
@@ -744,12 +769,13 @@ impl Backend {
             .type_index
             .has_instance_name_changes()
         {
-            return;
+            return false;
         }
         self.state
             .info_service
             .write()
-            .refresh_alias_key_names(&ruleset);
+            .refresh_alias_key_names(&ruleset)
+            .is_some()
     }
 
     pub(crate) fn rebuild_alias_key_index(&self) {
@@ -758,6 +784,63 @@ impl Backend {
         };
         let mut info = self.state.info_service.write();
         info.rebuild_alias_key_index(&ruleset);
+        drop(info);
+        self.refresh_open_reference_sites();
+    }
+
+    /// References from open buffers can be reclassified after a workspace scan
+    /// or ruleset reload. Rebuild from each accepted in-memory AST, never the
+    /// workspace file index, which may describe the on-disk version of an open
+    /// document. The final version check prevents a concurrent edit from
+    /// replacing a newer overlay with this snapshot.
+    pub(crate) fn reference_sites_for_open_ast(
+        &self,
+        uri: &str,
+        ast: &ParsedFile,
+    ) -> Option<Vec<cwtools_info::IndexedUseSite>> {
+        let ruleset = self.state.rules.read().ruleset.clone()?;
+        let ws_prefix = self.state.config.read().workspace_prefix.clone();
+        let table = self.state.string_table.rebound(ast.overlay());
+        let logical_path = logical_path_from_uri(uri, &ws_prefix);
+        Some(
+            self.state
+                .info_service
+                .write()
+                .file_reference_sites_for_ast(uri, ast, &table, &ruleset, &logical_path),
+        )
+    }
+
+    pub(crate) fn refresh_open_reference_sites(&self) {
+        let open_docs: Vec<(String, i32, Arc<ParsedFile>)> = self
+            .state
+            .documents
+            .lock()
+            .iter()
+            .filter_map(|(uri, document)| {
+                if document.ast_version == Some(document.version) {
+                    document
+                        .ast
+                        .clone()
+                        .map(|ast| (uri.clone(), document.version, ast))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if open_docs.is_empty() {
+            return;
+        }
+        let refreshed: Vec<(String, i32, Vec<cwtools_info::IndexedUseSite>)> = open_docs
+            .into_iter()
+            .filter_map(|(uri, version, ast)| {
+                self.reference_sites_for_open_ast(&uri, &ast)
+                    .map(|sites| (uri, version, sites))
+            })
+            .collect();
+        let mut documents = self.state.documents.lock();
+        for (uri, version, sites) in refreshed {
+            documents.replace_reference_sites(&uri, version, sites);
+        }
     }
 
     /// workspace scan (#259). Cheap to call unconditionally: the path check
@@ -1079,19 +1162,29 @@ impl Backend {
             }
         };
 
-        let (exports_before, names_before) = {
+        let (exports_before, names_before, references_before) = {
             let info = self.state.info_service.read();
-            (info.export_fingerprint(&uri), info.export_names(&uri))
+            (
+                info.export_fingerprint(&uri),
+                info.export_names(&uri),
+                info.reference_fingerprint(&uri),
+            )
         };
 
         let (diagnostics, parsed) = self
             .parse_and_validate(&uri, &text, trigger, Some(expected_version))
             .await;
-        let code_lenses_changed = parsed.is_some();
+        let parsed = parsed.map(Arc::new);
+        // Derive references from the just-parsed buffer. The workspace index
+        // may concurrently contain a disk parse for this URI, which is not
+        // necessarily the text that was accepted by this validation.
+        let open_use_sites = parsed
+            .as_ref()
+            .and_then(|ast| self.reference_sites_for_open_ast(&uri, ast));
+        let mut first_accepted_ast = false;
         {
-            let ast = parsed.map(Arc::new);
             // acquired before documents everywhere to avoid ABBA deadlock with
-            self.update_doc_tokens(&uri, ast.as_ref());
+            self.update_doc_tokens(&uri, parsed.as_ref());
             let mut docs = self.state.documents.lock();
             let still_current = docs
                 .get(&uri)
@@ -1100,8 +1193,17 @@ impl Backend {
                 return;
             }
             // is still published. (#41) Loc/.cwt files always parse to None
-            if let Some(ast) = ast {
-                docs.set_ast(&uri, expected_version, ast);
+            if let Some(ast) = parsed {
+                let had_no_ast = docs
+                    .get(&uri)
+                    .is_some_and(|document| document.ast.is_none());
+                let accepted = docs.set_ast_with_use_sites(
+                    &uri,
+                    expected_version,
+                    ast,
+                    open_use_sites.unwrap_or_default(),
+                );
+                first_accepted_ast = had_no_ast && accepted;
             }
         }
         let still_open = self.state.documents.lock().contains_key(&uri);
@@ -1115,11 +1217,21 @@ impl Backend {
             .await;
         }
 
-        let (exports_after, names_after) = {
+        let (exports_after, names_after, references_after) = {
             let info = self.state.info_service.read();
-            (info.export_fingerprint(&uri), info.export_names(&uri))
+            (
+                info.export_fingerprint(&uri),
+                info.export_names(&uri),
+                info.reference_fingerprint(&uri),
+            )
         };
         let exports_changed = exports_before != exports_after;
+        let code_lenses_changed = code_lens_refresh_needed(
+            first_accepted_ast,
+            exports_changed,
+            references_before,
+            references_after,
+        );
         let mut changed_names: HashSet<String> = names_before
             .symmetric_difference(&names_after)
             .cloned()
@@ -1141,6 +1253,8 @@ impl Backend {
         }
         if code_lenses_changed {
             self.request_code_lens_refresh().await;
+        } else {
+            tracing::debug!(uri = %uri, "CodeLens exports and references unchanged; skipping refresh");
         }
     }
 

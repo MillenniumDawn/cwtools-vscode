@@ -774,6 +774,27 @@ impl TypeIndex {
         out
     }
 
+    /// Find one instance through the per-file position index without
+    /// materializing every instance in the file.
+    pub fn instance_at(
+        &self,
+        file_uri: &str,
+        type_name: &str,
+        name: &str,
+        line: u32,
+        col: u16,
+    ) -> Option<&TypeInstance> {
+        let positions = self.file_positions.get(file_uri)?.get(type_name)?;
+        let entries = self.map.get(type_name)?;
+        positions.iter().find_map(|&idx| {
+            let instance = &entries[idx].1;
+            (instance.location.line == line
+                && instance.location.col == col
+                && instance.name == name)
+                .then_some(instance)
+        })
+    }
+
     pub fn instance_type_names_in_file<'a>(
         &'a self,
         file_uri: &str,
@@ -1376,6 +1397,37 @@ mod tests {
         );
 
         assert!(idx.instances_in_file("file://never.txt").is_empty());
+    }
+
+    #[test]
+    fn instance_at_uses_the_requested_file_type_and_source_position() {
+        let mut idx = TypeIndex::new();
+        idx.merge(
+            "file://a.txt",
+            HashMap::from([("event".to_string(), vec![inst("a_ev", 1), inst("b_ev", 2)])]),
+        );
+        idx.merge(
+            "file://b.txt",
+            HashMap::from([("event".to_string(), vec![inst("a_ev", 1)])]),
+        );
+
+        assert_eq!(
+            idx.instance_at("file://a.txt", "event", "b_ev", 2, 0)
+                .map(|instance| instance.name.as_str()),
+            Some("b_ev")
+        );
+        assert!(
+            idx.instance_at("file://a.txt", "event", "b_ev", 1, 0)
+                .is_none()
+        );
+        assert!(
+            idx.instance_at("file://b.txt", "event", "b_ev", 2, 0)
+                .is_none()
+        );
+        assert!(
+            idx.instance_at("file://a.txt", "other", "b_ev", 2, 0)
+                .is_none()
+        );
     }
 
     #[test]

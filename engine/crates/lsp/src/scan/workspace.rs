@@ -619,7 +619,7 @@ impl Backend {
                 Some((cache_hit, parsed, source_hash, inline_ignored)) => {
                     match &file.parent_logical_path {
                         Some(logical) => {
-                            self.index_parsed_file_as(&file.uri, &parsed, None, logical, true)
+                            self.index_parsed_file_as(&file.uri, &parsed, None, logical, true);
                         }
                         None => self.index_parsed_file(&file.uri, &parsed, None),
                     }

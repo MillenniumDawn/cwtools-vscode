@@ -20,3 +20,5 @@ pub(crate) use helpers::{
 };
 pub(crate) use references::key_sites;
 pub(crate) use use_sites::{BoundedUseSiteScan, scan_use_sites, scan_use_sites_bounded};
+#[cfg(test)]
+pub(crate) use use_sites::{ast_leaf_visits, reset_ast_leaf_visits};
