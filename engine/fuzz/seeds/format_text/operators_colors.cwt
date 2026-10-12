@@ -1,0 +1,5 @@
+equal == value
+optional ?= 4
+at_least >= 2
+color = rgb { 255 0 64 }
+shade = hsv360 { 180 50 80 }
