@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Prefilter script files for localization references before allocating lowercase copies and line indexes, while retaining exact token matching. (#871)
 * Load repeatable CLI `--parent` directories and `parents` from `cwtools.toml` for validate and fix, indexing parent scripts and localisation between the workspace and vanilla without validating or fixing parent files. Both commands share the same parent-aware vanilla cache. (#819)
 * Filter enum, filepath, icon and plain-alias completion candidates before growing result collections or allocating snippets; cache plain alias indices by category and preserve deterministic ordering, overload aggregation and filtering-budget signals. (#869)
 * Keep distinct non-UTF-8 file paths distinct in indexing, validation and fix grouping while retaining lossy path spellings only for display. (#497)
