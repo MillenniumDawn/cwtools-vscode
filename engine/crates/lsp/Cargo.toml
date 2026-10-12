@@ -35,10 +35,6 @@ harness = false
 name = "validate"
 harness = false
 
-[[bench]]
-name = "localization_refs"
-harness = false
-
 [dependencies]
 cwtools_parser = { workspace = true }
 cwtools_string_table = { workspace = true }

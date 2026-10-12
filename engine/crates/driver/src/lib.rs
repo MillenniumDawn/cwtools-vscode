@@ -510,22 +510,26 @@ impl Session {
             ),
         ) in parsed.iter().zip(per_file)
         {
-            let file_uri = src.path.to_str().unwrap_or("");
-            type_index.merge(file_uri, instances);
+            let file_uri = cwtools_file_manager::path_identity(&src.path);
+            type_index.merge(&file_uri, instances);
             if !subtype_instances.is_empty() {
-                type_index.merge(file_uri, subtype_instances);
+                type_index.merge(&file_uri, subtype_instances);
             }
             for n in &var_names {
                 type_index.var_index.add_name(n);
             }
-            type_index.value_set_values.merge_file(file_uri, value_sets);
-            type_index.complex_enum_values.merge_file(file_uri, complex);
+            type_index
+                .value_set_values
+                .merge_file(&file_uri, value_sets);
+            type_index
+                .complex_enum_values
+                .merge_file(&file_uri, complex);
             type_index
                 .scripted_loc_index
-                .merge_file(file_uri, scripted_locs);
+                .merge_file(&file_uri, scripted_locs);
             type_index
                 .scripted_gui_index
-                .merge_file(file_uri, scripted_guis);
+                .merge_file(&file_uri, scripted_guis);
         }
         let source_files: Vec<SourceFile> = parsed
             .into_iter()
@@ -850,14 +854,16 @@ impl SessionWithFiles {
             .par_iter()
             .filter(|src| only.is_none_or(|wanted| wanted.contains(&src.path)))
             .map(|src| {
-                let file_str: cwtools_validation::FilePath =
-                    std::sync::Arc::from(src.path.to_str().unwrap_or(""));
+                let file_str: cwtools_validation::FilePath = std::sync::Arc::from(
+                    cwtools_file_manager::path_identity(&src.path).into_owned(),
+                );
+                let file_display = src.path.display().to_string();
                 let changed_error = || {
                     (
                         src.path.clone(),
                         vec![ValidationError {
                             message: format!(
-                                "file changed after indexing: {file_str}; rerun validation"
+                                "file changed after indexing: {file_display}; rerun validation"
                             ),
                             severity: ErrorSeverity::Error,
                             line: 0,
@@ -887,7 +893,7 @@ impl SessionWithFiles {
                         return (
                             src.path.clone(),
                             vec![ValidationError {
-                                message: format!("could not parse {file_str}: {error}"),
+                                message: format!("could not parse {file_display}: {error}"),
                                 severity: ErrorSeverity::Error,
                                 line: 0,
                                 col: 0,
@@ -935,7 +941,7 @@ impl SessionWithFiles {
             }
             for (path, errors, _) in &mut results {
                 let file_str: cwtools_validation::FilePath =
-                    std::sync::Arc::from(path.to_str().unwrap_or(""));
+                    std::sync::Arc::from(cwtools_file_manager::path_identity(path).into_owned());
                 let instances = type_index.instances_in_file(&file_str);
                 errors.extend(check_unused_instances(
                     prepared.ruleset,

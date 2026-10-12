@@ -63,12 +63,9 @@ fn navigation_snapshot_changed_error() -> tower_lsp::jsonrpc::Error {
 /// ASCII-insensitive substring check without allocating a lowercase copy.
 /// Localization keys are matched with ASCII case folding in script tokens, so
 /// this is only a candidate filter; the full token scan still decides results.
-pub fn has_ascii_case_insensitive_substring(text: &str, needle: &str) -> bool {
+fn has_ascii_case_insensitive_substring(text: &str, needle: &str) -> bool {
     let needle = needle.as_bytes();
     let text = text.as_bytes();
-    if needle.is_empty() {
-        return true;
-    }
     let Some(&first) = needle.first() else {
         return true;
     };
@@ -90,42 +87,6 @@ pub fn has_ascii_case_insensitive_substring(text: &str, needle: &str) -> bool {
         offset += 1;
     }
     false
-}
-
-/// Locate script-side occurrences of localization keys, returning source line
-/// and column pairs. The byte prefilter avoids constructing line/lowercase
-/// indexes for files that cannot contain any key; the token matcher remains
-/// the authority for reported locations.
-pub fn loc_script_usage_columns(
-    text: &str,
-    keys: &[String],
-    encoding: PositionEncodingKind,
-    prefilter: bool,
-) -> Vec<Range> {
-    if prefilter
-        && !keys
-            .iter()
-            .any(|key| has_ascii_case_insensitive_substring(text, key))
-    {
-        return Vec::new();
-    }
-
-    let lines = DocLines::new(text, encoding);
-    let lower = text.to_ascii_lowercase();
-    let mut hits = Vec::new();
-    for ((line0, line), lower_line) in lines.iter().zip(lower.lines()) {
-        for key_lower in keys {
-            if !lower_line.contains(key_lower.as_str()) {
-                continue;
-            }
-            hits.extend(
-                code_token_cols_in_line(line, key_lower, TokenCase::AsciiInsensitive)
-                    .into_iter()
-                    .map(|col| lines.token_range(line0, col, key_lower)),
-            );
-        }
-    }
-    hits
 }
 
 impl Backend {
@@ -491,18 +452,36 @@ impl Backend {
         let fallback = fallback.clone();
         let mut out = self
             .scan_workspace_texts(script_uris, move |uri, text| {
-                let ranges = loc_script_usage_columns(text, &keys, encoding.clone(), true);
-                if ranges.is_empty() {
+                // Most files hold no key at all; skip their line index and
+                // lowercase copy.
+                if !keys
+                    .iter()
+                    .any(|key| has_ascii_case_insensitive_substring(text, key))
+                {
                     return Vec::new();
                 }
                 let uri = parse_uri(uri, &fallback);
-                ranges
-                    .into_iter()
-                    .map(|range| Location {
-                        uri: uri.clone(),
-                        range,
-                    })
-                    .collect()
+                let lines = DocLines::new(text, encoding.clone());
+                // Lines without the key skip the per-line char walk the
+                // matcher does; the matcher itself folds ASCII case too.
+                let lower = text.to_ascii_lowercase();
+                let mut hits = Vec::new();
+                for ((line0, line), lower_line) in lines.iter().zip(lower.lines()) {
+                    for key_lower in &keys {
+                        if !lower_line.contains(key_lower.as_str()) {
+                            continue;
+                        }
+                        for col in
+                            code_token_cols_in_line(line, key_lower, TokenCase::AsciiInsensitive)
+                        {
+                            hits.push(Location {
+                                uri: uri.clone(),
+                                range: lines.token_range(line0, col, key_lower),
+                            });
+                        }
+                    }
+                }
+                hits
             })
             .await?;
         out.sort_by(|a, b| (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start)));
@@ -1027,34 +1006,19 @@ mod tests {
     }
 
     #[test]
-    fn localization_script_prefilter_preserves_token_matches() {
-        let text =
-            "# target_key\nvalue = TARGET_KEY\nquoted = \"target_key\"\nnear = target_key_suffix\n";
-        let keys = vec!["target_key".to_string()];
-        assert_eq!(
-            loc_script_usage_columns(text, &keys, PositionEncodingKind::UTF16, true),
-            loc_script_usage_columns(text, &keys, PositionEncodingKind::UTF16, false),
-        );
-        assert_eq!(
-            loc_script_usage_columns(text, &keys, PositionEncodingKind::UTF16, true),
-            vec![
-                DocLines::new(text, PositionEncodingKind::UTF16).token_range(1, 8, &keys[0]),
-                DocLines::new(text, PositionEncodingKind::UTF16).token_range(2, 10, &keys[0]),
-            ],
-        );
-        assert!(
-            loc_script_usage_columns(
-                "other_key = value",
-                &keys,
-                PositionEncodingKind::UTF16,
-                true,
-            )
-            .is_empty()
-        );
-        assert!(
-            loc_script_usage_columns("1234567890t", &keys, PositionEncodingKind::UTF16, true,)
-                .is_empty()
-        );
+    fn ascii_case_insensitive_substring_never_rejects_a_file_holding_the_key() {
+        for text in [
+            "value = TARGET_KEY\n",
+            "quoted = \"target_key\"",
+            "tTarget_Key",
+            "target_key",
+        ] {
+            assert!(has_ascii_case_insensitive_substring(text, "target_key"));
+        }
+        for text in ["", "other_key = value", "1234567890t", "target_ke"] {
+            assert!(!has_ascii_case_insensitive_substring(text, "target_key"));
+        }
+        assert!(has_ascii_case_insensitive_substring("", ""));
     }
 
     struct IndexedTypeNavigationFixture {

@@ -376,7 +376,7 @@ def test_missing_npm_fails_before_compilation_and_clears_coverage(
 
 
 @pytest.mark.parametrize("skip_compile", [False, True])
-def test_runs_host_and_live_labels_in_one_coverage_command(
+def test_runs_host_live_and_restart_labels_in_one_coverage_command(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     skip_compile: bool,
@@ -432,7 +432,7 @@ def test_runs_host_and_live_labels_in_one_coverage_command(
         [] if skip_compile else [["resolved-npm", "run", "compile"]]
     )
     assert compile_commands == expected_compile_commands
-    assert labels_seen == [["host", "live"]]
+    assert labels_seen == [["host", "live", "restart"]]
     assert coverage_seen == [True]
     assert invoked_command == [
         "node",
@@ -441,5 +441,7 @@ def test_runs_host_and_live_labels_in_one_coverage_command(
         "host",
         "--label",
         "live",
+        "--label",
+        "restart",
         "--coverage",
     ]
