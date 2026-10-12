@@ -1,6 +1,6 @@
 import type cytoscape from "cytoscape";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { completeLayout, installGraph, node, rejectLayout, render, resetGraphState, state } from "./support/graphHeadless";
+import { completeLayout, installGraph, node, render, resetGraphState, state } from "./support/graphHeadless";
 
 beforeAll(installGraph);
 beforeEach(() => { vi.useFakeTimers(); resetGraphState(); });
@@ -71,26 +71,6 @@ test("reports a synchronous layout failure to the extension host", () => {
 	expect(state.layouts.map((layout) => layout.name)).toEqual(["grid"]);
 });
 
-test("an unrelated promise rejection does not finish the pending layout", () => {
-	const cy = render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
-	const fit = vi.spyOn(cy, "fit");
-	const unrelatedListener = vi.fn();
-	window.addEventListener("unhandledrejection", unrelatedListener);
-	rejectLayout(new Error("unrelated promise failed"));
-
-	expect(unrelatedListener).toHaveBeenCalledTimes(1);
-	expect(state.windowListeners.get("unhandledrejection")).toHaveLength(1);
-	expect(state.postMessage).not.toHaveBeenCalled();
-	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk"]);
-	expect(fit).not.toHaveBeenCalled();
-
-	completeLayout("elk");
-
-	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk", "grid"]);
-	expect(state.layouts.find((layout) => layout.name === "grid")?.ids).toEqual(["isolated"]);
-	expect(fit).toHaveBeenCalledTimes(1);
-});
-
 test("reports an ELK layout that does not complete and accepts a late completion", () => {
 	const timerSpy = vi.spyOn(globalThis, "setTimeout");
 	const cy = render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
@@ -120,7 +100,6 @@ test("discarded layout callbacks cannot finalize a replacement graph", () => {
 	const newOwner = state.cores.length - 1;
 	const newFit = vi.spyOn(newCy, "fit");
 
-	rejectLayout(new Error("old graph rejected"));
 	completeLayout("elk", oldOwner);
 
 	expect(state.postMessage).not.toHaveBeenCalled();

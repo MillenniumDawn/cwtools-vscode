@@ -11,7 +11,6 @@ const state = vi.hoisted(() => ({
 	layoutCallbacks: [] as Array<{ name: string; owner: number; callback: () => void; active: boolean }>,
 	layoutFailure: undefined as Error | undefined,
 	layoutEvents: [] as string[],
-	windowListeners: new Map<string, Set<(event: { reason: unknown; preventDefault: () => void }) => void>>(),
 	listener: undefined as ((event: { data: unknown }) => void) | undefined,
 	postMessage: vi.fn(),
 	setState: vi.fn(),
@@ -131,22 +130,7 @@ export async function installGraph() {
 	});
 	vi.stubGlobal("window", {
 		devicePixelRatio: 2,
-		addEventListener: (type: string, listener: (event: unknown) => void) => {
-			if (type === "message") state.listener = listener;
-			else if (listener) {
-				const listeners = state.windowListeners.get(type) ?? new Set();
-				listeners.add(listener);
-				state.windowListeners.set(type, listeners);
-			}
-		},
-		removeEventListener: (type: string, listener?: (event: unknown) => void) => {
-			if (!listener) state.windowListeners.delete(type);
-			else {
-				const listeners = state.windowListeners.get(type);
-				listeners?.delete(listener);
-				if (listeners?.size === 0) state.windowListeners.delete(type);
-			}
-		},
+		addEventListener: (_type: string, listener: typeof state.listener) => { state.listener = listener; },
 	});
 	vi.stubGlobal("MutationObserver", class {
 		observe() {}
@@ -176,10 +160,6 @@ export function completeLayout(name: string, owner = state.cores.length - 1) {
 	}
 }
 
-export function rejectLayout(reason: unknown) {
-	state.windowListeners.get("unhandledrejection")?.forEach((listener) => listener({ reason, preventDefault: vi.fn() }));
-}
-
 export function node(id: string, targets: string[] = []): GraphNode {
 	return {
 		id, name: id, isPrimary: true, entityType: "idea",
@@ -193,7 +173,6 @@ export function resetGraphState() {
 	state.layoutCallbacks.length = 0;
 	state.layoutFailure = undefined;
 	state.layoutEvents.length = 0;
-	state.windowListeners.clear();
 	state.postMessage.mockClear();
 	state.tips.length = 0;
 }

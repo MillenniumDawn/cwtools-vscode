@@ -166,11 +166,9 @@ let _tips: Instance[] = [];
 const _hoverTimers = new Set<NodeJS.Timeout>();
 let _themeObserver: MutationObserver | undefined;
 let _pendingGraphLayout: {
-	cy: cytoscape.Core;
 	layout?: ReturnType<CollectionReturnValue["layout"]>;
 	timeout?: NodeJS.Timeout;
 	onStop?: () => void;
-	cancelled: boolean;
 	timedOut?: boolean;
 } | undefined;
 
@@ -178,7 +176,6 @@ function cancelPendingGraphLayout() {
 	const pending = _pendingGraphLayout;
 	if (!pending) return;
 	_pendingGraphLayout = undefined;
-	pending.cancelled = true;
 	if (pending.timeout) clearTimeout(pending.timeout);
 	if (pending.layout && pending.onStop) {
 		pending.layout.removeListener("layoutstop", pending.onStop);
@@ -450,10 +447,9 @@ function runLayout(cy: cytoscape.Core) {
 		return;
 	}
 
-	const pending: NonNullable<typeof _pendingGraphLayout> = { cy, cancelled: false };
+	const pending: NonNullable<typeof _pendingGraphLayout> = {};
 	_pendingGraphLayout = pending;
-	const isActive = () =>
-		!pending.cancelled && _pendingGraphLayout === pending && _cy === cy && !cy.destroyed();
+	const isActive = () => _pendingGraphLayout === pending && _cy === cy && !cy.destroyed();
 	const detach = () => {
 		if (pending.timeout) clearTimeout(pending.timeout);
 		if (pending.layout && pending.onStop) {
