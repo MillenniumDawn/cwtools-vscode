@@ -24,6 +24,10 @@ name = "document_symbol"
 harness = false
 
 [[bench]]
+name = "semantic_tokens"
+harness = false
+
+[[bench]]
 name = "completion"
 harness = false
 

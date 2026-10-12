@@ -6,7 +6,7 @@ use cwtools_parser::{
 use cwtools_rules::rules_types::*;
 
 use crate::common::leaf_value_to_string;
-use crate::ctx::{AliasBranchBudget, InlineScriptExpansionBudget, ValidationCtx};
+use crate::ctx::{AliasBranchBudget, InlineScriptExpansionBudget, SubtypeMergeMemo, ValidationCtx};
 use crate::resolve::{
     DispatchInput, PathCandidate, ResolvedType, find_rules_by_name, find_type_from_candidates,
     grandchild_candidates_for_wrapper, path_candidates_for_file, refine_grandchild_type,
@@ -14,7 +14,8 @@ use crate::resolve::{
 };
 use crate::rule_core::{
     MatchingCandidatesIndex, alias_overloads, alias_overloads_with_confidence,
-    flatten_nested_subtype_rules, matching_candidates, merged_rules_for_type,
+    flatten_nested_subtype_rules, matching_candidates, matching_candidates_from_refs,
+    merged_rules_for_type,
 };
 use crate::scope::{enter_block_scope, seed_root_scope};
 use crate::{Prepared, initial_scope_context};
@@ -48,15 +49,32 @@ pub struct RuleContext {
 /// A rule-body-bound matcher that reuses its immutable key index across queries.
 /// Construct one when walking the same body repeatedly (for example, semantic tokens).
 pub struct RuleBodyMatcher<'a> {
-    rules: &'a [(RuleType, Options)],
+    rules: RuleBody<'a>,
     index: Option<MatchingCandidatesIndex>,
+}
+
+enum RuleBody<'a> {
+    Slice(&'a [(RuleType, Options)]),
+    References(&'a [&'a (RuleType, Options)]),
 }
 
 impl<'a> RuleBodyMatcher<'a> {
     pub fn new(rules: &'a [(RuleType, Options)], ruleset: &RuleSet) -> Self {
         let index = (rules.len() > RULE_BODY_INDEX_MIN_RULES)
             .then(|| MatchingCandidatesIndex::new(rules, ruleset));
-        Self { rules, index }
+        Self {
+            rules: RuleBody::Slice(rules),
+            index,
+        }
+    }
+
+    /// Match a borrowed flattened view of rules without cloning nested rule
+    /// bodies into a temporary contiguous vector.
+    pub fn from_references(rules: &'a [&'a (RuleType, Options)]) -> Self {
+        Self {
+            rules: RuleBody::References(rules),
+            index: None,
+        }
     }
 
     fn candidates(
@@ -65,10 +83,15 @@ impl<'a> RuleBodyMatcher<'a> {
         ruleset: &RuleSet,
         type_index: Option<&cwtools_index::TypeIndex>,
     ) -> smallvec::SmallVec<[&'a (RuleType, Options); 4]> {
-        self.index.as_ref().map_or_else(
-            || matching_candidates(self.rules, key, ruleset, type_index),
-            |index| index.matching_candidates(self.rules, key, ruleset, type_index),
-        )
+        if let (RuleBody::Slice(rules), Some(index)) = (&self.rules, &self.index) {
+            return index.matching_candidates(rules, key, ruleset, type_index);
+        }
+        match self.rules {
+            RuleBody::Slice(rules) => matching_candidates(rules, key, ruleset, type_index),
+            RuleBody::References(rules) => {
+                matching_candidates_from_refs(rules, key, ruleset, type_index)
+            }
+        }
     }
 
     pub fn alias_category_for_key(
@@ -105,6 +128,32 @@ impl<'a> RuleBodyMatcher<'a> {
             self.candidates(key, ruleset, type_index),
         )
     }
+
+    /// Match a semantic-token key once for both its token class and value
+    /// references. Alias detection and value-rule expansion share the same
+    /// candidate list instead of repeating path/index matching.
+    pub fn semantic_rules_for_key(
+        &self,
+        ruleset: &'a RuleSet,
+        type_index: Option<&cwtools_index::TypeIndex>,
+        key: &str,
+    ) -> (Vec<&'a (RuleType, Options)>, bool) {
+        let candidates = self.candidates(key, ruleset, type_index);
+        let is_alias = candidates.iter().any(|(rt, _)| {
+            matches!(
+                rt,
+                RuleType::LeafRule {
+                    left: NewField::AliasField(_),
+                    ..
+                } | RuleType::NodeRule {
+                    left: NewField::AliasField(_),
+                    ..
+                }
+            )
+        });
+        let values = value_rules_for_candidates(ruleset, type_index, key, candidates);
+        (values, is_alias)
+    }
 }
 
 fn pos_in_range(line: u32, col: u16, range: &SourceRange) -> bool {
@@ -130,6 +179,76 @@ pub fn rules_at_pos(
     line: u32,
     col: u16,
     for_completion: bool,
+) -> Option<RuleContext> {
+    FilePositionResolver::new(file_path, prepared).rules_at_pos(
+        ast,
+        prepared,
+        line,
+        col,
+        for_completion,
+    )
+}
+
+pub fn rules_at_pos_with_resolver(
+    ast: &ParsedFile,
+    resolver: &FilePositionResolver<'_>,
+    prepared: &Prepared<'_>,
+    line: u32,
+    col: u16,
+    for_completion: bool,
+) -> Option<RuleContext> {
+    resolver.rules_at_pos(ast, prepared, line, col, for_completion)
+}
+
+/// Reuses path dispatch data for repeated cursor-position rule lookups in one
+/// file. The mutable validation and scope context remains per lookup.
+pub struct FilePositionResolver<'a> {
+    file_path: String,
+    path_candidates: Vec<PathCandidate<'a>>,
+    subtype_merge_memo: RefCell<SubtypeMergeMemo>,
+}
+
+impl<'a> FilePositionResolver<'a> {
+    pub fn new(file_path: &str, prepared: &'a Prepared<'a>) -> Self {
+        let file_path_lower = file_path.to_lowercase();
+        Self {
+            file_path: file_path.to_string(),
+            path_candidates: path_candidates_for_file(&file_path_lower, prepared.ruleset),
+            subtype_merge_memo: RefCell::new(SubtypeMergeMemo::default()),
+        }
+    }
+
+    pub fn rules_at_pos(
+        &self,
+        ast: &ParsedFile,
+        prepared: &Prepared<'a>,
+        line: u32,
+        col: u16,
+        for_completion: bool,
+    ) -> Option<RuleContext> {
+        rules_at_pos_from_candidates(
+            ast,
+            &self.file_path,
+            prepared,
+            line,
+            col,
+            for_completion,
+            &self.path_candidates,
+            &self.subtype_merge_memo,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rules_at_pos_from_candidates(
+    ast: &ParsedFile,
+    file_path: &str,
+    prepared: &Prepared,
+    line: u32,
+    col: u16,
+    for_completion: bool,
+    path_candidates: &[PathCandidate<'_>],
+    subtype_merge_memo: &RefCell<SubtypeMergeMemo>,
 ) -> Option<RuleContext> {
     let ruleset = prepared.ruleset;
     let table = prepared.table;
@@ -157,93 +276,116 @@ pub fn rules_at_pos(
         inline_script_expansion_budget: &inline_script_expansion_budget,
         inline_stack: &inline_stack,
         alias_memo: std::cell::RefCell::new(crate::ctx::AliasMemo::default()),
-        subtype_merge_memo: std::cell::RefCell::new(crate::ctx::SubtypeMergeMemo::default()),
+        subtype_merge_memo: std::cell::RefCell::new(std::mem::take(
+            &mut *subtype_merge_memo.borrow_mut(),
+        )),
         type_uses: None,
     };
 
-    let file_path_lower = file_path.to_lowercase();
-    let path_candidates = path_candidates_for_file(&file_path_lower, ruleset);
+    let result = (|| {
+        let path_type = find_type_from_candidates(path_candidates, None);
+        if let Some(td) = path_type
+            && td.type_per_file
+        {
+            let inner_rules = find_rules_by_name(&td.name, ruleset);
+            if !type_has_content(td, inner_rules) {
+                return None;
+            }
+            return Some(enter_entity(
+                &ctx,
+                td,
+                &ast.root_children,
+                inner_rules,
+                None,
+                &mut scope_context,
+                line,
+                col,
+                for_completion,
+            ));
+        }
 
-    let path_type = find_type_from_candidates(&path_candidates, None);
-    if let Some(td) = path_type
-        && td.type_per_file
-    {
-        let inner_rules = find_rules_by_name(&td.name, ruleset);
-        if !type_has_content(td, inner_rules) {
+        let child = root_child_at_pos(ast, line, col)?;
+
+        let Child::Leaf(leaf_idx) = child else {
+            return None;
+        };
+        let leaf = &ast.arena.leaves[*leaf_idx as usize];
+        let Value::Clause(children) = &leaf.value else {
+            return None;
+        };
+        let root_key = table.get_string(leaf.key.normal).unwrap_or_default();
+        if line == leaf.pos.start.line
+            && (col as usize) <= leaf.pos.start.col as usize + root_key.chars().count()
+        {
             return None;
         }
-        return Some(enter_entity(
-            &ctx,
-            td,
-            &ast.root_children,
-            inner_rules,
-            None,
-            &mut scope_context,
-            line,
-            col,
-            for_completion,
-        ));
-    }
 
-    let child = ast.root_children.iter().find(|c| match c {
-        Child::Leaf(idx) => pos_in_range(line, col, &ast.arena.leaves[*idx as usize].pos),
-        Child::LeafValue(idx) => pos_in_range(line, col, &ast.arena.leaf_values[*idx as usize].pos),
-        _ => false,
-    })?;
+        let dispatch = DispatchInput {
+            ruleset,
+            file_path,
+            path_candidates,
+            allow_content_fallback: true,
+        };
+        match resolve_root_child(&dispatch, &root_key) {
+            ResolvedType::Entity {
+                type_def,
+                inner_rules,
+            } => Some(enter_entity(
+                &ctx,
+                type_def,
+                children,
+                inner_rules,
+                Some(&root_key),
+                &mut scope_context,
+                line,
+                col,
+                for_completion,
+            )),
+            ResolvedType::Wrapper {
+                type_def,
+                inner_rules,
+                skip_tail,
+            } => descend_wrapper(
+                &ctx,
+                children,
+                path_candidates,
+                type_def,
+                &root_key,
+                inner_rules,
+                skip_tail,
+                &mut scope_context,
+                line,
+                col,
+                for_completion,
+            ),
+            ResolvedType::None => None,
+        }
+    })();
+    *subtype_merge_memo.borrow_mut() = ctx.subtype_merge_memo.into_inner();
+    result
+}
 
-    let Child::Leaf(leaf_idx) = child else {
-        return None;
-    };
-    let leaf = &ast.arena.leaves[*leaf_idx as usize];
-    let Value::Clause(children) = &leaf.value else {
-        return None;
-    };
-    let root_key = table.get_string(leaf.key.normal).unwrap_or_default();
-    if line == leaf.pos.start.line
-        && (col as usize) <= leaf.pos.start.col as usize + root_key.chars().count()
-    {
-        return None;
-    }
+fn root_child_at_pos(ast: &ParsedFile, line: u32, col: u16) -> Option<&Child> {
+    let children = &ast.root_children;
+    let start =
+        children.partition_point(|child| child_source_range(child, &ast.arena).end.line < line);
+    children[start..]
+        .iter()
+        .take_while(|child| child_source_range(child, &ast.arena).start.line <= line)
+        .find(|child| match child {
+            Child::Leaf(idx) => pos_in_range(line, col, &ast.arena.leaves[*idx as usize].pos),
+            Child::LeafValue(idx) => {
+                pos_in_range(line, col, &ast.arena.leaf_values[*idx as usize].pos)
+            }
+            Child::Comment(_) => false,
+        })
+}
 
-    let dispatch = DispatchInput {
-        ruleset,
-        file_path,
-        path_candidates: &path_candidates,
-        allow_content_fallback: true,
-    };
-    match resolve_root_child(&dispatch, &root_key) {
-        ResolvedType::Entity {
-            type_def,
-            inner_rules,
-        } => Some(enter_entity(
-            &ctx,
-            type_def,
-            children,
-            inner_rules,
-            Some(&root_key),
-            &mut scope_context,
-            line,
-            col,
-            for_completion,
-        )),
-        ResolvedType::Wrapper {
-            type_def,
-            inner_rules,
-            skip_tail,
-        } => descend_wrapper(
-            &ctx,
-            children,
-            &path_candidates,
-            type_def,
-            &root_key,
-            inner_rules,
-            skip_tail,
-            &mut scope_context,
-            line,
-            col,
-            for_completion,
-        ),
-        ResolvedType::None => None,
+fn child_source_range(child: &Child, arena: &cwtools_parser::ast::Arena) -> SourceRange {
+    match child {
+        Child::Leaf(idx) => arena.leaves[*idx as usize].pos,
+        Child::LeafValue(idx) => arena.leaf_values[*idx as usize].pos,
+        Child::Comment(idx) => arena.comments[*idx as usize].pos,
     }
 }
 
@@ -1076,6 +1218,63 @@ mod tests {
         assert!(pos_in_range(1, 5, &r));
         assert!(!pos_in_range(1, 4, &r));
         assert!(!pos_in_range(1, 6, &r));
+    }
+
+    #[test]
+    fn semantic_rule_match_reuses_candidates_for_alias_and_value_rules() {
+        use cwtools_parser::parser::parse_string;
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+        use cwtools_string_table::string_table::StringTable;
+
+        let table = StringTable::new();
+        let ast = parse_string(
+            "foo = {\n  alias_name[trigger] = alias_match_left[trigger]\n}\n",
+            &table,
+        );
+        let ruleset = ast_to_ruleset(&ast, &table);
+        let rules = find_rules_by_name("foo", &ruleset);
+        let matcher = RuleBodyMatcher::new(rules, &ruleset);
+        let (matched, is_alias) = matcher.semantic_rules_for_key(&ruleset, None, "always");
+        assert_eq!(
+            is_alias,
+            matcher
+                .alias_category_for_key(&ruleset, None, "always")
+                .is_some()
+        );
+        assert_eq!(
+            matched,
+            matcher.value_rules_for_key(&ruleset, None, "always")
+        );
+        assert!(is_alias, "trigger alias should classify as an alias key");
+
+        let references: Vec<_> = rules.iter().collect();
+        let borrowed = RuleBodyMatcher::from_references(&references);
+        assert_eq!(
+            borrowed.value_rules_for_key(&ruleset, None, "always"),
+            matched
+        );
+    }
+
+    #[test]
+    fn root_child_position_lookup_skips_distant_siblings() {
+        use cwtools_parser::parser::parse_string;
+        use cwtools_string_table::string_table::StringTable;
+
+        let table = StringTable::new();
+        let mut text = String::new();
+        for i in 0..2_000 {
+            text.push_str(&format!("root_{i} = {{\n  value = yes\n}}\n"));
+        }
+        let ast = parse_string(&text, &table);
+        let line = 5_998;
+        let child = root_child_at_pos(&ast, line, 2).expect("middle top-level root child");
+        let Child::Leaf(idx) = child else {
+            panic!("expected a root leaf")
+        };
+        assert_eq!(
+            table.get_string(ast.arena.leaves[*idx as usize].key.normal),
+            Some("root_1999".to_string())
+        );
     }
 
     #[test]

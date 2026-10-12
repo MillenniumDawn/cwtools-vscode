@@ -368,6 +368,7 @@ pub(crate) struct DocumentStore {
     documents: HashMap<String, ParsedDoc>,
     content_hashes: HashMap<String, u64>,
     open_use_sites: OpenUseSiteIndex,
+    line_indices: HashMap<String, Arc<LineIndex>>,
     pub(crate) retained_text_bytes: usize,
 }
 
@@ -620,12 +621,61 @@ impl OpenUseSiteIndex {
     }
 }
 
+/// Byte starts for each physical source line. Kept with the open document so
+/// range semantic-token requests can jump directly to their first line.
+#[derive(Debug)]
+pub struct LineIndex {
+    starts: Vec<u32>,
+}
+
+impl LineIndex {
+    pub fn new(text: &str) -> Self {
+        let mut starts = Vec::new();
+        starts.push(0);
+        for (byte, value) in text.bytes().enumerate() {
+            if value == b'\n' {
+                starts.push((byte + 1) as u32);
+            }
+        }
+        Self { starts }
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.starts.capacity() * std::mem::size_of::<u32>()
+    }
+
+    pub(crate) fn line_count(&self) -> u32 {
+        self.starts.len() as u32
+    }
+
+    pub(crate) fn line<'a>(&self, text: &'a str, line: u32) -> &'a str {
+        let Some(&start) = self.starts.get(line as usize) else {
+            return "";
+        };
+        let end = self
+            .starts
+            .get(line as usize + 1)
+            .copied()
+            .unwrap_or(text.len() as u32) as usize;
+        let mut end = if end > start as usize && text.as_bytes()[end - 1] == b'\n' {
+            end - 1
+        } else {
+            end
+        };
+        if end > start as usize && text.as_bytes()[end - 1] == b'\r' {
+            end -= 1;
+        }
+        &text[start as usize..end]
+    }
+}
+
 impl DocumentStore {
     pub(crate) fn new() -> Self {
         Self {
             documents: HashMap::new(),
             content_hashes: HashMap::new(),
             open_use_sites: OpenUseSiteIndex::default(),
+            line_indices: HashMap::new(),
             retained_text_bytes: 0,
         }
     }
@@ -641,6 +691,28 @@ impl DocumentStore {
         self.documents
             .get(uri)
             .map(|document| document.text.clone())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn line_index_of(&self, uri: &str) -> Option<Arc<LineIndex>> {
+        self.line_indices.get(uri).cloned()
+    }
+
+    fn line_index_bytes(&self, uri: &str) -> usize {
+        self.line_indices
+            .get(uri)
+            .map_or(0, |index| index.retained_bytes())
+    }
+
+    /// Return the cached line index only when it belongs to the exact text
+    /// snapshot supplied by the caller. The document and index are checked
+    /// under the same store lock so concurrent changes cannot pair snapshots.
+    pub(crate) fn line_index_for_text(&self, uri: &str, text: &Arc<str>) -> Option<Arc<LineIndex>> {
+        let document = self.documents.get(uri)?;
+        if !Arc::ptr_eq(&document.text, text) {
+            return None;
+        }
+        self.line_indices.get(uri).cloned()
     }
 
     #[cfg(test)]
@@ -662,7 +734,8 @@ impl DocumentStore {
         let old_document_bytes = self
             .documents
             .get(&uri)
-            .map_or(0, ParsedDoc::retained_bytes);
+            .map_or(0, ParsedDoc::retained_bytes)
+            .saturating_add(self.line_index_bytes(&uri));
         let old_index_bytes = self
             .open_use_sites
             .file_bytes(&uri)
@@ -670,7 +743,10 @@ impl DocumentStore {
         if !self.documents.contains_key(&uri) && self.documents.len() >= MAX_OPEN_DOCUMENTS {
             return Err(DocumentRejection::TooManyOpen);
         }
-        let new_document_bytes = document.retained_bytes();
+        let line_index = Arc::new(LineIndex::new(&document.text));
+        let new_document_bytes = document
+            .retained_bytes()
+            .saturating_add(line_index.retained_bytes());
         self.replacement_total(
             old_document_bytes.saturating_add(old_index_bytes),
             new_document_bytes.saturating_add(self.open_use_sites.capacity_bytes()),
@@ -678,6 +754,7 @@ impl DocumentStore {
         self.open_use_sites.remove_file(&uri);
         let new_index_bytes = self.open_use_sites.capacity_bytes();
         self.documents.insert(uri.clone(), document);
+        self.line_indices.insert(uri.clone(), line_index);
         self.content_hashes.insert(uri, content_hash);
         self.retained_text_bytes = self
             .retained_text_bytes
@@ -711,10 +788,15 @@ impl DocumentStore {
             .open_use_sites
             .file_bytes(uri)
             .saturating_add(self.open_use_sites.capacity_bytes());
-        let old_len = document.retained_bytes().saturating_add(index_bytes);
+        let old_len = document
+            .retained_bytes()
+            .saturating_add(self.line_index_bytes(uri))
+            .saturating_add(index_bytes);
+        let line_index = Arc::new(LineIndex::new(&text));
         let new_len = text
             .len()
             .max(document.ast_source_bytes)
+            .saturating_add(line_index.retained_bytes())
             .saturating_add(index_bytes);
         self.replacement_total(old_len, new_len)?;
         let Some(document) = self.documents.get_mut(uri) else {
@@ -723,6 +805,7 @@ impl DocumentStore {
         document.version = version;
         document.text = text;
         document.loc_cache = None;
+        self.line_indices.insert(uri.to_string(), line_index);
         self.content_hashes.insert(uri.to_string(), content_hash);
         self.retained_text_bytes = self
             .retained_text_bytes
@@ -749,15 +832,20 @@ impl DocumentStore {
         if document.version != version {
             return false;
         }
-        let old_document_bytes = document.retained_bytes();
+        let line_index_bytes = self.line_index_bytes(uri);
+        let old_document_bytes = document.retained_bytes().saturating_add(line_index_bytes);
         let old_file_bytes = self.open_use_sites.file_bytes(uri);
         let old_index_bytes = old_file_bytes.saturating_add(self.open_use_sites.capacity_bytes());
-        let new_document_bytes = document.text.len().saturating_add(
-            document
-                .loc_cache
-                .as_ref()
-                .map_or(0, |cache| cache.retained_bytes),
-        );
+        let new_document_bytes = document
+            .text
+            .len()
+            .saturating_add(
+                document
+                    .loc_cache
+                    .as_ref()
+                    .map_or(0, |cache| cache.retained_bytes),
+            )
+            .saturating_add(line_index_bytes);
         let new_file_bytes = OpenUseSiteIndex::retained_bytes_for_sites(uri, &use_sites);
         let new_capacity_bytes = self
             .open_use_sites
@@ -804,6 +892,9 @@ impl DocumentStore {
         if document.version != version || document.ast_version != Some(version) {
             return false;
         }
+        let document_bytes = document
+            .retained_bytes()
+            .saturating_add(self.line_index_bytes(uri));
         let old_file_bytes = self.open_use_sites.file_bytes(uri);
         let old_index_bytes = old_file_bytes.saturating_add(self.open_use_sites.capacity_bytes());
         let new_file_bytes = OpenUseSiteIndex::retained_bytes_for_sites(uri, &use_sites);
@@ -812,9 +903,8 @@ impl DocumentStore {
             .replacement_capacity_bound(uri, &use_sites);
         if self
             .replacement_total_with_capacity(
-                document.retained_bytes().saturating_add(old_index_bytes),
-                document
-                    .retained_bytes()
+                document_bytes.saturating_add(old_index_bytes),
+                document_bytes
                     .saturating_add(new_file_bytes)
                     .saturating_add(new_capacity_bytes),
                 new_capacity_bytes,
@@ -830,8 +920,8 @@ impl DocumentStore {
             .saturating_add(self.open_use_sites.capacity_bytes());
         self.retained_text_bytes = self
             .retained_text_bytes
-            .saturating_sub(document.retained_bytes().saturating_add(old_index_bytes))
-            .saturating_add(document.retained_bytes().saturating_add(new_index_bytes));
+            .saturating_sub(document_bytes.saturating_add(old_index_bytes))
+            .saturating_add(document_bytes.saturating_add(new_index_bytes));
         true
     }
 
@@ -854,7 +944,8 @@ impl DocumentStore {
         let index_bytes = self
             .open_use_sites
             .file_bytes(uri)
-            .saturating_add(self.open_use_sites.capacity_bytes());
+            .saturating_add(self.open_use_sites.capacity_bytes())
+            .saturating_add(self.line_index_bytes(uri));
         let old_len = document.retained_bytes().saturating_add(index_bytes);
         let new_len = document
             .text
@@ -883,9 +974,18 @@ impl DocumentStore {
         self.open_use_sites.remove_file(uri);
         let new_index_bytes = self.open_use_sites.capacity_bytes();
         self.content_hashes.remove(uri);
+        let line_index_bytes = self
+            .line_indices
+            .remove(uri)
+            .map_or(0, |index| index.retained_bytes());
         self.retained_text_bytes = self
             .retained_text_bytes
-            .saturating_sub(document.retained_bytes().saturating_add(old_index_bytes))
+            .saturating_sub(
+                document
+                    .retained_bytes()
+                    .saturating_add(old_index_bytes)
+                    .saturating_add(line_index_bytes),
+            )
             .saturating_add(new_index_bytes);
         Some(document)
     }
@@ -948,6 +1048,186 @@ impl DocumentRejection {
             Self::TooManyOpen => "the open-document count limit was reached",
             Self::RetainedTextLimit => "the retained open-document byte limit was reached",
         }
+    }
+}
+
+#[cfg(test)]
+mod semantic_line_index_tests {
+    use super::*;
+
+    fn document(text: &str) -> ParsedDoc {
+        ParsedDoc {
+            version: 1,
+            text: Arc::from(text),
+            ast: None,
+            ast_version: None,
+            ast_source_bytes: 0,
+            loc_cache: None,
+        }
+    }
+
+    #[test]
+    fn line_index_matches_source_lines_for_empty_newline_crlf_and_unicode_text() {
+        for text in ["", "one line", "one line\n", "a\r\nβ😀\r\nlast"] {
+            let index = LineIndex::new(text);
+            for (line, expected) in text.lines().enumerate() {
+                assert_eq!(
+                    index.line(text, line as u32),
+                    expected,
+                    "{text:?} line {line}"
+                );
+            }
+            if text.ends_with('\n') {
+                assert_eq!(index.line(text, text.lines().count() as u32), "");
+            }
+        }
+    }
+
+    #[test]
+    fn document_store_accounts_for_line_and_reference_indexes_together() {
+        let mut docs = DocumentStore::new();
+        let uri = "file:///workspace/test.txt";
+        let table = StringTable::new();
+        let location = cwtools_info::SourceLocation {
+            line: 0,
+            col: 0,
+            end: (0, 1),
+        };
+        let site = IndexedUseSite {
+            type_name: "focus".to_string(),
+            name: "first".to_string(),
+            case_insensitive: false,
+            site: UseSite {
+                file: Arc::from(uri),
+                key: location,
+                value: location,
+            },
+        };
+        let assert_retained = |docs: &DocumentStore| {
+            let expected = docs
+                .documents
+                .values()
+                .map(ParsedDoc::retained_bytes)
+                .sum::<usize>()
+                + docs
+                    .line_indices
+                    .values()
+                    .map(|index| index.retained_bytes())
+                    .sum::<usize>()
+                + docs.open_use_sites.file_bytes.values().sum::<usize>()
+                + docs.open_use_sites.capacity_bytes();
+            assert_eq!(docs.retained_text_bytes, expected);
+        };
+        docs.open(uri.to_string(), document("root = first\n"))
+            .unwrap();
+        assert!(docs.set_ast_with_use_sites(
+            uri,
+            1,
+            Arc::new(cwtools_parser::parser::parse_string(
+                "root = first\n",
+                &table
+            )),
+            vec![site.clone()],
+        ));
+        assert_retained(&docs);
+        let reference_snapshot = |docs: &DocumentStore| {
+            docs.reference_sites("focus", "first")
+                .into_iter()
+                .map(|site| {
+                    (
+                        site.file,
+                        site.key.line,
+                        site.key.col,
+                        site.key.end,
+                        site.value.line,
+                        site.value.col,
+                        site.value.end,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let references = reference_snapshot(&docs);
+        docs.change(uri, 2, Arc::from("\n\nroot = first\n"))
+            .unwrap();
+        assert_eq!(reference_snapshot(&docs), references);
+        assert_retained(&docs);
+        assert!(docs.set_ast_with_use_sites(
+            uri,
+            2,
+            Arc::new(cwtools_parser::parser::parse_string(
+                "\n\nroot = first\n",
+                &table
+            )),
+            vec![site.clone()],
+        ));
+        assert_retained(&docs);
+        assert!(docs.replace_reference_sites(uri, 2, vec![site]));
+        assert_retained(&docs);
+        docs.set_loc_cache(
+            uri,
+            2,
+            Arc::new(LocDocumentCache {
+                version: 2,
+                retained_bytes: 10,
+                files: Vec::new(),
+                references: HashSet::new(),
+            }),
+        )
+        .unwrap();
+        assert_retained(&docs);
+        docs.open(uri.to_string(), document("reopened\n")).unwrap();
+        assert!(docs.reference_sites("focus", "first").is_empty());
+        assert_retained(&docs);
+        docs.remove(uri).unwrap();
+        assert_retained(&docs);
+        assert_eq!(docs.retained_text_bytes, 0);
+    }
+
+    #[test]
+    fn document_store_replaces_and_releases_line_index_with_memory_accounting() {
+        let mut docs = DocumentStore::new();
+        let uri = "file:///workspace/test.txt";
+        docs.open_with_hash(uri.to_string(), document("a\nb\n"), 1)
+            .unwrap();
+        let old_index = docs.line_index_of(uri).unwrap();
+        assert_eq!(old_index.line("a\nb\n", 1), "b");
+        assert_eq!(
+            docs.retained_text_bytes,
+            docs.get(uri).unwrap().retained_bytes() + old_index.retained_bytes()
+        );
+
+        docs.change_with_hash(uri, 2, Arc::from("new text\r\n"), 2)
+            .unwrap();
+        let new_index = docs.line_index_of(uri).unwrap();
+        assert_eq!(new_index.line("new text\r\n", 0), "new text");
+        assert_eq!(new_index.line("new text\r\n", 1), "");
+        assert_eq!(
+            docs.retained_text_bytes,
+            docs.get(uri).unwrap().retained_bytes() + new_index.retained_bytes()
+        );
+
+        docs.remove(uri).unwrap();
+        assert_eq!(docs.retained_text_bytes, 0);
+        assert!(docs.line_index_of(uri).is_none());
+    }
+
+    #[test]
+    fn line_index_lookup_rejects_a_different_text_snapshot() {
+        let mut docs = DocumentStore::new();
+        let uri = "file:///workspace/test.txt";
+        docs.open_with_hash(uri.to_string(), document("new\ntext\nwith\nlines"), 1)
+            .unwrap();
+
+        // This old snapshot is shorter than several starts in the current
+        // index. Returning that index would make `line()` slice out of bounds.
+        let old_text: Arc<str> = Arc::from("x");
+        assert!(docs.line_index_for_text(uri, &old_text).is_none());
+
+        let safe_index = docs
+            .line_index_for_text(uri, &old_text)
+            .unwrap_or_else(|| Arc::new(LineIndex::new(&old_text)));
+        assert_eq!(safe_index.line(&old_text, 0), "x");
+        assert_eq!(safe_index.line(&old_text, 1), "");
     }
 }
 

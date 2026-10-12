@@ -59,6 +59,50 @@ pub mod bench_support {
     pub use crate::lines::DocLines;
     pub use crate::navigation::build_doc_symbols;
     pub use crate::paths::{logical_path_from_uri, workspace_prefix_of};
+    pub use crate::state::LineIndex;
+    pub fn semantic_tokens(
+        file: &cwtools_parser::ast::ParsedFile,
+        table: &cwtools_string_table::string_table::StringTable,
+        text: &str,
+        encoding: &tower_lsp::lsp_types::PositionEncodingKind,
+        span: Option<(u32, u32)>,
+    ) -> Vec<tower_lsp::lsp_types::SemanticToken> {
+        let index = crate::state::LineIndex::new(text);
+        crate::semantic::encode(crate::semantic::semantic_tokens_indexed(
+            file, table, text, encoding, None, span, &index,
+        ))
+    }
+    pub fn semantic_tokens_indexed(
+        file: &cwtools_parser::ast::ParsedFile,
+        table: &cwtools_string_table::string_table::StringTable,
+        text: &str,
+        encoding: &tower_lsp::lsp_types::PositionEncodingKind,
+        span: Option<(u32, u32)>,
+        index: &crate::state::LineIndex,
+    ) -> Vec<tower_lsp::lsp_types::SemanticToken> {
+        crate::semantic::encode(crate::semantic::semantic_tokens_indexed(
+            file, table, text, encoding, None, span, index,
+        ))
+    }
+    pub fn semantic_tokens_with_rules(
+        file: &cwtools_parser::ast::ParsedFile,
+        prepared: &cwtools_validation::Prepared<'_>,
+        text: &str,
+        logical_path: &str,
+        encoding: &tower_lsp::lsp_types::PositionEncodingKind,
+        span: Option<(u32, u32)>,
+        index: &crate::state::LineIndex,
+    ) -> Vec<tower_lsp::lsp_types::SemanticToken> {
+        crate::semantic::encode(crate::semantic::semantic_tokens_indexed(
+            file,
+            prepared.table,
+            text,
+            encoding,
+            Some((prepared, logical_path)),
+            span,
+            index,
+        ))
+    }
     pub use crate::validate::{collect_doc_tokens, loc_extra_valid_refs, parse_loc_buffer};
 }
 
@@ -275,7 +319,10 @@ mod tests {
         store
             .change("file:///doc", 2, Arc::from("replacement"))
             .unwrap();
-        assert_eq!(store.retained_text_bytes, "replacement".len());
+        assert_eq!(
+            store.retained_text_bytes,
+            "replacement".len() + store.line_index_of("file:///doc").unwrap().retained_bytes()
+        );
 
         store.remove("file:///doc");
         assert_eq!(store.retained_text_bytes, 0);
@@ -296,7 +343,11 @@ mod tests {
             store.set_loc_cache("file:///doc", 1, loc_document_cache(1, 10)),
             Ok(true)
         );
-        assert_eq!(store.retained_text_bytes, "text".len() + 10);
+        let doc_index_bytes = store.line_index_of("file:///doc").unwrap().retained_bytes();
+        assert_eq!(
+            store.retained_text_bytes,
+            "text".len() + 10 + doc_index_bytes
+        );
         let retained_before_rejected_cache = store.retained_text_bytes;
         assert_eq!(
             store.set_loc_cache("file:///doc", 1, loc_document_cache(1, MAX_DOCUMENT_BYTES)),
@@ -310,12 +361,25 @@ mod tests {
             store.set_loc_cache("file:///cached", 1, loc_document_cache(1, 10)),
             Ok(true)
         );
-        assert_eq!(store.retained_text_bytes, "text".len() + 10 + 1 + 10);
+        let cached_index_bytes = store
+            .line_index_of("file:///cached")
+            .unwrap()
+            .retained_bytes();
+        assert_eq!(
+            store.retained_text_bytes,
+            "text".len() + 10 + doc_index_bytes + 1 + 10 + cached_index_bytes
+        );
         store.remove("file:///cached");
-        assert_eq!(store.retained_text_bytes, "text".len() + 10);
+        assert_eq!(
+            store.retained_text_bytes,
+            "text".len() + 10 + doc_index_bytes
+        );
 
         store.change("file:///doc", 2, Arc::from("x")).unwrap();
-        assert_eq!(store.retained_text_bytes, 1);
+        assert_eq!(
+            store.retained_text_bytes,
+            1 + store.line_index_of("file:///doc").unwrap().retained_bytes()
+        );
         assert!(store.get("file:///doc").unwrap().loc_cache.is_none());
 
         store.remove("file:///doc");
@@ -334,7 +398,10 @@ mod tests {
 
         store.change("file:///doc", 2, Arc::from("x")).unwrap();
 
-        assert_eq!(store.retained_text_bytes, source.len());
+        assert_eq!(
+            store.retained_text_bytes,
+            source.len() + store.line_index_of("file:///doc").unwrap().retained_bytes()
+        );
     }
 
     #[test]
@@ -432,7 +499,10 @@ mod tests {
         assert_eq!(store.retained_text_bytes, 0);
         assert!(store.reference_sites("focus", "second").is_empty());
         store.open(uri.to_string(), document("reopened")).unwrap();
-        assert_eq!(store.retained_text_bytes, "reopened".len());
+        assert_eq!(
+            store.retained_text_bytes,
+            "reopened".len() + store.line_index_of(uri).unwrap().retained_bytes()
+        );
         store.remove(uri);
         assert_eq!(store.retained_text_bytes, 0);
     }
