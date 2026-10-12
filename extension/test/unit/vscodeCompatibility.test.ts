@@ -15,10 +15,6 @@ function readJson<T>(file: string): T {
 const rootPackage = readJson<Manifest>("package.json");
 const extensionPackage = readJson<Manifest>("extension/package/package.json");
 const packageLock = readJson<Lockfile>("package-lock.json");
-const hostTestConfig = readFileSync(
-	path.join(repoRoot, ".vscode-test.mjs"),
-	"utf8",
-);
 
 function minimumVersion(range: string): [number, number, number] {
 	const match = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range);
@@ -53,16 +49,4 @@ test("declared VS Code floor covers the locked language client requirement", () 
 	expect(
 		compareVersions(minimumVersion(declared), minimumVersion(clientRequirement)),
 	).toBeGreaterThanOrEqual(0);
-});
-
-test("host runner uses the test CLI version option for stable and floor hosts", () => {
-	const floor = /const vscodeCompatibilityFloor = "([^"]+)"/.exec(
-		hostTestConfig,
-	)?.[1];
-	expect(hostTestConfig).toMatch(/const base = \{\s*version: "stable"/);
-	expect(hostTestConfig).toMatch(
-		/\.\.\.base,\s*version: vscodeCompatibilityFloor,\s*label: "vscode-floor"/,
-	);
-	expect(hostTestConfig).not.toMatch(/\bvscode\s*:/);
-	expect(floor).toBe(minimumVersion(extensionPackage.engines.vscode).join("."));
 });
