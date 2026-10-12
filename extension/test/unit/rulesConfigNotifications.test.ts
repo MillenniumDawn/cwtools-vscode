@@ -1,6 +1,6 @@
 import { suite, test } from "vitest";
 import * as assert from "assert";
-import { isRulesConfigSummaryNotification } from "../../src/common/rulesConfigNotifications";
+import { isRulesConfigSummaryNotification } from "../support/rulesConfigNotifications";
 
 suite("rulesConfigNotifications — isRulesConfigSummaryNotification", () => {
 	test("matches the rules-config summary envelope", () => {

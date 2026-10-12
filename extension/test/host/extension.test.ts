@@ -10,7 +10,7 @@ import {
 	SAMPLE_ROOT,
 } from "../support/utils";
 import type * as GraphPanelNamespace from "../../src/host/graphPanel";
-import { isRulesConfigSummaryNotification } from "../../src/common/rulesConfigNotifications";
+import { isRulesConfigSummaryNotification } from "../support/rulesConfigNotifications";
 type GraphPanelModule = typeof GraphPanelNamespace;
 import type { GraphData } from "../../src/common/graphTypes";
 import type { ElementsDefinition } from "cytoscape";
