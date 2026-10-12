@@ -9,7 +9,7 @@ use std::io::Write as _;
 
 use crate::cli::FixArgs;
 use crate::run::{
-    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty,
+    EXIT_DISCOVERY_FAILED, EXIT_USAGE, ModLayers, announce_config, exit_if_empty,
     gate_vanilla_cache_for_replacements, load_config, missing_required, note, parse_game,
     rebuild_vanilla_cache_if_stale, vanilla_notice,
 };
@@ -27,6 +27,7 @@ pub(super) fn run(args: FixArgs) {
         game,
         directory,
         rules,
+        parents: parent_roots,
         vanilla,
         vanilla_cache,
         no_vanilla_cache,
@@ -67,6 +68,7 @@ pub(super) fn run(args: FixArgs) {
         default case_sensitive_files => case_sensitive_files "case-sensitive-files";
         list ignore_files => ignore_files "ignore-files";
         list ignore_dirs => ignore_dirs "ignore-dirs";
+        list parent_roots => parents "parents";
         list loc_language => loc_languages "loc-languages";
         list only_codes => only_codes "only-codes";
         list ignore_codes => ignore_codes "ignore-codes";
@@ -104,7 +106,15 @@ pub(super) fn run(args: FixArgs) {
                     None
                 }
             };
-            gate_vanilla_cache_for_replacements(p, loaded, &directory, vanilla.as_deref())
+            gate_vanilla_cache_for_replacements(
+                p,
+                loaded,
+                ModLayers {
+                    primary: &directory,
+                    parents: &parent_roots,
+                },
+                vanilla.as_deref(),
+            )
         });
 
     // Same automatic base-game cache as `validate`, so both commands see
@@ -123,6 +133,7 @@ pub(super) fn run(args: FixArgs) {
             game: game_id,
             rules: RulesInput::from_path(rules.clone()),
             directory: directory.clone(),
+            parent_roots: parent_roots.clone(),
             vanilla: vanilla.clone(),
             vanilla_cache: vanilla_cache_index,
             vanilla_cache_auto,
@@ -148,7 +159,10 @@ pub(super) fn run(args: FixArgs) {
             &session,
             cache_path,
             cached_fp,
-            &directory,
+            ModLayers {
+                primary: &directory,
+                parents: &parent_roots,
+            },
             vanilla_dir,
             game_id,
             !no_vanilla_cache,
