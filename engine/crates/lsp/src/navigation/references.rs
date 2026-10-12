@@ -50,6 +50,16 @@ fn navigation_snapshot_read_error() -> tower_lsp::jsonrpc::Error {
     }
 }
 
+fn navigation_snapshot_changed_error() -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code: tower_lsp::jsonrpc::ErrorCode::ContentModified,
+        message:
+            "Navigation cancelled: documents changed while results were being collected; try again"
+                .into(),
+        data: None,
+    }
+}
+
 impl Backend {
     pub(crate) fn is_known_loc_key(&self, lower: &str) -> bool {
         if let Some(idx) = self.state.loc_index.read().as_deref()
@@ -296,64 +306,117 @@ impl Backend {
         script_uris.into_iter().collect()
     }
 
-    /// Runs `scan` over the current text of every `uri` — open buffers as
-    /// they are, closed files read one at a time — on the blocking pool, and
-    /// returns only what `scan` found. No file's text outlives its own `scan`
-    /// call, so the request never holds the workspace's text at once (#474).
-    pub(crate) async fn scan_workspace_texts<T, F>(&self, uris: Vec<String>, scan: F) -> Vec<T>
+    /// Runs `scan` over the current text of every `uri`, retaining no closed
+    /// file after its scan finishes. Open buffers are read from one document
+    /// snapshot and closed files are authorized and decoded on the blocking
+    /// pool. The shared budget bounds peak in-flight read, decoding and scan
+    /// allocations, not cumulative bytes processed sequentially (#823).
+    pub(crate) async fn scan_workspace_texts<T, F>(
+        &self,
+        uris: Vec<String>,
+        scan: F,
+    ) -> Result<Vec<T>>
     where
         T: Send + 'static,
         F: Fn(&str, &str) -> Vec<T> + Send + Sync + 'static,
     {
-        let mut open: Vec<(String, Arc<str>)> = Vec::new();
-        let mut closed: Vec<String> = Vec::new();
+        let limit = {
+            #[cfg(test)]
+            {
+                self.state
+                    .navigation_snapshot_budget_override
+                    .lock()
+                    .unwrap_or(crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES)
+            }
+            #[cfg(not(test))]
+            {
+                crate::access::MAX_NAVIGATION_SNAPSHOT_BYTES
+            }
+        };
+        let mut open = Vec::new();
+        let mut closed = Vec::new();
+        let mut seen = HashSet::with_capacity(uris.len());
         {
             let docs = self.state.documents.lock();
             for uri in uris {
-                match docs.text_of(&uri) {
-                    Some(text) => open.push((uri, text)),
-                    None => closed.push(uri),
+                if !seen.insert(uri.clone()) {
+                    continue;
+                }
+                if let Some(doc) = docs.get(&uri) {
+                    open.push((
+                        uri.clone(),
+                        Arc::clone(&doc.text),
+                        doc.version,
+                        docs.content_hash(&uri),
+                    ));
+                } else {
+                    closed.push(uri);
                 }
             }
         }
+        let open_versions = open
+            .iter()
+            .map(|(uri, _, version, hash)| (uri.clone(), *version, *hash))
+            .collect::<Vec<_>>();
+        let budget = crate::access::ReadBudget::new(limit);
         crate::scan::hold_for_tests(
             "CWTOOLS_NAV_SNAPSHOT_HOLD_FILE",
             Some("CWTOOLS_NAV_SNAPSHOT_HOLD_READY_FILE"),
         )
         .await;
-        if open.is_empty() && closed.is_empty() {
-            return Vec::new();
-        }
         let roots = self.state.config.read().authorized_roots.clone();
-        tokio::task::spawn_blocking(move || {
-            use rayon::prelude::*;
-            let mut out: Vec<T> = open
-                .par_iter()
-                .flat_map_iter(|(uri, text)| scan(uri, text))
-                .collect();
-            out.par_extend(closed.into_par_iter().flat_map_iter(|uri| {
-                crate::access::read_authorized_text(&uri, &roots, crate::access::MAX_URI_READ_BYTES)
-                    .map(|text| scan(&uri, &text))
-                    .unwrap_or_default()
-            }));
-            out
+        let scanned = tokio::task::spawn_blocking(move || {
+            let mut scanned = Vec::new();
+            for (uri, text, _, _) in &open {
+                let part = crate::access::with_read_budget(
+                    &budget,
+                    crate::access::scan_peak_bytes(text.len()),
+                    || scan(uri, text),
+                )
+                .map_err(|_| navigation_snapshot_budget_error())?;
+                scanned.extend(part);
+            }
+            for uri in closed {
+                let part = crate::access::scan_authorized_text_with_budget(
+                    &uri,
+                    &roots,
+                    crate::access::MAX_URI_READ_BYTES,
+                    &budget,
+                    |text| scan(&uri, text),
+                )
+                .map_err(|_| navigation_snapshot_budget_error())?
+                .ok_or_else(navigation_snapshot_read_error)?;
+                scanned.extend(part);
+            }
+            Ok::<_, tower_lsp::jsonrpc::Error>(scanned)
         })
         .await
-        .unwrap_or_default()
+        .map_err(|_| navigation_snapshot_read_error())??;
+        let unchanged = {
+            let docs = self.state.documents.lock();
+            open_versions.iter().all(|(uri, version, hash)| {
+                docs.get(uri)
+                    .is_some_and(|doc| doc.version == *version && docs.content_hash(uri) == *hash)
+            })
+        };
+        if !unchanged {
+            return Err(navigation_snapshot_changed_error());
+        }
+        Ok(scanned)
     }
 
-    /// Script-side uses of `keys`, from a streamed scan of every script file.
+    /// Script-side uses of `keys`, from a budgeted scan of every script file.
     pub(crate) async fn collect_loc_script_usages(
         &self,
         keys: &HashSet<String>,
         fallback: &Url,
-    ) -> Vec<Location> {
+    ) -> Result<Vec<Location>> {
         if keys.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let script_uris = self.script_uris();
         if script_uris.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let keys: Vec<String> = keys.iter().cloned().collect();
         let encoding = self.position_encoding();
@@ -383,9 +446,9 @@ impl Backend {
                 }
                 hits
             })
-            .await;
+            .await?;
         out.sort_by(|a, b| (a.uri.as_str(), a.range.start).cmp(&(b.uri.as_str(), b.range.start)));
-        out
+        Ok(out)
     }
 
     pub(crate) async fn references_impl(
@@ -407,7 +470,7 @@ impl Backend {
             if include_declaration {
                 all_locs.extend(self.collect_loc_definitions(&keys, fallback).await?);
             }
-            all_locs.extend(self.collect_loc_script_usages(&keys, fallback).await);
+            all_locs.extend(self.collect_loc_script_usages(&keys, fallback).await?);
             let all_locs = dedup_locations(all_locs);
             if !all_locs.is_empty() {
                 return Ok(Some(all_locs));
@@ -1252,16 +1315,14 @@ mod tests {
             .expect("the store accepts one small doc");
 
         let mut hits = backend
-            .scan_workspace_texts(
-                vec![uri_of(&on_disk), uri_of(&open_path), uri_of(&stray)],
-                |uri, text| {
-                    text.lines()
-                        .filter(|line| line.contains("needle"))
-                        .map(|line| format!("{}:{}", uri.rsplit('/').next().unwrap(), line))
-                        .collect()
-                },
-            )
-            .await;
+            .scan_workspace_texts(vec![uri_of(&on_disk), uri_of(&open_path)], |uri, text| {
+                text.lines()
+                    .filter(|line| line.contains("needle"))
+                    .map(|line| format!("{}:{}", uri.rsplit('/').next().unwrap(), line))
+                    .collect()
+            })
+            .await
+            .expect("open and authorized closed files are scanned");
         hits.sort();
         assert_eq!(
             hits,
@@ -1270,6 +1331,111 @@ mod tests {
                 "open.txt:edited = needle".to_string(),
             ]
         );
+        let error = backend
+            .scan_workspace_texts(vec![uri_of(&stray)], |_, _| Vec::<String>::new())
+            .await
+            .expect_err("an unauthorized scan target must not become a partial result");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED)
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_text_scan_streams_over_peak_budget_and_refuses_quota_exhaustion() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        let uri_of = |path: &std::path::Path| {
+            Url::from_file_path(path)
+                .expect("absolute path")
+                .to_string()
+        };
+        let open_path = ws.path().join("open.txt");
+        let open_uri = uri_of(&open_path);
+        let open_text = "o=1\n";
+        let closed_text = "c=1\n";
+        let closed_uris = (0..100)
+            .map(|idx| {
+                let path = ws.path().join(format!("closed-{idx}.txt"));
+                std::fs::write(&path, closed_text).unwrap();
+                uri_of(&path)
+            })
+            .collect::<Vec<_>>();
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(open_text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts the open buffer");
+        let limit = crate::access::scan_peak_bytes(closed_text.len());
+        *state.navigation_snapshot_budget_override.lock() = Some(limit);
+
+        let mut all_uris = vec![open_uri.clone()];
+        all_uris.extend(closed_uris.iter().cloned());
+        let hits = backend
+            .scan_workspace_texts(all_uris, |uri, text| vec![format!("{uri}:{}", text.trim())])
+            .await
+            .expect("files are scanned one at a time under the peak cap");
+        assert_eq!(hits.len(), 101);
+        assert!(open_text.len() + 100 * closed_text.len() > limit);
+
+        *state.navigation_snapshot_budget_override.lock() = Some(limit - 1);
+        let error = backend
+            .scan_workspace_texts(vec![open_uri, closed_uris[0].clone()], |_, text| {
+                vec![text.to_string()]
+            })
+            .await
+            .expect_err("a file that cannot reserve its peak must fail closed");
+        assert!(error.message.contains("total text read budget exceeded"));
+    }
+
+    #[tokio::test]
+    async fn workspace_text_scan_releases_multibyte_reservations() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        let uri_of = |path: &std::path::Path| Url::from_file_path(path).unwrap().to_string();
+        let closed = ws.path().join("closed.txt");
+        std::fs::write(&closed, [0xff, b'\n']).unwrap();
+        let open = ws.path().join("open.txt");
+        let open_uri = uri_of(&open);
+        let closed_uri = uri_of(&closed);
+        let open_text = "😀\n";
+        state.config.write().authorized_roots =
+            Arc::from([std::fs::canonicalize(ws.path()).expect("canonical root")]);
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(open_text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let limit = crate::access::scan_peak_bytes(open_text.len());
+        *state.navigation_snapshot_budget_override.lock() = Some(limit);
+        let mut texts = backend
+            .scan_workspace_texts(vec![open_uri, closed_uri], |_, text| vec![text.to_string()])
+            .await
+            .expect("decoded multibyte and replacement text fit sequentially");
+        texts.sort();
+        assert_eq!(texts, vec!["ÿ\n", "😀\n"]);
     }
 
     #[tokio::test]
