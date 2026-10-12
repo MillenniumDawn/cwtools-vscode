@@ -1,3 +1,4 @@
+use cwtools_file_manager::path_identity;
 use cwtools_validation::{ErrorSeverity, ValidationError};
 use std::borrow::Cow;
 use std::path::Path;
@@ -81,6 +82,50 @@ fn legacy_diag_hash(root: &Path, file: &str, code: &str, message: &str, line: u3
     ])
 }
 
+/// Return a native path's stable identity relative to `root`. This is used
+/// when `file` is a lossless key for a non-UTF-8 path: relativizing that
+/// encoded key as text would leave the absolute root embedded in the hash.
+fn relative_native_path_identity(root: &Path, file: &Path) -> Cow<'static, str> {
+    let absolute_root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
+    let absolute_file = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
+    let relative = absolute_file
+        .strip_prefix(&absolute_root)
+        .unwrap_or(&absolute_file);
+    Cow::Owned(path_identity(relative).into_owned())
+}
+
+fn diag_hash_for_native_path(
+    root: &Path,
+    file_key: &str,
+    native_file: &Path,
+    code: &str,
+    message: &str,
+    line_text: &str,
+) -> String {
+    if native_file.to_str().is_some() {
+        // Keep the existing UTF-8 normalization and digest exactly as-is.
+        return diag_hash(root, file_key, code, message, line_text);
+    }
+    let identity = relative_native_path_identity(root, native_file);
+    fnv1a_digest([&identity, code, message, line_text])
+}
+
+fn legacy_diag_hash_for_native_path(
+    root: &Path,
+    file_key: &str,
+    native_file: &Path,
+    code: &str,
+    message: &str,
+    line: u32,
+) -> String {
+    if native_file.to_str().is_some() {
+        // Keep the existing UTF-8 normalization and digest exactly as-is.
+        return legacy_diag_hash(root, file_key, code, message, line);
+    }
+    let identity = relative_native_path_identity(root, native_file);
+    fnv1a_digest([&identity, code, message, &line.to_string()])
+}
+
 /// One-slot memo of a file's trimmed lines, feeding [`diag_hash`]. Diagnostics
 /// arrive grouped by file from both the validation and loc passes, so a single
 /// slot keeps each file to one read and only one file resident.
@@ -95,11 +140,22 @@ impl SourceLines {
     /// Trimmed text of 1-based `line` in `file`; `""` when the file can't be
     /// read or the line doesn't exist (whole-file diagnostics report line 0).
     pub(crate) fn trimmed(&mut self, file: &str, line: u32) -> &str {
-        if self.file != file {
-            self.lines = std::fs::read_to_string(file)
+        self.trimmed_from(file, Path::new(file), line)
+    }
+
+    /// Read through the native path while memoizing by its lossless identity
+    /// key. This lets reports display a lossy spelling without conflating two
+    /// distinct non-UTF-8 filenames internally.
+    pub(crate) fn trimmed_path(&mut self, key: &str, path: &Path, line: u32) -> &str {
+        self.trimmed_from(key, path, line)
+    }
+
+    fn trimmed_from(&mut self, key: &str, path: &Path, line: u32) -> &str {
+        if self.file != key {
+            self.lines = std::fs::read_to_string(path)
                 .map(|text| text.lines().map(|l| l.trim().to_string()).collect())
                 .unwrap_or_default();
-            self.file = file.to_string();
+            self.file = key.to_string();
             // Built from the same trimmed lines the hash path reads, so a
             // directive costs nothing extra; trimming cannot hide one (it
             // only strips leading/trailing whitespace around the line).
@@ -122,6 +178,17 @@ impl SourceLines {
     /// trimmed-line lookup maintains, so per file it is one read at most.
     pub(crate) fn inline_suppressed(&mut self, file: &str, line: u32, code: &str) -> bool {
         self.trimmed(file, line);
+        cwtools_validation::inline_ignore::inline_suppressed(&self.inline_ignored, line, code)
+    }
+
+    pub(crate) fn inline_suppressed_path(
+        &mut self,
+        key: &str,
+        path: &Path,
+        line: u32,
+        code: &str,
+    ) -> bool {
+        self.trimmed_path(key, path, line);
         cwtools_validation::inline_ignore::inline_suppressed(&self.inline_ignored, line, code)
     }
 }
@@ -200,22 +267,41 @@ fn legacy_hash_if_wanted(
 }
 
 /// Map a `ValidationError` to a report `Diag`, computing its hash from the
-/// trimmed source line. Consumes the error (moves the message and the shared
-/// file path). The `fix` field is deliberately dropped. `root` is the mod root
-/// the hash is relativized against; the emitted `file` column is untouched.
-/// `legacy` requests the older line-number digest, needed only when matching an
-/// `--ignore-hashes` baseline.
+/// trimmed source line. The `fix` field is deliberately dropped. `root` is the
+/// mod root the hash is relativized against.
+#[cfg(test)]
 pub(crate) fn validation_to_diag(
     root: &Path,
     err: ValidationError,
     line_text: &str,
     legacy: bool,
 ) -> Diag {
+    let display_file = err.file.clone();
+    let native_file = Path::new(display_file.as_ref()).to_path_buf();
+    validation_to_diag_with_path(root, err, &native_file, display_file, line_text, legacy)
+}
+
+/// Map a `ValidationError` to a report `Diag`, computing its hash from the
+/// trimmed source line and retaining a readable path display separately from
+/// the lossless identity key carried by the error. The `fix` field is dropped.
+pub(crate) fn validation_to_diag_with_path(
+    root: &Path,
+    err: ValidationError,
+    native_file: &Path,
+    display_file: impl Into<cwtools_validation::FilePath>,
+    line_text: &str,
+    legacy: bool,
+) -> Diag {
     let code = err.code.unwrap_or_default();
-    let hash = diag_hash(root, &err.file, code, &err.message, line_text);
-    let legacy_hash = legacy_hash_if_wanted(legacy, root, &err.file, code, &err.message, err.line);
+    let hash =
+        diag_hash_for_native_path(root, &err.file, native_file, code, &err.message, line_text);
+    let legacy_hash = if legacy {
+        legacy_diag_hash_for_native_path(root, &err.file, native_file, code, &err.message, err.line)
+    } else {
+        String::new()
+    };
     Diag {
-        file: err.file,
+        file: display_file.into(),
         severity: err.severity,
         code,
         message: err.message,
@@ -463,6 +549,69 @@ mod tests {
                 spellings[0]
             );
         }
+    }
+
+    /// Non-UTF-8 identity keys must be relativized while still native paths;
+    /// hashing their encoded absolute spelling makes baselines depend on the
+    /// checkout location and on whether the root was passed relatively.
+    #[cfg(unix)]
+    // macOS filesystems reject filenames with invalid UTF-8 bytes (EILSEQ),
+    // so skip before the test attempts to create its fixture files there.
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS rejects non-UTF-8 filenames with EILSEQ"
+    )]
+    #[test]
+    fn non_utf8_diagnostic_hash_is_stable_across_roots_and_root_spellings() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let cwd = std::path::absolute(".").unwrap();
+        let first_root = tempfile::tempdir_in(".").unwrap();
+        let second_root = tempfile::tempdir_in(".").unwrap();
+        let first_root_abs = std::path::absolute(first_root.path()).unwrap();
+        let second_root_abs = std::path::absolute(second_root.path()).unwrap();
+        let first_root_relative = first_root_abs.strip_prefix(&cwd).unwrap();
+        let filename = std::ffi::OsString::from_vec(b"script-\x80.txt".to_vec());
+        let first_file = first_root_abs.join(&filename);
+        let second_file = second_root_abs.join(&filename);
+        std::fs::write(&first_file, "bad = 1\n").unwrap();
+        std::fs::write(&second_file, "bad = 1\n").unwrap();
+
+        let first_key = path_identity(&first_file);
+        let second_key = path_identity(&second_file);
+        let diag_for = |root: &Path, path: &Path, key: &str| {
+            validation_to_diag_with_path(
+                root,
+                ValidationError {
+                    message: "message".to_string(),
+                    severity: ErrorSeverity::Error,
+                    line: 7,
+                    col: 0,
+                    file: key.to_string().into(),
+                    code: Some("CW282"),
+                    fix: None,
+                    end: None,
+                    related: Vec::new(),
+                },
+                path,
+                path.display().to_string(),
+                "bad = 1",
+                true,
+            )
+        };
+        let first = diag_for(&first_root_abs, &first_file, &first_key);
+        let second = diag_for(&second_root_abs, &second_file, &second_key);
+        let relative_root = diag_for(first_root_relative, &first_file, &first_key);
+        assert_eq!(
+            first.hash, second.hash,
+            "checkout roots must not affect hashes"
+        );
+        assert_eq!(
+            first.hash, relative_root.hash,
+            "relative and absolute root spellings must agree"
+        );
+        assert_eq!(first.legacy_hash, second.legacy_hash);
+        assert_eq!(first.legacy_hash, relative_root.legacy_hash);
     }
 
     /// A file outside the root (e.g. a vanilla install path reported
