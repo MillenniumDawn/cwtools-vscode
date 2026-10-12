@@ -309,6 +309,9 @@ pub struct SessionConfig<'a> {
     pub game: Game,
     pub rules: RulesInput,
     pub directory: PathBuf,
+    /// Higher-priority script/localisation layers between the workspace and
+    /// vanilla game. Parents are indexed for references but never validated.
+    pub parent_roots: Vec<PathBuf>,
     pub vanilla: Option<PathBuf>,
     pub vanilla_cache: Option<VanillaCacheData>,
     pub vanilla_cache_auto: Option<VanillaCacheAuto>,
@@ -349,6 +352,7 @@ impl Session {
             game,
             rules,
             directory,
+            parent_roots,
             vanilla,
             mut vanilla_cache,
             vanilla_cache_auto,
@@ -358,7 +362,7 @@ impl Session {
             case_sensitive_files,
             on_rules_diagnostic,
         } = config;
-        let vanilla_shadow = vanilla_replacement_shadow(&directory, &[]);
+        let vanilla_shadow = vanilla_replacement_shadow(&directory, &parent_roots);
 
         let rules_table = StringTable::new();
         let (ruleset, rule_errors) = load_rules(&rules, &rules_table).unwrap_or_else(|e| {
@@ -396,48 +400,73 @@ impl Session {
             config: fm_config,
             policy: DiscoveryPolicy::Workspace,
         });
-        let (files, loc_paths, discovery_failed) = match discovery {
-            Ok(discovery) => {
-                for failure in discovery.failures {
-                    eprintln!(
-                        "warn: discovery skipped {}: {}",
-                        failure.path.display(),
-                        failure.error
+        let (files, loc_paths, primary_scripts, primary_loc_paths, discovery_failed) =
+            match discovery {
+                Ok(discovery) => {
+                    for failure in discovery.failures {
+                        eprintln!(
+                            "warn: discovery skipped {}: {}",
+                            failure.path.display(),
+                            failure.error
+                        );
+                    }
+                    let primary_scripts: Vec<DiscoveredFile> = discovery
+                        .files
+                        .iter()
+                        .filter(|file| file.kind == FileKind::Script)
+                        .map(|file| DiscoveredFile {
+                            path: file.path.clone(),
+                            logical_path: file.root_relative_path.clone(),
+                        })
+                        .collect();
+                    let primary_loc_paths: Vec<DiscoveredPath> = discovery
+                        .files
+                        .iter()
+                        .filter(|file| file.kind == FileKind::Localisation)
+                        .cloned()
+                        .collect();
+                    let loc_paths = primary_loc_paths
+                        .iter()
+                        .map(|file| file.path.clone())
+                        .collect();
+                    let files = parse_discovered_files(
+                        primary_scripts.clone(),
+                        &rules_table,
+                        parse_cache.as_ref(),
                     );
+                    (files, loc_paths, primary_scripts, primary_loc_paths, false)
                 }
-                let files = discovery
-                    .files
-                    .iter()
-                    .filter(|file| file.kind == FileKind::Script)
-                    .map(|file| DiscoveredFile {
-                        path: file.path.clone(),
-                        logical_path: file.root_relative_path.clone(),
-                    })
-                    .collect();
-                let loc_paths = discovery
-                    .files
-                    .into_iter()
-                    .filter(|file| file.kind == FileKind::Localisation)
-                    .map(|file| file.path)
-                    .collect();
-                (
-                    parse_discovered_files(files, &rules_table, parse_cache.as_ref()),
-                    loc_paths,
-                    false,
-                )
-            }
-            Err(e) => {
-                eprintln!("error: discovery failed for {}: {}", directory.display(), e);
-                (Vec::new(), Vec::new(), true)
-            }
-        };
+                Err(e) => {
+                    eprintln!("error: discovery failed for {}: {}", directory.display(), e);
+                    (Vec::new(), Vec::new(), Vec::new(), Vec::new(), true)
+                }
+            };
+        let parent_scripts = discover_parent_script_files(
+            &parent_roots,
+            &directory,
+            &primary_scripts,
+            Some(&ruleset),
+            ignore_files,
+            ignore_dirs,
+        );
+        let parsed_parents =
+            parse_discovered_files(parent_scripts, &rules_table, parse_cache.as_ref());
+        let parent_loc_paths = discover_parent_localisation_files(
+            &parent_roots,
+            &directory,
+            &primary_loc_paths,
+            ignore_files,
+            ignore_dirs,
+        );
         if let Some(cache) = &parse_cache
             && cache.wrote.swap(false, Ordering::Relaxed)
         {
             workspace_cache::prune(&cache.dir, cache.fingerprint);
         }
 
-        let parsed = files;
+        let mut parsed = files;
+        let primary_file_count = parsed.len();
+        parsed.extend(parsed_parents);
 
         use rayon::prelude::*;
         type PerFileResult = (
@@ -498,7 +527,7 @@ impl Session {
 
         let mut type_index = TypeIndex::new();
         for (
-            src,
+            (file_index, src),
             (
                 instances,
                 subtype_instances,
@@ -508,12 +537,21 @@ impl Session {
                 scripted_locs,
                 scripted_guis,
             ),
-        ) in parsed.iter().zip(per_file)
+        ) in parsed.iter().enumerate().zip(per_file)
         {
             let file_uri = cwtools_file_manager::path_identity(&src.path);
-            type_index.merge(&file_uri, instances);
+            let is_parent = file_index >= primary_file_count;
+            if is_parent {
+                type_index.merge_base_game(&file_uri, instances);
+            } else {
+                type_index.merge(&file_uri, instances);
+            }
             if !subtype_instances.is_empty() {
-                type_index.merge(&file_uri, subtype_instances);
+                if is_parent {
+                    type_index.merge_base_game(&file_uri, subtype_instances);
+                } else {
+                    type_index.merge(&file_uri, subtype_instances);
+                }
             }
             for n in &var_names {
                 type_index.var_index.add_name(n);
@@ -531,7 +569,7 @@ impl Session {
                 .scripted_gui_index
                 .merge_file(&file_uri, scripted_guis);
         }
-        let source_files: Vec<SourceFile> = parsed
+        let mut source_files: Vec<SourceFile> = parsed
             .into_iter()
             .map(|src| SourceFile {
                 path: src.path,
@@ -539,8 +577,10 @@ impl Session {
                 fingerprint: src.fingerprint,
             })
             .collect();
-
+        // Parents sit after the primary files; they supply inline scripts but
+        // are not validated.
         let inline_scripts = load_inline_scripts(&source_files, &rules_table);
+        source_files.truncate(primary_file_count);
 
         let mut cache_write_target: Option<(PathBuf, String)> = None;
         let mut force_vanilla_rebuild = false;
@@ -584,7 +624,7 @@ impl Session {
             }
             type_index.file_index = build_file_index_with_vanilla_shadow(
                 &directory,
-                &[],
+                &parent_roots,
                 ignore_files,
                 ignore_dirs,
                 VanillaFiles::Cached(aux.file_paths),
@@ -674,7 +714,7 @@ impl Session {
                     type_index.merge_base_game_with_uris(vanilla_per_type);
                     type_index.file_index = build_file_index_with_vanilla_shadow(
                         &directory,
-                        &[],
+                        &parent_roots,
                         ignore_files,
                         ignore_dirs,
                         VanillaFiles::Install(vanilla_dir),
@@ -702,6 +742,14 @@ impl Session {
         let mut loc_service =
             LocService::from_paths(loc_paths, ScanBudget::default(), loc_languages.as_deref());
         let mut loc_index = LocIndex::build_scoped(&loc_service, loc_languages.as_deref());
+        let parent_loc_service = LocService::from_paths(
+            parent_loc_paths.into_iter().map(|file| file.path).collect(),
+            ScanBudget::default(),
+            loc_languages.as_deref(),
+        );
+        let parent_loc_index =
+            LocIndex::build_scoped(&parent_loc_service, loc_languages.as_deref());
+        loc_index.merge_from(&parent_loc_index, loc_languages.as_deref());
         if cached_loc_keys.is_none()
             && let Some(v) = &vanilla
         {
@@ -1198,14 +1246,29 @@ pub fn build_file_index_with_vanilla_shadow(
 ) -> FileIndex {
     let mut index = FileIndex::new();
     index.set_case_sensitive(case_sensitive);
-    for root in std::iter::once(workspace_root).chain(parent_roots.iter().map(PathBuf::as_path)) {
-        index.add_paths(discover_file_index_paths(
-            root,
-            workspace_ignore_files,
-            workspace_ignore_dirs,
-            DiscoveryPolicy::Workspace,
-        ));
-    }
+    let workspace_paths = discover_file_index_paths(
+        workspace_root,
+        workspace_ignore_files,
+        workspace_ignore_dirs,
+        DiscoveryPolicy::Workspace,
+    );
+    let workspace_logical_paths: Vec<&str> = workspace_paths.iter().map(String::as_str).collect();
+    let parent_paths = visible_parent_files(
+        parent_roots,
+        workspace_root,
+        &workspace_logical_paths,
+        |root| {
+            discover_file_index_paths(
+                root,
+                workspace_ignore_files,
+                workspace_ignore_dirs,
+                DiscoveryPolicy::Workspace,
+            )
+        },
+        String::as_str,
+    );
+    index.add_paths(workspace_paths);
+    index.add_paths(parent_paths);
     match vanilla {
         VanillaFiles::Cached(paths) => index.add_paths(
             paths

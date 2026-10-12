@@ -13,7 +13,7 @@ use crate::diag::{
 };
 use crate::report::ReportType;
 use crate::run::{
-    EXIT_USAGE, announce_config, color_enabled, exit_code, exit_if_empty,
+    EXIT_USAGE, ModLayers, announce_config, color_enabled, exit_code, exit_if_empty,
     gate_vanilla_cache_for_replacements, load_config, load_ignore_hashes, missing_required, note,
     parse_game, rebuild_vanilla_cache_if_stale, report_owns_stdout, status, vanilla_notice,
 };
@@ -26,6 +26,7 @@ pub(super) fn run(args: ValidateArgs) {
         directory,
         rules,
         vanilla,
+        parents: parent_roots,
         vanilla_cache,
         no_vanilla_cache,
         refresh_vanilla_cache,
@@ -63,6 +64,7 @@ pub(super) fn run(args: ValidateArgs) {
         option fail_on => fail_on "fail-on";
         list ignore_files => ignore_files "ignore-files";
         list ignore_dirs => ignore_dirs "ignore-dirs";
+        list parent_roots => parents "parents";
         list loc_language => loc_languages "loc-languages";
         list ignore_codes => ignore_codes "ignore-codes";
         list only_codes => only_codes "only-codes";
@@ -162,7 +164,10 @@ pub(super) fn run(args: ValidateArgs) {
             gate_vanilla_cache_for_replacements(
                 cache_path,
                 loaded,
-                &directory,
+                ModLayers {
+                    primary: &directory,
+                    parents: &parent_roots,
+                },
                 vanilla.as_deref(),
             )
         });
@@ -193,6 +198,7 @@ pub(super) fn run(args: ValidateArgs) {
             game: game_id,
             rules: RulesInput::from_path(rules.clone()),
             directory: directory.clone(),
+            parent_roots: parent_roots.clone(),
             vanilla: vanilla.clone(),
             vanilla_cache: vanilla_cache_index,
             vanilla_cache_auto,
@@ -270,7 +276,10 @@ pub(super) fn run(args: ValidateArgs) {
             &session,
             cache_path,
             fp_loaded,
-            &directory,
+            ModLayers {
+                primary: &directory,
+                parents: &parent_roots,
+            },
             vanilla_dir,
             game_id,
             !no_vanilla_cache,

@@ -52,6 +52,7 @@ const vscodeBg = () =>
 // pass per draw call, so drop it.
 const SHADOW_NODE_LIMIT = 300;
 const SHADOW_MIN_ZOOM = 0.4;
+const GRAPH_LAYOUT_TIMEOUT_MS = 60_000;
 
 function drawExtra(
 	nodes: cytoscape.NodeCollection,
@@ -164,8 +165,26 @@ let _cy: cytoscape.Core | undefined;
 let _tips: Instance[] = [];
 const _hoverTimers = new Set<NodeJS.Timeout>();
 let _themeObserver: MutationObserver | undefined;
+let _pendingGraphLayout: {
+	layout?: ReturnType<CollectionReturnValue["layout"]>;
+	timeout?: NodeJS.Timeout;
+	onStop?: () => void;
+	timedOut?: boolean;
+} | undefined;
+
+function cancelPendingGraphLayout() {
+	const pending = _pendingGraphLayout;
+	if (!pending) return;
+	_pendingGraphLayout = undefined;
+	if (pending.timeout) clearTimeout(pending.timeout);
+	if (pending.layout && pending.onStop) {
+		pending.layout.removeListener("layoutstop", pending.onStop);
+	}
+	pending.layout?.stop();
+}
 
 function disposeCytoscape() {
+	cancelPendingGraphLayout();
 	_hoverTimers.forEach((timer) => clearTimeout(timer));
 	_hoverTimers.clear();
 	_themeObserver?.disconnect();
@@ -386,7 +405,6 @@ function setupTooltips(cy: cytoscape.Core) {
 }
 
 function runLayout(cy: cytoscape.Core) {
-	cy.fit();
 	const opts = {
 		name: "elk",
 		nodeDimensionsIncludeLabels: true,
@@ -406,17 +424,63 @@ function runLayout(cy: cytoscape.Core) {
 	const singles2 = cy.nodes().filter((node) => node.degree() === 0);
 	const rest2 = cy.elements().difference(singles2);
 
-	const lrest = rest2.layout(opts);
-	lrest.run();
 	const opts2 = {
 		name: "grid",
 		condense: true,
 		nodeDimensionsIncludeLabels: true,
 	};
-	const lsingles = singles2.layout(opts2);
-	lsingles.run();
-	singles2.shift("y", (singles2.boundingBox({}).y2 + 10) * -1);
-	cy.fit();
+	const layoutSingles = () => {
+		try {
+			if (singles2.length > 0) {
+				const lsingles = singles2.layout(opts2);
+				lsingles.run();
+				singles2.shift("y", (singles2.boundingBox({}).y2 + 10) * -1);
+			}
+			cy.fit();
+		} catch (error) {
+			reportLayoutError(error);
+		}
+	};
+
+	if (rest2.length === 0) {
+		layoutSingles();
+		return;
+	}
+
+	const pending: NonNullable<typeof _pendingGraphLayout> = {};
+	_pendingGraphLayout = pending;
+	const isActive = () => _pendingGraphLayout === pending && _cy === cy && !cy.destroyed();
+	const detach = () => {
+		if (pending.timeout) clearTimeout(pending.timeout);
+		if (pending.layout && pending.onStop) {
+			pending.layout.removeListener("layoutstop", pending.onStop);
+		}
+		if (_pendingGraphLayout === pending) _pendingGraphLayout = undefined;
+	};
+	pending.onStop = () => {
+		if (!isActive()) return;
+		const timedOut = pending.timedOut === true;
+		detach();
+		if (timedOut) cy.fit();
+		else layoutSingles();
+	};
+	pending.timeout = setTimeout(() => {
+		if (!isActive()) return;
+		pending.timeout = undefined;
+		pending.timedOut = true;
+		reportLayoutError(new Error("ELK layout did not finish within 60 seconds"));
+		layoutSingles();
+	}, GRAPH_LAYOUT_TIMEOUT_MS);
+	try {
+		pending.layout = rest2.layout(opts);
+		pending.layout.one("layoutstop", pending.onStop);
+		pending.layout.run();
+	} catch (error) {
+		if (!isActive()) return;
+		cancelPendingGraphLayout();
+		reportLayoutError(error);
+		layoutSingles();
+	}
 }
 
 function setupInteraction(
@@ -638,6 +702,14 @@ function reportUnavailableExport(kind: "an image" | "a JSON file") {
 	vscode.postMessage({
 		command: "showError",
 		message: `CWTools: no graph is available to export as ${kind}.`,
+	});
+}
+
+function reportLayoutError(error: unknown) {
+	const detail = error instanceof Error ? error.message : String(error);
+	vscode.postMessage({
+		command: "showError",
+		message: `CWTools: couldn't lay out graph: ${detail}.`,
 	});
 }
 

@@ -9,11 +9,11 @@ The suite runs on the headless Cytoscape harness in
 harness and covers the isolated/connected partition. Here the real canvas.ts
 extension also runs, against a small DOM/canvas boundary stub.
 
-The suite covers the closed neighborhood hover classes, bounded class-update
-work, drawExtra label caching
-and shadow limits, canvas pixel ratios/resize/transforms, and lazy tooltip
-creation, detail expansion, simple/expanded mouseout behavior and graph-replacement
-cleanup. It complements graphWebview.test.ts,
+The suite covers asynchronous layout ordering, stalled-layout reporting and
+replacement cleanup, the closed neighborhood hover classes, bounded class-update
+work, drawExtra label caching and shadow limits, canvas pixel ratios/resize/
+transforms, and lazy tooltip creation, detail expansion, simple/expanded mouseout
+behavior and graph-replacement cleanup. It complements graphWebview.test.ts,
 whose fake Cytoscape boundary remains useful for import/export failure cases.
 
 These tests measure graph correctness and application operations before layout.
