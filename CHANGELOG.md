@@ -3,6 +3,8 @@
 #### Engine
 
 * Prefilter script files for localization references before allocating lowercase copies and line indexes, while retaining exact token matching. (#871)
+* Load repeatable CLI `--parent` directories and `parents` from `cwtools.toml` for validate and fix, indexing parent scripts and localisation between the workspace and vanilla without validating or fixing parent files. Both commands share the same parent-aware vanilla cache. (#819)
+* Filter enum, filepath, icon and plain-alias completion candidates before growing result collections or allocating snippets; cache plain alias indices by category and preserve deterministic ordering, overload aggregation and filtering-budget signals. (#869)
 * Keep distinct non-UTF-8 file paths distinct in indexing, validation and fix grouping while retaining lossy path spellings only for display. (#497)
 * Remove an unused test-only `Arc` placeholder from completion tests. (#966)
 * Move the eight ignored perf tests into `cwtools_lsp` and `cwtools_cache` benches that find their checkouts under `CWTOOLS_PROJECTS`, like the existing benches. The per-test path variables and home-directory defaults are gone, and the indexing bench now reads Millennium Dawn files instead of a base-game install. With those unrun test bodies gone, the Rust line-coverage floor rises from 91.5 to 92.3. (#886)
@@ -58,6 +60,7 @@
 
 #### Extension
 
+* Keep the Fix All and Format Workspace protocol-error tests independent of delayed rules-config error notifications from the pinned Stellaris rules. (#959)
 * Test that a crashed language server recovers, stops after its restart budget, and can be started manually again. (#928)
 * Skip executable workspace scans during activation when folder-name or content hints already identify the game; retain executable detection for unrecognized roots. (#501)
 * Delegate graph tooltips, retain only the active hover neighborhood, and clean up tooltip timers and scratch state when replacing a graph; assert node/core scratch collections stay bounded to the active neighborhood. (#503)
