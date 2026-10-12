@@ -4,6 +4,28 @@ use cwtools_string_table::string_table::StringTable;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// A lossless, injective string key for a native filesystem path.
+///
+/// Ordinary UTF-8 paths retain their existing spelling. A path that cannot be
+/// represented as UTF-8 gets a NUL-prefixed hex encoding of its native encoded bytes;
+/// NUL cannot occur in a filesystem path, so this cannot collide with a valid
+/// path's UTF-8 spelling. Keep this for identity keys only; use `Path::display`
+/// when a human-readable lossy spelling is wanted.
+pub fn path_identity(path: &Path) -> std::borrow::Cow<'_, str> {
+    if let Some(path) = path.to_str() {
+        return std::borrow::Cow::Borrowed(path);
+    }
+
+    use std::fmt::Write as _;
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let mut key = String::with_capacity(14 + bytes.len() * 2);
+    key.push_str("\0cwtools-path:");
+    for byte in bytes {
+        write!(key, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    std::borrow::Cow::Owned(key)
+}
+
 /// Windows-1252 → Unicode mapping for the 0x80-0x9F range (the gap not covered
 /// Source: https://encoding.spec.whatwg.org/index-windows-1252.txt
 const CP1252_HIGH: [char; 32] = [

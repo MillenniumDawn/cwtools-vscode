@@ -55,6 +55,25 @@ cwtools validate --game hoi4 --directory path/to/mod --rules path/to/cwtools-hoi
 
 `cwtools --help` lists the other subcommands (`fix`, `loc`, `cache-vanilla`, ...).
 
+For submods, pass each parent in load order with repeatable `--parent` flags:
+
+```plaintext
+cwtools validate --game hoi4 --directory path/to/submod --rules path/to/Config \
+  --parent path/to/base-mod --parent path/to/next-parent
+```
+
+`fix` accepts the same parent flags and configuration, including the same
+parent-aware vanilla cache, while fixing only the primary mod's files.
+
+The primary mod has highest priority, followed by parent directories in the
+order given, then vanilla. When parents conflict, a later-listed parent wins.
+Parent scripts and localisation contribute to reference resolution, while only
+files under `--directory` are validated.
+CLI `--parent` paths are relative to the current working directory. A
+`cwtools.toml` can set the same ordered list with `parents = ["../base-mod"]`;
+those paths are relative to the config file. If no `--parent` flag is present,
+the config list is used. Supplying one or more flags replaces that list.
+
 The `.cwt` rules are a separate repo, not bundled. HOI4 uses
 [cwtools-hoi4-config](https://github.com/cwtools/cwtools-hoi4-config); point
 `--rules` at its `Config` directory.

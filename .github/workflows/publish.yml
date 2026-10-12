@@ -286,7 +286,16 @@ jobs:
         with:
           persist-credentials: false
       # @vscode/vsce is a devDependency, so `npx --no-install` needs the tree.
+      # ovsx's nested vsce has optional keytar, whose install script fetches a
+      # native prebuild. The publisher only uploads prebuilt VSIX files, so no
+      # dependency lifecycle script needs to run in this publisher job.
       - uses: ./.github/actions/setup-node-npm
+        with:
+          ignore-scripts: true
+      - name: Verify registry tools with dependency scripts disabled
+        run: |
+          npx --no-install vsce --version
+          npx --no-install ovsx --version
       - name: Download the packaged VSIX files
         # v8.0.1
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -322,7 +331,15 @@ jobs:
         with:
           persist-credentials: false
       # ovsx is a devDependency, so `npx --no-install` needs the tree.
+      # Keep dependency install scripts disabled here too; this job only uploads
+      # the already packaged VSIX and needs no native package build steps.
       - uses: ./.github/actions/setup-node-npm
+        with:
+          ignore-scripts: true
+      - name: Verify registry tools with dependency scripts disabled
+        run: |
+          npx --no-install vsce --version
+          npx --no-install ovsx --version
       - name: Download the packaged VSIX files
         # v8.0.1
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c

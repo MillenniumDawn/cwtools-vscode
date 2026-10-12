@@ -1,6 +1,6 @@
 ---
 name: Setup Node and install
-description: setup-node with npm cache, then npm ci
+description: setup-node with npm cache, then install npm dependencies
 
 inputs:
   node-version:
@@ -8,6 +8,9 @@ inputs:
     default: "26"
   cache-vscode:
     description: Cache the vscode-test download under .vscode-test
+    default: "false"
+  ignore-scripts:
+    description: Skip dependency lifecycle scripts during npm ci
     default: "false"
 
 runs:
@@ -18,8 +21,16 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
         cache: npm
-    - run: npm ci
+    - name: Install dependencies
       shell: bash
+      env:
+        IGNORE_SCRIPTS: ${{ inputs.ignore-scripts }}
+      run: |
+        if [[ "$IGNORE_SCRIPTS" == "true" ]]; then
+          npm ci --ignore-scripts
+        else
+          npm ci
+        fi
     # vscode-test resolves "stable" (.vscode-test.mjs) through this same
     # update API, so keying the cache on the resolved version writes a new
     # entry only when stable moves. Restore-keys seed the newest prior cache

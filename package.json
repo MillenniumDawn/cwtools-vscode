@@ -4,7 +4,7 @@
   "scripts": {
     "build": "node scripts/build/python.mjs scripts/build/build.py",
     "compile": "node scripts/build/python.mjs scripts/build/build.py compile",
-    "compile:code": "tsc -p ./tsconfig.extension.json && node scripts/build/python.mjs scripts/build/esbuild.py",
+    "compile:code": "tsc -p ./tsconfig.extension.json && node scripts/build/python.mjs scripts/build/esbuild.py --dev",
     "compile:code:release": "tsc -p ./tsconfig.extension.json && node scripts/build/python.mjs scripts/build/esbuild.py --release",
     "compile:release": "node scripts/build/python.mjs scripts/build/build.py compile-release",
     "typecheck": "tsc -p ./tsconfig.json --noEmit",
@@ -13,7 +13,7 @@
     "test": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label unit",
     "test:watch": "npm run compile && concurrently -k \"tsc -w -p ./tsconfig.extension.json\" \"node scripts/build/python.mjs scripts/build/esbuild.py --watch\" \"node scripts/build/python.mjs scripts/build/hosttest.py --label unit --watch --watch-files dist/extension/bin/client\"",
     "test:host": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label host",
-    "test:smoke": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label smoke --label live --label multi-root --label watched",
+    "test:smoke": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label smoke --label live --label multi-root --label watched --label restart",
     "test:rules-sync": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --label rules-sync",
     "test:native": "npm run compile && node scripts/build/python.mjs scripts/build/hosttest.py --native",
     "test:coverage": "node scripts/build/python.mjs scripts/build/host_coverage.py && node scripts/build/python.mjs scripts/build/coverage_summary.py --host-only",
@@ -74,6 +74,6 @@
   },
   "engines": {
     "node": ">=26",
-    "vscode": "^1.83.0"
+    "vscode": "^1.91.0"
   }
 }

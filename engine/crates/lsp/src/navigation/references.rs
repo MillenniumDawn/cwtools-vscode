@@ -60,6 +60,35 @@ fn navigation_snapshot_changed_error() -> tower_lsp::jsonrpc::Error {
     }
 }
 
+/// ASCII-insensitive substring check without allocating a lowercase copy.
+/// Localization keys are matched with ASCII case folding in script tokens, so
+/// this is only a candidate filter; the full token scan still decides results.
+fn has_ascii_case_insensitive_substring(text: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    let text = text.as_bytes();
+    let Some(&first) = needle.first() else {
+        return true;
+    };
+    let mut offset = 0;
+    while offset + needle.len() <= text.len() {
+        let Some(found) = text[offset..]
+            .iter()
+            .position(|byte| byte.eq_ignore_ascii_case(&first))
+        else {
+            return false;
+        };
+        offset += found;
+        if text.len() - offset < needle.len() {
+            return false;
+        }
+        if text[offset..offset + needle.len()].eq_ignore_ascii_case(needle) {
+            return true;
+        }
+        offset += 1;
+    }
+    false
+}
+
 impl Backend {
     pub(crate) fn is_known_loc_key(&self, lower: &str) -> bool {
         if let Some(idx) = self.state.loc_index.read().as_deref()
@@ -423,6 +452,14 @@ impl Backend {
         let fallback = fallback.clone();
         let mut out = self
             .scan_workspace_texts(script_uris, move |uri, text| {
+                // Most files hold no key at all; skip their line index and
+                // lowercase copy.
+                if !keys
+                    .iter()
+                    .any(|key| has_ascii_case_insensitive_substring(text, key))
+                {
+                    return Vec::new();
+                }
                 let uri = parse_uri(uri, &fallback);
                 let lines = DocLines::new(text, encoding.clone());
                 // Lines without the key skip the per-line char walk the
@@ -966,6 +1003,22 @@ mod tests {
             },
             state,
         )
+    }
+
+    #[test]
+    fn ascii_case_insensitive_substring_never_rejects_a_file_holding_the_key() {
+        for text in [
+            "value = TARGET_KEY\n",
+            "quoted = \"target_key\"",
+            "tTarget_Key",
+            "target_key",
+        ] {
+            assert!(has_ascii_case_insensitive_substring(text, "target_key"));
+        }
+        for text in ["", "other_key = value", "1234567890t", "target_ke"] {
+            assert!(!has_ascii_case_insensitive_substring(text, "target_key"));
+        }
+        assert!(has_ascii_case_insensitive_substring("", ""));
     }
 
     struct IndexedTypeNavigationFixture {
