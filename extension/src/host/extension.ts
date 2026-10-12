@@ -13,6 +13,7 @@ import type { LanguageClient } from "vscode-languageclient/node";
 
 import { serverExe as resolveServerExe } from "./engine";
 import { detectGameAndVanilla } from "./detectGame";
+import type { GameDetection } from "./detectGame";
 import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
 import { createLanguageClient } from "./lspClient";
 import { registerServerNotifications } from "./serverNotifications";
@@ -40,6 +41,8 @@ let notifyStopped: (() => void) | undefined;
 // would never be the one the extension opened.
 export interface CwtoolsApi {
 	graphPanel(): Promise<typeof GraphPanelModule>;
+	/** Classify a workspace through the bundled detector, also used by host tests. */
+	detectGameAndVanilla(root: WorkspaceFolder): Promise<GameDetection>;
 	/** Commands the running server advertised, empty if it never started. */
 	serverCommands(): readonly string[];
 	/** The running client's output, without exposing the client itself. */
@@ -59,6 +62,7 @@ export interface CwtoolsApi {
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 	const api: CwtoolsApi = {
 		graphPanel: () => import("./graphPanel"),
+		detectGameAndVanilla,
 		serverCommands: () =>
 			defaultClient?.initializeResult?.capabilities.executeCommandProvider
 				?.commands ?? [],

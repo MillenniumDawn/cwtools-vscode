@@ -430,6 +430,14 @@ jobs:
         run: >-
           cargo +nightly-2026-07-24 fuzz run parse_loc_text
           fuzz/seeds/parse_loc_text -- -runs=0
+      - name: format_text over seed corpus
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run format_text
+          fuzz/seeds/format_text -- -runs=0
+      - name: fix_edits over seed corpus
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run fix_edits
+          fuzz/seeds/fix_edits -- -runs=0
       - name: decode_capped over seed corpus
         run: >-
           cargo +nightly-2026-07-24 fuzz run decode_capped

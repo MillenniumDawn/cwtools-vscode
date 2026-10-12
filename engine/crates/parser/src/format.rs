@@ -522,7 +522,7 @@ impl<'a> Printer<'a> {
                 .with_string(t.normal, |s| Cow::Owned(s.to_owned()))
                 .unwrap_or_else(|| Cow::Owned(String::new())),
             Value::Int(i) => Cow::Owned(i.to_string()),
-            Value::Float(f) => Cow::Owned(f.to_string()),
+            Value::Float(f) => Cow::Owned(format_float(*f)),
             Value::Bool(true) => Cow::Borrowed("yes"),
             Value::Bool(false) => Cow::Borrowed("no"),
             Value::Clause(_) => Cow::Borrowed("{ }"),
@@ -563,7 +563,7 @@ impl<'a> Printer<'a> {
         match value {
             Value::String(t) | Value::QString(t) => self.push_token(t.normal),
             Value::Int(i) => self.push_str(&i.to_string()),
-            Value::Float(f) => self.push_str(&f.to_string()),
+            Value::Float(f) => self.push_str(&format_float(*f)),
             Value::Bool(true) => self.push_str("yes"),
             Value::Bool(false) => self.push_str("no"),
             Value::Clause(_) => self.push_str("{ }"),
@@ -627,10 +627,44 @@ impl<'a> Printer<'a> {
     }
 }
 
+fn format_float(value: f64) -> String {
+    let rendered = value.to_string();
+    if rendered.contains(['.', 'e', 'E']) {
+        rendered
+    } else {
+        format!("{rendered}.0")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::Child;
+    use crate::ast::{Child, Operator};
+
+    #[derive(Debug, PartialEq)]
+    enum AstChild {
+        Comment(String),
+        LeafValue {
+            color: Option<ColorPrefix>,
+            value: AstValue,
+        },
+        Leaf {
+            key: String,
+            operator: Operator,
+            color: Option<ColorPrefix>,
+            value: AstValue,
+        },
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum AstValue {
+        String(String),
+        QuotedString(String),
+        Float(u64),
+        Int(i64),
+        Bool(bool),
+        Clause(Vec<AstChild>),
+    }
 
     fn table() -> StringTable {
         StringTable::new()
@@ -687,61 +721,52 @@ mod tests {
             .fold(0, |width, ch| advance_char(width, ch, tab_size))
     }
 
-    fn dump(input: &str) -> String {
+    fn ast_signature(input: &str) -> Vec<AstChild> {
         let table = table();
         let parsed = parse_string(input, &table);
-        dump_children(&parsed.arena, &parsed.root_children, &table)
+        ast_children(&parsed.arena, &parsed.root_children, &table)
     }
 
-    fn dump_children(arena: &Arena, children: &[Child], table: &StringTable) -> String {
+    fn ast_children(arena: &Arena, children: &[Child], table: &StringTable) -> Vec<AstChild> {
         children
             .iter()
-            .map(|c| dump_child(arena, c, table))
-            .collect::<Vec<_>>()
-            .join("\n")
+            .map(|child| ast_child(arena, child, table))
+            .collect()
     }
 
-    fn dump_child(arena: &Arena, child: &Child, table: &StringTable) -> String {
+    fn ast_child(arena: &Arena, child: &Child, table: &StringTable) -> AstChild {
         match child {
-            Child::Comment(i) => format!("C:{}", arena.comments[*i as usize].text),
+            Child::Comment(i) => AstChild::Comment(arena.comments[*i as usize].text.clone()),
             Child::LeafValue(i) => {
                 let leaf_value = &arena.leaf_values[*i as usize];
-                format!(
-                    "V:{}{}",
-                    dump_prefix(leaf_value.color_prefix),
-                    dump_value(arena, &leaf_value.value, table)
-                )
+                AstChild::LeafValue {
+                    color: leaf_value.color_prefix,
+                    value: ast_value(arena, &leaf_value.value, table),
+                }
             }
             Child::Leaf(i) => {
                 let leaf = &arena.leaves[*i as usize];
                 let key = table.get_string(leaf.key.normal).unwrap_or_default();
-                format!(
-                    "L:{key}{}{}{}",
-                    leaf.op.as_str(),
-                    dump_prefix(leaf.color_prefix),
-                    dump_value(arena, &leaf.value, table)
-                )
+                AstChild::Leaf {
+                    key,
+                    operator: leaf.op,
+                    color: leaf.color_prefix,
+                    value: ast_value(arena, &leaf.value, table),
+                }
             }
         }
     }
 
-    fn dump_prefix(prefix: Option<ColorPrefix>) -> &'static str {
-        match prefix {
-            Some(ColorPrefix::Rgb) => "rgb ",
-            Some(ColorPrefix::Hsv) => "hsv ",
-            Some(ColorPrefix::Hsv360) => "hsv360 ",
-            None => "",
-        }
-    }
-
-    fn dump_value(arena: &Arena, value: &Value, table: &StringTable) -> String {
+    fn ast_value(arena: &Arena, value: &Value, table: &StringTable) -> AstValue {
         match value {
-            Value::Clause(ch) => format!("{{{}}}", dump_children(arena, ch, table)),
-            Value::String(t) | Value::QString(t) => table.get_string(t.normal).unwrap_or_default(),
-            Value::Int(i) => i.to_string(),
-            Value::Float(f) => f.to_string(),
-            Value::Bool(true) => "yes".into(),
-            Value::Bool(false) => "no".into(),
+            Value::Clause(children) => AstValue::Clause(ast_children(arena, children, table)),
+            Value::String(t) => AstValue::String(table.get_string(t.normal).unwrap_or_default()),
+            Value::QString(t) => {
+                AstValue::QuotedString(table.get_string(t.normal).unwrap_or_default())
+            }
+            Value::Float(f) => AstValue::Float(f.to_bits()),
+            Value::Int(i) => AstValue::Int(*i),
+            Value::Bool(value) => AstValue::Bool(*value),
         }
     }
 
@@ -753,7 +778,7 @@ mod tests {
             out,
             "root = {\n    a = 1\n    b = {\n        x = 2\n    }\n}\n"
         );
-        assert_eq!(dump(src), dump(&out));
+        assert_eq!(ast_signature(src), ast_signature(&out));
     }
 
     #[test]
@@ -761,6 +786,95 @@ mod tests {
         let once = fmt("foo={\nbar=1\n}\n");
         let twice = fmt(&once);
         assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn formatting_preserves_float_and_integer_variants() {
+        let input = "fraction = 1.0\ninteger = 1\n";
+        let formatted = fmt(input);
+
+        assert_eq!(formatted, input);
+        assert_eq!(ast_signature(input), ast_signature(&formatted));
+        assert_ne!(
+            ast_signature("number = 1.0\n"),
+            ast_signature("number = 1\n")
+        );
+
+        let table = table();
+        let arena = Arena::new();
+        let options = FormatOptions::default();
+        let mut printer = Printer::new("", &table, &arena, &options, 0);
+        printer.emit_value_fallback(&Value::Float(1.0));
+        assert_eq!(printer.out, "1.0");
+    }
+
+    fn generated_round_trip_input(seed: u64) -> String {
+        let mut state = seed.wrapping_add(1);
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let newline = "\n";
+        let mut input = format!("# generated seed {seed}{newline}");
+        let operators = ["=", "==", "?=", ">="];
+
+        for index in 0..24 {
+            let choice = next() % 7;
+            let key = format!("key_{index}");
+            let op = operators[(next() as usize) % operators.len()];
+            match choice {
+                0 => input.push_str(&format!("{key} {op} yes{newline}")),
+                1 => input.push_str(&format!("{key} {op} {}{newline}", next() % 1000)),
+                2 => input.push_str(&format!(
+                    "{key} {op} {}.{}{newline}",
+                    next() % 1000,
+                    next() % 10
+                )),
+                3 => input.push_str(&format!("{key} {op} \"value_{:x}\"{newline}", next())),
+                4 => input.push_str(&format!(
+                    "{key} {op} {{ nested = {}; flag = no }}{newline}",
+                    next() % 100
+                )),
+                5 => {
+                    let color = ["rgb", "hsv", "hsv360"][(next() as usize) % 3];
+                    input.push_str(&format!(
+                        "{key} {op} {color} {{ {} {} {} }}{newline}",
+                        next() % 256,
+                        next() % 256,
+                        next() % 256
+                    ));
+                }
+                _ => input.push_str(&format!("{key} {op} bare_value{newline}")),
+            }
+        }
+
+        input
+    }
+
+    #[test]
+    fn generated_format_parse_round_trip_preserves_ast() {
+        for seed in 0..128 {
+            let input = generated_round_trip_input(seed);
+            let parsed = parse_string(&input, &table());
+            assert!(
+                parsed.errors.is_empty(),
+                "generated input for seed {seed}: {input}"
+            );
+
+            let formatted = fmt(&input);
+            let reparsed = parse_string(&formatted, &table());
+            assert!(
+                reparsed.errors.is_empty(),
+                "formatted input for seed {seed}: {formatted}"
+            );
+            assert_eq!(
+                ast_signature(&input),
+                ast_signature(&formatted),
+                "seed {seed}"
+            );
+        }
     }
 
     #[test]
@@ -842,7 +956,7 @@ mod tests {
         let out = fmt(src);
         assert!(out.contains("# head"));
         assert!(out.contains("foo = 1 # eol"));
-        assert_eq!(dump(src), dump(&out));
+        assert_eq!(ast_signature(src), ast_signature(&out));
     }
 
     #[test]
@@ -862,7 +976,7 @@ mod tests {
         let src = "color = rgb { 255 0 0 }\n";
         let out = fmt(src);
         assert!(out.contains("rgb { 255 0 0 }"), "{out}");
-        assert_eq!(dump(src), dump(&out));
+        assert_eq!(ast_signature(src), ast_signature(&out));
     }
 
     #[test]
@@ -870,7 +984,7 @@ mod tests {
         let src = "color = HSV360 { 340 60 55 }\n";
         let out = fmt(src);
         assert_eq!(out, "color = hsv360 { 340 60 55 }\n");
-        assert_eq!(dump(src), dump(&out));
+        assert_eq!(ast_signature(src), ast_signature(&out));
     }
 
     #[test]
@@ -878,7 +992,7 @@ mod tests {
         let src = "color = hsv 360 { 340 60 55 }\n";
         let out = fmt(src);
         assert_eq!(out, "color = hsv360 { 340 60 55 }\n");
-        assert_eq!(dump(src), dump(&out));
+        assert_eq!(ast_signature(src), ast_signature(&out));
     }
 
     #[test]
@@ -972,7 +1086,7 @@ mod tests {
         };
         let out = fmt_opts(&src, opts);
 
-        assert_eq!(dump(&src), dump(&out));
+        assert_eq!(ast_signature(&src), ast_signature(&out));
         assert_eq!(fmt_opts(&out, opts), out);
 
         let parsed = parse_string(&src, &table());
@@ -1149,7 +1263,7 @@ mod tests {
         let src = "color = hsv360 { 0 100 50 }\n";
         let out = fmt(src);
         assert!(out.contains("hsv360 { 0 100 50 }"), "{out}");
-        assert_eq!(dump(src), dump(&out));
+        assert_eq!(ast_signature(src), ast_signature(&out));
     }
 
     #[test]
