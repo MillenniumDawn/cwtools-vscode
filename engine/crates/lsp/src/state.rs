@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tower_lsp::Client;
 use tower_lsp::lsp_types::*;
 
-use cwtools_info::TypeInstance;
+use cwtools_info::{IndexedUseSite, TypeInstance, UseSite};
 use cwtools_parser::ast::ParsedFile;
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringTable;
@@ -367,7 +367,257 @@ const MAX_CONCURRENT_VALIDATIONS: usize = 2;
 pub(crate) struct DocumentStore {
     documents: HashMap<String, ParsedDoc>,
     content_hashes: HashMap<String, u64>,
+    open_use_sites: OpenUseSiteIndex,
     pub(crate) retained_text_bytes: usize,
+}
+
+#[derive(Default)]
+struct OpenUseSiteIndex {
+    by_key: HashMap<(String, String), HashMap<String, Vec<OpenUseSite>>>,
+    file_keys: HashMap<String, Vec<(String, String)>>,
+    file_bytes: HashMap<String, usize>,
+    capacity_bytes: usize,
+}
+
+#[derive(Clone)]
+struct OpenUseSite {
+    name: String,
+    case_insensitive: bool,
+    site: UseSite,
+}
+
+impl OpenUseSiteIndex {
+    fn string_arc_bytes(len: usize) -> usize {
+        let alignment = std::mem::align_of::<usize>();
+        let size = std::mem::size_of::<usize>() * 2 + len;
+        size.saturating_add(alignment - 1) / alignment * alignment
+    }
+
+    fn hash_bytes<K, V>(capacity: usize) -> usize {
+        capacity
+            .saturating_mul(4)
+            .saturating_mul(std::mem::size_of::<(K, V)>())
+    }
+
+    fn vec_bytes<T>(capacity: usize) -> usize {
+        capacity
+            .saturating_mul(4)
+            .saturating_mul(std::mem::size_of::<T>())
+    }
+
+    fn shrink_hash<K: Eq + std::hash::Hash, V>(map: &mut HashMap<K, V>) {
+        if map.capacity() > map.len().saturating_mul(3) {
+            map.shrink_to_fit();
+        }
+    }
+
+    fn shrink_vec<T>(values: &mut Vec<T>) {
+        if values.capacity() > values.len().saturating_mul(3) {
+            values.shrink_to_fit();
+        }
+    }
+
+    fn retained_bytes_for_sites(uri: &str, sites: &[IndexedUseSite]) -> usize {
+        if sites.is_empty() {
+            return 0;
+        }
+        let mut bytes = uri.len().saturating_mul(2);
+        let mut keys = HashSet::new();
+        for site in sites {
+            bytes = bytes
+                .saturating_add(site.name.capacity())
+                .saturating_add(Self::string_arc_bytes(uri.len()));
+            let lower = site.name.to_ascii_lowercase();
+            let key = (site.type_name.clone(), lower.clone());
+            if keys.insert(key) {
+                bytes = bytes
+                    .saturating_add(site.type_name.capacity())
+                    .saturating_add(site.type_name.len())
+                    .saturating_add(lower.capacity())
+                    .saturating_add(lower.len())
+                    .saturating_add(uri.len());
+            }
+        }
+        bytes
+    }
+
+    fn capacity_bound(key_count: usize, site_count: usize) -> usize {
+        let buckets = key_count.saturating_mul(4);
+        let sites = site_count.saturating_mul(4);
+        Self::hash_bytes::<String, usize>(4)
+            .saturating_add(Self::hash_bytes::<String, Vec<(String, String)>>(4))
+            .saturating_add(Self::hash_bytes::<
+                (String, String),
+                HashMap<String, Vec<OpenUseSite>>,
+            >(buckets))
+            .saturating_add(Self::hash_bytes::<String, Vec<OpenUseSite>>(buckets))
+            .saturating_add(Self::vec_bytes::<(String, String)>(buckets))
+            .saturating_add(Self::vec_bytes::<OpenUseSite>(sites))
+    }
+
+    fn capacity_bound_for_sites(sites: &[IndexedUseSite]) -> usize {
+        let mut keys = HashSet::new();
+        for site in sites {
+            keys.insert((site.type_name.as_str(), site.name.to_ascii_lowercase()));
+        }
+        Self::capacity_bound(keys.len(), sites.len())
+    }
+
+    fn capacity_bound_for_file(&self, uri: &str) -> usize {
+        let Some(keys) = self.file_keys.get(uri) else {
+            return 0;
+        };
+        let site_count = keys
+            .iter()
+            .filter_map(|key| self.by_key.get(key).and_then(|files| files.get(uri)))
+            .map(Vec::len)
+            .sum();
+        Self::capacity_bound(keys.len(), site_count)
+    }
+
+    fn replacement_capacity_bound(&self, uri: &str, sites: &[IndexedUseSite]) -> usize {
+        self.capacity_bytes.saturating_add(
+            Self::capacity_bound_for_sites(sites).saturating_sub(self.capacity_bound_for_file(uri)),
+        )
+    }
+
+    fn file_bytes(&self, uri: &str) -> usize {
+        self.file_bytes.get(uri).copied().unwrap_or(0)
+    }
+
+    fn capacity_bytes(&self) -> usize {
+        self.capacity_bytes
+    }
+
+    fn touched_keys(&self, uri: &str) -> HashSet<(String, String)> {
+        self.file_keys
+            .get(uri)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
+    fn touched_capacity(&self, uri: &str, keys: &HashSet<(String, String)>) -> usize {
+        let mut bytes = Self::hash_bytes::<String, usize>(self.file_bytes.capacity())
+            .saturating_add(Self::hash_bytes::<String, Vec<(String, String)>>(
+                self.file_keys.capacity(),
+            ))
+            .saturating_add(Self::hash_bytes::<
+                (String, String),
+                HashMap<String, Vec<OpenUseSite>>,
+            >(self.by_key.capacity()));
+        if let Some(file_keys) = self.file_keys.get(uri) {
+            bytes = bytes.saturating_add(Self::vec_bytes::<(String, String)>(file_keys.capacity()));
+        }
+        for key in keys {
+            if let Some(files) = self.by_key.get(key) {
+                bytes = bytes.saturating_add(Self::hash_bytes::<String, Vec<OpenUseSite>>(
+                    files.capacity(),
+                ));
+                for sites in files.values() {
+                    bytes = bytes.saturating_add(Self::vec_bytes::<OpenUseSite>(sites.capacity()));
+                }
+            }
+        }
+        bytes
+    }
+
+    fn shrink_touched(&mut self, uri: &str, keys: &HashSet<(String, String)>) {
+        if let Some(file_keys) = self.file_keys.get_mut(uri) {
+            Self::shrink_vec(file_keys);
+        }
+        for key in keys {
+            if let Some(files) = self.by_key.get_mut(key) {
+                for sites in files.values_mut() {
+                    Self::shrink_vec(sites);
+                }
+                Self::shrink_hash(files);
+            }
+        }
+        Self::shrink_hash(&mut self.by_key);
+        Self::shrink_hash(&mut self.file_keys);
+        Self::shrink_hash(&mut self.file_bytes);
+    }
+
+    fn replace_file(&mut self, uri: &str, sites: Vec<IndexedUseSite>) {
+        self.remove_file(uri);
+        let keys = sites
+            .iter()
+            .map(|site| (site.type_name.clone(), site.name.to_ascii_lowercase()))
+            .collect();
+        let before = self.touched_capacity(uri, &keys);
+        let retained_bytes = Self::retained_bytes_for_sites(uri, &sites);
+        let mut seen = HashSet::new();
+        for IndexedUseSite {
+            type_name,
+            name,
+            case_insensitive,
+            site,
+        } in sites
+        {
+            let key = (type_name, name.to_ascii_lowercase());
+            let file_keys = self.file_keys.entry(uri.to_string()).or_default();
+            if seen.insert(key.clone()) {
+                file_keys.push(key.clone());
+            }
+            self.by_key
+                .entry(key)
+                .or_default()
+                .entry(uri.to_string())
+                .or_default()
+                .push(OpenUseSite {
+                    name,
+                    case_insensitive,
+                    site,
+                });
+        }
+        if retained_bytes > 0 {
+            self.file_bytes.insert(uri.to_string(), retained_bytes);
+        }
+        self.shrink_touched(uri, &keys);
+        let after = self.touched_capacity(uri, &keys);
+        self.capacity_bytes = self
+            .capacity_bytes
+            .saturating_sub(before)
+            .saturating_add(after);
+    }
+
+    fn remove_file(&mut self, uri: &str) {
+        let keys = self.touched_keys(uri);
+        if keys.is_empty() && !self.file_keys.contains_key(uri) {
+            return;
+        }
+        let before = self.touched_capacity(uri, &keys);
+        self.file_keys.remove(uri);
+        self.file_bytes.remove(uri);
+        for key in &keys {
+            if let Some(files) = self.by_key.get_mut(key) {
+                files.remove(uri);
+                if files.is_empty() {
+                    self.by_key.remove(key);
+                }
+            }
+        }
+        self.shrink_touched(uri, &keys);
+        let after = self.touched_capacity(uri, &keys);
+        self.capacity_bytes = self
+            .capacity_bytes
+            .saturating_sub(before)
+            .saturating_add(after);
+    }
+
+    fn references(&self, type_name: &str, name: &str) -> Vec<UseSite> {
+        let key = (type_name.to_string(), name.to_ascii_lowercase());
+        self.by_key
+            .get(&key)
+            .into_iter()
+            .flat_map(HashMap::values)
+            .flatten()
+            .filter(|site| site.case_insensitive || site.name == name)
+            .map(|site| site.site.clone())
+            .collect()
+    }
 }
 
 impl DocumentStore {
@@ -375,6 +625,7 @@ impl DocumentStore {
         Self {
             documents: HashMap::new(),
             content_hashes: HashMap::new(),
+            open_use_sites: OpenUseSiteIndex::default(),
             retained_text_bytes: 0,
         }
     }
@@ -408,17 +659,30 @@ impl DocumentStore {
         document: ParsedDoc,
         content_hash: u64,
     ) -> std::result::Result<(), DocumentRejection> {
-        let old_len = self
+        let old_document_bytes = self
             .documents
             .get(&uri)
             .map_or(0, ParsedDoc::retained_bytes);
+        let old_index_bytes = self
+            .open_use_sites
+            .file_bytes(&uri)
+            .saturating_add(self.open_use_sites.capacity_bytes());
         if !self.documents.contains_key(&uri) && self.documents.len() >= MAX_OPEN_DOCUMENTS {
             return Err(DocumentRejection::TooManyOpen);
         }
-        let retained = self.replacement_total(old_len, document.retained_bytes())?;
+        let new_document_bytes = document.retained_bytes();
+        self.replacement_total(
+            old_document_bytes.saturating_add(old_index_bytes),
+            new_document_bytes.saturating_add(self.open_use_sites.capacity_bytes()),
+        )?;
+        self.open_use_sites.remove_file(&uri);
+        let new_index_bytes = self.open_use_sites.capacity_bytes();
         self.documents.insert(uri.clone(), document);
         self.content_hashes.insert(uri, content_hash);
-        self.retained_text_bytes = retained;
+        self.retained_text_bytes = self
+            .retained_text_bytes
+            .saturating_sub(old_document_bytes.saturating_add(old_index_bytes))
+            .saturating_add(new_document_bytes.saturating_add(new_index_bytes));
         Ok(())
     }
 
@@ -443,9 +707,16 @@ impl DocumentStore {
         let Some(document) = self.documents.get(uri) else {
             return Err(DocumentRejection::NotOpen);
         };
-        let old_len = document.retained_bytes();
-        let new_len = text.len().max(document.ast_source_bytes);
-        let retained = self.replacement_total(old_len, new_len)?;
+        let index_bytes = self
+            .open_use_sites
+            .file_bytes(uri)
+            .saturating_add(self.open_use_sites.capacity_bytes());
+        let old_len = document.retained_bytes().saturating_add(index_bytes);
+        let new_len = text
+            .len()
+            .max(document.ast_source_bytes)
+            .saturating_add(index_bytes);
+        self.replacement_total(old_len, new_len)?;
         let Some(document) = self.documents.get_mut(uri) else {
             return Err(DocumentRejection::NotOpen);
         };
@@ -453,24 +724,119 @@ impl DocumentStore {
         document.text = text;
         document.loc_cache = None;
         self.content_hashes.insert(uri.to_string(), content_hash);
-        self.retained_text_bytes = retained;
+        self.retained_text_bytes = self
+            .retained_text_bytes
+            .saturating_sub(old_len)
+            .saturating_add(new_len);
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn set_ast(&mut self, uri: &str, version: i32, ast: Arc<ParsedFile>) -> bool {
-        let Some(document) = self.documents.get_mut(uri) else {
+        self.set_ast_with_use_sites(uri, version, ast, Vec::new())
+    }
+
+    pub(crate) fn set_ast_with_use_sites(
+        &mut self,
+        uri: &str,
+        version: i32,
+        ast: Arc<ParsedFile>,
+        use_sites: Vec<IndexedUseSite>,
+    ) -> bool {
+        let Some(document) = self.documents.get(uri) else {
             return false;
         };
         if document.version != version {
             return false;
         }
-        let old_len = document.retained_bytes();
+        let old_document_bytes = document.retained_bytes();
+        let old_file_bytes = self.open_use_sites.file_bytes(uri);
+        let old_index_bytes = old_file_bytes.saturating_add(self.open_use_sites.capacity_bytes());
+        let new_document_bytes = document.text.len().saturating_add(
+            document
+                .loc_cache
+                .as_ref()
+                .map_or(0, |cache| cache.retained_bytes),
+        );
+        let new_file_bytes = OpenUseSiteIndex::retained_bytes_for_sites(uri, &use_sites);
+        let new_capacity_bytes = self
+            .open_use_sites
+            .replacement_capacity_bound(uri, &use_sites);
+        if self
+            .replacement_total_with_capacity(
+                old_document_bytes.saturating_add(old_index_bytes),
+                new_document_bytes
+                    .saturating_add(new_file_bytes)
+                    .saturating_add(new_capacity_bytes),
+                new_capacity_bytes,
+            )
+            .is_err()
+        {
+            return false;
+        }
+        let Some(document) = self.documents.get_mut(uri) else {
+            return false;
+        };
         document.ast = Some(ast);
         document.ast_version = Some(version);
         document.ast_source_bytes = document.text.len();
-        let new_len = document.retained_bytes();
-        self.retained_text_bytes = self.retained_text_bytes - old_len + new_len;
+        self.open_use_sites.replace_file(uri, use_sites);
+        let new_index_bytes = self
+            .open_use_sites
+            .file_bytes(uri)
+            .saturating_add(self.open_use_sites.capacity_bytes());
+        self.retained_text_bytes = self
+            .retained_text_bytes
+            .saturating_sub(old_document_bytes.saturating_add(old_index_bytes))
+            .saturating_add(new_document_bytes.saturating_add(new_index_bytes));
         true
+    }
+
+    pub(crate) fn replace_reference_sites(
+        &mut self,
+        uri: &str,
+        version: i32,
+        use_sites: Vec<IndexedUseSite>,
+    ) -> bool {
+        let Some(document) = self.documents.get(uri) else {
+            return false;
+        };
+        if document.version != version || document.ast_version != Some(version) {
+            return false;
+        }
+        let old_file_bytes = self.open_use_sites.file_bytes(uri);
+        let old_index_bytes = old_file_bytes.saturating_add(self.open_use_sites.capacity_bytes());
+        let new_file_bytes = OpenUseSiteIndex::retained_bytes_for_sites(uri, &use_sites);
+        let new_capacity_bytes = self
+            .open_use_sites
+            .replacement_capacity_bound(uri, &use_sites);
+        if self
+            .replacement_total_with_capacity(
+                document.retained_bytes().saturating_add(old_index_bytes),
+                document
+                    .retained_bytes()
+                    .saturating_add(new_file_bytes)
+                    .saturating_add(new_capacity_bytes),
+                new_capacity_bytes,
+            )
+            .is_err()
+        {
+            return false;
+        }
+        self.open_use_sites.replace_file(uri, use_sites);
+        let new_index_bytes = self
+            .open_use_sites
+            .file_bytes(uri)
+            .saturating_add(self.open_use_sites.capacity_bytes());
+        self.retained_text_bytes = self
+            .retained_text_bytes
+            .saturating_sub(document.retained_bytes().saturating_add(old_index_bytes))
+            .saturating_add(document.retained_bytes().saturating_add(new_index_bytes));
+        true
+    }
+
+    pub(crate) fn reference_sites(&self, type_name: &str, name: &str) -> Vec<UseSite> {
+        self.open_use_sites.references(type_name, name)
     }
 
     pub(crate) fn set_loc_cache(
@@ -485,25 +851,42 @@ impl DocumentStore {
         if document.version != version || cache.version != version {
             return Ok(false);
         }
-        let old_len = document.retained_bytes();
+        let index_bytes = self
+            .open_use_sites
+            .file_bytes(uri)
+            .saturating_add(self.open_use_sites.capacity_bytes());
+        let old_len = document.retained_bytes().saturating_add(index_bytes);
         let new_len = document
             .text
             .len()
             .max(document.ast_source_bytes)
-            .saturating_add(cache.retained_bytes);
-        let retained = self.replacement_total(old_len, new_len)?;
+            .saturating_add(cache.retained_bytes)
+            .saturating_add(index_bytes);
+        self.replacement_total(old_len, new_len)?;
         let Some(document) = self.documents.get_mut(uri) else {
             return Ok(false);
         };
         document.loc_cache = Some(cache);
-        self.retained_text_bytes = retained;
+        self.retained_text_bytes = self
+            .retained_text_bytes
+            .saturating_sub(old_len)
+            .saturating_add(new_len);
         Ok(true)
     }
 
     pub(crate) fn remove(&mut self, uri: &str) -> Option<ParsedDoc> {
         let document = self.documents.remove(uri)?;
+        let old_index_bytes = self
+            .open_use_sites
+            .file_bytes(uri)
+            .saturating_add(self.open_use_sites.capacity_bytes());
+        self.open_use_sites.remove_file(uri);
+        let new_index_bytes = self.open_use_sites.capacity_bytes();
         self.content_hashes.remove(uri);
-        self.retained_text_bytes -= document.retained_bytes();
+        self.retained_text_bytes = self
+            .retained_text_bytes
+            .saturating_sub(document.retained_bytes().saturating_add(old_index_bytes))
+            .saturating_add(new_index_bytes);
         Some(document)
     }
 
@@ -512,7 +895,19 @@ impl DocumentStore {
         old_len: usize,
         new_len: usize,
     ) -> std::result::Result<usize, DocumentRejection> {
-        if new_len > MAX_DOCUMENT_BYTES {
+        self.replacement_total_with_capacity(old_len, new_len, self.open_use_sites.capacity_bytes())
+    }
+
+    fn replacement_total_with_capacity(
+        &self,
+        old_len: usize,
+        new_len: usize,
+        capacity_bytes: usize,
+    ) -> std::result::Result<usize, DocumentRejection> {
+        let document_bytes = new_len
+            .checked_sub(capacity_bytes)
+            .ok_or(DocumentRejection::RetainedTextLimit)?;
+        if document_bytes > MAX_DOCUMENT_BYTES {
             return Err(DocumentRejection::TooLarge);
         }
         let retained = self

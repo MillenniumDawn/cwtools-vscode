@@ -17,8 +17,8 @@ use references::{
     classify_alias_key_sites, collect_alias_key_candidates, collect_type_ref_uses, strip_affix,
 };
 pub use references::{
-    ReferenceIndex, TypePatternAlias, UseSite, build_type_patterns, key_matches_type_pattern,
-    value_location,
+    IndexedUseSite, ReferenceIndex, TypePatternAlias, UseSite, build_type_patterns,
+    key_matches_type_pattern, value_location,
 };
 
 /// Entry points for this crate's `benches/`, which link it as an external crate
@@ -504,6 +504,113 @@ impl InfoService {
             acc = acc.wrapping_add(mix_export_symbol(&["e", et]));
         }
         acc
+    }
+
+    /// Fingerprint references, alias-key sites and definition positions for
+    /// CodeLens refreshes.
+    pub fn reference_fingerprint(&self, uri: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.reference_index.file_fingerprint(uri).hash(&mut hasher);
+        self.alias_key_index.file_fingerprint(uri).hash(&mut hasher);
+        for (type_name, instance) in self.type_index.instances_in_file(uri) {
+            (
+                type_name,
+                &instance.name,
+                instance.location.line,
+                instance.location.col,
+            )
+                .hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// References contributed by one parsed file, including references found
+    /// through concrete type-reference rules and alias-key patterns.
+    pub fn file_reference_sites(&self, uri: &str) -> Vec<IndexedUseSite> {
+        let mut sites = self.reference_index.file_references(uri);
+        sites.extend(
+            self.alias_key_index
+                .file_references(uri)
+                .into_iter()
+                .map(|mut site| {
+                    site.case_insensitive = true;
+                    site
+                }),
+        );
+        sites
+    }
+
+    /// Classify references from an accepted open-buffer AST using the current
+    /// ruleset and type index. This deliberately avoids a workspace file index:
+    /// a scan may have reindexed the on-disk version of this URI instead.
+    pub fn file_reference_sites_for_ast(
+        &mut self,
+        uri: &str,
+        ast: &ParsedFile,
+        table: &StringTable,
+        ruleset: &RuleSet,
+        logical_path: &str,
+    ) -> Vec<IndexedUseSite> {
+        let type_ref_keys = self
+            .type_ref_keys
+            .get_or_insert_with(|| build_type_ref_keys(ruleset));
+        let mut type_refs = Vec::new();
+        collect_type_ref_uses(
+            &ast.root_children,
+            &ast.arena,
+            table,
+            type_ref_keys,
+            ruleset,
+            logical_path,
+            &mut type_refs,
+        );
+        let mut sites: Vec<IndexedUseSite> = type_refs
+            .into_iter()
+            .map(|reference| IndexedUseSite {
+                type_name: reference.ref_type.to_string(),
+                name: reference.name,
+                case_insensitive: false,
+                site: UseSite {
+                    file: Arc::from(uri),
+                    key: reference.key,
+                    value: reference.value,
+                },
+            })
+            .collect();
+
+        if self.schema_keys.is_none() {
+            self.schema_keys = Some(build_schema_keys(ruleset));
+        }
+        if self.type_patterns.is_none() {
+            self.type_patterns = Some(build_type_patterns(ruleset));
+        }
+        let mut candidates = Vec::new();
+        collect_alias_key_candidates(
+            &ast.root_children,
+            &ast.arena,
+            table,
+            self.schema_keys.as_ref().expect("schema keys just set"),
+            &mut candidates,
+        );
+        let alias_refs = classify_alias_key_sites(
+            &candidates,
+            uri,
+            self.type_patterns.as_ref().expect("type patterns just set"),
+            &self.type_index,
+        );
+        sites.extend(alias_refs.into_iter().map(|reference| IndexedUseSite {
+            type_name: reference.ref_type.to_string(),
+            name: reference.name,
+            case_insensitive: true,
+            site: UseSite {
+                file: Arc::from(uri),
+                key: reference.key,
+                value: reference.value,
+            },
+        }));
+        sites
     }
 
     pub fn export_names(&self, uri: &str) -> HashSet<String> {

@@ -1,5 +1,20 @@
 use std::sync::Arc;
 
+#[cfg(test)]
+thread_local! {
+    static AST_LEAF_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_ast_leaf_visits() {
+    AST_LEAF_VISITS.set(0);
+}
+
+#[cfg(test)]
+pub(crate) fn ast_leaf_visits() -> usize {
+    AST_LEAF_VISITS.get()
+}
+
 use cwtools_parser::{ast::ParsedFile, unquote};
 use cwtools_rules::rules_types::{NewField, RootRule, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
@@ -185,6 +200,8 @@ fn scan_ast_for_type_ref<S: UseSiteSink>(
 
     for child in children {
         let Child::Leaf(idx) = child else { continue };
+        #[cfg(test)]
+        AST_LEAF_VISITS.set(AST_LEAF_VISITS.get() + 1);
         let leaf = &arena.leaves[*idx as usize];
         // Value first, key only on a match: `with_string` borrows from the
         // table instead of allocating a `String` per leaf, and the key is

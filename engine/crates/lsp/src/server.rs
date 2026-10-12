@@ -21,7 +21,7 @@ use crate::cursor::{
     CursorResolution, RuleCursorInfo, hint_from_rule_left, hint_from_rule_right,
     scope_link_key_type,
 };
-use crate::paths::{canonicalize_uri_string, canonicalize_url};
+use crate::paths::{canonicalize_uri_string, canonicalize_url, logical_path_from_uri};
 use crate::state::{
     AstSnapshot, AstSource, Backend, DebounceTask, DeferredRulesMessage, DiskState,
     LocOverlayWrite, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_URI_BYTES, ParsedDoc, ValidateTrigger,
@@ -738,7 +738,9 @@ impl Backend {
 
             match &disk_ast {
                 DiskState::Parsed { parsed, text, .. } => {
-                    self.index_parsed_file(&uri, parsed, None);
+                    let ws_prefix = self.state.config.read().workspace_prefix.clone();
+                    let logical_path = logical_path_from_uri(&uri, &ws_prefix);
+                    self.index_parsed_file_as(&uri, parsed, None, &logical_path, false);
                     // (#259).
                     if let Some(name) = self.refresh_inline_script(&uri, text) {
                         self.state.pending_changed_names.lock().insert(name);
@@ -779,6 +781,8 @@ impl Backend {
                 self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1,
             )
         };
+
+        self.refresh_open_reference_sites();
 
         // The slot covers only the CPU-heavy tail — type-uses refresh, the disk
         // loc validation and the dependent sweep — not the disk reads and index

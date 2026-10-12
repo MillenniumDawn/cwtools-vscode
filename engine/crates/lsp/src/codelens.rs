@@ -18,6 +18,28 @@ struct LensData<'a> {
 }
 
 impl Backend {
+    fn indexed_code_lens_use_sites(
+        &self,
+        type_name: &str,
+        instance_name: &str,
+    ) -> Vec<cwtools_info::UseSite> {
+        let mut sites = self
+            .state
+            .documents
+            .lock()
+            .reference_sites(type_name, instance_name);
+        let mut indexed_sites = {
+            let info = self.state.info_service.read();
+            let mut indexed = info.reference_index.references(type_name, instance_name);
+            indexed.extend(info.alias_key_index.references_ci(type_name, instance_name));
+            indexed
+        };
+        let documents = self.state.documents.lock();
+        indexed_sites.retain(|site| !documents.contains_key(site.file.as_ref()));
+        sites.extend(indexed_sites);
+        sites
+    }
+
     pub(crate) async fn code_lens_impl(
         &self,
         params: CodeLensParams,
@@ -74,34 +96,29 @@ impl Backend {
         let Some(uri) = Url::parse(data.uri).ok() else {
             return Ok(lens);
         };
-        let Some((location, type_names)) = ({
+        let (location, type_names) = {
             let info = self.state.info_service.read();
-            info.type_index
-                .instances_in_file(data.uri)
+            let Some(instance) = info.type_index.instance_at(
+                data.uri,
+                data.type_name,
+                data.instance_name,
+                data.line,
+                data.column,
+            ) else {
+                return Ok(lens);
+            };
+            let type_names = info
+                .type_index
+                .instance_type_names_in_file(
+                    data.uri,
+                    data.type_name,
+                    &instance.name,
+                    instance.location,
+                )
                 .into_iter()
-                .find_map(|(type_name, instance)| {
-                    if type_name != data.type_name
-                        || instance.name != data.instance_name
-                        || instance.location.line != data.line
-                        || instance.location.col != data.column
-                    {
-                        return None;
-                    }
-                    let type_names: Vec<String> = info
-                        .type_index
-                        .instance_type_names_in_file(
-                            data.uri,
-                            data.type_name,
-                            &instance.name,
-                            instance.location,
-                        )
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect();
-                    Some((instance.location, type_names))
-                })
-        }) else {
-            return Ok(lens);
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            (instance.location, type_names)
         };
 
         let encoding = self.position_encoding();
@@ -115,16 +132,18 @@ impl Backend {
             location.col as u32,
             "",
         );
-        // The reference index and the open-document walk both record where the
-        // referenced name starts, so a lens answers from indexed data and never
-        // reads a referencing file (#472). `source_range_without_text` converts
-        // the parser's char column by char count rather than through
+        // The per-open-document overlay and closed-file indexes are keyed by
+        // reference type and lowercase name, so resolving one lens never walks
+        // unrelated ASTs or reads a referencing file (#472, #865).
+        // `source_range_without_text` converts the parser's char column rather
+        // than using
         // `DocLines`, which differs only on a line carrying astral-plane
         // characters ahead of the reference — and is already what every
         // unreadable file falls back to.
         let mut locations: Vec<Location> = Vec::new();
         for type_name in type_names {
-            for site in self.collect_use_sites(&type_name, data.instance_name) {
+            let sites = self.indexed_code_lens_use_sites(&type_name, data.instance_name);
+            for site in sites {
                 locations.push(Location {
                     uri: parse_uri(&site.file, &uri),
                     range: source_range_without_text(
@@ -182,6 +201,7 @@ mod tests {
     use super::*;
     use crate::access::recorded_reads_under;
     use crate::navigation::test_rules::type_ref_ruleset;
+    use crate::navigation::{ast_leaf_visits, reset_ast_leaf_visits};
     use crate::paths::{path_to_uri, workspace_prefix_of};
     use crate::state::ParsedDoc;
     use crate::{Backend, DocumentState};
@@ -367,6 +387,609 @@ mod tests {
             recorded_reads_under(fixture.workspace.path()),
             before + 1,
             "the read recorder must see a real read"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn moving_definition_refreshes_lenses_without_export_or_reference_changes() {
+        let fixture = fixture();
+        let uri = &fixture.definition_uri;
+        let before = {
+            let info = fixture.backend.state.info_service.read();
+            (
+                info.export_fingerprint(uri),
+                info.file_reference_sites(uri).len(),
+                info.reference_fingerprint(uri),
+            )
+        };
+        let edited = format!("\n{DEFINITION}");
+        let parsed = Arc::new(parse_string(&edited, &fixture.backend.state.string_table));
+        {
+            let mut docs = fixture.backend.state.documents.lock();
+            docs.change(uri, 2, Arc::from(edited)).unwrap();
+            assert!(docs.set_ast(uri, 2, Arc::clone(&parsed)));
+        }
+        fixture.backend.index_parsed_file(uri, &parsed, Some(2));
+        let after = {
+            let info = fixture.backend.state.info_service.read();
+            (
+                info.export_fingerprint(uri),
+                info.file_reference_sites(uri).len(),
+                info.reference_fingerprint(uri),
+            )
+        };
+        assert_eq!(before.0, after.0);
+        assert_eq!((before.1, after.1), (0, 0));
+        assert!(crate::validate::code_lens_refresh_needed(
+            false, false, before.2, after.2
+        ));
+        let lenses = fixture
+            .backend
+            .code_lens_impl(CodeLensParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri.parse().unwrap(),
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(lenses.iter().all(|lens| lens.range.start.line == 1));
+        let (title, locations) = resolve(&fixture).await;
+        assert_eq!(title, "1 reference");
+        assert_eq!(locations.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ordinary_open_reference_case_matching_matches_the_closed_index() {
+        let fixture = fixture();
+        let uri = "file:///events/case-mismatch.txt";
+        let text = REFERENCE.replace("my_instance", "MY_INSTANCE");
+        let parsed = Arc::new(parse_string(&text, &fixture.backend.state.string_table));
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.to_string(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text.as_str()),
+                    ast: Some(Arc::clone(&parsed)),
+                    ast_version: Some(1),
+                    ast_source_bytes: text.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("open case-mismatched reference");
+        fixture.backend.index_parsed_file(uri, &parsed, Some(1));
+        // This fixture's `base` rule is also an alias pattern; isolate the
+        // ordinary type-reference index for exact-spelling parity here.
+        fixture.backend.state.info_service.write().alias_key_index =
+            cwtools_info::ReferenceIndex::default();
+        let indexed_sites = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .file_reference_sites(uri);
+        assert_eq!(indexed_sites.len(), 1);
+        assert_eq!(indexed_sites[0].name, "MY_INSTANCE");
+        assert!(!indexed_sites[0].case_insensitive);
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .set_ast_with_use_sites(uri, 1, parsed, indexed_sites);
+
+        let open_legacy = fixture.backend.collect_use_sites("my_type", "my_instance");
+        let open_indexed = fixture
+            .backend
+            .indexed_code_lens_use_sites("my_type", "my_instance");
+        assert_eq!(open_indexed.len(), open_legacy.len());
+        assert!(open_indexed.iter().all(|site| site.file.as_ref() != uri));
+
+        fixture.backend.state.documents.lock().remove(uri);
+        let closed_legacy = fixture.backend.collect_use_sites("my_type", "my_instance");
+        let closed_indexed = fixture
+            .backend
+            .indexed_code_lens_use_sites("my_type", "my_instance");
+        assert_eq!(closed_indexed.len(), closed_legacy.len());
+        assert!(closed_indexed.iter().all(|site| site.file.as_ref() != uri));
+    }
+
+    #[tokio::test]
+    async fn same_reference_edit_keeps_overlay_until_current_ast_is_accepted() {
+        let fixture = fixture();
+        let uri = fixture.reference_uri.clone();
+        let parsed = Arc::new(parse_string(REFERENCE, &fixture.backend.state.string_table));
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(REFERENCE),
+                    ast: Some(Arc::clone(&parsed)),
+                    ast_version: Some(1),
+                    ast_source_bytes: REFERENCE.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("open indexed reference");
+        fixture.backend.index_parsed_file(&uri, &parsed, Some(1));
+        let sites = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .file_reference_sites(&uri);
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .set_ast_with_use_sites(&uri, 1, parsed, sites);
+        let fingerprint_before = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .reference_fingerprint(&uri);
+
+        let edited = format!("{REFERENCE}# comment only\n");
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::from(edited.as_str()))
+            .expect("edit reference document");
+        assert_eq!(
+            fixture
+                .backend
+                .state
+                .documents
+                .lock()
+                .reference_sites("my_type", "my_instance")
+                .len(),
+            1,
+            "the last accepted AST remains usable during debounce"
+        );
+
+        let reparsed = Arc::new(parse_string(&edited, &fixture.backend.state.string_table));
+        fixture.backend.index_parsed_file(&uri, &reparsed, Some(2));
+        let sites = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .file_reference_sites(&uri);
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .set_ast_with_use_sites(&uri, 2, reparsed, sites);
+        let fingerprint_after = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .reference_fingerprint(&uri);
+        assert_eq!(fingerprint_before, fingerprint_after);
+        assert!(!crate::validate::code_lens_refresh_needed(
+            false,
+            false,
+            fingerprint_before,
+            fingerprint_after,
+        ));
+        assert_eq!(
+            fixture
+                .backend
+                .state
+                .documents
+                .lock()
+                .reference_sites("my_type", "my_instance")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn debounce_overlay_uses_parsed_ast_when_disk_index_is_stale() {
+        let fixture = fixture();
+        let uri = fixture.reference_uri.clone();
+        let unsaved = REFERENCE.replace("my_instance", "unsaved_instance");
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(unsaved.as_str()),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("open unsaved reference before its first parse");
+        assert_eq!(
+            fixture
+                .backend
+                .state
+                .info_service
+                .read()
+                .file_reference_sites(&uri)[0]
+                .name,
+            "my_instance",
+            "the workspace index still describes the on-disk file"
+        );
+
+        let parsed = Arc::new(parse_string(&unsaved, &fixture.backend.state.string_table));
+        let sites = fixture
+            .backend
+            .reference_sites_for_open_ast(&uri, &parsed)
+            .expect("current rules classify the parsed AST");
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .set_ast_with_use_sites(&uri, 1, parsed, sites);
+
+        let docs = fixture.backend.state.documents.lock();
+        assert_eq!(docs.reference_sites("my_type", "unsaved_instance").len(), 1);
+        assert!(docs.reference_sites("my_type", "my_instance").is_empty());
+    }
+
+    #[tokio::test]
+    async fn did_open_first_ast_refreshes_lenses_hidden_by_closed_index_filter() {
+        let fixture = fixture();
+        let uri = fixture.reference_uri.clone();
+        let fingerprint_before = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .reference_fingerprint(&uri);
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(REFERENCE),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("didOpen before initial parse");
+        assert!(
+            fixture
+                .backend
+                .indexed_code_lens_use_sites("my_type", "my_instance")
+                .iter()
+                .all(|site| site.file.as_ref() != uri)
+        );
+
+        let parsed = Arc::new(parse_string(REFERENCE, &fixture.backend.state.string_table));
+        let sites = fixture
+            .backend
+            .reference_sites_for_open_ast(&uri, &parsed)
+            .expect("current rules classify the parsed AST");
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .set_ast_with_use_sites(&uri, 1, parsed, sites);
+        assert_eq!(
+            fixture
+                .backend
+                .indexed_code_lens_use_sites("my_type", "my_instance")
+                .iter()
+                .filter(|site| site.file.as_ref() == uri)
+                .count(),
+            1,
+            "the accepted open AST supplies the reference overlay"
+        );
+        let fingerprint_after = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .reference_fingerprint(&uri);
+        assert_eq!(fingerprint_before, fingerprint_after);
+        assert!(crate::validate::code_lens_refresh_needed(
+            true,
+            false,
+            fingerprint_before,
+            fingerprint_after,
+        ));
+        assert!(!crate::validate::code_lens_refresh_needed(
+            false,
+            false,
+            fingerprint_after,
+            fingerprint_after,
+        ));
+    }
+
+    #[tokio::test]
+    async fn post_scan_refresh_reclassifies_the_accepted_open_ast_not_disk_index() {
+        let fixture = fixture();
+        let uri = fixture.reference_uri.clone();
+        let unsaved = REFERENCE.replace("my_instance", "unsaved_instance");
+        let parsed = Arc::new(parse_string(&unsaved, &fixture.backend.state.string_table));
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(unsaved.as_str()),
+                    ast: Some(Arc::clone(&parsed)),
+                    ast_version: Some(1),
+                    ast_source_bytes: unsaved.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("open unsaved reference");
+        fixture.backend.index_parsed_file(&uri, &parsed, Some(1));
+        let sites = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .file_reference_sites(&uri);
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .set_ast_with_use_sites(&uri, 1, parsed, sites);
+
+        // A scan indexes the on-disk text with no document-version guard.
+        let disk_ast = parse_string(REFERENCE, &fixture.backend.state.string_table);
+        fixture.backend.index_parsed_file(&uri, &disk_ast, None);
+        assert_eq!(
+            fixture
+                .backend
+                .state
+                .info_service
+                .read()
+                .file_reference_sites(&uri)[0]
+                .name,
+            "my_instance"
+        );
+
+        fixture.backend.refresh_open_reference_sites();
+        let docs = fixture.backend.state.documents.lock();
+        assert_eq!(docs.reference_sites("my_type", "unsaved_instance").len(), 1);
+        assert!(docs.reference_sites("my_type", "my_instance").is_empty());
+    }
+
+    #[tokio::test]
+    async fn ruleset_reload_and_membership_changes_reclassify_open_alias_keys() {
+        use cwtools_rules::rules_types::{NewField, Options, RuleType, TypeType, ValueType};
+
+        let fixture = fixture();
+        let uri = fixture.reference_uri.clone();
+        let text = "use_type = { base = my_instance use_MY_INSTANCE_ref = yes }\n";
+        let parsed = Arc::new(parse_string(text, &fixture.backend.state.string_table));
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: Some(Arc::clone(&parsed)),
+                    ast_version: Some(1),
+                    ast_source_bytes: text.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("open reference document");
+        fixture.backend.index_parsed_file(&uri, &parsed, Some(1));
+        let sites = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .file_reference_sites(&uri);
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .set_ast_with_use_sites(&uri, 1, parsed, sites);
+
+        let mut reloaded = type_ref_ruleset();
+        for root in &mut reloaded.root_rules {
+            if let cwtools_rules::rules_types::RootRule::AliasRule(
+                name,
+                (RuleType::NodeRule { rules, .. }, _),
+            ) = root
+                && name == "effect:use_type"
+            {
+                let mut children = rules.to_vec();
+                for (rule, _) in &mut children {
+                    if let RuleType::LeafRule {
+                        left: NewField::SpecificField(key),
+                        right: NewField::TypeField(TypeType::Simple(type_name)),
+                    } = rule
+                        && key == "base"
+                    {
+                        *type_name = "other_type".to_string();
+                    }
+                }
+                *rules = children.into();
+            }
+        }
+        reloaded.aliases.push((
+            "effect:use_<my_type>_ref".to_string(),
+            (
+                RuleType::LeafRule {
+                    left: NewField::SpecificField("yes".to_string()),
+                    right: NewField::ValueField(ValueType::Bool),
+                },
+                Options::default(),
+            ),
+        ));
+        reloaded.reindex();
+        fixture.backend.set_ruleset(reloaded);
+
+        {
+            let docs = fixture.backend.state.documents.lock();
+            assert_eq!(docs.reference_sites("other_type", "my_instance").len(), 1);
+            assert_eq!(docs.reference_sites("my_type", "my_instance").len(), 1);
+            assert_eq!(docs.reference_sites("my_type", "MY_INSTANCE").len(), 1);
+        }
+
+        for (version, definition, expected_alias_sites) in [
+            (2, DEFINITION.replace("my_instance", "other_instance"), 0),
+            (3, DEFINITION.to_string(), 1),
+        ] {
+            let parsed = Arc::new(parse_string(
+                &definition,
+                &fixture.backend.state.string_table,
+            ));
+            {
+                let mut docs = fixture.backend.state.documents.lock();
+                docs.change(&fixture.definition_uri, version, Arc::from(definition))
+                    .expect("change definition");
+                docs.set_ast(&fixture.definition_uri, version, Arc::clone(&parsed));
+            }
+            fixture
+                .backend
+                .index_parsed_file(&fixture.definition_uri, &parsed, Some(version));
+            let docs = fixture.backend.state.documents.lock();
+            assert_eq!(docs.reference_sites("other_type", "my_instance").len(), 1);
+            assert_eq!(
+                docs.reference_sites("my_type", "my_instance").len(),
+                expected_alias_sites,
+            );
+            assert_eq!(
+                docs.reference_sites("my_type", "MY_INSTANCE").len(),
+                expected_alias_sites,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolving_a_lens_does_not_walk_unrelated_open_asts() {
+        let fixture = fixture();
+        for document in 0..32 {
+            let uri = format!("file:///events/unrelated-{document}.txt");
+            let text = (0..128)
+                .map(|leaf| format!("noise_{leaf} = {leaf}\n"))
+                .collect::<String>();
+            let parsed = Arc::new(parse_string(&text, &fixture.backend.state.string_table));
+            fixture
+                .backend
+                .state
+                .documents
+                .lock()
+                .open(
+                    uri.clone(),
+                    ParsedDoc {
+                        version: 1,
+                        text: Arc::from(text.as_str()),
+                        ast: Some(Arc::clone(&parsed)),
+                        ast_version: Some(1),
+                        ast_source_bytes: text.len(),
+                        loc_cache: None,
+                    },
+                )
+                .expect("open unrelated document");
+            fixture.backend.index_parsed_file(&uri, &parsed, Some(1));
+        }
+
+        let open_reference_uri = "file:///events/open-use.txt";
+        let parsed = Arc::new(parse_string(REFERENCE, &fixture.backend.state.string_table));
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .open(
+                open_reference_uri.to_string(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(REFERENCE),
+                    ast: Some(Arc::clone(&parsed)),
+                    ast_version: Some(1),
+                    ast_source_bytes: REFERENCE.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("open reference document");
+        fixture
+            .backend
+            .index_parsed_file(open_reference_uri, &parsed, Some(1));
+        let use_sites = fixture
+            .backend
+            .state
+            .info_service
+            .read()
+            .file_reference_sites(open_reference_uri);
+        assert_eq!(use_sites.len(), 1, "open file reference index entry");
+        fixture
+            .backend
+            .state
+            .documents
+            .lock()
+            .set_ast_with_use_sites(open_reference_uri, 1, parsed, use_sites);
+        assert_eq!(
+            fixture
+                .backend
+                .state
+                .documents
+                .lock()
+                .reference_sites("my_type", "my_instance")
+                .len(),
+            1,
+            "open reference overlay entry"
+        );
+
+        reset_ast_leaf_visits();
+        let (title, locations) = resolve(&fixture).await;
+        assert_eq!(title, "2 references");
+        assert_eq!(locations.len(), 2);
+        assert_eq!(
+            locations
+                .iter()
+                .filter(|location| location.uri.as_str() == open_reference_uri)
+                .count(),
+            1,
+            "indexed references from an open document must be included"
+        );
+        assert_eq!(
+            ast_leaf_visits(),
+            0,
+            "resolving one lens must not visit leaves in any open AST"
         );
     }
 

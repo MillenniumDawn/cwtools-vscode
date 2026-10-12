@@ -48,6 +48,18 @@ pub struct UseSite {
     pub value: SourceLocation,
 }
 
+/// A use site with its lookup key, used to snapshot one open document's
+/// references alongside the parsed AST that produced them.
+#[derive(Debug, Clone)]
+pub struct IndexedUseSite {
+    pub type_name: String,
+    pub name: String,
+    /// Alias-key references are matched without regard to ASCII case; ordinary
+    /// type references retain the exact-spelling behavior of `references`.
+    pub case_insensitive: bool,
+    pub site: UseSite,
+}
+
 /// A reference collected from one file's AST, before it is filed under its
 /// referenced type. A named struct rather than a tuple so the collector's
 /// output stays readable as it grows.
@@ -199,6 +211,71 @@ impl ReferenceIndex {
         self.references_where(type_name, name, |_| true)
     }
 
+    /// Fingerprint the references contributed by one file. This follows the
+    /// file's own `(type, lowercase name)` keys, rather than scanning every
+    /// workspace reference when deciding whether CodeLens needs a refresh.
+    pub(crate) fn file_fingerprint(&self, file_uri: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let Some(keys) = self.file_keys.get(file_uri) else {
+            return hasher.finish();
+        };
+        for BucketKey { ref_type, name } in keys {
+            ref_type.hash(&mut hasher);
+            name.hash(&mut hasher);
+            if let Some(bucket) = self
+                .map
+                .get(ref_type.as_ref())
+                .and_then(|names| names.get(name.as_ref()))
+            {
+                for site in bucket
+                    .sites
+                    .iter()
+                    .filter(|site| site.file.as_ref() == file_uri)
+                {
+                    site.name.hash(&mut hasher);
+                    hash_location(&mut hasher, site.location);
+                    hash_location(&mut hasher, site.value);
+                }
+            }
+        }
+        hasher.finish()
+    }
+
+    pub(crate) fn file_references(&self, file_uri: &str) -> Vec<IndexedUseSite> {
+        let Some(keys) = self.file_keys.get(file_uri) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for BucketKey { ref_type, name } in keys {
+            let Some(bucket) = self
+                .map
+                .get(ref_type.as_ref())
+                .and_then(|names| names.get(name.as_ref()))
+            else {
+                continue;
+            };
+            out.extend(
+                bucket
+                    .sites
+                    .iter()
+                    .filter(|site| site.file.as_ref() == file_uri)
+                    .map(|site| IndexedUseSite {
+                        type_name: ref_type.to_string(),
+                        name: site.name.clone(),
+                        case_insensitive: false,
+                        site: UseSite {
+                            file: Arc::clone(&site.file),
+                            key: site.location,
+                            value: site.value,
+                        },
+                    }),
+            );
+        }
+        out
+    }
+
     /// Return at most `limit` matching sites, together with the total number
     /// of matches. The total is counted without allocating the complete result
     /// vector, and `excluded_files` preserves the LSP's open-buffer precedence.
@@ -283,6 +360,14 @@ fn ascii_lowercase(name: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(name)
     }
+}
+
+fn hash_location<H: std::hash::Hasher>(hasher: &mut H, location: SourceLocation) {
+    use std::hash::Hash;
+
+    location.line.hash(hasher);
+    location.col.hash(hasher);
+    location.end.hash(hasher);
 }
 
 /// Where a reference's name starts, from the parser's value range.
@@ -788,6 +873,19 @@ mod tests {
         assert_eq!((lines(&sites), total), (vec![("b.txt", 3)], 1));
         let (sites, total) = index.references_bounded("t", "Alpha", 1, &HashSet::new());
         assert_eq!((lines(&sites), total), (vec![("a.txt", 1)], 1));
+    }
+
+    #[test]
+    fn file_fingerprint_tracks_only_that_files_reference_sites() {
+        let mut index = ReferenceIndex::default();
+        index.merge("a.txt", vec![collected("t", "Alpha", 1)]);
+        let baseline = index.file_fingerprint("a.txt");
+        index.merge("b.txt", vec![collected("t", "other", 2)]);
+        assert_eq!(index.file_fingerprint("a.txt"), baseline);
+
+        index.remove_file("a.txt");
+        index.merge("a.txt", vec![collected("t", "Alpha", 3)]);
+        assert_ne!(index.file_fingerprint("a.txt"), baseline);
     }
 
     #[test]

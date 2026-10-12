@@ -295,6 +295,7 @@ impl Backend {
             .write()
             .update_ruleset_data(var_effects);
         drop(rules);
+        self.refresh_open_reference_sites();
         self.bump_info_revision();
         self.state
             .settings_generation
