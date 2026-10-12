@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Look up instance locations and explicit primary localisation keys by instance name instead of scanning every instance, keeping duplicate order and removal behavior. The positions live in the per-type name sets the index already kept, and `TypeIndex::map` is now read through an accessor so nothing outside the index can put them out of step. (#485)
 * Raise the Rust line coverage floor from 92.3% to 94.4%, just under the measured 95.0%, so a one-point drop fails CI. (#965)
 * Prefilter script files for localization references before allocating lowercase copies and line indexes, while retaining exact token matching. (#871)
 * Load repeatable CLI `--parent` directories and `parents` from `cwtools.toml` for validate and fix, indexing parent scripts and localisation between the workspace and vanilla without validating or fixing parent files. Both commands share the same parent-aware vanilla cache. (#819)

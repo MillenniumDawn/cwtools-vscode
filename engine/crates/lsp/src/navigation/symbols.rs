@@ -15,7 +15,7 @@ impl Backend {
         let mut top = TopSymbols::new(WORKSPACE_SYMBOL_LIMIT);
         {
             let info = self.state.info_service.read();
-            for (type_name, instances) in &info.type_index.map {
+            for (type_name, instances) in info.type_index.map() {
                 for (file_uri, inst) in instances {
                     let Some(rank) = symbol_rank(&inst.name, &query) else {
                         continue;

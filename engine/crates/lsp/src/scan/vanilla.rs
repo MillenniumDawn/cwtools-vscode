@@ -76,7 +76,7 @@ pub(super) fn index_vanilla_dir_with_shadow(
         Some(shadow) => cwtools_driver::build_vanilla_cache_aux_with_shadow(dir, &index, shadow),
         None => cwtools_driver::build_vanilla_cache_aux(dir, &index),
     };
-    let per_type = index.map.into_iter().collect();
+    let per_type = index.into_map().into_iter().collect();
     Ok((per_type, aux))
 }
 
@@ -778,7 +778,7 @@ mod tests {
         backend.merge_pending_vanilla_index();
 
         let info = backend.state.info_service.read();
-        let entries = info.type_index.map.get("foo").unwrap();
+        let entries = info.type_index.map().get("foo").unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1.name, "in_root");
         assert_eq!(entries[0].0.as_ref(), path_to_uri(&canonical_in_root));

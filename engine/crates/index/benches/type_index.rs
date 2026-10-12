@@ -73,9 +73,66 @@ fn bench_remove_file(c: &mut Criterion) {
     });
 }
 
+fn build_primary_loc_index(instance_count: usize) -> TypeIndex {
+    let instances = (0..instance_count)
+        .map(|i| {
+            let target = i + 1 == instance_count;
+            TypeInstance {
+                name: if target {
+                    "target_instance".to_string()
+                } else {
+                    format!("unrelated_instance_{i}")
+                },
+                location: SourceLocation {
+                    line: i as u32,
+                    col: 0,
+                    end: (i as u32, 0),
+                },
+                primary_loc_key: target.then(|| "target_title".to_string()),
+                required_loc_keys: Vec::new(),
+            }
+        })
+        .collect();
+    let mut idx = TypeIndex::new();
+    idx.merge(
+        "file:///mod/common/events.txt",
+        HashMap::from([("event".to_string(), instances)]),
+    );
+    idx
+}
+
+// The lookups should stay flat as the type grows (#485). `build` and `clone`
+// are here because the name index is paid for on every merge and snapshot.
+fn bench_name_lookups(c: &mut Criterion) {
+    for count in [100, 10_000, 100_000] {
+        let idx = build_primary_loc_index(count);
+        c.bench_function(
+            &format!("type_index/primary_loc_key/instances_{count}"),
+            |b| b.iter(|| idx.primary_loc_key(black_box("event"), black_box("TARGET_INSTANCE"))),
+        );
+        c.bench_function(
+            &format!("type_index/instance_locations/instances_{count}"),
+            |b| b.iter(|| idx.instance_locations(black_box("TARGET_INSTANCE"))),
+        );
+    }
+}
+
+fn bench_build_and_clone(c: &mut Criterion) {
+    c.bench_function("type_index/build/instances_100000", |b| {
+        b.iter(|| build_primary_loc_index(black_box(100_000)))
+    });
+    let index = build_primary_loc_index(100_000);
+    c.bench_function("type_index/clone/instances_100000", |b| {
+        b.iter(|| index.clone())
+    });
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(30);
-    targets = bench_instances_in_file, bench_remove_file
+    targets = bench_instances_in_file,
+        bench_remove_file,
+        bench_name_lookups,
+        bench_build_and_clone
 }
 criterion_main!(benches);

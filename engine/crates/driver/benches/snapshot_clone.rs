@@ -116,7 +116,7 @@ fn value_count(idx: &NamedValueIndex) -> usize {
 }
 
 fn bench_index(c: &mut Criterion, label: &str, idx: &TypeIndex) {
-    let instances: usize = idx.map.values().map(Vec::len).sum();
+    let instances: usize = idx.map().values().map(Vec::len).sum();
     eprintln!(
         "snapshot_clone/{label}: {instances} instances, \
          {} complex-enum values, {} value-set values",
@@ -177,7 +177,7 @@ fn bench_snapshot_clone(c: &mut Criterion) {
     let var_effects = variable_defining_effects(&ruleset);
     let idx = index_game_dir(&corpus, &ruleset, &table, &var_effects).unwrap();
     assert!(
-        !idx.map.is_empty(),
+        !idx.map().is_empty(),
         "snapshot_clone: {CORPUS_NAME} indexed to nothing; the clone would measure an empty map"
     );
     bench_index(c, "corpus", &idx);

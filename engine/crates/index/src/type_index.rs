@@ -1,9 +1,20 @@
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::dynamic_values;
 use crate::{SourceLocation, dec_ref, is_subtype_key};
+
+#[inline]
+fn ascii_lowercase_if_needed(value: &str) -> Cow<'_, str> {
+    if value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        Cow::Owned(value.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(value)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct TypeInstance {
@@ -424,10 +435,13 @@ impl ScriptedGuiIndex {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 struct NameRefs {
     total: usize,
     workspace: usize,
+    /// Where this name's instances sit in the type's `map` entry, unordered.
+    /// Most names occur once, so two inline slots avoid a heap allocation.
+    positions: SmallVec<[usize; 2]>,
 }
 
 fn release_name(set: &mut FxHashMap<Arc<str>, NameRefs>, name: &str, base_game: bool) {
@@ -438,12 +452,31 @@ fn release_name(set: &mut FxHashMap<Arc<str>, NameRefs>, name: &str, base_game: 
     }
 }
 
+/// [`release_name`] for one instance whose `map` position is known.
+fn release_name_at(
+    set: &mut FxHashMap<Arc<str>, NameRefs>,
+    name: &str,
+    base_game: bool,
+    position: usize,
+) {
+    let Some(refs) = set.get_mut(name) else {
+        return;
+    };
+    if let Some(slot) = refs.positions.iter().position(|&p| p == position) {
+        refs.positions.swap_remove(slot);
+    }
+    if refs.release(base_game) {
+        set.remove(name);
+    }
+}
+
 impl NameRefs {
-    fn add(&mut self, base_game: bool) {
+    fn add(&mut self, base_game: bool, position: usize) {
         self.total += 1;
         if !base_game {
             self.workspace += 1;
         }
+        self.positions.push(position);
     }
 
     fn release(&mut self, base_game: bool) -> bool {
@@ -457,7 +490,9 @@ impl NameRefs {
 
 #[derive(Debug, Clone, Default)]
 pub struct TypeIndex {
-    pub map: FxHashMap<String, Vec<(Arc<str>, TypeInstance)>>,
+    /// Private because `instance_sets`, `name_counts` and `file_positions` are
+    /// derived from it; read it through [`TypeIndex::map`].
+    map: FxHashMap<String, Vec<(Arc<str>, TypeInstance)>>,
     name_counts: FxHashMap<Arc<str>, usize>,
     instance_sets: FxHashMap<String, FxHashMap<Arc<str>, NameRefs>>,
     base_game_uris: FxHashSet<Arc<str>>,
@@ -474,6 +509,15 @@ pub struct TypeIndex {
 impl TypeIndex {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Every indexed instance, keyed by type name.
+    pub fn map(&self) -> &FxHashMap<String, Vec<(Arc<str>, TypeInstance)>> {
+        &self.map
+    }
+
+    pub fn into_map(self) -> FxHashMap<String, Vec<(Arc<str>, TypeInstance)>> {
+        self.map
     }
 
     pub fn contains(&self, type_name: &str, instance: &str) -> bool {
@@ -540,21 +584,45 @@ impl TypeIndex {
     }
 
     pub fn instance_locations(&self, name: &str) -> Vec<(Arc<str>, SourceLocation)> {
-        self.map
-            .values()
-            .flatten()
-            .filter(|(_, inst)| inst.name.eq_ignore_ascii_case(name))
-            .map(|(uri, inst)| (uri.clone(), inst.location))
-            .collect()
+        let name = ascii_lowercase_if_needed(name);
+        let mut locations = Vec::new();
+        // One name lookup per type, in map order, instead of every instance.
+        for (type_name, entries) in &self.map {
+            let Some(refs) = self
+                .instance_sets
+                .get(type_name)
+                .and_then(|names| names.get(name.as_ref()))
+            else {
+                continue;
+            };
+            let mut positions = refs.positions.clone();
+            positions.sort_unstable();
+            locations.extend(positions.into_iter().map(|position| {
+                let (uri, instance) = &entries[position];
+                (Arc::clone(uri), instance.location)
+            }));
+        }
+        locations
     }
 
     /// The explicit-field primary loc key captured for `name`'s instance of
     pub fn primary_loc_key(&self, type_name: &str, name: &str) -> Option<&str> {
-        self.map
+        let name = ascii_lowercase_if_needed(name);
+        let entries = self.map.get(type_name)?;
+        self.instance_sets
             .get(type_name)?
+            .get(name.as_ref())?
+            .positions
             .iter()
-            .filter(|(_, inst)| inst.name.eq_ignore_ascii_case(name))
-            .find_map(|(_, inst)| inst.primary_loc_key.as_deref())
+            .filter_map(|&position| {
+                entries[position]
+                    .1
+                    .primary_loc_key
+                    .as_deref()
+                    .map(|key| (position, key))
+            })
+            .min_by_key(|(position, _)| *position)
+            .map(|(_, key)| key)
     }
 
     pub fn loc_bindable_names(&self) -> impl Iterator<Item = String> + '_ {
@@ -672,8 +740,9 @@ impl TypeIndex {
                         }
                     }
                 };
-                set.entry(lower).or_default().add(base_game);
-                positions.push(entry.len());
+                let position = entry.len();
+                set.entry(lower).or_default().add(base_game, position);
+                positions.push(position);
                 entry.push((Arc::clone(&uri), inst));
             }
         }
@@ -704,8 +773,8 @@ impl TypeIndex {
                         }
                     }
                 };
-                set.entry(lower).or_default().add(true);
                 let pos = entry.len();
+                set.entry(lower).or_default().add(true, pos);
                 self.base_game_uris.insert(Arc::clone(&uri));
                 let type_positions = self.file_positions.entry(Arc::clone(&uri)).or_default();
                 match type_positions.get_mut(type_name.as_str()) {
@@ -745,15 +814,26 @@ impl TypeIndex {
         }
         self.map.retain(|_, v| !v.is_empty());
         self.instance_sets.retain(|_, names| !names.is_empty());
+        // `retain` shifted the survivors, so both position indexes start over.
         self.file_positions.clear();
         for (type_name, entries) in &self.map {
-            for (i, (uri, _)) in entries.iter().enumerate() {
+            let mut names = self.instance_sets.get_mut(type_name);
+            for refs in names.iter_mut().flat_map(|names| names.values_mut()) {
+                refs.positions.clear();
+            }
+            for (i, (uri, inst)) in entries.iter().enumerate() {
                 self.file_positions
                     .entry(Arc::clone(uri))
                     .or_default()
                     .entry(type_name.clone())
                     .or_default()
                     .push(i);
+                if let Some(refs) = names
+                    .as_mut()
+                    .and_then(|names| names.get_mut(ascii_lowercase_if_needed(&inst.name).as_ref()))
+                {
+                    refs.positions.push(i);
+                }
             }
         }
     }
@@ -779,7 +859,7 @@ impl TypeIndex {
                     dec_ref(&mut self.name_counts, lower.as_str());
                 }
                 if let Some(set) = self.instance_sets.get_mut(&type_name) {
-                    release_name(set, lower.as_str(), base_game);
+                    release_name_at(set, lower.as_str(), base_game, index);
                 }
                 self.swap_remove_instance(&type_name, index);
             }
@@ -799,12 +879,21 @@ impl TypeIndex {
         if index == last {
             return;
         }
-        let moved_uri = Arc::clone(&v[index].0);
+        // The former last entry now sits at `index`; repoint both indexes.
+        let (moved_uri, moved) = &v[index];
         if let Some(slot) = self
             .file_positions
-            .get_mut(&moved_uri)
+            .get_mut(moved_uri)
             .and_then(|by_type| by_type.get_mut(type_name))
             .and_then(|positions| positions.iter_mut().find(|p| **p == last))
+        {
+            *slot = index;
+        }
+        if let Some(slot) = self
+            .instance_sets
+            .get_mut(type_name)
+            .and_then(|names| names.get_mut(ascii_lowercase_if_needed(&moved.name).as_ref()))
+            .and_then(|refs| refs.positions.iter_mut().find(|p| **p == last))
         {
             *slot = index;
         }
@@ -898,6 +987,203 @@ mod tests {
         assert_eq!(locs.len(), 1, "should resolve case-insensitively");
         assert_eq!(locs[0].1.line, 7);
         assert!(idx.instance_locations("nope.1").is_empty());
+    }
+
+    #[test]
+    fn keyed_instance_lookups_preserve_duplicates_case_and_file_removal() {
+        let mut idx = TypeIndex::new();
+        idx.merge(
+            "file://first.txt",
+            HashMap::from([
+                (
+                    "event".to_string(),
+                    vec![
+                        TypeInstance {
+                            primary_loc_key: Some("first_title".to_string()),
+                            ..inst("Shared_Event", 1)
+                        },
+                        TypeInstance {
+                            primary_loc_key: Some("duplicate_title".to_string()),
+                            ..inst("shared_event", 5)
+                        },
+                    ],
+                ),
+                (
+                    "decision".to_string(),
+                    vec![TypeInstance {
+                        primary_loc_key: Some("decision_title".to_string()),
+                        ..inst("shared_event", 2)
+                    }],
+                ),
+            ]),
+        );
+        idx.merge(
+            "file://second.txt",
+            HashMap::from([(
+                "event".to_string(),
+                vec![TypeInstance {
+                    primary_loc_key: Some("second_title".to_string()),
+                    ..inst("SHARED_EVENT", 3)
+                }],
+            )]),
+        );
+
+        assert_eq!(
+            idx.primary_loc_key("event", "shared_event"),
+            Some("first_title")
+        );
+        assert_eq!(idx.primary_loc_key("EVENT", "shared_event"), None);
+        let locations = idx.instance_locations("sHaReD_eVeNt");
+        assert_eq!(locations.len(), 4);
+        let event_lines: Vec<_> = locations
+            .iter()
+            .filter(|(uri, _)| uri.as_ref() == "file://first.txt")
+            .map(|(_, loc)| loc.line)
+            .filter(|line| *line == 1 || *line == 5)
+            .collect();
+        assert_eq!(event_lines, vec![1, 5], "same-type duplicates keep order");
+        let mut got: Vec<_> = locations
+            .iter()
+            .map(|(uri, loc)| (uri.as_ref(), loc.line))
+            .collect();
+        got.sort_by_key(|(_, line)| *line);
+        assert_eq!(
+            got,
+            vec![
+                ("file://first.txt", 1),
+                ("file://first.txt", 2),
+                ("file://second.txt", 3),
+                ("file://first.txt", 5),
+            ]
+        );
+
+        idx.remove_file("file://first.txt");
+        assert_eq!(idx.instance_locations("shared_event").len(), 1);
+        assert_eq!(
+            idx.primary_loc_key("event", "shared_event"),
+            Some("second_title")
+        );
+        assert_eq!(
+            idx.primary_loc_key("decision", "shared_event"),
+            None,
+            "removed type/name entries must not remain in the keyed view"
+        );
+        assert!(idx.instance_locations("missing").is_empty());
+    }
+
+    #[test]
+    fn keyed_instance_lookups_remove_bulk_files_and_keep_surviving_duplicates() {
+        let mut idx = TypeIndex::new();
+        idx.merge(
+            "file://a.txt",
+            HashMap::from([(
+                "event".to_string(),
+                vec![
+                    TypeInstance {
+                        primary_loc_key: Some("a_title".into()),
+                        ..inst("same", 1)
+                    },
+                    TypeInstance {
+                        primary_loc_key: Some("a_second_title".into()),
+                        ..inst("same", 2)
+                    },
+                ],
+            )]),
+        );
+        idx.merge_base_game_with_uris([(
+            "event".to_string(),
+            vec![(Arc::<str>::from("file://b.txt"), inst("SAME", 3))],
+        )]);
+        idx.merge(
+            "file://c.txt",
+            HashMap::from([("event".to_string(), vec![inst("same", 4)])]),
+        );
+
+        let removed = HashSet::from([
+            Arc::<str>::from("file://a.txt"),
+            Arc::<str>::from("file://b.txt"),
+        ]);
+        idx.remove_files(&removed);
+
+        let locations = idx.instance_locations("SAME");
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].0.as_ref(), "file://c.txt");
+        assert_eq!(locations[0].1.line, 4);
+        assert_eq!(idx.primary_loc_key("event", "same"), None);
+    }
+
+    #[test]
+    fn keyed_primary_lookup_skips_missing_keys_and_indexes_base_game_uris() {
+        let mut idx = TypeIndex::new();
+        idx.merge_base_game_with_uris([(
+            "event".to_string(),
+            vec![(Arc::<str>::from("file://vanilla.txt"), inst("shared", 1))],
+        )]);
+        idx.merge(
+            "file://mod.txt",
+            HashMap::from([(
+                "event".to_string(),
+                vec![TypeInstance {
+                    primary_loc_key: Some("mod_title".to_string()),
+                    ..inst("SHARED", 2)
+                }],
+            )]),
+        );
+
+        assert_eq!(
+            idx.primary_loc_key("event", "shared"),
+            Some("mod_title"),
+            "a preceding instance without a primary key must not hide a later key"
+        );
+        assert_eq!(idx.instance_locations("shared").len(), 2);
+
+        idx.remove_file("file://vanilla.txt");
+        assert_eq!(idx.instance_locations("shared").len(), 1);
+        assert_eq!(idx.primary_loc_key("event", "shared"), Some("mod_title"));
+    }
+
+    #[test]
+    fn primary_lookup_tracks_the_last_instance_moved_by_file_removal() {
+        let mut idx = TypeIndex::new();
+        idx.merge(
+            "file://a.txt",
+            HashMap::from([("event".to_string(), vec![inst("shared", 1)])]),
+        );
+        idx.merge(
+            "file://b.txt",
+            HashMap::from([(
+                "event".to_string(),
+                vec![TypeInstance {
+                    primary_loc_key: Some("b_title".into()),
+                    ..inst("shared", 2)
+                }],
+            )]),
+        );
+        idx.merge(
+            "file://c.txt",
+            HashMap::from([(
+                "event".to_string(),
+                vec![TypeInstance {
+                    primary_loc_key: Some("c_title".into()),
+                    ..inst("shared", 3)
+                }],
+            )]),
+        );
+        assert_eq!(idx.primary_loc_key("event", "shared"), Some("b_title"));
+
+        idx.remove_file("file://a.txt");
+        assert_eq!(
+            idx.primary_loc_key("event", "shared"),
+            Some("c_title"),
+            "swap_remove moves the last entry ahead of intervening matches"
+        );
+        assert_eq!(
+            idx.instance_locations("shared")
+                .iter()
+                .map(|(_, location)| location.line)
+                .collect::<Vec<_>>(),
+            vec![3, 2]
+        );
     }
 
     #[test]
@@ -1047,6 +1333,23 @@ mod tests {
                 )
             })
             .collect();
+        // Every name's positions must point at exactly its own instances.
+        for (ty, names) in &idx.instance_sets {
+            for (name, refs) in names {
+                let mut got = refs.positions.to_vec();
+                got.sort_unstable();
+                let want: Vec<usize> = idx
+                    .map
+                    .get(ty)
+                    .into_iter()
+                    .flatten()
+                    .enumerate()
+                    .filter(|(_, (_, inst))| inst.name.to_ascii_lowercase() == **name)
+                    .map(|(i, _)| i)
+                    .collect();
+                assert_eq!(got, want, "positions of {ty}/{name}");
+            }
+        }
         (map, name_counts, instance_sets)
     }
 
