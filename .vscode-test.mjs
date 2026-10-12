@@ -3,6 +3,7 @@
 //
 //   unit        fast suites that need the VS Code API but not the language server
 //   smoke       unit + activation, in the sample workspace
+//   vscode-floor activation and server initialization on the declared minimum
 //   multi-root  server-backed descriptor/root selection in a multi-root fixture
 //   watched     served-root exclusions and watched-file updates, in its own workspace
 //   live        the live-settings suite, in sample-live (its own workspace
@@ -10,13 +11,14 @@
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
 //               (see below; its own CI step, not part of test:smoke)
 //   host        sample-workspace suites, including smoke, hover and completion;
-//               excludes live, multi-root, rules-sync and watched
+//               excludes live, multi-root, restart, rules-sync and watched
+//   restart     destructive server-crash/recovery test in an isolated host
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
 // Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
-// `--label live`, `--label multi-root`, and `--label watched` to cover the host
-// workspaces and the external-file watcher suite.
+// `--label live`, `--label multi-root`, `--label watched`, and `--label restart`
+// to cover the host workspaces and the external-file watcher suite.
 //
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
@@ -44,13 +46,15 @@
 // differ. CI runs it as its own step after the server has been staged.
 //
 // Coverage applies globally when `--coverage` is passed. test:coverage runs
-// the `host` and `live` labels together, preserving their separate workspaces
-// while collecting them in one session; host also exercises graphPanel.ts.
+// the `host`, `live`, and isolated `restart` labels together, preserving their
+// separate workspaces while collecting them in one session; host also exercises
+// graphPanel.ts.
 
 import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";
 
 const sampleWorkspace = "./extension/test/workspaces/stellaris";
+const vscodeCompatibilityFloor = "1.91.0";
 const multiRootWorkspace =
 	"./extension/test/workspaces/multiroot.code-workspace";
 const liveWorkspace = "./extension/test/workspaces/live";
@@ -89,8 +93,11 @@ const deactivateFile =
 const smokeFiles = [
 	...unitFiles,
 	"./dist/extension/bin/client/test/host/extension.test.js",
-	"./dist/extension/bin/client/test/host/restart.test.js",
 	deactivateFile,
+];
+const restartFiles = [
+	abortDiagnostics,
+	"./dist/extension/bin/client/test/host/restart.test.js",
 ];
 // Live-settings fixture is isolated: its .vscode/settings.json attempts to set
 // cwtools.rules_folder to .cwtools-test-rules, while the test environment
@@ -116,7 +123,6 @@ const hostFiles = [
 	"./dist/extension/bin/client/test/host/codeLens.test.js",
 	"./dist/extension/bin/client/test/host/detectGame.test.js",
 	"./dist/extension/bin/client/test/host/commands.test.js",
-	"./dist/extension/bin/client/test/host/restart.test.js",
 	deactivateFile,
 ];
 
@@ -136,7 +142,7 @@ const headless =
 		: [];
 
 const base = {
-	vscode: "stable",
+	version: "stable",
 	extensionDevelopmentPath: "dist/extension",
 };
 
@@ -149,6 +155,22 @@ export default defineConfig({
 			workspaceFolder: "./extension/test/workspaces/watched/watched.code-workspace",
 			launchArgs: ["./extension/test/workspaces/watched/served/workspaces/stellaris/events/open.txt", softwareRendering, disableCrashReporter, ...headless],
 			env: { CWTOOLS_TEST_RULES_FOLDER: path.resolve(import.meta.dirname, "extension/test/workspaces/watched/served/rules") },
+		},
+		{
+			...base,
+			version: vscodeCompatibilityFloor,
+			label: "vscode-floor",
+			files: [
+				abortDiagnostics,
+				"./dist/extension/bin/client/test/host/vscodeCompatibilityFloor.test.js",
+			],
+			workspaceFolder: sampleWorkspace,
+			launchArgs: [
+				sampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
 		},
 		{
 			...base,
@@ -217,6 +239,18 @@ export default defineConfig({
 				CWTOOLS_TEST_HOI4_REF: "3f03757a6f15565f763434e5752021c3ba8c0c3e",
 				CWTOOLS_TEST_RULES_MANIFEST_URL: "http://127.0.0.1:1/rules-pins.json",
 			},
+		},
+		{
+			...base,
+			label: "restart",
+			files: restartFiles,
+			workspaceFolder: sampleWorkspace,
+			launchArgs: [
+				sampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
 		},
 		{
 			...base,

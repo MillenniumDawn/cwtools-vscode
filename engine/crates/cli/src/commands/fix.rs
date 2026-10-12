@@ -9,7 +9,7 @@ use std::io::Write as _;
 
 use crate::cli::FixArgs;
 use crate::run::{
-    EXIT_DISCOVERY_FAILED, EXIT_USAGE, announce_config, exit_if_empty,
+    EXIT_DISCOVERY_FAILED, EXIT_USAGE, ModLayers, announce_config, exit_if_empty,
     gate_vanilla_cache_for_replacements, load_config, missing_required, note, parse_game,
     rebuild_vanilla_cache_if_stale, vanilla_notice,
 };
@@ -27,6 +27,7 @@ pub(super) fn run(args: FixArgs) {
         game,
         directory,
         rules,
+        parents: parent_roots,
         vanilla,
         vanilla_cache,
         no_vanilla_cache,
@@ -67,6 +68,7 @@ pub(super) fn run(args: FixArgs) {
         default case_sensitive_files => case_sensitive_files "case-sensitive-files";
         list ignore_files => ignore_files "ignore-files";
         list ignore_dirs => ignore_dirs "ignore-dirs";
+        list parent_roots => parents "parents";
         list loc_language => loc_languages "loc-languages";
         list only_codes => only_codes "only-codes";
         list ignore_codes => ignore_codes "ignore-codes";
@@ -104,7 +106,15 @@ pub(super) fn run(args: FixArgs) {
                     None
                 }
             };
-            gate_vanilla_cache_for_replacements(p, loaded, &directory, vanilla.as_deref())
+            gate_vanilla_cache_for_replacements(
+                p,
+                loaded,
+                ModLayers {
+                    primary: &directory,
+                    parents: &parent_roots,
+                },
+                vanilla.as_deref(),
+            )
         });
 
     // Same automatic base-game cache as `validate`, so both commands see
@@ -123,6 +133,7 @@ pub(super) fn run(args: FixArgs) {
             game: game_id,
             rules: RulesInput::from_path(rules.clone()),
             directory: directory.clone(),
+            parent_roots: parent_roots.clone(),
             vanilla: vanilla.clone(),
             vanilla_cache: vanilla_cache_index,
             vanilla_cache_auto,
@@ -148,7 +159,10 @@ pub(super) fn run(args: FixArgs) {
             &session,
             cache_path,
             cached_fp,
-            &directory,
+            ModLayers {
+                primary: &directory,
+                parents: &parent_roots,
+            },
             vanilla_dir,
             game_id,
             !no_vanilla_cache,
@@ -178,9 +192,8 @@ pub(super) fn run(args: FixArgs) {
     );
 
     // Gather fixable diagnostics, grouped per file in deterministic order.
-    let mut by_file: BTreeMap<String, Vec<PlannedFix>> = BTreeMap::new();
+    let mut by_file: BTreeMap<std::path::PathBuf, Vec<PlannedFix>> = BTreeMap::new();
     for (path, errors) in session.validate_all() {
-        let file_str = path.to_str().unwrap_or("").to_string();
         for err in errors {
             let code = err.code.unwrap_or_default();
             if !want(code) {
@@ -189,7 +202,7 @@ pub(super) fn run(args: FixArgs) {
             if let Some(fix) = err.fix {
                 for edit in fix.edits {
                     by_file
-                        .entry(file_str.clone())
+                        .entry(path.clone())
                         .or_default()
                         .push((code.to_string(), edit));
                 }
@@ -212,7 +225,7 @@ pub(super) fn run(args: FixArgs) {
         if let Some(fix) = d.fix {
             for edit in fix.edits {
                 by_file
-                    .entry(d.file.clone())
+                    .entry(std::path::PathBuf::from(d.file.as_str()))
                     .or_default()
                     .push((d.code.to_string(), edit));
             }
@@ -223,8 +236,9 @@ pub(super) fn run(args: FixArgs) {
     let mut edits_applied = 0usize;
     let mut write_failed = false;
     for (file, planned) in by_file {
+        let file_display = file.display().to_string();
         let Ok(text) = std::fs::read_to_string(&file) else {
-            eprintln!("warn: could not read {file}; skipping its fixes");
+            eprintln!("warn: could not read {file_display}; skipping its fixes");
             if apply {
                 write_failed = true;
             }
@@ -232,25 +246,25 @@ pub(super) fn run(args: FixArgs) {
         };
         let (kept, skipped) = cwtools_parser::fix::plan_file_edits(&text, planned);
         for code in &skipped {
-            eprintln!("warn: {file}: skipped a {code} fix (overlaps another edit)");
+            eprintln!("warn: {file_display}: skipped a {code} fix (overlaps another edit)");
         }
         if kept.is_empty() {
             continue;
         }
         if apply {
             let fixed = cwtools_parser::fix::apply_edits(&text, &kept);
-            if let Err(e) = crate::run::write_atomically(std::path::Path::new(&file), |file| {
-                file.write_all(fixed.as_bytes())
-            }) {
-                eprintln!("Error writing {file}: {e}");
+            if let Err(e) =
+                crate::run::write_atomically(&file, |file| file.write_all(fixed.as_bytes()))
+            {
+                eprintln!("Error writing {file_display}: {e}");
                 write_failed = true;
             } else {
                 files_changed += 1;
                 edits_applied += kept.len();
-                println!("fixed {file} ({} edit(s))", kept.len());
+                println!("fixed {file_display} ({} edit(s))", kept.len());
             }
         } else {
-            print!("{}", fix_preview(&file, &text, &kept));
+            print!("{}", fix_preview(&file_display, &text, &kept));
             files_changed += 1;
             edits_applied += kept.len();
         }

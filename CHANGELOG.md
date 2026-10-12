@@ -2,11 +2,16 @@
 
 #### Engine
 
+* Prefilter script files for localization references before allocating lowercase copies and line indexes, while retaining exact token matching. (#871)
+* Load repeatable CLI `--parent` directories and `parents` from `cwtools.toml` for validate and fix, indexing parent scripts and localisation between the workspace and vanilla without validating or fixing parent files. Both commands share the same parent-aware vanilla cache. (#819)
+* Filter enum, filepath, icon and plain-alias completion candidates before growing result collections or allocating snippets; cache plain alias indices by category and preserve deterministic ordering, overload aggregation and filtering-budget signals. (#869)
+* Keep distinct non-UTF-8 file paths distinct in indexing, validation and fix grouping while retaining lossy path spellings only for display. (#497)
 * Remove an unused test-only `Arc` placeholder from completion tests. (#966)
 * Move the eight ignored perf tests into `cwtools_lsp` and `cwtools_cache` benches that find their checkouts under `CWTOOLS_PROJECTS`, like the existing benches. The per-test path variables and home-directory defaults are gone, and the indexing bench now reads Millennium Dawn files instead of a base-game install. With those unrun test bodies gone, the Rust line-coverage floor rises from 91.5 to 92.3. (#886)
 * Fuzz the format and fix edit writers with committed smoke corpora, and property-test format/parse round trips for AST preservation. (#525)
 * Give a lowercase string one string-table slot and one map entry instead of two, and skip the `to_lowercase` allocation for ASCII input with no uppercase. The Millennium Dawn string table drops from 1,050,164 to 916,655 entries. (#486)
 * Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)
+* Cache root type-rule lookups and collect rule-defined variable sets in one path-filtered file traversal, avoiding per-clause key allocation when no variable rule matches. (#482)
 * Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
 * Key the reference index by type and lowercased name, with a reverse map from each file to its keys, so clearing a file and looking up an instance no longer scan every use site of the type. (#866)
@@ -39,6 +44,7 @@
 * Remove three test-only public wrappers (`scope_transitions`, `LocService::from_folders`, `LocService::discover_files`) and two stale `too_many_arguments` allows. (#912)
 * The per-edit ignored-file check reads the default exclude patterns from a shared static instead of building a whole `FileManagerConfig` per call. (#873)
 * Cap cumulative text snapshots for references and rename requests, refusing incomplete navigation when the request budget is exhausted. The conservative 5× peak-memory reservation means a closed UTF-8 file larger than 25.6 MiB cannot fit within the 128 MiB request budget. (#569)
+* Stream localization references and renames one workspace file at a time under a shared peak-memory budget, including open buffers and decoded closed-file text; abort exhausted requests instead of returning partial rename edits. Aggregate snapshot APIs remain cumulative. (#823)
 * Reuse formatted text when constructing whole-file format edits, avoiding reparsing and the multi-edit planner. (#557)
 * Share one `workspace_edit_for_snapshots` between format and fix-all instead of keeping two copies. (#909)
 * Memoize subtype merges per file and precompute matcher key groups. (#492)
@@ -55,6 +61,10 @@
 #### Extension
 
 * Wait for the connected-node ELK layout before positioning isolated nodes and fitting the initial graph view. Report layouts that do not finish within 60 seconds and discard pending callbacks when replacing the graph. (#564)
+* Declare VS Code 1.91.0 as the minimum host version required by the shipped vscode-languageclient, and exercise activation plus language-server initialization at that floor in CI. (#849)
+* Minify production extension and webview bundles, and generate source maps only for development builds. (#500)
+* Keep the Fix All and Format Workspace protocol-error tests independent of delayed rules-config error notifications from the pinned Stellaris rules. (#959)
+* Test that a crashed language server recovers, stops after its restart budget, and can be started manually again. (#928)
 * Skip executable workspace scans during activation when folder-name or content hints already identify the game; retain executable detection for unrecognized roots. (#501)
 * Delegate graph tooltips, retain only the active hover neighborhood, and clean up tooltip timers and scratch state when replacing a graph; assert node/core scratch collections stay bounded to the active neighborhood. (#503)
 * Validate optional imported graph details, display names and file locations before replacement, and keep generic nodes safely hoverable without navigation metadata. (#842)

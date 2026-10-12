@@ -535,7 +535,7 @@ pub fn index_discovered_files(
     let per_file: Vec<PerFileData> = files
         .into_par_iter()
         .map(|file| {
-            let path = file.path.to_str().unwrap_or("").to_string();
+            let path = cwtools_file_manager::path_identity(&file.path).into_owned();
             // Workspace-scan files, always parsed on the base table.
             let pf = ParsedFile::new(file.arena, file.root_children, vec![]);
             let (instances, subtype_instances) = match subtype_collector {
@@ -680,6 +680,73 @@ mod tests {
 
         let result = collect_type_instances(&rs, &parsed, "common/things/00_things.txt", &table);
         assert_eq!(names(&result, "thing"), vec!["MY_thing", "NOPE_thing"]);
+    }
+
+    #[cfg(unix)]
+    // macOS filesystems reject filenames with invalid UTF-8 bytes (EILSEQ),
+    // so skip before the test attempts to create its fixture files there.
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "macOS rejects non-UTF-8 filenames with EILSEQ"
+    )]
+    #[test]
+    fn non_utf8_paths_keep_distinct_file_index_entries() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let first_path = root
+            .path()
+            .join(std::ffi::OsString::from_vec(b"same\x80.txt".to_vec()));
+        let second_path = root
+            .path()
+            .join(std::ffi::OsString::from_vec(b"same\x81.txt".to_vec()));
+        assert_ne!(first_path, second_path);
+        assert_eq!(
+            first_path.file_name().unwrap().to_string_lossy(),
+            second_path.file_name().unwrap().to_string_lossy(),
+            "the fixture paths must collide under lossy display",
+        );
+        std::fs::write(&first_path, "first = { }").unwrap();
+        std::fs::write(&second_path, "second = { }").unwrap();
+
+        let table = StringTable::new();
+        let first = parse_string("first = { }", &table);
+        let second = parse_string("second = { }", &table);
+        let files = [
+            cwtools_file_manager::file_manager::ParsedFile {
+                path: first_path.clone(),
+                logical_path: "common/things/first.txt".into(),
+                arena: first.arena,
+                root_children: first.root_children,
+                errors: first.errors,
+            },
+            cwtools_file_manager::file_manager::ParsedFile {
+                path: second_path.clone(),
+                logical_path: "common/things/second.txt".into(),
+                arena: second.arena,
+                root_children: second.root_children,
+                errors: second.errors,
+            },
+        ];
+        let mut ruleset = ruleset_with(type_def("thing", "common/things"));
+        ruleset.reindex();
+        let index = index_discovered_files(files, &ruleset, &table, None, None);
+
+        let first_key = cwtools_file_manager::path_identity(&first_path);
+        let second_key = cwtools_file_manager::path_identity(&second_path);
+        assert_ne!(first_key, second_key);
+        let first_names: Vec<_> = index
+            .instances_in_file(&first_key)
+            .into_iter()
+            .map(|(_, instance)| instance.name.as_str())
+            .collect();
+        let second_names: Vec<_> = index
+            .instances_in_file(&second_key)
+            .into_iter()
+            .map(|(_, instance)| instance.name.as_str())
+            .collect();
+        assert_eq!(first_names, ["first"]);
+        assert_eq!(second_names, ["second"]);
     }
 
     // the end is the spot just past the closing brace (the parser's

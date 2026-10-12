@@ -20,6 +20,7 @@ const KEYS: &[&str] = &[
     "fail-on",
     "ignore-files",
     "ignore-dirs",
+    "parents",
     "loc-languages",
     "case-sensitive-files",
     "ignore-codes",
@@ -39,6 +40,7 @@ pub(crate) const FIX_KEYS: &[&str] = &[
     "refresh-vanilla-cache",
     "ignore-files",
     "ignore-dirs",
+    "parents",
     "loc-languages",
     "case-sensitive-files",
     "ignore-codes",
@@ -106,6 +108,7 @@ pub(crate) struct FileConfig {
     pub(crate) fail_on: Option<FailOn>,
     pub(crate) ignore_files: Vec<String>,
     pub(crate) ignore_dirs: Vec<String>,
+    pub(crate) parents: Vec<PathBuf>,
     pub(crate) loc_languages: Vec<Lang>,
     pub(crate) case_sensitive_files: Option<bool>,
     pub(crate) ignore_codes: Vec<String>,
@@ -313,6 +316,7 @@ fn from_entries(path: PathBuf, dir: &Path, entries: Vec<Entry>) -> Result<FileCo
             }
             "ignore-files" => cfg.ignore_files = strings(&cfg.path, e)?,
             "ignore-dirs" => cfg.ignore_dirs = strings(&cfg.path, e)?,
+            "parents" => cfg.parents = paths(&cfg.path, dir, e)?,
             "loc-languages" => {
                 cfg.loc_languages = list(&cfg.path, e)?
                     .iter()
@@ -350,6 +354,22 @@ fn path_value(path: &Path, dir: &Path, e: &Entry) -> Result<PathBuf, ConfigError
     }
     let joined: PathBuf = dir.join(raw).components().collect();
     Ok(joined)
+}
+
+fn paths(path: &Path, dir: &Path, e: &Entry) -> Result<Vec<PathBuf>, ConfigError> {
+    list(path, e)?
+        .iter()
+        .map(|v| {
+            if v.value.is_empty() {
+                return Err(ConfigError::at(
+                    path,
+                    v.line,
+                    format!("key `{}` contains an empty path", e.key),
+                ));
+            }
+            Ok(dir.join(&v.value).components().collect())
+        })
+        .collect()
 }
 
 fn codes(path: &Path, e: &Entry) -> Result<Vec<String>, ConfigError> {
@@ -721,6 +741,7 @@ ignore-dirs = [
     "build",   # trailing comma and comments are fine
     "temp*",
 ]
+parents = ["../base", "next-parent"]
 loc-languages = ["english"]
 ignore-codes = ["cw100"]
 only-codes = []
@@ -740,6 +761,10 @@ allow-empty = true
         assert_eq!(cfg.fail_on, Some(FailOn::Never));
         assert_eq!(cfg.ignore_files, ["*.notes"]);
         assert_eq!(cfg.ignore_dirs, ["build", "temp*"]);
+        assert_eq!(
+            cfg.parents,
+            [tmp.path().join("../base"), tmp.path().join("next-parent")]
+        );
         assert_eq!(cfg.loc_languages, [Lang::English]);
         // Codes are normalised to the catalog spelling.
         assert_eq!(cfg.ignore_codes, ["CW100"]);
