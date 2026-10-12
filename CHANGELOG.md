@@ -1,9 +1,5 @@
 ### Unreleased
 
-#### Extension
-
-* Minify production extension and webview bundles, and generate source maps only for development builds. (#500)
-
 #### Engine
 
 * Filter enum, filepath, icon and plain-alias completion candidates before growing result collections or allocating snippets; cache plain alias indices by category and preserve deterministic ordering, overload aggregation and filtering-budget signals. (#869)
@@ -62,6 +58,7 @@
 
 #### Extension
 
+* Minify production extension and webview bundles, and generate source maps only for development builds. (#500)
 * Keep the Fix All and Format Workspace protocol-error tests independent of delayed rules-config error notifications from the pinned Stellaris rules. (#959)
 * Test that a crashed language server recovers, stops after its restart budget, and can be started manually again. (#928)
 * Skip executable workspace scans during activation when folder-name or content hints already identify the game; retain executable detection for unrecognized roots. (#501)
