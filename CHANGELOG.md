@@ -3,9 +3,12 @@
 #### Engine
 
 * Filter enum, filepath, icon and plain-alias completion candidates before growing result collections or allocating snippets; cache plain alias indices by category and preserve deterministic ordering, overload aggregation and filtering-budget signals. (#869)
+* Remove an unused test-only `Arc` placeholder from completion tests. (#966)
 * Move the eight ignored perf tests into `cwtools_lsp` and `cwtools_cache` benches that find their checkouts under `CWTOOLS_PROJECTS`, like the existing benches. The per-test path variables and home-directory defaults are gone, and the indexing bench now reads Millennium Dawn files instead of a base-game install. With those unrun test bodies gone, the Rust line-coverage floor rises from 91.5 to 92.3. (#886)
+* Fuzz the format and fix edit writers with committed smoke corpora, and property-test format/parse round trips for AST preservation. (#525)
 * Give a lowercase string one string-table slot and one map entry instead of two, and skip the `to_lowercase` allocation for ASCII input with no uppercase. The Millennium Dawn string table drops from 1,050,164 to 916,655 entries. (#486)
 * Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)
+* Cache root type-rule lookups and collect rule-defined variable sets in one path-filtered file traversal, avoiding per-clause key allocation when no variable rule matches. (#482)
 * Reuse the live scope context with save/restore while probing scope targets and validating math clauses, avoiding a full context clone per probe. (#558)
 * Charge cached workspace files against the same cumulative scan-byte budget as cache misses. (#600)
 * Key the reference index by type and lowercased name, with a reverse map from each file to its keys, so clearing a file and looking up an instance no longer scan every use site of the type. (#866)
@@ -53,6 +56,7 @@
 
 #### Extension
 
+* Skip executable workspace scans during activation when folder-name or content hints already identify the game; retain executable detection for unrecognized roots. (#501)
 * Delegate graph tooltips, retain only the active hover neighborhood, and clean up tooltip timers and scratch state when replacing a graph; assert node/core scratch collections stay bounded to the active neighborhood. (#503)
 * Validate optional imported graph details, display names and file locations before replacement, and keep generic nodes safely hoverable without navigation metadata. (#842)
 * Limit automatic plaintext language promotion to the selected mod, configured parent mods and the server's configured or auto-discovered vanilla content roots, including symlink targets used by definitions. Recheck open vanilla scripts after the server reports its install. (#836)

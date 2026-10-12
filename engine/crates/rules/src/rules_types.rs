@@ -34,6 +34,7 @@ pub struct RuleSet {
     type_by_name: rustc_hash::FxHashMap<String, usize>,
     enum_by_name: rustc_hash::FxHashMap<String, usize>,
     type_rules_idx: rustc_hash::FxHashMap<String, usize>,
+    root_type_rules_idx: rustc_hash::FxHashMap<String, Vec<usize>>,
     type_reference_rules: rustc_hash::FxHashMap<String, Vec<TypeReferenceRule>>,
     value_set_effects: rustc_hash::FxHashMap<String, String>,
     value_set_effect_fields: rustc_hash::FxHashMap<String, Vec<(String, String)>>,
@@ -378,6 +379,7 @@ impl RuleSet {
             type_by_name: rustc_hash::FxHashMap::default(),
             enum_by_name: rustc_hash::FxHashMap::default(),
             type_rules_idx: rustc_hash::FxHashMap::default(),
+            root_type_rules_idx: rustc_hash::FxHashMap::default(),
             type_reference_rules: rustc_hash::FxHashMap::default(),
             value_set_effects: rustc_hash::FxHashMap::default(),
             value_set_effect_fields: rustc_hash::FxHashMap::default(),
@@ -570,11 +572,16 @@ impl RuleSet {
             })
             .unwrap_or_default();
         self.type_rules_idx.clear();
+        self.root_type_rules_idx.clear();
         self.type_reference_rules.clear();
         for (i, root_rule) in self.root_rules.iter().enumerate() {
             let (root_type, rule) = match root_rule {
                 RootRule::TypeRule(name, rule) => {
                     self.type_rules_idx.entry(name.clone()).or_insert(i);
+                    self.root_type_rules_idx
+                        .entry(name.clone())
+                        .or_default()
+                        .push(i);
                     (Some(name.as_str()), rule)
                 }
                 RootRule::AliasRule(_, rule) | RootRule::SingleAliasRule(_, rule) => (None, rule),
@@ -773,6 +780,14 @@ impl RuleSet {
     pub fn type_rules_idx(&self) -> &rustc_hash::FxHashMap<String, usize> {
         self.assert_reindexed();
         &self.type_rules_idx
+    }
+
+    /// Root type-rule indices grouped by type name. This derived lookup lets
+    /// per-file collectors select applicable roots without rebuilding a map
+    /// from `root_rules` for every indexed file.
+    pub fn root_type_rules_idx(&self) -> &rustc_hash::FxHashMap<String, Vec<usize>> {
+        self.assert_reindexed();
+        &self.root_type_rules_idx
     }
 
     pub fn type_reference_rules(&self) -> &rustc_hash::FxHashMap<String, Vec<TypeReferenceRule>> {

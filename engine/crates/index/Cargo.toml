@@ -18,6 +18,7 @@ cwtools_string_table = { workspace = true }
 cwtools_rules = { workspace = true }
 cwtools_cache = { workspace = true }
 serde_json = { workspace = true }
+smallvec = { workspace = true }
 rkyv = { workspace = true }
 zstd = { workspace = true }
 rayon = { workspace = true }
