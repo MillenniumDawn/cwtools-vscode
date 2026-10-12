@@ -22,26 +22,24 @@ import {
 	rulesFetchCommands,
 	GitNotFoundError,
 } from "../../src/host/engine";
+import type { ResolveRulesFolderOpts } from "../../src/host/engine";
+import { GAMES } from "../../src/host/games";
 
-suite("engine — LANGUAGE_REPOS", () => {
-	test("covers every supported game with a github URL", () => {
-		const expected = [
-			"stellaris",
-			"eu4",
-			"hoi4",
-			"ck2",
-			"imperator",
-			"vic2",
-			"vic3",
-			"ck3",
-			"eu5",
-		];
-		for (const id of expected) {
-			assert.ok(LANGUAGE_REPOS[id], `missing repo URL for ${id}`);
-			assert.match(LANGUAGE_REPOS[id].repo, /^https:\/\/github\.com\//);
-			assert.match(LANGUAGE_REPOS[id].ref, /^[0-9a-f]{40}$/, `${id} ref`);
+suite("engine — game table", () => {
+	test("every game has a unique id and a pinned github repo", () => {
+		assert.strictEqual(new Set(GAMES.map((g) => g.id)).size, GAMES.length);
+		assert.deepStrictEqual(
+			Object.keys(LANGUAGE_REPOS).sort(),
+			GAMES.map((g) => g.id).sort(),
+		);
+		for (const g of GAMES) {
+			assert.match(g.repo, /^https:\/\/github\.com\//, `${g.id} repo`);
+			assert.match(g.repoRef, /^[0-9a-f]{40}$/, `${g.id} repoRef`);
+			assert.deepStrictEqual(LANGUAGE_REPOS[g.id], {
+				repo: g.repo,
+				ref: g.repoRef,
+			});
 		}
-		assert.strictEqual(Object.keys(LANGUAGE_REPOS).length, expected.length);
 	});
 });
 
@@ -50,78 +48,43 @@ suite("engine — detectFromFolder", () => {
 	const assertDetects = async (folder: string, expected: string | null) =>
 		assert.strictEqual(await detectFromFolder(folder, noopExists), expected);
 
-	test("returns null for an unrecognised folder", async () => {
-		await assertDetects("/home/user/mymod", null);
+	// Newer games share a prefix with their predecessors, so the pairs are here
+	// together: a hint table in the wrong order sends CK3 to ck2.
+	test.each([
+		["/home/user/mymod", null],
+		["", null],
+		["/mods/Stellaris_v3", "stellaris"],
+		["/mods/hoi4_mod", "hoi4"],
+		["/mods/Hearts of Iron", "hoi4"],
+		["/mods/Europa Universalis IV", "eu4"],
+		["/mods/eu4", "eu4"],
+		["/mods/EU5", "eu5"],
+		["/x/Documents/Paradox Interactive/Europa Universalis V/mod/m", "eu5"],
+		["/mods/CK2_whatever", "ck2"],
+		["/x/Crusader Kings II", "ck2"],
+		["/mods/ck3_mod", "ck3"],
+		["/x/Crusader Kings III", "ck3"],
+		["/mods/Vic2", "vic2"],
+		["/mods/Victoria 2", "vic2"],
+		["/x/Victoria II", "vic2"],
+		["/mods/Vic3", "vic3"],
+		["/x/Victoria III", "vic3"],
+		["/mods/Imperator", "imperator"],
+		["/mods/Rome Total War", "imperator"],
+	])("folder name %s detects %s", async (folder, expected) => {
+		await assertDetects(folder, expected);
 	});
 
-	test("returns null for an empty path", async () => {
-		await assertDetects("", null);
-	});
-
-	test("matches by folder name substring for every supported game", async () => {
-		await assertDetects("/mods/Stellaris_v3", "stellaris");
-		await assertDetects("/mods/HOI4_Mod", "hoi4");
-		await assertDetects("/mods/Hearts of Iron", "hoi4");
-		await assertDetects("/mods/Europa Universalis IV", "eu4");
-		await assertDetects("/mods/CK2_whatever", "ck2");
-		await assertDetects("/mods/CK3_whatever", "ck3");
-		await assertDetects("/mods/CK3_Mod", "ck3");
-		await assertDetects("/mods/Vic2", "vic2");
-		await assertDetects("/mods/Victoria 2", "vic2");
-		await assertDetects("/mods/Vic3", "vic3");
-		await assertDetects("/mods/Imperator", "imperator");
-		await assertDetects("/mods/Rome Total War", "imperator");
-		await assertDetects("/mods/EU5", "eu5");
-	});
-
-	test("matching is case-insensitive", async () => {
-		await assertDetects("/mods/stellaris_v3", "stellaris");
-		await assertDetects("/mods/hoi4_mod", "hoi4");
-		await assertDetects("/mods/ck3_mod", "ck3");
-		await assertDetects("/mods/eu5_mod", "eu5");
-	});
-
-	test("an Europa Universalis V install folder detects as eu5", async () => {
-		await assertDetects(
-			"/x/Documents/Paradox Interactive/Europa Universalis V/mod/m",
-			"eu5",
+	test.each([
+		["common/ai_strategy", "hoi4"],
+		["common/species_classes", "stellaris"],
+		["common/great_projects", "eu4"],
+		["common/dynasties", "ck3"],
+	])("content marker %s detects %s under an opaque name", async (marker, expected) => {
+		assert.strictEqual(
+			await detectFromFolder("/opaque", (p) => p === "/opaque/" + marker),
+			expected,
 		);
-	});
-
-	test("EU4 folders still detect as eu4", async () => {
-		for (const folder of ["/mods/Europa Universalis IV", "/mods/eu4"]) {
-			await assertDetects(folder, "eu4");
-		}
-	});
-
-	test("falls back to file content markers when the folder name is opaque", async () => {
-		const files: Record<string, boolean> = {
-			["/x/common/ai_strategy"]: true,
-		};
-		const exists = (p: string) => files[p] === true;
-		assert.strictEqual(await detectFromFolder("/x", exists), "hoi4");
-		assert.strictEqual(await detectFromFolder("/y", noopExists), null);
-	});
-
-	test("content markers cover every game that lacks a unique folder-name hint", async () => {
-		const contentMarkers: Record<string, string> = {
-			"common/ai_strategy": "hoi4",
-			"common/species_classes": "stellaris",
-			"common/great_projects": "eu4",
-			"common/dynasties": "ck3",
-		};
-		for (const [marker, expectedId] of Object.entries(contentMarkers)) {
-			const root = "/opaque";
-			const files: Record<string, boolean> = {
-				[root + "/" + marker]: true,
-			};
-			const exists = (p: string) => files[p] === true;
-			assert.strictEqual(
-				await detectFromFolder(root, exists),
-				expectedId,
-				`marker ${marker} should detect ${expectedId}`,
-			);
-		}
 	});
 
 	test("content beats a conflicting root name", async () => {
@@ -171,43 +134,30 @@ suite("engine — detectFromFolder", () => {
 		assert.strictEqual(await detectFromFolder("/mods/HOI4", () => true), "stellaris");
 	});
 
-	test("unrelated ancestors do not provide folder hints on either path style", async () => {
-		for (const root of [
-			"/home/stellaris/mods/Millennium-Dawn",
-			"/home/europa/projects/Millennium-Dawn/",
-			"C:\\Users\\stellaris\\mods\\Millennium-Dawn",
-			"C:\\projects\\europa\\Millennium-Dawn\\",
-		]) {
-			await assertDetects(root, null);
-			assert.strictEqual(await detectFromFolder(root, (p) =>
-				p.replace(/\\/g, "/").endsWith("/common/ai_strategy")), "hoi4");
-		}
-	});
-
-	test("canonical mod and vanilla game-subdirectory layouts retain name hints", async () => {
-		for (const root of [
-			"/games/Crusader Kings III/game",
-			"C:\\games\\Crusader Kings III\\game\\",
-			"/Documents/Paradox Interactive/Hearts of Iron IV/mod/opaque",
-			"C:\\Documents\\Paradox Interactive\\Hearts of Iron IV\\mod\\opaque",
-		]) {
-			await assertDetects(root, root.toLowerCase().includes("crusader") ? "ck3" : "hoi4");
-		}
-		await assertDetects("/projects/stellaris/game", "stellaris");
-		await assertDetects("/projects/stellaris-project/mod/opaque", null);
+	test.each([
+		"/home/stellaris/mods/Millennium-Dawn",
+		"/home/europa/projects/Millennium-Dawn/",
+		"C:\\Users\\stellaris\\mods\\Millennium-Dawn",
+		"C:\\projects\\europa\\Millennium-Dawn\\",
+	])("unrelated ancestors do not provide folder hints: %s", async (root) => {
+		await assertDetects(root, null);
+		assert.strictEqual(await detectFromFolder(root, (p) =>
+			p.replace(/\\/g, "/").endsWith("/common/ai_strategy")), "hoi4");
 	});
 
 	test.each([
+		["/games/Crusader Kings III/game", "ck3"],
+		["C:\\games\\Crusader Kings III\\game\\", "ck3"],
+		["/projects/stellaris/game", "stellaris"],
+		["/projects/stellaris-project/mod/opaque", null],
+		["C:\\Documents\\Paradox Interactive\\Hearts of Iron IV\\mod\\opaque", "hoi4"],
+		// The layout's game wins over another game's keyword in the mod name.
 		["/Documents/Paradox Interactive/Hearts of Iron IV/mod/Fall of Rome", "hoi4"],
 		["C:\\Documents\\Paradox Interactive\\Hearts of Iron IV\\mod\\Europa Reborn", "hoi4"],
 		["/Documents/Paradox Interactive/Crusader Kings III/mod/ck2_conversion", "ck3"],
 		["/Documents/Paradox Interactive/Stellaris/mod/Victoria 3 flags", "stellaris"],
-	])("the canonical layout game beats another game's keyword in the mod name: %s", async (root, expected) => {
+	])("canonical mod and game-subdirectory layout %s detects %s", async (root, expected) => {
 		await assertDetects(root, expected);
-	});
-
-	test("first matching folder-name hint wins (order matters)", async () => {
-		assert.strictEqual(await detectFromFolder("/mods/CK2", noopExists), "ck2");
 	});
 
 	// The host label's workspace has no game name in its path, so it must carry
@@ -223,448 +173,188 @@ suite("engine — detectFromFolder", () => {
 });
 
 suite("engine — resolveRulesFolder", () => {
-	test("returns undefined for an unset value", () => {
-		const r = resolveRulesFolder(undefined, { exists: () => true });
-		assert.strictEqual(r.path, undefined);
-		assert.strictEqual(r.existed, false);
-	});
-
-	test("returns undefined for an empty/whitespace value", () => {
-		const r = resolveRulesFolder("   ", { exists: () => true });
-		assert.strictEqual(r.path, undefined);
-		assert.strictEqual(r.existed, false);
-	});
-
-	test("regression: a Linux path that exists is returned verbatim and unaltered", () => {
-		const raw = "/home/user/cwtools-hoi4-config";
-		const r = resolveRulesFolder(raw, {
-			platform: "linux",
-			exists: (p) => p === raw,
+	test.each([undefined, "   "])("an unset or blank value %j resolves to nothing", (raw) => {
+		assert.deepStrictEqual(resolveRulesFolder(raw, { exists: () => true }), {
+			path: undefined,
+			existed: false,
 		});
-		assert.strictEqual(r.path, raw);
-		assert.strictEqual(r.existed, true);
 	});
 
-	test("regression: a Linux path containing backslashes is never separator-rewritten", () => {
+	const linux: ResolveRulesFolderOpts = { platform: "linux" };
+	const win32: ResolveRulesFolderOpts = { platform: "win32" };
+	const home = "/home/user";
+
+	// Each row names the only path that exists on disk; the raw setting has to
+	// resolve to exactly that.
+	test.each<[string, string, ResolveRulesFolderOpts, string]>([
+		["an existing path is returned verbatim", "/home/user/cwtools-hoi4-config", linux, "/home/user/cwtools-hoi4-config"],
 		// Backslash is a legal filename char on Linux; the raw value must win as-is.
-		const raw = "/home/user/odd\\dir/config";
-		const r = resolveRulesFolder(raw, {
-			platform: "linux",
-			exists: (p) => p === raw,
-		});
-		assert.strictEqual(r.path, raw);
-		assert.strictEqual(r.existed, true);
+		["a Linux path with backslashes is never separator-rewritten", "/home/user/odd\\dir/config", linux, "/home/user/odd\\dir/config"],
+		["the raw value wins before normalization", "/home/user/./config", linux, "/home/user/./config"],
+		// settings.json "C:\\Users\\me\\config" arrives as this string; only the
+		// normalized form exists on disk.
+		["win32 normalizes a JSON-escaped backslash path", "C:\\Users\\me\\config", win32, path.win32.normalize("C:\\Users\\me\\config")],
+		["a leading ~ expands to home", "~/cwtools-config", { ...linux, home }, path.join(home, "cwtools-config")],
+		["~ alone expands to home", "~", { ...linux, home }, home],
+		["$VAR expands off win32", "$RULES/hoi4", { ...linux, env: { RULES: "/opt/rules" } }, "/opt/rules/hoi4"],
+		["${VAR} expands off win32", "${RULES}/hoi4", { ...linux, env: { RULES: "/opt/rules" } }, "/opt/rules/hoi4"],
+		["an unset $VAR stays literal", "$NONEXISTENT/path", { ...linux, env: {} }, "$NONEXISTENT/path"],
+		["%VAR% expands on win32", "%RULES%\\hoi4", { ...win32, env: { RULES: "C:\\rules" } }, path.win32.normalize("C:\\rules\\hoi4")],
+		["an unset %VAR% stays literal", "%NONEXISTENT%\\path", { ...win32, env: {} }, path.win32.normalize("%NONEXISTENT%\\path")],
+		["double quotes and whitespace are trimmed", '  "/home/user/config"  ', linux, "/home/user/config"],
+		["single quotes and whitespace are trimmed", "  '/home/user/config'  ", linux, "/home/user/config"],
+		["a relative path resolves against the workspace root", "rules", { ...linux, workspaceRoot: "/mods/mymod" }, path.resolve("/mods/mymod", "rules")],
+		["an absolute path ignores the workspace root", "/absolute/path", { ...linux, workspaceRoot: "/mods/mymod" }, "/absolute/path"],
+	])("%s", (_name, raw, opts, expected) => {
+		assert.deepStrictEqual(
+			resolveRulesFolder(raw, { ...opts, exists: (p) => p === expected }),
+			{ path: expected, existed: true },
+		);
 	});
 
-	test("win32: a JSON-escaped backslash path resolves once normalized", () => {
-		// settings.json value "C:\\Users\\me\\config" arrives as this string;
-		// only the normalized form exists on disk.
-		const raw = "C:\\Users\\me\\config";
-		const normalized = path.win32.normalize(raw);
-		const r = resolveRulesFolder(raw, {
-			platform: "win32",
-			exists: (p) => p === normalized,
-		});
-		assert.strictEqual(r.path, normalized);
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("expands a leading ~ to the home directory", () => {
-		const home = "/home/user";
-		const expanded = path.join(home, "cwtools-config");
-		const r = resolveRulesFolder("~/cwtools-config", {
-			platform: "linux",
-			home,
-			exists: (p) => p === expanded,
-		});
-		assert.strictEqual(r.path, expanded);
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("expands ~ alone to the home directory", () => {
-		const r = resolveRulesFolder("~", {
-			platform: "linux",
-			home: "/home/user",
-			exists: (p) => p === "/home/user",
-		});
-		assert.strictEqual(r.path, "/home/user");
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("expands $VAR / ${VAR} env vars on non-win32", () => {
-		const env = { RULES: "/opt/rules" };
-		const r = resolveRulesFolder("$RULES/hoi4", {
-			platform: "linux",
-			env,
-			exists: (p) => p === "/opt/rules/hoi4",
-		});
-		assert.strictEqual(r.path, "/opt/rules/hoi4");
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("expands ${VAR} braced env vars on non-win32", () => {
-		const env = { RULES: "/opt/rules" };
-		const r = resolveRulesFolder("${RULES}/hoi4", {
-			platform: "linux",
-			env,
-			exists: (p) => p === "/opt/rules/hoi4",
-		});
-		assert.strictEqual(r.path, "/opt/rules/hoi4");
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("leaves unset env vars unexpanded on non-win32", () => {
-		const r = resolveRulesFolder("$NONEXISTENT/path", {
-			platform: "linux",
-			env: {},
-			exists: (p) => p === "$NONEXISTENT/path",
-		});
-		assert.strictEqual(r.path, "$NONEXISTENT/path");
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("leaves unset env vars unexpanded on win32", () => {
-		const r = resolveRulesFolder("%NONEXISTENT%\\path", {
-			platform: "win32",
-			env: {},
-			exists: (p) => p === path.win32.normalize("%NONEXISTENT%\\path"),
-		});
-		assert.strictEqual(r.path, path.win32.normalize("%NONEXISTENT%\\path"));
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("expands %VAR% env vars on win32", () => {
-		const env = { RULES: "C:\\rules" };
-		const expected = path.win32.normalize("C:\\rules\\hoi4");
-		const r = resolveRulesFolder("%RULES%\\hoi4", {
-			platform: "win32",
-			env,
-			exists: (p) => p === expected,
-		});
-		assert.strictEqual(r.path, expected);
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("trims surrounding whitespace and quotes", () => {
-		for (const [raw, expected] of [
-			['  "/home/user/config"  ', "/home/user/config"],
-			["  '/home/user/config'  ", "/home/user/config"],
-		]) {
-			const r = resolveRulesFolder(raw, {
-				platform: "linux",
-				exists: (p) => p === expected,
-			});
-			assert.strictEqual(r.path, expected);
-			assert.strictEqual(r.existed, true);
-		}
-	});
-
-	test("resolves a relative path against the workspace root", () => {
-		const r = resolveRulesFolder("rules", {
-			platform: "linux",
-			workspaceRoot: "/mods/mymod",
-			exists: (p) => p === path.resolve("/mods/mymod", "rules"),
-		});
-		assert.strictEqual(r.path, path.resolve("/mods/mymod", "rules"));
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("does not resolve an absolute path against workspace root", () => {
-		const r = resolveRulesFolder("/absolute/path", {
-			platform: "linux",
-			workspaceRoot: "/mods/mymod",
-			exists: (p) => p === "/absolute/path",
-		});
-		assert.strictEqual(r.path, "/absolute/path");
-		assert.strictEqual(r.existed, true);
-	});
-
-	test("set-but-missing returns existed:false with a defined best-effort path", () => {
+	test("set-but-missing returns existed:false with a trimmed best-effort path", () => {
 		const r = resolveRulesFolder('  "C:\\Users\\me\\missing"  ', {
-			platform: "win32",
+			...win32,
 			exists: () => false,
 		});
 		assert.strictEqual(r.existed, false);
-		assert.ok(
-			r.path,
-			"best-effort path must be defined so the caller can warn",
-		);
-		assert.ok(
-			!r.path.includes('"'),
-			"best-effort path should be trimmed of quotes",
-		);
-	});
-
-	test("raw value that exists is returned before any normalization runs", () => {
-		const raw = "/home/user/./config";
-		const r = resolveRulesFolder(raw, {
-			platform: "linux",
-			exists: (p) => p === raw,
-		});
-		assert.strictEqual(r.path, raw);
-		assert.strictEqual(r.existed, true);
+		assert.strictEqual(r.path, path.win32.normalize("C:\\Users\\me\\missing"));
 	});
 });
 
 suite("engine — serverExe", () => {
-	const fakeContext = (abs: string): ExtensionContext =>
-		({ asAbsolutePath: (_p: string) => abs }) as unknown as ExtensionContext;
+	const context = {
+		asAbsolutePath: (p: string) => "/ext/" + p,
+	} as unknown as ExtensionContext;
+	const serverDir = path.join("bin", "server", "cwtools-server");
 
-	function runServerExePlatform(
-		platform: NodeJS.Platform,
-		arch: string,
-		expectedSubdir: string,
-	) {
-		const originalPlatform = Object.getOwnPropertyDescriptor(
-			process,
-			"platform",
-		);
+	function onPlatform<T>(platform: NodeJS.Platform, arch: string, run: () => T): T {
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 		const originalArch = Object.getOwnPropertyDescriptor(process, "arch");
 		Object.defineProperty(process, "platform", { value: platform });
 		Object.defineProperty(process, "arch", { value: arch });
 		try {
-			const ctx = {
-				asAbsolutePath: (p: string) => "/ext/" + p,
-			} as unknown as ExtensionContext;
-			const exe =
-				platform === "win32" ? "cwtools-server.exe" : "cwtools-server";
-			const expected =
-				"/ext/" +
-				path.join("bin", "server", "cwtools-server", expectedSubdir, exe);
-			const out = serverExe(ctx, (p) => p === expected);
-			assert.strictEqual(out, expected);
+			return run();
 		} finally {
-			if (originalPlatform)
-				Object.defineProperty(process, "platform", originalPlatform);
+			if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
 			if (originalArch) Object.defineProperty(process, "arch", originalArch);
 		}
 	}
 
-	test("returns the server binary path when it exists", () => {
-		const ctx = fakeContext("/ext/bin/server/cwtools-server/cwtools-server");
-		const out = serverExe(ctx, () => true);
-		assert.strictEqual(out, "/ext/bin/server/cwtools-server/cwtools-server");
-	});
-
 	test("returns undefined when the binary is not deployed", () => {
-		const ctx = fakeContext("/ext/bin/server/cwtools-server/cwtools-server");
-		assert.strictEqual(
-			serverExe(ctx, () => false),
-			undefined,
-		);
+		assert.strictEqual(serverExe(context, () => false), undefined);
 	});
 
 	test("prefers the flat layout over the per-platform subdir", () => {
-		const ctx = {
-			asAbsolutePath: (p: string) => "/ext/" + p,
-		} as unknown as ExtensionContext;
-		const flat =
-			"/ext/" + path.join("bin", "server", "cwtools-server", "cwtools-server");
-		const nested =
-			"/ext/" +
-			path.join(
-				"bin",
-				"server",
-				"cwtools-server",
-				"linux-x64",
-				"cwtools-server",
-			);
-		const out = serverExe(ctx, (p) => p === flat || p === nested);
-		assert.strictEqual(out, flat, "flat layout should be preferred");
-	});
-
-	test("falls back to the per-platform subdir of a packaged vsix", () => {
-		const original = Object.getOwnPropertyDescriptor(process, "platform");
-		Object.defineProperty(process, "platform", { value: "linux" });
-		try {
-			const ctx = {
-				asAbsolutePath: (p: string) => "/ext/" + p,
-			} as unknown as ExtensionContext;
-			const nested =
-				"/ext/" +
-				path.join(
-					"bin",
-					"server",
-					"cwtools-server",
-					"linux-x64",
-					"cwtools-server",
-				);
-			// Flat path absent (no single-platform binary), nested one present.
-			const out = serverExe(ctx, (p) => p === nested);
-			assert.strictEqual(out, nested);
-		} finally {
-			if (original) Object.defineProperty(process, "platform", original);
-		}
-	});
-
-	test("uses the .exe extension on Windows", () => {
-		const originalPlatform = Object.getOwnPropertyDescriptor(
-			process,
-			"platform",
+		const flat = "/ext/" + path.join(serverDir, "cwtools-server");
+		assert.strictEqual(
+			onPlatform("linux", "x64", () => serverExe(context, () => true)),
+			flat,
 		);
-		Object.defineProperty(process, "platform", { value: "win32" });
-		try {
-			const ctx = fakeContext(
-				"C:\\ext\\bin\\server\\cwtools-server\\cwtools-server.exe",
-			);
-			const out = serverExe(ctx, () => true);
-			assert.ok(out!.endsWith("cwtools-server.exe"));
-		} finally {
-			if (originalPlatform)
-				Object.defineProperty(process, "platform", originalPlatform);
-		}
 	});
 
-	test("uses osx-arm64 subdir on darwin arm64", () =>
-		runServerExePlatform("darwin", "arm64", "osx-arm64"));
-	test("uses osx-x64 subdir on darwin x64", () =>
-		runServerExePlatform("darwin", "x64", "osx-x64"));
-	test("uses linux-x64 subdir on linux", () =>
-		runServerExePlatform("linux", "x64", "linux-x64"));
-	// The arm64 vsix carries only that binary, so looking under linux-x64 there
-	// finds nothing and the server never starts.
-	test("uses linux-arm64 subdir on linux arm64", () =>
-		runServerExePlatform("linux", "arm64", "linux-arm64"));
-	test("uses win-x64 subdir on windows", () =>
-		runServerExePlatform("win32", "x64", "win-x64"));
+	// A packaged vsix carries one binary under its platform's subdir. The arm64
+	// one in particular finds nothing under linux-x64 and never starts.
+	test.each<[NodeJS.Platform, string, string, string]>([
+		["darwin", "arm64", "osx-arm64", "cwtools-server"],
+		["darwin", "x64", "osx-x64", "cwtools-server"],
+		["linux", "x64", "linux-x64", "cwtools-server"],
+		["linux", "arm64", "linux-arm64", "cwtools-server"],
+		["win32", "x64", "win-x64", "cwtools-server.exe"],
+	])("falls back to the packaged subdir on %s %s", (platform, arch, subdir, exe) => {
+		const nested = "/ext/" + path.join(serverDir, subdir, exe);
+		assert.strictEqual(
+			onPlatform(platform, arch, () => serverExe(context, (p) => p === nested)),
+			nested,
+		);
+	});
 });
 
 suite("engine — runGit", () => {
-	function makeChild(opts: {
-		code: number | null;
-		signal: NodeJS.Signals | null;
-		stdout?: string;
-		stderr?: string;
-		error?: Error;
-		// When set, emit `close` after `error` so the settled guard is exercised.
-		closeAfterError?: { code: number | null; signal: NodeJS.Signals | null };
-	}): EventEmitter & { stdout: EventEmitter; stderr: EventEmitter } {
-		const child = new EventEmitter() as EventEmitter & {
-			stdout: EventEmitter;
-			stderr: EventEmitter;
-		};
-		child.stdout = new EventEmitter();
-		child.stderr = new EventEmitter();
-		queueMicrotask(() => {
-			if (opts.stdout) child.stdout.emit("data", Buffer.from(opts.stdout));
-			if (opts.stderr) child.stderr.emit("data", Buffer.from(opts.stderr));
-			if (opts.error) {
-				child.emit("error", opts.error);
-				if (opts.closeAfterError) {
-					child.emit(
-						"close",
-						opts.closeAfterError.code,
-						opts.closeAfterError.signal,
-					);
-				}
-			} else {
-				child.emit("close", opts.code, opts.signal);
-			}
-		});
-		return child;
-	}
-
-	function makeHangingChild(killFn?: () => void): EventEmitter & {
+	type FakeChild = EventEmitter & {
 		stdout: EventEmitter;
 		stderr: EventEmitter;
 		kill: () => void;
-	} {
-		const child = new EventEmitter() as EventEmitter & {
-			stdout: EventEmitter;
-			stderr: EventEmitter;
-			kill: () => void;
-		};
-		child.stdout = new EventEmitter();
-		child.stderr = new EventEmitter();
-		child.kill = killFn ?? (() => {});
-		return child;
+	};
+
+	// With no `end`, the child hangs until the timeout kills it.
+	function spawning(opts: {
+		stdout?: string;
+		stderr?: string;
+		end?: () => unknown[][];
+		kill?: () => void;
+	}): never {
+		return (() => {
+			const child = new EventEmitter() as FakeChild;
+			child.stdout = new EventEmitter();
+			child.stderr = new EventEmitter();
+			child.kill = opts.kill ?? (() => {});
+			queueMicrotask(() => {
+				if (opts.stdout) child.stdout.emit("data", Buffer.from(opts.stdout));
+				if (opts.stderr) child.stderr.emit("data", Buffer.from(opts.stderr));
+				for (const [event, ...args] of opts.end?.() ?? []) {
+					child.emit(event as string, ...args);
+				}
+			});
+			return child;
+		}) as never;
 	}
+	const close = (code: number | null, signal: string | null = null) => () => [
+		["close", code, signal],
+	];
+	const enoent = () =>
+		Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" });
 
 	test("resolves with stdout when git exits with code 0", async () => {
-		const fakeSpawn = () =>
-			makeChild({ code: 0, signal: null, stdout: "ok\n" });
-		assert.strictEqual(await runGit(["status"], fakeSpawn as never), "ok\n");
-	});
-
-	test("resolves when git exits with code 0 and stderr output", async () => {
-		// Some git versions write progress to stderr even on success.
-		const fakeSpawn = () =>
-			makeChild({
-				code: 0,
-				signal: null,
-				stdout: "",
-				stderr: "warning: progress info\n",
-			});
-		await runGit(["fetch"], fakeSpawn as never);
+		assert.strictEqual(
+			await runGit(["status"], spawning({ stdout: "ok\n", end: close(0) })),
+			"ok\n",
+		);
 	});
 
 	// git writes fetch progress and "From <remote>" to stderr on success. Logging
 	// that at error level puts [ERROR] in the shared output channel on a healthy
-	// rules fetch, which is both misleading and enough to trip the host suite's
-	// error monitor.
-	test("does not log stderr at error level when git succeeds", async () => {
+	// rules fetch, which is enough to trip the host suite's error monitor.
+	test("records stderr below error level when git succeeds", async () => {
 		logged.length = 0;
-		const fakeSpawn = () =>
-			makeChild({
-				code: 0,
-				signal: null,
-				stderr: "From github.com:cwtools/cwtools-hoi4-config\n",
-			});
-		await runGit(["fetch"], fakeSpawn as never);
-		assert.ok(
-			!logged.some((l) => l.level === "error"),
-			`succeeded but logged an error: ${JSON.stringify(logged)}`,
+		await runGit(
+			["fetch"],
+			spawning({ stderr: "From github.com:cwtools/cwtools-hoi4-config\n", end: close(0) }),
 		);
-		assert.ok(
-			logged.some((l) => l.message.includes("From github.com")),
-			`stderr must still be recorded: ${JSON.stringify(logged)}`,
-		);
+		assert.deepStrictEqual(logged, [
+			{ level: "warn", message: "git stderr: From github.com:cwtools/cwtools-hoi4-config" },
+		]);
 	});
 
-	test("logs stderr at error level when git fails", async () => {
+	test("rejects and logs stderr at error level when git exits non-zero", async () => {
 		logged.length = 0;
-		const fakeSpawn = () =>
-			makeChild({ code: 128, signal: null, stderr: "fatal: not a repo\n" });
-		await assert.rejects(() => runGit(["pull"], fakeSpawn as never));
-		assert.ok(
-			logged.some(
-				(l) => l.level === "error" && l.message.includes("fatal: not a repo"),
-			),
-			`a real failure must log at error level: ${JSON.stringify(logged)}`,
-		);
-	});
-
-	test("rejects when git exits non-zero", async () => {
-		const fakeSpawn = () =>
-			makeChild({ code: 128, signal: null, stderr: "fatal: not a repo\n" });
 		await assert.rejects(
-			() => runGit(["pull"], fakeSpawn as never),
+			() => runGit(["pull"], spawning({ stderr: "fatal: not a repo\n", end: close(128) })),
 			/git exited with code 128/,
 		);
+		assert.deepStrictEqual(logged, [
+			{ level: "error", message: "git stderr: fatal: not a repo" },
+		]);
 	});
 
 	test("rejects when git is killed by a signal", async () => {
-		const fakeSpawn = () => makeChild({ code: null, signal: "SIGTERM" });
 		await assert.rejects(
-			() => runGit(["fetch"], fakeSpawn as never),
+			() => runGit(["fetch"], spawning({ end: close(null, "SIGTERM") })),
 			/signal: SIGTERM/,
 		);
 	});
 
-	test("rejects with GitNotFoundError when git fails to spawn (ENOENT)", async () => {
-		// Node sets .code on real spawn ENOENT errors.
-		const spawnError = Object.assign(new Error("spawn git ENOENT"), {
-			code: "ENOENT",
-		});
-		const fakeSpawn = () =>
-			makeChild({ code: null, signal: null, error: spawnError });
+	// Node can emit close after error for some spawn failures; the settled guard
+	// must keep the GitNotFoundError rejection, not double-settle.
+	test("a missing git rejects with GitNotFoundError, even when close follows", async () => {
 		await assert.rejects(
-			() => runGit(["clone"], fakeSpawn as never),
+			() =>
+				runGit(
+					["fetch"],
+					spawning({ end: () => [["error", enoent()], ["close", 0, null]] }),
+				),
 			(err) => {
-				assert.ok(
-					err instanceof GitNotFoundError,
-					"should be GitNotFoundError",
-				);
+				assert.ok(err instanceof GitNotFoundError);
 				assert.match(err.message, /git was not found on your PATH/);
 				return true;
 			},
@@ -673,69 +363,19 @@ suite("engine — runGit", () => {
 
 	test("rejects with the raw error when a non-ENOENT spawn error fires", async () => {
 		const spawnError = new Error("EACCES");
-		const fakeSpawn = () =>
-			makeChild({ code: null, signal: null, error: spawnError });
 		await assert.rejects(
-			() => runGit(["clone"], fakeSpawn as never),
-			(err) => {
-				assert.strictEqual(err, spawnError);
-				return true;
-			},
+			() => runGit(["clone"], spawning({ end: () => [["error", spawnError]] })),
+			(err) => err === spawnError,
 		);
 	});
 
-	test("a close event after an ENOENT error does not override the rejection", async () => {
-		// Node can emit close after error for some spawn failures; the settled
-		// guard must keep the GitNotFoundError rejection, not double-settle.
-		const spawnError = Object.assign(new Error("spawn git ENOENT"), {
-			code: "ENOENT",
-		});
-		const fakeSpawn = () =>
-			makeChild({
-				code: null,
-				signal: null,
-				error: spawnError,
-				closeAfterError: { code: 0, signal: null },
-			});
-		await assert.rejects(
-			() => runGit(["fetch"], fakeSpawn as never),
-			(err) => {
-				assert.ok(err instanceof GitNotFoundError);
-				return true;
-			},
-		);
-	});
-
-	test("times out when git hangs", async () => {
-		const fakeSpawn = () => makeHangingChild();
-		await assert.rejects(
-			() => runGit(["fetch"], fakeSpawn as never, 10),
-			/timed out/,
-		);
-	}, 10000);
-
-	test("timeout kills the child process", async () => {
+	test("times out and kills the child when git hangs", async () => {
 		let killed = false;
-		const fakeSpawn = () =>
-			makeHangingChild(() => {
-				killed = true;
-			});
 		await assert.rejects(
-			() => runGit(["fetch"], fakeSpawn as never, 10),
+			() => runGit(["fetch"], spawning({ kill: () => (killed = true) }), 10),
 			/timed out/,
 		);
-		assert.strictEqual(
-			killed,
-			true,
-			"child.kill() should be called on timeout",
-		);
-	});
-
-	test("timeout does not fire if git completes before the deadline", async () => {
-		const fakeSpawn = () =>
-			makeChild({ code: 0, signal: null, stdout: "ok\n" });
-		// Use a generous timeout; the microtask resolves before it fires.
-		await runGit(["status"], fakeSpawn as never, 5000);
+		assert.strictEqual(killed, true);
 	});
 });
 
@@ -744,26 +384,25 @@ suite("engine — rulesFetchCommands", () => {
 		repo: "https://github.com/cwtools/cwtools-hoi4-config",
 		ref: "ab1fda2a599ab4318d6f24ecba380e579e37006a",
 	};
+	const fetchAndCheckout = [
+		["-C", "/cache/hoi4", "fetch", "--depth", "1", pin.repo, pin.ref],
+		["-C", "/cache/hoi4", "checkout", "--detach", pin.ref],
+	];
 
-	test("builds an empty repo, then fetches and checks out the pin", () => {
-		assert.deepStrictEqual(rulesFetchCommands("/cache/hoi4", pin, null), [
+	// The whole point of the pin: no command may name a branch or a remote HEAD.
+	test("builds an empty repo, then fetches and checks out the pin, never a branch tip", () => {
+		const commands = rulesFetchCommands("/cache/hoi4", pin, null);
+		assert.deepStrictEqual(commands, [
 			["init", "--quiet", "/cache/hoi4"],
-			["-C", "/cache/hoi4", "fetch", "--depth", "1", pin.repo, pin.ref],
-			["-C", "/cache/hoi4", "checkout", "--detach", pin.ref],
+			...fetchAndCheckout,
 		]);
+		assert.doesNotMatch(commands.flat().join(" "), /\b(HEAD|master|main|clone|pull)\b/);
 	});
 
 	test("moves an existing cache to a new pin without re-initing", () => {
 		assert.deepStrictEqual(
-			rulesFetchCommands(
-				"/cache/hoi4",
-				pin,
-				"f1460d139036e75a8dd065dbd27b27415172654f",
-			),
-			[
-				["-C", "/cache/hoi4", "fetch", "--depth", "1", pin.repo, pin.ref],
-				["-C", "/cache/hoi4", "checkout", "--detach", pin.ref],
-			],
+			rulesFetchCommands("/cache/hoi4", pin, "f1460d139036e75a8dd065dbd27b27415172654f"),
+			fetchAndCheckout,
 		);
 	});
 
@@ -771,34 +410,9 @@ suite("engine — rulesFetchCommands", () => {
 		assert.deepStrictEqual(rulesFetchCommands("/cache/hoi4", pin, pin.ref), []);
 	});
 
-	// The whole point of the pin: no command may name a branch or a remote HEAD.
-	test("never checks out a branch tip", () => {
-		const flat = rulesFetchCommands("/cache/hoi4", pin, null).flat().join(" ");
-		assert.ok(!/\bHEAD\b|\bmaster\b|\bmain\b/.test(flat), flat);
-		assert.ok(!flat.includes("clone"), flat);
-		assert.ok(!flat.includes("pull"), flat);
-	});
-
-	test("rejects a ref that begins with -", () => {
+	test.each(["ref", "repo"] as const)("rejects a %s that begins with -", (field) => {
 		assert.throws(
-			() =>
-				rulesFetchCommands(
-					"/cache/hoi4",
-					{ ...pin, ref: "--upload-pack=evil" },
-					null,
-				),
-			/must not begin with '-'/,
-		);
-	});
-
-	test("rejects a repo that begins with -", () => {
-		assert.throws(
-			() =>
-				rulesFetchCommands(
-					"/cache/hoi4",
-					{ ...pin, repo: "--upload-pack=evil" },
-					null,
-				),
+			() => rulesFetchCommands("/cache/hoi4", { ...pin, [field]: "--upload-pack=evil" }, null),
 			/must not begin with '-'/,
 		);
 	});

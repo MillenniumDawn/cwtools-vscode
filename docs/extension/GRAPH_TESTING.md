@@ -12,9 +12,11 @@ extension also runs, against a small DOM/canvas boundary stub.
 The suite covers asynchronous layout ordering, stalled-layout reporting and
 replacement cleanup, the closed neighborhood hover classes, bounded class-update
 work, drawExtra label caching and shadow limits, canvas pixel ratios/resize/
-transforms, and lazy tooltip creation, detail expansion, simple/expanded mouseout
-behavior and graph-replacement cleanup. It complements graphWebview.test.ts,
-whose fake Cytoscape boundary remains useful for import/export failure cases.
+transforms, lazy tooltip creation, detail expansion, simple/expanded mouseout
+behavior, graph-replacement cleanup and edge building. Import validation is in
+`graphImportMetadata.test.ts` on the same harness, and import/export failures
+run against the real webview in the `host` label
+(`extension/test/host/extension.test.ts`).
 
 These tests measure graph correctness and application operations before layout.
 They do not measure Electron rendering, ELK computation, or browser frame time.

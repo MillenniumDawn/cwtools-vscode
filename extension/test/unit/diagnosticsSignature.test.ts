@@ -4,20 +4,9 @@ import {
 	diagnosticsSignature,
 	DiagnosticsSignatureCache,
 } from "../../src/host/diagnosticsSignature";
+import type { DiagnosticLike } from "../../src/host/diagnosticsSignature";
 
-interface Diag {
-	range: {
-		start: { line: number; character: number };
-		end: { line: number; character: number };
-	};
-	severity?: number;
-	code?: string | number | { value: string | number };
-	message: string;
-	source?: string;
-	relatedInformation?: readonly unknown[];
-}
-
-function diag(overrides: Partial<Diag> = {}): Diag {
+function diag(overrides: Partial<DiagnosticLike> = {}): DiagnosticLike {
 	return {
 		range: { start: { line: 1, character: 2 }, end: { line: 1, character: 8 } },
 		severity: 0,
@@ -28,68 +17,23 @@ function diag(overrides: Partial<Diag> = {}): Diag {
 	};
 }
 
-suite("diagnosticsSignature — diagnosticsSignature", () => {
+suite("diagnosticsSignature", () => {
 	test("identical diagnostics produce the same signature", () => {
-		assert.strictEqual(
-			diagnosticsSignature([diag()]),
-			diagnosticsSignature([diag()]),
-		);
+		assert.strictEqual(diagnosticsSignature([diag()]), diagnosticsSignature([diag()]));
+		assert.strictEqual(diagnosticsSignature([]), diagnosticsSignature([]));
 	});
 
-	test("a changed message changes the signature", () => {
-		assert.notStrictEqual(
-			diagnosticsSignature([diag()]),
-			diagnosticsSignature([diag({ message: "different" })]),
-		);
-	});
-
-	test("a changed range changes the signature", () => {
-		assert.notStrictEqual(
-			diagnosticsSignature([diag()]),
-			diagnosticsSignature([
-				diag({
-					range: {
-						start: { line: 3, character: 0 },
-						end: { line: 3, character: 4 },
-					},
-				}),
-			]),
-		);
-	});
-
-	test("a changed severity changes the signature", () => {
-		assert.notStrictEqual(
-			diagnosticsSignature([diag()]),
-			diagnosticsSignature([diag({ severity: 1 })]),
-		);
-	});
-
-	test("a changed code changes the signature", () => {
-		assert.notStrictEqual(
-			diagnosticsSignature([diag()]),
-			diagnosticsSignature([diag({ code: "CW200" })]),
-		);
-	});
-
-	test("a changed source changes the signature", () => {
-		assert.notStrictEqual(
-			diagnosticsSignature([diag()]),
-			diagnosticsSignature([diag({ source: "other" })]),
-		);
-	});
-
-	test("gaining relatedInformation changes the signature", () => {
-		assert.notStrictEqual(
-			diagnosticsSignature([diag()]),
-			diagnosticsSignature([diag({ relatedInformation: [{}] })]),
-		);
-	});
-
-	test("a changed count changes the signature", () => {
-		assert.notStrictEqual(
-			diagnosticsSignature([diag()]),
-			diagnosticsSignature([diag(), diag({ message: "second" })]),
-		);
+	test.each<[string, DiagnosticLike[]]>([
+		["message", [diag({ message: "different" })]],
+		["range", [diag({ range: { start: { line: 3, character: 0 }, end: { line: 3, character: 4 } } })]],
+		["severity", [diag({ severity: 1 })]],
+		["code", [diag({ code: "CW200" })]],
+		["source", [diag({ source: "other" })]],
+		["relatedInformation", [diag({ relatedInformation: [{}] })]],
+		["count", [diag(), diag({ message: "second" })]],
+		["empty list", []],
+	])("a changed %s changes the signature", (_field, changed) => {
+		assert.notStrictEqual(diagnosticsSignature([diag()]), diagnosticsSignature(changed));
 	});
 
 	test("a message containing separator bytes cannot collide with a real second diagnostic", () => {
@@ -98,89 +42,46 @@ suite("diagnosticsSignature — diagnosticsSignature", () => {
 			diagnosticsSignature([diag(), diag()]),
 		);
 	});
-
-	test("an empty list has a stable signature that differs from a non-empty one", () => {
-		assert.strictEqual(diagnosticsSignature([]), diagnosticsSignature([]));
-		assert.notStrictEqual(
-			diagnosticsSignature([]),
-			diagnosticsSignature([diag()]),
-		);
-	});
 });
 
-suite("diagnosticsSignature — DiagnosticsSignatureCache", () => {
-	test("publishes the first time a URI is seen", () => {
+suite("DiagnosticsSignatureCache", () => {
+	test("publishes a URI's first and changed payloads, skips an identical repeat", () => {
 		const cache = new DiagnosticsSignatureCache();
 		assert.strictEqual(cache.shouldPublish("file:///a.txt", [diag()]), true);
-	});
-
-	test("skips an identical repeat for the same URI", () => {
-		const cache = new DiagnosticsSignatureCache();
-		cache.shouldPublish("file:///a.txt", [diag()]);
 		assert.strictEqual(cache.shouldPublish("file:///a.txt", [diag()]), false);
-	});
-
-	test("publishes when the diagnostics changed", () => {
-		const cache = new DiagnosticsSignatureCache();
-		cache.shouldPublish("file:///a.txt", [diag()]);
+		assert.strictEqual(cache.shouldPublish("file:///b.txt", [diag()]), true);
 		assert.strictEqual(
 			cache.shouldPublish("file:///a.txt", [diag({ message: "changed" })]),
 			true,
 		);
-	});
-
-	test("publishes an empty-after-nonempty payload", () => {
-		const cache = new DiagnosticsSignatureCache();
-		cache.shouldPublish("file:///a.txt", [diag()]);
 		assert.strictEqual(cache.shouldPublish("file:///a.txt", []), true);
+		assert.strictEqual(cache.shouldPublish("file:///a.txt", []), false);
 	});
 
-	test("passes an empty publish for a never-seen URI, then skips the repeat", () => {
+	test("passes an empty publish for a never-seen URI", () => {
 		const cache = new DiagnosticsSignatureCache();
 		assert.strictEqual(cache.shouldPublish("file:///new.txt", []), true);
-		assert.strictEqual(cache.shouldPublish("file:///new.txt", []), false);
 	});
 
-	test("tracks URIs independently", () => {
+	// A restart drops the diagnostic collection, so the same payload has to go
+	// out again.
+	test("re-publishes the same payload after clear", () => {
 		const cache = new DiagnosticsSignatureCache();
 		cache.shouldPublish("file:///a.txt", [diag()]);
-		assert.strictEqual(cache.shouldPublish("file:///b.txt", [diag()]), true);
-	});
-
-	test("re-publishes the same payload after clear (restart drops the collection)", () => {
-		const cache = new DiagnosticsSignatureCache();
-		cache.shouldPublish("file:///a.txt", [diag()]);
-		assert.strictEqual(cache.shouldPublish("file:///a.txt", [diag()]), false);
 		cache.clear();
 		assert.strictEqual(cache.shouldPublish("file:///a.txt", [diag()]), true);
 	});
 
-	test("evicts the oldest entry once the cache is full", () => {
+	test("retains a full workspace pass, then evicts the oldest entry", () => {
 		const cache = new DiagnosticsSignatureCache();
+		const uri = (i: number) => `file:///f${i}.txt`;
+		for (let i = 0; i < 2_000; i++) cache.shouldPublish(uri(i), [diag()]);
 		for (let i = 0; i < 2_000; i++) {
-			cache.shouldPublish(`file:///f${i}.txt`, [diag()]);
+			assert.strictEqual(cache.shouldPublish(uri(i), [diag()]), false);
 		}
-		// Inserting one more evicts the oldest (f0).
-		cache.shouldPublish("file:///f2000.txt", [diag()]);
-		// f0 was evicted, so a same-payload repeat now re-publishes.
-		assert.strictEqual(cache.shouldPublish("file:///f0.txt", [diag()]), true);
-		// A recent URI still dedupes.
-		assert.strictEqual(
-			cache.shouldPublish("file:///f1999.txt", [diag()]),
-			false,
-		);
-	});
 
-	test("retains a full workspace pass for identical repeats", () => {
-		const cache = new DiagnosticsSignatureCache();
-		for (let i = 0; i < 2_000; i++) {
-			cache.shouldPublish(`file:///f${i}.txt`, [diag()]);
-		}
-		for (let i = 0; i < 2_000; i++) {
-			assert.strictEqual(
-				cache.shouldPublish(`file:///f${i}.txt`, [diag()]),
-				false,
-			);
-		}
+		cache.shouldPublish(uri(2_000), [diag()]);
+		assert.strictEqual(cache.shouldPublish(uri(1_999), [diag()]), false);
+		assert.strictEqual(cache.shouldPublish(uri(0), [diag()]), true);
 	});
 });

@@ -1,5 +1,5 @@
 import * as assert from "assert";
-import { beforeEach, suite, test, vi } from "vitest";
+import { suite, test, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
 	showErrorMessage: vi.fn(),
@@ -16,93 +16,57 @@ vi.mock("vscode", async (importOriginal) => ({
 
 import { showServerBlockedDialog } from "../../src/host/serverBlockedDialog";
 
+const blocked = (code: string) =>
+	Object.assign(new Error(`spawn ${code}`), { code });
+
+async function choose(button: string | undefined, serverPath?: string) {
+	state.showErrorMessage.mockResolvedValue(button);
+	const handled = showServerBlockedDialog(blocked("EPERM"), serverPath);
+	await state.showErrorMessage.mock.results[0]?.value;
+	await Promise.resolve();
+	return handled;
+}
+
 suite("serverBlockedDialog", () => {
-	beforeEach(() => {
-		// clearMocks only wipes call history, not the implementation set by
-		// mockResolvedValue, so every test starts from the same "no button
-		// chosen" default and opts in to a specific choice where it matters.
+	test("leaves errors without an EPERM/EACCES code to the caller", () => {
+		assert.strictEqual(showServerBlockedDialog(new Error("other"), "/srv"), false);
+		assert.strictEqual(showServerBlockedDialog(undefined, "/srv"), false);
+		assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
+	});
+
+	test.each(["EPERM", "EACCES"])("shows the blocked dialog for %s", (code) => {
 		state.showErrorMessage.mockResolvedValue(undefined);
+
+		assert.strictEqual(showServerBlockedDialog(blocked(code), "/srv"), true);
+
+		const [message, ...buttons] = state.showErrorMessage.mock.calls[0] as string[];
+		assert.ok(message.includes(`blocked from running (${code})`), message);
+		assert.deepStrictEqual(buttons, ["Reveal Server Binary", "Antivirus Help"]);
 	});
-
-	test("does not handle an error without an EPERM/EACCES code", () => {
-		const handled = showServerBlockedDialog(
-			new Error("something else"),
-			"/opt/cwtools/server",
-		);
-		assert.strictEqual(handled, false);
-		assert.strictEqual(state.showErrorMessage.mock.calls.length, 0);
-	});
-
-	test("does not handle an error with no code at all", () => {
-		const handled = showServerBlockedDialog(undefined, "/opt/cwtools/server");
-		assert.strictEqual(handled, false);
-	});
-
-	for (const code of ["EPERM", "EACCES"]) {
-		test(`shows the blocked dialog for ${code}`, () => {
-			const err = Object.assign(new Error(`spawn ${code}`), { code });
-
-			const handled = showServerBlockedDialog(err, "/opt/cwtools/server");
-
-			assert.strictEqual(handled, true);
-			assert.strictEqual(state.showErrorMessage.mock.calls.length, 1);
-			const [message, reveal, help] = state.showErrorMessage.mock.calls[0] as [
-				string,
-				string,
-				string,
-			];
-			assert.match(message, new RegExp(`blocked from running \\(${code}\\)`));
-			assert.strictEqual(reveal, "Reveal Server Binary");
-			assert.strictEqual(help, "Antivirus Help");
-		});
-	}
 
 	test("reveals the server binary when that button is chosen", async () => {
-		state.showErrorMessage.mockResolvedValue("Reveal Server Binary");
-		const err = Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
+		await choose("Reveal Server Binary", "/opt/cwtools/server");
 
-		showServerBlockedDialog(err, "/opt/cwtools/server");
-
-		await vi.waitFor(() => {
-			assert.strictEqual(state.executeCommand.mock.calls.length, 1);
-		});
-		assert.deepStrictEqual(state.executeCommand.mock.calls[0], [
-			"revealFileInOS",
-			{ fsPath: "/opt/cwtools/server" },
+		assert.deepStrictEqual(state.executeCommand.mock.calls, [
+			["revealFileInOS", { fsPath: "/opt/cwtools/server" }],
 		]);
-		assert.strictEqual(state.openExternal.mock.calls.length, 0);
-	});
-
-	test("does nothing when the reveal button is chosen but no server path is known", async () => {
-		state.showErrorMessage.mockResolvedValue("Reveal Server Binary");
-		const err = Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
-
-		showServerBlockedDialog(err, undefined);
-
-		await state.showErrorMessage.mock.results[0]?.value;
-		assert.strictEqual(state.executeCommand.mock.calls.length, 0);
+		assert.deepStrictEqual(state.openExternal.mock.calls, []);
 	});
 
 	test("opens the antivirus help link when that button is chosen", async () => {
-		state.showErrorMessage.mockResolvedValue("Antivirus Help");
-		const err = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+		await choose("Antivirus Help", "/opt/cwtools/server");
 
-		showServerBlockedDialog(err, "/opt/cwtools/server");
-
-		await vi.waitFor(() => {
-			assert.strictEqual(state.openExternal.mock.calls.length, 1);
-		});
-		assert.strictEqual(state.executeCommand.mock.calls.length, 0);
+		assert.strictEqual(state.openExternal.mock.calls.length, 1);
+		assert.deepStrictEqual(state.executeCommand.mock.calls, []);
 	});
 
-	test("dismissing the dialog opens nothing", async () => {
-		state.showErrorMessage.mockResolvedValue(undefined);
-		const err = Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
+	test.each<[string, string | undefined, string | undefined]>([
+		["the dialog is dismissed", undefined, "/opt/cwtools/server"],
+		["no server path is known", "Reveal Server Binary", undefined],
+	])("opens nothing when %s", async (_name, button, serverPath) => {
+		await choose(button, serverPath);
 
-		showServerBlockedDialog(err, "/opt/cwtools/server");
-
-		await state.showErrorMessage.mock.results[0]?.value;
-		assert.strictEqual(state.executeCommand.mock.calls.length, 0);
-		assert.strictEqual(state.openExternal.mock.calls.length, 0);
+		assert.deepStrictEqual(state.executeCommand.mock.calls, []);
+		assert.deepStrictEqual(state.openExternal.mock.calls, []);
 	});
 });

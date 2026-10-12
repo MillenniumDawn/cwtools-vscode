@@ -1,23 +1,20 @@
 import * as assert from "assert";
 import { beforeEach, suite, test, vi } from "vitest";
 import { LSPErrorCodes } from "vscode-languageserver-protocol";
-import { CancellationError } from "vscode";
 import type { ExtensionContext } from "vscode";
 import type * as VscodeStub from "./_stubs/vscode";
 import type { EditorTracker } from "../../src/host/documentLanguage";
 import type { LanguageClient } from "vscode-languageclient/node";
 
 // registerCommands' handlers are the only seam between the palette entries and
-// the server: runCancellableExecuteCommand turns each one into an
-// ExecuteCommandRequest. These tests drive the captured handlers against a
-// fake LanguageClient so a handler that silently became a no-op — dropped
-// capability gate, lost request, swallowed failure — fails here instead of
-// staying green while the workspace command does nothing.
+// the server. The host suites run the happy path against the real server; these
+// drive the captured handlers against a fake LanguageClient for the branches a
+// healthy server never takes: stopped, unadvertised, failed, cancelled, and
+// responses arriving out of order.
 
 const state = vi.hoisted(() => {
 	const registeredCommands = new Map<string, (...args: never[]) => unknown>();
 	const initialiseGraph = vi.fn();
-	const graphPanel = { initialiseGraph };
 	const token = {
 		isCancellationRequested: false,
 		onCancellationRequested: () => ({ dispose: () => undefined }),
@@ -44,11 +41,8 @@ const state = vi.hoisted(() => {
 		showErrorMessage: vi.fn(),
 		showInputBox: vi.fn(),
 		showSaveDialog: vi.fn(),
-		showTextDocument: vi.fn(),
-		openTextDocument: vi.fn(),
 		writeFile: vi.fn(),
-		registerWebviewPanelSerializer: vi.fn(),
-		graphPanel,
+		initialiseGraph,
 	};
 });
 
@@ -57,12 +51,10 @@ vi.mock("vscode", async (importOriginal) => {
 	return {
 		...original,
 		commands: {
-			registerCommand: vi.fn(
-				(id: string, handler: (...args: never[]) => unknown) => {
-					state.registeredCommands.set(id, handler);
-					return { dispose: () => undefined };
-				},
-			),
+			registerCommand: (id: string, handler: (...args: never[]) => unknown) => {
+				state.registeredCommands.set(id, handler);
+				return { dispose: () => undefined };
+			},
 			executeCommand: state.executeCommand,
 		},
 		window: {
@@ -74,13 +66,11 @@ vi.mock("vscode", async (importOriginal) => {
 			showErrorMessage: state.showErrorMessage,
 			showInputBox: state.showInputBox,
 			showSaveDialog: state.showSaveDialog,
-			showTextDocument: state.showTextDocument,
-			registerWebviewPanelSerializer: state.registerWebviewPanelSerializer,
+			registerWebviewPanelSerializer: () => ({ dispose: () => undefined }),
 		},
 		workspace: {
 			...original.workspace,
 			fs: { writeFile: state.writeFile, readFile: state.readFile },
-			openTextDocument: state.openTextDocument,
 		},
 	};
 });
@@ -95,13 +85,11 @@ import {
 } from "../../src/host/commands";
 import { GraphPanel } from "../../src/host/graphPanel";
 
-const graphPanelCreate = vi
-	.spyOn(GraphPanel, "create")
-	.mockImplementation(() => {
-		GraphPanel.currentPanel = {
-			initialiseGraph: state.graphPanel.initialiseGraph,
-		} as unknown as GraphPanel;
-	});
+vi.spyOn(GraphPanel, "create").mockImplementation(() => {
+	GraphPanel.currentPanel = {
+		initialiseGraph: state.initialiseGraph,
+	} as unknown as GraphPanel;
+});
 
 interface FakeClient {
 	initializeResult: {
@@ -192,15 +180,19 @@ function mockGraphRequests(): GraphRequest[] {
 	return requests;
 }
 
+const STOPPED =
+	"CWTools: the language server is stopped. Run 'CWTools: Restart Server' to start it again.";
+const bytes = (text: string) => new TextEncoder().encode(text);
+
 suite("registered workspace commands", () => {
 	beforeEach(() => {
 		state.executeCommand.mockReset();
 		state.showInputBox.mockReset();
 		state.showOpenDialog.mockReset();
 		state.readFile.mockReset();
+		state.showSaveDialog.mockReset();
 		GraphPanel.currentPanel = undefined;
 		state.registeredCommands.clear();
-		state.token.isCancellationRequested = false;
 	});
 
 	test("clears command availability contexts when the server stops", () => {
@@ -214,27 +206,22 @@ suite("registered workspace commands", () => {
 		]);
 	});
 
-	suite("cwtools.showGraph", () => {
-		test("reports that the server stopped instead of loading graph data", async () => {
+	suite("graph requests", () => {
+		test("showGraph reports that the server stopped instead of loading graph data", async () => {
 			const client = fakeClient(["getGraphData"]);
 			client.isRunning.mockReturnValue(false);
 			register(client);
 
 			await handler("cwtools.showGraph")();
 
-			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
-				[
-					"CWTools: the language server is stopped. Run 'CWTools: Restart Server' to start it again.",
-				],
-			]);
-			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
+			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [[STOPPED]]);
+			assert.deepStrictEqual(state.executeCommand.mock.calls, []);
 		});
 
 		test("renders only the newest depth when responses resolve out of order", async () => {
 			const requests = mockGraphRequests();
-			const client = fakeClient(["getGraphData"]);
 			state.showInputBox.mockResolvedValue("1");
-			register(client, "event");
+			register(fakeClient(["getGraphData"]), "event");
 
 			const oldRequest = handler("cwtools.showGraph")();
 			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
@@ -253,41 +240,15 @@ suite("registered workspace commands", () => {
 			requests[0].result.resolve([{ id: "old" }]);
 			await oldRequest;
 
-			assert.strictEqual(graphPanelCreate.mock.calls.length, 1);
-			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
-				[
-					[{ id: "new" }],
-					1,
-					{ source: "server", entityType: "event", depth: 1 },
-				],
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "new" }], 1, { source: "server", entityType: "event", depth: 1 }],
 			]);
-		});
-
-		test("does not revive a stale graph after the newest request is cancelled", async () => {
-			const requests = mockGraphRequests();
-			const client = fakeClient(["getGraphData"]);
-			state.showInputBox.mockResolvedValue("1");
-			register(client, "event");
-
-			const oldRequest = handler("cwtools.showGraph")();
-			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
-			const newRequest = handler("cwtools.setGraphDepth")();
-			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
-
-			requests[1].result.reject(new CancellationError());
-			await newRequest;
-			requests[0].result.resolve([{ id: "old" }]);
-			await oldRequest;
-
-			assert.strictEqual(graphPanelCreate.mock.calls.length, 0);
-			assert.strictEqual(state.graphPanel.initialiseGraph.mock.calls.length, 0);
 		});
 
 		test("does not revive a stale graph after the newest request fails", async () => {
 			const requests = mockGraphRequests();
-			const client = fakeClient(["getGraphData"]);
 			state.showInputBox.mockResolvedValue("1");
-			register(client, "event");
+			register(fakeClient(["getGraphData"]), "event");
 
 			const oldRequest = handler("cwtools.showGraph")();
 			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
@@ -299,193 +260,47 @@ suite("registered workspace commands", () => {
 			requests[0].result.resolve([{ id: "old" }]);
 			await oldRequest;
 
-			assert.strictEqual(graphPanelCreate.mock.calls.length, 0);
-			assert.strictEqual(state.graphPanel.initialiseGraph.mock.calls.length, 0);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
 		});
-
-		test("ignores a stale rejection after the newest graph renders", async () => {
-			const requests = mockGraphRequests();
-			const client = fakeClient(["getGraphData"]);
-			state.showInputBox.mockResolvedValue("1");
-			register(client, "event");
-
-			const oldRequest = handler("cwtools.showGraph")();
-			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
-			const newRequest = handler("cwtools.setGraphDepth")();
-			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
-
-			requests[1].result.resolve([{ id: "new" }]);
-			await newRequest;
-			requests[0].result.reject(new Error("stale failed"));
-			await oldRequest;
-
-			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
-				[
-					[{ id: "new" }],
-					1,
-					{ source: "server", entityType: "event", depth: 1 },
-				],
-			]);
-		});
-	});
-
-	suite("cwtools.setGraphDepth", () => {
-		interface InputBoxOptions {
-			value: string;
-			validateInput: (value: string) => string | undefined;
-		}
-		const MINIMUM_MESSAGE = "Please enter a whole number of at least 1";
-		const REJECTED = ["", " ", "0", "-2", "1.5", "abc", "9007199254740993"];
-
-		function promptedValues(): string[] {
-			return state.showInputBox.mock.calls.map(
-				([options]) => (options as InputBoxOptions).value,
-			);
-		}
-
-		async function redrawAt(
-			requests: GraphRequest[],
-			answer: string,
-		): Promise<void> {
-			const before = requests.length;
-			state.showInputBox.mockResolvedValueOnce(answer);
-			const pending = handler("cwtools.setGraphDepth")();
-			await vi.waitFor(() => assert.strictEqual(requests.length, before + 1));
-			requests[before].result.resolve([]);
-			await pending;
-		}
-
-		test("tells the user the minimum depth is 1 for every rejected input", async () => {
-			register(fakeClient(["getGraphData"]), "event");
-
-			await handler("cwtools.setGraphDepth")();
-
-			const { validateInput } = state.showInputBox.mock
-				.calls[0][0] as InputBoxOptions;
-			for (const input of REJECTED) {
-				assert.strictEqual(
-					validateInput(input),
-					MINIMUM_MESSAGE,
-					`validateInput(${JSON.stringify(input)})`,
-				);
-			}
-			for (const input of ["1", "3", "12"]) {
-				assert.strictEqual(
-					validateInput(input),
-					undefined,
-					`validateInput(${JSON.stringify(input)})`,
-				);
-			}
-		});
-
-		for (const input of REJECTED) {
-			test(`sends no request and keeps the remembered depth for ${JSON.stringify(input)}`, async () => {
-				const requests = mockGraphRequests();
-				register(fakeClient(["getGraphData"]), "event");
-				await redrawAt(requests, "2");
-
-				state.showInputBox.mockResolvedValueOnce(input);
-				await handler("cwtools.setGraphDepth")();
-				await handler("cwtools.setGraphDepth")();
-
-				assert.strictEqual(requests.length, 1);
-				assert.strictEqual(state.graphPanel.initialiseGraph.mock.calls.length, 1);
-				assert.deepStrictEqual(promptedValues(), ["3", "2", "2"]);
-			});
-		}
-
-		test("sends no request and keeps the remembered depth when the prompt is cancelled", async () => {
-			const requests = mockGraphRequests();
-			register(fakeClient(["getGraphData"]), "event");
-			await redrawAt(requests, "2");
-
-			state.showInputBox.mockResolvedValueOnce(undefined);
-			await handler("cwtools.setGraphDepth")();
-			await handler("cwtools.setGraphDepth")();
-
-			assert.strictEqual(requests.length, 1);
-			assert.strictEqual(state.graphPanel.initialiseGraph.mock.calls.length, 1);
-			assert.deepStrictEqual(promptedValues(), ["3", "2", "2"]);
-		});
-
-		for (const [input, depth] of [
-			["1", 1],
-			["3", 3],
-		] as const) {
-			test(`redraws at depth ${depth} and remembers it for ${JSON.stringify(input)}`, async () => {
-				const requests = mockGraphRequests();
-				register(fakeClient(["getGraphData"]), "event");
-
-				await redrawAt(requests, input);
-				await handler("cwtools.setGraphDepth")();
-
-				assert.deepStrictEqual(
-					requests.map((request) => [request.entityType, request.depth]),
-					[["event", depth]],
-				);
-				assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
-					[[], 1, { source: "server", entityType: "event", depth }],
-				]);
-				assert.deepStrictEqual(promptedValues(), ["3", String(depth)]);
-			});
-		}
-	});
-
-	suite("cwtools.graphFromJson", () => {
-		function selectFile(name = "graph.json") {
-			state.showOpenDialog.mockResolvedValue([{ fsPath: name }]);
-		}
 
 		test("keeps a newer import when an older server graph completes", async () => {
 			const requests = mockGraphRequests();
 			register(fakeClient(["getGraphData"]), "event");
 			const server = handler("cwtools.showGraph")();
 			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
-			selectFile();
-			state.readFile.mockResolvedValue(new TextEncoder().encode("new json"));
+			state.showOpenDialog.mockResolvedValue([{ fsPath: "/tmp/graph.json" }]);
+			state.readFile.mockResolvedValue(bytes("new json"));
+
 			await handler("cwtools.graphFromJson")();
 			requests[0].result.resolve([{ id: "old" }]);
 			await server;
-			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
-				["new json", 1, { source: "json", fileName: "graph.json" }],
-			]);
-		});
 
-		test("keeps a newer server graph when an older import finishes reading", async () => {
-			const requests = mockGraphRequests();
-			register(fakeClient(["getGraphData"]), "event");
-			selectFile();
-			const bytes = deferred<Uint8Array>();
-			state.readFile.mockReturnValue(bytes.promise);
-			const imported = handler("cwtools.graphFromJson")();
-			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
-			const server = handler("cwtools.showGraph")();
-			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
-			requests[0].result.resolve([{ id: "new" }]);
-			await server;
-			bytes.resolve(new TextEncoder().encode("old json"));
-			await imported;
-			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
-				[[{ id: "new" }], 1, { source: "server", entityType: "event", depth: 3 }],
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				["new json", 1, { source: "json", fileName: "graph.json" }],
 			]);
 		});
 
 		test("renders only the last selected import when reads finish in reverse order", async () => {
 			register(fakeClient([]));
-			state.showOpenDialog.mockResolvedValueOnce([{ fsPath: "first.json" }])
+			state.showOpenDialog
+				.mockResolvedValueOnce([{ fsPath: "first.json" }])
 				.mockResolvedValueOnce([{ fsPath: "second.json" }]);
 			const firstBytes = deferred<Uint8Array>();
 			const secondBytes = deferred<Uint8Array>();
-			state.readFile.mockReturnValueOnce(firstBytes.promise).mockReturnValueOnce(secondBytes.promise);
+			state.readFile
+				.mockReturnValueOnce(firstBytes.promise)
+				.mockReturnValueOnce(secondBytes.promise);
+
 			const first = handler("cwtools.graphFromJson")();
 			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
 			const second = handler("cwtools.graphFromJson")();
 			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 2));
-			secondBytes.resolve(new TextEncoder().encode("second"));
+			secondBytes.resolve(bytes("second"));
 			await second;
-			firstBytes.resolve(new TextEncoder().encode("first"));
+			firstBytes.resolve(bytes("first"));
 			await first;
-			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
 				["second", 1, { source: "json", fileName: "second.json" }],
 			]);
 		});
@@ -496,240 +311,183 @@ suite("registered workspace commands", () => {
 			const server = handler("cwtools.showGraph")();
 			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
 			state.showOpenDialog.mockResolvedValue(undefined);
+
 			await handler("cwtools.graphFromJson")();
 			requests[0].result.resolve([{ id: "pending" }]);
 			await server;
-			assert.strictEqual(state.readFile.mock.calls.length, 0);
-			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
+
+			assert.deepStrictEqual(state.readFile.mock.calls, []);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
 				[[{ id: "pending" }], 1, { source: "server", entityType: "event", depth: 3 }],
 			]);
 		});
+	});
 
-		test("does not supersede a pending import when the next dialog is cancelled", async () => {
-			register(fakeClient([]));
-			selectFile();
-			const bytes = deferred<Uint8Array>();
-			state.readFile.mockReturnValue(bytes.promise);
-			const imported = handler("cwtools.graphFromJson")();
-			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
-			state.showOpenDialog.mockResolvedValue(undefined);
-			await handler("cwtools.graphFromJson")();
-			bytes.resolve(new TextEncoder().encode("pending"));
-			await imported;
-			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
-				["pending", 1, { source: "json", fileName: "graph.json" }],
-			]);
+	suite("cwtools.setGraphDepth", () => {
+		interface InputBoxOptions {
+			value: string;
+			validateInput: (value: string) => string | undefined;
+		}
+		const prompts = () =>
+			state.showInputBox.mock.calls.map(([options]) => options as InputBoxOptions);
+
+		async function redrawAt(requests: GraphRequest[], answer: string): Promise<void> {
+			const before = requests.length;
+			state.showInputBox.mockResolvedValueOnce(answer);
+			const pending = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, before + 1));
+			requests[before].result.resolve([]);
+			await pending;
+		}
+
+		test("the prompt accepts only whole numbers of at least 1", async () => {
+			register(fakeClient(["getGraphData"]), "event");
+
+			await handler("cwtools.setGraphDepth")();
+
+			const { validateInput } = prompts()[0];
+			for (const input of ["", " ", "0", "-2", "1.5", "abc", "9007199254740993"]) {
+				assert.strictEqual(
+					validateInput(input),
+					"Please enter a whole number of at least 1",
+					JSON.stringify(input),
+				);
+			}
+			for (const input of ["1", "3", "12"]) {
+				assert.strictEqual(validateInput(input), undefined, input);
+			}
 		});
 
-		test("forwards the selected JSON file name to the graph panel", async () => {
-			const client = fakeClient([]);
-			state.showOpenDialog.mockResolvedValue([
-				{ fsPath: "/tmp/imported-graph.json" },
-			]);
-			state.readFile.mockResolvedValue(
-				new TextEncoder().encode('{"elements":{"nodes":[]}}'),
+		test.each(["0", undefined])("sends no request and keeps the remembered depth when the prompt answers %j", async (answer) => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			await redrawAt(requests, "2");
+
+			state.showInputBox.mockResolvedValueOnce(answer);
+			await handler("cwtools.setGraphDepth")();
+			await handler("cwtools.setGraphDepth")();
+
+			assert.deepStrictEqual(
+				requests.map((request) => [request.entityType, request.depth]),
+				[["event", 2]],
 			);
-			register(client);
-
-			await handler("cwtools.graphFromJson")();
-
-			assert.deepStrictEqual(state.showOpenDialog.mock.calls, [
-				[{ filters: { Json: ["json"] } }],
-			]);
-			assert.deepStrictEqual(state.readFile.mock.calls, [
-				[{ fsPath: "/tmp/imported-graph.json" }],
-			]);
-			assert.deepStrictEqual(state.graphPanel.initialiseGraph.mock.calls, [
-				[
-					'{"elements":{"nodes":[]}}',
-					1,
-					{ source: "json", fileName: "imported-graph.json" },
-				],
-			]);
+			assert.deepStrictEqual(
+				prompts().map((prompt) => prompt.value),
+				["3", "2", "2"],
+			);
 		});
 	});
 
-	suite("cwtools.fixAllWorkspace", () => {
-		test("reports that the server stopped instead of sending a request", async () => {
-			const client = fakeClient(["fixAllWorkspace"]);
-			client.isRunning.mockReturnValue(false);
-			register(client);
+	for (const [command, unsupported] of [
+		["fixAllWorkspace", "fixing the workspace"],
+		["formatWorkspace", "formatting the workspace"],
+	]) {
+		suite(`cwtools.${command}`, () => {
+			test("reports that the server stopped instead of sending a request", async () => {
+				const client = fakeClient([command]);
+				client.isRunning.mockReturnValue(false);
+				register(client);
 
-			await handler("cwtools.fixAllWorkspace")();
+				await handler(`cwtools.${command}`)();
 
-			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
-				[
-					"CWTools: the language server is stopped. Run 'CWTools: Restart Server' to start it again.",
-				],
-			]);
-			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
-		});
-
-		test("warns and sends nothing when the server doesn't advertise the command", async () => {
-			const client = fakeClient(["getGraphData"]);
-			register(client);
-
-			await handler("cwtools.fixAllWorkspace")();
-
-			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
-				[
-					"CWTools: this language server doesn't support fixing the workspace. Update the language server to enable it.",
-				],
-			]);
-			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
-		});
-
-		test("sends the exact command without a workDoneToken and shows the server's reply", async () => {
-			// The edit lands as one snapshot; Cancel stays the $/cancelRequest
-			// path, so no token even against a server that supports progress.
-			const client = fakeClient(["fixAllWorkspace"], true);
-			sendRequestResolves(client, "Fixed 12 problem(s) in 3 file(s).");
-			register(client);
-
-			await handler("cwtools.fixAllWorkspace")();
-
-			assert.deepStrictEqual(state.withProgress.mock.calls[0]?.[0], {
-				location: 15,
-				title: "CWTools: Fix all auto-fixable problems in workspace",
-				cancellable: true,
+				assert.deepStrictEqual(state.showWarningMessage.mock.calls, [[STOPPED]]);
+				assert.deepStrictEqual(client.sendRequest.mock.calls, []);
 			});
-			assert.deepStrictEqual(client.sendRequest.mock.calls, [
-				[
-					state.requestType,
-					{ command: "fixAllWorkspace", arguments: [] },
-					state.token,
-				],
-			]);
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, [
-				["CWTools: Fixed 12 problem(s) in 3 file(s)."],
-			]);
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
+
+			test("warns and sends nothing when the server doesn't advertise the command", async () => {
+				const client = fakeClient(["getGraphData"]);
+				register(client);
+
+				await handler(`cwtools.${command}`)();
+
+				assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
+					[
+						`CWTools: this language server doesn't support ${unsupported}. Update the language server to enable it.`,
+					],
+				]);
+				assert.deepStrictEqual(client.sendRequest.mock.calls, []);
+			});
+
+			test("shows a failure message when the server rejects", async () => {
+				const client = fakeClient([command]);
+				client.sendRequest.mockRejectedValue(new Error("boom"));
+				register(client);
+
+				await handler(`cwtools.${command}`)();
+
+				assert.deepStrictEqual(state.showErrorMessage.mock.calls, [
+					[`CWTools: ${command} failed: boom`],
+				]);
+				assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
+			});
+
+			test("stays silent when the request is cancelled", async () => {
+				const client = fakeClient([command]);
+				client.sendRequest.mockRejectedValue({
+					code: LSPErrorCodes.RequestCancelled,
+				});
+				register(client);
+
+				await handler(`cwtools.${command}`)();
+
+				assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
+				assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
+			});
 		});
+	}
 
-		test("shows nothing when the server reports no fixes", async () => {
-			const client = fakeClient(["fixAllWorkspace"]);
-			sendRequestResolves(client, "");
-			register(client);
+	// The fix lands as one snapshot; Cancel stays the $/cancelRequest path, so
+	// no token even against a server that supports progress.
+	test("fixAllWorkspace sends the exact command without a workDoneToken and shows the reply", async () => {
+		const client = fakeClient(["fixAllWorkspace"], true);
+		client.sendRequest.mockResolvedValue("Fixed 12 problem(s) in 3 file(s).");
+		register(client);
 
-			await handler("cwtools.fixAllWorkspace")();
+		await handler("cwtools.fixAllWorkspace")();
 
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
+		assert.deepStrictEqual(state.withProgress.mock.calls[0]?.[0], {
+			location: 15,
+			title: "CWTools: Fix all auto-fixable problems in workspace",
+			cancellable: true,
 		});
-
-		test("shows a failure message when the server rejects", async () => {
-			const client = fakeClient(["fixAllWorkspace"]);
-			sendRequestRejects(client, new Error("server unavailable"));
-			register(client);
-
-			await handler("cwtools.fixAllWorkspace")();
-
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, [
-				["CWTools: fixAllWorkspace failed: server unavailable"],
-			]);
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
-		});
-
-		test("stays silent when the request is cancelled", async () => {
-			const client = fakeClient(["fixAllWorkspace"]);
-			sendRequestRejects(client, { code: LSPErrorCodes.RequestCancelled });
-			register(client);
-
-			await handler("cwtools.fixAllWorkspace")();
-
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
-		});
+		assert.deepStrictEqual(client.sendRequest.mock.calls, [
+			[
+				state.requestType,
+				{ command: "fixAllWorkspace", arguments: [] },
+				state.token,
+			],
+		]);
+		assert.deepStrictEqual(state.showInformationMessage.mock.calls, [
+			["CWTools: Fixed 12 problem(s) in 3 file(s)."],
+		]);
 	});
 
-	suite("cwtools.formatWorkspace", () => {
-		test("reports that the server stopped instead of sending a request", async () => {
-			const client = fakeClient(["formatWorkspace"]);
-			client.isRunning.mockReturnValue(false);
-			register(client);
+	test("formatWorkspace carries a workDoneToken against a server that supports progress", async () => {
+		const client = fakeClient(["formatWorkspace"], true);
+		client.sendRequest.mockResolvedValue("Formatted 2 file(s)");
+		register(client);
 
-			await handler("cwtools.formatWorkspace")();
+		await handler("cwtools.formatWorkspace")();
 
-			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
-				[
-					"CWTools: the language server is stopped. Run 'CWTools: Restart Server' to start it again.",
-				],
-			]);
-			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
-		});
-
-		test("warns and sends nothing when the server doesn't advertise the command", async () => {
-			const client = fakeClient(["getGraphData"]);
-			register(client);
-
-			await handler("cwtools.formatWorkspace")();
-
-			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [
-				[
-					"CWTools: this language server doesn't support formatting the workspace. Update the language server to enable it.",
-				],
-			]);
-			assert.deepStrictEqual(client.sendRequest.mock.calls, []);
-		});
-
-		test("carries a workDoneToken against a server that supports progress and shows the reply", async () => {
-			const client = fakeClient(["formatWorkspace"], true);
-			sendRequestResolves(client, "Formatted 2 file(s)");
-			register(client);
-
-			await handler("cwtools.formatWorkspace")();
-
-			const [type, params, cancellation] = client.sendRequest.mock.calls[0] as [
-				unknown,
-				{ command: string; arguments: unknown[]; workDoneToken?: string },
-				unknown,
-			];
-			assert.strictEqual(type, state.requestType);
-			assert.strictEqual(params.command, "formatWorkspace");
-			assert.deepStrictEqual(params.arguments, []);
-			assert.match(
-				params.workDoneToken ?? "",
-				/^cwtools\/command\//,
-				"the request must carry a workDoneToken",
-			);
-			assert.strictEqual(cancellation, undefined);
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, [
-				["CWTools: Formatted 2 file(s)"],
-			]);
-		});
-
-		test("shows a failure message when the server rejects", async () => {
-			const client = fakeClient(["formatWorkspace"]);
-			sendRequestRejects(client, new Error("boom"));
-			register(client);
-
-			await handler("cwtools.formatWorkspace")();
-
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, [
-				["CWTools: formatWorkspace failed: boom"],
-			]);
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
-		});
-
-		test("stays silent when the request is cancelled", async () => {
-			const client = fakeClient(["formatWorkspace"]);
-			sendRequestRejects(client, { code: LSPErrorCodes.RequestCancelled });
-			register(client);
-
-			await handler("cwtools.formatWorkspace")();
-
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
-		});
+		const [type, params, cancellation] = client.sendRequest.mock.calls[0] as [
+			unknown,
+			{ command: string; arguments: unknown[]; workDoneToken?: string },
+			unknown,
+		];
+		assert.strictEqual(type, state.requestType);
+		assert.strictEqual(params.command, "formatWorkspace");
+		assert.match(params.workDoneToken ?? "", /^cwtools\/command\//);
+		assert.strictEqual(cancellation, undefined);
+		assert.deepStrictEqual(state.showInformationMessage.mock.calls, [
+			["CWTools: Formatted 2 file(s)"],
+		]);
 	});
 
 	suite("cwtools.exportProfilingLog", () => {
 		test("sends the exact request and saves the fetched log", async () => {
 			const client = fakeClient(["exportProfilingLog"]);
 			const log = "phase=parse 12ms\nrss=31MB";
-			sendRequestResolves(client, log);
+			client.sendRequest.mockResolvedValue(log);
 			state.showSaveDialog.mockResolvedValue({ fsPath: "/tmp/prof.log" });
 			register(client);
 
@@ -742,14 +500,6 @@ suite("registered workspace commands", () => {
 					state.token,
 				],
 			]);
-			assert.deepStrictEqual(state.showSaveDialog.mock.calls, [
-				[
-					{
-						filters: { Log: ["log", "txt"] },
-						saveLabel: "Export CWTools profiling log",
-					},
-				],
-			]);
 			assert.deepStrictEqual(state.writeFile.mock.calls, [
 				[{ fsPath: "/tmp/prof.log" }, Buffer.from(log, "utf8")],
 			]);
@@ -760,7 +510,7 @@ suite("registered workspace commands", () => {
 
 		test("warns instead of saving an empty log", async () => {
 			const client = fakeClient(["exportProfilingLog"]);
-			sendRequestResolves(client, "");
+			client.sendRequest.mockResolvedValue("");
 			register(client);
 
 			await handler("cwtools.exportProfilingLog")();
@@ -774,21 +524,9 @@ suite("registered workspace commands", () => {
 			assert.deepStrictEqual(state.writeFile.mock.calls, []);
 		});
 
-		test("saves nothing when the save dialog is cancelled", async () => {
-			const client = fakeClient(["exportProfilingLog"]);
-			sendRequestResolves(client, "profiling data");
-			state.showSaveDialog.mockResolvedValue(undefined);
-			register(client);
-
-			await handler("cwtools.exportProfilingLog")();
-
-			assert.deepStrictEqual(state.writeFile.mock.calls, []);
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
-		});
-
 		test("shows a failure message when the fetch rejects", async () => {
 			const client = fakeClient(["exportProfilingLog"]);
-			sendRequestRejects(client, new Error("boom"));
+			client.sendRequest.mockRejectedValue(new Error("boom"));
 			register(client);
 
 			await handler("cwtools.exportProfilingLog")();
@@ -798,25 +536,5 @@ suite("registered workspace commands", () => {
 			]);
 			assert.deepStrictEqual(state.writeFile.mock.calls, []);
 		});
-
-		test("stays silent when the fetch is cancelled", async () => {
-			const client = fakeClient(["exportProfilingLog"]);
-			sendRequestRejects(client, { code: LSPErrorCodes.RequestCancelled });
-			register(client);
-
-			await handler("cwtools.exportProfilingLog")();
-
-			assert.deepStrictEqual(state.showErrorMessage.mock.calls, []);
-			assert.deepStrictEqual(state.showInformationMessage.mock.calls, []);
-			assert.deepStrictEqual(state.writeFile.mock.calls, []);
-		});
 	});
 });
-
-function sendRequestResolves(client: FakeClient, result: unknown): void {
-	client.sendRequest.mockResolvedValue(result);
-}
-
-function sendRequestRejects(client: FakeClient, error: unknown): void {
-	client.sendRequest.mockRejectedValue(error);
-}

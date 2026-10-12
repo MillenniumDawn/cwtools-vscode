@@ -6,8 +6,7 @@ loop edge remain together. This replaces component-by-component unions with
 one degree filter and one collection difference.
 
 `graphPartition.test.ts` executes the real graph.ts dispatcher with a real
-headless Cytoscape harness in `support/graphHeadless.ts`. The existing
-`graphWebview.test.ts` suite uses a separate hand-written Cytoscape fake. The normal tests
+headless Cytoscape harness in `support/graphHeadless.ts`. The normal tests
 assert no unions and one degree check per node at sizes 100, 200 and 500, plus
 complete edge/component/self-loop preservation. Timing is optional:
 

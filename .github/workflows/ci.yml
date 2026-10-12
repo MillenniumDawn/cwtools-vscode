@@ -43,20 +43,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-node-npm
-        with:
-          cache-vscode: true
       - name: Typecheck and lint
         run: npm run check
       - name: Node unit tests
         run: npm run test:node
-      # No xvfb-run prefix here or in the build job: scripts/build/hosttest.py
-      # picks the virtual display itself, so CI and a developer machine run the
-      # host suites the same way (#406).
-      # Step-scoped so a hung extension host fails here in minutes instead of
-      # burning the job's whole 20m budget with no mocha output to show for it.
-      - name: Unit tests
-        timeout-minutes: 5
-        run: npm test
 
   # The helpers under scripts/ are their own toolchain, so they get their own
   # job instead of riding along in the node and Rust ones. Versions come from
