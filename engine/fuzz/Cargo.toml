@@ -39,6 +39,20 @@ doc = false
 bench = false
 
 [[bin]]
+name = "format_text"
+path = "fuzz_targets/format_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fix_edits"
+path = "fuzz_targets/fix_edits.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "decode_capped"
 path = "fuzz_targets/decode_capped.rs"
 test = false

@@ -20,12 +20,17 @@ use std::hint::black_box;
 use std::path::PathBuf;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use cwtools_info::InfoService;
 use cwtools_lsp::bench_support::{
     collect_doc_tokens, loc_extra_valid_refs, logical_path_from_uri, parse_loc_buffer,
     workspace_prefix_of,
 };
 use cwtools_parser::parser::parse_string;
+use cwtools_rules::rules_types::{
+    NewField, Options, PathOptions, RootRule, RuleSet, RuleType, TypeDefinition,
+};
 use cwtools_string_table::string_table::StringTable;
+use std::sync::Arc;
 
 const KEYSTROKE_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -287,9 +292,98 @@ fn bench_index_parsed_file(c: &mut Criterion) {
     }
 }
 
+/// Isolate the edit-time variable-set collector with many root types matching
+/// one path and many root children. The real MD corpus bench above remains the
+/// representative end-to-end measurement; this synthetic case makes the
+/// repeated-traversal workload stable and easy to reproduce.
+fn bench_synthetic_many_type_index_edit(c: &mut Criterion) {
+    const MATCHING_TYPES: usize = 64;
+    let table = StringTable::new();
+    let mut ruleset = RuleSet::new();
+    let mut source = String::from("object = {\n");
+    for i in 0..MATCHING_TYPES {
+        let type_name = format!("synthetic_{i}");
+        let section_name = format!("section_{i}");
+        let variable_name = format!("variable_{i}");
+        source.push_str(&format!(
+            "  {section_name} = {{ {variable_name} = {{}} }}\n"
+        ));
+        ruleset.types.push(TypeDefinition {
+            name: type_name.clone(),
+            name_field: None,
+            path_options: PathOptions {
+                paths: vec!["common/synthetic".to_string()],
+                ..Default::default()
+            },
+            subtypes: Vec::new(),
+            type_key_filter: None,
+            skip_root_key: Vec::new(),
+            starts_with: None,
+            type_per_file: false,
+            key_prefix: None,
+            warning_only: false,
+            unique: false,
+            should_be_referenced: false,
+            localisation: Vec::new(),
+            graph_related_types: Vec::new(),
+            modifiers: Vec::new(),
+        });
+        let variable_rule = (
+            RuleType::NodeRule {
+                left: NewField::VariableSetField("variable".to_string()),
+                rules: Arc::from([]),
+            },
+            Options::default(),
+        );
+        let section_rule = (
+            RuleType::NodeRule {
+                left: NewField::SpecificField(section_name),
+                rules: Arc::from([variable_rule]),
+            },
+            Options::default(),
+        );
+        ruleset.root_rules.push(RootRule::TypeRule(
+            type_name,
+            (
+                RuleType::NodeRule {
+                    left: NewField::ScalarField,
+                    rules: Arc::from([section_rule]),
+                },
+                Options::default(),
+            ),
+        ));
+    }
+    source.push_str("}\n");
+    ruleset.reindex();
+    let parsed = parse_string(&source, &table);
+    let uri = "file:///bench/synthetic/common/example.txt";
+    let mut info = InfoService::new();
+    let empty_instances = HashMap::new();
+    let logical_path = "common/synthetic/example.txt";
+
+    let mut group = c.benchmark_group("index_parsed_file/synthetic_many_types");
+    group.bench_function("collect_clear_file_index_file", |b| {
+        b.iter(|| {
+            info.clear_file(uri);
+            info.index_file_with_precomputed_instances(
+                uri,
+                &parsed,
+                &table,
+                &ruleset,
+                logical_path,
+                empty_instances.clone(),
+                HashMap::new(),
+                false,
+            );
+            black_box(&info);
+        })
+    });
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(20);
-    targets = bench_keystroke_validate, bench_loc_edit_parse, bench_loc_ref_names, bench_index_parsed_file
+    targets = bench_keystroke_validate, bench_loc_edit_parse, bench_loc_ref_names, bench_index_parsed_file, bench_synthetic_many_type_index_edit
 }
 criterion_main!(benches);
