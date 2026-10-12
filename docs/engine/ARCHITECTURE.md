@@ -101,6 +101,15 @@ which doesn't fit `Session`'s load-once ownership. Instead the LSP holds its own
 workspace state and builds a `Prepared` from the same shared primitives per
 validation. Same sequence, different ownership.
 
+Alias-key references use a separate incremental index. `TypeIndex` records each
+distinct instance name that enters or leaves the index, and a file replacement
+that ends with the same names records nothing. `InfoService` keeps a reverse
+map from `(type, lowercased name)` to the cached key sites that can refer to it,
+so an edit reclassifies only the sites of the names that changed. That refresh
+runs under the info write lock, and its cost follows the changed names, not the
+workspace. Initial scans and rules reloads still rebuild the complete alias-key
+index once.
+
 Both front ends read the same base-game cache, and both have to consume all of
 it. `vanilla_cache::load` returns the type instances plus a `VanillaCacheAux`,
 the very type the writer packs, and the LSP routes that payload in one place

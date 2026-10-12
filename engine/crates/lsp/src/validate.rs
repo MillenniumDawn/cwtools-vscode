@@ -702,6 +702,7 @@ impl Backend {
         }
         let mut info = self.state.info_service.write();
         let exports_before = info.export_fingerprint(uri);
+        info.begin_file_replacement(uri);
         info.clear_file(uri);
         if let (Some(ruleset), Some(collected)) = (ruleset.as_ref(), collected) {
             info.index_file_with_precomputed_instances(
@@ -715,6 +716,7 @@ impl Backend {
                 base_game,
             );
         }
+        info.finish_file_replacement(uri);
         let exports_changed = info.export_fingerprint(uri) != exports_before;
         drop(info);
         if exports_changed {
@@ -734,15 +736,20 @@ impl Backend {
         let Some(ruleset) = self.state.rules.read().ruleset.clone() else {
             return;
         };
-        let mut info = self.state.info_service.write();
-        let fingerprint = info.pattern_instance_fingerprint(&ruleset);
-        let previous = self
+        // Most edits change no instance name; skip the write lock for those.
+        if !self
             .state
-            .alias_key_fp
-            .swap(fingerprint, std::sync::atomic::Ordering::Relaxed);
-        if fingerprint != previous {
-            info.rebuild_alias_key_index(&ruleset);
+            .info_service
+            .read()
+            .type_index
+            .has_instance_name_changes()
+        {
+            return;
         }
+        self.state
+            .info_service
+            .write()
+            .refresh_alias_key_names(&ruleset);
     }
 
     pub(crate) fn rebuild_alias_key_index(&self) {
@@ -750,11 +757,7 @@ impl Backend {
             return;
         };
         let mut info = self.state.info_service.write();
-        let fingerprint = info.pattern_instance_fingerprint(&ruleset);
         info.rebuild_alias_key_index(&ruleset);
-        self.state
-            .alias_key_fp
-            .store(fingerprint, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// workspace scan (#259). Cheap to call unconditionally: the path check

@@ -157,6 +157,34 @@ impl ReferenceIndex {
         }
     }
 
+    /// Remove one case-insensitive `(type, name)` bucket, keeping the
+    /// per-file reverse keys in sync. Used when an exported type name leaves
+    /// or enters the workspace without rebuilding unrelated references.
+    pub(crate) fn remove_name(&mut self, ref_type: &str, name: &str) {
+        let lower = ascii_lowercase(name);
+        let Some(by_name) = self.map.get_mut(ref_type) else {
+            return;
+        };
+        let Some(bucket) = by_name.remove(lower.as_ref()) else {
+            return;
+        };
+        let mut files = HashSet::new();
+        for site in bucket.sites {
+            files.insert(site.file);
+        }
+        for file in files {
+            if let Some(keys) = self.file_keys.get_mut(&file) {
+                keys.retain(|key| key.ref_type.as_ref() != ref_type || key.name != bucket.key);
+                if keys.is_empty() {
+                    self.file_keys.remove(&file);
+                }
+            }
+        }
+        if by_name.is_empty() {
+            self.map.remove(ref_type);
+        }
+    }
+
     /// Every recorded reference to instance `name` of `type_name`. Exact-match
     /// on the name (Paradox refs are written verbatim). Both the key and the
     /// name's own position are returned, so a caller needs no file text to
@@ -425,8 +453,8 @@ pub(crate) fn collect_type_ref_uses(
 
 #[derive(Debug, Clone)]
 pub(crate) struct AliasKeySite {
-    key: String,
-    location: SourceLocation,
+    pub(crate) key: String,
+    pub(crate) location: SourceLocation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -439,19 +467,68 @@ pub struct TypePatternAlias {
 #[derive(Debug, Default)]
 pub(crate) struct AliasKeyCache {
     sites: HashMap<Arc<str>, Vec<AliasKeySite>>,
+    /// Reverse index from a possible aliased definition to the exact candidate
+    /// sites that could become references if that name is exported.
+    by_instance: HashMap<(String, String), Vec<AliasKeyCandidate>>,
+    file_keys: HashMap<Arc<str>, Vec<(String, String)>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AliasKeyCandidate {
+    pub(crate) file: Arc<str>,
+    pub(crate) site_index: usize,
+    pub(crate) pattern_index: usize,
 }
 
 impl AliasKeyCache {
     pub(crate) fn remove_file(&mut self, file_uri: &str) {
         self.sites.remove(file_uri);
+        let Some(keys) = self.file_keys.remove(file_uri) else {
+            return;
+        };
+        for key in keys {
+            if let Some(candidates) = self.by_instance.get_mut(&key) {
+                candidates.retain(|candidate| candidate.file.as_ref() != file_uri);
+                if candidates.is_empty() {
+                    self.by_instance.remove(&key);
+                }
+            }
+        }
     }
 
-    pub(crate) fn merge_file(&mut self, file_uri: &str, sites: Vec<AliasKeySite>) {
+    pub(crate) fn merge_file(
+        &mut self,
+        file_uri: &str,
+        sites: Vec<AliasKeySite>,
+        patterns: &[TypePatternAlias],
+    ) -> Vec<(String, String)> {
+        self.remove_file(file_uri);
         if sites.is_empty() {
-            self.sites.remove(file_uri);
-        } else {
-            self.sites.insert(Arc::from(file_uri), sites);
+            return Vec::new();
         }
+        let file: Arc<str> = Arc::from(file_uri);
+        let mut keys = HashSet::new();
+        for (site_index, site) in sites.iter().enumerate() {
+            for (pattern_index, pattern) in patterns.iter().enumerate() {
+                let Some(middle) = strip_affix(&site.key, &pattern.prefix, &pattern.suffix) else {
+                    continue;
+                };
+                let key = (pattern.type_name.clone(), middle.to_ascii_lowercase());
+                self.by_instance
+                    .entry(key.clone())
+                    .or_default()
+                    .push(AliasKeyCandidate {
+                        file: Arc::clone(&file),
+                        site_index,
+                        pattern_index,
+                    });
+                keys.insert(key);
+            }
+        }
+        let keys: Vec<_> = keys.into_iter().collect();
+        self.file_keys.insert(Arc::clone(&file), keys.clone());
+        self.sites.insert(file, sites);
+        keys
     }
 
     pub(crate) fn file_uris(&self) -> impl Iterator<Item = &Arc<str>> {
@@ -460,6 +537,17 @@ impl AliasKeyCache {
 
     pub(crate) fn sites(&self, file_uri: &str) -> &[AliasKeySite] {
         self.sites.get(file_uri).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub(crate) fn candidates_for(&self, type_name: &str, name: &str) -> &[AliasKeyCandidate] {
+        let lower = name.to_ascii_lowercase();
+        self.by_instance
+            .get(&(type_name.to_string(), lower))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    pub(crate) fn site(&self, file_uri: &str, site_index: usize) -> Option<&AliasKeySite> {
+        self.sites.get(file_uri)?.get(site_index)
     }
 }
 
@@ -643,7 +731,7 @@ pub(crate) fn classify_alias_key_sites(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     use cwtools_parser::parser::parse_string;
@@ -651,7 +739,7 @@ mod tests {
     use cwtools_string_table::string_table::StringTable;
 
     use super::{CollectedRef, ReferenceIndex};
-    use crate::{InfoService, SourceLocation};
+    use crate::{InfoService, SourceLocation, TypeInstance};
 
     fn collected(ref_type: &str, name: &str, line: u32) -> CollectedRef {
         let at = SourceLocation {
@@ -807,6 +895,162 @@ alias[effect:log] = scalar
             (sites[0].value.line, sites[0].value.col),
             (sites[0].key.line, sites[0].key.col)
         );
+    }
+
+    #[test]
+    fn alias_refresh_cost_tracks_changed_names_not_all_pattern_instances() {
+        let table = StringTable::new();
+        let rules = ast_to_ruleset(&parse_string(RULES, &table), &table);
+        let mut service = InfoService::new();
+
+        // A large patterned type index reproduces the old per-edit fingerprint
+        // scan. The measured count below is exact candidate-site work, not time.
+        let instances: Vec<_> = (0..100_000)
+            .map(|idx| TypeInstance {
+                name: format!("effect_{idx}"),
+                location: SourceLocation {
+                    line: idx,
+                    col: 0,
+                    end: (idx, 0),
+                },
+                primary_loc_key: None,
+                required_loc_keys: Vec::new(),
+            })
+            .collect();
+        Arc::make_mut(&mut service.type_index).merge(
+            "definitions.txt",
+            HashMap::from([("scripted_effect".to_string(), instances.clone())]),
+        );
+        service.type_index.take_instance_name_changes();
+
+        let caller = "my_se = yes\n";
+        service.index_file_with_path(
+            "caller.txt",
+            &parse_string(caller, &table),
+            &table,
+            &rules,
+            "common/decisions/caller.txt",
+        );
+        service.rebuild_alias_key_index(&rules);
+
+        // The no-change path must not use Arc::make_mut on the large index.
+        let held_snapshot = Arc::clone(&service.type_index);
+        assert_eq!(service.refresh_alias_key_names(&rules), None);
+        assert!(Arc::ptr_eq(&held_snapshot, &service.type_index));
+
+        // Replacing the 100k-name file with the same exports coalesces its
+        // removal/addition within one atomic file operation. No alias sites
+        // need reclassification.
+        let type_index = Arc::make_mut(&mut service.type_index);
+        type_index.begin_file_replacement("definitions.txt");
+        type_index.remove_file("definitions.txt");
+        type_index.merge(
+            "definitions.txt",
+            HashMap::from([("scripted_effect".to_string(), instances)]),
+        );
+        type_index.finish_file_replacement("definitions.txt");
+        assert!(type_index.take_instance_name_changes().is_empty());
+        assert_eq!(service.refresh_alias_key_names(&rules), None);
+        assert!(
+            service
+                .alias_key_index
+                .references("scripted_effect", "my_se")
+                .is_empty()
+        );
+
+        // Adding and removing one matching export visits only the one site
+        // whose candidate key carries that name.
+        Arc::make_mut(&mut service.type_index).merge(
+            "new_definition.txt",
+            HashMap::from([(
+                "scripted_effect".to_string(),
+                vec![TypeInstance {
+                    name: "my_se".to_string(),
+                    location: SourceLocation {
+                        line: 0,
+                        col: 0,
+                        end: (0, 0),
+                    },
+                    primary_loc_key: None,
+                    required_loc_keys: Vec::new(),
+                }],
+            )]),
+        );
+        assert_eq!(service.refresh_alias_key_names(&rules), Some(1));
+        assert_eq!(
+            lines(
+                &service
+                    .alias_key_index
+                    .references("scripted_effect", "my_se")
+            ),
+            [("caller.txt", 1)]
+        );
+
+        Arc::make_mut(&mut service.type_index).remove_file("new_definition.txt");
+        assert_eq!(service.refresh_alias_key_names(&rules), Some(1));
+        assert!(
+            service
+                .alias_key_index
+                .references("scripted_effect", "my_se")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn alias_refresh_keeps_reclassification_dirty_across_absent_reindex() {
+        let table = StringTable::new();
+        let rules = ast_to_ruleset(&parse_string(RULES, &table), &table);
+        let mut service = indexed(&[(
+            "effects.txt",
+            "common/scripted_effects/effects.txt",
+            "my_se = { log = hi }\n",
+        )]);
+
+        // The export disappears, then a caller is indexed while it is absent.
+        // It cannot yet be classified as a reference.
+        service.clear_file("effects.txt");
+        service.index_file_with_path(
+            "caller.txt",
+            &parse_string("my_se = yes\n", &table),
+            &table,
+            &rules,
+            "common/decisions/caller.txt",
+        );
+        assert!(
+            service
+                .alias_key_index
+                .references("scripted_effect", "my_se")
+                .is_empty()
+        );
+
+        // Restoring the export cancels the net remove/add transition, but the
+        // candidate classified during the absent interval remains dirty.
+        service.index_file_with_path(
+            "effects.txt",
+            &parse_string("my_se = { log = hi }\n", &table),
+            &table,
+            &rules,
+            "common/scripted_effects/effects.txt",
+        );
+        assert_eq!(service.refresh_alias_key_names(&rules), Some(2));
+        assert_eq!(
+            lines(
+                &service
+                    .alias_key_index
+                    .references("scripted_effect", "my_se")
+            ),
+            [("caller.txt", 1)]
+        );
+
+        let incrementally_indexed_sites = service
+            .alias_key_index
+            .references("scripted_effect", "my_se");
+        let incrementally_classified = lines(&incrementally_indexed_sites);
+        service.rebuild_alias_key_index(&rules);
+        let rebuilt_sites = service
+            .alias_key_index
+            .references("scripted_effect", "my_se");
+        assert_eq!(incrementally_classified, lines(&rebuilt_sites));
     }
 
     #[test]
