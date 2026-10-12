@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Filter enum, filepath, icon and plain-alias completion candidates before growing result collections or allocating snippets; cache plain alias indices by category and preserve deterministic ordering, overload aggregation and filtering-budget signals. (#869)
 * Keep distinct non-UTF-8 file paths distinct in indexing, validation and fix grouping while retaining lossy path spellings only for display. (#497)
 * Remove an unused test-only `Arc` placeholder from completion tests. (#966)
 * Move the eight ignored perf tests into `cwtools_lsp` and `cwtools_cache` benches that find their checkouts under `CWTOOLS_PROJECTS`, like the existing benches. The per-test path variables and home-directory defaults are gone, and the indexing bench now reads Millennium Dawn files instead of a base-game install. With those unrun test bodies gone, the Rust line-coverage floor rises from 91.5 to 92.3. (#886)

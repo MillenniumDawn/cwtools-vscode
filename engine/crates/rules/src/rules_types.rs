@@ -124,6 +124,8 @@ impl ParsedAliasPattern {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AliasCategoryIndex {
+    /// Non-pattern aliases in declaration order, used for plain-key completion.
+    pub plain_alias_indices: Vec<usize>,
     pub parsed_patterns: Vec<ParsedAliasPattern>,
     pub scope_field_idx: Option<usize>,
     pattern_buckets: AliasPatternBuckets,
@@ -520,6 +522,8 @@ impl RuleSet {
                     entry.scope_field_idx = Some(i);
                 } else if let Some(parsed) = ParsedAliasPattern::parse(rest, i) {
                     entry.parsed_patterns.push(parsed);
+                } else {
+                    entry.plain_alias_indices.push(i);
                 }
             }
         }
@@ -827,6 +831,36 @@ impl RuleSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alias_category_index_separates_plain_keys_without_reordering_overloads() {
+        let mut ruleset = RuleSet::new();
+        for name in [
+            "effect:first",
+            "effect:<focus>",
+            "effect:scope_field",
+            "effect:second",
+            "effect:first",
+        ] {
+            ruleset.aliases.push((
+                name.to_string(),
+                (
+                    RuleType::LeafRule {
+                        left: NewField::SpecificField(name.to_string()),
+                        right: NewField::ScalarField,
+                    },
+                    Options::default(),
+                ),
+            ));
+        }
+        ruleset.reindex();
+
+        let category = &ruleset.alias_categories()["effect"];
+        assert_eq!(category.plain_alias_indices, [0, 3, 4]);
+        assert_eq!(category.parsed_patterns.len(), 1);
+        assert_eq!(category.parsed_patterns[0].alias_idx, 1);
+        assert_eq!(category.scope_field_idx, Some(2));
+    }
 
     #[test]
     fn builtin_variable_base_matches_across_suffixes() {
