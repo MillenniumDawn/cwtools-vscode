@@ -61,6 +61,7 @@
 
 #### Extension
 
+* Skip dependency lifecycle scripts in registry publisher installs so `keytar` cannot fetch an unverified native prebuild; smoke both registry CLIs with their optional platform binaries installed, while the package job keeps its existing full install and VSIX smoke. (#573)
 * Wait for the connected-node ELK layout before positioning isolated nodes and fitting the initial graph view. Report layouts that do not finish within 60 seconds and discard pending callbacks when replacing the graph. (#564)
 * Declare VS Code 1.91.0 as the minimum host version required by the shipped vscode-languageclient, and exercise activation plus language-server initialization at that floor in CI. (#849)
 * Minify production extension and webview bundles, and generate source maps only for development builds. (#500)
