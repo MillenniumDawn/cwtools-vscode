@@ -1653,7 +1653,6 @@ mod resolve_data_tests {
         assert!(incomplete);
         assert_eq!(strategy, "filtered");
         assert_eq!(items.len(), 1);
-        assert_eq!(rs.alias_categories()["effect"].alias_indices.len(), 3);
         assert_eq!(rs.alias_categories()["effect"].plain_alias_indices.len(), 3);
     }
 

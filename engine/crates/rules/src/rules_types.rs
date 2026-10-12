@@ -124,8 +124,6 @@ impl ParsedAliasPattern {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AliasCategoryIndex {
-    /// Alias definitions in declaration order, scoped to this category.
-    pub alias_indices: Vec<usize>,
     /// Non-pattern aliases in declaration order, used for plain-key completion.
     pub plain_alias_indices: Vec<usize>,
     pub parsed_patterns: Vec<ParsedAliasPattern>,
@@ -520,7 +518,6 @@ impl RuleSet {
             }
             if let Some((cat, rest)) = name.split_once(':') {
                 let entry = self.alias_categories.entry(cat.to_string()).or_default();
-                entry.alias_indices.push(i);
                 if rest == "scope_field" {
                     entry.scope_field_idx = Some(i);
                 } else if let Some(parsed) = ParsedAliasPattern::parse(rest, i) {
@@ -859,7 +856,6 @@ mod tests {
         ruleset.reindex();
 
         let category = &ruleset.alias_categories()["effect"];
-        assert_eq!(category.alias_indices, [0, 1, 2, 3, 4]);
         assert_eq!(category.plain_alias_indices, [0, 3, 4]);
         assert_eq!(category.parsed_patterns.len(), 1);
         assert_eq!(category.parsed_patterns[0].alias_idx, 1);
