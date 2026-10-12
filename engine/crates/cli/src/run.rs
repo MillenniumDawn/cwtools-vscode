@@ -174,6 +174,12 @@ pub(crate) fn vanilla_notice(game: Game, has_vanilla: bool) -> Option<String> {
 
 // ── Explicit `--vanilla-cache` (validate / fix) ────────────────────────────
 
+#[derive(Clone, Copy)]
+pub(crate) struct ModLayers<'a> {
+    pub primary: &'a Path,
+    pub parents: &'a [PathBuf],
+}
+
 /// Whether the cache has this mod's replacement scope.
 fn carries_replacement_view(
     fingerprint: &str,
@@ -190,13 +196,13 @@ fn carries_replacement_view(
 pub(crate) fn gate_vanilla_cache_for_replacements(
     cache_path: &Path,
     loaded: Option<(String, VanillaCacheData)>,
-    directory: &Path,
+    mod_layers: ModLayers<'_>,
     vanilla: Option<&Path>,
 ) -> (Option<String>, Option<VanillaCacheData>) {
     let Some((fingerprint, data)) = loaded else {
         return (None, None);
     };
-    let shadow = cwtools_driver::vanilla_replacement_shadow(directory, &[]);
+    let shadow = cwtools_driver::vanilla_replacement_shadow(mod_layers.primary, mod_layers.parents);
     if carries_replacement_view(&fingerprint, &shadow) {
         return (Some(fingerprint), Some(data));
     }
@@ -225,13 +231,13 @@ pub(crate) fn rebuild_vanilla_cache_if_stale(
     session: &cwtools_driver::Session,
     cache_path: &Path,
     cached_fingerprint: &str,
-    directory: &Path,
+    mod_layers: ModLayers<'_>,
     vanilla_dir: &Path,
     game: Game,
     use_parse_cache: bool,
 ) {
     let ruleset = session.ruleset();
-    let shadow = cwtools_driver::vanilla_replacement_shadow(directory, &[]);
+    let shadow = cwtools_driver::vanilla_replacement_shadow(mod_layers.primary, mod_layers.parents);
     let live_fingerprint =
         cwtools_driver::replacement_aware_vanilla_fingerprint(vanilla_dir, ruleset, &shadow);
     if cached_fingerprint == live_fingerprint {
