@@ -162,6 +162,14 @@ jobs:
       - name: Build engine and client
         id: build-engine
         run: npm run build -- quick
+      # Pin one real extension host at the declared minimum. The smoke checks
+      # activation plus a completed initialize exchange against the built
+      # language server, so the metadata floor is exercised rather than only
+      # asserted from package files.
+      - name: Host test (VS Code compatibility floor)
+        id: host-vscode-floor
+        timeout-minutes: 10
+        run: node scripts/build/python.mjs scripts/build/hosttest.py --label vscode-floor
       # Exercises activation-triggered rules sync against the checked-in local
       # fixture, without reaching the network (see .vscode-test.mjs).
       - name: Host tests (rules sync)
@@ -205,6 +213,7 @@ jobs:
         id: test-build
         if: >-
           !cancelled() && steps.build-engine.outcome == 'success' &&
+          steps.host-vscode-floor.outcome == 'success' &&
           steps.host-rules-sync.outcome == 'success' &&
           steps.host-configurations.outcome == 'success'
         run: npm run build -- package-prebuilt

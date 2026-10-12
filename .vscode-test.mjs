@@ -3,6 +3,7 @@
 //
 //   unit        fast suites that need the VS Code API but not the language server
 //   smoke       unit + activation, in the sample workspace
+//   vscode-floor activation and server initialization on the declared minimum
 //   multi-root  server-backed descriptor/root selection in a multi-root fixture
 //   watched     served-root exclusions and watched-file updates, in its own workspace
 //   live        the live-settings suite, in sample-live (its own workspace
@@ -53,6 +54,7 @@ import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";
 
 const sampleWorkspace = "./extension/test/workspaces/stellaris";
+const vscodeCompatibilityFloor = "1.91.0";
 const multiRootWorkspace =
 	"./extension/test/workspaces/multiroot.code-workspace";
 const liveWorkspace = "./extension/test/workspaces/live";
@@ -140,7 +142,7 @@ const headless =
 		: [];
 
 const base = {
-	vscode: "stable",
+	version: "stable",
 	extensionDevelopmentPath: "dist/extension",
 };
 
@@ -153,6 +155,22 @@ export default defineConfig({
 			workspaceFolder: "./extension/test/workspaces/watched/watched.code-workspace",
 			launchArgs: ["./extension/test/workspaces/watched/served/workspaces/stellaris/events/open.txt", softwareRendering, disableCrashReporter, ...headless],
 			env: { CWTOOLS_TEST_RULES_FOLDER: path.resolve(import.meta.dirname, "extension/test/workspaces/watched/served/rules") },
+		},
+		{
+			...base,
+			version: vscodeCompatibilityFloor,
+			label: "vscode-floor",
+			files: [
+				abortDiagnostics,
+				"./dist/extension/bin/client/test/host/vscodeCompatibilityFloor.test.js",
+			],
+			workspaceFolder: sampleWorkspace,
+			launchArgs: [
+				sampleFile,
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
 		},
 		{
 			...base,
