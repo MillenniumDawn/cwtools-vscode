@@ -4,6 +4,10 @@
 //! plus the `prepare_context_items` cap that follows them, over a ruleset with
 //! thousands of aliases, modifiers and type instances. It needs no checkout.
 //!
+//! `completion_candidate_filtering` isolates typed filepath, icon, and enum
+//! completions over 20k synthetic candidates. It measures candidate construction
+//! and filtering only; it is not representative of any one game's full corpus.
+//!
 //! `loc_completion_keys` times picking the top localisation keys for a token
 //! out of ~400k keys. `before` is the original ordered-set scan, `linear` is
 //! `select_loc_keys`, and `indexed` is `LocKeyIndex::select`. The bench asserts
@@ -22,7 +26,7 @@ use cwtools_lsp::bench_support::{
     value_completions,
 };
 use cwtools_rules::rules_types::{
-    NewField, NewRule, Options, RuleSet, RuleType, TypeType, ValueType,
+    EnumDefinition, NewField, NewRule, Options, RuleSet, RuleType, TypeType, ValueType,
 };
 
 const EXACT_EFFECTS: usize = 600;
@@ -81,6 +85,20 @@ fn synthetic_ruleset() -> RuleSet {
                     required_scopes: scopes,
                     ..Options::default()
                 },
+            ),
+        ));
+    }
+    // Other categories make a single-category request pay for unrelated aliases
+    // unless completion uses the per-category alias index.
+    for i in 0..10_000 {
+        rs.aliases.push((
+            format!("unused:noise_{i:05}"),
+            (
+                RuleType::LeafRule {
+                    left: NewField::SpecificField(format!("noise_{i:05}")),
+                    right: NewField::ScalarField,
+                },
+                Options::default(),
             ),
         ));
     }
@@ -270,6 +288,70 @@ fn bench_completion_synthetic(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_completion_candidate_filtering(c: &mut Criterion) {
+    const CANDIDATES: usize = 20_000;
+    let mut info = cwtools_info::InfoService::new();
+    let paths = (0..CANDIDATES)
+        .map(|i| format!("common/ships/candidate_{i:05}.txt"))
+        .chain((0..CANDIDATES).map(|i| format!("gfx/interface/icons/candidate_{i:05}.dds")));
+    Arc::make_mut(&mut info.type_index)
+        .file_index
+        .add_paths(paths);
+
+    let mut ruleset = RuleSet::new();
+    ruleset.enums.push(EnumDefinition {
+        key: "bench_enum".to_string(),
+        description: String::new(),
+        values: (0..CANDIDATES)
+            .map(|i| format!("candidate_{i:05}"))
+            .collect(),
+    });
+    ruleset.reindex();
+
+    let rule = |right| vec![(RuleType::LeafValueRule { right }, Options::default())];
+    let file_rules = rule(NewField::FilepathField {
+        prefix: Some("common/ships/".to_string()),
+        extension: Some("txt".to_string()),
+    });
+    let icon_rules = rule(NewField::IconField("gfx/interface/icons".to_string()));
+    let enum_rules = rule(NewField::ValueField(ValueType::Enum(
+        "bench_enum".to_string(),
+    )));
+    let modifier_keys = HashSet::new();
+    let modifier_scopes = HashMap::new();
+    let loc_keys = HashSet::new();
+    let sets = ValueCompletionSets {
+        modifier_keys: &modifier_keys,
+        modifier_scopes: &modifier_scopes,
+        loc_keys: &loc_keys,
+    };
+    let mut group = c.benchmark_group("completion_candidate_filtering");
+    group.sample_size(30);
+    for (name, rules) in [
+        ("filepath_token", &file_rules),
+        ("icon_token", &icon_rules),
+        ("enum_token", &enum_rules),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                value_completions(
+                    rules,
+                    &ruleset,
+                    &info,
+                    None,
+                    "hoi4",
+                    sets,
+                    None,
+                    "candidate_0199",
+                )
+                .0
+                .len()
+            })
+        });
+    }
+    group.finish();
+}
+
 fn bench_loc_completion_keys(c: &mut Criterion) {
     let keys: HashSet<String> = (0..LOC_KEYS)
         .map(|i| {
@@ -376,6 +458,7 @@ mod reference {
 criterion_group!(
     benches,
     bench_completion_synthetic,
+    bench_completion_candidate_filtering,
     bench_loc_completion_keys
 );
 criterion_main!(benches);

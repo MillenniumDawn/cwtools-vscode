@@ -34,6 +34,7 @@ pub struct RuleSet {
     type_by_name: rustc_hash::FxHashMap<String, usize>,
     enum_by_name: rustc_hash::FxHashMap<String, usize>,
     type_rules_idx: rustc_hash::FxHashMap<String, usize>,
+    root_type_rules_idx: rustc_hash::FxHashMap<String, Vec<usize>>,
     type_reference_rules: rustc_hash::FxHashMap<String, Vec<TypeReferenceRule>>,
     value_set_effects: rustc_hash::FxHashMap<String, String>,
     value_set_effect_fields: rustc_hash::FxHashMap<String, Vec<(String, String)>>,
@@ -123,6 +124,8 @@ impl ParsedAliasPattern {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AliasCategoryIndex {
+    /// Non-pattern aliases in declaration order, used for plain-key completion.
+    pub plain_alias_indices: Vec<usize>,
     pub parsed_patterns: Vec<ParsedAliasPattern>,
     pub scope_field_idx: Option<usize>,
     pattern_buckets: AliasPatternBuckets,
@@ -374,6 +377,7 @@ impl RuleSet {
             type_by_name: rustc_hash::FxHashMap::default(),
             enum_by_name: rustc_hash::FxHashMap::default(),
             type_rules_idx: rustc_hash::FxHashMap::default(),
+            root_type_rules_idx: rustc_hash::FxHashMap::default(),
             type_reference_rules: rustc_hash::FxHashMap::default(),
             value_set_effects: rustc_hash::FxHashMap::default(),
             value_set_effect_fields: rustc_hash::FxHashMap::default(),
@@ -518,6 +522,8 @@ impl RuleSet {
                     entry.scope_field_idx = Some(i);
                 } else if let Some(parsed) = ParsedAliasPattern::parse(rest, i) {
                     entry.parsed_patterns.push(parsed);
+                } else {
+                    entry.plain_alias_indices.push(i);
                 }
             }
         }
@@ -563,11 +569,16 @@ impl RuleSet {
             })
             .unwrap_or_default();
         self.type_rules_idx.clear();
+        self.root_type_rules_idx.clear();
         self.type_reference_rules.clear();
         for (i, root_rule) in self.root_rules.iter().enumerate() {
             let (root_type, rule) = match root_rule {
                 RootRule::TypeRule(name, rule) => {
                     self.type_rules_idx.entry(name.clone()).or_insert(i);
+                    self.root_type_rules_idx
+                        .entry(name.clone())
+                        .or_default()
+                        .push(i);
                     (Some(name.as_str()), rule)
                 }
                 RootRule::AliasRule(_, rule) | RootRule::SingleAliasRule(_, rule) => (None, rule),
@@ -768,6 +779,14 @@ impl RuleSet {
         &self.type_rules_idx
     }
 
+    /// Root type-rule indices grouped by type name. This derived lookup lets
+    /// per-file collectors select applicable roots without rebuilding a map
+    /// from `root_rules` for every indexed file.
+    pub fn root_type_rules_idx(&self) -> &rustc_hash::FxHashMap<String, Vec<usize>> {
+        self.assert_reindexed();
+        &self.root_type_rules_idx
+    }
+
     pub fn type_reference_rules(&self) -> &rustc_hash::FxHashMap<String, Vec<TypeReferenceRule>> {
         self.assert_reindexed();
         &self.type_reference_rules
@@ -812,6 +831,36 @@ impl RuleSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alias_category_index_separates_plain_keys_without_reordering_overloads() {
+        let mut ruleset = RuleSet::new();
+        for name in [
+            "effect:first",
+            "effect:<focus>",
+            "effect:scope_field",
+            "effect:second",
+            "effect:first",
+        ] {
+            ruleset.aliases.push((
+                name.to_string(),
+                (
+                    RuleType::LeafRule {
+                        left: NewField::SpecificField(name.to_string()),
+                        right: NewField::ScalarField,
+                    },
+                    Options::default(),
+                ),
+            ));
+        }
+        ruleset.reindex();
+
+        let category = &ruleset.alias_categories()["effect"];
+        assert_eq!(category.plain_alias_indices, [0, 3, 4]);
+        assert_eq!(category.parsed_patterns.len(), 1);
+        assert_eq!(category.parsed_patterns[0].alias_idx, 1);
+        assert_eq!(category.scope_field_idx, Some(2));
+    }
 
     #[test]
     fn builtin_variable_base_matches_across_suffixes() {
