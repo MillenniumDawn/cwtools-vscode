@@ -83,6 +83,34 @@ pub(crate) fn matching_candidates<'a>(
         .collect()
 }
 
+/// Matching over a borrowed flattened rule body must keep precedence across
+/// the complete body: any matching specific fields suppress every fallback.
+pub(crate) fn matching_candidates_from_refs<'a>(
+    rules: &[&'a (RuleType, Options)],
+    key: &str,
+    ruleset: &RuleSet,
+    type_index: Option<&cwtools_index::TypeIndex>,
+) -> SmallVec<[&'a (RuleType, Options); 4]> {
+    let mut specific = SmallVec::<[&'a (RuleType, Options); 4]>::new();
+    let mut fallback = SmallVec::<[&'a (RuleType, Options); 4]>::new();
+    for &rule in rules {
+        if let Some(name) = get_rule_key(&rule.0) {
+            if name.eq_ignore_ascii_case(key) {
+                specific.push(rule);
+            }
+        } else {
+            fallback.push(rule);
+        }
+    }
+    if !specific.is_empty() {
+        return specific;
+    }
+    fallback
+        .into_iter()
+        .filter(|(rule_type, _)| rule_matches_leaf_key(rule_type, key, ruleset, type_index))
+        .collect()
+}
+
 pub(crate) fn rule_matches_leaf_key(
     rule_type: &RuleType,
     key: &str,

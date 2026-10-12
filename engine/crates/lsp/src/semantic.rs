@@ -1,6 +1,7 @@
 //! Columns and lengths are in the NEGOTIATED position encoding (utf-16 by
 
 use std::cell::Cell;
+use std::sync::Arc;
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -10,7 +11,9 @@ use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
 use cwtools_rules::rules_types::{NewField, Options, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::Prepared;
-use cwtools_validation::position::{RuleBodyMatcher, rules_at_pos};
+use cwtools_validation::position::{
+    FilePositionResolver, RuleBodyMatcher, rules_at_pos_with_resolver,
+};
 
 use crate::Backend;
 
@@ -99,6 +102,7 @@ struct Ctx<'a> {
     arena: &'a Arena,
     table: &'a StringTable,
     lines: Vec<Vec<char>>,
+    first_line0: u32,
     encoding: &'a PositionEncodingKind,
     rules: Option<RuleCtx<'a>>,
     span: Option<LineSpan>,
@@ -106,10 +110,38 @@ struct Ctx<'a> {
 
 struct RuleCtx<'a> {
     ast: &'a ParsedFile,
-    logical_path: &'a str,
+    resolver: &'a FilePositionResolver<'a>,
     prepared: &'a Prepared<'a>,
     ruleset: &'a RuleSet,
     bootstraps_left: Cell<u32>,
+}
+
+#[derive(Clone, Copy)]
+enum RuleList<'a> {
+    Slice(&'a [(RuleType, Options)]),
+    References(&'a [&'a (RuleType, Options)]),
+}
+
+impl RuleList<'_> {
+    fn matcher<'a>(self, ruleset: &RuleSet) -> RuleBodyMatcher<'a>
+    where
+        Self: 'a,
+    {
+        match self {
+            Self::Slice(rules) => RuleBodyMatcher::new(rules, ruleset),
+            Self::References(rules) => RuleBodyMatcher::from_references(rules),
+        }
+    }
+
+    fn iter<'a>(self) -> Box<dyn Iterator<Item = &'a (RuleType, Options)> + 'a>
+    where
+        Self: 'a,
+    {
+        match self {
+            Self::Slice(rules) => Box::new(rules.iter()),
+            Self::References(rules) => Box::new(rules.iter().copied()),
+        }
+    }
 }
 
 impl RuleCtx<'_> {
@@ -119,25 +151,16 @@ impl RuleCtx<'_> {
             return None;
         }
         self.bootstraps_left.set(left - 1);
-        block_rules_for(self.ast, self.prepared, self.logical_path, children)
+        block_rules_for_with_resolver(self.ast, self.prepared, self.resolver, children)
     }
 }
 
 impl Ctx<'_> {
-    fn worth_entering(&self, child: &Child) -> bool {
-        let Some((first, last)) = self.span else {
-            return true;
-        };
-        let pos = match child {
-            Child::Leaf(i) => self.arena.leaves[*i as usize].pos,
-            Child::LeafValue(i) => self.arena.leaf_values[*i as usize].pos,
-            Child::Comment(i) => self.arena.comments[*i as usize].pos,
-        };
-        pos.start.line <= last && pos.end.line >= first
-    }
-
     fn line(&self, line0: u32) -> &[char] {
-        self.lines.get(line0 as usize).map_or(&[], |l| l.as_slice())
+        line0
+            .checked_sub(self.first_line0)
+            .and_then(|index| self.lines.get(index as usize))
+            .map_or(&[], |l| l.as_slice())
     }
 
     /// parser char columns into the negotiated encoding. `None` outside the
@@ -177,6 +200,7 @@ fn encoded_len(chars: &[char], encoding: &PositionEncodingKind) -> u32 {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn semantic_tokens(
     file: &ParsedFile,
     table: &StringTable,
@@ -185,18 +209,48 @@ pub(crate) fn semantic_tokens(
     rules: Option<(&Prepared<'_>, &str)>,
     span: Option<LineSpan>,
 ) -> Vec<AbsToken> {
+    let line_index = crate::state::LineIndex::new(text);
+    semantic_tokens_indexed(file, table, text, encoding, rules, span, &line_index)
+}
+
+pub(crate) fn semantic_tokens_indexed(
+    file: &ParsedFile,
+    table: &StringTable,
+    text: &str,
+    encoding: &PositionEncodingKind,
+    rules: Option<(&Prepared<'_>, &str)>,
+    span: Option<LineSpan>,
+    line_index: &crate::state::LineIndex,
+) -> Vec<AbsToken> {
+    let first_line0 = span.map_or(0, |(first, _)| first.saturating_sub(1));
+    let last_line0 = span.map_or_else(
+        || line_index.line_count().saturating_sub(1),
+        |(_, last)| last.saturating_sub(1),
+    );
+    let lines = if first_line0 < line_index.line_count() && first_line0 <= last_line0 {
+        (first_line0..=last_line0.min(line_index.line_count() - 1))
+            .map(|line| line_index.line(text, line).chars().collect())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let position_resolver =
+        rules.map(|(prepared, logical_path)| FilePositionResolver::new(logical_path, prepared));
     let cx = Ctx {
         arena: &file.arena,
         table,
-        lines: text.lines().map(|l| l.chars().collect()).collect(),
+        lines,
+        first_line0,
         encoding,
-        rules: rules.map(|(prepared, logical_path)| RuleCtx {
-            ast: file,
-            logical_path,
-            prepared,
-            ruleset: prepared.ruleset,
-            bootstraps_left: Cell::new(MAX_RULE_BOOTSTRAPS),
-        }),
+        rules: rules
+            .zip(position_resolver.as_ref())
+            .map(|((prepared, _), resolver)| RuleCtx {
+                ast: file,
+                resolver,
+                prepared,
+                ruleset: prepared.ruleset,
+                bootstraps_left: Cell::new(MAX_RULE_BOOTSTRAPS),
+            }),
         span,
     };
     let mut out = Vec::new();
@@ -204,7 +258,12 @@ pub(crate) fn semantic_tokens(
         .rules
         .as_ref()
         .and_then(|r| r.bootstrap(&file.root_children));
-    collect(&file.root_children, &cx, root_rules.as_deref(), &mut out);
+    collect(
+        &file.root_children,
+        &cx,
+        root_rules.as_deref().map(RuleList::Slice),
+        &mut out,
+    );
     out
 }
 
@@ -214,8 +273,19 @@ pub(crate) fn block_rules_for(
     logical_path: &str,
     children: &[Child],
 ) -> Option<Vec<(RuleType, Options)>> {
+    let resolver = FilePositionResolver::new(logical_path, prepared);
+    block_rules_for_with_resolver(ast, prepared, &resolver, children)
+}
+
+fn block_rules_for_with_resolver(
+    ast: &ParsedFile,
+    prepared: &Prepared<'_>,
+    resolver: &FilePositionResolver<'_>,
+    children: &[Child],
+) -> Option<Vec<(RuleType, Options)>> {
     let (line, col) = first_leaf_key_pos(children, &ast.arena)?;
-    rules_at_pos(ast, logical_path, prepared, line, col, false).map(|rctx| rctx.child_rules)
+    rules_at_pos_with_resolver(ast, resolver, prepared, line, col, false)
+        .map(|rctx| rctx.child_rules)
 }
 
 fn first_leaf_key_pos(children: &[Child], arena: &Arena) -> Option<(u32, u16)> {
@@ -242,16 +312,13 @@ fn first_leaf_key_pos(children: &[Child], arena: &Arena) -> Option<(u32, u16)> {
 fn collect(
     children: &[Child],
     cx: &Ctx<'_>,
-    block_rules: Option<&[(RuleType, Options)]>,
+    block_rules: Option<RuleList<'_>>,
     out: &mut Vec<AbsToken>,
 ) {
     let matcher = block_rules
         .zip(cx.rules.as_ref())
-        .map(|(rules, ctx)| RuleBodyMatcher::new(rules, ctx.ruleset));
-    for child in children {
-        if !cx.worth_entering(child) {
-            continue;
-        }
+        .map(|(rules, ctx)| rules.matcher(ctx.ruleset));
+    for child in children_in_span(children, cx) {
         match child {
             Child::Comment(idx) => {
                 let c = &cx.arena.comments[*idx as usize];
@@ -271,8 +338,13 @@ fn collect(
                 let lv = &cx.arena.leaf_values[*idx as usize];
                 let line0 = lv.pos.start.line.saturating_sub(1);
                 if let Value::Clause(inner) = &lv.value {
-                    let inner_rules = block_rules.map(valueclause_bodies);
-                    collect(inner, cx, inner_rules.as_deref(), out);
+                    let inner_rules = block_rules.map(valueclause_body_refs);
+                    collect(
+                        inner,
+                        cx,
+                        inner_rules.as_deref().map(RuleList::References),
+                        out,
+                    );
                     continue;
                 }
                 let start = lv.pos.start.col as usize;
@@ -288,10 +360,32 @@ fn collect(
     }
 }
 
+fn children_in_span<'a>(children: &'a [Child], cx: &Ctx<'_>) -> &'a [Child] {
+    let Some((first, last)) = cx.span else {
+        return children;
+    };
+    // Parser children are emitted in source order; find only the contiguous
+    // overlap instead of checking every sibling in a large enclosing block.
+    let start =
+        children.partition_point(|child| child_source_range(child, cx.arena).end.line < first);
+    let end = start
+        + children[start..]
+            .partition_point(|child| child_source_range(child, cx.arena).start.line <= last);
+    &children[start..end]
+}
+
+fn child_source_range(child: &Child, arena: &Arena) -> cwtools_parser::ast::SourceRange {
+    match child {
+        Child::Leaf(i) => arena.leaves[*i as usize].pos,
+        Child::LeafValue(i) => arena.leaf_values[*i as usize].pos,
+        Child::Comment(i) => arena.comments[*i as usize].pos,
+    }
+}
+
 fn collect_leaf(
     idx: u32,
     cx: &Ctx<'_>,
-    block_rules: Option<&[(RuleType, Options)]>,
+    block_rules: Option<RuleList<'_>>,
     matcher: Option<&RuleBodyMatcher<'_>>,
     out: &mut Vec<AbsToken>,
 ) {
@@ -303,20 +397,21 @@ fn collect_leaf(
     let key_len = raw_key.chars().count();
     let key = raw_key.trim_matches('"');
 
-    let matched = match (cx.rules.as_ref(), block_rules, matcher) {
+    let (matched, is_alias_key) = match (cx.rules.as_ref(), block_rules, matcher) {
         (Some(r), Some(_), Some(matcher)) => {
-            matcher.value_rules_for_key(r.ruleset, r.prepared.type_index, key)
+            matcher.semantic_rules_for_key(r.ruleset, r.prepared.type_index, key)
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), false),
     };
 
-    let (key_ty, key_mods) = key_token_class(cx, block_rules, matcher, &matched, key);
+    let (key_ty, key_mods) = key_token_class(cx, block_rules, &matched, is_alias_key);
     if let Some(t) = cx.token(line0, key_col, key_col + key_len, key_ty, key_mods) {
         out.push(t);
     }
 
     let op = leaf.op.as_str();
-    if let Some(op_col) = find_token_col(line, op, key_col + key_len)
+    let op_col = find_token_col(line, op, key_col + key_len);
+    if let Some(op_col) = op_col
         && let Some(t) = cx.token(
             line0,
             op_col,
@@ -329,15 +424,25 @@ fn collect_leaf(
     }
 
     if let Value::Clause(inner) = &leaf.value {
-        let inner_rules = match block_rules {
-            None => cx.rules.as_ref().and_then(|r| r.bootstrap(inner)),
-            Some(_) => Some(node_bodies(&matched)),
+        let owned_inner_rules = if block_rules.is_none() {
+            cx.rules.as_ref().and_then(|r| r.bootstrap(inner))
+        } else {
+            None
         };
-        collect(inner, cx, inner_rules.as_deref(), out);
+        let borrowed_inner_rules = if block_rules.is_some() {
+            Some(node_body_refs(&matched))
+        } else {
+            None
+        };
+        let inner_rules = owned_inner_rules
+            .as_deref()
+            .map(RuleList::Slice)
+            .or_else(|| borrowed_inner_rules.as_deref().map(RuleList::References));
+        collect(inner, cx, inner_rules, out);
         return;
     }
 
-    let from = find_token_col(line, op, key_col + key_len)
+    let from = op_col
         .map(|c| c + op.chars().count())
         .unwrap_or(key_col + key_len);
     let Some((s, e)) = value_token_span(line, from) else {
@@ -351,19 +456,18 @@ fn collect_leaf(
 
 fn key_token_class(
     cx: &Ctx<'_>,
-    block_rules: Option<&[(RuleType, Options)]>,
-    matcher: Option<&RuleBodyMatcher<'_>>,
+    block_rules: Option<RuleList<'_>>,
     matched: &[&(RuleType, Options)],
-    key: &str,
+    is_alias_key: bool,
 ) -> (u32, u32) {
-    let (Some(r), Some(_rules)) = (cx.rules.as_ref(), block_rules) else {
+    let (Some(_), Some(_rules)) = (cx.rules.as_ref(), block_rules) else {
         return (TY_PROPERTY, MOD_NONE);
     };
-    if matcher.is_some_and(|matcher| {
-        matcher
-            .alias_category_for_key(r.ruleset, r.prepared.type_index, key)
-            .is_some()
-    }) {
+    key_token_class_for_matches(matched, is_alias_key)
+}
+
+fn key_token_class_for_matches(matched: &[&(RuleType, Options)], is_alias_key: bool) -> (u32, u32) {
+    if is_alias_key {
         return (TY_FUNCTION, MOD_NONE);
     }
     let declares_type = matched.iter().any(|(rt, _)| {
@@ -406,11 +510,7 @@ fn value_token_type(value: &Value, matched: &[&(RuleType, Options)], cx: &Ctx<'_
     }
 }
 
-fn leaf_value_token_type(
-    value: &Value,
-    cx: &Ctx<'_>,
-    block_rules: Option<&[(RuleType, Options)]>,
-) -> u32 {
+fn leaf_value_token_type(value: &Value, cx: &Ctx<'_>, block_rules: Option<RuleList<'_>>) -> u32 {
     match value {
         Value::Int(_) | Value::Float(_) => TY_NUMBER,
         Value::Bool(_) => TY_KEYWORD,
@@ -438,19 +538,34 @@ fn hint_token_type(hint: &ReferenceHint) -> Option<u32> {
     }
 }
 
-pub(crate) fn node_bodies(matched: &[&(RuleType, Options)]) -> Vec<(RuleType, Options)> {
+fn node_body_refs<'a>(matched: &[&'a (RuleType, Options)]) -> Vec<&'a (RuleType, Options)> {
     let mut out = Vec::new();
     for (rt, _) in matched.iter().copied() {
         if let RuleType::NodeRule { rules, .. } = rt {
             for r in rules.iter() {
                 match &r.0 {
-                    RuleType::SubtypeRule { rules: inner, .. } => out.extend(inner.iter().cloned()),
-                    _ => out.push(r.clone()),
+                    RuleType::SubtypeRule { rules: inner, .. } => out.extend(inner.iter()),
+                    _ => out.push(r),
                 }
             }
         }
     }
     out
+}
+
+pub(crate) fn node_bodies(matched: &[&(RuleType, Options)]) -> Vec<(RuleType, Options)> {
+    node_body_refs(matched).into_iter().cloned().collect()
+}
+
+fn valueclause_body_refs<'a>(rules: RuleList<'a>) -> Vec<&'a (RuleType, Options)> {
+    rules
+        .iter()
+        .filter_map(|(rt, _)| match rt {
+            RuleType::ValueClauseRule { rules } => Some(rules.iter()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
 }
 
 pub(crate) fn valueclause_bodies(rules: &[(RuleType, Options)]) -> Vec<(RuleType, Options)> {
@@ -465,11 +580,12 @@ pub(crate) fn valueclause_bodies(rules: &[(RuleType, Options)]) -> Vec<(RuleType
 }
 
 fn find_token_col(line: &[char], needle: &str, from: usize) -> Option<usize> {
-    let needle: Vec<char> = needle.chars().collect();
-    if needle.is_empty() || line.len() < needle.len() {
+    let needle_len = needle.chars().count();
+    if needle_len == 0 || line.len() < needle_len {
         return None;
     }
-    (from..=line.len() - needle.len()).find(|&i| line[i..i + needle.len()] == needle[..])
+    (from..=line.len().saturating_sub(needle_len))
+        .find(|&i| line[i..i + needle_len].iter().copied().eq(needle.chars()))
 }
 
 fn value_token_span(line: &[char], from: usize) -> Option<(usize, usize)> {
@@ -533,8 +649,12 @@ impl Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri.to_string();
-        if let Some(text) = self.file_text_for(&uri).await {
-            let hash = cwtools_cache::workspace::content_hash(&text);
+        let text = self.file_text_for(&uri).await;
+        let hash = text
+            .as_deref()
+            .map(cwtools_cache::workspace::content_hash)
+            .unwrap_or(0);
+        if text.is_some() {
             // scrutinee would still be alive inside the block (#334).
             let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
             if let Some(entry) = cached
@@ -560,14 +680,12 @@ impl Backend {
                 })));
             }
         }
-        let Some(data) = self.tokens_for(&uri, None).await else {
+        let Some(text) = text else {
             return Ok(None);
         };
-        let hash = self
-            .file_text_for(&uri)
-            .await
-            .map(|t| cwtools_cache::workspace::content_hash(&t))
-            .unwrap_or(0);
+        let Some(data) = self.tokens_for_text(&uri, text, None).await else {
+            return Ok(None);
+        };
         let result_id = self
             .state
             .semantic_tokens_seq
@@ -593,8 +711,12 @@ impl Backend {
         params: SemanticTokensDeltaParams,
     ) -> Result<Option<SemanticTokensFullDeltaResult>> {
         let uri = params.text_document.uri.to_string();
-        if let Some(text) = self.file_text_for(&uri).await {
-            let hash = cwtools_cache::workspace::content_hash(&text);
+        let text = self.file_text_for(&uri).await;
+        let hash = text
+            .as_deref()
+            .map(cwtools_cache::workspace::content_hash)
+            .unwrap_or(0);
+        if text.is_some() {
             let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
             if let Some(entry) = cached
                 && entry.hash == hash
@@ -621,14 +743,12 @@ impl Backend {
                 )));
             }
         }
-        let Some(new_data) = self.tokens_for(&uri, None).await else {
+        let Some(text) = text else {
             return Ok(None);
         };
-        let hash = self
-            .file_text_for(&uri)
-            .await
-            .map(|t| cwtools_cache::workspace::content_hash(&t))
-            .unwrap_or(0);
+        let Some(new_data) = self.tokens_for_text(&uri, text, None).await else {
+            return Ok(None);
+        };
         let previous_id = params.previous_result_id;
         let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
         if let Some(entry) = cached
@@ -698,11 +818,20 @@ impl Backend {
     }
 
     async fn tokens_for(&self, uri: &str, span: Option<LineSpan>) -> Option<Vec<SemanticToken>> {
+        let text = self.file_text_for(uri).await?;
+        self.tokens_for_text(uri, text, span).await
+    }
+
+    async fn tokens_for_text(
+        &self,
+        uri: &str,
+        text: Arc<str>,
+        span: Option<LineSpan>,
+    ) -> Option<Vec<SemanticToken>> {
         if crate::paths::has_loc_ext(uri) || crate::paths::is_cwt_file(uri) {
             return None;
         }
         let ast = self.ast_for(uri)?;
-        let text = self.file_text_for(uri).await?;
         let (game, scope_checks, var_checks, encoding, ws_prefix) = {
             let cfg = self.state.config.read();
             (
@@ -724,10 +853,16 @@ impl Backend {
         };
 
         let table = self.table_for(&ast);
-        let tokens = match ruleset {
+        let line_index = {
+            let docs = self.state.documents.lock();
+            docs.line_index_for_text(uri, &text)
+                .unwrap_or_else(|| Arc::new(crate::state::LineIndex::new(&text)))
+        };
+        let state = Arc::clone(&self.state);
+        let tokens = match tokio::task::spawn_blocking(move || match ruleset {
             Some(ruleset) => {
-                let info = self.state.info_service.read();
-                let inline_guard = self.state.inline_scripts.read();
+                let info = state.info_service.read();
+                let inline_guard = state.inline_scripts.read();
                 let prepared = crate::validate::make_prepared(
                     &ruleset,
                     &table,
@@ -741,16 +876,27 @@ impl Backend {
                     scope_checks,
                     var_checks,
                 );
-                semantic_tokens(
+                semantic_tokens_indexed(
                     &ast,
                     &table,
                     &text,
                     &encoding,
                     Some((&prepared, logical_path.as_str())),
                     span,
+                    &line_index,
                 )
             }
-            None => semantic_tokens(&ast, &table, &text, &encoding, None, span),
+            None => {
+                semantic_tokens_indexed(&ast, &table, &text, &encoding, None, span, &line_index)
+            }
+        })
+        .await
+        {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                tracing::error!(%uri, %error, "semantic token worker failed");
+                return None;
+            }
         };
 
         Some(encode(tokens))
@@ -778,6 +924,51 @@ mod tests {
             None,
             Some(span),
         )
+    }
+
+    #[test]
+    fn borrowed_nested_rules_keep_specific_precedence_and_token_class() {
+        let specific = (
+            RuleType::LeafRule {
+                left: NewField::SpecificField("always".to_string()),
+                right: NewField::ScalarField,
+            },
+            Options::default(),
+        );
+        let scalar = (
+            RuleType::LeafRule {
+                left: NewField::ScalarField,
+                right: NewField::ScalarField,
+            },
+            Options::default(),
+        );
+        let alias = (
+            RuleType::LeafRule {
+                left: NewField::AliasField("trigger".to_string()),
+                right: NewField::ScalarField,
+            },
+            Options::default(),
+        );
+        let rules = vec![specific, scalar, alias];
+        let references: Vec<_> = rules.iter().collect();
+        let ruleset = RuleSet::default();
+
+        let borrowed = RuleBodyMatcher::from_references(&references);
+        let (borrowed_matches, borrowed_is_alias) =
+            borrowed.semantic_rules_for_key(&ruleset, None, "always");
+        let owned = RuleBodyMatcher::new(&rules, &ruleset);
+        let (owned_matches, owned_is_alias) =
+            owned.semantic_rules_for_key(&ruleset, None, "always");
+
+        assert_eq!(borrowed_matches, owned_matches);
+        assert!(!borrowed_is_alias);
+        assert_eq!(borrowed_is_alias, owned_is_alias);
+        assert_eq!(borrowed_matches, vec![&rules[0]]);
+        assert_eq!(
+            key_token_class_for_matches(&borrowed_matches, borrowed_is_alias),
+            (TY_PROPERTY, MOD_NONE),
+            "the specific property must suppress alias fallback classification"
+        );
     }
 
     fn at(tokens: &[AbsToken], line: u32, start: u32) -> AbsToken {
@@ -1009,6 +1200,23 @@ mod tests {
             .filter(|t| (3..=5).contains(&t.line))
             .collect();
         assert_eq!(ranged, expected);
+    }
+
+    #[test]
+    fn a_narrow_span_matches_full_tokens_with_many_distant_siblings() {
+        let mut text = String::new();
+        for i in 0..2_000 {
+            text.push_str(&format!(
+                "event_{i} = {{\n  label = \"β😀 {i}\"\n  cost = {i}\n}}\n"
+            ));
+        }
+        let full = tokens_for(&text);
+        let range = tokens_in_span(&text, (4_000, 4_004));
+        let expected: Vec<_> = full
+            .into_iter()
+            .filter(|token| (3_999..=4_003).contains(&token.line))
+            .collect();
+        assert_eq!(range, expected);
     }
 
     #[test]
