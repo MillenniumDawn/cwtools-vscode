@@ -1,9 +1,5 @@
 ### Unreleased
 
-#### Extension
-
-* Declare VS Code 1.91.0 as the minimum host version required by the shipped vscode-languageclient, and exercise activation plus language-server initialization at that floor in CI. (#849)
-
 #### Engine
 
 * Load repeatable CLI `--parent` directories and `parents` from `cwtools.toml` for validate and fix, indexing parent scripts and localisation between the workspace and vanilla without validating or fixing parent files. Both commands share the same parent-aware vanilla cache. (#819)
@@ -63,6 +59,7 @@
 
 #### Extension
 
+* Declare VS Code 1.91.0 as the minimum host version required by the shipped vscode-languageclient, and exercise activation plus language-server initialization at that floor in CI. (#849)
 * Minify production extension and webview bundles, and generate source maps only for development builds. (#500)
 * Keep the Fix All and Format Workspace protocol-error tests independent of delayed rules-config error notifications from the pinned Stellaris rules. (#959)
 * Test that a crashed language server recovers, stops after its restart budget, and can be started manually again. (#928)
