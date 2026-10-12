@@ -240,8 +240,8 @@ impl Backend {
         let loc_uris = self.loc_file_uris().await;
         let loc_edits = self
             .collect_loc_rename_loc_edits(Arc::clone(&target_to_new), loc_uris)
-            .await;
-        let script_edits = self.collect_loc_rename_usages(target_to_new).await;
+            .await?;
+        let script_edits = self.collect_loc_rename_usages(target_to_new).await?;
         let mut by_uri: HashMap<String, Vec<TextEdit>> = HashMap::new();
         for (file_uri, edits) in loc_edits.into_iter().chain(script_edits) {
             by_uri.entry(file_uri).or_default().extend(edits);
@@ -263,17 +263,17 @@ impl Backend {
     }
 
     /// The edits inside loc files: each key's definition lines, and every
-    /// `$key$` reference in a value. One streamed pass, each file parsed once
-    /// and dropped; the definitions come from the parser rather than the loc
+    /// `$key$` reference in a value. One budgeted pass parses each file once;
+    /// the definitions come from the parser rather than the loc
     /// index because a rename has to reach every language on disk, and the
     /// index only holds the configured ones (#474).
     async fn collect_loc_rename_loc_edits(
         &self,
         target_to_new: Arc<HashMap<String, String>>,
         loc_uris: Vec<String>,
-    ) -> Vec<(String, Vec<TextEdit>)> {
+    ) -> Result<Vec<(String, Vec<TextEdit>)>> {
         if loc_uris.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let encoding = self.position_encoding();
         self.scan_workspace_texts(loc_uris, move |uri, text| {
@@ -324,15 +324,15 @@ impl Backend {
         .await
     }
 
-    /// The edits inside script files, from the same streamed scan
+    /// The edits inside script files, from the same budgeted scan
     /// find-references uses for its usage half.
     async fn collect_loc_rename_usages(
         &self,
         target_to_new: Arc<HashMap<String, String>>,
-    ) -> Vec<(String, Vec<TextEdit>)> {
+    ) -> Result<Vec<(String, Vec<TextEdit>)>> {
         let script_uris = self.script_uris();
         if script_uris.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let encoding = self.position_encoding();
         self.scan_workspace_texts(script_uris, move |uri, text| {
@@ -562,5 +562,174 @@ impl Backend {
             return Err(refused);
         }
         Ok(Some(self.build_workspace_edit(by_uri, &snapshot)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::{DocumentState, ParsedDoc};
+
+    fn backend() -> (Backend, Arc<DocumentState>) {
+        let state = Arc::new(DocumentState::new());
+        let captured = Arc::new(parking_lot::Mutex::new(None));
+        let slot = captured.clone();
+        let server_state = state.clone();
+        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
+            *slot.lock() = Some(client.clone());
+            Backend {
+                client,
+                state: server_state.clone(),
+            }
+        });
+        let client = captured.lock().take().expect("the builder ran");
+        (
+            Backend {
+                client,
+                state: state.clone(),
+            },
+            state,
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loc_rename_discards_definition_edits_when_usage_scan_exceeds_budget() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("workspace");
+        let loc_dir = ws.path().join("localisation");
+        std::fs::create_dir_all(&loc_dir).unwrap();
+        let content = "l_english:\nx:0 \"x\"\n";
+        let open_uri = Url::from_file_path(loc_dir.join("open_l_english.yml"))
+            .expect("open URI")
+            .to_string();
+        let root = std::fs::canonicalize(ws.path()).expect("canonical root");
+        {
+            let mut config = state.config.write();
+            config.authorized_roots = Arc::from([root.clone()]);
+            config.workspace_roots = vec![root.clone()];
+            config.editable_roots = Arc::from([root]);
+        }
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(content),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        *state.navigation_snapshot_budget_override.lock() =
+            Some(crate::access::scan_peak_bytes(content.len()));
+        let snapshot = backend.capture_rename_request();
+        let edit = backend
+            .rename_loc(&open_uri, "x", "renamed_x", &snapshot)
+            .await
+            .expect("the definition scan fits the peak cap")
+            .expect("the definition produces an edit");
+        let changes = edit.changes.expect("the client uses unversioned changes");
+        let definition_edits = changes.get(&open_uri.parse().unwrap()).unwrap();
+        assert_eq!(definition_edits.len(), 1);
+        assert_eq!(definition_edits[0].new_text, "renamed_x");
+
+        let script_uri = Url::from_file_path(ws.path().join("large.txt"))
+            .expect("script URI")
+            .to_string();
+        state
+            .documents
+            .lock()
+            .open(
+                script_uri,
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from("value = x\n".repeat(4)),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let snapshot = backend.capture_rename_request();
+        let error = backend
+            .rename_loc(&open_uri, "x", "renamed_x", &snapshot)
+            .await
+            .expect_err("usage exhaustion must discard the already collected definition edits");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED)
+        );
+        assert!(error.message.contains("total text read budget exceeded"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn loc_rename_refuses_shared_budget_exhaustion_without_partial_edits() {
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("workspace");
+        let loc_dir = ws.path().join("localisation");
+        std::fs::create_dir_all(&loc_dir).unwrap();
+        let content = "l_english:\nx:0 \"x\"\n";
+        let open_path = loc_dir.join("open_l_english.yml");
+        let open_uri = Url::from_file_path(&open_path)
+            .expect("open URI")
+            .to_string();
+        let closed_paths = (0..2)
+            .map(|idx| {
+                let path = loc_dir.join(format!("closed-{idx}_l_english.yml"));
+                std::fs::write(&path, content).unwrap();
+                path
+            })
+            .collect::<Vec<_>>();
+        let closed_uris = closed_paths
+            .iter()
+            .map(|path| Url::from_file_path(path).expect("closed URI").to_string())
+            .collect::<Vec<_>>();
+        let root = std::fs::canonicalize(ws.path()).expect("canonical root");
+        {
+            let mut config = state.config.write();
+            config.authorized_roots = Arc::from([root.clone()]);
+            config.workspace_roots = vec![root.clone()];
+            config.editable_roots = Arc::from([root]);
+        }
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(content),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts the open loc buffer");
+
+        let limit = content.len() + (content.len() + 1) * 5;
+        *state.navigation_snapshot_budget_override.lock() = Some(limit);
+        for closed_uri in &closed_uris {
+            let individually_fitting = vec![open_uri.clone(), closed_uri.clone()];
+            backend
+                .file_text_snapshots_for_navigation(&individually_fitting)
+                .await
+                .expect("the open buffer and one closed file fit the cap");
+        }
+        let snapshot = backend.capture_rename_request();
+        let error = backend
+            .rename_loc(&open_uri, "x", "renamed_x", &snapshot)
+            .await
+            .expect_err("the rename must abort rather than return partial edits");
+        assert_eq!(
+            error.code,
+            tower_lsp::jsonrpc::ErrorCode::ServerError(REQUEST_FAILED)
+        );
+        assert!(error.message.contains("total text read budget exceeded"));
     }
 }

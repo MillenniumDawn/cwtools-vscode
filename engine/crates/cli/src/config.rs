@@ -197,25 +197,6 @@ pub(crate) fn pick_list<T>(
     file
 }
 
-/// A repeatable command-line path list can override a configured list, while
-/// an explicitly empty config array still means “no paths” and counts as used.
-pub(crate) fn pick_configured_list<T>(
-    flag: Vec<T>,
-    file: Vec<T>,
-    file_is_set: bool,
-    key: &'static str,
-    applied: &mut Vec<&'static str>,
-) -> Vec<T> {
-    if !flag.is_empty() {
-        return flag;
-    }
-    if file_is_set {
-        note(key, applied);
-        return file;
-    }
-    flag
-}
-
 pub(crate) fn pick_flag(
     flag: bool,
     file: bool,
@@ -797,42 +778,6 @@ allow-empty = true
         let cfg = load(&p).unwrap();
         assert_eq!(cfg.rules, Some(tmp.path().join("Config")));
         assert_eq!(cfg.directory, Some(tmp.path().join(".")));
-    }
-
-    #[test]
-    fn empty_parents_array_is_an_explicit_empty_config_value() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = write(tmp.path(), "parents = []\n");
-        let cfg = load(&p).unwrap();
-        assert!(cfg.parents.is_empty());
-        assert!(cfg.present.contains(&"parents"));
-
-        let mut applied = Vec::new();
-        assert!(
-            pick_configured_list(
-                Vec::<PathBuf>::new(),
-                cfg.parents,
-                cfg.present.contains(&"parents"),
-                "parents",
-                &mut applied,
-            )
-            .is_empty()
-        );
-        assert_eq!(applied, ["parents"]);
-    }
-
-    #[test]
-    fn repeated_parent_flags_override_the_config_list_in_flag_order() {
-        let mut applied = Vec::new();
-        let result = pick_configured_list(
-            vec![PathBuf::from("first"), PathBuf::from("second")],
-            vec![PathBuf::from("from-config")],
-            true,
-            "parents",
-            &mut applied,
-        );
-        assert_eq!(result, [PathBuf::from("first"), PathBuf::from("second")]);
-        assert!(applied.is_empty());
     }
 
     /// `directory = "."` must be the config's directory, not `<dir>/.`:

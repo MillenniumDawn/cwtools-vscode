@@ -52,23 +52,22 @@ export interface GameDetection {
 export async function detectGameAndVanilla(
 	root: WorkspaceFolder,
 ): Promise<GameDetection> {
-	let languageId = (await detectLanguageId(root)) ?? "paradox";
+	const hintedLanguageId = await detectLanguageId(root);
+	// Folder and content markers are enough to classify recognized workspaces.
+	// Avoid a recursive executable search during activation; scan only when the
+	// workspace gives us no game hint.
+	if (hintedLanguageId) return { languageId: hintedLanguageId };
 
-	// Once content or root-name hints pin a specific game we don't need to scan the workspace
-	// for the other exes; the generic "paradox" case still checks all of them.
-	const gamesToCheck =
-		languageId === "paradox" ? GAMES : GAMES.filter((g) => g.id === languageId);
+	const gamesToCheck = GAMES;
 	const promises = gamesToCheck.map(({ exeName, binariesPrefix }) =>
 		findExeInFiles(exeName, binariesPrefix, root),
 	);
 	const results = await Promise.all(promises);
 
+	let languageId = "paradox";
 	for (let i = 0; i < results.length; i++) {
 		const { id } = gamesToCheck[i];
-		if (
-			results[i].length > 0 &&
-			(languageId === "paradox" || languageId === id)
-		) {
+		if (results[i].length > 0) {
 			languageId = id;
 		}
 	}

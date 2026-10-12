@@ -46,7 +46,6 @@ pub struct WorkspaceDiscoveryRequest {
     pub policy: DiscoveryPolicy,
 }
 
-#[derive(Clone)]
 pub struct SourceFile {
     pub path: PathBuf,
     pub logical_path: String,
@@ -570,29 +569,18 @@ impl Session {
                 .scripted_gui_index
                 .merge_file(&file_uri, scripted_guis);
         }
-        let (primary_parsed, parent_parsed): (Vec<_>, Vec<_>) = parsed
+        let mut source_files: Vec<SourceFile> = parsed
             .into_iter()
-            .enumerate()
-            .partition(|(index, _)| *index < primary_file_count);
-        let source_files: Vec<SourceFile> = primary_parsed
-            .into_iter()
-            .map(|(_, src)| SourceFile {
+            .map(|src| SourceFile {
                 path: src.path,
                 logical_path: src.logical_path,
                 fingerprint: src.fingerprint,
             })
             .collect();
-        let parent_source_files: Vec<SourceFile> = parent_parsed
-            .into_iter()
-            .map(|(_, src)| SourceFile {
-                path: src.path,
-                logical_path: src.logical_path,
-                fingerprint: src.fingerprint,
-            })
-            .collect();
-        let mut inline_files = source_files.clone();
-        inline_files.extend(parent_source_files);
-        let inline_scripts = load_inline_scripts(&inline_files, &rules_table);
+        // Parents sit after the primary files; they supply inline scripts but
+        // are not validated.
+        let inline_scripts = load_inline_scripts(&source_files, &rules_table);
+        source_files.truncate(primary_file_count);
 
         let mut cache_write_target: Option<(PathBuf, String)> = None;
         let mut force_vanilla_rebuild = false;

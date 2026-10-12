@@ -72,8 +72,7 @@ files under `--directory` are validated.
 CLI `--parent` paths are relative to the current working directory. A
 `cwtools.toml` can set the same ordered list with `parents = ["../base-mod"]`;
 those paths are relative to the config file. If no `--parent` flag is present,
-the config list is used. Supplying one or more flags replaces that list, and
-`parents = []` explicitly clears it when no CLI flags are supplied.
+the config list is used. Supplying one or more flags replaces that list.
 
 The `.cwt` rules are a separate repo, not bundled. HOI4 uses
 [cwtools-hoi4-config](https://github.com/cwtools/cwtools-hoi4-config); point

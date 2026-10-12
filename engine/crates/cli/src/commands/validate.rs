@@ -26,7 +26,7 @@ pub(super) fn run(args: ValidateArgs) {
         directory,
         rules,
         vanilla,
-        parents,
+        parents: parent_roots,
         vanilla_cache,
         no_vanilla_cache,
         refresh_vanilla_cache,
@@ -64,17 +64,11 @@ pub(super) fn run(args: ValidateArgs) {
         option fail_on => fail_on "fail-on";
         list ignore_files => ignore_files "ignore-files";
         list ignore_dirs => ignore_dirs "ignore-dirs";
+        list parent_roots => parents "parents";
         list loc_language => loc_languages "loc-languages";
         list ignore_codes => ignore_codes "ignore-codes";
         list only_codes => only_codes "only-codes";
         flag allow_empty => allow_empty "allow-empty";
-    );
-    let parent_roots = config::pick_configured_list(
-        parents,
-        fc.map(|c| c.parents.clone()).unwrap_or_default(),
-        fc.is_some_and(|c| c.present.contains(&"parents")),
-        "parents",
-        &mut applied,
     );
     let report_type = report_type.unwrap_or(ReportType::Cli);
     let fail_on = fail_on.unwrap_or_default();

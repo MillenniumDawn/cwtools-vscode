@@ -1300,10 +1300,6 @@ mod tests {
         );
     }
 
-    const _: fn() = || {
-        let _ = Arc::new(());
-    };
-
     mod reference {
         pub(super) fn subsequence_match(haystack: &str, needle: &str) -> bool {
             if needle.is_empty() {

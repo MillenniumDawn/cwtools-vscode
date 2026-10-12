@@ -70,10 +70,22 @@ suite("detectGameAndVanilla", () => {
 				assert.deepStrictEqual(await detectGameAndVanilla({
 					uri: { fsPath: folder }, name: "Millennium-Dawn", index: 0,
 				} as never), { languageId: "hoi4" });
-				assert.strictEqual(mocks.findFiles.mock.calls.length, 1);
-				const [pattern] = mocks.findFiles.mock.calls[0] as [{ pattern: string }];
-				assert.match(pattern.pattern, /hoi4/);
+				assert.strictEqual(mocks.findFiles.mock.calls.length, 0);
 			}
+		} finally {
+			await fs.rm(temp, { recursive: true, force: true });
+		}
+	});
+
+	test("a recognized folder-name hint skips executable searches", async () => {
+		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "cwtools-detection-"));
+		const folder = path.join(temp, "HOI4_Mod");
+		await fs.mkdir(folder);
+		try {
+			assert.deepStrictEqual(await detectGameAndVanilla({
+				uri: { fsPath: folder }, name: "HOI4_Mod", index: 0,
+			} as never), { languageId: "hoi4" });
+			assert.strictEqual(mocks.findFiles.mock.calls.length, 0);
 		} finally {
 			await fs.rm(temp, { recursive: true, force: true });
 		}

@@ -27,7 +27,7 @@ pub(super) fn run(args: FixArgs) {
         game,
         directory,
         rules,
-        parents,
+        parents: parent_roots,
         vanilla,
         vanilla_cache,
         no_vanilla_cache,
@@ -68,17 +68,11 @@ pub(super) fn run(args: FixArgs) {
         default case_sensitive_files => case_sensitive_files "case-sensitive-files";
         list ignore_files => ignore_files "ignore-files";
         list ignore_dirs => ignore_dirs "ignore-dirs";
+        list parent_roots => parents "parents";
         list loc_language => loc_languages "loc-languages";
         list only_codes => only_codes "only-codes";
         list ignore_codes => ignore_codes "ignore-codes";
         flag allow_empty => allow_empty "allow-empty";
-    );
-    let parent_roots = config::pick_configured_list(
-        parents,
-        fc.map(|c| c.parents.clone()).unwrap_or_default(),
-        fc.is_some_and(|c| c.present.contains(&"parents")),
-        "parents",
-        &mut applied,
     );
     announce_config("fix", fc, &applied, config::FIX_KEYS);
 
