@@ -7,7 +7,10 @@ import type { GraphNode } from "../../../src/common/graphTypes";
 // execute through their normal message dispatcher.
 const state = vi.hoisted(() => ({
 	cores: [] as cytoscape.Core[],
-	layouts: [] as { name: string; ids: string[] }[],
+	layouts: [] as { name: string; ids: string[]; owner: number }[],
+	layoutCallbacks: [] as Array<{ name: string; owner: number; callback: () => void; active: boolean }>,
+	layoutFailure: undefined as Error | undefined,
+	layoutEvents: [] as string[],
 	listener: undefined as ((event: { data: unknown }) => void) | undefined,
 	postMessage: vi.fn(),
 	setState: vi.fn(),
@@ -49,12 +52,43 @@ vi.mock("cytoscape", async (importOriginal) => {
 vi.mock("cytoscape-elk", () => ({
 	default: (factory: typeof cytoscape) => {
 		for (const name of ["elk", "grid"]) {
-			function Layout(this: { options: { eles: cytoscape.CollectionReturnValue } }, options: { eles: cytoscape.CollectionReturnValue }) {
+			function Layout(this: {
+				options: { eles: cytoscape.CollectionReturnValue };
+				callback?: () => void;
+				callbackRecord?: (typeof state.layoutCallbacks)[number];
+				owner: number;
+				one: (event: string, callback: () => void) => void;
+				removeListener: (event: string, callback: () => void) => void;
+			}, options: { eles: cytoscape.CollectionReturnValue }) {
 				this.options = options;
+				this.owner = state.cores.length - 1;
+				this.one = (_event, callback) => { this.callback = callback; };
+				this.removeListener = (_event, callback) => {
+					if (this.callback === callback) {
+						this.callback = undefined;
+						if (this.callbackRecord) this.callbackRecord.active = false;
+					}
+				};
 			}
 			Object.defineProperty(Layout.prototype as object, "run", {
-				value: function (this: { options: { eles: cytoscape.CollectionReturnValue } }) {
-					state.layouts.push({ name, ids: this.options.eles.map((e) => e.id()) });
+				value: function (this: {
+					options: { eles: cytoscape.CollectionReturnValue };
+					callback?: () => void;
+					callbackRecord?: (typeof state.layoutCallbacks)[number];
+					owner: number;
+				}) {
+					if (name === "elk" && state.layoutFailure) throw state.layoutFailure;
+					state.layouts.push({ name, owner: this.owner, ids: this.options.eles.map((e) => e.id()) });
+					state.layoutEvents.push(`${name}:run`);
+					if (name === "elk") {
+						this.callbackRecord = {
+							name,
+							owner: this.owner,
+							callback: this.callback ?? (() => {}),
+							active: true,
+						};
+						state.layoutCallbacks.push(this.callbackRecord);
+					}
 					return this;
 				},
 			});
@@ -110,9 +144,20 @@ export function send(message: unknown) {
 	state.listener!({ data: message });
 }
 
-export function render(nodes: GraphNode[]): cytoscape.Core {
+export function render(nodes: GraphNode[], options: { completeLayouts?: boolean } = {}): cytoscape.Core {
 	send({ command: "go", data: nodes, settings: { wheelSensitivity: 1 } });
+	if (options.completeLayouts !== false) completeLayout("elk");
 	return state.cores[state.cores.length - 1];
+}
+
+export function completeLayout(name: string, owner = state.cores.length - 1) {
+	const pending = state.layoutCallbacks.find((layout) => layout.name === name && layout.owner === owner && layout.active);
+	if (pending) {
+		state.layoutCallbacks.splice(state.layoutCallbacks.indexOf(pending), 1);
+		pending.active = false;
+		state.layoutEvents.push(`${name}:stop`);
+		pending.callback();
+	}
 }
 
 export function node(id: string, targets: string[] = []): GraphNode {
@@ -125,6 +170,10 @@ export function node(id: string, targets: string[] = []): GraphNode {
 
 export function resetGraphState() {
 	state.layouts.length = 0;
+	state.layoutCallbacks.length = 0;
+	state.layoutFailure = undefined;
+	state.layoutEvents.length = 0;
+	state.postMessage.mockClear();
 	state.tips.length = 0;
 }
 

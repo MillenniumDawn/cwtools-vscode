@@ -1,10 +1,10 @@
 import type cytoscape from "cytoscape";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { installGraph, node, render, resetGraphState, state } from "./support/graphHeadless";
+import { completeLayout, installGraph, node, render, resetGraphState, state } from "./support/graphHeadless";
 
 beforeAll(installGraph);
 beforeEach(() => { vi.useFakeTimers(); resetGraphState(); });
-afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+afterEach(() => { vi.restoreAllMocks(); vi.clearAllTimers(); vi.useRealTimers(); });
 afterAll(() => { state.cores.forEach((core) => core.destroy()); vi.unstubAllGlobals(); });
 
 test("real delegated hover highlights the closed neighborhood and restores classes", () => {
@@ -43,6 +43,74 @@ test("a large graph draws each node once and disables expensive shadows", () => 
 	expect(state.ctx.arc).toHaveBeenCalledTimes(500);
 	expect(state.ctx.shadowBlur).toBe(0);
 	expect(state.layouts.find((l) => l.name === "grid")!.ids.length).toBe(500);
+});
+
+test("waits for ELK before laying out isolated nodes and fitting the graph", () => {
+	const cy = render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
+	const fit = vi.spyOn(Object.getPrototypeOf(cy) as { fit: cytoscape.Core["fit"] }, "fit");
+
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk"]);
+	expect(fit).not.toHaveBeenCalled();
+
+	completeLayout("elk");
+
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk", "grid"]);
+	expect(state.layouts.find((layout) => layout.name === "grid")?.ids).toEqual(["isolated"]);
+	expect(state.layoutEvents).toEqual(["elk:run", "elk:stop", "grid:run"]);
+	expect(fit).toHaveBeenCalledTimes(1);
+});
+
+test("reports a synchronous layout failure to the extension host", () => {
+	state.layoutFailure = new Error("ELK failed");
+	render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
+
+	expect(state.postMessage).toHaveBeenCalledWith({
+		command: "showError",
+		message: "CWTools: couldn't lay out graph: ELK failed.",
+	});
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["grid"]);
+});
+
+test("reports an ELK layout that does not complete and accepts a late completion", () => {
+	const timerSpy = vi.spyOn(globalThis, "setTimeout");
+	const cy = render([node("isolated"), node("connected", ["target"]), node("target")], { completeLayouts: false });
+	const fit = vi.spyOn(cy, "fit");
+	const timeout = timerSpy.mock.calls.find(([, delay]) => delay === 60_000)?.[0];
+	expect(timeout).toBeDefined();
+	(timeout as () => void)();
+	timerSpy.mockRestore();
+	vi.clearAllTimers();
+
+	expect(state.postMessage).toHaveBeenCalledWith({
+		command: "showError",
+		message: "CWTools: couldn't lay out graph: ELK layout did not finish within 60 seconds.",
+	});
+	expect(state.layouts.map((layout) => layout.name)).toEqual(["elk", "grid"]);
+	expect(fit).toHaveBeenCalledTimes(1);
+
+	completeLayout("elk");
+	expect(fit).toHaveBeenCalledTimes(2);
+});
+
+test("discarded layout callbacks cannot finalize a replacement graph", () => {
+	const oldCy = render([node("old", ["oldTarget"]), node("oldTarget")], { completeLayouts: false });
+	const oldOwner = state.cores.length - 1;
+	const oldFit = vi.spyOn(oldCy, "fit");
+	const newCy = render([node("newIsolated"), node("new", ["newTarget"]), node("newTarget")], { completeLayouts: false });
+	const newOwner = state.cores.length - 1;
+	const newFit = vi.spyOn(newCy, "fit");
+
+	completeLayout("elk", oldOwner);
+
+	expect(state.postMessage).not.toHaveBeenCalled();
+	expect(state.layoutCallbacks.some((layout) => layout.owner === oldOwner && layout.active)).toBe(false);
+	expect(oldFit).not.toHaveBeenCalled();
+	expect(newFit).not.toHaveBeenCalled();
+
+	completeLayout("elk", newOwner);
+
+	expect(state.layouts.filter((layout) => layout.name === "grid").map((layout) => layout.owner)).toEqual([newOwner]);
+	expect(newFit).toHaveBeenCalledTimes(1);
 });
 
 test("real hover creates tooltips lazily and replacement destroys them", () => {
