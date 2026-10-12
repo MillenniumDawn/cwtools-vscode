@@ -178,9 +178,8 @@ pub(super) fn run(args: FixArgs) {
     );
 
     // Gather fixable diagnostics, grouped per file in deterministic order.
-    let mut by_file: BTreeMap<String, Vec<PlannedFix>> = BTreeMap::new();
+    let mut by_file: BTreeMap<std::path::PathBuf, Vec<PlannedFix>> = BTreeMap::new();
     for (path, errors) in session.validate_all() {
-        let file_str = path.to_str().unwrap_or("").to_string();
         for err in errors {
             let code = err.code.unwrap_or_default();
             if !want(code) {
@@ -189,7 +188,7 @@ pub(super) fn run(args: FixArgs) {
             if let Some(fix) = err.fix {
                 for edit in fix.edits {
                     by_file
-                        .entry(file_str.clone())
+                        .entry(path.clone())
                         .or_default()
                         .push((code.to_string(), edit));
                 }
@@ -212,7 +211,7 @@ pub(super) fn run(args: FixArgs) {
         if let Some(fix) = d.fix {
             for edit in fix.edits {
                 by_file
-                    .entry(d.file.clone())
+                    .entry(std::path::PathBuf::from(d.file.as_str()))
                     .or_default()
                     .push((d.code.to_string(), edit));
             }
@@ -223,8 +222,9 @@ pub(super) fn run(args: FixArgs) {
     let mut edits_applied = 0usize;
     let mut write_failed = false;
     for (file, planned) in by_file {
+        let file_display = file.display().to_string();
         let Ok(text) = std::fs::read_to_string(&file) else {
-            eprintln!("warn: could not read {file}; skipping its fixes");
+            eprintln!("warn: could not read {file_display}; skipping its fixes");
             if apply {
                 write_failed = true;
             }
@@ -232,25 +232,25 @@ pub(super) fn run(args: FixArgs) {
         };
         let (kept, skipped) = cwtools_parser::fix::plan_file_edits(&text, planned);
         for code in &skipped {
-            eprintln!("warn: {file}: skipped a {code} fix (overlaps another edit)");
+            eprintln!("warn: {file_display}: skipped a {code} fix (overlaps another edit)");
         }
         if kept.is_empty() {
             continue;
         }
         if apply {
             let fixed = cwtools_parser::fix::apply_edits(&text, &kept);
-            if let Err(e) = crate::run::write_atomically(std::path::Path::new(&file), |file| {
-                file.write_all(fixed.as_bytes())
-            }) {
-                eprintln!("Error writing {file}: {e}");
+            if let Err(e) =
+                crate::run::write_atomically(&file, |file| file.write_all(fixed.as_bytes()))
+            {
+                eprintln!("Error writing {file_display}: {e}");
                 write_failed = true;
             } else {
                 files_changed += 1;
                 edits_applied += kept.len();
-                println!("fixed {file} ({} edit(s))", kept.len());
+                println!("fixed {file_display} ({} edit(s))", kept.len());
             }
         } else {
-            print!("{}", fix_preview(&file, &text, &kept));
+            print!("{}", fix_preview(&file_display, &text, &kept));
             files_changed += 1;
             edits_applied += kept.len();
         }
