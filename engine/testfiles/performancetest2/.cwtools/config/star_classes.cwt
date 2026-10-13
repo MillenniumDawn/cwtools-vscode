@@ -1,5 +1,0 @@
-types = {
-	type[star_class] = {
-		path = "game/common/star_classes"
-	}
-}

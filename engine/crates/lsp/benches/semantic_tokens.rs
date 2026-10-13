@@ -7,7 +7,7 @@
 //! table setup happen outside the timed closures, matching the LSP handler's
 //! use of its parsed-document cache.
 //!
-//! The synthetic rules-backed cases parse the same small events.cwt fixture;
+//! The synthetic rules-backed cases parse the pinned Stellaris events.cwt alone;
 //! they cover repeated position dispatch and rule matching but are not a
 //! representative game rules corpus. The optional real Millennium Dawn case
 //! has no ruleset, so it measures source/AST shape only. In cached-index range
@@ -32,10 +32,6 @@ const SMALL_BLOCKS: usize = 2_000;
 const LARGE_BLOCKS: usize = 20_000;
 const RANGE_LINES: u32 = 40;
 const CORPUS_FILE: &str = "common/national_focus/05_usa.txt";
-const RULES_FILE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../testfiles/performancetest2/.cwtools/config/events.cwt"
-);
 const LOGICAL_PATH: &str = "game/events/semantic_bench.txt";
 
 fn synthetic(blocks: usize) -> String {
@@ -132,7 +128,8 @@ fn bench_source_with_rules(c: &mut Criterion, name: &str, text: &str) {
     let ast = parse_string(text, &table);
     let line_index = LineIndex::new(text);
     let rules_ast = parse_string(
-        &std::fs::read_to_string(RULES_FILE).expect("read events.cwt"),
+        &std::fs::read_to_string(cwtools_test_rules::stellaris_config().join("events.cwt"))
+            .expect("read events.cwt"),
         &table,
     );
     let ruleset = ast_to_ruleset(&rules_ast, &table);

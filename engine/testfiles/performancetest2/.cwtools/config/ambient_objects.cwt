@@ -1,6 +1,0 @@
-types = {
-	type[ambient_object] = {
-		name_field = "name"
-		path = "game/common/ambient_objects"
-	}
-}

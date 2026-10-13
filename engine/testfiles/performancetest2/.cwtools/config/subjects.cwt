@@ -1,5 +1,0 @@
-types = {
-	type[subject_type] = {
-		path = "game/common/subjects"
-	}
-}

@@ -1,5 +1,0 @@
-types = {
-	type[planet_modifier] = {
-		path = "game/common/planet_modifiers"
-	}
-}

@@ -1,36 +1,33 @@
 //! End-to-end test for the cwtools-stellaris-config integration.
 //!
-//! The fixture under `tests/fixtures/stellaris-config/` mirrors the layout of the
-//! external `cwtools-stellaris-config` repo (its `scopes.cwt` and `links.cwt`).
+//! The config is the external `cwtools-stellaris-config` repo at the commit
+//! `rules-pins.json` pins, the one installed extensions fetch.
 //! We load it through the real ruleset loader, build the runtime
 //! `ScopeRegistry`, and assert that scope/link resolution matches what the
 //! config declares. This is the regression net for issue #8's Stellaris slice:
 //! once the hardcoded `STELLARIS_SCOPES` table is gone, the config has to be
 //! the source of truth and this test pins that.
 
-use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use cwtools_game::constants::Game;
 use cwtools_game::scope_registry::ScopeRegistry;
+use cwtools_rules::rules_types::RuleSet;
 use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_rules::stellaris_config;
 
-fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stellaris-config")
-}
-
-fn load_stellaris_ruleset() -> cwtools_rules::rules_types::RuleSet {
-    let table = StringTable::new();
-    let (ruleset, _errors) = load_ruleset_from_dir(
-        &fixture_dir(),
-        &table,
-        cwtools_file_manager::file_manager::ScanBudget::default(),
-    );
-    // The fixture only carries scopes.cwt, links.cwt, pre_triggers.cwt; other
-    // cross-file type references surface as config-validation warnings about
-    // unrelated type definitions. The scope and link inputs we test against
-    // are populated regardless.
-    ruleset
+fn load_stellaris_ruleset() -> &'static RuleSet {
+    static RULESET: OnceLock<RuleSet> = OnceLock::new();
+    RULESET.get_or_init(|| {
+        let table = StringTable::new();
+        let (ruleset, _errors) = load_ruleset_from_dir(
+            stellaris_config(),
+            &table,
+            cwtools_file_manager::file_manager::ScanBudget::default(),
+        );
+        ruleset
+    })
 }
 
 fn stellaris_registry() -> ScopeRegistry {
@@ -38,12 +35,12 @@ fn stellaris_registry() -> ScopeRegistry {
     ScopeRegistry::from_config(&ruleset.scope_inputs, &ruleset.link_inputs, Game::Stellaris)
 }
 
-/// Sanity: the fixture must contain a scopes.cwt and a links.cwt, otherwise
-/// the rest of the assertions in this file are meaningless. Catches the case
-/// where someone deletes the fixture but leaves the tests.
+/// Sanity: the config must contain a scopes.cwt and a links.cwt, otherwise
+/// the rest of the assertions in this file are meaningless. Catches upstream
+/// moving either file out from under the tests.
 #[test]
-fn fixture_files_exist() {
-    let dir = fixture_dir();
+fn config_files_exist() {
+    let dir = stellaris_config();
     assert!(
         dir.join("scopes.cwt").is_file(),
         "scopes.cwt missing under {}",
@@ -219,7 +216,7 @@ fn config_driven_cw120_fires_for_planet_event() {
         let mut errors = Vec::new();
         validate_stellaris(
             &ast,
-            &ruleset,
+            ruleset,
             &table,
             &"events/test.txt".into(),
             None,

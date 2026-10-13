@@ -1,6 +1,0 @@
-
-types = {
-	type[resource] = {
-		path = "game/common/strategic_resources"
-	}
-}

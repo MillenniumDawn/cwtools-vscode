@@ -1,7 +1,8 @@
 # Weekly PR bumping the reviewed runtime manifest and bundled fallback pins.
 # Every install fetches only the exact commits this PR approves
 # The pins are consumed by extension/src/host/rulesSetup.ts, so an upstream
-# push cannot land unreviewed.
+# push cannot land unreviewed. The engine tests read the Stellaris and HOI4
+# pins too.
 # Nothing here auto-merges; the diffs are the point.
 on:
   schedule:
@@ -77,9 +78,48 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  pr:
+  # The engine tests read the Stellaris and HOI4 pins through
+  # cwtools_test_rules, so a bump can break them or move coverage. The coverage
+  # run is the whole `cargo test` suite, so one step gates both. The rules it
+  # fetches land in the runner's home cache dir, outside every path setup-rust
+  # saves.
+  engine:
     if: needs.bump.outputs.changed == 'true'
     needs: bump
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download changed pins
+        # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rules-pins
+          path: .
+      - uses: ./.github/actions/setup-rust
+        id: rust-setup
+        with:
+          components: llvm-tools
+          cache-prefix: cargo-coverage-target
+          cargo-tool: cargo-llvm-cov
+          cargo-tool-version: 0.8.7
+      - name: Install cargo-llvm-cov
+        if: steps.rust-setup.outputs.cargo-tool-cache-hit != 'true'
+        run: cargo install cargo-llvm-cov --locked --version 0.8.7
+      - name: Engine tests and coverage floor
+        run: python3 ../scripts/coverage.py
+
+  pr:
+    if: needs.bump.outputs.changed == 'true'
+    needs: [bump, engine]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

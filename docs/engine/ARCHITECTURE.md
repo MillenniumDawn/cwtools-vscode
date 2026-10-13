@@ -46,6 +46,8 @@ Then, roughly bottom-up:
 - `lsp`: the tower-lsp server, `cwtools-server` (on `driver`, `validation`, `info`,
   `cache`, `profiling`, and below).
 - `cli`: the `cwtools` binary (on `driver`, `validation`, `info`, `profiling`, and below).
+- `test_rules`: a dev-dependency only. Fetches and caches the pinned upstream
+  Stellaris and HOI4 rules the tests read (on no engine crate).
 
 The dependency graph is acyclic. `i18n`, `string_table`, and `game` are the
 shared leaves; `error_codes` adds only `i18n`.

@@ -1,8 +1,0 @@
-enums = {
-	complex_enum[component_tag] = {
-		path = "game/common/component_tags"
-		name = {
-			enum_name
-		}
-	}
-}
