@@ -81,6 +81,15 @@ document version. The file-type command test uses empty files to distinguish
 rule path matching from indexed instances, and checks the complete fallback
 lists for events, scripts, scripted effects and scripted triggers.
 
+## Test fixtures
+
+A fixture one crate uses lives in that crate's `tests/fixtures/`. `testfiles/`
+holds only `performancetest2`, the Stellaris mod slice with its own
+`.cwtools/config` ruleset that the parser, cache, rules and driver tests and two
+`cwtools_lsp` benches share. It is there for real-world syntax, not volume, so
+keep it small. Anything corpus-sized belongs in a bench that reads the sibling
+checkouts under `CWTOOLS_PROJECTS`.
+
 ## Diagnostics guard
 
 The test suite says the code still compiles and behaves. The diagnostics guard
