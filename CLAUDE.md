@@ -28,7 +28,7 @@ Both halves live here: a VS Code extension with a TypeScript client, and the Rus
 
 - `python3 scripts/guard.py md` and `scripts/md-baseline.csv` are the diagnostics regression gate against a pinned real mod (Millennium Dawn). `python3 scripts/guard.py vanilla` and `scripts/vanilla-baseline.csv` are the tier over a committed synthetic base game, for the checks that need one (CW113, CW222, CW227, CW229, CW250, CW500).
 - Two sibling checkouts matter, expected next to this repo (override the location with `CWTOOLS_PROJECTS`): `cwtools-hoi4-config` holds the `.cwt` rules, which are not bundled, so a behavior change is as likely to belong there as here; `Millennium-Dawn` is the pinned corpus the guard validates.
-- No Stellaris rules are committed. The engine tests that need them call `cwtools_test_rules::stellaris_config()`, which fetches `cwtools-stellaris-config` at the `rules-pins.json` commit into the user cache dir (`cwtools/test-rules` under `XDG_CACHE_HOME`, `LOCALAPPDATA` or `~/.cache`) on first use, so `cargo test` needs git and network access once per pin.
+- No real game rules are committed. The engine tests that read them call `cwtools_test_rules::stellaris_config()` or `hoi4_config()`, which fetch the upstream config at its `rules-pins.json` commit into the user cache dir (`cwtools/test-rules` under `XDG_CACHE_HOME`, `LOCALAPPDATA` or `~/.cache`) on first use, so `cargo test` needs git and network access once per pin. That HOI4 pin is the upstream repo installed extensions fetch, not the sibling `cwtools-hoi4-config` checkout the guard and benches read.
 
 ### Build System
 

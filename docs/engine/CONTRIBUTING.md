@@ -89,14 +89,16 @@ and driver tests and a `cwtools_lsp` bench share. It is there for real-world
 syntax, not volume, so keep it small. Anything corpus-sized belongs in a bench
 that reads the sibling checkouts under `CWTOOLS_PROJECTS`.
 
-No Stellaris rules are committed. A test that needs them calls
-`cwtools_test_rules::stellaris_config()`, which returns
-`cwtools-stellaris-config` at the commit `rules-pins.json` pins. The first call
+No real game rules are committed. A test that needs them calls
+`cwtools_test_rules::stellaris_config()` or `hoi4_config()`, which return the
+upstream config repo at the commit `rules-pins.json` pins. The first call
 fetches that commit with git into `cwtools/test-rules/` under the user cache
 dir (`XDG_CACHE_HOME`, `LOCALAPPDATA`, else `~/.cache` on every OS), and later
 runs read the cached copy, so the suite needs git and network access once per
 pin. A miss that cannot be fetched fails the test and names the commit. Rules a
 test's assertions spell out stay inline or in that crate's `tests/fixtures/`.
+The HOI4 pin is the upstream repo installed extensions fetch. The guard and the
+benches still read the sibling `cwtools-hoi4-config` checkout.
 
 ## Diagnostics guard
 
