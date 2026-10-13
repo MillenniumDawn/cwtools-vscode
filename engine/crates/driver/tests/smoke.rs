@@ -3,9 +3,9 @@
 //! The driver is the anti-drift hub between the CLI and the LSP: both call its
 //! Session/pipeline primitives so the load sequence can't diverge. These tests
 //! pin the pipeline against the checked-in `performancetest2` fixture (a
-//! Stellaris mod slice with its own `.cwtools/config` ruleset) plus a couple of
-//! synthesized temp dirs for the discovery-config helper. They assert the
-//! pipeline loads, indexes, and validates without panicking, and that its
+//! Stellaris mod slice, validated with the pinned upstream ruleset) plus a
+//! couple of synthesized temp dirs for the discovery-config helper. They assert
+//! the pipeline loads, indexes, and validates without panicking, and that its
 //! output is deterministic across runs.
 
 use std::collections::HashSet;
@@ -34,7 +34,7 @@ fn perf_mod() -> PathBuf {
 }
 
 fn perf_rules() -> PathBuf {
-    perf_mod().join(".cwtools").join("config")
+    cwtools_test_rules::stellaris_config().to_path_buf()
 }
 
 fn total_instances(index: &cwtools_index::TypeIndex) -> usize {

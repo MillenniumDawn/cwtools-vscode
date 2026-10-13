@@ -57,11 +57,13 @@ enums = {
 
 #[test]
 fn test_parse_real_cwt() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/test.cwt");
-    let input = std::fs::read_to_string(path).unwrap();
+    let config = cwtools_test_rules::stellaris_config();
     let table = StringTable::new();
-    let parsed = parse_string(&input, &table);
-    let ruleset = ast_to_ruleset(&parsed, &table);
+    let convert = |file: &str| {
+        let input = std::fs::read_to_string(config.join(file)).unwrap();
+        ast_to_ruleset(&parse_string(&input, &table), &table)
+    };
+    let ruleset = convert("common/ship_sizes.cwt");
 
     assert!(!ruleset.types.is_empty(), "expected at least one type");
     assert!(!ruleset.enums.is_empty(), "expected at least one enum");
@@ -82,40 +84,15 @@ fn test_parse_real_cwt() {
         "ship_size should not be path_strict in this ruleset"
     );
 
-    // Check that we got the shipsize_class enum with the expected members.
-    let shipsize_class = ruleset
+    // Check that we got the ship_size_ship_roles enum with the expected members.
+    let ship_roles = ruleset
         .enums
         .iter()
-        .find(|e| e.key == "shipsize_class")
-        .expect("shipsize_class enum should be present");
-    assert!(
-        shipsize_class
-            .values
-            .contains(&"shipclass_military".to_string())
-    );
-    assert!(
-        shipsize_class
-            .values
-            .contains(&"shipclass_starbase".to_string())
-    );
-    assert!(
-        shipsize_class
-            .values
-            .contains(&"shipclass_military_station".to_string())
-    );
-
-    // Check that several aliases were extracted, including scalar and block forms.
-    assert!(
-        ruleset
-            .aliases
-            .iter()
-            .any(|(n, _)| n == "effect:create_starbase"),
-        "effect:create_starbase alias missing"
-    );
-    assert!(
-        ruleset.aliases.iter().any(|(n, _)| n == "effect:set_name"),
-        "effect:set_name alias missing"
-    );
+        .find(|e| e.key == "ship_size_ship_roles")
+        .expect("ship_size_ship_roles enum should be present");
+    assert!(ship_roles.values.contains(&"artillery".to_string()));
+    assert!(ship_roles.values.contains(&"carrier".to_string()));
+    assert!(ship_roles.values.contains(&"screen".to_string()));
 
     // The ruleset index should have been built, so name lookups work.
     assert!(
@@ -123,20 +100,55 @@ fn test_parse_real_cwt() {
         "type_by_name index missing ship_size"
     );
     assert!(
-        ruleset.enum_by_name().contains_key("shipsize_class"),
-        "enum_by_name index missing shipsize_class"
+        ruleset.enum_by_name().contains_key("ship_size_ship_roles"),
+        "enum_by_name index missing ship_size_ship_roles"
+    );
+
+    // Check that several aliases were extracted, including scalar and block forms.
+    let effects = convert("effects.cwt");
+    assert!(
+        effects
+            .aliases
+            .iter()
+            .any(|(n, _)| n == "effect:create_starbase"),
+        "effect:create_starbase alias missing"
+    );
+    assert!(
+        effects.aliases.iter().any(|(n, _)| n == "effect:set_name"),
+        "effect:set_name alias missing"
     );
 }
 
 #[test]
-fn test_parse_stellaris_ethics() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../testfiles/performancetest2/.cwtools/config/ethics.cwt"
-    );
-    let input = std::fs::read_to_string(path).unwrap();
+fn test_parse_subtype_type_key_filter() {
+    let input = r#"
+types = {
+    type[ethos] = {
+        path = "game/common/ethics"
+
+        ## type_key_filter = ethic_categories
+        subtype[ethic_categories] = {
+        }
+
+        subtype[actual_ethics] = {
+            category_value = int
+        }
+    }
+}
+
+ethos = {
+    subtype[ethic_categories] = {
+        ## cardinality = 0..100
+        scalar = {}
+    }
+    subtype[actual_ethics] = {
+        cost = int
+        category_value = int[0..4]
+    }
+}
+"#;
     let table = StringTable::new();
-    let parsed = parse_string(&input, &table);
+    let parsed = parse_string(input, &table);
     let ruleset = ast_to_ruleset(&parsed, &table);
 
     assert!(!ruleset.types.is_empty(), "expected at least one type");

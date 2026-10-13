@@ -1,5 +1,0 @@
-types = {
-	type[asteroid_belt] = {
-		path = "game/common/asteroid_belts"
-	}
-}

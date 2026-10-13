@@ -1,7 +1,0 @@
-
-types = {
-	type[army] = {
-		path = "game/common/armies"
-	}
-}
-

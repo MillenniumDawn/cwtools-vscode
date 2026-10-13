@@ -1,5 +1,0 @@
-types = {
-	type[tile_blocker] = {
-		path = "game/common/tile_blockers"
-	}
-}

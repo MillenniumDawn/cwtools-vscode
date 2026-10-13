@@ -1,6 +1,0 @@
-types = {
-	type[global_ship_design] = {
-		path = "game/common/global_ship_designs"
-		name_field = "name"
-	}
-}
