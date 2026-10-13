@@ -13031,16 +13031,32 @@ fn unclosed_quote_notices_until_response(
         let Ok(frame) = serde_json::from_str::<serde_json::Value>(&raw) else {
             continue;
         };
-        if frame["method"] == method
-            && let Some(message) = frame["params"]["message"].as_str()
-            && message.contains("unclosed quote")
-        {
-            notices.push(message.to_owned());
-        }
+        notices.extend(unclosed_quote_notice(&frame, method));
         if frame["id"] == id && frame.get("method").is_none() {
             return (notices, frame);
         }
     }
+}
+
+fn unclosed_quote_notice(frame: &serde_json::Value, method: &str) -> Option<String> {
+    let message = frame["params"]["message"].as_str()?;
+    (frame["method"] == method && message.contains("unclosed quote")).then(|| message.to_owned())
+}
+
+/// The matching notices still unread once the server has exited. The server
+/// queues a notice before its response, but the two travel on separate
+/// streams and can swap on the wire, so a count is only final at EOF.
+fn unclosed_quote_notices_after_exit(
+    reader: &mut BufReader<std::process::ChildStdout>,
+    method: &str,
+) -> Vec<String> {
+    let mut notices = Vec::new();
+    while let Ok(raw) = read_frame(reader) {
+        if let Ok(frame) = serde_json::from_str::<serde_json::Value>(&raw) {
+            notices.extend(unclosed_quote_notice(&frame, method));
+        }
+    }
+    notices
 }
 
 #[test]
@@ -13115,6 +13131,7 @@ fn test_formatting_names_the_unclosed_quote_it_refuses() {
         ));
     }
     stop_server(&mut child);
+    let late = unclosed_quote_notices_after_exit(&mut reader, "window/showMessage");
     for (_, resp) in &rounds {
         assert!(resp.get("error").is_none(), "got: {resp}");
         assert!(
@@ -13123,16 +13140,16 @@ fn test_formatting_names_the_unclosed_quote_it_refuses() {
             resp["result"]
         );
     }
-    let (first, second) = (&rounds[0].0, &rounds[1].0);
-    assert_eq!(first.len(), 1, "one toast for the refusal: {first:?}");
-    assert!(
-        first[0].starts_with("CWTools: did not format ")
-            && first[0].ends_with("names.txt: unclosed quote on line 2."),
-        "{first:?}"
+    let toasts: Vec<&String> = rounds.iter().flat_map(|(n, _)| n).chain(&late).collect();
+    assert_eq!(
+        toasts.len(),
+        1,
+        "one toast for the refusal, not one per request: {toasts:?}"
     );
     assert!(
-        second.is_empty(),
-        "the second request must not toast again: {second:?}"
+        toasts[0].starts_with("CWTools: did not format ")
+            && toasts[0].ends_with("names.txt: unclosed quote on line 2."),
+        "{toasts:?}"
     );
 }
 
@@ -13179,9 +13196,13 @@ fn test_format_workspace_counts_and_logs_an_unclosed_quote() {
         ),
     )
     .unwrap();
-    let (notices, resp) =
+    let (mut notices, resp) =
         unclosed_quote_notices_until_response(&mut reader, "window/logMessage", 2);
     stop_server(&mut child);
+    notices.extend(unclosed_quote_notices_after_exit(
+        &mut reader,
+        "window/logMessage",
+    ));
     assert_eq!(
         resp["result"],
         "No files needed formatting; skipped 1 (unclosed quotes, listed in the output).",
