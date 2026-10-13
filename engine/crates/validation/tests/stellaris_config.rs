@@ -1,6 +1,6 @@
 //! End-to-end test for the cwtools-stellaris-config integration.
 //!
-//! The fixture under `testfiles/stellaris-config/` mirrors the layout of the
+//! The fixture under `tests/fixtures/stellaris-config/` mirrors the layout of the
 //! external `cwtools-stellaris-config` repo (its `scopes.cwt` and `links.cwt`).
 //! We load it through the real ruleset loader, build the runtime
 //! `ScopeRegistry`, and assert that scope/link resolution matches what the
@@ -16,11 +16,7 @@ use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
 use cwtools_string_table::string_table::StringTable;
 
 fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("testfiles")
-        .join("stellaris-config")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stellaris-config")
 }
 
 fn load_stellaris_ruleset() -> cwtools_rules::rules_types::RuleSet {

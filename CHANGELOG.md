@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Cut the shared `engine/testfiles/performancetest2` corpus from 3.28 MB to 0.99 MB. The seven non-English localisation languages and the 13 event files over 20 KB that no test or bench names are gone, and the cache round-trip gate moves from 60 files to 50. Fixtures one crate uses now sit in that crate's `tests/fixtures/` (`configtests/test.cwt` in `cwtools_rules`, `stellaris-config/` in `cwtools_validation`), and `stellarisconfig/ethics.cwt` is dropped for the corpus's own copy. The HEAD tree shrinks 15%, from 15.22 MB to 12.94 MB of unique blobs, and Rust line coverage moves from 95.10% to 95.09%. (#989)
 * Look up instance locations and explicit primary localisation keys by instance name instead of scanning every instance, keeping duplicate order and removal behavior. The positions live in the per-type name sets the index already kept, and `TypeIndex::map` is now read through an accessor so nothing outside the index can put them out of step. (#485)
 * Raise the Rust line coverage floor from 92.3% to 94.4%, just under the measured 95.0%, so a one-point drop fails CI. (#965)
 * Prefilter script files for localization references before allocating lowercase copies and line indexes, while retaining exact token matching. (#871)

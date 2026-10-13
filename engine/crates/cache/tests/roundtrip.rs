@@ -280,7 +280,7 @@ fn archived_to_arena_matches_reference_over_corpus() {
     }
 }
 
-/// Gate: Cache round-trip verified for all 63 test files.
+/// Gate: Cache round-trip verified for all 52 test files.
 #[test]
 fn roundtrip_all_performancetest_files() {
     let test_dir = concat!(
@@ -348,8 +348,8 @@ fn roundtrip_all_performancetest_files() {
         total_files, total_leaves
     );
     assert!(
-        total_files >= 60,
-        "Expected at least 60 files, got {}",
+        total_files >= 50,
+        "Expected at least 50 files, got {}",
         total_files
     );
 }
