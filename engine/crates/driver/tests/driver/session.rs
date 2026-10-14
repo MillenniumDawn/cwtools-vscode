@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use cwtools_driver::{RulesInput, Session, SessionConfig, index_game_dir};
+use cwtools_driver::{Session, index_game_dir};
 use cwtools_file_manager::file_manager::FileError;
 use cwtools_game::constants::Game;
 use cwtools_index::variable_defining_effects;
@@ -9,7 +9,8 @@ use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
 use cwtools_string_table::string_table::StringTable;
 
 use crate::common::{
-    FILEPATH_RULES, THING_RULES, load_perf_session, loc_gate_workspace, perf_mod, perf_rules,
+    FILEPATH_RULES, PERF_SESSION, THING_RULES, load_perf_session, loc_gate_workspace, perf_mod,
+    perf_rules, session_config, workspace_config, write_tree,
 };
 
 // ── index_game_dir ───────────────────────────────────────────────────────────
@@ -79,7 +80,7 @@ fn index_game_dir_missing_root_returns_an_error() {
 /// are resident for the batch path.
 #[test]
 fn session_load_builds_indexes() {
-    let session = load_perf_session();
+    let session = &*PERF_SESSION;
     assert!(!session.discovery_failed, "discovery should not fail");
     assert!(!session.parsed_files().is_empty(), "mod files should parse");
     assert!(
@@ -100,20 +101,9 @@ fn session_load_builds_indexes() {
 fn session_missing_vanilla_root_is_a_discovery_failure() {
     let tmp = tempfile::tempdir().unwrap();
     let missing = tmp.path().join("no_such_vanilla");
-    let session = Session::load(SessionConfig {
-        game: Game::Stellaris,
-        rules: RulesInput::Dir(perf_rules()),
-        directory: perf_mod(),
-        parent_roots: Vec::new(),
-        vanilla: Some(missing),
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = session_config(Game::Stellaris, perf_rules(), perf_mod());
+    config.vanilla = Some(missing);
+    let session = Session::load(config);
 
     assert!(
         session.discovery_failed,
@@ -127,14 +117,10 @@ fn session_missing_vanilla_root_is_a_discovery_failure() {
 
 #[test]
 fn session_batch_index_collects_scripted_gui_callbacks_not_outer_names() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules = tmp.path().join("rules");
-    let mod_root = tmp.path().join("mod");
-    std::fs::create_dir_all(&rules).unwrap();
-    std::fs::create_dir_all(mod_root.join("common/scripted_guis")).unwrap();
-    std::fs::write(
-        rules.join("scripted_guis.cwt"),
-        r#"
+    let tmp = write_tree(&[
+        (
+            "rules/scripted_guis.cwt",
+            r#"
 types = {
     type[scripted_gui] = {
         path = "game/common/scripted_guis"
@@ -143,11 +129,10 @@ types = {
 }
 scripted_gui = { }
 "#,
-    )
-    .unwrap();
-    std::fs::write(
-        mod_root.join("common/scripted_guis/example.txt"),
-        r#"
+        ),
+        (
+            "mod/common/scripted_guis/example.txt",
+            r#"
 scripted_gui = {
     outer_gui = {
         effects = { Topbar_Icon_Click = { nested_effect = yes } }
@@ -155,23 +140,10 @@ scripted_gui = {
     }
 }
 "#,
-    )
-    .unwrap();
+        ),
+    ]);
 
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(rules),
-        directory: mod_root,
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let session = Session::load(workspace_config(tmp.path()));
 
     let callbacks = &session.type_index().scripted_gui_index;
     assert!(callbacks.contains("topbar_icon_click"));
@@ -183,20 +155,7 @@ scripted_gui = {
 #[test]
 fn changed_source_is_not_validated_against_a_stale_index() {
     let tmp = loc_gate_workspace(None);
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(tmp.path().join("rules")),
-        directory: tmp.path().join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let session = Session::load(workspace_config(tmp.path()));
     std::fs::write(
         tmp.path().join("mod/common/things/x.txt"),
         "changed_thing = { different_value = yes }\n",
@@ -214,81 +173,53 @@ fn changed_source_is_not_validated_against_a_stale_index() {
 
 #[test]
 fn parent_mods_are_ordered_reference_layers_but_not_validation_targets() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules = tmp.path().join("rules");
-    std::fs::create_dir_all(&rules).unwrap();
-    std::fs::write(rules.join("things.cwt"), THING_RULES).unwrap();
-
+    let tmp = write_tree(&[
+        ("rules/things.cwt", THING_RULES),
+        ("mod/common/things/main.txt", "shared = { }\n"),
+        // Distinct file paths preserve all same-named definitions, so the
+        // TypeIndex's source order exposes the actual layer priority.
+        (
+            "first-parent/common/things/first.txt",
+            "shared = { }\nfirst_only = { }\n",
+        ),
+        (
+            "second-parent/common/things/second.txt",
+            "shared = { }\nsecond_only = { }\n",
+        ),
+        ("vanilla/common/things/vanilla.txt", "shared = { }\n"),
+        ("first-parent/gfx/parent_asset.dds", ""),
+        (
+            "mod/localisation/main_l_english.yml",
+            "l_english:\n shared_key:0 \"Workspace [GetName]\"\n",
+        ),
+        (
+            "first-parent/localisation/parent_l_english.yml",
+            "l_english:\n shared_key:0 \"Parent [GetName]\"\n parent_key:0 \"Parent text\"\n parent_priority:0 \"First [GetName]\"\n",
+        ),
+        // This parent localisation file is malformed. It must not be returned as
+        // a project diagnostic even though a valid parent file contributes keys.
+        (
+            "first-parent/localisation/broken_l_english.yml",
+            "l_english:\n broken\n",
+        ),
+        (
+            "second-parent/localisation/second_l_english.yml",
+            "l_english:\n second_parent_key:0 \"Second parent\"\n parent_priority:0 \"Second [GetName]\"\n",
+        ),
+        (
+            "vanilla/localisation/vanilla_l_english.yml",
+            "l_english:\n shared_key:0 \"Vanilla [GetName]\"\n vanilla_key:0 \"Vanilla text\"\n parent_priority:0 \"Vanilla [GetName]\"\n",
+        ),
+    ]);
     let mod_root = tmp.path().join("mod");
     let first_parent = tmp.path().join("first-parent");
     let second_parent = tmp.path().join("second-parent");
     let vanilla = tmp.path().join("vanilla");
-    for root in [&mod_root, &first_parent, &second_parent, &vanilla] {
-        std::fs::create_dir_all(root.join("common/things")).unwrap();
-    }
-    std::fs::write(mod_root.join("common/things/main.txt"), "shared = { }\n").unwrap();
-    // Distinct file paths preserve all same-named definitions, so the
-    // TypeIndex's source order exposes the actual layer priority.
-    std::fs::write(
-        first_parent.join("common/things/first.txt"),
-        "shared = { }\nfirst_only = { }\n",
-    )
-    .unwrap();
-    std::fs::write(
-        second_parent.join("common/things/second.txt"),
-        "shared = { }\nsecond_only = { }\n",
-    )
-    .unwrap();
-    std::fs::write(vanilla.join("common/things/vanilla.txt"), "shared = { }\n").unwrap();
-    std::fs::create_dir_all(first_parent.join("gfx")).unwrap();
-    std::fs::write(first_parent.join("gfx/parent_asset.dds"), b"").unwrap();
 
-    // This parent localisation file is malformed. It must not be returned as
-    // a project diagnostic even though a valid parent file contributes keys.
-    std::fs::create_dir_all(mod_root.join("localisation")).unwrap();
-    std::fs::create_dir_all(first_parent.join("localisation")).unwrap();
-    std::fs::create_dir_all(second_parent.join("localisation")).unwrap();
-    std::fs::create_dir_all(vanilla.join("localisation")).unwrap();
-    std::fs::write(
-        mod_root.join("localisation/main_l_english.yml"),
-        "l_english:\n shared_key:0 \"Workspace [GetName]\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        first_parent.join("localisation/parent_l_english.yml"),
-        "l_english:\n shared_key:0 \"Parent [GetName]\"\n parent_key:0 \"Parent text\"\n parent_priority:0 \"First [GetName]\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        first_parent.join("localisation/broken_l_english.yml"),
-        "l_english:\n broken\n",
-    )
-    .unwrap();
-    std::fs::write(
-        second_parent.join("localisation/second_l_english.yml"),
-        "l_english:\n second_parent_key:0 \"Second parent\"\n parent_priority:0 \"Second [GetName]\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        vanilla.join("localisation/vanilla_l_english.yml"),
-        "l_english:\n shared_key:0 \"Vanilla [GetName]\"\n vanilla_key:0 \"Vanilla text\"\n parent_priority:0 \"Vanilla [GetName]\"\n",
-    )
-    .unwrap();
-
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(rules),
-        directory: mod_root.clone(),
-        parent_roots: vec![first_parent.clone(), second_parent.clone()],
-        vanilla: Some(vanilla.clone()),
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(tmp.path());
+    config.parent_roots = vec![first_parent.clone(), second_parent.clone()];
+    config.vanilla = Some(vanilla.clone());
+    let session = Session::load(config);
 
     let shared_sources: Vec<_> = session
         .type_index()
@@ -364,12 +295,10 @@ fn parent_mods_are_ordered_reference_layers_but_not_validation_targets() {
 
 #[test]
 fn inline_scripts_from_parent_mods_are_available_without_validating_parent_files() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules = tmp.path().join("rules");
-    std::fs::create_dir_all(&rules).unwrap();
-    std::fs::write(
-        rules.join("things.cwt"),
-        r#"
+    let tmp = write_tree(&[
+        (
+            "rules/things.cwt",
+            r#"
 types = { type[foo] = { path = "game/common/foo" } }
 foo = {
     ## cardinality = 1..1
@@ -378,35 +307,22 @@ foo = {
     add = int
 }
 "#,
-    )
-    .unwrap();
-    let mod_root = tmp.path().join("mod");
-    let parent = tmp.path().join("parent");
-    std::fs::create_dir_all(mod_root.join("common/foo")).unwrap();
-    std::fs::create_dir_all(parent.join("common/inline_scripts")).unwrap();
-    let mod_file = mod_root.join("common/foo/main.txt");
-    let parent_script = parent.join("common/inline_scripts/bonus.txt");
-    std::fs::write(
-        &mod_file,
-        "sample = { id = x inline_script = { script = bonus } }\n",
-    )
-    .unwrap();
-    std::fs::write(&parent_script, "not_a_field = 5\n").unwrap();
+        ),
+        (
+            "mod/common/foo/main.txt",
+            "sample = { id = x inline_script = { script = bonus } }\n",
+        ),
+        (
+            "parent/common/inline_scripts/bonus.txt",
+            "not_a_field = 5\n",
+        ),
+    ]);
+    let mod_file = tmp.path().join("mod/common/foo/main.txt");
+    let parent_script = tmp.path().join("parent/common/inline_scripts/bonus.txt");
 
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(rules),
-        directory: mod_root,
-        parent_roots: vec![parent],
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(tmp.path());
+    config.parent_roots = vec![tmp.path().join("parent")];
+    let session = Session::load(config);
     let results = session.validate_all();
     assert_eq!(
         results.len(),
@@ -430,10 +346,11 @@ foo = {
 }
 
 /// validate_all runs the whole batch without panicking and returns one entry
-/// per parsed file. The total error count is deterministic across two loads.
+/// per parsed file. The total error count is deterministic across two loads:
+/// the shared session against a fresh one.
 #[test]
 fn session_validate_all_is_deterministic() {
-    let s1 = load_perf_session();
+    let s1 = &*PERF_SESSION;
     let r1 = s1.validate_all();
     assert_eq!(
         r1.len(),
@@ -471,31 +388,12 @@ enums = {
 /// does.
 #[test]
 fn session_load_collects_mod_defined_complex_enum_members() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(
-        tmp.path().join("rules").join("enums.cwt"),
-        COMPLEX_ENUM_RULES,
-    )
-    .unwrap();
-    let enum_dir = tmp.path().join("mod").join("common").join("my_enum");
-    std::fs::create_dir_all(&enum_dir).unwrap();
-    std::fs::write(enum_dir.join("x.txt"), "MY_VALUE = \"something\"\n").unwrap();
+    let tmp = write_tree(&[
+        ("rules/enums.cwt", COMPLEX_ENUM_RULES),
+        ("mod/common/my_enum/x.txt", "MY_VALUE = \"something\"\n"),
+    ]);
 
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(tmp.path().join("rules")),
-        directory: tmp.path().join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let session = Session::load(workspace_config(tmp.path()));
 
     assert!(
         session
@@ -512,43 +410,22 @@ fn session_load_collects_mod_defined_complex_enum_members() {
 /// is `Button.DDS` (case differs), plus a minimal vanilla install so the file
 /// index (mod walk) is populated.
 fn filepath_workspace() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(tmp.path().join("rules").join("gfx.cwt"), FILEPATH_RULES).unwrap();
-    let gfx_dir = tmp.path().join("mod").join("gfx");
-    std::fs::create_dir_all(&gfx_dir).unwrap();
-    std::fs::write(
-        gfx_dir.join("ref.gfx"),
-        "spriteType = { texturefile = \"gfx/test/button.dds\" }\n",
-    )
-    .unwrap();
-    let asset = gfx_dir.join("test");
-    std::fs::create_dir_all(&asset).unwrap();
-    std::fs::write(asset.join("Button.DDS"), b"").unwrap();
-    std::fs::create_dir_all(tmp.path().join("vanilla").join("common")).unwrap();
-    std::fs::write(
-        tmp.path().join("vanilla").join("common").join("dummy.txt"),
-        "x = {}\n",
-    )
-    .unwrap();
-    tmp
+    write_tree(&[
+        ("rules/gfx.cwt", FILEPATH_RULES),
+        (
+            "mod/gfx/ref.gfx",
+            "spriteType = { texturefile = \"gfx/test/button.dds\" }\n",
+        ),
+        ("mod/gfx/test/Button.DDS", ""),
+        ("vanilla/common/dummy.txt", "x = {}\n"),
+    ])
 }
 
 fn cw113_count(workspace: &std::path::Path, case_sensitive: bool) -> usize {
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(workspace.join("rules")),
-        directory: workspace.join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: Some(workspace.join("vanilla")),
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: case_sensitive,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(workspace);
+    config.vanilla = Some(workspace.join("vanilla"));
+    config.case_sensitive_files = case_sensitive;
+    let session = Session::load(config);
     session
         .validate_all()
         .iter()
@@ -574,47 +451,32 @@ fn cw113_case_mismatch_only_flagged_in_case_sensitive_mode() {
 
 #[test]
 fn primary_replace_path_hides_parent_resources_from_file_references() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules = tmp.path().join("rules");
+    let tmp = write_tree(&[
+        ("rules/gfx.cwt", FILEPATH_RULES),
+        (
+            "mod/descriptor.mod",
+            "name = \"Primary\"\nreplace_path = \"gfx\"\n",
+        ),
+        (
+            "mod/gfx/ref.gfx",
+            "spriteType = { texturefile = \"gfx/hidden.dds\" }\n",
+        ),
+        ("parent/gfx/hidden.dds", ""),
+    ]);
     let primary = tmp.path().join("mod");
     let parent = tmp.path().join("parent");
     let vanilla = tmp.path().join("vanilla");
-    std::fs::create_dir_all(&rules).unwrap();
-    std::fs::create_dir_all(primary.join("gfx")).unwrap();
-    std::fs::create_dir_all(parent.join("gfx")).unwrap();
     std::fs::create_dir_all(&vanilla).unwrap();
-    std::fs::write(rules.join("gfx.cwt"), FILEPATH_RULES).unwrap();
-    std::fs::write(
-        primary.join("descriptor.mod"),
-        "name = \"Primary\"\nreplace_path = \"gfx\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        primary.join("gfx/ref.gfx"),
-        "spriteType = { texturefile = \"gfx/hidden.dds\" }\n",
-    )
-    .unwrap();
-    std::fs::write(parent.join("gfx/hidden.dds"), b"").unwrap();
 
     assert!(
         cwtools_driver::vanilla_replacement_shadow(&primary, &[]).hides("gfx/hidden.dds"),
         "the primary descriptor should establish the gfx replacement shadow"
     );
 
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(rules),
-        directory: primary,
-        parent_roots: vec![parent],
-        vanilla: Some(vanilla),
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(tmp.path());
+    config.parent_roots = vec![parent];
+    config.vanilla = Some(vanilla);
+    let session = Session::load(config);
 
     assert!(
         !session.type_index().file_index.contains("gfx/hidden.dds"),

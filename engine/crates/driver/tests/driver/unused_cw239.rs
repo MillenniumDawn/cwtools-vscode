@@ -1,27 +1,15 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use cwtools_driver::{RulesInput, Session, SessionConfig};
-use cwtools_game::constants::Game;
+use cwtools_driver::Session;
 use cwtools_test_support::{capped_alias_workspace, unused_workspace};
+
+use crate::common::workspace_config;
 
 // ── CW239 unused-instance pass ───────────────────────────────────────────────
 
 fn unused_session(workspace: &std::path::Path) -> cwtools_driver::SessionWithFiles {
-    Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(workspace.join("rules")),
-        directory: workspace.join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    })
+    Session::load(workspace_config(workspace))
 }
 
 fn cw239_rows(workspace: &std::path::Path) -> Vec<(PathBuf, String)> {

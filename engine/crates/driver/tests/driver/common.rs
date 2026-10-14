@@ -1,22 +1,26 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+use std::time::SystemTime;
 
-use cwtools_driver::{RulesInput, Session, SessionConfig};
+use cwtools_driver::{RulesInput, Session, SessionConfig, SessionWithFiles};
 use cwtools_game::constants::Game;
 use cwtools_test_support::{stellaris_config, testfiles};
+use tempfile::TempDir;
 
-pub(crate) fn perf_mod() -> PathBuf {
-    testfiles().join("performancetest2")
-}
+/// The `performancetest2` session, loaded once for the tests that only read it.
+pub(crate) static PERF_SESSION: LazyLock<SessionWithFiles> = LazyLock::new(load_perf_session);
 
-pub(crate) fn perf_rules() -> PathBuf {
-    stellaris_config().to_path_buf()
-}
-
-pub(crate) fn load_perf_session() -> cwtools_driver::SessionWithFiles {
-    Session::load(SessionConfig {
-        game: Game::Stellaris,
-        rules: RulesInput::Dir(perf_rules()),
-        directory: perf_mod(),
+/// A [`SessionConfig`] that loads `directory` against `rules` with nothing else
+/// switched on. Set the fields a test cares about on the result.
+pub(crate) fn session_config<'a>(
+    game: Game,
+    rules: PathBuf,
+    directory: PathBuf,
+) -> SessionConfig<'a> {
+    SessionConfig {
+        game,
+        rules: RulesInput::Dir(rules),
+        directory,
         parent_roots: Vec::new(),
         vanilla: None,
         vanilla_cache: None,
@@ -26,10 +30,58 @@ pub(crate) fn load_perf_session() -> cwtools_driver::SessionWithFiles {
         loc_languages: None,
         case_sensitive_files: false,
         on_rules_diagnostic: None,
-    })
+    }
 }
 
-pub(crate) const LOC_RULES: &str = r#"
+/// [`session_config`] for a HOI4 workspace laid out as `rules/` and `mod/`.
+pub(crate) fn workspace_config<'a>(workspace: &Path) -> SessionConfig<'a> {
+    session_config(Game::Hoi4, workspace.join("rules"), workspace.join("mod"))
+}
+
+pub(crate) fn load_perf_session() -> SessionWithFiles {
+    Session::load(session_config(Game::Stellaris, perf_rules(), perf_mod()))
+}
+
+pub(crate) fn perf_mod() -> PathBuf {
+    testfiles().join("performancetest2")
+}
+
+pub(crate) fn perf_rules() -> PathBuf {
+    stellaris_config().to_path_buf()
+}
+
+/// A temp dir holding `files`, each `(path relative to the root, text)`, with
+/// the parent directories created.
+pub(crate) fn write_tree(files: &[(&str, &str)]) -> TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    for (rel, text) in files {
+        let path = tmp.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    tmp
+}
+
+pub(crate) const THING_RULES: &str = r#"
+types = {
+    type[thing] = {
+        path = "game/common/things"
+    }
+}
+"#;
+
+pub(crate) const FILEPATH_RULES: &str = r#"
+spriteType = {
+    texturefile = filepath
+}
+types = {
+    type[spriteType] = {
+        path = "gfx"
+    }
+}
+"#;
+
+const LOC_RULES: &str = r#"
 types = {
     type[thing] = {
         path = "game/common/things"
@@ -43,43 +95,18 @@ types = {
 
 /// A temp workspace: `rules/` with a `## required` loc rule, and `mod/` with one
 /// `thing` instance plus an optional `localisation/` file.
-pub(crate) fn loc_gate_workspace(loc: Option<&str>) -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(tmp.path().join("rules").join("things.cwt"), LOC_RULES).unwrap();
-    let things = tmp.path().join("mod").join("common").join("things");
-    std::fs::create_dir_all(&things).unwrap();
-    std::fs::write(things.join("x.txt"), "my_thing = { }\n").unwrap();
+pub(crate) fn loc_gate_workspace(loc: Option<&str>) -> TempDir {
+    let mut files = vec![
+        ("rules/things.cwt", LOC_RULES),
+        ("mod/common/things/x.txt", "my_thing = { }\n"),
+    ];
     if let Some(text) = loc {
-        let loc_dir = tmp.path().join("mod").join("localisation");
-        std::fs::create_dir_all(&loc_dir).unwrap();
-        std::fs::write(loc_dir.join("l_english.yml"), text).unwrap();
+        files.push(("mod/localisation/l_english.yml", text));
     }
-    tmp
+    write_tree(&files)
 }
 
-pub(crate) const FILEPATH_RULES: &str = r#"
-spriteType = {
-    texturefile = filepath
-}
-types = {
-    type[spriteType] = {
-        path = "gfx"
-    }
-}
-"#;
-
-pub(crate) const THING_RULES: &str = r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-    }
-}
-"#;
-
-pub(crate) fn parse_cache_entries(
-    cache_dir: &std::path::Path,
-) -> Vec<(String, std::time::SystemTime)> {
+pub(crate) fn parse_cache_entries(cache_dir: &Path) -> Vec<(String, SystemTime)> {
     let mut entries = Vec::new();
     let root = cache_dir.join("parse-cache");
     for workspace in std::fs::read_dir(&root).unwrap().flatten() {

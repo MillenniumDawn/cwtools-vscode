@@ -1,26 +1,12 @@
-use cwtools_driver::{RulesInput, Session, SessionConfig};
-use cwtools_game::constants::Game;
+use cwtools_driver::Session;
 use cwtools_localization::Lang;
 
-use crate::common::{THING_RULES, loc_gate_workspace};
+use crate::common::{THING_RULES, loc_gate_workspace, workspace_config, write_tree};
 
 // ── CW100 loc gate ───────────────────────────────────────────────────────────
 
 fn cw100_count(workspace: &std::path::Path) -> usize {
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(workspace.join("rules")),
-        directory: workspace.join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let session = Session::load(workspace_config(workspace));
     session
         .validate_all()
         .iter()
@@ -59,50 +45,31 @@ fn cw100_still_fires_when_loc_data_exists() {
 /// A temp workspace whose `mod/localisation/` holds one english file, one french
 /// file, and one file with an unrecognised language header.
 fn loc_language_workspace() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(tmp.path().join("rules").join("things.cwt"), THING_RULES).unwrap();
-    let things = tmp.path().join("mod").join("common").join("things");
-    std::fs::create_dir_all(&things).unwrap();
-    std::fs::write(things.join("x.txt"), "my_thing = { }\n").unwrap();
-    let loc = tmp.path().join("mod").join("localisation");
-    std::fs::create_dir_all(&loc).unwrap();
-    std::fs::write(
-        loc.join("a_l_english.yml"),
-        "l_english:\n english_key:0 \"e\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        loc.join("b_l_french.yml"),
-        "l_french:\n french_key:0 \"f\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        loc.join("c_l_klingon.yml"),
-        "l_klingon:\n other_key:0 \"k\"\n",
-    )
-    .unwrap();
-    tmp
+    write_tree(&[
+        ("rules/things.cwt", THING_RULES),
+        ("mod/common/things/x.txt", "my_thing = { }\n"),
+        (
+            "mod/localisation/a_l_english.yml",
+            "l_english:\n english_key:0 \"e\"\n",
+        ),
+        (
+            "mod/localisation/b_l_french.yml",
+            "l_french:\n french_key:0 \"f\"\n",
+        ),
+        (
+            "mod/localisation/c_l_klingon.yml",
+            "l_klingon:\n other_key:0 \"k\"\n",
+        ),
+    ])
 }
 
 fn load_scoped(
     workspace: &std::path::Path,
     langs: Option<Vec<Lang>>,
 ) -> cwtools_driver::SessionWithFiles {
-    Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(workspace.join("rules")),
-        directory: workspace.join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: langs,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    })
+    let mut config = workspace_config(workspace);
+    config.loc_languages = langs;
+    Session::load(config)
 }
 
 #[test]
@@ -152,20 +119,11 @@ fn session_loc_load_filters_the_mod_but_not_vanilla() {
     .unwrap();
     let ignore_files = ["skip_*".to_string()];
 
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(ws.path().join("rules")),
-        directory: ws.path().join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: Some(vanilla),
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &ignore_files,
-        ignore_dirs: &[],
-        loc_languages: Some(vec![Lang::English]),
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(ws.path());
+    config.vanilla = Some(vanilla);
+    config.ignore_files = &ignore_files;
+    config.loc_languages = Some(vec![Lang::English]);
+    let session = Session::load(config);
 
     assert!(!session.loc_index().exists_any("ignored_mod_key"));
     assert!(session.loc_index().exists_any("vanilla_key"));

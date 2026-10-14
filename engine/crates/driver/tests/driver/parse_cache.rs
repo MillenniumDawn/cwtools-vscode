@@ -1,31 +1,14 @@
 use std::path::PathBuf;
 
-use cwtools_driver::{RulesInput, Session, SessionConfig};
-use cwtools_game::constants::Game;
+use cwtools_driver::Session;
 
-use crate::common::{loc_gate_workspace, parse_cache_entries};
+use crate::common::{loc_gate_workspace, parse_cache_entries, workspace_config};
 
 fn load_loc_session(
     workspace: &std::path::Path,
     parse_cache_dir: Option<PathBuf>,
 ) -> cwtools_driver::SessionWithFiles {
-    Session::load_with_parse_cache(
-        SessionConfig {
-            game: Game::Hoi4,
-            rules: RulesInput::Dir(workspace.join("rules")),
-            directory: workspace.join("mod"),
-            parent_roots: Vec::new(),
-            vanilla: None,
-            vanilla_cache: None,
-            vanilla_cache_auto: None,
-            ignore_files: &[],
-            ignore_dirs: &[],
-            loc_languages: None,
-            case_sensitive_files: false,
-            on_rules_diagnostic: None,
-        },
-        parse_cache_dir,
-    )
+    Session::load_with_parse_cache(workspace_config(workspace), parse_cache_dir)
 }
 
 #[test]

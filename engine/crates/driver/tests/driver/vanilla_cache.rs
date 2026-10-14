@@ -1,14 +1,13 @@
 use std::path::PathBuf;
 
-use cwtools_driver::{
-    RulesInput, Session, SessionConfig, VanillaCacheAuto, build_vanilla_cache_aux, index_game_dir,
-};
-use cwtools_game::constants::Game;
+use cwtools_driver::{Session, VanillaCacheAuto, build_vanilla_cache_aux, index_game_dir};
 use cwtools_index::variable_defining_effects;
 use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
 use cwtools_string_table::string_table::StringTable;
 
-use crate::common::{FILEPATH_RULES, THING_RULES, parse_cache_entries};
+use crate::common::{
+    FILEPATH_RULES, THING_RULES, parse_cache_entries, workspace_config, write_tree,
+};
 
 /// A mod whose `ref.gfx` references a vanilla file with the wrong case, loaded
 /// from a pre-built vanilla cache (not a live install walk).
@@ -16,16 +15,13 @@ fn vanilla_cache_workspace() -> (
     tempfile::TempDir,
     cwtools_index::vanilla_cache::VanillaCacheData,
 ) {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(tmp.path().join("rules").join("gfx.cwt"), FILEPATH_RULES).unwrap();
-    let gfx_dir = tmp.path().join("mod").join("gfx");
-    std::fs::create_dir_all(&gfx_dir).unwrap();
-    std::fs::write(
-        gfx_dir.join("ref.gfx"),
-        "spriteType = { texturefile = \"gfx/vanilla/icon.dds\" }\n",
-    )
-    .unwrap();
+    let tmp = write_tree(&[
+        ("rules/gfx.cwt", FILEPATH_RULES),
+        (
+            "mod/gfx/ref.gfx",
+            "spriteType = { texturefile = \"gfx/vanilla/icon.dds\" }\n",
+        ),
+    ]);
     // The vanilla cache carries the on-disk case `Icon.DDS`; the mod's reference
     // is the lowercased `icon.dds`.
     let cache = cwtools_index::vanilla_cache::VanillaCacheData {
@@ -42,20 +38,9 @@ fn vanilla_cache_workspace() -> (
 fn session_installs_vanilla_scripted_gui_callbacks_from_cache() {
     let (tmp, mut cache) = vanilla_cache_workspace();
     cache.aux.scripted_gui_names = vec!["Topbar_Icon_Click".into()];
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(tmp.path().join("rules")),
-        directory: tmp.path().join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: Some(cache),
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(tmp.path());
+    config.vanilla_cache = Some(cache);
+    let session = Session::load(config);
 
     assert!(
         session
@@ -70,20 +55,10 @@ fn cw113_count_from_cache(
     cache: cwtools_index::vanilla_cache::VanillaCacheData,
     case_sensitive: bool,
 ) -> usize {
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(workspace.join("rules")),
-        directory: workspace.join("mod"),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: Some(cache),
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: case_sensitive,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(workspace);
+    config.vanilla_cache = Some(cache);
+    config.case_sensitive_files = case_sensitive;
+    let session = Session::load(config);
     session
         .validate_all()
         .iter()
@@ -112,10 +87,7 @@ fn cw113_case_mismatch_on_cache_restored_vanilla_flagged_in_case_sensitive_mode(
 fn vanilla_cache_aux_preserves_original_case_file_paths() {
     // The cache must store on-disk case so a later case-sensitive run can enforce
     // it against base-game files too.
-    let tmp = tempfile::tempdir().unwrap();
-    let asset = tmp.path().join("gfx").join("test");
-    std::fs::create_dir_all(&asset).unwrap();
-    std::fs::write(asset.join("Icon.DDS"), b"").unwrap();
+    let tmp = write_tree(&[("gfx/test/Icon.DDS", "")]);
     let aux = build_vanilla_cache_aux(tmp.path(), &cwtools_index::TypeIndex::default());
     assert!(
         aux.file_paths.contains(&"gfx/test/Icon.DDS".to_string()),
@@ -150,14 +122,11 @@ types = {
 /// A temp workspace with `rules/`, a one-instance `mod/`, a one-instance
 /// `vanilla/` install, and an empty `cache/` for the auto cache to write into.
 fn cache_workspace() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(tmp.path().join("rules").join("things.cwt"), THING_RULES).unwrap();
-    for (root, instance) in [("mod", "my_thing"), ("vanilla", "vanilla_thing")] {
-        let things = tmp.path().join(root).join("common").join("things");
-        std::fs::create_dir_all(&things).unwrap();
-        std::fs::write(things.join("x.txt"), format!("{instance} = {{ }}\n")).unwrap();
-    }
+    let tmp = write_tree(&[
+        ("rules/things.cwt", THING_RULES),
+        ("mod/common/things/x.txt", "my_thing = { }\n"),
+        ("vanilla/common/things/x.txt", "vanilla_thing = { }\n"),
+    ]);
     std::fs::create_dir_all(tmp.path().join("cache")).unwrap();
     tmp
 }
@@ -181,26 +150,13 @@ fn load_cached_from_vanilla(
     refresh: bool,
     parse_cache_dir: Option<PathBuf>,
 ) -> cwtools_driver::SessionWithFiles {
-    Session::load_with_parse_cache(
-        SessionConfig {
-            game: Game::Hoi4,
-            rules: RulesInput::Dir(workspace.join("rules")),
-            directory: workspace.join("mod"),
-            parent_roots: Vec::new(),
-            vanilla: Some(vanilla_root.to_path_buf()),
-            vanilla_cache: None,
-            vanilla_cache_auto: Some(VanillaCacheAuto {
-                dir: workspace.join("cache"),
-                refresh,
-            }),
-            ignore_files: &[],
-            ignore_dirs: &[],
-            loc_languages: None,
-            case_sensitive_files: false,
-            on_rules_diagnostic: None,
-        },
-        parse_cache_dir,
-    )
+    let mut config = workspace_config(workspace);
+    config.vanilla = Some(vanilla_root.to_path_buf());
+    config.vanilla_cache_auto = Some(VanillaCacheAuto {
+        dir: workspace.join("cache"),
+        refresh,
+    });
+    Session::load_with_parse_cache(config, parse_cache_dir)
 }
 
 fn load_cached(workspace: &std::path::Path, refresh: bool) -> cwtools_driver::SessionWithFiles {
@@ -399,23 +355,10 @@ fn explicit_vanilla_cache_keeps_the_exact_replacement_view_and_unrelated_entries
         .expect("replacement-aware cache is written");
     let (_, _, cache) = cwtools_index::vanilla_cache::load(&cache_path).unwrap();
 
-    let explicit = Session::load_with_parse_cache(
-        SessionConfig {
-            game: Game::Hoi4,
-            rules: RulesInput::Dir(ws.path().join("rules")),
-            directory: ws.path().join("mod"),
-            parent_roots: Vec::new(),
-            vanilla: Some(vanilla),
-            vanilla_cache: Some(cache),
-            vanilla_cache_auto: None,
-            ignore_files: &[],
-            ignore_dirs: &[],
-            loc_languages: None,
-            case_sensitive_files: false,
-            on_rules_diagnostic: None,
-        },
-        None,
-    );
+    let mut config = workspace_config(ws.path());
+    config.vanilla = Some(vanilla);
+    config.vanilla_cache = Some(cache);
+    let explicit = Session::load(config);
 
     assert!(!explicit.type_index().contains("thing", "vanilla_thing"));
     assert!(explicit.type_index().contains("thing", "sibling_thing"));

@@ -1,11 +1,9 @@
 use cwtools_driver::{
-    RulesInput, Session, SessionConfig, discover_workspace_files, search_config_for,
-    workspace_discovery_config,
+    Session, discover_workspace_files, search_config_for, workspace_discovery_config,
 };
 use cwtools_file_manager::file_manager::FileError;
-use cwtools_game::constants::Game;
 
-use crate::common::perf_mod;
+use crate::common::{perf_mod, workspace_config, write_tree};
 
 // ── search_config_for ────────────────────────────────────────────────────────
 
@@ -38,10 +36,8 @@ fn search_config_mod_root_uses_default_subfolders() {
 /// when its name is not a known folder.
 #[test]
 fn search_config_loose_script_files_search_directly() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[("modroot/stuff.txt", "foo = { x = 1 }\n")]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("stuff.txt"), "foo = { x = 1 }\n").unwrap();
 
     let config = search_config_for(&root);
     assert_eq!(config.include_dirs, vec![".".to_string()]);
@@ -118,11 +114,9 @@ fn workspace_discovery_keeps_defaults_when_root_lacks_folders() {
 
 #[test]
 fn workspace_discovery_multi_mod_overrides_even_without_root_folder_check() {
-    let tmp = tempfile::tempdir().unwrap();
-    let ws = tmp.path().join("workspace");
-    std::fs::create_dir_all(ws.join("mod")).unwrap();
     // Descriptor that makes `ws` classify as MultipleMod.
-    std::fs::write(ws.join("mod/test.mod"), "name = \"X\"\npath = \"alpha\"\n").unwrap();
+    let tmp = write_tree(&[("workspace/mod/test.mod", "name = \"X\"\npath = \"alpha\"\n")]);
+    let ws = tmp.path().join("workspace");
     std::fs::create_dir_all(ws.join("alpha")).unwrap();
     // Note: `ws` itself has no `myfolder/` child — apply_config_folders alone
     // would leave include_dirs unchanged. The multi-mod branch must still
@@ -134,14 +128,12 @@ fn workspace_discovery_multi_mod_overrides_even_without_root_folder_check() {
 
 #[test]
 fn discover_workspace_files_single_mod_respects_include_dirs() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("modroot/common/a.txt", "x = 1\n"),
+        ("modroot/events/b.txt", "x = 1\n"),
+        ("modroot/docs/c.txt", "x = 1\n"),
+    ]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(root.join("common")).unwrap();
-    std::fs::create_dir_all(root.join("events")).unwrap();
-    std::fs::create_dir_all(root.join("docs")).unwrap();
-    std::fs::write(root.join("common/a.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join("events/b.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join("docs/c.txt"), "x = 1\n").unwrap();
     let rs = ruleset_with_folders(&["common"]);
     let cfg = workspace_discovery_config(&root, Some(&rs));
     let files = discover_workspace_files(cfg).expect("discovery");
@@ -162,11 +154,11 @@ fn discover_workspace_files_single_mod_respects_include_dirs() {
 
 #[test]
 fn discover_workspace_files_extra_ignore_globs_filter_after_narrowing() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("modroot/common/keep.txt", "x = 1\n"),
+        ("modroot/common/skip.txt", "x = 1\n"),
+    ]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(root.join("common")).unwrap();
-    std::fs::write(root.join("common/keep.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join("common/skip.txt"), "x = 1\n").unwrap();
     let rs = ruleset_with_folders(&["common"]);
     let mut cfg = workspace_discovery_config(&root, Some(&rs));
     cfg.exclude_patterns.push("skip.txt".to_string());
@@ -200,10 +192,8 @@ fn discover_workspace_files_missing_root_is_error() {
 
 #[test]
 fn discover_workspace_files_empty_include_dirs_returns_empty() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[("modroot/common/ignored.txt", "x = 1\n")]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(root.join("common")).unwrap();
-    std::fs::write(root.join("common/ignored.txt"), "x = 1\n").unwrap();
     let rs = ruleset_with_folders(&["common"]);
     let mut cfg = workspace_discovery_config(&root, Some(&rs));
     cfg.include_dirs.clear();
@@ -216,21 +206,21 @@ fn discover_workspace_files_empty_include_dirs_returns_empty() {
 
 #[test]
 fn discover_workspace_files_multi_mod_layers_and_suppresses_replace_path() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        (
+            "workspace/mod/a.mod",
+            "name = \"A Mod\"\npath = \"alpha\"\n",
+        ),
+        // B is higher priority (B > A name-sorted) and declares replace_path.
+        (
+            "workspace/mod/b.mod",
+            "name = \"B Mod\"\npath = \"bravo\"\nreplace_path = \"common\"\n",
+        ),
+        ("workspace/alpha/common/shared.txt", "shared = alpha"),
+        ("workspace/bravo/common/shared.txt", "shared = bravo"),
+        ("workspace/bravo/common/only_bravo.txt", "x = 1"),
+    ]);
     let ws = tmp.path().join("workspace");
-    std::fs::create_dir_all(ws.join("mod")).unwrap();
-    // B is higher priority (B > A name-sorted) and declares replace_path.
-    std::fs::write(ws.join("mod/a.mod"), "name = \"A Mod\"\npath = \"alpha\"\n").unwrap();
-    std::fs::write(
-        ws.join("mod/b.mod"),
-        "name = \"B Mod\"\npath = \"bravo\"\nreplace_path = \"common\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(ws.join("alpha/common")).unwrap();
-    std::fs::create_dir_all(ws.join("bravo/common")).unwrap();
-    std::fs::write(ws.join("alpha/common/shared.txt"), "shared = alpha").unwrap();
-    std::fs::write(ws.join("bravo/common/shared.txt"), "shared = bravo").unwrap();
-    std::fs::write(ws.join("bravo/common/only_bravo.txt"), "x = 1").unwrap();
     let rs = ruleset_with_folders(&["common"]);
     let cfg = workspace_discovery_config(&ws, Some(&rs));
     assert_eq!(cfg.include_dirs, vec!["common".to_string()]);
@@ -264,19 +254,16 @@ fn discover_workspace_files_multi_mod_layers_and_suppresses_replace_path() {
 /// single-mod semantics (#412).
 #[test]
 fn discover_workspace_files_multi_mod_honours_ignore_dirs() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        (
+            "workspace/mod/alpha.mod",
+            "name = \"Alpha Mod\"\npath = \"alpha\"\n",
+        ),
+        ("workspace/alpha/common/keep.txt", "x = 1"),
+        ("workspace/alpha/common/temp/skip.txt", "x = 1"),
+        ("workspace/alpha/common/template/keep2.txt", "x = 1"),
+    ]);
     let ws = tmp.path().join("workspace");
-    std::fs::create_dir_all(ws.join("mod")).unwrap();
-    std::fs::write(
-        ws.join("mod/alpha.mod"),
-        "name = \"Alpha Mod\"\npath = \"alpha\"\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(ws.join("alpha/common/temp")).unwrap();
-    std::fs::create_dir_all(ws.join("alpha/common/template")).unwrap();
-    std::fs::write(ws.join("alpha/common/keep.txt"), "x = 1").unwrap();
-    std::fs::write(ws.join("alpha/common/temp/skip.txt"), "x = 1").unwrap();
-    std::fs::write(ws.join("alpha/common/template/keep2.txt"), "x = 1").unwrap();
     let rs = ruleset_with_folders(&["common"]);
     let mut cfg = workspace_discovery_config(&ws, Some(&rs));
     cfg.exclude_dir_patterns.push("temp".to_string());
@@ -299,21 +286,21 @@ fn discover_workspace_files_multi_mod_honours_ignore_dirs() {
 #[test]
 fn discover_workspace_files_multi_mod_layers_lower_priority_replace_path_does_not_invalidate_higher_priority_files()
  {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        // A is lower priority (A < B) but declares replace_path.
+        (
+            "workspace/mod/a.mod",
+            "name = \"A Mod\"\npath = \"alpha\"\nreplace_path = \"common\"\n",
+        ),
+        (
+            "workspace/mod/b.mod",
+            "name = \"B Mod\"\npath = \"bravo\"\n",
+        ),
+        ("workspace/alpha/common/shared.txt", "shared = alpha"),
+        ("workspace/alpha/common/only_alpha.txt", "x = 1"),
+        ("workspace/bravo/common/shared.txt", "shared = bravo"),
+    ]);
     let ws = tmp.path().join("workspace");
-    std::fs::create_dir_all(ws.join("mod")).unwrap();
-    // A is lower priority (A < B) but declares replace_path.
-    std::fs::write(
-        ws.join("mod/a.mod"),
-        "name = \"A Mod\"\npath = \"alpha\"\nreplace_path = \"common\"\n",
-    )
-    .unwrap();
-    std::fs::write(ws.join("mod/b.mod"), "name = \"B Mod\"\npath = \"bravo\"\n").unwrap();
-    std::fs::create_dir_all(ws.join("alpha/common")).unwrap();
-    std::fs::create_dir_all(ws.join("bravo/common")).unwrap();
-    std::fs::write(ws.join("alpha/common/shared.txt"), "shared = alpha").unwrap();
-    std::fs::write(ws.join("alpha/common/only_alpha.txt"), "x = 1").unwrap();
-    std::fs::write(ws.join("bravo/common/shared.txt"), "shared = bravo").unwrap();
     let rs = ruleset_with_folders(&["common"]);
     let cfg = workspace_discovery_config(&ws, Some(&rs));
     let files = discover_workspace_files(cfg).expect("multi-mod discovery");
@@ -345,33 +332,19 @@ fn discover_workspace_files_multi_mod_layers_lower_priority_replace_path_does_no
 fn discover_workspace_files_parity_with_session_discovery() {
     // Session::load must discover the same file set as the standalone
     // discover_workspace_files primitive when given identical inputs (#284).
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("modroot/common/a.txt", "my_a = { }\n"),
+        ("modroot/events/b.txt", "my_b = { }\n"),
+        (
+            "rules/f.cwt",
+            "types = { type[my_a] = { path = \"common\" } type[my_b] = { path = \"events\" } }",
+        ),
+    ]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(root.join("common")).unwrap();
-    std::fs::create_dir_all(root.join("events")).unwrap();
-    std::fs::write(root.join("common/a.txt"), "my_a = { }\n").unwrap();
-    std::fs::write(root.join("events/b.txt"), "my_b = { }\n").unwrap();
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(
-        tmp.path().join("rules/f.cwt"),
-        "types = { type[my_a] = { path = \"common\" } type[my_b] = { path = \"events\" } }",
-    )
-    .unwrap();
     // Session path.
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(tmp.path().join("rules")),
-        directory: root.clone(),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(tmp.path());
+    config.directory = root.clone();
+    let session = Session::load(config);
     let mut session_paths: Vec<String> = session
         .parsed_files()
         .iter()
@@ -388,18 +361,17 @@ fn discover_workspace_files_parity_with_session_discovery() {
 
 #[test]
 fn discover_workspace_files_inherits_engine_baseline_excludes() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("modroot/common/keep.txt", "x = 1\n"),
+        ("modroot/common/Changelog.txt", "x = 1\n"),
+        ("modroot/common/README.md", "x\n"),
+        ("modroot/common/notes.md", "x\n"),
+        ("modroot/common/build/skip.txt", "x = 1\n"),
+    ]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(root.join("common")).unwrap();
-    std::fs::write(root.join("common/keep.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join("common/Changelog.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join("common/README.md"), "x\n").unwrap();
-    std::fs::write(root.join("common/notes.md"), "x\n").unwrap();
     let rs = ruleset_with_folders(&["common"]);
     let mut cfg = workspace_discovery_config(&root, Some(&rs));
     cfg.exclude_dir_patterns.push("build".to_string());
-    std::fs::create_dir_all(root.join("common/build")).unwrap();
-    std::fs::write(root.join("common/build/skip.txt"), "x = 1\n").unwrap();
     let files = discover_workspace_files(cfg).expect("discovery");
     let logical: Vec<String> = files.iter().map(|f| f.logical_path.clone()).collect();
     assert!(
@@ -426,18 +398,14 @@ fn discover_workspace_files_inherits_engine_baseline_excludes() {
 
 #[test]
 fn discover_workspace_files_inherits_engine_default_excluded_dirs() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("modroot/keep.txt", "x = 1\n"),
+        ("modroot/allowed_dir/sub/keep.txt", "x = 1\n"),
+        ("modroot/.git/ignore.txt", "x = 1\n"),
+        ("modroot/target/skip.txt", "x = 1\n"),
+        ("modroot/resources/skip.txt", "x = 1\n"),
+    ]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(root.join(".git")).unwrap();
-    std::fs::create_dir_all(root.join("target")).unwrap();
-    std::fs::create_dir_all(root.join("resources")).unwrap();
-    std::fs::create_dir_all(root.join("allowed_dir")).unwrap();
-    std::fs::create_dir_all(root.join("allowed_dir/sub")).unwrap();
-    std::fs::write(root.join("keep.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join("allowed_dir/sub/keep.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join(".git/ignore.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join("target/skip.txt"), "x = 1\n").unwrap();
-    std::fs::write(root.join("resources/skip.txt"), "x = 1\n").unwrap();
     let mut cfg = search_config_for(&root);
     cfg.include_dirs = vec![".".to_string()];
     let files = discover_workspace_files(cfg).expect("discovery");
@@ -468,42 +436,30 @@ fn discover_workspace_files_inherits_engine_default_excluded_dirs() {
 
 #[test]
 fn discover_workspace_files_parity_with_session_discovery_multi_mod() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        (
+            "workspace/mod/a.mod",
+            "name = \"A Mod\"\npath = \"alpha\"\n",
+        ),
+        (
+            "workspace/mod/b.mod",
+            "name = \"B Mod\"\npath = \"bravo\"\n",
+        ),
+        ("workspace/alpha/common/a.txt", "x = 1\n"),
+        ("workspace/alpha/common/skip.txt", "x = 1\n"),
+        ("workspace/bravo/common/b.txt", "x = 1\n"),
+        ("workspace/bravo/common/keep.txt", "x = 1\n"),
+        (
+            "rules/f.cwt",
+            "types = { type[my_a] = { path = \"common\" } }",
+        ),
+    ]);
     let ws = tmp.path().join("workspace");
-    std::fs::create_dir_all(ws.join("mod")).unwrap();
-    std::fs::write(ws.join("mod/a.mod"), "name = \"A Mod\"\npath = \"alpha\"\n").unwrap();
-    std::fs::write(ws.join("mod/b.mod"), "name = \"B Mod\"\npath = \"bravo\"\n").unwrap();
-    for (mod_name, files) in [
-        ("alpha", vec!["common/a.txt", "common/skip.txt"]),
-        ("bravo", vec!["common/b.txt", "common/keep.txt"]),
-    ] {
-        for rel in files {
-            let p = ws.join(mod_name).join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(&p, "x = 1\n").unwrap();
-        }
-    }
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(
-        tmp.path().join("rules/f.cwt"),
-        "types = { type[my_a] = { path = \"common\" } }",
-    )
-    .unwrap();
     let ignore_files = vec!["skip.txt".to_string()];
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(tmp.path().join("rules")),
-        directory: ws.clone(),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &ignore_files,
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(tmp.path());
+    config.directory = ws.clone();
+    config.ignore_files = &ignore_files;
+    let session = Session::load(config);
     let session_paths: Vec<String> = session
         .parsed_files()
         .iter()
@@ -535,10 +491,8 @@ fn discover_workspace_files_parity_with_session_discovery_multi_mod() {
 fn discover_workspace_files_rejects_symlinks() {
     use std::os::unix::fs::symlink;
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[("modroot/real.txt", "x = 1\n")]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("real.txt"), "x = 1\n").unwrap();
     symlink(root.join("real.txt"), root.join("link.txt")).unwrap();
 
     let mut cfg = workspace_discovery_config(&root, None);
@@ -577,12 +531,12 @@ fn discover_workspace_files_enforces_file_budget() {
 /// multi-mod deduplication sorts globally by logical_path (#339).
 #[test]
 fn discover_workspace_files_returns_sorted_order_single_mod() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("modroot/common/zebra.txt", "x = 1\n"),
+        ("modroot/common/middle.txt", "x = 1\n"),
+        ("modroot/common/alpha.txt", "x = 1\n"),
+    ]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(root.join("common")).unwrap();
-    for name in ["zebra.txt", "middle.txt", "alpha.txt"] {
-        std::fs::write(root.join("common").join(name), "x = 1\n").unwrap();
-    }
     let rs = ruleset_with_folders(&["common"]);
     let cfg = workspace_discovery_config(&root, Some(&rs));
     let files = discover_workspace_files(cfg).expect("discovery");
@@ -600,23 +554,25 @@ fn discover_workspace_files_returns_sorted_order_single_mod() {
 
 #[test]
 fn discover_workspace_files_returns_sorted_order_multi_mod() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        (
+            "workspace/mod/a.mod",
+            "name = \"A Mod\"\npath = \"alpha\"\n",
+        ),
+        (
+            "workspace/mod/b.mod",
+            "name = \"B Mod\"\npath = \"bravo\"\n",
+        ),
+        ("workspace/alpha/events/z.txt", "x = 1\n"),
+        ("workspace/bravo/events/z.txt", "x = 1\n"),
+        ("workspace/alpha/common/z.txt", "x = 1\n"),
+        ("workspace/bravo/common/z.txt", "x = 1\n"),
+        ("workspace/alpha/common/a.txt", "x = 1\n"),
+        ("workspace/bravo/common/a.txt", "x = 1\n"),
+        ("workspace/alpha/events/a.txt", "x = 1\n"),
+        ("workspace/bravo/events/a.txt", "x = 1\n"),
+    ]);
     let ws = tmp.path().join("workspace");
-    std::fs::create_dir_all(ws.join("mod")).unwrap();
-    std::fs::write(ws.join("mod/a.mod"), "name = \"A Mod\"\npath = \"alpha\"\n").unwrap();
-    std::fs::write(ws.join("mod/b.mod"), "name = \"B Mod\"\npath = \"bravo\"\n").unwrap();
-    for p in [
-        "events/z.txt",
-        "common/z.txt",
-        "common/a.txt",
-        "events/a.txt",
-    ] {
-        for m in ["alpha", "bravo"] {
-            let path = ws.join(m).join(p);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(&path, "x = 1\n").unwrap();
-        }
-    }
     let rs = ruleset_with_folders(&["events", "common"]);
     let cfg = workspace_discovery_config(&ws, Some(&rs));
     let files = discover_workspace_files(cfg).expect("multi-mod discovery");
@@ -638,31 +594,18 @@ fn discover_workspace_files_parity_with_session_preserves_order() {
     // Same inputs must yield the same file *order*, not just the same set
     // (#339). Session::load shares discover_workspace_files, so this pins
     // that no layer re-sorts or shuffles between them.
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("modroot/common/b.txt", "my_b = { }\n"),
+        ("modroot/common/a.txt", "my_a = { }\n"),
+        (
+            "rules/f.cwt",
+            "types = { type[my_a] = { path = \"common\" } type[my_b] = { path = \"common\" } }",
+        ),
+    ]);
     let root = tmp.path().join("modroot");
-    std::fs::create_dir_all(root.join("common")).unwrap();
-    std::fs::write(root.join("common/b.txt"), "my_b = { }\n").unwrap();
-    std::fs::write(root.join("common/a.txt"), "my_a = { }\n").unwrap();
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(
-        tmp.path().join("rules/f.cwt"),
-        "types = { type[my_a] = { path = \"common\" } type[my_b] = { path = \"common\" } }",
-    )
-    .unwrap();
-    let session = Session::load(SessionConfig {
-        game: Game::Hoi4,
-        rules: RulesInput::Dir(tmp.path().join("rules")),
-        directory: root.clone(),
-        parent_roots: Vec::new(),
-        vanilla: None,
-        vanilla_cache: None,
-        vanilla_cache_auto: None,
-        ignore_files: &[],
-        ignore_dirs: &[],
-        loc_languages: None,
-        case_sensitive_files: false,
-        on_rules_diagnostic: None,
-    });
+    let mut config = workspace_config(tmp.path());
+    config.directory = root.clone();
+    let session = Session::load(config);
     let session_paths: Vec<String> = session
         .parsed_files()
         .iter()
