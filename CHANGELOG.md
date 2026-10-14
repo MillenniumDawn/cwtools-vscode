@@ -79,6 +79,7 @@
 * Minify production extension and webview bundles, and generate source maps only for development builds. (#500)
 * Keep the Fix All and Format Workspace protocol-error tests independent of delayed rules-config error notifications from the pinned Stellaris rules. (#959)
 * Test four more graph request orderings: a cancelled newest request and a stale rejection after the newest graph renders leave the newest graph in place, an older import that finishes after a newer server graph does not replace it, and cancelling the next import dialog keeps a pending import. (#995)
+* Test the graph panel serializer that restores a graph after a window reload: a persisted server graph is requested again with its entity type and depth, a persisted JSON graph asks for the export and renders it, nothing persisted with no active file type sends no request, a newer show-graph request wins over a later restore, and a restore failure is logged. (#1000)
 * Test that a crashed language server recovers, stops after its restart budget, and can be started manually again. (#928)
 * Skip executable workspace scans during activation when folder-name or content hints already identify the game; retain executable detection for unrecognized roots. (#501)
 * Delegate graph tooltips, retain only the active hover neighborhood, and clean up tooltip timers and scratch state when replacing a graph; assert node/core scratch collections stay bounded to the active neighborhood. (#503)
