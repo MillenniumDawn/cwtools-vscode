@@ -1313,17 +1313,13 @@ pub fn is_ignored_path(
     extra_file_globs: &[String],
     extra_dir_globs: &[String],
 ) -> bool {
-    if is_ignored_logical_path(logical_path, extra_file_globs) {
+    let normalized = normalize_slashes(std::borrow::Cow::Borrowed(logical_path));
+    if is_ignored_logical_path(&normalized, extra_file_globs) {
         return true;
     }
     if extra_dir_globs.is_empty() {
         return false;
     }
-    let normalized = if logical_path.contains('\\') {
-        logical_path.replace('\\', "/")
-    } else {
-        logical_path.to_string()
-    };
     let segments: Vec<&str> = normalized.split('/').collect();
     if segments.len() < 2 {
         return false;
