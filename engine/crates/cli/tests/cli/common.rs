@@ -1,11 +1,43 @@
 use assert_cmd::Command;
 use cwtools_test_support::scratch_home_env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tempfile::TempDir;
+
+pub(crate) fn cwtools() -> Command {
+    let mut cmd = Command::cargo_bin("cwtools").unwrap();
+    cmd.env("RUST_LOG", "");
+    // So a run never picks up a locally installed base game and never writes
+    // into the developer's real cwtools cache.
+    cmd.envs(scratch_home_env());
+    // Same reason as HOME: a suite run from a git hook inherits the hook's
+    // GIT_DIR, and `--since` would resolve against that repo, not the fixture.
+    for key in INHERITED_GIT_ENV {
+        cmd.env_remove(key);
+    }
+    cmd
+}
+
+/// A temp dir holding `files`, each `(path relative to the root, text)`, with
+/// the parent directories created.
+pub(crate) fn write_tree(files: &[(&str, &str)]) -> TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    for (rel, text) in files {
+        let path = tmp.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    tmp
+}
 
 pub(crate) fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
+}
+
+/// The text of the fixture at `rel`, to hand to [`write_tree`].
+pub(crate) fn fixture_text(rel: &str) -> String {
+    std::fs::read_to_string(fixtures_dir().join(rel)).unwrap()
 }
 
 /// Variables git exports to a hook. The pre-push hook runs `cargo test
@@ -26,22 +58,8 @@ pub(crate) const INHERITED_GIT_ENV: &[&str] = &[
     "GIT_WORK_TREE",
 ];
 
-pub(crate) fn cwtools() -> Command {
-    let mut cmd = Command::cargo_bin("cwtools").unwrap();
-    cmd.env("RUST_LOG", "");
-    // So a run never picks up a locally installed base game and never writes
-    // into the developer's real cwtools cache.
-    cmd.envs(scratch_home_env());
-    // Same reason as HOME: a suite run from a git hook inherits the hook's
-    // GIT_DIR, and `--since` would resolve against that repo, not the fixture.
-    for key in INHERITED_GIT_ENV {
-        cmd.env_remove(key);
-    }
-    cmd
-}
-
 /// `validate` over `dir` against the rules fixture, with `extra` appended.
-pub(crate) fn validate_dir(dir: &std::path::Path, extra: &[&str]) -> assert_cmd::assert::Assert {
+pub(crate) fn validate_dir(dir: &Path, extra: &[&str]) -> assert_cmd::assert::Assert {
     let rules_dir = fixtures_dir().join("rules");
     let mut cmd = cwtools();
     cmd.args([
@@ -59,40 +77,25 @@ pub(crate) fn validate_dir(dir: &std::path::Path, extra: &[&str]) -> assert_cmd:
 
 /// A rules directory with one hard problem (a reference to an undefined type)
 /// and one soft one (a `## cardinality` the loader can't parse).
-pub(crate) fn broken_rules_dir() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(
-        tmp.path().join("broken.cwt"),
+pub(crate) fn broken_rules_dir() -> TempDir {
+    write_tree(&[(
+        "broken.cwt",
         "types = { type[test_type] = { path = \"game/common\" } }\n\
          ## cardinality = 0..x\n\
          r = { a = <undefined_type> }\n",
-    )
-    .unwrap();
-    tmp
+    )])
 }
 
 /// A temp mod with one `common/` file carrying an empty `if` (CW121, fixable).
-pub(crate) fn fix_mod() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    let common = tmp.path().join("common");
-    std::fs::create_dir_all(&common).unwrap();
-    std::fs::write(common.join("hint.txt"), "x = { if = { } }\n").unwrap();
-    tmp
+pub(crate) fn fix_mod() -> TempDir {
+    write_tree(&[("common/hint.txt", "x = { if = { } }\n")])
 }
 
 /// A mod root whose only diagnostic is the CW107 from `mod_a`'s event, with
 /// `cwtools.toml` written at `root/cwtools.toml`.
-pub(crate) fn config_mod(body: &str) -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    let events = tmp.path().join("mod").join("events");
-    std::fs::create_dir_all(&events).unwrap();
-    std::fs::copy(
-        fixtures_dir().join("discover/mod_a/events/test.txt"),
-        events.join("test.txt"),
-    )
-    .unwrap();
-    std::fs::write(tmp.path().join("cwtools.toml"), body).unwrap();
-    tmp
+pub(crate) fn config_mod(body: &str) -> TempDir {
+    let event = fixture_text("discover/mod_a/events/test.txt");
+    write_tree(&[("mod/events/test.txt", &event), ("cwtools.toml", body)])
 }
 
 /// The `game`/`directory`/`rules` triple as a config body, with `directory`

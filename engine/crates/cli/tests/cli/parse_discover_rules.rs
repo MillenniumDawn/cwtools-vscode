@@ -1,4 +1,4 @@
-use crate::common::{broken_rules_dir, cwtools, fixtures_dir};
+use crate::common::{broken_rules_dir, cwtools, fixtures_dir, write_tree};
 use predicates::prelude::*;
 
 // ── Parse ────────────────────────────────────────────────────────────────────
@@ -39,9 +39,8 @@ fn test_parse_missing_file_fails() {
 
 #[test]
 fn test_parse_reports_errors_and_exits_nonzero() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[("bad.txt", "a = { b = ")]);
     let file = tmp.path().join("bad.txt");
-    std::fs::write(&file, "a = { b = ").unwrap();
     cwtools()
         .args(["parse", file.to_str().unwrap()])
         .assert()
@@ -56,10 +55,9 @@ fn test_parse_reports_errors_and_exits_nonzero() {
 
 #[test]
 fn test_parse_reports_the_clause_depth_limit() {
-    let tmp = tempfile::tempdir().unwrap();
-    let file = tmp.path().join("deep.txt");
     let body = format!("root = {}1{}\n", "{ a = ".repeat(300), " }".repeat(300));
-    std::fs::write(&file, body).unwrap();
+    let tmp = write_tree(&[("deep.txt", &body)]);
+    let file = tmp.path().join("deep.txt");
     cwtools()
         .args(["parse", file.to_str().unwrap()])
         .assert()
@@ -121,26 +119,14 @@ fn test_discover_missing_directory_fails_with_discovery_exit_code() {
 
 #[test]
 fn test_discover_multi_mod_workspace_uses_the_layered_file_set() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
-    for (name, path) in [("a", "mods/a"), ("b", "mods/b")] {
-        let descriptor = root.join("mod").join(format!("{name}.mod"));
-        std::fs::create_dir_all(descriptor.parent().unwrap()).unwrap();
-        std::fs::write(
-            descriptor,
-            format!("name = \"{name}\"\npath = \"{path}\"\n"),
-        )
-        .unwrap();
-    }
-    for (path, content) in [
+    let tmp = write_tree(&[
+        ("mod/a.mod", "name = \"a\"\npath = \"mods/a\"\n"),
+        ("mod/b.mod", "name = \"b\"\npath = \"mods/b\"\n"),
         ("mods/a/common/shared.txt", "value = a\n"),
         ("mods/b/common/shared.txt", "value = b\n"),
         ("mods/b/events/only_b.txt", "value = b\n"),
-    ] {
-        let path = root.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content).unwrap();
-    }
+    ]);
+    let root = tmp.path();
     let winner_path = r"mods/b[/\\]common[/\\]shared\.txt";
 
     cwtools()
@@ -211,8 +197,7 @@ fn test_rules_reports_coded_problems_and_fails() {
 
 #[test]
 fn test_rules_reports_a_syntax_error_and_fails() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("broken.cwt"), "types = {\n").unwrap();
+    let tmp = write_tree(&[("broken.cwt", "types = {\n")]);
     cwtools()
         .args(["rules", tmp.path().to_str().unwrap()])
         .assert()
@@ -227,9 +212,8 @@ fn test_single_rules_file_reports_syntax_and_directive_errors() {
         ("types = {\n", "CW604"),
         ("## cardinality = 0..x\nr = { a = bool }\n", "CW603"),
     ] {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = write_tree(&[("broken.cwt", source)]);
         let file = tmp.path().join("broken.cwt");
-        std::fs::write(&file, source).unwrap();
         for input in [&file, &tmp.path().to_path_buf()] {
             cwtools()
                 .args(["rules", input.to_str().unwrap(), "--fail-on", "warning"])
@@ -284,13 +268,11 @@ fn test_rules_csv_report_keeps_the_summary_off_stdout() {
 
 #[test]
 fn test_rules_malformed_alias_directive_reports_cw605() {
-    let tmp = tempfile::tempdir().unwrap();
-    let file = tmp.path().join("malformed.cwt");
-    std::fs::write(
-        &file,
+    let tmp = write_tree(&[(
+        "malformed.cwt",
         "# comment\nalias[effect] = { field = scalar }\nordinary_type = { field = scalar }\n",
-    )
-    .unwrap();
+    )]);
+    let file = tmp.path().join("malformed.cwt");
     cwtools()
         .arg("rules")
         .arg(&file)

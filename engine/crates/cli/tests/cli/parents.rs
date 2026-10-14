@@ -1,27 +1,21 @@
-use crate::common::cwtools;
+use crate::common::{cwtools, write_tree};
 use predicates::prelude::*;
 
 fn parent_file_reference_workspace() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules = tmp.path().join("rules");
-    std::fs::create_dir_all(&rules).unwrap();
-    std::fs::write(
-        rules.join("gfx.cwt"),
-        r#"
+    let tmp = write_tree(&[
+        (
+            "rules/gfx.cwt",
+            r#"
 spriteType = { texturefile = filepath }
 types = { type[spriteType] = { path = "gfx" } }
 "#,
-    )
-    .unwrap();
-    let mod_gfx = tmp.path().join("mod/gfx");
-    std::fs::create_dir_all(&mod_gfx).unwrap();
-    std::fs::write(
-        mod_gfx.join("ref.gfx"),
-        "spriteType = { texturefile = \"gfx/parent_icon.dds\" }\n",
-    )
-    .unwrap();
-    std::fs::create_dir_all(tmp.path().join("parent/gfx")).unwrap();
-    std::fs::write(tmp.path().join("parent/gfx/parent_icon.dds"), b"").unwrap();
+        ),
+        (
+            "mod/gfx/ref.gfx",
+            "spriteType = { texturefile = \"gfx/parent_icon.dds\" }\n",
+        ),
+        ("parent/gfx/parent_icon.dds", ""),
+    ]);
     std::fs::create_dir_all(tmp.path().join("other-parent")).unwrap();
     std::fs::create_dir_all(tmp.path().join("vanilla")).unwrap();
     tmp
@@ -103,9 +97,8 @@ fn validate_missing_parent_keeps_the_normal_missing_file_diagnostic() {
 
 #[test]
 fn validate_rejects_an_empty_parent_path_in_config() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[("cwtools.toml", "parents = [\"\"]\n")]);
     let config = tmp.path().join("cwtools.toml");
-    std::fs::write(&config, "parents = [\"\"]\n").unwrap();
     cwtools()
         .args(["validate", "--config", config.to_str().unwrap()])
         .assert()
@@ -138,42 +131,33 @@ fn an_explicit_empty_config_parent_list_clears_parent_resolution() {
 
 #[test]
 fn parent_replace_path_is_applied_to_explicit_vanilla_cache_with_or_without_install() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        (
+            "parent/descriptor.mod",
+            "name = \"Parent\"\nreplace_path = \"localisation\"\n",
+        ),
+        (
+            "mod/common/things/test.txt",
+            "thing = { name = hidden_key }\n",
+        ),
+        (
+            "mod/localisation/mod_l_english.yml",
+            "l_english:\n visible_key:0 \"Visible\"\n",
+        ),
+        (
+            "vanilla/localisation/hidden_l_english.yml",
+            "l_english:\n hidden_key:0 \"Hidden\"\n",
+        ),
+        ("mod/script.txt", "anyway_valid = { }\n"),
+        (
+            "rules/things.cwt",
+            "types = { type[thing] = { path = \"game/common/things\" } }\nthing = { name = localisation }\n",
+        ),
+    ]);
     let mod_dir = tmp.path().join("mod");
     let parent_dir = tmp.path().join("parent");
     let rules_dir = tmp.path().join("rules");
     let vanilla_dir = tmp.path().join("vanilla");
-    std::fs::create_dir_all(mod_dir.join("common/things")).unwrap();
-    std::fs::create_dir_all(mod_dir.join("localisation")).unwrap();
-    std::fs::create_dir_all(&parent_dir).unwrap();
-    std::fs::create_dir_all(&rules_dir).unwrap();
-    std::fs::create_dir_all(vanilla_dir.join("localisation")).unwrap();
-    std::fs::write(
-        parent_dir.join("descriptor.mod"),
-        "name = \"Parent\"\nreplace_path = \"localisation\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        mod_dir.join("common/things/test.txt"),
-        "thing = { name = hidden_key }\n",
-    )
-    .unwrap();
-    std::fs::write(
-        mod_dir.join("localisation/mod_l_english.yml"),
-        "l_english:\n visible_key:0 \"Visible\"\n",
-    )
-    .unwrap();
-    std::fs::write(
-        vanilla_dir.join("localisation/hidden_l_english.yml"),
-        "l_english:\n hidden_key:0 \"Hidden\"\n",
-    )
-    .unwrap();
-    std::fs::write(mod_dir.join("script.txt"), "anyway_valid = { }\n").unwrap();
-    std::fs::write(
-        rules_dir.join("things.cwt"),
-        "types = { type[thing] = { path = \"game/common/things\" } }\nthing = { name = localisation }\n",
-    )
-    .unwrap();
     let cache = tmp.path().join("vanilla.cwv");
 
     cwtools()

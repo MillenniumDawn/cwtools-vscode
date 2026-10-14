@@ -1,4 +1,4 @@
-use crate::common::{config_body, config_mod, cwtools, fixtures_dir};
+use crate::common::{config_body, config_mod, cwtools, fixtures_dir, write_tree};
 use predicates::prelude::*;
 
 // ── Per-code suppression ─────────────────────────────────────────────────────
@@ -181,15 +181,10 @@ fn test_validate_inline_ignore_quoted_example_keeps_the_diagnostic() {
 
 #[test]
 fn test_loc_inline_ignore_quoted_example_keeps_the_diagnostic() {
-    let tmp = tempfile::tempdir().unwrap();
-    let loc = tmp.path().join("localisation");
-    std::fs::create_dir_all(&loc).unwrap();
-    let file = loc.join("test_l_english.yml");
-    std::fs::write(
-        &file,
+    let tmp = write_tree(&[(
+        "localisation/test_l_english.yml",
         "\u{FEFF}l_english:\n KEY:0 \"$missing_key$ \"quoted # cwtools-ignore CW225 example\" rest\"\n",
-    )
-    .unwrap();
+    )]);
     cwtools()
         .arg("loc")
         .arg(tmp.path())
@@ -200,14 +195,10 @@ fn test_loc_inline_ignore_quoted_example_keeps_the_diagnostic() {
 
 #[test]
 fn test_loc_inline_ignore_real_comment_after_embedded_quotes_suppresses() {
-    let tmp = tempfile::tempdir().unwrap();
-    let loc = tmp.path().join("localisation");
-    std::fs::create_dir_all(&loc).unwrap();
-    std::fs::write(
-        loc.join("test_l_english.yml"),
+    let tmp = write_tree(&[(
+        "localisation/test_l_english.yml",
         "\u{FEFF}l_english:\n KEY:0 \"$missing_key$ \"quoted\" rest\" # cwtools-ignore CW225\n",
-    )
-    .unwrap();
+    )]);
     cwtools()
         .arg("loc")
         .arg(tmp.path())

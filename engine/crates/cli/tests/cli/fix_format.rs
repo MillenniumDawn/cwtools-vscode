@@ -1,4 +1,4 @@
-use crate::common::{cwtools, fix_mod, fixtures_dir};
+use crate::common::{cwtools, fix_mod, fixtures_dir, write_tree};
 use predicates::prelude::*;
 
 // ── Fix ──────────────────────────────────────────────────────────────────────
@@ -69,10 +69,9 @@ fn test_fix_apply_writes_and_is_idempotent() {
 
 #[test]
 fn test_fix_apply_preserves_a_leading_bom_and_surrounding_text() {
-    let tmp = fix_mod();
+    let tmp = write_tree(&[("common/hint.txt", "\u{FEFF}x = { if = { } }\n")]);
     let rules_dir = fixtures_dir().join("rules");
     let file = tmp.path().join("common").join("hint.txt");
-    std::fs::write(&file, "\u{FEFF}x = { if = { } }\n").unwrap();
 
     cwtools()
         .args([
@@ -228,11 +227,7 @@ fn test_fix_missing_directory_fails() {
 // ── Format ───────────────────────────────────────────────────────────────────
 
 fn format_mod_dir() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    let common = tmp.path().join("common");
-    std::fs::create_dir_all(&common).unwrap();
-    std::fs::write(common.join("a.txt"), "root={\n a=1\n}\n").unwrap();
-    tmp
+    write_tree(&[("common/a.txt", "root={\n a=1\n}\n")])
 }
 
 #[test]
@@ -271,9 +266,7 @@ fn test_format_apply_rewrites_and_second_dry_run_is_clean() {
 
 #[test]
 fn test_format_max_line_width_is_passed_to_formatter() {
-    let tmp = format_mod_dir();
-    let path = tmp.path().join("common").join("a.txt");
-    std::fs::write(path, "root={\n    values={1 22 333}\n}\n").unwrap();
+    let tmp = write_tree(&[("common/a.txt", "root={\n    values={1 22 333}\n}\n")]);
     cwtools()
         .args([
             "format",
@@ -291,10 +284,7 @@ fn test_format_max_line_width_is_passed_to_formatter() {
 
 #[test]
 fn test_format_skips_a_parse_error() {
-    let tmp = tempfile::tempdir().unwrap();
-    let common = tmp.path().join("common");
-    std::fs::create_dir_all(&common).unwrap();
-    std::fs::write(common.join("bad.txt"), "root = {\n").unwrap();
+    let tmp = write_tree(&[("common/bad.txt", "root = {\n")]);
     cwtools()
         .args(["format", "--directory", tmp.path().to_str().unwrap()])
         .assert()
@@ -304,12 +294,9 @@ fn test_format_skips_a_parse_error() {
 
 #[test]
 fn test_format_names_the_unclosed_quote_it_will_not_format() {
-    let tmp = tempfile::tempdir().unwrap();
-    let common = tmp.path().join("common");
-    std::fs::create_dir_all(&common).unwrap();
-    let file = common.join("names.txt");
     let original = "names = {\n\t\"Falke\n\tAdler\n}\n";
-    std::fs::write(&file, original).unwrap();
+    let tmp = write_tree(&[("common/names.txt", original)]);
+    let file = tmp.path().join("common").join("names.txt");
     cwtools()
         .args([
             "format",

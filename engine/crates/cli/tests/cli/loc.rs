@@ -1,4 +1,4 @@
-use crate::common::{cwtools, fixtures_dir};
+use crate::common::{cwtools, fixture_text, fixtures_dir, write_tree};
 use predicates::prelude::*;
 use std::path::PathBuf;
 
@@ -276,14 +276,10 @@ fn test_loc_without_rules_runs_no_command_checks() {
 
 #[test]
 fn test_loc_parenthesised_expression_does_not_report_an_empty_command() {
-    let tmp = tempfile::tempdir().unwrap();
-    let loc = tmp.path().join("localisation");
-    std::fs::create_dir_all(&loc).unwrap();
-    std::fs::copy(
-        fixtures_dir().join("loc_parenthesised/cmds_l_english.txt"),
-        loc.join("cmds_l_english.yml"),
-    )
-    .unwrap();
+    let tmp = write_tree(&[(
+        "localisation/cmds_l_english.yml",
+        &fixture_text("loc_parenthesised/cmds_l_english.txt"),
+    )]);
 
     cwtools()
         .args([
@@ -351,22 +347,17 @@ fn test_loc_game_without_rules_warns_and_checks_nothing() {
 
 #[test]
 fn test_loc_reads_game_and_rules_from_the_config() {
-    let tmp = tempfile::tempdir().unwrap();
-    let loc = tmp.path().join("mod").join("localisation");
-    std::fs::create_dir_all(&loc).unwrap();
-    std::fs::copy(
-        loc_commands_dir().join("localisation/cmds_l_english.yml"),
-        loc.join("cmds_l_english.yml"),
-    )
-    .unwrap();
-    std::fs::write(
-        tmp.path().join("cwtools.toml"),
-        format!(
-            "game = \"hoi4\"\ndirectory = \"mod\"\nrules = {:?}\n",
-            loc_rules_dir().to_str().unwrap()
+    let config = format!(
+        "game = \"hoi4\"\ndirectory = \"mod\"\nrules = {:?}\n",
+        loc_rules_dir().to_str().unwrap()
+    );
+    let tmp = write_tree(&[
+        (
+            "mod/localisation/cmds_l_english.yml",
+            &fixture_text("loc_commands/localisation/cmds_l_english.yml"),
         ),
-    )
-    .unwrap();
+        ("cwtools.toml", &config),
+    ]);
     cwtools()
         .arg("loc")
         .current_dir(tmp.path())

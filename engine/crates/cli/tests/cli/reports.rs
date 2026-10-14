@@ -1,4 +1,4 @@
-use crate::common::{cwtools, fix_mod, fixtures_dir, validate_dir};
+use crate::common::{cwtools, fix_mod, fixtures_dir, validate_dir, write_tree};
 use predicates::prelude::*;
 
 // ── Report formats: github / sarif ───────────────────────────────────────────
@@ -352,24 +352,23 @@ fn test_validate_hash_baseline_survives_inserted_line() {
 
 #[test]
 fn test_raw_equipment_icons_reach_cli_sarif_and_suppression() {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules = tmp.path().join("rules");
-    let mod_dir = tmp.path().join("mod");
-    std::fs::create_dir_all(&rules).unwrap();
-    std::fs::write(
-        rules.join("r.cwt"),
-        "types = { type[variant] = { path = \"game/history/countries\" } }",
-    )
-    .unwrap();
-    let variant = mod_dir.join("history/countries/USA.txt");
-    let pool = mod_dir.join("gfx/interface/equipmentdesigner/graphic_db/planes.txt");
-    for file in [&variant, &pool] {
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-    }
     let variant_source = "create_equipment_variant = {\n icon = \"gfx/plane.dds\"\n}\n";
     let pool_source = "USA = { plane = { pool = { icons = {\n \"gfx/plane.dds\"\n} } } }\n";
-    std::fs::write(&variant, variant_source).unwrap();
-    std::fs::write(&pool, pool_source).unwrap();
+    let tmp = write_tree(&[
+        (
+            "rules/r.cwt",
+            "types = { type[variant] = { path = \"game/history/countries\" } }",
+        ),
+        ("mod/history/countries/USA.txt", variant_source),
+        (
+            "mod/gfx/interface/equipmentdesigner/graphic_db/planes.txt",
+            pool_source,
+        ),
+    ]);
+    let rules = tmp.path().join("rules");
+    let mod_dir = tmp.path().join("mod");
+    let variant = mod_dir.join("history/countries/USA.txt");
+    let pool = mod_dir.join("gfx/interface/equipmentdesigner/graphic_db/planes.txt");
     let command = |report: &str| {
         let mut cmd = cwtools();
         cmd.args(["validate", "--game", "hoi4", "--directory"])

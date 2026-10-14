@@ -1,4 +1,4 @@
-use crate::common::{config_body, config_mod, cwtools, fixtures_dir};
+use crate::common::{config_body, config_mod, cwtools, fixture_text, fixtures_dir, write_tree};
 use predicates::prelude::*;
 
 // ── Config file (cwtools.toml) ───────────────────────────────────────────────
@@ -242,19 +242,16 @@ fn test_missing_required_setting_is_a_usage_error() {
 
 #[test]
 fn test_loc_reads_the_config_directory() {
-    let tmp = tempfile::tempdir().unwrap();
-    let loc = tmp.path().join("mod").join("localisation");
-    std::fs::create_dir_all(&loc).unwrap();
-    std::fs::copy(
-        fixtures_dir().join("loc_error/localisation/l_english.yml"),
-        loc.join("l_english.yml"),
-    )
-    .unwrap();
-    std::fs::write(
-        tmp.path().join("cwtools.toml"),
-        "directory = \"mod\"\nignore-codes = [\"CW225\"]\n",
-    )
-    .unwrap();
+    let tmp = write_tree(&[
+        (
+            "mod/localisation/l_english.yml",
+            &fixture_text("loc_error/localisation/l_english.yml"),
+        ),
+        (
+            "cwtools.toml",
+            "directory = \"mod\"\nignore-codes = [\"CW225\"]\n",
+        ),
+    ]);
     // CW225 is the only (Error-severity) diagnostic, so suppressing it also
     // flips the exit code.
     cwtools()
@@ -274,16 +271,14 @@ fn test_loc_reads_the_config_directory() {
 /// the same one file, which isn't the scenario this test is about.
 #[test]
 fn test_config_directory_dot_keeps_baseline_hashes_stable() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        (
+            "mod/events/test.txt",
+            &fixture_text("discover/mod_a/events/test.txt"),
+        ),
+        ("mod/cwtools.toml", "directory = \".\"\n"),
+    ]);
     let mod_dir = tmp.path().join("mod");
-    let events = mod_dir.join("events");
-    std::fs::create_dir_all(&events).unwrap();
-    std::fs::copy(
-        fixtures_dir().join("discover/mod_a/events/test.txt"),
-        events.join("test.txt"),
-    )
-    .unwrap();
-    std::fs::write(mod_dir.join("cwtools.toml"), "directory = \".\"\n").unwrap();
     let rules_dir = fixtures_dir().join("rules");
     let hashes = |args: &[&str], cwd: &std::path::Path| {
         let out = tmp.path().join("h.txt");
@@ -316,19 +311,16 @@ fn test_config_directory_dot_keeps_baseline_hashes_stable() {
 /// won't act on are named rather than quietly dropped.
 #[test]
 fn test_config_warns_about_keys_the_command_ignores() {
-    let tmp = tempfile::tempdir().unwrap();
-    let loc = tmp.path().join("mod").join("localisation");
-    std::fs::create_dir_all(&loc).unwrap();
-    std::fs::copy(
-        fixtures_dir().join("loc/localisation/l_english.yml"),
-        loc.join("l_english.yml"),
-    )
-    .unwrap();
-    std::fs::write(
-        tmp.path().join("cwtools.toml"),
-        "directory = \"mod\"\nvanilla = \"game\"\ncase-sensitive-files = false\n",
-    )
-    .unwrap();
+    let tmp = write_tree(&[
+        (
+            "mod/localisation/l_english.yml",
+            &fixture_text("loc/localisation/l_english.yml"),
+        ),
+        (
+            "cwtools.toml",
+            "directory = \"mod\"\nvanilla = \"game\"\ncase-sensitive-files = false\n",
+        ),
+    ]);
     cwtools()
         .arg("loc")
         .current_dir(tmp.path())

@@ -1,5 +1,13 @@
-use crate::common::{cwtools, fix_mod, fixtures_dir};
+use crate::common::{cwtools, fix_mod, fixtures_dir, write_tree};
 use predicates::prelude::*;
+
+const THING_RULES: &str = r#"
+types = {
+    type[thing] = {
+        path = "game/common/things"
+    }
+}
+"#;
 
 // ── Vanilla cache ─────────────────────────────────────────────────────────────
 
@@ -109,29 +117,13 @@ fn test_cache_vanilla_writes_instances_and_validate_loads_cache() {
 /// still completes and never validates on the unfiltered install.
 #[test]
 fn test_validate_warns_and_skips_unfilterable_explicit_vanilla_cache_without_vanilla() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("mod/descriptor.mod", r#"replace_path = "common/ideas""#),
+        ("mod/common/test.txt", "test_thing = { }\n"),
+        ("rules/things.cwt", THING_RULES),
+    ]);
     let mod_dir = tmp.path().join("mod");
-    let mod_common = mod_dir.join("common");
-    std::fs::create_dir_all(&mod_common).unwrap();
-    std::fs::write(
-        mod_dir.join("descriptor.mod"),
-        r#"replace_path = "common/ideas""#,
-    )
-    .unwrap();
-    std::fs::write(mod_common.join("test.txt"), "test_thing = { }\n").unwrap();
     let rules_dir = tmp.path().join("rules");
-    std::fs::create_dir_all(&rules_dir).unwrap();
-    std::fs::write(
-        rules_dir.join("things.cwt"),
-        r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-    }
-}
-"#,
-    )
-    .unwrap();
     let cache = tmp.path().join("vanilla.cwv");
     let vanilla = tmp.path().join("vanilla");
     std::fs::create_dir_all(&vanilla).unwrap();
@@ -172,35 +164,16 @@ types = {
 /// the replacement-aware fingerprint instead of exiting.
 #[test]
 fn test_validate_warns_and_rebuilds_replace_path_cache_with_vanilla() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        ("mod/descriptor.mod", r#"replace_path = "common/things""#),
+        ("mod/script.txt", "anyway_valid = { }\n"),
+        ("rules/things.cwt", THING_RULES),
+        ("vanilla/common/things/x.txt", "vanilla_thing = { }\n"),
+        ("vanilla/common/things/nested/y.txt", "nested_kept = { }\n"),
+    ]);
     let mod_dir = tmp.path().join("mod");
-    std::fs::create_dir_all(&mod_dir).unwrap();
-    std::fs::write(
-        mod_dir.join("descriptor.mod"),
-        r#"replace_path = "common/things""#,
-    )
-    .unwrap();
-    std::fs::write(mod_dir.join("script.txt"), "anyway_valid = { }\n").unwrap();
     let rules_dir = tmp.path().join("rules");
-    std::fs::create_dir_all(&rules_dir).unwrap();
-    std::fs::write(
-        rules_dir.join("things.cwt"),
-        r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-    }
-}
-"#,
-    )
-    .unwrap();
     let vanilla = tmp.path().join("vanilla");
-    let replaced = vanilla.join("common/things");
-    std::fs::create_dir_all(&replaced).unwrap();
-    std::fs::write(replaced.join("x.txt"), "vanilla_thing = { }\n").unwrap();
-    let nested = replaced.join("nested");
-    std::fs::create_dir_all(&nested).unwrap();
-    std::fs::write(nested.join("y.txt"), "nested_kept = { }\n").unwrap();
     let cache = tmp.path().join("vanilla.cwv");
 
     // Build the cache the documented way: the unfiltered install view.
@@ -302,49 +275,29 @@ types = {
 /// cache file for the next run.
 #[test]
 fn test_validate_first_run_cannot_resolve_loc_key_hidden_by_replace_path() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = write_tree(&[
+        (
+            "mod/descriptor.mod",
+            r#"replace_path = "localisation/replaced""#,
+        ),
+        ("mod/script.txt", "anyway_valid = { }\n"),
+        (
+            "mod/localisation/mod_l_english.yml",
+            "l_english:\n mod_key:0 \"$hidden_key$\"\n ref_kept:0 \"$kept_key$\"\n",
+        ),
+        ("rules/things.cwt", THING_RULES),
+        (
+            "vanilla/localisation/replaced/hidden_l_english.yml",
+            "l_english:\n hidden_key:0 \"Hidden\"\n",
+        ),
+        (
+            "vanilla/localisation/kept_l_english.yml",
+            "l_english:\n kept_key:0 \"Kept\"\n",
+        ),
+    ]);
     let mod_dir = tmp.path().join("mod");
-    std::fs::create_dir_all(&mod_dir).unwrap();
-    std::fs::write(
-        mod_dir.join("descriptor.mod"),
-        r#"replace_path = "localisation/replaced""#,
-    )
-    .unwrap();
-    std::fs::write(mod_dir.join("script.txt"), "anyway_valid = { }\n").unwrap();
-    let mod_loc = mod_dir.join("localisation");
-    std::fs::create_dir_all(&mod_loc).unwrap();
-    std::fs::write(
-        mod_loc.join("mod_l_english.yml"),
-        "l_english:\n mod_key:0 \"$hidden_key$\"\n ref_kept:0 \"$kept_key$\"\n",
-    )
-    .unwrap();
     let rules_dir = tmp.path().join("rules");
-    std::fs::create_dir_all(&rules_dir).unwrap();
-    std::fs::write(
-        rules_dir.join("things.cwt"),
-        r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-    }
-}
-"#,
-    )
-    .unwrap();
     let vanilla = tmp.path().join("vanilla");
-    let replaced_loc = vanilla.join("localisation/replaced");
-    std::fs::create_dir_all(&replaced_loc).unwrap();
-    std::fs::write(
-        replaced_loc.join("hidden_l_english.yml"),
-        "l_english:\n hidden_key:0 \"Hidden\"\n",
-    )
-    .unwrap();
-    let vanilla_loc = vanilla.join("localisation");
-    std::fs::write(
-        vanilla_loc.join("kept_l_english.yml"),
-        "l_english:\n kept_key:0 \"Kept\"\n",
-    )
-    .unwrap();
     let cache = tmp.path().join("vanilla.cwv");
 
     // The cache built the documented way carries the unfiltered loc keys.

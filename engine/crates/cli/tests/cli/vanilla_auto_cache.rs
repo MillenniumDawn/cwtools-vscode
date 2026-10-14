@@ -1,4 +1,4 @@
-use crate::common::{cwtools, fix_mod, fixtures_dir};
+use crate::common::{cwtools, fix_mod, fixtures_dir, write_tree};
 use predicates::prelude::*;
 
 // ── Automatic base-game cache ────────────────────────────────────────────────
@@ -184,10 +184,7 @@ fn test_validate_no_vanilla_cache_writes_nothing() {
 #[test]
 fn test_validate_no_vanilla_cache_does_not_write_vanilla_parse_entries() {
     let cache = tempfile::tempdir().unwrap();
-    let vanilla = tempfile::tempdir().unwrap();
-    let scripts = vanilla.path().join("common").join("things");
-    std::fs::create_dir_all(&scripts).unwrap();
-    std::fs::write(scripts.join("x.txt"), "thing = { }\n").unwrap();
+    let vanilla = write_tree(&[("common/things/x.txt", "thing = { }\n")]);
 
     let discover_dir = fixtures_dir().join("discover").join("mod_a");
     let rules_dir = fixtures_dir().join("rules");

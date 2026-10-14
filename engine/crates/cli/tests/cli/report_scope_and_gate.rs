@@ -1,4 +1,7 @@
-use crate::common::{INHERITED_GIT_ENV, broken_rules_dir, cwtools, fixtures_dir, validate_dir};
+use crate::common::{
+    INHERITED_GIT_ENV, broken_rules_dir, cwtools, fixture_text, fixtures_dir, validate_dir,
+    write_tree,
+};
 use predicates::prelude::*;
 
 // ── Exit gate (--fail-on) ────────────────────────────────────────────────────
@@ -207,13 +210,9 @@ fn git(dir: &std::path::Path, args: &[&str]) {
 /// clean tree to start from. Identity and signing are set on the repo so the
 /// commit doesn't depend on the developer's global git config.
 fn git_repo_mod() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    let src = fixtures_dir().join("discover").join("mod_a");
-    for rel in ["common/test.txt", "events/test.txt"] {
-        let dst = tmp.path().join(rel);
-        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
-        std::fs::copy(src.join(rel), &dst).unwrap();
-    }
+    let common = fixture_text("discover/mod_a/common/test.txt");
+    let events = fixture_text("discover/mod_a/events/test.txt");
+    let tmp = write_tree(&[("common/test.txt", &common), ("events/test.txt", &events)]);
     git(tmp.path(), &["init"]);
     git(tmp.path(), &["config", "user.email", "test@example.com"]);
     git(tmp.path(), &["config", "user.name", "cwtools tests"]);
