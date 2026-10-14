@@ -228,7 +228,7 @@ suite("GraphPanel", function () {
 		return vscode.commands.executeCommand("cwtools.graphFromJson");
 	};
 
-	async function assertRenderedGraph(panel: GraphPanelNamespace.GraphPanel) {
+	async function waitForRenderedGraph(panel: GraphPanelNamespace.GraphPanel) {
 		assert.ok(
 			await waitUntil(() => panel.getState() === gp.State.Done),
 			"GraphPanel should reach the Done state",
@@ -237,32 +237,57 @@ suite("GraphPanel", function () {
 			await waitUntil(() => panel.checkCytoscapeRendered()),
 			"Cytoscape should render the supplied graph",
 		);
-		let exported: string | undefined;
-		const listener = panel["_panel"].webview.onDidReceiveMessage(
-			(message: { command: string; json: string }) => {
-				if (message.command === "saveJson") exported = message.json;
+	}
+
+	type SaveCommand = "cwtools.saveGraphImage" | "cwtools.saveGraphJson";
+	type SaveMessage = "saveImage" | "saveJson";
+	const saves: readonly (readonly [SaveCommand, SaveMessage])[] = [
+		["cwtools.saveGraphImage", "saveImage"],
+		["cwtools.saveGraphJson", "saveJson"],
+	];
+
+	// Awaits the host's handler, not just the message, so the disk is settled before it is read.
+	async function runSave(
+		panel: GraphPanelNamespace.GraphPanel,
+		command: SaveCommand,
+		message: SaveMessage,
+		dest: string | undefined,
+	) {
+		const handler = sandbox.spy(
+			panel as unknown as {
+				handleWebviewMessage: (message: { command: string }) => Promise<void>;
 			},
+			"handleWebviewMessage",
 		);
-		sandbox.stub(vscode.window, "showSaveDialog").resolves(undefined);
-		try {
-			await vscode.commands.executeCommand("cwtools.saveGraphJson");
-			assert.ok(
-				await waitUntil(() => exported !== undefined),
-				"graph export should arrive",
-			);
-			assert.ok(exported);
-			const graph = JSON.parse(exported) as { elements: ElementsDefinition };
-			assert.deepStrictEqual(
-				graph.elements.nodes.map((node) => node.data.id).sort(),
-				["test1", "test2"],
-			);
-			assert.deepStrictEqual(
-				graph.elements.edges.map((edge) => [edge.data.source, edge.data.target]),
-				[["test1", "test2"]],
-			);
-		} finally {
-			listener.dispose();
-		}
+		const dialog = sandbox
+			.stub(vscode.window, "showSaveDialog")
+			.resolves(dest === undefined ? undefined : vscode.Uri.file(dest));
+		await vscode.commands.executeCommand(command);
+		const handled = () =>
+			handler.getCalls().find((call) => call.args[0].command === message);
+		assert.ok(
+			await waitUntil(() => handled() !== undefined, 30_000),
+			`${message} should reach the host`,
+		);
+		await handled()!.returnValue;
+		assert.strictEqual(dialog.callCount, 1);
+	}
+
+	async function assertRenderedGraph(panel: GraphPanelNamespace.GraphPanel) {
+		await waitForRenderedGraph(panel);
+		const dest = path.join(tempDir, "export.json");
+		await runSave(panel, "cwtools.saveGraphJson", "saveJson", dest);
+		const graph = JSON.parse(fs.readFileSync(dest, "utf8")) as {
+			elements: ElementsDefinition;
+		};
+		assert.deepStrictEqual(
+			graph.elements.nodes.map((node) => node.data.id).sort(),
+			["test1", "test2"],
+		);
+		assert.deepStrictEqual(
+			graph.elements.edges.map((edge) => [edge.data.source, edge.data.target]),
+			[["test1", "test2"]],
+		);
 	}
 
 	// A rebuilt panel would duplicate the webview and the save commands it
@@ -287,13 +312,42 @@ suite("GraphPanel", function () {
 		);
 	});
 
-	test("renders server graph data and exports what it rendered", async function () {
+	test("renders server graph data and cwtools.saveGraphJson writes the nodes and edges it rendered", async function () {
 		const panel = createPanel();
 
 		panel.initialiseGraph(graphData, 1.0);
 
 		await assertRenderedGraph(panel);
 	});
+
+	test("cwtools.saveGraphImage writes a PNG of the rendered graph", async function () {
+		const panel = createPanel();
+		panel.initialiseGraph(graphData, 1.0);
+		await waitForRenderedGraph(panel);
+		const dest = path.join(tempDir, "export.png");
+
+		await runSave(panel, "cwtools.saveGraphImage", "saveImage", dest);
+
+		const png = fs.readFileSync(dest);
+		assert.deepStrictEqual(
+			png.subarray(0, 8),
+			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		);
+		assert.strictEqual(png.subarray(12, 16).toString("ascii"), "IHDR");
+		assert.ok(png.readUInt32BE(16) > 0 && png.readUInt32BE(20) > 0);
+	});
+
+	for (const [command, message] of saves) {
+		test(`${command} writes nothing when the save dialog is cancelled`, async function () {
+			const panel = createPanel();
+			panel.initialiseGraph(graphData, 1.0);
+			await waitForRenderedGraph(panel);
+
+			await runSave(panel, command, message, undefined);
+
+			assert.deepStrictEqual(fs.readdirSync(tempDir), ["graph.json"]);
+		});
+	}
 
 	// The window-reload serializer hands back a live panel whose html the
 	// extension must re-set; restore() adopts it like a fresh panel.
