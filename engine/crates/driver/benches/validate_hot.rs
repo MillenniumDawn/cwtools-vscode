@@ -33,6 +33,7 @@ use cwtools_parser::parser::parse_string;
 use cwtools_rules::rules_converter::ast_to_ruleset;
 use cwtools_rules::rules_types::{RootRule, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_support::{projects_dir, rules_dir};
 use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
 
 /// Alias-heavy scripted-effects file from the pinned Kaiserreich corpus.
@@ -62,23 +63,6 @@ alias[effect:every_owned_state] = {
 alias[trigger:is_core_of] = scope[country]
 "#;
 const FIXTURE_LEAVES: usize = 200;
-
-fn projects_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_PROJECTS") {
-        return Some(PathBuf::from(dir));
-    }
-    // crates/driver -> repo root is ../../.., siblings sit next to it.
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    repo.join("..").canonicalize().ok()
-}
-
-fn rules_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_RULES") {
-        return Some(PathBuf::from(dir));
-    }
-    let dir = projects_dir()?.join("cwtools-hoi4-config/Config");
-    dir.is_dir().then_some(dir)
-}
 
 fn corpus_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("CWTOOLS_CORPUS") {

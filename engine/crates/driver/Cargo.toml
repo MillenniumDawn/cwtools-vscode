@@ -22,7 +22,7 @@ cwtools_localization = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
-cwtools_test_rules = { workspace = true }
+cwtools_test_support = { workspace = true }
 criterion = { workspace = true }
 tempfile = { workspace = true }
 

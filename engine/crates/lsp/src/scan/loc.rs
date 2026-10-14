@@ -441,30 +441,13 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use super::*;
     use cwtools_file_manager::file_manager::ScanBudget;
     use cwtools_info::vanilla_cache::{VanillaCacheAux, VanillaCacheData};
     use cwtools_localization::{Lang, LocIndex, LocService};
 
-    use crate::state::DocumentState;
-
-    fn test_backend() -> Backend {
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().unwrap();
-        Backend { client, state }
-    }
+    use crate::testing::test_backend;
 
     #[test]
     fn collect_loc_display_respects_primary_and_hover_all() {

@@ -21,20 +21,14 @@ use cwtools_index::variable_defining_effects;
 use cwtools_localization::Lang;
 use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
 use cwtools_string_table::string_table::StringTable;
-
-fn testfiles() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("testfiles")
-}
+use cwtools_test_support::{capped_alias_workspace, stellaris_config, testfiles, unused_workspace};
 
 fn perf_mod() -> PathBuf {
     testfiles().join("performancetest2")
 }
 
 fn perf_rules() -> PathBuf {
-    cwtools_test_rules::stellaris_config().to_path_buf()
+    stellaris_config().to_path_buf()
 }
 
 fn total_instances(index: &cwtools_index::TypeIndex) -> usize {
@@ -1131,88 +1125,6 @@ fn vanilla_cache_aux_preserves_original_case_file_paths() {
 }
 
 // ── CW239 unused-instance pass ───────────────────────────────────────────────
-
-/// Two types: `thing`, whose instances are expected to be referenced, and
-/// `user`, which references one. `{SHOULD_BE_USED}` is filled per test so the
-/// same mod can be validated with the check armed and disarmed.
-const UNUSED_RULES: &str = r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-        {SHOULD_BE_USED}
-    }
-    type[user] = {
-        path = "game/common/users"
-    }
-}
-thing = { }
-user = { uses = <thing> }
-"#;
-
-const CAPPED_ALIAS_RULES: &str = r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-        should_be_used = yes
-    }
-    type[user] = {
-        path = "game/common/users"
-    }
-}
-thing = { x = scalar }
-user = { alias_name[effect] = alias_match_left[effect] }
-alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
-## severity = warning
-alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
-alias[effect:needs_int] = int
-"#;
-
-/// A temp workspace holding two `thing` instances, only one of which `a_user`
-/// references. `armed` controls whether the config asks for the check at all.
-fn unused_workspace(armed: bool) -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules = UNUSED_RULES.replace(
-        "{SHOULD_BE_USED}",
-        if armed { "should_be_used = yes" } else { "" },
-    );
-    std::fs::create_dir_all(tmp.path().join("rules")).unwrap();
-    std::fs::write(tmp.path().join("rules").join("things.cwt"), rules).unwrap();
-
-    let things = tmp.path().join("mod").join("common").join("things");
-    std::fs::create_dir_all(&things).unwrap();
-    std::fs::write(things.join("x.txt"), "used_thing = { }\nlone_thing = { }\n").unwrap();
-
-    let users = tmp.path().join("mod").join("common").join("users");
-    std::fs::create_dir_all(&users).unwrap();
-    std::fs::write(users.join("u.txt"), "a_user = { uses = used_thing }\n").unwrap();
-    tmp
-}
-
-fn capped_alias_workspace() -> tempfile::TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    let rules = tmp.path().join("rules");
-    std::fs::create_dir_all(&rules).unwrap();
-    std::fs::write(rules.join("aliases.cwt"), CAPPED_ALIAS_RULES).unwrap();
-
-    let things = tmp.path().join("mod").join("common").join("things");
-    std::fs::create_dir_all(&things).unwrap();
-    std::fs::write(things.join("x.txt"), "my_thing = { x = a }\n").unwrap();
-
-    let users = tmp.path().join("mod").join("common").join("users");
-    std::fs::create_dir_all(&users).unwrap();
-    // One two-overload usage past the 65,536-branch budget, every usage its own,
-    // so nothing is memoizable and the budget is what stops the file.
-    let mut user = String::from("a_user = {\n");
-    for _ in 0..32_769 {
-        user.push_str("recurse = { }\n");
-    }
-    user.push_str("}\n");
-    std::fs::write(users.join("u.txt"), user).unwrap();
-    // A neighbour with one ordinary error. The budget is per file, so the capped
-    // file must not take this one's diagnostic down with it.
-    std::fs::write(users.join("v.txt"), "b_user = { needs_int = nope }\n").unwrap();
-    tmp
-}
 
 fn unused_session(workspace: &std::path::Path) -> cwtools_driver::SessionWithFiles {
     Session::load(SessionConfig {

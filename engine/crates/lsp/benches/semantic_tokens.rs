@@ -128,7 +128,7 @@ fn bench_source_with_rules(c: &mut Criterion, name: &str, text: &str) {
     let ast = parse_string(text, &table);
     let line_index = LineIndex::new(text);
     let rules_ast = parse_string(
-        &std::fs::read_to_string(cwtools_test_rules::stellaris_config().join("events.cwt"))
+        &std::fs::read_to_string(cwtools_test_support::stellaris_config().join("events.cwt"))
             .expect("read events.cwt"),
         &table,
     );

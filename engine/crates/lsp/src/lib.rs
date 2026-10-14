@@ -35,6 +35,8 @@ mod scan;
 mod semantic;
 mod server;
 mod state;
+#[cfg(test)]
+mod testing;
 mod transport;
 mod validate;
 

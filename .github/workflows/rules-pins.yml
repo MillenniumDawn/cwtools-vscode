@@ -79,7 +79,7 @@ jobs:
           retention-days: 1
 
   # The engine tests read the Stellaris and HOI4 pins through
-  # cwtools_test_rules, so a bump can break them or move coverage. The coverage
+  # cwtools_test_support, so a bump can break them or move coverage. The coverage
   # run is the whole `cargo test` suite, so one step gates both. The rules it
   # fetches land in the runner's home cache dir, outside every path setup-rust
   # saves.
