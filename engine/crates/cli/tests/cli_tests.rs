@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use cwtools_test_support::scratch_home_env;
 use predicates::prelude::*;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
@@ -16,22 +17,12 @@ fn fixtures_dir() -> PathBuf {
         .join("fixtures")
 }
 
-/// Scratch home for every CLI this binary spawns. It has to outlive the
-/// children, so it is a static: leaking the dir at process exit is the point,
-/// the OS temp cleaner takes it from there.
-static SCRATCH_HOME: std::sync::LazyLock<tempfile::TempDir> =
-    std::sync::LazyLock::new(|| tempfile::tempdir().expect("failed to create scratch home"));
-
 fn cwtools() -> Command {
     let mut cmd = Command::cargo_bin("cwtools").unwrap();
     cmd.env("RUST_LOG", "");
-    // Pin HOME and the cache dirs at a scratch tree so a run never picks up a
-    // locally installed base game and never writes into the developer's real
-    // cwtools cache.
-    let home = SCRATCH_HOME.path();
-    cmd.env("HOME", home);
-    cmd.env("XDG_CACHE_HOME", home.join("cache"));
-    cmd.env("LOCALAPPDATA", home.join("localappdata"));
+    // So a run never picks up a locally installed base game and never writes
+    // into the developer's real cwtools cache.
+    cmd.envs(scratch_home_env());
     // Same reason as HOME: a suite run from a git hook inherits the hook's
     // GIT_DIR, and `--since` would resolve against that repo, not the fixture.
     for key in INHERITED_GIT_ENV {
@@ -3233,7 +3224,7 @@ fn test_validate_default_report_type_matches_explicit_cli() {
         .unwrap();
     assert_eq!(default_out.stdout, explicit_out.stdout);
     // Only the known transient cache warnings that race under parallel
-    // `cargo test` sharing SCRATCH_HOME are filtered; any other `warn:`
+    // `cargo test` sharing the scratch home are filtered; any other `warn:`
     // must remain visible so a real persistent cache regression is not hidden.
     fn without_cache_noise(buf: &[u8]) -> String {
         String::from_utf8_lossy(buf)

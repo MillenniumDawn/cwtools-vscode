@@ -15,7 +15,7 @@ use cwtools_game::scope_registry::ScopeRegistry;
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_rules::ruleset_loader::load_ruleset_from_dir;
 use cwtools_string_table::string_table::StringTable;
-use cwtools_test_rules::stellaris_config;
+use cwtools_test_support::stellaris_config;
 
 fn load_stellaris_ruleset() -> &'static RuleSet {
     static RULESET: OnceLock<RuleSet> = OnceLock::new();

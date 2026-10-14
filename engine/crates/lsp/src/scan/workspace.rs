@@ -1319,30 +1319,11 @@ mod tests {
 
     use crate::command_progress::CommandProgress;
     use crate::state::{DocumentState, HoldGate, HoldPoint};
+    use crate::testing::{test_backend, test_backend_with_socket};
 
     const SENTINEL_URI: &str = "sentinel://uses";
     const SENTINEL_FP: (u64, u64) = (1, 1);
     const SENTINEL_REV: u64 = 7;
-
-    fn test_backend() -> Backend {
-        test_backend_with_socket().0
-    }
-
-    fn test_backend_with_socket() -> (Backend, tower_lsp::ClientSocket) {
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().unwrap();
-        (Backend { client, state }, socket)
-    }
 
     fn clone_backend(backend: &Backend) -> Backend {
         Backend {

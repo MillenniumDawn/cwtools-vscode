@@ -1,5 +1,5 @@
 [package]
-name = "cwtools_test_rules"
+name = "cwtools_test_support"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

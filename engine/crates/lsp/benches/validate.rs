@@ -30,12 +30,8 @@ use cwtools_rules::rules_types::{
     NewField, Options, PathOptions, RootRule, RuleSet, RuleType, TypeDefinition,
 };
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_support::testfiles;
 use std::sync::Arc;
-
-const KEYSTROKE_FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../testfiles/performancetest2/events/cc_colony_events.txt"
-);
 
 /// The same three kinds of file this once ran on from a base-game install: a
 /// focus tree, an events file and a plane equipment file.
@@ -64,9 +60,10 @@ fn checkout(var: &str, name: &str) -> Option<PathBuf> {
 }
 
 fn bench_keystroke_validate(c: &mut Criterion) {
-    let text = std::fs::read_to_string(KEYSTROKE_FIXTURE)
-        .expect("keystroke fixture")
-        .repeat(8);
+    let text =
+        std::fs::read_to_string(testfiles().join("performancetest2/events/cc_colony_events.txt"))
+            .expect("keystroke fixture")
+            .repeat(8);
     eprintln!("keystroke_validate: {} bytes", text.len());
     let table = StringTable::new();
     let parsed = parse_string(&text, &table);
