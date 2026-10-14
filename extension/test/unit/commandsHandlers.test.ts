@@ -280,6 +280,28 @@ suite("registered workspace commands", () => {
 			]);
 		});
 
+		test("keeps a newer server graph when an older selected import finishes reading", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			state.showOpenDialog.mockResolvedValue([{ fsPath: "older.json" }]);
+			const oldBytes = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(oldBytes.promise);
+
+			const oldImport = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			const server = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+
+			requests[0].result.resolve([{ id: "new-server" }]);
+			await server;
+			oldBytes.resolve(bytes("old json"));
+			await oldImport;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "new-server" }], 1, { source: "server", entityType: "event", depth: 3 }],
+			]);
+		});
+
 		test("renders only the last selected import when reads finish in reverse order", async () => {
 			register(fakeClient([]));
 			state.showOpenDialog
@@ -320,6 +342,25 @@ suite("registered workspace commands", () => {
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
 				[[{ id: "pending" }], 1, { source: "server", entityType: "event", depth: 3 }],
 			]);
+		});
+
+		test("a failed selected import still suppresses an older server result", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			const server = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			state.showOpenDialog.mockResolvedValue([{ fsPath: "broken.json" }]);
+			const read = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(read.promise);
+
+			const selectedImport = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			read.reject(new Error("unreadable import"));
+			await assert.rejects(selectedImport, /unreadable import/);
+			requests[0].result.resolve([{ id: "stale-server" }]);
+			await server;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
 		});
 	});
 
