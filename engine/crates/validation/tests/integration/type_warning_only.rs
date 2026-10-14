@@ -1,17 +1,14 @@
 //! A type whose `## severity = warning` directive is read from the comment
 //! above it (not a body leaf) demotes its errors to warnings (#264).
 
-use cwtools_game::constants::Game;
 use cwtools_index::{TypeIndex, collect_type_instances};
 use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::{ErrorSeverity, Prepared, build_scope_registry_arc, validate_prepared};
+use cwtools_validation::{ErrorSeverity, Game};
+
+use super::common::{Opts, ruleset, validate_with};
 
 fn assert_type_errors_are_warnings(rules: &str, input: &str) {
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(rules, &table), &table);
-    let registry = build_scope_registry_arc(&ruleset, Some(Game::Hoi4));
+    let (table, ruleset) = ruleset(rules);
 
     let path = "game/common/things/a.txt";
     let ast = parse_string(input, &table);
@@ -19,21 +16,15 @@ fn assert_type_errors_are_warnings(rules: &str, input: &str) {
     let mut index = TypeIndex::new();
     index.merge(path, collect_type_instances(&ruleset, &ast, path, &table));
 
-    let prepared = Prepared {
-        ruleset: &ruleset,
-        table: &table,
+    let opts = Opts {
+        path,
         game: Some(Game::Hoi4),
         type_index: Some(&index),
-        modifier_keys: None,
-        loc_index: None,
-        extra_loc_keys: None,
-        inline_scripts: None,
-        registry: registry.as_ref(),
         scope_checks: false,
         var_checks: false,
+        ..Opts::DEFAULT
     };
-
-    let errors = validate_prepared(&ast, path, &prepared);
+    let errors = validate_with(&table, &ruleset, input, &opts);
     let unexpected_node_errors: Vec<_> = errors
         .iter()
         .filter(|error| error.code == Some("CW262"))

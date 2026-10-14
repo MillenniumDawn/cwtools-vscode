@@ -1,7 +1,9 @@
-use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::validate_ast;
+use super::common::{Opts, validate};
+
+const GFX_FILE: Opts<'static> = Opts {
+    path: "gfx/entities/test.gfx",
+    ..Opts::DEFAULT
+};
 
 // Regression: several types can share a path AND `skip_root_key = objectTypes`
 // (in HOI4 `.gfx` files, `pdxmesh` and `pdxparticle` both live under
@@ -45,16 +47,8 @@ pdxparticle = {
 }
 "#;
 
-fn ruleset_and_table() -> (cwtools_rules::rules_types::RuleSet, StringTable) {
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(CWT, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
-    (ruleset, table)
-}
-
 #[test]
 fn objecttypes_grandchildren_validate_against_their_own_type() {
-    let (ruleset, table) = ruleset_and_table();
     // Both a pdxmesh and a pdxparticle under the same objectTypes wrapper; every
     // field is valid for its respective type.
     let script = r#"
@@ -70,16 +64,7 @@ objectTypes = {
     }
 }
 "#;
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "gfx/entities/test.gfx",
-        None,
-        None,
-        None,
-    );
+    let errors = validate(CWT, script, &GFX_FILE);
     assert!(
         errors.is_empty(),
         "expected no diagnostics, got: {:?}",
@@ -92,7 +77,6 @@ fn objecttypes_disambiguation_still_flags_real_errors() {
     // Not suppression: a field that belongs to neither type's rule is still caught,
     // and it's caught against the CORRECT type (so the pdxparticle bogus field is
     // flagged in the pdxparticle body, the pdxmesh bogus field in the pdxmesh body).
-    let (ruleset, table) = ruleset_and_table();
     let script = r#"
 objectTypes = {
     pdxmesh = {
@@ -107,16 +91,7 @@ objectTypes = {
     }
 }
 "#;
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "gfx/entities/test.gfx",
-        None,
-        None,
-        None,
-    );
+    let errors = validate(CWT, script, &GFX_FILE);
     let msgs: Vec<&String> = errors.iter().map(|e| &e.message).collect();
     assert!(
         msgs.iter().any(|m| m.contains("totally_bogus_mesh_field")),

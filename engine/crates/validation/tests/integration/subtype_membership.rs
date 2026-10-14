@@ -10,11 +10,10 @@
 
 use cwtools_index::{TypeIndex, TypeInstance};
 use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
 use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::{
-    collect_subtype_instances, subtype_membership_for_instance, validate_ast,
-};
+use cwtools_validation::{Game, collect_subtype_instances, subtype_membership_for_instance};
+
+use super::common::{Opts, ruleset, validate_with};
 
 const CWT: &str = r#"
 types = {
@@ -117,8 +116,7 @@ fn instance_projection(
 
 #[test]
 fn fused_collection_matches_the_separate_walks() {
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(CWT, &table), &table);
+    let (table, ruleset) = ruleset(CWT);
     let parsed = parse_string(SCRIPT, &table);
     let logical = "common/units/equipment/ships.txt";
 
@@ -145,8 +143,7 @@ fn fused_collection_matches_the_separate_walks() {
 
 #[test]
 fn naval_variant_with_archetype_ref_activates_naval_equip() {
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(CWT, &table), &table);
+    let (table, ruleset) = ruleset(CWT);
 
     // The archetype is tagged naval_equip from its own `type = submarine`.
     let idx = build_index(&ruleset, &table);
@@ -155,15 +152,16 @@ fn naval_variant_with_archetype_ref_activates_naval_equip() {
         "archetype should be a naval_equip member"
     );
 
-    let parsed = parse_string(SCRIPT, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
+    let errors = validate_with(
         &table,
-        "common/units/equipment/ships.txt",
-        Some(cwtools_validation::Game::Hoi4),
-        Some(&idx),
-        None,
+        &ruleset,
+        SCRIPT,
+        &Opts {
+            path: "common/units/equipment/ships.txt",
+            game: Some(Game::Hoi4),
+            type_index: Some(&idx),
+            ..Opts::DEFAULT
+        },
     );
     let msgs: Vec<&String> = errors.iter().map(|e| &e.message).collect();
     assert!(

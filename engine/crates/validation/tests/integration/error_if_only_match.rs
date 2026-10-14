@@ -5,34 +5,15 @@
 //! (RuleValidationService.applyLeafRule -> FromRulesCustomError, gated in
 //! lazyErrorMerge on there being no directive-free clean match).
 
-use cwtools_game::constants::Game;
-use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::{ErrorSeverity, ValidationError, validate_ast};
+use cwtools_validation::{ErrorSeverity, Game};
 
-fn validate(rules: &str, script: &str) -> Vec<ValidationError> {
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(rules, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
-    let parsed = parse_string(script, &table);
-    validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "game/common/foo/test.txt",
-        Some(Game::Hoi4),
-        None,
-        None,
-    )
-}
+use super::common::{Opts, codes, validate};
 
-fn codes(rules: &str, script: &str) -> Vec<String> {
-    validate(rules, script)
-        .into_iter()
-        .filter_map(|e| e.code.map(String::from))
-        .collect()
-}
+const FOO_FILE: Opts<'static> = Opts {
+    path: "game/common/foo/test.txt",
+    game: Some(Game::Hoi4),
+    ..Opts::DEFAULT
+};
 
 // ---- Plain overloaded key (pick_best_candidate in children.rs) ----
 
@@ -51,20 +32,20 @@ foo = {
 
 #[test]
 fn plain_only_match_emits_cw272() {
-    let c = codes(PLAIN_RULES, "foo = { name = x val = hello }");
+    let c = codes(PLAIN_RULES, "foo = { name = x val = hello }", &FOO_FILE);
     assert!(c.contains(&"CW272".to_string()), "got: {:?}", c);
 }
 
 #[test]
 fn plain_other_candidate_matches_no_cw272() {
     // `val = 5` matches the directive-free `int` overload cleanly -> accept.
-    let c = codes(PLAIN_RULES, "foo = { name = x val = 5 }");
+    let c = codes(PLAIN_RULES, "foo = { name = x val = 5 }", &FOO_FILE);
     assert!(!c.contains(&"CW272".to_string()), "got: {:?}", c);
 }
 
 #[test]
 fn plain_cw272_message_is_verbatim() {
-    let err = validate(PLAIN_RULES, "foo = { name = x val = hello }")
+    let err = validate(PLAIN_RULES, "foo = { name = x val = hello }", &FOO_FILE)
         .into_iter()
         .find(|e| e.code == Some("CW272"))
         .expect("CW272 emitted");
@@ -73,7 +54,7 @@ fn plain_cw272_message_is_verbatim() {
 
 #[test]
 fn plain_cw272_default_severity_is_error() {
-    let err = validate(PLAIN_RULES, "foo = { name = x val = hello }")
+    let err = validate(PLAIN_RULES, "foo = { name = x val = hello }", &FOO_FILE)
         .into_iter()
         .find(|e| e.code == Some("CW272"))
         .expect("CW272 emitted");
@@ -95,7 +76,7 @@ foo = {
 
 #[test]
 fn plain_severity_directive_overrides_error() {
-    let err = validate(PLAIN_SEV_RULES, "foo = { name = x val = hello }")
+    let err = validate(PLAIN_SEV_RULES, "foo = { name = x val = hello }", &FOO_FILE)
         .into_iter()
         .find(|e| e.code == Some("CW272"))
         .expect("CW272 emitted");
@@ -113,7 +94,11 @@ foo = {
 
 #[test]
 fn plain_no_directive_no_cw272() {
-    let c = codes(NO_DIRECTIVE_RULES, "foo = { name = x val = hello }");
+    let c = codes(
+        NO_DIRECTIVE_RULES,
+        "foo = { name = x val = hello }",
+        &FOO_FILE,
+    );
     assert!(!c.contains(&"CW272".to_string()), "got: {:?}", c);
 }
 
@@ -136,26 +121,26 @@ alias[effect:safe_fx] = bool
 #[test]
 fn alias_only_match_emits_cw272() {
     // `pick = beta` matches only the directive-carrying overload -> CW272.
-    let c = codes(ALIAS_RULES, "foo = { pick = beta }");
+    let c = codes(ALIAS_RULES, "foo = { pick = beta }", &FOO_FILE);
     assert!(c.contains(&"CW272".to_string()), "got: {:?}", c);
 }
 
 #[test]
 fn alias_other_overload_matches_no_cw272() {
     // `pick = alpha` matches the directive-free overload cleanly -> accept.
-    let c = codes(ALIAS_RULES, "foo = { pick = alpha }");
+    let c = codes(ALIAS_RULES, "foo = { pick = alpha }", &FOO_FILE);
     assert!(!c.contains(&"CW272".to_string()), "got: {:?}", c);
 }
 
 #[test]
 fn alias_no_directive_no_cw272() {
-    let c = codes(ALIAS_RULES, "foo = { safe_fx = yes }");
+    let c = codes(ALIAS_RULES, "foo = { safe_fx = yes }", &FOO_FILE);
     assert!(!c.contains(&"CW272".to_string()), "got: {:?}", c);
 }
 
 #[test]
 fn alias_cw272_message_is_verbatim() {
-    let err = validate(ALIAS_RULES, "foo = { pick = beta }")
+    let err = validate(ALIAS_RULES, "foo = { pick = beta }", &FOO_FILE)
         .into_iter()
         .find(|e| e.code == Some("CW272"))
         .expect("CW272 emitted");

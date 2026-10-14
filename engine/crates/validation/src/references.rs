@@ -259,27 +259,14 @@ user = { uses = <thing> }
         assert!(found[0].1.contains("lone_thing"), "got: {found:?}");
     }
 
-    #[test]
-    fn reference_is_case_insensitive() {
-        let found = unused_in(
-            RULES,
-            &[
-                ("common/things/test.txt", "MyThing = { x = a }\n"),
-                ("common/users/test.txt", "a_user = { uses = mything }\n"),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
+    struct NotUnused {
+        name: &'static str,
+        game: Option<Game>,
+        rules: &'static str,
+        files: &'static [(&'static str, &'static str)],
     }
 
-    #[test]
-    fn type_without_should_be_used_is_never_flagged() {
-        let found = unused_in(RULES, &[("common/users/test.txt", "a_user = { }\n")]);
-        assert!(found.is_empty(), "got: {found:?}");
-    }
-
-    #[test]
-    fn affixed_reference_counts_as_a_use() {
-        const AFFIX_RULES: &str = r#"
+    const AFFIX_RULES: &str = r#"
 types = {
     type[thing] = {
         path = "game/common/things"
@@ -292,22 +279,8 @@ types = {
 thing = { x = scalar }
 user = { uses = GFX_<thing>_icon }
 "#;
-        let found = unused_in(
-            AFFIX_RULES,
-            &[
-                ("common/things/test.txt", "my_thing = { x = a }\n"),
-                (
-                    "common/users/test.txt",
-                    "a_user = { uses = GFX_my_thing_icon }\n",
-                ),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
 
-    #[test]
-    fn subtype_qualified_reference_counts_as_a_use() {
-        const SUBTYPE_RULES: &str = r#"
+    const SUBTYPE_RULES: &str = r#"
 types = {
     type[thing] = {
         path = "game/common/things"
@@ -326,19 +299,8 @@ thing = {
 }
 user = { uses = <thing.fancy> }
 "#;
-        let found = unused_in(
-            SUBTYPE_RULES,
-            &[
-                ("common/things/test.txt", "my_thing = { fancy = yes }\n"),
-                ("common/users/test.txt", "a_user = { uses = my_thing }\n"),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
 
-    #[test]
-    fn affixed_subtype_qualified_reference_counts_as_a_use() {
-        const AFFIX_SUBTYPE_RULES: &str = r#"
+    const AFFIX_SUBTYPE_RULES: &str = r#"
 types = {
     type[thing] = {
         path = "game/common/things"
@@ -357,22 +319,8 @@ thing = {
 }
 user = { uses = GFX_<thing.fancy>_icon }
 "#;
-        let found = unused_in(
-            AFFIX_SUBTYPE_RULES,
-            &[
-                ("common/things/test.txt", "my_thing = { fancy = yes }\n"),
-                (
-                    "common/users/test.txt",
-                    "a_user = { uses = GFX_my_thing_icon }\n",
-                ),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
 
-    #[test]
-    fn subtype_qualified_keyed_rule_records_its_key_as_a_use() {
-        const KEYED_SUBTYPE_RULES: &str = r#"
+    const KEYED_SUBTYPE_RULES: &str = r#"
 types = {
     type[thing] = {
         path = "game/common/things"
@@ -393,19 +341,8 @@ user = {
     <thing.fancy> = int
 }
 "#;
-        let found = unused_in(
-            KEYED_SUBTYPE_RULES,
-            &[
-                ("common/things/test.txt", "my_thing = { fancy = yes }\n"),
-                ("common/users/test.txt", "a_user = { my_thing = 3 }\n"),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
 
-    #[test]
-    fn alias_routed_reference_counts_as_a_use() {
-        const ALIAS_RULES: &str = r#"
+    const ALIAS_RULES: &str = r#"
 types = {
     type[thing] = {
         path = "game/common/things"
@@ -421,17 +358,228 @@ user = {
 }
 alias[trigger:has_thing] = <thing>
 "#;
-        let found = unused_in(
-            ALIAS_RULES,
-            &[
+
+    const KEYED_RULES: &str = r#"
+types = {
+    type[thing] = {
+        path = "game/common/things"
+        should_be_used = yes
+    }
+    type[user] = {
+        path = "game/common/users"
+    }
+}
+thing = { x = scalar }
+user = {
+    <thing> = int
+}
+"#;
+
+    const PER_FILE_RULES: &str = r#"
+types = {
+    type[thing] = {
+        path = "game/common/things"
+        should_be_used = yes
+    }
+    type[oob] = {
+        path = "game/history/units"
+        type_per_file = yes
+    }
+}
+thing = { }
+oob = { uses = <thing> }
+"#;
+
+    const CROSS_RULES: &str = r#"
+types = {
+    type[technology] = {
+        path = "game/common/technology"
+    }
+    type[building] = {
+        path = "game/common/buildings"
+    }
+}
+technology = {
+    ## cardinality = 0..1
+    weight = int
+}
+building = {
+    ## cardinality = 0..1
+    prerequisites = {
+        ## cardinality = 0..100
+        <technology>
+    }
+}
+"#;
+
+    const NOT_UNUSED: &[NotUnused] = &[
+        NotUnused {
+            name: "reference_is_case_insensitive",
+            game: None,
+            rules: RULES,
+            files: &[
+                ("common/things/test.txt", "MyThing = { x = a }\n"),
+                ("common/users/test.txt", "a_user = { uses = mything }\n"),
+            ],
+        },
+        NotUnused {
+            name: "type_without_should_be_used_is_never_flagged",
+            game: None,
+            rules: RULES,
+            files: &[("common/users/test.txt", "a_user = { }\n")],
+        },
+        NotUnused {
+            name: "affixed_reference_counts_as_a_use",
+            game: None,
+            rules: AFFIX_RULES,
+            files: &[
+                ("common/things/test.txt", "my_thing = { x = a }\n"),
+                (
+                    "common/users/test.txt",
+                    "a_user = { uses = GFX_my_thing_icon }\n",
+                ),
+            ],
+        },
+        NotUnused {
+            name: "subtype_qualified_reference_counts_as_a_use",
+            game: None,
+            rules: SUBTYPE_RULES,
+            files: &[
+                ("common/things/test.txt", "my_thing = { fancy = yes }\n"),
+                ("common/users/test.txt", "a_user = { uses = my_thing }\n"),
+            ],
+        },
+        NotUnused {
+            name: "affixed_subtype_qualified_reference_counts_as_a_use",
+            game: None,
+            rules: AFFIX_SUBTYPE_RULES,
+            files: &[
+                ("common/things/test.txt", "my_thing = { fancy = yes }\n"),
+                (
+                    "common/users/test.txt",
+                    "a_user = { uses = GFX_my_thing_icon }\n",
+                ),
+            ],
+        },
+        NotUnused {
+            name: "subtype_qualified_keyed_rule_records_its_key_as_a_use",
+            game: None,
+            rules: KEYED_SUBTYPE_RULES,
+            files: &[
+                ("common/things/test.txt", "my_thing = { fancy = yes }\n"),
+                ("common/users/test.txt", "a_user = { my_thing = 3 }\n"),
+            ],
+        },
+        NotUnused {
+            name: "alias_routed_reference_counts_as_a_use",
+            game: None,
+            rules: ALIAS_RULES,
+            files: &[
                 ("common/things/test.txt", "my_thing = { x = a }\n"),
                 (
                     "common/users/test.txt",
                     "a_user = { has_thing = my_thing }\n",
                 ),
             ],
+        },
+        NotUnused {
+            name: "type_keyed_rule_records_its_key_as_a_use",
+            game: None,
+            rules: KEYED_RULES,
+            files: &[
+                ("common/things/test.txt", "my_thing = { x = a }\n"),
+                ("common/users/test.txt", "a_user = { my_thing = 3 }\n"),
+            ],
+        },
+        NotUnused {
+            name: "quoted_reference_counts_as_a_use",
+            game: None,
+            rules: RULES,
+            files: &[
+                ("common/things/test.txt", "my_thing = { x = a }\n"),
+                (
+                    "common/users/test.txt",
+                    "a_user = { uses = \"my_thing\" }\n",
+                ),
+            ],
+        },
+        NotUnused {
+            name: "bare_reference_to_an_affixed_instance_counts_as_a_use",
+            game: None,
+            rules: AFFIX_RULES,
+            files: &[
+                ("common/things/test.txt", "GFX_my_thing_icon = { x = a }\n"),
+                ("common/users/test.txt", "a_user = { uses = my_thing }\n"),
+            ],
+        },
+        NotUnused {
+            name: "reference_inside_a_type_per_file_entity_counts_as_a_use",
+            game: None,
+            rules: PER_FILE_RULES,
+            files: &[
+                ("common/things/test.txt", "my_thing = { }\n"),
+                ("history/units/my_oob.txt", "uses = my_thing\n"),
+            ],
+        },
+        NotUnused {
+            name: "technology_exemptions_keep_cw231_quiet",
+            game: Some(Game::Stellaris),
+            rules: TECH_RULES,
+            files: &[(
+                "common/technology/test.txt",
+                "tech_a = { modifier = { } }\n\
+                 tech_b = { prereqfor_desc = { } }\n\
+                 tech_c = { feature_flags = { x } }\n\
+                 tech_d = { weight = 0 }\n\
+                 tech_e = { weight_modifier = { factor = 0 } }\n",
+            )],
+        },
+        NotUnused {
+            name: "technology_referenced_from_another_folder_counts_as_a_use",
+            game: Some(Game::Stellaris),
+            rules: CROSS_RULES,
+            files: &[
+                ("common/technology/test.txt", "tech_x = { weight = 10 }\n"),
+                (
+                    "common/buildings/test.txt",
+                    "bld = { prerequisites = { tech_x } }\n",
+                ),
+            ],
+        },
+        NotUnused {
+            name: "technology_float_zero_weight_factor_is_exempt",
+            game: Some(Game::Stellaris),
+            rules: TECH_RULES,
+            files: &[(
+                "common/technology/test.txt",
+                "tech_f = { weight_modifier = { factor = 0.0 } }\n",
+            )],
+        },
+        NotUnused {
+            name: "technology_is_only_checked_for_stellaris",
+            game: Some(Game::Hoi4),
+            rules: TECH_RULES,
+            files: &[(
+                "common/technology/test.txt",
+                "tech_root = { weight = 10 }\n",
+            )],
+        },
+    ];
+
+    #[test]
+    fn referenced_or_exempt_instances_are_never_reported_unused() {
+        let failures: Vec<String> = NOT_UNUSED
+            .iter()
+            .filter_map(|case| {
+                let found = unused_for(case.game, case.rules, case.files);
+                (!found.is_empty()).then(|| format!("{}: {found:?}", case.name))
+            })
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "instances reported unused:\n{}",
+            failures.join("\n")
         );
-        assert!(found.is_empty(), "got: {found:?}");
     }
 
     #[test]
@@ -550,73 +698,6 @@ alias[effect:uses] = <thing>
     }
 
     #[test]
-    fn type_keyed_rule_records_its_key_as_a_use() {
-        const KEYED_RULES: &str = r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-        should_be_used = yes
-    }
-    type[user] = {
-        path = "game/common/users"
-    }
-}
-thing = { x = scalar }
-user = {
-    <thing> = int
-}
-"#;
-        let found = unused_in(
-            KEYED_RULES,
-            &[
-                ("common/things/test.txt", "my_thing = { x = a }\n"),
-                ("common/users/test.txt", "a_user = { my_thing = 3 }\n"),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
-
-    #[test]
-    fn quoted_reference_counts_as_a_use() {
-        let found = unused_in(
-            RULES,
-            &[
-                ("common/things/test.txt", "my_thing = { x = a }\n"),
-                (
-                    "common/users/test.txt",
-                    "a_user = { uses = \"my_thing\" }\n",
-                ),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
-
-    #[test]
-    fn bare_reference_to_an_affixed_instance_counts_as_a_use() {
-        const AFFIX_RULES: &str = r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-        should_be_used = yes
-    }
-    type[user] = {
-        path = "game/common/users"
-    }
-}
-thing = { x = scalar }
-user = { uses = GFX_<thing>_icon }
-"#;
-        let found = unused_in(
-            AFFIX_RULES,
-            &[
-                ("common/things/test.txt", "GFX_my_thing_icon = { x = a }\n"),
-                ("common/users/test.txt", "a_user = { uses = my_thing }\n"),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
-
-    #[test]
     fn reference_from_the_defining_file_counts_as_a_use() {
         const SELF_RULES: &str = r#"
 types = {
@@ -643,32 +724,6 @@ thing = {
             "only the referrer itself is unused, got: {found:?}"
         );
         assert!(found[0].1.contains("referrer"), "got: {found:?}");
-    }
-
-    #[test]
-    fn reference_inside_a_type_per_file_entity_counts_as_a_use() {
-        const PER_FILE_RULES: &str = r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-        should_be_used = yes
-    }
-    type[oob] = {
-        path = "game/history/units"
-        type_per_file = yes
-    }
-}
-thing = { }
-oob = { uses = <thing> }
-"#;
-        let found = unused_in(
-            PER_FILE_RULES,
-            &[
-                ("common/things/test.txt", "my_thing = { }\n"),
-                ("history/units/my_oob.txt", "uses = my_thing\n"),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
     }
 
     #[test]
@@ -733,55 +788,6 @@ technology = {
     }
 
     #[test]
-    fn technology_exemptions_keep_cw231_quiet() {
-        let found = unused_techs(
-            "tech_a = { modifier = { } }\n\
-             tech_b = { prereqfor_desc = { } }\n\
-             tech_c = { feature_flags = { x } }\n\
-             tech_d = { weight = 0 }\n\
-             tech_e = { weight_modifier = { factor = 0 } }\n",
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
-
-    #[test]
-    fn technology_referenced_from_another_folder_counts_as_a_use() {
-        const CROSS_RULES: &str = r#"
-types = {
-    type[technology] = {
-        path = "game/common/technology"
-    }
-    type[building] = {
-        path = "game/common/buildings"
-    }
-}
-technology = {
-    ## cardinality = 0..1
-    weight = int
-}
-building = {
-    ## cardinality = 0..1
-    prerequisites = {
-        ## cardinality = 0..100
-        <technology>
-    }
-}
-"#;
-        let found = unused_for(
-            Some(Game::Stellaris),
-            CROSS_RULES,
-            &[
-                ("common/technology/test.txt", "tech_x = { weight = 10 }\n"),
-                (
-                    "common/buildings/test.txt",
-                    "bld = { prerequisites = { tech_x } }\n",
-                ),
-            ],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
-    }
-
-    #[test]
     fn subtype_qualified_technology_reference_counts_as_a_use() {
         const SUBTYPE_TECH_RULES: &str = r#"
 types = {
@@ -819,29 +825,10 @@ technology = {
     }
 
     #[test]
-    fn technology_float_zero_weight_factor_is_exempt() {
-        let found = unused_techs("tech_f = { weight_modifier = { factor = 0.0 } }\n");
-        assert!(found.is_empty(), "got: {found:?}");
-    }
-
-    #[test]
     fn technology_with_a_nonzero_weight_is_not_exempt() {
         let found = unused_techs("tech_g = { weight = 5 weight_modifier = { factor = 2 } }\n");
         assert_eq!(found.len(), 1, "got: {found:?}");
         assert_eq!(found[0].0, "CW231");
-    }
-
-    #[test]
-    fn technology_is_only_checked_for_stellaris() {
-        let found = unused_for(
-            Some(Game::Hoi4),
-            TECH_RULES,
-            &[(
-                "common/technology/test.txt",
-                "tech_root = { weight = 10 }\n",
-            )],
-        );
-        assert!(found.is_empty(), "got: {found:?}");
     }
 
     #[test]

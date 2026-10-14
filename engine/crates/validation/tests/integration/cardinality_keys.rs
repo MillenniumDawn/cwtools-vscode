@@ -4,17 +4,9 @@
 //! disjunction under the most permissive bounds, a soft (`~`) minimum on any
 //! overload softens the key, and each key reports at most once.
 
-use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::{ValidationError, validate_ast};
+use cwtools_validation::ValidationError;
 
-fn run(cwt: &str, script: &str) -> Vec<ValidationError> {
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(cwt, &table), &table);
-    let parsed = parse_string(script, &table);
-    validate_ast(&parsed, &ruleset, &table, "test.txt", None, None, None)
-}
+use super::common::{Opts, validate};
 
 fn cw242<'a>(errors: &'a [ValidationError], needle: &str) -> Vec<&'a ValidationError> {
     errors
@@ -38,7 +30,11 @@ types = {
     }
 }
 "#;
-    let errors = run(cwt, "spriteType = {\n    texturefile = gfx/x.dds\n}\n");
+    let errors = validate(
+        cwt,
+        "spriteType = {\n    texturefile = gfx/x.dds\n}\n",
+        &Opts::DEFAULT,
+    );
     assert!(
         cw242(&errors, "textureFile").is_empty(),
         "a lowercased field must satisfy a camelCased rule key, got: {:?}",
@@ -62,7 +58,11 @@ types = {
     }
 }
 "#;
-    let errors = run(cwt, "my_thing = {\n    icon = a\n    ICON = b\n}\n");
+    let errors = validate(
+        cwt,
+        "my_thing = {\n    icon = a\n    ICON = b\n}\n",
+        &Opts::DEFAULT,
+    );
     let over = cw242(&errors, "at most");
     assert_eq!(
         over.len(),
@@ -94,9 +94,10 @@ types = {
     }
 }
 "#;
-    let errors = run(
+    let errors = validate(
         cwt,
         "my_thing = {\n    clicksound = a\n    clicksound = b\n}\n",
+        &Opts::DEFAULT,
     );
     assert!(
         cw242(&errors, "at most").is_empty(),
@@ -123,7 +124,7 @@ types = {
     }
 }
 "#;
-    let errors = run(cwt, "my_thing = {\n    name = a\n}\n");
+    let errors = validate(cwt, "my_thing = {\n    name = a\n}\n", &Opts::DEFAULT);
     assert!(
         cw242(&errors, "clicksound").is_empty(),
         "an overload allowing zero makes the key optional, got: {:?}",
@@ -147,7 +148,7 @@ types = {
     }
 }
 "#;
-    let errors = run(cwt, "my_thing = {\n    name = a\n}\n");
+    let errors = validate(cwt, "my_thing = {\n    name = a\n}\n", &Opts::DEFAULT);
     assert_eq!(
         cw242(&errors, "required_field").len(),
         1,
@@ -175,7 +176,7 @@ types = {
     }
 }
 "#;
-    let errors = run(cwt, "my_thing = {\n    name = a\n}\n");
+    let errors = validate(cwt, "my_thing = {\n    name = a\n}\n", &Opts::DEFAULT);
     assert!(
         cw242(&errors, "ship_types").is_empty(),
         "a ~ minimum on any overload suppresses the under-count, got: {:?}",
@@ -202,7 +203,7 @@ types = {
     }
 }
 "#;
-    let errors = run(cwt, "my_thing = {\n    name = a\n}\n");
+    let errors = validate(cwt, "my_thing = {\n    name = a\n}\n", &Opts::DEFAULT);
     assert_eq!(
         cw242(&errors, "ship_types").len(),
         1,
@@ -229,9 +230,10 @@ types = {
     }
 }
 "#;
-    let errors = run(
+    let errors = validate(
         cwt,
         "my_thing = {\n    icon = a\n    stray = b\n    other = c\n}\n",
+        &Opts::DEFAULT,
     );
     assert!(
         cw242(&errors, "at most").is_empty(),
@@ -267,9 +269,10 @@ types = {
     }
 }
 "#;
-    let errors = run(
+    let errors = validate(
         cwt,
         "my_thing = {\n    effect = {\n        set_flag = my_flag\n    }\n}\n",
+        &Opts::DEFAULT,
     );
     assert!(
         errors.iter().all(|e| e.code != Some("CW242")),
