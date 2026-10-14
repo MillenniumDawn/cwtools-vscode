@@ -1,6 +1,7 @@
 import * as assert from "assert";
 import { beforeEach, suite, test, vi } from "vitest";
 import { LSPErrorCodes } from "vscode-languageserver-protocol";
+import { CancellationError } from "vscode";
 import type { ExtensionContext } from "vscode";
 import type * as VscodeStub from "./_stubs/vscode";
 import type { EditorTracker } from "../../src/host/documentLanguage";
@@ -245,6 +246,24 @@ suite("registered workspace commands", () => {
 			]);
 		});
 
+		test("does not revive a stale graph after the newest request is cancelled", async () => {
+			const requests = mockGraphRequests();
+			state.showInputBox.mockResolvedValue("1");
+			register(fakeClient(["getGraphData"]), "event");
+
+			const oldRequest = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const newRequest = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			requests[1].result.reject(new CancellationError());
+			await newRequest;
+			requests[0].result.resolve([{ id: "old" }]);
+			await oldRequest;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
+		});
+
 		test("does not revive a stale graph after the newest request fails", async () => {
 			const requests = mockGraphRequests();
 			state.showInputBox.mockResolvedValue("1");
@@ -263,6 +282,26 @@ suite("registered workspace commands", () => {
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
 		});
 
+		test("ignores a stale rejection after the newest graph renders", async () => {
+			const requests = mockGraphRequests();
+			state.showInputBox.mockResolvedValue("1");
+			register(fakeClient(["getGraphData"]), "event");
+
+			const oldRequest = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const newRequest = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			requests[1].result.resolve([{ id: "new" }]);
+			await newRequest;
+			requests[0].result.reject(new Error("stale failed"));
+			await oldRequest;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "new" }], 1, { source: "server", entityType: "event", depth: 1 }],
+			]);
+		});
+
 		test("keeps a newer import when an older server graph completes", async () => {
 			const requests = mockGraphRequests();
 			register(fakeClient(["getGraphData"]), "event");
@@ -277,6 +316,27 @@ suite("registered workspace commands", () => {
 
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
 				["new json", 1, { source: "json", fileName: "graph.json" }],
+			]);
+		});
+
+		test("keeps a newer server graph when an older import finishes reading", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			state.showOpenDialog.mockResolvedValue([{ fsPath: "/tmp/graph.json" }]);
+			const importBytes = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(importBytes.promise);
+
+			const imported = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			const server = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			requests[0].result.resolve([{ id: "new" }]);
+			await server;
+			importBytes.resolve(bytes("old json"));
+			await imported;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "new" }], 1, { source: "server", entityType: "event", depth: 3 }],
 			]);
 		});
 
@@ -319,6 +379,25 @@ suite("registered workspace commands", () => {
 			assert.deepStrictEqual(state.readFile.mock.calls, []);
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
 				[[{ id: "pending" }], 1, { source: "server", entityType: "event", depth: 3 }],
+			]);
+		});
+
+		test("does not supersede a pending import when the next import dialog is cancelled", async () => {
+			register(fakeClient([]));
+			state.showOpenDialog.mockResolvedValueOnce([{ fsPath: "/tmp/graph.json" }]);
+			const importBytes = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(importBytes.promise);
+
+			const imported = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			state.showOpenDialog.mockResolvedValueOnce(undefined);
+			await handler("cwtools.graphFromJson")();
+			importBytes.resolve(bytes("pending"));
+			await imported;
+
+			assert.strictEqual(state.readFile.mock.calls.length, 1);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				["pending", 1, { source: "json", fileName: "graph.json" }],
 			]);
 		});
 	});
