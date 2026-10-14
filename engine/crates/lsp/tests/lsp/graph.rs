@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::common::{TestServer, poll_until_attempts, storm_base, storm_builder, storm_start};
+use crate::common::{TestServer, storm_base, storm_builder, storm_start};
 
 /// A focus type whose instances reference each other, plus a decision type that
 /// references a focus. Both reference keys sit at depth 1 of a type rule
@@ -137,29 +137,18 @@ fn graph_edges(nodes: &[serde_json::Value]) -> Vec<(String, String)> {
     edges
 }
 
-/// Spawn a server over a workspace of `files`, then run `getGraphData` with
-/// `arguments`, polling until the workspace scan has populated the index.
+/// Spawn a server over a workspace of `files`, wait until the workspace scan has
+/// populated the index, then run `getGraphData` with `arguments`.
 fn graph_data_response(files: &[(&str, &str)], arguments: Value) -> Value {
     let mut builder = storm_builder().rules_file("r.cwt", GRAPH_RULES);
     for (rel, content) in files {
         builder = builder.file(rel, *content);
     }
     let mut server = storm_start(builder);
-    let mut response = Value::Null;
-    let _ = poll_until_attempts(20, Duration::from_millis(300), || {
-        response = server.call(
-            "workspace/executeCommand",
-            json!({ "command": "getGraphData", "arguments": arguments }),
-        );
-        // The reference index lands with the async workspace scan; a graph that
-        // is still only seeds means the scan hasn't finished writing it.
-        let settled = response["result"].as_array().is_none_or(|nodes| {
-            nodes
-                .iter()
-                .any(|n| !n["references"].as_array().unwrap().is_empty())
-        });
-        settled.then_some(())
-    });
+    let response = server.call(
+        "workspace/executeCommand",
+        json!({ "command": "getGraphData", "arguments": arguments }),
+    );
     server.stop();
     response
 }
