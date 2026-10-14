@@ -108,6 +108,7 @@
 * The graph, Fix All and Format Workspace commands now come back after the language server crashes and restarts on its own. They stayed hidden until a manual restart. (#838)
 * The Set graph depth prompt now accepts only a whole number of at least 1. Blank, zero, negative, fractional and unsafe values are rejected with a message naming the minimum, so they no longer replace the remembered depth or send a request the server refuses. (#841)
 * Log `Watching rules in <folder>` to the CWTools output when a `cwtools.rules_folder` change installs the rules watcher. The live-settings host test waits for that line before it edits a rules file. (#918)
+* Fix the flaky rules-sync host test. It read `HEAD` once the fixture's marker file appeared, but checkout writes the tree before it moves `HEAD`, so the read could land in between. It now waits for both. (#1029)
 
 #### Tooling
 
