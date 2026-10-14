@@ -92,6 +92,7 @@
 * When the client drops watched-file events, skipped directory names (`.git`, `.claude`, `target`, `dist`, `out` and the rest) no longer count in the folders above the served workspace root. A mod checked out under a folder with one of those names, such as `.claude/worktrees/<mod>`, used to index at startup but ignore later external edits, checkouts and deletes. (#835)
 * Report graph image export failures in the webview instead of leaving rejected promises unhandled, and allow a later export to succeed. (#834)
 * Discard delayed plaintext language upgrades after editor focus changes or teardown, before sending stale focus notifications. (#837)
+* Test that a late file type reply for the previous editor does not mark the current one as a graph file, that closing the last editor clears the type at once, that a timed-out request is cancelled and the next one backs off, and that nothing is written after shutdown. (#997)
 * Exercise automatic server crash/restart recovery in real extension-host tests, including all command contexts and a request to the replacement process. (#838)
 * Extend the graph unit tests to cover exportImage's data-URI strip and the panel's saveImage and saveJson writes to the chosen file. (#523)
 * The loaded-files tree is built on a `Map`, so a folder or file named `constructor`, `toString` or `__proto__` shows up instead of vanishing, integer-like names keep the server's order, and "Reveal active file" is one lookup in a URI index instead of a `Uri.parse` per node. (#876)
