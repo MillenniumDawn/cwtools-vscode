@@ -1005,6 +1005,135 @@ mod tests {
         );
     }
 
+    #[test]
+    fn type_generated_modifier_keys_are_completed() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let (ruleset, _errors) = cwtools_rules::ruleset_loader::load_ruleset_from_dir(
+            cwtools_test_rules::stellaris_config(),
+            &table,
+            cwtools_file_manager::file_manager::ScanBudget::default(),
+        );
+        let mut type_index = cwtools_info::TypeIndex::new();
+        type_index.merge(
+            "file:///game/common/pop_jobs/00_jobs.txt",
+            std::collections::HashMap::from([(
+                "job".to_string(),
+                vec![cwtools_info::TypeInstance {
+                    name: "farmer".to_string(),
+                    location: cwtools_info::SourceLocation {
+                        line: 0,
+                        col: 0,
+                        end: (0, 0),
+                    },
+                    primary_loc_key: None,
+                    required_loc_keys: Vec::new(),
+                }],
+            )]),
+        );
+        let modifier_keys = cwtools_validation::build_modifier_keys(&ruleset, &type_index);
+        let modifier_scopes = expanded_modifier_scopes(&ruleset, &type_index);
+        let registry = cwtools_validation::build_scope_registry_arc(
+            &ruleset,
+            Some(cwtools_game::constants::Game::Stellaris),
+        )
+        .expect("the pinned Stellaris scope configuration should load");
+        let info = cwtools_info::InfoService::new();
+        let rules = vec![(
+            RuleType::LeafRule {
+                left: NewField::AliasValueKeysField("modifier".to_string()),
+                right: NewField::ValueField(ValueType::Float {
+                    min: -1e8,
+                    max: 1e8,
+                }),
+            },
+            Options::default(),
+        )];
+
+        let sort_text_in = |scope: &str| {
+            let scope_id = registry
+                .id_of(scope)
+                .unwrap_or_else(|| panic!("pinned Stellaris scope `{scope}` should resolve"));
+            let items = completions_from_rules(
+                &rules,
+                &ruleset,
+                &info,
+                "stellaris",
+                &modifier_keys,
+                &modifier_scopes,
+                Some(registry.as_ref()),
+                Some(scope_id),
+                "job_farmer",
+            )
+            .0;
+            items
+                .iter()
+                .find(|item| item.label == "job_farmer_add")
+                .unwrap_or_else(|| panic!("generated modifier missing in `{scope}` completions"))
+                .sort_text
+                .clone()
+        };
+
+        // The pinned `Planets` category supports both planet and country
+        // contexts. Ship is outside that category and must rank below them.
+        assert_eq!(sort_text_in("Planet"), Some("0_job_farmer_add".to_string()));
+        assert_eq!(
+            sort_text_in("Country"),
+            Some("0_job_farmer_add".to_string())
+        );
+        assert_eq!(sort_text_in("Ship"), Some("z_job_farmer_add".to_string()));
+    }
+
+    #[test]
+    fn type_generated_scopes_preserve_global_collision_metadata() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let ruleset = cwtools_rules::rules_converter::ast_to_ruleset(
+            &cwtools_parser::parser::parse_string(
+                r#"
+types = { type[job] = {
+    modifiers = {
+        "job_$_add" = Planets
+        "job_$_cost" = Planets
+    }
+} }
+modifier_categories = {
+    Planets = { supported_scopes = { planet } }
+    Countries = { supported_scopes = { country } }
+}
+modifiers = {
+    job_farmer_add = UnknownCategory
+    job_farmer_cost = Countries
+}
+"#,
+                &table,
+            ),
+            &table,
+        );
+        let mut type_index = cwtools_info::TypeIndex::new();
+        type_index.merge(
+            "file:///game/common/pop_jobs/00_jobs.txt",
+            std::collections::HashMap::from([(
+                "job".to_string(),
+                vec![cwtools_info::TypeInstance {
+                    name: "farmer".to_string(),
+                    location: cwtools_info::SourceLocation {
+                        line: 0,
+                        col: 0,
+                        end: (0, 0),
+                    },
+                    primary_loc_key: None,
+                    required_loc_keys: Vec::new(),
+                }],
+            )]),
+        );
+
+        let scopes = expanded_modifier_scopes(&ruleset, &type_index);
+        assert_eq!(scopes.get("job_farmer_add"), Some(&Vec::new()));
+        assert_eq!(
+            scopes.get("job_farmer_cost"),
+            Some(&vec!["country".to_string()])
+        );
+    }
+
     // ── #66: duplicate labels are removed from the completion list ───────────
 
     #[test]
