@@ -127,7 +127,8 @@ jobs:
           comment-summary-in-pr: on-failure
 
   # Full client build: compile the engine and client, run rules-sync plus the
-  # live-settings, multi-root and watched-file suites, collect host and node
+  # live-settings, multi-root, watched-file and activation-gate suites,
+  # collect host and node
   # coverage, then package and smoke-test the vsix.
   # The engine lives in-repo at engine/, so this is the same tree the rust
   # jobs lint and test, built here the way the extension actually consumes it.
@@ -173,7 +174,8 @@ jobs:
         timeout-minutes: 10
         run: >-
           node scripts/build/python.mjs scripts/build/hosttest.py
-          --label multi-root --label watched
+          --label multi-root --label watched --label activation-missing
+          --label activation-directory --label activation-disabled
       # Host V8 coverage runs the host label (including smoke files) and the
       # isolated live-settings workspace, while the earlier configuration
       # step retains unique multi-root and watched-file coverage. Run it before

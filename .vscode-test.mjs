@@ -11,13 +11,15 @@
 //               (see below; its own CI step, not part of test:smoke)
 //   host        sample-workspace suites, including smoke, hover and completion;
 //               excludes live, multi-root, restart, rules-sync and watched
+//   activation-missing, activation-directory, activation-disabled
+//               activation gates in separate hosts and workspace fixtures
 //   restart     destructive server-crash/recovery test in an isolated host
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
 // Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
 // `--label live`, `--label multi-root`, `--label watched`, and `--label restart`
-// to cover the host workspaces and the external-file watcher suite.
+// to cover the host workspaces, external-file watcher and activation gates.
 //
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
@@ -30,8 +32,8 @@
 //
 // The multi-root fixture needs a staged server, so CI runs it alongside watched
 // after the build step has produced one, and locally it runs with smoke under
-// test:smoke. Every label needs the server; the server-free tests are the
-// vitest suites under extension/test/unit.
+// test:smoke. Activation-gate labels share the host harness but do not need a
+// server binary; the server-free unit tests are under extension/test/unit.
 //
 // rules-sync exercises the opposite gap: sample-hoi4's folder name and
 // common/ai_strategy dir make it detect as hoi4, so activation's real
@@ -77,6 +79,10 @@ const hoi4RulesFixture = path.resolve(
 // on `live` as well as `host`.
 const abortDiagnostics =
 	"./dist/extension/bin/client/test/support/abortDiagnostics.js";
+const activationGateFiles = [
+	abortDiagnostics,
+	"./dist/extension/bin/client/test/host/activationGates.test.js",
+];
 const multiRootFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/multiroot.test.js",
@@ -219,6 +225,30 @@ export default defineConfig({
 				CWTOOLS_TEST_HOI4_REF: "3f03757a6f15565f763434e5752021c3ba8c0c3e",
 				CWTOOLS_TEST_RULES_MANIFEST_URL: "http://127.0.0.1:1/rules-pins.json",
 			},
+		},
+		{
+			...base,
+			label: "activation-missing",
+			files: activationGateFiles,
+			workspaceFolder: "./extension/test/workspaces/activation-missing",
+			env: { CWTOOLS_TEST_ACTIVATION_GATE: "missing" },
+			launchArgs: [softwareRendering, disableCrashReporter, ...headless],
+		},
+		{
+			...base,
+			label: "activation-directory",
+			files: activationGateFiles,
+			workspaceFolder: "./extension/test/workspaces/activation-directory",
+			env: { CWTOOLS_TEST_ACTIVATION_GATE: "directory" },
+			launchArgs: [softwareRendering, disableCrashReporter, ...headless],
+		},
+		{
+			...base,
+			label: "activation-disabled",
+			files: activationGateFiles,
+			workspaceFolder: "./extension/test/workspaces/activation-disabled",
+			env: { CWTOOLS_TEST_ACTIVATION_GATE: "disabled" },
+			launchArgs: [softwareRendering, disableCrashReporter, ...headless],
 		},
 		{
 			...base,

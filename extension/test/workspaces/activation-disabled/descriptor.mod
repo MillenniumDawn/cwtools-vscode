@@ -1,0 +1,1 @@
+name="activation disabled fixture"
