@@ -1,5 +1,7 @@
 ### Unreleased
 
+* Cover saved graph panel restoration for server and JSON sources
+
 #### Engine
 
 * Read the Stellaris rules the engine tests use from `cwtools-stellaris-config` at the commit `rules-pins.json` pins, instead of three committed copies that had drifted from it. The new dev-only `cwtools_test_rules` crate fetches that commit with git into the user cache dir on first use and reads the cached copy after, so `cargo test` needs git and network access once per pin and a miss it cannot fetch fails naming the commit. The 55-file `performancetest2/.cwtools/config`, `stellaris-config/` in `cwtools_validation` and `test.cwt` in `cwtools_rules` are gone, 220 KB in all. The ethics subtype test parses an inline snippet now, because upstream `ethos` no longer has subtypes. The weekly rules-pins job runs the engine tests and the coverage floor against a bump before it opens the PR. The `semantic_tokens` bench's rules-backed cases parse the 19.6 KB upstream `events.cwt` in place of the 4.1 KB copy, so their numbers do not compare across this change. (#1005)
