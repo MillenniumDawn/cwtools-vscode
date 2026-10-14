@@ -2,12 +2,11 @@
 //! Dawn mod: enum case-sensitivity, top-level GUI widgets validated against the
 //! wrong type, `.asset` music routing, and soft (`~`) cardinality minimums.
 
-use cwtools_index::{SourceLocation, TypeIndex, TypeInstance};
-use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::validate_ast;
 use std::collections::HashMap;
+
+use cwtools_index::{SourceLocation, TypeIndex, TypeInstance};
+
+use super::common::{Opts, validate};
 
 fn messages(errors: &[cwtools_validation::ValidationError]) -> Vec<String> {
     errors.iter().map(|e| e.message.clone()).collect()
@@ -29,17 +28,17 @@ enums = {
     enum[orientations] = { UPPER_LEFT CENTER LOWER_LEFT }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
+    let opts = Opts {
+        path: "gfx/test.txt",
+        ..Opts::DEFAULT
+    };
 
     let script = r#"
 container = {
     orientation = upper_left
 }
 "#;
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(&parsed, &ruleset, &table, "gfx/test.txt", None, None, None);
+    let errors = validate(cwt, script, &opts);
     assert!(
         !errors.iter().any(|e| e.message.contains("orientation")),
         "lowercase enum value wrongly flagged. Errors: {:?}",
@@ -47,8 +46,7 @@ container = {
     );
 
     // A value in neither case is still rejected.
-    let bad = parse_string("container = { orientation = sideways }", &table);
-    let bad_errors = validate_ast(&bad, &ruleset, &table, "gfx/test.txt", None, None, None);
+    let bad_errors = validate(cwt, "container = { orientation = sideways }", &opts);
     assert!(
         bad_errors.iter().any(|e| e.message.contains("orientation")),
         "genuinely invalid enum value should still be flagged"
@@ -74,9 +72,6 @@ types = {
     }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
 
     let script = r#"
 guiTypes = {
@@ -87,15 +82,13 @@ guiTypes = {
     }
 }
 "#;
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "interface/test.gui",
-        None,
-        None,
-        None,
+    let errors = validate(
+        cwt,
+        script,
+        &Opts {
+            path: "interface/test.gui",
+            ..Opts::DEFAULT
+        },
     );
     assert!(
         !errors
@@ -134,9 +127,6 @@ types = {
     }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
 
     let asset = r#"
 music = {
@@ -144,15 +134,13 @@ music = {
     file = "main.ogg"
 }
 "#;
-    let parsed = parse_string(asset, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "music/test.asset",
-        None,
-        None,
-        None,
+    let errors = validate(
+        cwt,
+        asset,
+        &Opts {
+            path: "music/test.asset",
+            ..Opts::DEFAULT
+        },
     );
     assert!(
         !errors
@@ -166,15 +154,13 @@ music = {
 
     // The .txt form still routes to `music` (song required, name unexpected).
     let txt = "music = { name = \"x\" }";
-    let parsed_txt = parse_string(txt, &table);
-    let txt_errors = validate_ast(
-        &parsed_txt,
-        &ruleset,
-        &table,
-        "music/test.txt",
-        None,
-        None,
-        None,
+    let txt_errors = validate(
+        cwt,
+        txt,
+        &Opts {
+            path: "music/test.txt",
+            ..Opts::DEFAULT
+        },
     );
     assert!(
         txt_errors
@@ -197,9 +183,10 @@ types = {
     type[container] = { path = "interface" }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
+    let opts = Opts {
+        path: "interface/test.gui",
+        ..Opts::DEFAULT
+    };
 
     let script = r#"
 container = {
@@ -208,16 +195,7 @@ container = {
     @col_1 = 73
 }
 "#;
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "interface/test.gui",
-        None,
-        None,
-        None,
-    );
+    let errors = validate(cwt, script, &opts);
     assert!(
         !errors.iter().any(|e| e.message.contains('@')),
         "@-prefixed read-time variable wrongly flagged. Errors: {:?}",
@@ -225,16 +203,7 @@ container = {
     );
 
     // A non-@ unknown key is still flagged.
-    let bad = parse_string("container = { name = \"ok\"  bogus = 1 }", &table);
-    let bad_errors = validate_ast(
-        &bad,
-        &ruleset,
-        &table,
-        "interface/test.gui",
-        None,
-        None,
-        None,
-    );
+    let bad_errors = validate(cwt, "container = { name = \"ok\"  bogus = 1 }", &opts);
     assert!(
         bad_errors
             .iter()
@@ -271,22 +240,17 @@ enums = {
     enum[ship_units] = { destroyer battleship }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
 
     // `cruiser` matches <unit.ship_unit> (indexed elsewhere) but is NOT in
     // enum[ship_units]; the enum rule must not report "appears 0 time(s)".
     let script = "ship_name = { type = ship  ship_types = { cruiser } }";
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "names_ships/FRA.txt",
-        None,
-        None,
-        None,
+    let errors = validate(
+        cwt,
+        script,
+        &Opts {
+            path: "names_ships/FRA.txt",
+            ..Opts::DEFAULT
+        },
     );
     assert!(
         !errors.iter().any(|e| e.message.contains("appears 0")),
@@ -324,9 +288,10 @@ types = {
     }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
+    let opts = Opts {
+        path: "common/terrain/00_terrain.txt",
+        ..Opts::DEFAULT
+    };
 
     let script = r#"
 categories = {
@@ -337,16 +302,7 @@ terrain = {
     desert = { type = desert color = { 3 } texture = 9 }
 }
 "#;
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "common/terrain/00_terrain.txt",
-        None,
-        None,
-        None,
-    );
+    let errors = validate(cwt, script, &opts);
     assert!(
         !errors.iter().any(|e| e.message.contains("terrain_0")
             || e.message.contains("Unexpected field 'desert'")
@@ -356,18 +312,10 @@ terrain = {
     );
 
     // A genuinely unknown field inside a graphical_terrain entry still flags.
-    let bad = parse_string(
+    let bad_errors = validate(
+        cwt,
         "terrain = { terrain_0 = { type = plains color = { 0 } texture = 1 bogus = 1 } }",
-        &table,
-    );
-    let bad_errors = validate_ast(
-        &bad,
-        &ruleset,
-        &table,
-        "common/terrain/00_terrain.txt",
-        None,
-        None,
-        None,
+        &opts,
     );
     assert!(
         bad_errors
@@ -393,9 +341,6 @@ types = {
     type[idea] = { path = "common/ideas" }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
 
     let mut index = TypeIndex::new();
     index.complete = true;
@@ -414,20 +359,17 @@ types = {
         }],
     );
     index.merge("interface/ideas.gfx", per_type);
+    let opts = Opts {
+        path: "common/ideas/test.txt",
+        type_index: Some(&index),
+        ..Opts::DEFAULT
+    };
 
     // Both the bare form and the already-prefixed form point at the same sprite.
-    let ok = parse_string(
+    let ok_errors = validate(
+        cwt,
         "bare = { picture = research_bonus } full = { picture = GFX_idea_research_bonus }",
-        &table,
-    );
-    let ok_errors = validate_ast(
-        &ok,
-        &ruleset,
-        &table,
-        "common/ideas/test.txt",
-        None,
-        Some(&index),
-        None,
+        &opts,
     );
     assert!(
         !ok_errors.iter().any(|e| e.message.contains("picture")),
@@ -436,16 +378,7 @@ types = {
     );
 
     // A picture with no matching sprite under any form is a genuine miss.
-    let bad = parse_string("x = { picture = nonexistent_art }", &table);
-    let bad_errors = validate_ast(
-        &bad,
-        &ruleset,
-        &table,
-        "common/ideas/test.txt",
-        None,
-        Some(&index),
-        None,
-    );
+    let bad_errors = validate(cwt, "x = { picture = nonexistent_art }", &opts);
     assert!(
         bad_errors
             .iter()

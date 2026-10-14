@@ -9,56 +9,31 @@
 //! skip-wrapper against a sibling base type) broke no test, and the navigator's
 //! content-fallback descent was likewise unexercised.
 
-use cwtools_index::TypeIndex;
 use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
 use cwtools_rules::rules_types::*;
-use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::position::{RuleContext, rules_at_pos};
-use cwtools_validation::{Prepared, build_scope_registry_arc, validate_ast};
+
+use super::common::{NO_TYPES, Opts, pos_of, prepared, ruleset, validate};
 
 const FILE_PATH: &str = "game/common/on_actions/test.txt";
 
-fn pos_of(script: &str, marker: &str) -> (u32, u16) {
-    let off = script
-        .find(marker)
-        .unwrap_or_else(|| panic!("marker {:?} not in script", marker));
-    let before = &script[..off];
-    let line = before.matches('\n').count() as u32 + 1;
-    let col = before.rsplit('\n').next().unwrap().len() as u16;
-    (line, col)
-}
-
-fn validate(
-    rules: &str,
-    script: &str,
-    file_path: &str,
-) -> Vec<cwtools_validation::ValidationError> {
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(rules, &table), &table);
-    let parsed = parse_string(script, &table);
-    let idx = TypeIndex::new();
-    validate_ast(&parsed, &ruleset, &table, file_path, None, Some(&idx), None)
+/// Validate at `path` with a type index that holds nothing.
+fn at(path: &str) -> Opts<'_> {
+    Opts {
+        path,
+        type_index: Some(&NO_TYPES),
+        ..Opts::DEFAULT
+    }
 }
 
 fn navigate(rules: &str, script: &str, file_path: &str, marker: &str) -> Option<RuleContext> {
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(rules, &table), &table);
+    let (table, ruleset) = ruleset(rules);
     let parsed = parse_string(script, &table);
-    let registry = build_scope_registry_arc(&ruleset, None);
-    let prepared = Prepared {
-        ruleset: &ruleset,
-        table: &table,
-        game: None,
-        type_index: None,
-        modifier_keys: None,
-        loc_index: None,
-        extra_loc_keys: None,
-        inline_scripts: None,
-        registry: registry.as_ref(),
-        scope_checks: true,
+    let opts = Opts {
         var_checks: false,
+        ..Opts::DEFAULT
     };
+    let prepared = prepared(&ruleset, &table, None, &opts);
     let (line, col) = pos_of(script, marker);
     rules_at_pos(&parsed, file_path, &prepared, line, col, false)
 }
@@ -136,7 +111,7 @@ fn validator_does_not_content_fallback_into_sibling_base_type() {
     // against the sibling `on_action` base type. With allow_content_fallback wrongly
     // flipped to true, this emits CW262 "Unexpected block 'on_weekly'" + CW242.
     let script = "on_actions = {\n\ton_weekly = {\n\t\teffect = boom\n\t}\n}\n";
-    let errors = validate(RULES_NO_WEEKLY, script, FILE_PATH);
+    let errors = validate(RULES_NO_WEEKLY, script, &at(FILE_PATH));
     assert!(
         errors.is_empty(),
         "validator must skip the index-only skip-wrapper root, not content-validate \
@@ -182,7 +157,7 @@ fn validator_skips_index_only_path_type() {
     // `sprite` has a path but NO rule body. The root `my_sprite = { ... }` must
     // validate clean — the validator skips it rather than flagging its fields.
     let script = "my_sprite = {\n\ttexturefile = x.dds\n\tanything = 5\n}\n";
-    let errors = validate(INDEX_ONLY_RULES, script, "game/gfx/test.gfx");
+    let errors = validate(INDEX_ONLY_RULES, script, &at("game/gfx/test.gfx"));
     assert!(
         errors.is_empty(),
         "an index-only type[x] must not content-validate its instances; got: {:?}",
@@ -225,7 +200,7 @@ fn entity_root_validates_the_node_itself() {
     let good = validate(
         ENTITY_VS_WRAPPER_RULES,
         good_script,
-        "game/common/things/test.txt",
+        &at("game/common/things/test.txt"),
     );
     assert!(
         good.is_empty(),
@@ -252,7 +227,7 @@ fn entity_root_validates_the_node_itself() {
     let bad = validate(
         ENTITY_VS_WRAPPER_RULES,
         "my_plain = {\n\tbar = 5\n}\n",
-        "game/common/things/test.txt",
+        &at("game/common/things/test.txt"),
     );
     assert!(
         bad.iter().any(|e| e.message.contains("bar")),
@@ -282,7 +257,7 @@ fn wrapper_root_validates_grandchildren_not_the_node() {
     let good = validate(
         ENTITY_VS_WRAPPER_RULES,
         good_script,
-        "game/common/things/test.txt",
+        &at("game/common/things/test.txt"),
     );
     assert!(
         good.is_empty(),
@@ -310,7 +285,7 @@ fn wrapper_root_validates_grandchildren_not_the_node() {
     let bad = validate(
         ENTITY_VS_WRAPPER_RULES,
         bad_script,
-        "game/common/things/test.txt",
+        &at("game/common/things/test.txt"),
     );
     assert!(
         bad.iter().any(|e| e.message.contains("foo")),
@@ -364,7 +339,7 @@ ab = { wrong_short = 1 }
 xy = { wrong_short_key = 1 }
 éyz_good = { wrong_nonascii_key = 1 }
 "#;
-    let errors = validate(PREFIX_RULES, script, "game/common/prefix/test.txt");
+    let errors = validate(PREFIX_RULES, script, &at("game/common/prefix/test.txt"));
     let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
     assert!(messages.iter().any(|m| m.contains("wrong_start")));
     assert!(messages.iter().any(|m| m.contains("wrong_key")));
@@ -455,7 +430,7 @@ outer = {
     let errors = validate(
         PREFIX_WRAPPER_RULES,
         script,
-        "game/common/wrappers/test.txt",
+        &at("game/common/wrappers/test.txt"),
     );
     let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
     for field in ["wrong_start", "wrong_prefix", "wrong_nested"] {
@@ -527,7 +502,7 @@ holder = {
     let errors = validate(
         GENERIC_FALLBACK_RULES,
         script,
-        "game/common/generic/test.txt",
+        &at("game/common/generic/test.txt"),
     );
     let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
     assert!(
@@ -601,7 +576,11 @@ fn direct_name_dispatch_does_not_bypass_prefixes() {
 direct = { wrong_direct = 1 }
 allowed_direct = { wrong_allowed = 1 }
 "#;
-    let errors = validate(DIRECT_NAME_RULES, script, "game/common/direct/test.txt");
+    let errors = validate(
+        DIRECT_NAME_RULES,
+        script,
+        &at("game/common/direct/test.txt"),
+    );
     assert!(
         !errors.iter().any(|e| e.message.contains("wrong_direct")),
         "the direct type name must not bypass starts_with"
@@ -647,7 +626,11 @@ file = {
     allowed = scalar
 }
 "#;
-    let errors = validate(rules, "not_file = 1\n", "game/common/per_file/test.txt");
+    let errors = validate(
+        rules,
+        "not_file = 1\n",
+        &at("game/common/per_file/test.txt"),
+    );
     assert!(
         errors.iter().any(|e| e.message.contains("not_file")),
         "type_per_file dispatch has no instance key to prefix-gate"

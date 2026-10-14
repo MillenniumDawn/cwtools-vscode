@@ -3,9 +3,9 @@
 
 use cwtools_localization::{LocIndex, LocService};
 use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::validate_ast_with_loc;
+use cwtools_validation::{Game, ValidationError};
+
+use super::common::{Opts, codes, error_codes, ruleset, validate, validate_with};
 
 const CWT: &str = r#"
 types = {
@@ -30,31 +30,28 @@ fn loc_index(files: &[(&str, &str)]) -> LocIndex {
     LocIndex::build(&svc)
 }
 
-fn run(script: &str, idx: &LocIndex) -> Vec<cwtools_validation::ValidationError> {
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(CWT, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
-    let parsed = parse_string(script, &table);
-    validate_ast_with_loc(
-        &parsed,
-        &ruleset,
-        &table,
-        "test.txt",
-        None,
-        None,
-        None,
-        Some(idx),
-    )
+fn with_loc(idx: &LocIndex) -> Opts<'_> {
+    Opts {
+        loc_index: Some(idx),
+        ..Opts::DEFAULT
+    }
 }
 
-fn cw100s(errs: &[cwtools_validation::ValidationError]) -> usize {
+/// Where a `mytype` lives, with the scope and variable checks the loc commands need.
+const MYTYPE_FILE: Opts<'static> = Opts {
+    path: "game/common/mytype/test.txt",
+    game: Some(Game::Hoi4),
+    ..Opts::DEFAULT
+};
+
+fn cw100s(errs: &[ValidationError]) -> usize {
     errs.iter().filter(|e| e.code == Some("CW100")).count()
 }
 
 #[test]
 fn unsynced_existing_key_ok() {
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n my_key: \"hi\"\n")]);
-    let errs = run("mytype = {\n name = my_key\n}\n", &idx);
+    let errs = validate(CWT, "mytype = {\n name = my_key\n}\n", &with_loc(&idx));
     assert_eq!(cw100s(&errs), 0, "existing key should not warn: {:?}", errs);
 }
 
@@ -73,8 +70,6 @@ event = {
     }
 }
 "#;
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(RULES, &table), &table);
     let idx = loc_index(&[
         (
             "b_l_braz_por.yml",
@@ -82,16 +77,13 @@ event = {
         ),
         ("a_l_english.yml", "l_english:\n EUevent.5.d: \"plain\"\n"),
     ]);
-    let parsed = parse_string("event = {\n desc = EUevent.5.d\n}\n", &table);
-    let errs = validate_ast_with_loc(
-        &parsed,
-        &ruleset,
-        &table,
-        "events/EU_events.txt",
-        None,
-        None,
-        None,
-        Some(&idx),
+    let errs = validate(
+        RULES,
+        "event = {\n desc = EUevent.5.d\n}\n",
+        &Opts {
+            path: "events/EU_events.txt",
+            ..with_loc(&idx)
+        },
     );
     assert!(
         errs.iter().all(|e| e.code != Some("CW267")),
@@ -102,7 +94,7 @@ event = {
 #[test]
 fn unsynced_missing_key_warns_cw100() {
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n other: \"hi\"\n")]);
-    let errs = run("mytype = {\n name = absent_key\n}\n", &idx);
+    let errs = validate(CWT, "mytype = {\n name = absent_key\n}\n", &with_loc(&idx));
     assert_eq!(
         cw100s(&errs),
         1,
@@ -117,7 +109,7 @@ fn inline_quoted_existing_key_warns_cw122() {
 
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n my_key: \"hi\"\n")]);
     let script = "mytype = {\n iname = \"my_key\"  # unnecessary\n}\n";
-    let errs = run(script, &idx);
+    let errs = validate(CWT, script, &with_loc(&idx));
     let cw122 = errs
         .iter()
         .find(|e| e.code == Some("CW122"))
@@ -131,7 +123,9 @@ fn inline_quoted_existing_key_warns_cw122() {
     let fixed = apply_edits(script, &fix.edits);
     assert_eq!(fixed, "mytype = {\n iname = my_key  # unnecessary\n}\n");
     assert!(
-        !run(&fixed, &idx).iter().any(|e| e.code == Some("CW122")),
+        !validate(CWT, &fixed, &with_loc(&idx))
+            .iter()
+            .any(|e| e.code == Some("CW122")),
         "CW122 must be gone after applying the fix"
     );
 }
@@ -139,7 +133,7 @@ fn inline_quoted_existing_key_warns_cw122() {
 #[test]
 fn inline_quoted_key_that_cannot_be_unquoted_has_no_fix() {
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n foo=bar: \"hi\"\n")]);
-    let errs = run("mytype = { iname = \"foo=bar\" }", &idx);
+    let errs = validate(CWT, "mytype = { iname = \"foo=bar\" }", &with_loc(&idx));
     let cw122 = errs
         .iter()
         .find(|e| e.code == Some("CW122"))
@@ -159,7 +153,8 @@ fn inline_quoted_keys_that_change_value_kind_have_no_fix() {
     )]);
 
     for key in ["yes", "no", "123", "-token"] {
-        let errs = run(&format!("mytype = {{ iname = \"{key}\" }}"), &idx);
+        let script = format!("mytype = {{ iname = \"{key}\" }}");
+        let errs = validate(CWT, &script, &with_loc(&idx));
         let cw122 = errs
             .iter()
             .find(|e| e.code == Some("CW122"))
@@ -177,7 +172,7 @@ fn inline_quoted_escaped_backslash_key_unquotes_to_the_parsed_key() {
 
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n foo\\bar: \"hi\"\n")]);
     let script = r#"mytype = { iname = "foo\\bar" }"#;
-    let errs = run(script, &idx);
+    let errs = validate(CWT, script, &with_loc(&idx));
     let cw122 = errs
         .iter()
         .find(|e| e.code == Some("CW122"))
@@ -190,7 +185,9 @@ fn inline_quoted_escaped_backslash_key_unquotes_to_the_parsed_key() {
     let fixed = apply_edits(script, &fix.edits);
     assert_eq!(fixed, r#"mytype = { iname = foo\bar }"#);
     assert!(
-        !run(&fixed, &idx).iter().any(|e| e.code == Some("CW122")),
+        !validate(CWT, &fixed, &with_loc(&idx))
+            .iter()
+            .any(|e| e.code == Some("CW122")),
         "the unquoted parsed key must revalidate cleanly"
     );
 }
@@ -201,7 +198,7 @@ fn inline_quoted_uppercase_boolean_key_is_safely_unquoted() {
 
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n YES: \"hi\"\n")]);
     let script = "mytype = { iname = \"YES\" }";
-    let errs = run(script, &idx);
+    let errs = validate(CWT, script, &with_loc(&idx));
     let cw122 = errs
         .iter()
         .find(|e| e.code == Some("CW122"))
@@ -214,7 +211,9 @@ fn inline_quoted_uppercase_boolean_key_is_safely_unquoted() {
     let fixed = apply_edits(script, &fix.edits);
     assert_eq!(fixed, "mytype = { iname = YES }");
     assert!(
-        !run(&fixed, &idx).iter().any(|e| e.code == Some("CW122")),
+        !validate(CWT, &fixed, &with_loc(&idx))
+            .iter()
+            .any(|e| e.code == Some("CW122")),
         "the safely unquoted key must revalidate cleanly"
     );
 }
@@ -222,7 +221,7 @@ fn inline_quoted_uppercase_boolean_key_is_safely_unquoted() {
 #[test]
 fn inline_quoted_missing_key_is_skipped() {
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n other: \"hi\"\n")]);
-    let errs = run("mytype = {\n iname = \"absent\"\n}\n", &idx);
+    let errs = validate(CWT, "mytype = {\n iname = \"absent\"\n}\n", &with_loc(&idx));
     assert_eq!(
         cw100s(&errs),
         0,
@@ -238,7 +237,7 @@ fn synced_missing_in_a_language_warns() {
         ("a_l_english.yml", "l_english:\n my_key: \"hi\"\n"),
         ("a_l_german.yml", "l_german:\n other: \"hallo\"\n"),
     ]);
-    let errs = run("mytype = {\n sname = my_key\n}\n", &idx);
+    let errs = validate(CWT, "mytype = {\n sname = my_key\n}\n", &with_loc(&idx));
     assert_eq!(
         cw100s(&errs),
         1,
@@ -254,9 +253,10 @@ fn embedded_inline_command_is_skipped() {
     // `"[?ROOT.current_party_ideology_group.GetTokenKey]_subtype"`), not a literal
     // loc key. It must not warn CW100 (cwtools-vscode#25).
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n other: \"hi\"\n")]);
-    let errs = run(
+    let errs = validate(
+        CWT,
         "mytype = {\n name = \"[GetIdeologyToken]_subtype\"\n}\n",
-        &idx,
+        &with_loc(&idx),
     );
     assert_eq!(
         cw100s(&errs),
@@ -269,7 +269,11 @@ fn embedded_inline_command_is_skipped() {
 #[test]
 fn dollar_var_reference_is_skipped() {
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n other: \"hi\"\n")]);
-    let errs = run("mytype = {\n name = \"$SOME_VAR$\"\n}\n", &idx);
+    let errs = validate(
+        CWT,
+        "mytype = {\n name = \"$SOME_VAR$\"\n}\n",
+        &with_loc(&idx),
+    );
     assert_eq!(cw100s(&errs), 0, "$VAR$ refs are not key refs: {:?}", errs);
 }
 
@@ -316,31 +320,19 @@ fn overlay_key_resolves_missing_loc() {
     // Regression for cwtools-vscode#36: a loc key absent from the scanned index
     // but present in the live overlay (just typed into an open `.yml`) must NOT
     // warn CW100, so adding a key clears the diagnostic without a full rescan.
-    use cwtools_validation::{Prepared, validate_prepared};
     use std::collections::HashSet;
 
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(CWT, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
-    let parsed = parse_string("mytype = {\n name = just_added_key\n}\n", &table);
+    let script = "mytype = {\n name = just_added_key\n}\n";
     // Index lacks the key.
     let idx = loc_index(&[("a_l_english.yml", "l_english:\n other: \"hi\"\n")]);
 
-    let base = Prepared {
-        ruleset: &ruleset,
-        table: &table,
-        game: None,
-        type_index: None,
-        modifier_keys: None,
-        loc_index: Some(&idx),
-        extra_loc_keys: None,
-        inline_scripts: None,
-        registry: None,
+    let base = Opts {
         scope_checks: false,
         var_checks: false,
+        ..with_loc(&idx)
     };
     // No overlay → the key is missing → CW100.
-    let errs = validate_prepared(&parsed, "test.txt", &base);
+    let errs = validate(CWT, script, &base);
     assert_eq!(
         cw100s(&errs),
         1,
@@ -351,11 +343,11 @@ fn overlay_key_resolves_missing_loc() {
     // Overlay carries the (lowercased) key → resolved, no CW100.
     let mut overlay = HashSet::new();
     overlay.insert("just_added_key".to_string());
-    let with_overlay = Prepared {
+    let with_overlay = Opts {
         extra_loc_keys: Some(&overlay),
         ..base
     };
-    let errs = validate_prepared(&parsed, "test.txt", &with_overlay);
+    let errs = validate(CWT, script, &with_overlay);
     assert_eq!(
         cw100s(&errs),
         0,
@@ -383,38 +375,21 @@ mytype = {
 /// Validate a `mytype` referencing `key`, with `variables` as the project's
 /// defined script variables. Returns the emitted codes.
 fn scoped_loc_codes(loc: &str, key: &str, variables: &[&str]) -> Vec<String> {
-    use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
-
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(SCOPED_CWT, &table), &table);
     let idx = loc_index(&[("a_l_english.yml", loc)]);
     let mut type_index = cwtools_index::TypeIndex::new();
     for v in variables {
         type_index.var_index.add_name(v);
     }
     let script = format!("mytype = {{\n name = {key}\n}}\n");
-    let parsed = parse_string(&script, &table);
-    let registry = build_scope_registry_arc(&ruleset, Some(cwtools_game::constants::Game::Hoi4));
-    validate_prepared(
-        &parsed,
-        "game/common/mytype/test.txt",
-        &Prepared {
-            ruleset: &ruleset,
-            table: &table,
-            game: Some(cwtools_game::constants::Game::Hoi4),
+    codes(
+        SCOPED_CWT,
+        &script,
+        &Opts {
             type_index: Some(&type_index),
-            modifier_keys: None,
             loc_index: Some(&idx),
-            extra_loc_keys: None,
-            inline_scripts: None,
-            registry: registry.as_ref(),
-            scope_checks: true,
-            var_checks: true,
+            ..MYTYPE_FILE
         },
     )
-    .into_iter()
-    .filter_map(|e| e.code.map(String::from))
-    .collect()
 }
 
 #[test]
@@ -460,13 +435,7 @@ fn chain_reading_a_variable_without_an_index_is_lenient() {
 
 #[test]
 fn no_loc_index_is_lenient() {
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(CWT, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
-    let parsed = parse_string("mytype = {\n name = absent_key\n}\n", &table);
-    let errs = validate_ast_with_loc(
-        &parsed, &ruleset, &table, "test.txt", None, None, None, None,
-    );
+    let errs = validate(CWT, "mytype = {\n name = absent_key\n}\n", &Opts::DEFAULT);
     assert_eq!(cw100s(&errs), 0, "no loc loaded → accept: {:?}", errs);
 }
 
@@ -479,9 +448,6 @@ mytype = { name = localisation }
 
 fn scoped_with_cmds_loc_codes(loc: &str, scripted_locs: &[&str]) -> Vec<String> {
     use cwtools_index::{SourceLocation, TypeInstance};
-    use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(SCOPED_WITH_CMDS_CWT, &table), &table);
     let idx = loc_index(&[("a_l_english.yml", loc)]);
     let mut type_index = cwtools_index::TypeIndex::new();
     for sl in scripted_locs {
@@ -501,28 +467,15 @@ fn scoped_with_cmds_loc_codes(loc: &str, scripted_locs: &[&str]) -> Vec<String> 
         );
         type_index.merge("game/common/scripted_localisation/defs.txt", map);
     }
-    let parsed = parse_string("mytype = {\n name = my_key\n}\n", &table);
-    let registry = build_scope_registry_arc(&ruleset, Some(cwtools_game::constants::Game::Hoi4));
-    validate_prepared(
-        &parsed,
-        "game/common/mytype/test.txt",
-        &Prepared {
-            ruleset: &ruleset,
-            table: &table,
-            game: Some(cwtools_game::constants::Game::Hoi4),
+    codes(
+        SCOPED_WITH_CMDS_CWT,
+        "mytype = {\n name = my_key\n}\n",
+        &Opts {
             type_index: Some(&type_index),
-            modifier_keys: None,
             loc_index: Some(&idx),
-            extra_loc_keys: None,
-            inline_scripts: None,
-            registry: registry.as_ref(),
-            scope_checks: true,
-            var_checks: true,
+            ..MYTYPE_FILE
         },
     )
-    .into_iter()
-    .filter_map(|e| e.code.map(String::from))
-    .collect()
 }
 
 /// As above, but the scripted localisations arrive the way a real run gets them:
@@ -531,9 +484,7 @@ fn scoped_with_cmds_loc_codes(loc: &str, scripted_locs: &[&str]) -> Vec<String> 
 /// `type[scripted_loc]` at all — exactly like the HOI4 config, whose one
 /// declaration points at a folder that does not exist there (#348).
 fn loc_codes_with_scripted_loc_file(loc: &str, defs: &str) -> Vec<String> {
-    use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(SCOPED_WITH_CMDS_CWT, &table), &table);
+    let (table, ruleset) = ruleset(SCOPED_WITH_CMDS_CWT);
     let idx = loc_index(&[("a_l_english.yml", loc)]);
     let mut type_index = cwtools_index::TypeIndex::new();
     let defs_path = "game/common/scripted_localisation/00_defs.txt";
@@ -541,28 +492,16 @@ fn loc_codes_with_scripted_loc_file(loc: &str, defs: &str) -> Vec<String> {
         defs_path,
         cwtools_index::collect_scripted_loc_names(&parse_string(defs, &table), defs_path, &table),
     );
-    let parsed = parse_string("mytype = {\n name = my_key\n}\n", &table);
-    let registry = build_scope_registry_arc(&ruleset, Some(cwtools_game::constants::Game::Hoi4));
-    validate_prepared(
-        &parsed,
-        "game/common/mytype/test.txt",
-        &Prepared {
-            ruleset: &ruleset,
-            table: &table,
-            game: Some(cwtools_game::constants::Game::Hoi4),
+    error_codes(&validate_with(
+        &table,
+        &ruleset,
+        "mytype = {\n name = my_key\n}\n",
+        &Opts {
             type_index: Some(&type_index),
-            modifier_keys: None,
             loc_index: Some(&idx),
-            extra_loc_keys: None,
-            inline_scripts: None,
-            registry: registry.as_ref(),
-            scope_checks: true,
-            var_checks: true,
+            ..MYTYPE_FILE
         },
-    )
-    .into_iter()
-    .filter_map(|e| e.code.map(String::from))
-    .collect()
+    ))
 }
 
 const DEFINED_TEXT: &str = r#"
@@ -617,9 +556,7 @@ fn a_typo_beside_a_known_scripted_loc_still_warns() {
 }
 
 fn loc_codes_with_scripted_gui_file(loc: &str, defs: Option<&str>) -> Vec<String> {
-    use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(SCOPED_WITH_CMDS_CWT, &table), &table);
+    let (table, ruleset) = ruleset(SCOPED_WITH_CMDS_CWT);
     let idx = loc_index(&[("a_l_english.yml", loc)]);
     let mut type_index = cwtools_index::TypeIndex::new();
     if let Some(defs) = defs {
@@ -633,28 +570,16 @@ fn loc_codes_with_scripted_gui_file(loc: &str, defs: Option<&str>) -> Vec<String
             ),
         );
     }
-    let parsed = parse_string("mytype = {\n name = my_key\n}\n", &table);
-    let registry = build_scope_registry_arc(&ruleset, Some(cwtools_game::constants::Game::Hoi4));
-    validate_prepared(
-        &parsed,
-        "game/common/mytype/test.txt",
-        &Prepared {
-            ruleset: &ruleset,
-            table: &table,
-            game: Some(cwtools_game::constants::Game::Hoi4),
+    error_codes(&validate_with(
+        &table,
+        &ruleset,
+        "mytype = {\n name = my_key\n}\n",
+        &Opts {
             type_index: Some(&type_index),
-            modifier_keys: None,
             loc_index: Some(&idx),
-            extra_loc_keys: None,
-            inline_scripts: None,
-            registry: registry.as_ref(),
-            scope_checks: true,
-            var_checks: true,
+            ..MYTYPE_FILE
         },
-    )
-    .into_iter()
-    .filter_map(|error| error.code.map(String::from))
-    .collect()
+    ))
 }
 
 const SCRIPTED_GUI: &str = r#"
@@ -749,37 +674,21 @@ fn command_chain_scripted_loc_typo_warns_when_index_populated() {
 
 // ── Issue #306: vanilla variables in loc chains ─────────────────────────────
 fn scoped_loc_codes_with_vanilla(loc: &str, key: &str, vanilla_vars: &[&str]) -> Vec<String> {
-    use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(SCOPED_CWT, &table), &table);
     let idx = loc_index(&[("a_l_english.yml", loc)]);
     let mut type_index = cwtools_index::TypeIndex::new();
     type_index
         .var_index
         .set_vanilla_names(vanilla_vars.iter().map(|s| s.to_string()).collect());
     let script = format!("mytype = {{\n name = {key}\n}}\n");
-    let parsed = parse_string(&script, &table);
-    let registry = build_scope_registry_arc(&ruleset, Some(cwtools_game::constants::Game::Hoi4));
-    validate_prepared(
-        &parsed,
-        "game/common/mytype/test.txt",
-        &Prepared {
-            ruleset: &ruleset,
-            table: &table,
-            game: Some(cwtools_game::constants::Game::Hoi4),
+    codes(
+        SCOPED_CWT,
+        &script,
+        &Opts {
             type_index: Some(&type_index),
-            modifier_keys: None,
             loc_index: Some(&idx),
-            extra_loc_keys: None,
-            inline_scripts: None,
-            registry: registry.as_ref(),
-            scope_checks: true,
-            var_checks: true,
+            ..MYTYPE_FILE
         },
     )
-    .into_iter()
-    .filter_map(|e| e.code.map(String::from))
-    .collect()
 }
 
 #[test]

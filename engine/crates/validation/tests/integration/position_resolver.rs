@@ -6,23 +6,16 @@ use std::collections::HashMap;
 
 use cwtools_index::{SourceLocation, TypeIndex, TypeInstance};
 use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
 use cwtools_rules::rules_types::*;
-use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::position::{RuleContext, rules_at_pos};
-use cwtools_validation::{Prepared, build_scope_registry_arc};
 
-/// Position of `marker`'s first char in `script`: 1-based line, 0-based col
-/// (the parser/LSP convention).
-fn pos_of(script: &str, marker: &str) -> (u32, u16) {
-    let off = script
-        .find(marker)
-        .unwrap_or_else(|| panic!("marker {:?} not in script", marker));
-    let before = &script[..off];
-    let line = before.matches('\n').count() as u32 + 1;
-    let col = before.rsplit('\n').next().unwrap().len() as u16;
-    (line, col)
-}
+use super::common::{Opts, pos_of, prepared, ruleset, validate};
+
+/// Scope checks on and variable checks off: how the editor resolves a position.
+const EDITOR: Opts<'static> = Opts {
+    var_checks: false,
+    ..Opts::DEFAULT
+};
 
 fn type_index(entries: &[(&str, &str)]) -> TypeIndex {
     let mut idx = TypeIndex::new();
@@ -77,24 +70,13 @@ fn resolve_with(
     idx: Option<&TypeIndex>,
     for_completion: bool,
 ) -> Option<RuleContext> {
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
+    let (table, ruleset) = ruleset(cwt);
     let parsed = parse_string(script, &table);
-    let registry = build_scope_registry_arc(&ruleset, None);
-    let prepared = Prepared {
-        ruleset: &ruleset,
-        table: &table,
-        game: None,
+    let opts = Opts {
         type_index: idx,
-        modifier_keys: None,
-        loc_index: None,
-        extra_loc_keys: None,
-        inline_scripts: None,
-        registry: registry.as_ref(),
-        scope_checks: true,
-        var_checks: false,
+        ..EDITOR
     };
+    let prepared = prepared(&ruleset, &table, None, &opts);
     let (line, col) = pos_of(script, marker);
     rules_at_pos(&parsed, file_path, &prepared, line, col, for_completion)
 }
@@ -245,17 +227,13 @@ alias[effect:needs_int] = int
 
     // The fixture has to be one validation actually gives up on, or the
     // resolution below proves nothing.
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(cwt, &table), &table);
-    let parsed = parse_string(&script, &table);
-    let errors = cwtools_validation::validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "game/common/foo/test.txt",
-        None,
-        None,
-        None,
+    let errors = validate(
+        cwt,
+        &script,
+        &Opts {
+            path: "game/common/foo/test.txt",
+            ..Opts::DEFAULT
+        },
     );
     assert!(
         errors.iter().any(|e| e.code == Some("CW277")),
@@ -580,23 +558,9 @@ alias[trigger:always] = bool
     // Use a script with a marker leaf removed: place cursor mid-block where no
     // child exists. Build it by replacing the marker with spaces.
     let script = script.replace("MARKER", "      ");
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
+    let (table, ruleset) = ruleset(cwt);
     let parsed = parse_string(&script, &table);
-    let prepared = Prepared {
-        ruleset: &ruleset,
-        table: &table,
-        game: None,
-        type_index: None,
-        modifier_keys: None,
-        loc_index: None,
-        extra_loc_keys: None,
-        inline_scripts: None,
-        registry: None,
-        scope_checks: true,
-        var_checks: false,
-    };
+    let prepared = prepared(&ruleset, &table, None, &EDITOR);
     let ctx = rules_at_pos(
         &parsed,
         "game/common/decisions/test.txt",
@@ -709,25 +673,10 @@ fn cursor_on_blank_line_after_field_is_insert_position() {
     // line after `icon = GFX_x` previously resolved to that leaf's VALUE (offering
     // value completions, usually empty) instead of the block's fields. It must be
     // an insert position (cwtools-vscode#20).
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(FOCUS_RULES, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
+    let (table, ruleset) = ruleset(FOCUS_RULES);
     let script = "shared_focus = {\n\tid = my_shared\n\ticon = GFX_x\n\t\n}\n";
     let parsed = parse_string(script, &table);
-    let registry = build_scope_registry_arc(&ruleset, None);
-    let prepared = Prepared {
-        ruleset: &ruleset,
-        table: &table,
-        game: None,
-        type_index: None,
-        modifier_keys: None,
-        loc_index: None,
-        extra_loc_keys: None,
-        inline_scripts: None,
-        registry: registry.as_ref(),
-        scope_checks: true,
-        var_checks: false,
-    };
+    let prepared = prepared(&ruleset, &table, None, &EDITOR);
     // The blank line is parser line 4 (1-based), col 1 (after the tab).
     let ctx = rules_at_pos(
         &parsed,

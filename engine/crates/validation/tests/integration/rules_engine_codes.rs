@@ -10,22 +10,7 @@
 //! - cardinality (too few / too many)   -> CW242
 //! - wrong value type                   -> CW240
 
-use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::validate_ast;
-
-fn codes_for(cwt: &str, script: &str) -> Vec<String> {
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(&parsed, &ruleset, &table, "test.txt", None, None, None);
-    errors
-        .into_iter()
-        .filter_map(|e| e.code.map(String::from))
-        .collect()
-}
+use super::common::{Opts, codes, validate};
 
 /// A required field carrying `## severity = error` must report its missing-field
 /// cardinality (CW242) at Error severity, not the default Warning. Mirrors the
@@ -41,11 +26,7 @@ foo = {
     needed = scalar
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(RULES, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
-    let parsed = parse_string("foo = { name = x }", &table);
-    let errors = validate_ast(&parsed, &ruleset, &table, "test.txt", None, None, None);
+    let errors = validate(RULES, "foo = { name = x }", &Opts::DEFAULT);
     let cw242 = errors
         .iter()
         .find(|e| e.code == Some("CW242"))
@@ -74,7 +55,7 @@ foo = {
 
 #[test]
 fn unexpected_leaf_is_cw263() {
-    let codes = codes_for(
+    let codes = codes(
         RULES,
         r#"
 foo = {
@@ -82,6 +63,7 @@ foo = {
     bogus_leaf = 3
 }
 "#,
+        &Opts::DEFAULT,
     );
     assert!(codes.contains(&"CW263".to_string()), "got: {:?}", codes);
     assert!(!codes.iter().any(|c| c == "CW201"), "CW201 retired");
@@ -89,7 +71,7 @@ foo = {
 
 #[test]
 fn unexpected_node_is_cw262() {
-    let codes = codes_for(
+    let codes = codes(
         RULES,
         r#"
 foo = {
@@ -97,13 +79,14 @@ foo = {
     bogus_block = { x = 1 }
 }
 "#,
+        &Opts::DEFAULT,
     );
     assert!(codes.contains(&"CW262".to_string()), "got: {:?}", codes);
 }
 
 #[test]
 fn wrong_value_type_is_cw240() {
-    let codes = codes_for(
+    let codes = codes(
         RULES,
         r#"
 foo = {
@@ -111,6 +94,7 @@ foo = {
     count = notaninteger
 }
 "#,
+        &Opts::DEFAULT,
     );
     assert!(codes.contains(&"CW240".to_string()), "got: {:?}", codes);
     assert!(!codes.iter().any(|c| c == "CW202"), "CW202 retired");
@@ -119,13 +103,14 @@ foo = {
 #[test]
 fn missing_required_is_cw242() {
     // `required_field` has `## cardinality = 1..1` and is omitted.
-    let codes = codes_for(
+    let codes = codes(
         RULES,
         r#"
 foo = {
     name = something
 }
 "#,
+        &Opts::DEFAULT,
     );
     assert!(codes.contains(&"CW242".to_string()), "got: {:?}", codes);
     assert!(
@@ -136,7 +121,7 @@ foo = {
 
 #[test]
 fn unexpected_value_clause_is_cw265() {
-    let codes = codes_for(
+    let codes = codes(
         RULES,
         r#"
 foo = {
@@ -144,6 +129,7 @@ foo = {
     { x = 1 }
 }
 "#,
+        &Opts::DEFAULT,
     );
     assert!(codes.contains(&"CW265".to_string()), "got: {:?}", codes);
 }
@@ -159,13 +145,17 @@ foo = {
 
 #[test]
 fn allowed_value_clause_is_not_cw265() {
-    let codes = codes_for(VALUE_CLAUSE_RULES, "foo = { { id = 1 } }");
+    let codes = codes(VALUE_CLAUSE_RULES, "foo = { { id = 1 } }", &Opts::DEFAULT);
     assert!(codes.is_empty(), "got: {:?}", codes);
 }
 
 #[test]
 fn value_clause_children_are_validated() {
-    let codes = codes_for(VALUE_CLAUSE_RULES, "foo = { { id = notaninteger } }");
+    let codes = codes(
+        VALUE_CLAUSE_RULES,
+        "foo = { { id = notaninteger } }",
+        &Opts::DEFAULT,
+    );
     assert!(codes.contains(&"CW240".to_string()), "got: {:?}", codes);
     assert!(!codes.contains(&"CW265".to_string()), "got: {:?}", codes);
 }
@@ -181,7 +171,7 @@ foo = {
     }
 }
 "#;
-    let (_t, _r, errors) = validate_pair(RULES, "foo = { { id = 1 } }");
+    let errors = validate(RULES, "foo = { { id = 1 } }", &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW242"))
@@ -203,7 +193,11 @@ foo = {
     }
 }
 "#;
-    let (_t, _r, errors) = validate_pair(RULES, "foo = { { id = 1 } { id = 2 } { id = 3 } }");
+    let errors = validate(
+        RULES,
+        "foo = { { id = 1 } { id = 2 } { id = 3 } }",
+        &Opts::DEFAULT,
+    );
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW242"))
@@ -218,29 +212,11 @@ foo = {
 // The suggestion lives in the fix title/edit; the diagnostic message, code, and
 // position are unchanged (corpus-inert).
 
-/// Full errors for a (cwt, script) pair, keeping ruleset+table alive so a fix can
-/// be applied and the corrected text revalidated against the same rules.
-fn validate_pair(
-    cwt: &str,
-    script: &str,
-) -> (
-    StringTable,
-    cwtools_rules::rules_types::RuleSet,
-    Vec<cwtools_validation::ValidationError>,
-) {
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(&parsed, &ruleset, &table, "test.txt", None, None, None);
-    (table, ruleset, errors)
-}
-
 #[test]
 fn cw263_close_match_attaches_did_you_mean_fix() {
     use cwtools_parser::fix::apply_edits;
     let script = "foo = {\n    required_field = ok\n    cont = 3\n}\n";
-    let (table, ruleset, errors) = validate_pair(RULES, script);
+    let errors = validate(RULES, script, &Opts::DEFAULT);
 
     let err = errors
         .iter()
@@ -258,8 +234,7 @@ fn cw263_close_match_attaches_did_you_mean_fix() {
     );
 
     // The corrected key matches `count = int`; CW263 is gone on revalidation.
-    let ast2 = parse_string(&fixed, &table);
-    let errors2 = validate_ast(&ast2, &ruleset, &table, "test.txt", None, None, None);
+    let errors2 = validate(RULES, &fixed, &Opts::DEFAULT);
     assert!(
         !errors2.iter().any(|e| e.code == Some("CW263")),
         "CW263 must be gone after applying the fix"
@@ -276,7 +251,7 @@ foo = { mode = enum[mode] }
 fn cw240_enum_close_match_attaches_did_you_mean_fix() {
     use cwtools_parser::fix::apply_edits;
     let script = "foo = {\n    mode = histroic  # typo\n}\n";
-    let (table, ruleset, errors) = validate_pair(ENUM_RULES, script);
+    let errors = validate(ENUM_RULES, script, &Opts::DEFAULT);
 
     let err = errors
         .iter()
@@ -288,8 +263,7 @@ fn cw240_enum_close_match_attaches_did_you_mean_fix() {
     let fixed = apply_edits(script, &fix.edits);
     assert_eq!(fixed, "foo = {\n    mode = \"historic\"  # typo\n}\n");
 
-    let ast2 = parse_string(&fixed, &table);
-    let errors2 = validate_ast(&ast2, &ruleset, &table, "test.txt", None, None, None);
+    let errors2 = validate(ENUM_RULES, &fixed, &Opts::DEFAULT);
     assert!(
         !errors2.iter().any(|e| e.code == Some("CW240")),
         "CW240 must be gone after applying the fix"
@@ -301,7 +275,7 @@ fn cw240_quoted_enum_value_replaces_the_quotes_too() {
     use cwtools_parser::fix::apply_edits;
 
     let script = "foo = { mode = \"histroic\" }";
-    let (_table, _ruleset, errors) = validate_pair(ENUM_RULES, script);
+    let errors = validate(ENUM_RULES, script, &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW240"))
@@ -325,7 +299,7 @@ fn cw240_spaced_enum_value_keeps_its_quotes() {
     use cwtools_parser::fix::apply_edits;
 
     let script = "foo = { mode = \"histroic mode\" }";
-    let (_table, _ruleset, errors) = validate_pair(SPACED_ENUM_RULES, script);
+    let errors = validate(SPACED_ENUM_RULES, script, &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW240"))
@@ -349,7 +323,7 @@ fn cw240_boolean_enum_suggestion_stays_a_string() {
     use cwtools_parser::fix::apply_edits;
 
     let script = "foo = { mode = yess }";
-    let (table, ruleset, errors) = validate_pair(BOOLEAN_ENUM_RULES, script);
+    let errors = validate(BOOLEAN_ENUM_RULES, script, &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW240"))
@@ -358,9 +332,8 @@ fn cw240_boolean_enum_suggestion_stays_a_string() {
 
     let fixed = apply_edits(script, &fix.edits);
     assert_eq!(fixed, "foo = { mode = \"yes\" }");
-    let ast = parse_string(&fixed, &table);
     assert!(
-        !validate_ast(&ast, &ruleset, &table, "test.txt", None, None, None)
+        !validate(BOOLEAN_ENUM_RULES, &fixed, &Opts::DEFAULT)
             .iter()
             .any(|e| e.code == Some("CW240")),
         "quoted boolean enum member must revalidate cleanly"
@@ -378,7 +351,7 @@ fn cw240_enum_suggestion_escapes_quotes_and_backslashes() {
     use cwtools_parser::fix::apply_edits;
 
     let script = r#"foo = { mode = "histr\"oric\\mode" }"#;
-    let (table, ruleset, errors) = validate_pair(ESCAPED_ENUM_RULES, script);
+    let errors = validate(ESCAPED_ENUM_RULES, script, &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW240"))
@@ -388,9 +361,8 @@ fn cw240_enum_suggestion_escapes_quotes_and_backslashes() {
     assert_eq!(fix.title, "Did you mean 'hist\"oric\\mode'?");
     let fixed = apply_edits(script, &fix.edits);
     assert_eq!(fixed, r#"foo = { mode = "hist\"oric\\mode" }"#);
-    let ast = parse_string(&fixed, &table);
     assert!(
-        !validate_ast(&ast, &ruleset, &table, "test.txt", None, None, None)
+        !validate(ESCAPED_ENUM_RULES, &fixed, &Opts::DEFAULT)
             .iter()
             .any(|e| e.code == Some("CW240")),
         "escaped enum member must revalidate cleanly"
@@ -405,7 +377,7 @@ foo = { mode = enum[mode] }
 
 #[test]
 fn cw240_enum_ambiguous_match_has_no_fix() {
-    let (_t, _r, errors) = validate_pair(ENUM_TIE_RULES, "foo = { mode = dask }");
+    let errors = validate(ENUM_TIE_RULES, "foo = { mode = dask }", &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW240"))
@@ -428,7 +400,7 @@ foo = {
 fn cw262_close_match_attaches_did_you_mean_fix() {
     use cwtools_parser::fix::apply_edits;
     let script = "foo = {\n    setings = { x = 1 }\n}\n";
-    let (table, ruleset, errors) = validate_pair(NODE_RULES, script);
+    let errors = validate(NODE_RULES, script, &Opts::DEFAULT);
 
     let err = errors
         .iter()
@@ -441,8 +413,7 @@ fn cw262_close_match_attaches_did_you_mean_fix() {
     let fixed = apply_edits(script, &fix.edits);
     assert_eq!(fixed, "foo = {\n    settings = { x = 1 }\n}\n");
 
-    let ast2 = parse_string(&fixed, &table);
-    let errors2 = validate_ast(&ast2, &ruleset, &table, "test.txt", None, None, None);
+    let errors2 = validate(NODE_RULES, &fixed, &Opts::DEFAULT);
     assert!(
         !errors2.iter().any(|e| e.code == Some("CW262")),
         "CW262 must be gone after applying the fix"
@@ -455,7 +426,7 @@ fn cw262_close_match_attaches_did_you_mean_fix() {
 #[test]
 fn cw262_underlines_only_the_unexpected_key() {
     let script = "foo = {\n    setings = {\n        x = 1\n    }\n}\n";
-    let (_t, _r, errors) = validate_pair(NODE_RULES, script);
+    let errors = validate(NODE_RULES, script, &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW262"))
@@ -471,7 +442,7 @@ fn cw262_underlines_only_the_unexpected_key() {
 #[test]
 fn cw263_no_close_match_has_no_fix() {
     let script = "foo = {\n    required_field = ok\n    xyzzy = 3\n}\n";
-    let (_t, _r, errors) = validate_pair(RULES, script);
+    let errors = validate(RULES, script, &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW263"))
@@ -494,7 +465,7 @@ foo = {
 fn cw263_ambiguous_tie_has_no_fix() {
     // "rat" is distance 1 from both "cat" and "bat": ambiguous → no fix.
     let script = "foo = {\n    rat = 1\n}\n";
-    let (_t, _r, errors) = validate_pair(TIE_RULES, script);
+    let errors = validate(TIE_RULES, script, &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW263"))
@@ -513,7 +484,7 @@ foo = {
 fn cw263_tiny_candidate_has_no_fix() {
     // "ba" -> "ab" is distance 2, but the only candidate is 2 chars: too short.
     let script = "foo = {\n    ba = 1\n}\n";
-    let (_t, _r, errors) = validate_pair(TINY_RULES, script);
+    let errors = validate(TINY_RULES, script, &Opts::DEFAULT);
     let err = errors
         .iter()
         .find(|e| e.code == Some("CW263"))

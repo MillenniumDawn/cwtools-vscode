@@ -1,7 +1,4 @@
-use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::validate_ast;
+use super::common::{Opts, validate};
 
 // A missing-required-field CW242 (under-count) must be anchored on the
 // block's own key line (`key = { ... }`), not on the first child inside it.
@@ -19,9 +16,6 @@ types = {
     }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
 
     let script = r#"
 my_decision = {
@@ -32,8 +26,7 @@ my_decision = {
     // Line 3 (1-based): `    icon = test_icon`
     // `required_field` is absent -> CW242 under-count
 
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(&parsed, &ruleset, &table, "test.txt", None, None, None);
+    let errors = validate(cwt, script, &Opts::DEFAULT);
 
     let card = errors
         .iter()
@@ -83,21 +76,16 @@ types = {
     }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
 
     // File has content but no required_field.
     let script = "some_other_field = value\n";
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(
-        &parsed,
-        &ruleset,
-        &table,
-        "game/history/test.txt",
-        None,
-        None,
-        None,
+    let errors = validate(
+        cwt,
+        script,
+        &Opts {
+            path: "game/history/test.txt",
+            ..Opts::DEFAULT
+        },
     );
 
     for e in &errors {
@@ -131,9 +119,6 @@ types = {
     }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
 
     let script = r#"
 my_decision = {
@@ -142,8 +127,7 @@ my_decision = {
     custom_cost_text = b
 }
 "#;
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(&parsed, &ruleset, &table, "test.txt", None, None, None);
+    let errors = validate(cwt, script, &Opts::DEFAULT);
 
     let card = errors
         .iter()

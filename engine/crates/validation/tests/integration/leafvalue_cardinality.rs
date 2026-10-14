@@ -1,7 +1,4 @@
-use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::validate_ast;
+use super::common::{Opts, validate};
 
 // Regression: alternative leafvalue rules in one block must be counted
 // independently (mirrors F# RuleValidationService.checkCardinality, which uses
@@ -39,9 +36,6 @@ enums = {
     }
 }
 "#;
-    let table = StringTable::new();
-    let parsed_cwt = parse_string(cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed_cwt, &table);
 
     let script = r#"
 ship_name = {
@@ -52,8 +46,7 @@ ship_name = {
     }
 }
 "#;
-    let parsed = parse_string(script, &table);
-    let errors = validate_ast(&parsed, &ruleset, &table, "test.txt", None, None, None);
+    let errors = validate(cwt, script, &Opts::DEFAULT);
     let enum_card_fp = errors
         .iter()
         .any(|e| e.message.contains("Enum(\"ship_units\")") && e.message.contains("appears 0"));

@@ -1,12 +1,11 @@
 //! CW261: an instance of a `## unique` type whose id the project defines more
 //! than once. Project-wide, so a second definition in another file counts.
 
-use cwtools_game::constants::Game;
 use cwtools_index::{TypeIndex, collect_type_instances};
 use cwtools_parser::parser::parse_string;
-use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::{Prepared, build_scope_registry_arc, validate_prepared};
+use cwtools_validation::Game;
+
+use super::common::{Opts, ruleset, validate_with};
 
 const RULES: &str = r#"
 types = {
@@ -31,9 +30,7 @@ commented = { x = scalar }
 /// `base_game` files are indexed but not validated, standing in for a vanilla
 /// install the mod is overriding.
 fn cw261_for(files: &[(&str, &str)], base_game: &[(&str, &str)]) -> Vec<(String, String)> {
-    let table = StringTable::new();
-    let ruleset = ast_to_ruleset(&parse_string(RULES, &table), &table);
-    let registry = build_scope_registry_arc(&ruleset, Some(Game::Hoi4));
+    let (table, ruleset) = ruleset(RULES);
 
     let parsed: Vec<_> = files
         .iter()
@@ -51,23 +48,17 @@ fn cw261_for(files: &[(&str, &str)], base_game: &[(&str, &str)]) -> Vec<(String,
         }
     }
 
-    let prepared = Prepared {
-        ruleset: &ruleset,
-        table: &table,
+    let opts = Opts {
         game: Some(Game::Hoi4),
         type_index: Some(&index),
-        modifier_keys: None,
-        loc_index: None,
-        extra_loc_keys: None,
-        inline_scripts: None,
-        registry: registry.as_ref(),
         scope_checks: false,
         var_checks: false,
+        ..Opts::DEFAULT
     };
 
     let mut out = Vec::new();
-    for (path, ast) in parsed.iter().take(files.len()) {
-        for err in validate_prepared(ast, path, &prepared) {
+    for (path, src) in files {
+        for err in validate_with(&table, &ruleset, src, &Opts { path, ..opts }) {
             if err.code == Some("CW261") {
                 out.push((path.to_string(), err.message.clone()));
             }
