@@ -3098,7 +3098,8 @@ mod ignored_tests {
     use std::future::Future;
     use std::sync::Arc;
 
-    use crate::state::{DocumentState, ParsedDoc};
+    use crate::state::ParsedDoc;
+    use crate::testing::{test_backend, test_backend_with_socket};
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
     use futures_util::FutureExt;
@@ -3134,9 +3135,9 @@ mod ignored_tests {
     }
 
     fn backend_with_ignore(patterns: Vec<String>, workspace_uri: Option<&str>) -> Backend {
-        let state = Arc::new(DocumentState::new());
+        let backend = test_backend();
         {
-            let mut cfg = state.config.write();
+            let mut cfg = backend.state.config.write();
             cfg.ignore_file_patterns = patterns;
             if let Some(ws) = workspace_uri {
                 cfg.workspace_prefix = Some(crate::paths::workspace_prefix_of(ws));
@@ -3151,18 +3152,7 @@ mod ignored_tests {
                 }
             }
         }
-        let captured = Arc::new(Mutex::new(None));
-        let slot = captured.clone();
-        let st = state.clone();
-        let (_svc, _sock) = LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: st.clone(),
-            }
-        });
-        let client = captured.lock().take().expect("client");
-        Backend { client, state }
+        backend
     }
 
     /// Like `backend_with_ignore`, but the client has passed the `initialize`
@@ -3216,22 +3206,6 @@ mod ignored_tests {
         (Backend { client, state }, socket)
     }
 
-    fn backend_with_socket() -> (Backend, tower_lsp::ClientSocket) {
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(Mutex::new(None));
-        let slot = captured.clone();
-        let st = state.clone();
-        let (_svc, socket) = LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: st.clone(),
-            }
-        });
-        let client = captured.lock().take().expect("client");
-        (Backend { client, state }, socket)
-    }
-
     fn backend_with_ignore_and_dirs(
         file_patterns: Vec<String>,
         dir_patterns: Vec<String>,
@@ -3247,7 +3221,7 @@ mod ignored_tests {
 
     #[tokio::test]
     async fn revalidate_other_open_loc_files_drops_stale_snapshot() {
-        let (backend, mut socket) = backend_with_socket();
+        let (backend, mut socket) = test_backend_with_socket();
         let uri = if cfg!(windows) {
             "file:///C:/ws/localisation/target_l_english.yml".to_string()
         } else {

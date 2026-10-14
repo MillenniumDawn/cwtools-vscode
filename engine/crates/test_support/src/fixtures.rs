@@ -1,8 +1,6 @@
 //! Workspaces the driver and `cwtools_lsp` tests both build: the CW239
 //! unused-instance scenario and the alias branch-limit (CW277) scenario.
 
-use std::path::Path;
-
 use tempfile::TempDir;
 
 /// Two types: `thing`, whose instances are expected to be referenced, and
@@ -37,11 +35,11 @@ pub fn unused_rules(armed: bool) -> String {
 /// A temp workspace holding [`UNUSED_THINGS`] and [`UNUSED_USERS`] under `mod/`
 /// and the [`unused_rules`] under `rules/`.
 pub fn unused_workspace(armed: bool) -> TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    write_file(&tmp.path().join("rules/things.cwt"), &unused_rules(armed));
-    write_file(&tmp.path().join("mod/common/things/x.txt"), UNUSED_THINGS);
-    write_file(&tmp.path().join("mod/common/users/u.txt"), UNUSED_USERS);
-    tmp
+    write_tree(&[
+        ("rules/things.cwt", &unused_rules(armed)),
+        ("mod/common/things/x.txt", UNUSED_THINGS),
+        ("mod/common/users/u.txt", UNUSED_USERS),
+    ])
 }
 
 /// A `user` whose alias usages can exhaust the branch budget, and nothing else.
@@ -97,24 +95,22 @@ pub fn capped_alias_file(noise: usize) -> String {
 /// neighbour carrying one ordinary error, so a test can check the budget is per
 /// file.
 pub fn capped_alias_workspace() -> TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    write_file(&tmp.path().join("rules/aliases.cwt"), CAPPED_UNUSED_RULES);
-    write_file(
-        &tmp.path().join("mod/common/things/x.txt"),
-        "my_thing = { x = a }\n",
-    );
-    write_file(
-        &tmp.path().join("mod/common/users/u.txt"),
-        &capped_alias_file(0),
-    );
-    write_file(
-        &tmp.path().join("mod/common/users/v.txt"),
-        "b_user = { needs_int = nope }\n",
-    );
-    tmp
+    write_tree(&[
+        ("rules/aliases.cwt", CAPPED_UNUSED_RULES),
+        ("mod/common/things/x.txt", "my_thing = { x = a }\n"),
+        ("mod/common/users/u.txt", &capped_alias_file(0)),
+        ("mod/common/users/v.txt", "b_user = { needs_int = nope }\n"),
+    ])
 }
 
-fn write_file(path: &Path, text: &str) {
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
+/// A temp dir holding `files`, each `(path relative to the root, text)`, with
+/// the parent directories created.
+pub fn write_tree(files: &[(&str, &str)]) -> TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    for (rel, text) in files {
+        let path = tmp.path().join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    tmp
 }

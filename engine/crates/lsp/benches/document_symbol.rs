@@ -38,6 +38,7 @@ use tower_lsp::lsp_types::{DocumentSymbol, PositionEncodingKind};
 use cwtools_lsp::bench_support::{DocLines, build_doc_symbols};
 use cwtools_parser::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_support::checkout;
 
 /// Fixture size target. #471 asks for "a ~1 MB script file"; the generator
 /// appends whole focus trees until it clears this.
@@ -92,24 +93,11 @@ fn symbol_count(syms: &[DocumentSymbol]) -> usize {
         .sum()
 }
 
-fn projects_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_PROJECTS") {
-        return Some(PathBuf::from(dir));
-    }
-    // crates/lsp -> repo root is ../../.., siblings sit next to it.
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    repo.join("..").canonicalize().ok()
-}
-
 fn corpus_file() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("CWTOOLS_DOC_SYMBOL_FILE") {
         return Some(PathBuf::from(path));
     }
-    let root = match std::env::var("CWTOOLS_CORPUS") {
-        Ok(dir) => PathBuf::from(dir),
-        Err(_) => projects_dir()?.join("Millennium-Dawn"),
-    };
-    let path = root.join(CORPUS_FILE);
+    let path = checkout("CWTOOLS_CORPUS", "Millennium-Dawn")?.join(CORPUS_FILE);
     path.is_file().then_some(path)
 }
 

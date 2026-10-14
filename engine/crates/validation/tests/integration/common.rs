@@ -9,7 +9,7 @@ use cwtools_index::TypeIndex;
 use cwtools_localization::LocIndex;
 use cwtools_parser::parser::parse_string;
 use cwtools_rules::rules_converter::ast_to_ruleset;
-use cwtools_rules::rules_types::RuleSet;
+use cwtools_rules::rules_types::{NewField, Options, RuleSet, RuleType};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::{
     InlineScripts, Prepared, ValidationError, build_scope_registry_arc, validate_prepared,
@@ -131,4 +131,22 @@ pub fn pos_of(script: &str, marker: &str) -> (u32, u16) {
     let line = before.matches('\n').count() as u32 + 1;
     let col = before.rsplit('\n').next().unwrap().len() as u16;
     (line, col)
+}
+
+/// The SpecificField keys in `rules`, for assertion messages.
+pub fn specific_keys(rules: &[(RuleType, Options)]) -> Vec<String> {
+    rules
+        .iter()
+        .filter_map(|(rt, _)| match rt {
+            RuleType::LeafRule {
+                left: NewField::SpecificField(k),
+                ..
+            }
+            | RuleType::NodeRule {
+                left: NewField::SpecificField(k),
+                ..
+            } => Some(k.clone()),
+            _ => None,
+        })
+        .collect()
 }

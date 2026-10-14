@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use cwtools_test_support::scratch_home_env;
+pub(crate) use cwtools_test_support::write_tree;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -15,18 +16,6 @@ pub(crate) fn cwtools() -> Command {
         cmd.env_remove(key);
     }
     cmd
-}
-
-/// A temp dir holding `files`, each `(path relative to the root, text)`, with
-/// the parent directories created.
-pub(crate) fn write_tree(files: &[(&str, &str)]) -> TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    for (rel, text) in files {
-        let path = tmp.path().join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-    tmp
 }
 
 pub(crate) fn fixtures_dir() -> PathBuf {

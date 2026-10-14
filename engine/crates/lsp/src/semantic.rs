@@ -1306,19 +1306,9 @@ mod tests {
     };
 
     fn backend_with_open_doc() -> Backend {
-        let state = std::sync::Arc::new(crate::state::DocumentState::new());
-        let captured = std::sync::Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().unwrap();
-        state
+        let backend = crate::testing::test_backend();
+        backend
+            .state
             .documents
             .lock()
             .open(
@@ -1333,7 +1323,7 @@ mod tests {
                 },
             )
             .unwrap();
-        Backend { client, state }
+        backend
     }
 
     fn full_params() -> SemanticTokensParams {

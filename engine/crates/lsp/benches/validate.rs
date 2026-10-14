@@ -17,7 +17,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hint::black_box;
-use std::path::PathBuf;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use cwtools_info::InfoService;
@@ -30,7 +29,7 @@ use cwtools_rules::rules_types::{
     NewField, Options, PathOptions, RootRule, RuleSet, RuleType, TypeDefinition,
 };
 use cwtools_string_table::string_table::StringTable;
-use cwtools_test_support::testfiles;
+use cwtools_test_support::{checkout, testfiles};
 use std::sync::Arc;
 
 /// The same three kinds of file this once ran on from a base-game install: a
@@ -40,24 +39,6 @@ const CORPUS_FILES: [(&str, &str); 3] = [
     ("events", "events/France.txt"),
     ("equipment", "common/units/equipment/MD_plane_airframes.txt"),
 ];
-
-/// A checkout named by `var`, else found under `CWTOOLS_PROJECTS`, else beside
-/// this repo.
-fn checkout(var: &str, name: &str) -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var(var) {
-        return Some(PathBuf::from(dir));
-    }
-    let projects = match std::env::var("CWTOOLS_PROJECTS") {
-        Ok(dir) => PathBuf::from(dir),
-        // crates/lsp -> repo root is ../../.., siblings sit next to it.
-        Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../..")
-            .canonicalize()
-            .ok()?,
-    };
-    let dir = projects.join(name);
-    dir.is_dir().then_some(dir)
-}
 
 fn bench_keystroke_validate(c: &mut Criterion) {
     let text =

@@ -16,6 +16,8 @@
 //!
 //!   CWTOOLS_CORPUS=/path/to/Millennium-Dawn cargo bench -p cwtools_lsp --bench semantic_tokens
 //!   CWTOOLS_SEMANTIC_TOKEN_FILE=/path/to/script.txt cargo bench -p cwtools_lsp --bench semantic_tokens
+//!
+//! The corpus is also found under `CWTOOLS_PROJECTS`, or as a sibling of this repo.
 
 use std::hint::black_box;
 use std::path::PathBuf;
@@ -25,6 +27,7 @@ use cwtools_lsp::bench_support::{LineIndex, semantic_tokens_indexed, semantic_to
 use cwtools_parser::parser::parse_string;
 use cwtools_rules::rules_converter::ast_to_ruleset;
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_support::checkout;
 use cwtools_validation::Prepared;
 use tower_lsp::lsp_types::PositionEncodingKind;
 
@@ -48,12 +51,7 @@ fn corpus_file() -> Option<PathBuf> {
     if let Ok(file) = std::env::var("CWTOOLS_SEMANTIC_TOKEN_FILE") {
         return Some(PathBuf::from(file));
     }
-    let root = std::env::var_os("CWTOOLS_CORPUS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../Millennium-Dawn")
-        });
-    let path = root.join(CORPUS_FILE);
+    let path = checkout("CWTOOLS_CORPUS", "Millennium-Dawn")?.join(CORPUS_FILE);
     path.is_file().then_some(path)
 }
 
