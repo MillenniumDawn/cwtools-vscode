@@ -74,6 +74,7 @@
 
 #### Extension
 
+* The served-root watcher host test no longer sleeps 250 ms and hopes its observers are live. It rewrites a probe in each root until that root's observer reports it, the gate #960 added for external rules, so a slow host cannot drop the create event the test asserts. Five runs pinned to two busy cores pass. (#1027)
 * Test four rules sync failure paths: a newer manifest is still used when caching it fails, a stale `.git` checkout with Git missing still gets the missing-Git warning, a manifest whose `content-length` is over the limit is skipped without reading the body, and a sync can run again after a failed fetch. (#996)
 * Skip dependency lifecycle scripts in registry publisher installs so `keytar` cannot fetch an unverified native prebuild; smoke both registry CLIs with their optional platform binaries installed, while the package job keeps its existing full install and VSIX smoke. (#573)
 * Wait for the connected-node ELK layout before positioning isolated nodes and fitting the initial graph view. Report layouts that do not finish within 60 seconds and discard pending callbacks when replacing the graph. (#564)
