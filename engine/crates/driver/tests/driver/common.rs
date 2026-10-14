@@ -4,6 +4,7 @@ use std::time::SystemTime;
 
 use cwtools_driver::{RulesInput, Session, SessionConfig, SessionWithFiles};
 use cwtools_game::constants::Game;
+pub(crate) use cwtools_test_support::write_tree;
 use cwtools_test_support::{stellaris_config, testfiles};
 use tempfile::TempDir;
 
@@ -48,18 +49,6 @@ pub(crate) fn perf_mod() -> PathBuf {
 
 pub(crate) fn perf_rules() -> PathBuf {
     stellaris_config().to_path_buf()
-}
-
-/// A temp dir holding `files`, each `(path relative to the root, text)`, with
-/// the parent directories created.
-pub(crate) fn write_tree(files: &[(&str, &str)]) -> TempDir {
-    let tmp = tempfile::tempdir().unwrap();
-    for (rel, text) in files {
-        let path = tmp.path().join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, text).unwrap();
-    }
-    tmp
 }
 
 pub(crate) const THING_RULES: &str = r#"

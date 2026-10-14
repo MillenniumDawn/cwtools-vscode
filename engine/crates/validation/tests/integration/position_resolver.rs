@@ -9,7 +9,7 @@ use cwtools_parser::parser::parse_string;
 use cwtools_rules::rules_types::*;
 use cwtools_validation::position::{RuleContext, rules_at_pos};
 
-use super::common::{Opts, pos_of, prepared, ruleset, validate};
+use super::common::{Opts, pos_of, prepared, ruleset, specific_keys, validate};
 
 /// Scope checks on and variable checks off: how the editor resolves a position.
 const EDITOR: Opts<'static> = Opts {
@@ -95,24 +95,6 @@ fn has_specific_key(rules: &[(RuleType, Options)], key: &str) -> bool {
             RuleType::LeafRule { left: NewField::SpecificField(k), .. }
             | RuleType::NodeRule { left: NewField::SpecificField(k), .. } if k == key)
     })
-}
-
-/// The SpecificField keys in `rules` — for assertion messages.
-fn specific_keys(rules: &[(RuleType, Options)]) -> Vec<String> {
-    rules
-        .iter()
-        .filter_map(|(rt, _)| match rt {
-            RuleType::LeafRule {
-                left: NewField::SpecificField(k),
-                ..
-            }
-            | RuleType::NodeRule {
-                left: NewField::SpecificField(k),
-                ..
-            } => Some(k.clone()),
-            _ => None,
-        })
-        .collect()
 }
 
 const TRIGGER_RULES: &str = r#"

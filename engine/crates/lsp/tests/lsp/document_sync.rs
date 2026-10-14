@@ -301,7 +301,7 @@ fn test_did_close_restores_disk_definition() {
     );
 }
 
-/// Fixture adapted from `crates/validation/tests/subtype_membership.rs`: a
+/// Fixture adapted from `crates/validation/tests/integration/subtype_membership.rs`: a
 /// `naval_equip` subtype is discriminated by `archetype = <equipment.naval_equip>`,
 /// which only resolves once the archetype's own subtype-qualified membership
 /// (`equipment.naval_equip`) is in the type index. Without that merge, the

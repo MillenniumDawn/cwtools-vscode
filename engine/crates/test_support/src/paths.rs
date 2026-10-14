@@ -35,13 +35,18 @@ pub fn projects_dir() -> Option<PathBuf> {
     repo.join("..").canonicalize().ok()
 }
 
-/// A `cwtools-hoi4-config/Config` checkout for the benches: `CWTOOLS_RULES`,
-/// else the one under [`projects_dir`]. `None` when neither exists, so a bench
-/// can say why it measured nothing.
-pub fn rules_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_RULES") {
+/// A checkout for the benches: the folder `var` names, else `name` under
+/// [`projects_dir`]. `None` when neither exists, so a bench can say why it
+/// measured nothing.
+pub fn checkout(var: &str, name: &str) -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(var) {
         return Some(PathBuf::from(dir));
     }
-    let dir = projects_dir()?.join("cwtools-hoi4-config/Config");
+    let dir = projects_dir()?.join(name);
     dir.is_dir().then_some(dir)
+}
+
+/// The `cwtools-hoi4-config/Config` [`checkout`], named by `CWTOOLS_RULES`.
+pub fn rules_dir() -> Option<PathBuf> {
+    checkout("CWTOOLS_RULES", "cwtools-hoi4-config/Config")
 }

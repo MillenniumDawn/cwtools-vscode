@@ -175,6 +175,7 @@ mod tests {
         LocDocumentCache, MAX_DOCUMENT_BYTES, MAX_OPEN_DOCUMENTS, MAX_RETAINED_DOCUMENT_BYTES,
         ParsedDoc, remove_debounce_task,
     };
+    use crate::testing::test_backend;
     use cwtools_info::{IndexedUseSite, SourceLocation, UseSite};
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
@@ -824,21 +825,8 @@ mod tests {
 
     #[tokio::test]
     async fn did_change_cannot_create_document_or_validation_state() {
-        let state = Arc::new(DocumentState::new());
-        let captured_client = Arc::new(Mutex::new(None));
-        let client_slot = captured_client.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = LspService::new(move |client| {
-            *client_slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let backend = Backend {
-            client: captured_client.lock().take().unwrap(),
-            state: state.clone(),
-        };
+        let backend = test_backend();
+        let state = backend.state.clone();
 
         backend
             .did_change(DidChangeTextDocumentParams {
@@ -860,21 +848,8 @@ mod tests {
 
     #[tokio::test]
     async fn did_rename_clears_the_path_bound_loc_cache() {
-        let state = Arc::new(DocumentState::new());
-        let captured_client = Arc::new(Mutex::new(None));
-        let client_slot = captured_client.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = LspService::new(move |client| {
-            *client_slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let backend = Backend {
-            client: captured_client.lock().take().unwrap(),
-            state: state.clone(),
-        };
+        let backend = test_backend();
+        let state = backend.state.clone();
         let old_uri = "file:///localisation/a_l_english.yml";
         let new_uri = "file:///localisation/a_l_french.yml";
         state
@@ -909,21 +884,8 @@ mod tests {
 
     #[tokio::test]
     async fn did_save_keeps_the_pending_validation() {
-        let state = Arc::new(DocumentState::new());
-        let captured_client = Arc::new(Mutex::new(None));
-        let client_slot = captured_client.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = LspService::new(move |client| {
-            *client_slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let backend = Backend {
-            client: captured_client.lock().take().unwrap(),
-            state: state.clone(),
-        };
+        let backend = test_backend();
+        let state = backend.state.clone();
         let uri = "file:///pending.txt";
         state
             .documents
