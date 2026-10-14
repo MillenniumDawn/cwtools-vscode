@@ -379,8 +379,8 @@ suite("lspClient user-facing results", function () {
 		} finally {
 			prompt.resolves(undefined);
 			await config.update(setting, previous, vscode.ConfigurationTarget.Global);
-			assert.ok(await waitUntil(() => prompts().length >= 2), "restoring the setting should prompt again");
 		}
+		assert.ok(await waitUntil(() => prompts().length >= 2), "restoring the setting should prompt again");
 		assert.strictEqual(reload.callCount, 1, "declining the prompt must not reload");
 	});
 });
