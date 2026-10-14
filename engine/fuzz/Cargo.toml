@@ -17,6 +17,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 cwtools_parser = { path = "../crates/parser" }
+cwtools_rules = { path = "../crates/rules" }
 cwtools_string_table = { path = "../crates/string_table" }
 cwtools_localization = { path = "../crates/localization" }
 cwtools_cache = { path = "../crates/cache" }
@@ -27,6 +28,13 @@ tempfile = "3"
 [[bin]]
 name = "parse_string"
 path = "fuzz_targets/parse_string.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_rules"
+path = "fuzz_targets/parse_rules.rs"
 test = false
 doc = false
 bench = false
