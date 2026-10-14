@@ -9,6 +9,8 @@
 //               because .vscode/settings.json attempts to set rules_folder)
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
 //               (see below; its own CI step, not part of test:smoke)
+//   editor-tracker active-editor classification races against a controlled
+//               transport in a server-free fixture workspace
 //   host        sample-workspace suites, including smoke, hover and completion;
 //               excludes live, multi-root, restart, rules-sync and watched
 //   restart     destructive server-crash/recovery test in an isolated host
@@ -16,8 +18,9 @@
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
 // Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
-// `--label live`, `--label multi-root`, `--label watched`, and `--label restart`
-// to cover the host workspaces and the external-file watcher suite.
+// `--label live`, `--label multi-root`, `--label watched`, `--label restart`,
+// and `--label editor-tracker` to cover the host workspaces, the external-file
+// watcher and active-editor tracker suites.
 //
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
@@ -30,8 +33,8 @@
 //
 // The multi-root fixture needs a staged server, so CI runs it alongside watched
 // after the build step has produced one, and locally it runs with smoke under
-// test:smoke. Every label needs the server; the server-free tests are the
-// vitest suites under extension/test/unit.
+// test:smoke. The editor-tracker label is server-free; the server-free unit
+// tests are the vitest suites under extension/test/unit.
 //
 // rules-sync exercises the opposite gap: sample-hoi4's folder name and
 // common/ai_strategy dir make it detect as hoi4, so activation's real
@@ -140,6 +143,17 @@ const base = {
 
 export default defineConfig({
 	tests: [
+		{
+			...base,
+			label: "editor-tracker",
+			files: [
+				abortDiagnostics,
+				"./dist/extension/bin/client/test/host/documentLanguage.test.js",
+			],
+			workspaceFolder: "./extension/test/workspaces/editor-tracker",
+			launchArgs: [softwareRendering, disableCrashReporter, ...headless],
+			env: { CWTOOLS_TEST_EDITOR_TRACKER: "1" },
+		},
 		{
 			...base,
 			label: "watched",

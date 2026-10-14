@@ -45,6 +45,7 @@ def extension_args(
                 "--define:process.env.CWTOOLS_TEST_HOI4_REF=undefined",
                 "--define:process.env.CWTOOLS_TEST_RULES_MANIFEST_URL=undefined",
                 "--define:process.env.CWTOOLS_TEST_RULES_FOLDER=undefined",
+                "--define:process.env.CWTOOLS_TEST_EDITOR_TRACKER=undefined",
             ]
         )
     if watch:

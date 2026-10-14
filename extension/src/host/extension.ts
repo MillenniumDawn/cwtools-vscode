@@ -18,6 +18,7 @@ import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
 import { createLanguageClient } from "./lspClient";
 import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
+import type { EditorTracker } from "./documentLanguage";
 import { gameContentRoots } from "./gameContentRoots";
 import { registerCommands } from "./commands";
 import { setTrustedRoots } from "./trustedPaths";
@@ -57,6 +58,10 @@ export interface CwtoolsApi {
 	serverProcessId(): number | undefined;
 	/** This module's deactivate(), which no VS Code API lets a test call. */
 	deactivate(): Thenable<void> | undefined;
+	/** Present only in the dedicated tracker host-test bundle. */
+	documentLanguageTrackerForTests?: (
+		client: Pick<LanguageClient, "sendNotification" | "sendRequest">,
+	) => Promise<{ tracker: EditorTracker; dispose(): void }>;
 }
 
 export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
@@ -72,6 +77,39 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverProcessId: () => defaultClient?.serverProcess?.pid,
 		deactivate,
 	};
+	if (process.env.CWTOOLS_TEST_EDITOR_TRACKER === "1") {
+		api.documentLanguageTrackerForTests = async (client) => {
+			const subscriptions: vscode.Disposable[] = [];
+			const testOutputChannel = window.createOutputChannel("CWTools test", {
+				log: true,
+			});
+			initializeLogger(testOutputChannel);
+			let tracker: EditorTracker;
+			try {
+				tracker = await registerDocumentLanguage(
+					{ subscriptions } as ExtensionContext,
+					client as LanguageClient,
+					"paradox",
+					() => [],
+				);
+			} catch (error) {
+				for (const disposable of subscriptions.splice(0)) {
+					disposable.dispose();
+				}
+				testOutputChannel.dispose();
+				throw error;
+			}
+			return {
+				tracker,
+				dispose: () => {
+					for (const disposable of subscriptions.splice(0)) {
+						disposable.dispose();
+					}
+					testOutputChannel.dispose();
+				},
+			};
+		};
+	}
 	if (
 		workspace.getConfiguration("cwtools").get<boolean>("enable", true) === false
 	) {

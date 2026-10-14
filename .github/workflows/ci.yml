@@ -166,6 +166,12 @@ jobs:
         id: host-rules-sync
         timeout-minutes: 10
         run: node scripts/build/python.mjs scripts/build/hosttest.py --label rules-sync
+      # Exercises editor classification in an isolated workspace with a
+      # controlled transport; it does not depend on the server build.
+      - name: Host tests (editor tracker)
+        id: host-editor-tracker
+        timeout-minutes: 10
+        run: node scripts/build/python.mjs scripts/build/hosttest.py --label editor-tracker
       # Keep the suites with distinct workspace/configuration coverage. The
       # smoke files are a subset of hostFiles and run once under host coverage.
       - name: Host tests (multi-root, watched files)
