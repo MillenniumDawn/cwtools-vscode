@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::common::{TestServer, poll_until_attempts, storm_base, storm_builder, storm_start};
+use crate::common::{TestServer, storm_base, storm_builder, storm_start};
 
 /// A focus type whose instances reference each other, plus a decision type that
 /// references a focus. Both reference keys sit at depth 1 of a type rule
@@ -145,24 +145,10 @@ fn graph_data_response(files: &[(&str, &str)], arguments: Value) -> Value {
         builder = builder.file(rel, *content);
     }
     let mut server = storm_start(builder);
-    let mut get_graph_data = |arguments: &Value| {
-        server.call(
-            "workspace/executeCommand",
-            json!({ "command": "getGraphData", "arguments": arguments }),
-        )
-    };
-    // The reference index lands with the async scan. Probe with a focus graph,
-    // which always has references once it lands; `arguments` may have none.
-    let _ = poll_until_attempts(20, Duration::from_millis(300), || {
-        let probe = get_graph_data(&json!(["focus", 3]));
-        let settled = probe["result"].as_array().is_none_or(|nodes| {
-            nodes
-                .iter()
-                .any(|n| !n["references"].as_array().unwrap().is_empty())
-        });
-        settled.then_some(())
-    });
-    let response = get_graph_data(&arguments);
+    let response = server.call(
+        "workspace/executeCommand",
+        json!({ "command": "getGraphData", "arguments": arguments }),
+    );
     server.stop();
     response
 }
