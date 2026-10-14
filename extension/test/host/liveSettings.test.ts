@@ -185,7 +185,7 @@ suite("Live settings", function () {
 	});
 
 	test("switches rules folders and watches external rules files live", async function () {
-		this.timeout(45_000);
+		this.timeout(70_000);
 		const cfg = cwtoolsConfig();
 		assert.strictEqual(cfg.get<boolean>("rules.autoReload"), true);
 		const previousFolder = cfg.get<string>("rules_folder");
@@ -208,11 +208,10 @@ suite("Live settings", function () {
 				message.includes(`Loaded rules from ${rulesRoot}`),
 			);
 		const watcherReadyMessage = `Watching rules in ${rulesRoot}`;
+		const rulesText = (...names: string[]) =>
+			`types = { ${names.map((name) => `type[${name}] = { path = "common/${name}" }`).join(" ")} }\n`;
 		try {
-			await fs.writeFile(
-				rulesFile,
-				'types = { type[first] = { path = "common/first" } }\n',
-			);
+			await fs.writeFile(rulesFile, rulesText("first"));
 			process.env.CWTOOLS_TEST_RULES_FOLDER = rulesRoot;
 			await cfg.update(
 				"rules_folder",
@@ -227,13 +226,28 @@ suite("Live settings", function () {
 				await waitUntil(() => messages.includes(watcherReadyMessage), 15_000),
 				"the external rules watcher should be registered before the file edit",
 			);
-			await fs.writeFile(
-				rulesFile,
-				'types = { type[second] = { path = "common/second" } }\n',
-			);
+			// VS Code drops edits made before the watch is live and signals no readiness.
+			let probes = 0;
+			let lastProbe = 0;
 			assert.ok(
-				await waitUntil(() => matchingLoads().length >= 2, 15_000),
-				"an edit under the external rules folder should trigger one rules reload",
+				await waitUntil(async () => {
+					if (matchingLoads().length >= 2) return true;
+					if (Date.now() - lastProbe >= 2_000) {
+						lastProbe = Date.now();
+						await fs.writeFile(rulesFile, rulesText(`probe${probes++}`));
+					}
+					return false;
+				}, 20_000),
+				"the external rules watcher should deliver an edit once it is live",
+			);
+			await fs.writeFile(rulesFile, rulesText("second", "third"));
+			assert.ok(
+				await waitUntil(
+					() =>
+						matchingLoads().some((message) => message.includes("(2 types")),
+					15_000,
+				),
+				"an edit under the external rules folder should trigger a rules reload",
 			);
 		} finally {
 			process.env.CWTOOLS_TEST_RULES_FOLDER = previousTestFolder;

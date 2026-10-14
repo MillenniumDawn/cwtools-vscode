@@ -16,7 +16,7 @@ members = [
   "crates/driver",
   "crates/lsp",
   "crates/cli",
-  "crates/test_rules",
+  "crates/test_support",
 ]
 # fuzz/ is its own workspace root. Excluding it here keeps `cargo build` and
 # `cargo test` from ever pulling in libfuzzer-sys, which needs nightly and a
@@ -54,7 +54,7 @@ cwtools_info = { path = "crates/info" }
 cwtools_driver = { path = "crates/driver" }
 cwtools_lsp = { path = "crates/lsp" }
 cwtools_cli = { path = "crates/cli" }
-cwtools_test_rules = { path = "crates/test_rules" }
+cwtools_test_support = { path = "crates/test_support" }
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 thiserror = "2.0"

@@ -919,10 +919,8 @@ ENG = {
 
     #[test]
     fn parse_real_file() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../testfiles/performancetest2/common/static_modifiers/cc_colony_events_static_modifiers.txt"
-        );
+        let path = cwtools_test_support::testfiles()
+            .join("performancetest2/common/static_modifiers/cc_colony_events_static_modifiers.txt");
         let input = std::fs::read_to_string(path).unwrap();
         let table = StringTable::new();
         let result = parse_string(&input, &table);

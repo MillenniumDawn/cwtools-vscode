@@ -90,7 +90,7 @@ syntax, not volume, so keep it small. Anything corpus-sized belongs in a bench
 that reads the sibling checkouts under `CWTOOLS_PROJECTS`.
 
 No real game rules are committed. A test that needs them calls
-`cwtools_test_rules::stellaris_config()` or `hoi4_config()`, which return the
+`cwtools_test_support::stellaris_config()` or `hoi4_config()`, which return the
 upstream config repo at the commit `rules-pins.json` pins. The first call
 fetches that commit with git into `cwtools/test-rules/` under the user cache
 dir (`XDG_CACHE_HOME`, `LOCALAPPDATA`, else `~/.cache` on every OS), and later
@@ -99,6 +99,11 @@ pin. A miss that cannot be fetched fails the test and names the commit. Rules a
 test's assertions spell out stay inline or in that crate's `tests/fixtures/`.
 The HOI4 pin is the upstream repo installed extensions fetch. The guard and the
 benches still read the sibling `cwtools-hoi4-config` checkout.
+
+A helper that tests in more than one crate need belongs in `cwtools_test_support`
+(`engine/crates/test_support`), added as a dev-dependency where it is used:
+`abs` and `abs_path` for Windows-safe absolute paths, `testfiles()`, the bench
+checkout lookup, and the scratch home for spawned binaries.
 
 ## Diagnostics guard
 

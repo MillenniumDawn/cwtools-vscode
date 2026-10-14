@@ -2,6 +2,11 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 
+use cwtools_test_support::{
+    ALIAS_BRANCH_LIMIT_RULES, CAPPED_UNUSED_RULES, UNUSED_THINGS as A_TEXT, UNUSED_USERS as B_TEXT,
+    capped_alias_file, scratch_home_env, unused_rules,
+};
+
 /// Build a URI the way the server does. `format!("file://{path}")` is only
 /// valid where paths start with `/`; on Windows it yields `file://C:\a\b`,
 /// which never matches the server's `file:///C:/a/b`.
@@ -29,24 +34,13 @@ fn client_spelling(uri: &str) -> String {
     uri.to_string()
 }
 
-/// Scratch home for every server this binary spawns. It has to outlive the
-/// children, so it is a static: leaking the dir at process exit is the point,
-/// the OS temp cleaner takes it from there.
-static SCRATCH_HOME: std::sync::LazyLock<tempfile::TempDir> =
-    std::sync::LazyLock::new(|| tempfile::tempdir().expect("failed to create scratch home"));
-
 fn cwtools_server_cmd() -> Command {
     let bin = assert_cmd::cargo::cargo_bin("cwtools-server");
     let mut cmd = Command::new(bin);
     cmd.env("RUST_LOG", "");
-    // Pin HOME and the cache dirs at a scratch tree so a server never discovers
-    // a locally installed base game (and spends the test scanning it), and never
-    // writes into the developer's real cwtools cache. A test that wants
-    // discovery sets its own HOME afterwards; the later `.env` wins.
-    let home = SCRATCH_HOME.path();
-    cmd.env("HOME", home);
-    cmd.env("XDG_CACHE_HOME", home.join("cache"));
-    cmd.env("LOCALAPPDATA", home.join("localappdata"));
+    // A test that wants discovery sets its own HOME afterwards; the later `.env`
+    // wins.
+    cmd.envs(scratch_home_env());
     cmd
 }
 
@@ -4436,18 +4430,6 @@ fn test_did_open_definition_clears_open_caller_stale_error() {
 
 // ── CW239: unused should_be_used instances in the LSP (issue #123) ──────────
 
-const UNUSED_RULES: &str = r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-        should_be_used = yes
-    }
-    type[user] = { path = "game/common/users" }
-}
-thing = { x = scalar }
-user = { uses = <thing> }
-"#;
-
 /// Spawn a server over a workspace with one `should_be_used` type: `a.txt`
 /// defines `used_thing` (referenced from `b.txt`) and `lone_thing` (referenced
 /// from nowhere). Returns the child, reader, and the two file paths.
@@ -4462,7 +4444,7 @@ fn spawn_unused_workspace() -> (
     let ws = tempfile::tempdir().unwrap();
     let rules_dir = tempfile::tempdir().unwrap();
     let vanilla = tempfile::tempdir().unwrap(); // empty dir → index marked complete
-    std::fs::write(rules_dir.path().join("r.cwt"), UNUSED_RULES).unwrap();
+    std::fs::write(rules_dir.path().join("r.cwt"), unused_rules(true)).unwrap();
 
     let a_path = ws.path().join("common/things/a.txt");
     std::fs::create_dir_all(a_path.parent().unwrap()).unwrap();
@@ -4507,39 +4489,6 @@ fn spawn_unused_workspace() -> (
     // rules_dir/vanilla TempDirs may drop once the scan has read them; the
     // workspace must outlive the test, so it is returned.
     (ws, child, reader, a_path, b_path)
-}
-
-const A_TEXT: &str = "used_thing = { x = a }\nlone_thing = { x = b }\n";
-const B_TEXT: &str = "a_user = { uses = used_thing }\n";
-
-const ALIAS_BRANCH_LIMIT_RULES: &str = r#"
-types = {
-    type[user] = { path = "game/common/users" }
-}
-user = { alias_name[effect] = alias_match_left[effect] }
-alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
-## severity = warning
-alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
-alias[effect:needs_int] = int
-"#;
-
-/// A `common/users` file whose alias usages exhaust the branch budget, preceded
-/// by `noise` single-overload value errors. Those cost no budget, so the caller
-/// can push the file past the server's per-file diagnostic cap without changing
-/// where the cap falls.
-///
-/// Every usage is its own, so there is nothing for the alias memo to reuse and
-/// the budget is what stops the file: one two-overload usage past capacity.
-fn capped_alias_file(noise: usize) -> String {
-    let mut text = String::from("a_user = {\n");
-    for _ in 0..noise {
-        text.push_str("needs_int = nope\n");
-    }
-    for _ in 0..32_769 {
-        text.push_str("recurse = { }\n");
-    }
-    text.push_str("}\n");
-    text
 }
 
 /// Write `files` into a fresh workspace under `rules` and return the
@@ -4601,24 +4550,6 @@ fn spawn_alias_workspace(
 }
 
 const CAPPED_ALIAS_REL_PATH: &str = "common/users/capped.txt";
-
-/// [`ALIAS_BRANCH_LIMIT_RULES`] plus a `should_be_used` type, so the same capped
-/// file also decides whether the unused-instance check can run.
-const CAPPED_UNUSED_RULES: &str = r#"
-types = {
-    type[thing] = {
-        path = "game/common/things"
-        should_be_used = yes
-    }
-    type[user] = { path = "game/common/users" }
-}
-thing = { x = scalar }
-user = { alias_name[effect] = alias_match_left[effect] }
-alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
-## severity = warning
-alias[effect:recurse] = { alias_name[effect] = alias_match_left[effect] }
-alias[effect:needs_int] = int
-"#;
 
 #[test]
 fn test_scan_reports_unused_should_be_used_instance() {
