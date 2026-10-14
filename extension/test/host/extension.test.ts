@@ -426,6 +426,82 @@ suite("GraphPanel", function () {
 			"graph content should render under the CSP",
 		);
 	});
+
+	// The host cannot script the webview page, so these post its message by hand.
+	suite("goToFile", function () {
+		let panel: GraphPanelNamespace.GraphPanel;
+		let show: sinon.SinonStub;
+		let revealRange: sinon.SinonStub;
+		let warn: sinon.SinonStub;
+
+		setup(() => {
+			panel = createPanel();
+			revealRange = sandbox.stub();
+			show = sandbox
+				.stub(vscode.window, "showTextDocument")
+				.resolves({ revealRange } as unknown as vscode.TextEditor);
+			warn = sandbox.stub(vscode.window, "showWarningMessage");
+		});
+
+		const openedPath = () => (show.firstCall.args[0] as vscode.Uri).fsPath;
+		const goToFile = (uri: string, line = 1, column = 1) =>
+			panel["handleWebviewMessage"]({ command: "goToFile", uri, line, column });
+
+		test("prompts for a path outside every trusted root and does not open it when declined", async function () {
+			warn.resolves(undefined);
+
+			await goToFile(tempFile);
+
+			assert.strictEqual(warn.callCount, 1);
+			assert.ok(
+				String(warn.firstCall.args[0]).includes(tempFile),
+				`prompt should name the path, got: ${String(warn.firstCall.args[0])}`,
+			);
+			assert.deepStrictEqual(warn.firstCall.args[1], { modal: true });
+			assert.strictEqual(show.called, false);
+		});
+
+		test("opens a path outside every trusted root once the prompt is accepted", async function () {
+			warn.callsFake(
+				(_message: string, _options: vscode.MessageOptions, ...items: string[]) =>
+					Promise.resolve(items[0]),
+			);
+
+			await goToFile(tempFile);
+
+			assert.strictEqual(warn.callCount, 1);
+			assert.strictEqual(show.callCount, 1);
+			assert.strictEqual(openedPath(), tempFile);
+		});
+
+		test("opens a workspace file without a prompt at the 0-based line and column", async function () {
+			const inside = path.join(root, "events", "irm.txt");
+
+			await goToFile(inside, 5, 3);
+
+			assert.strictEqual(warn.called, false);
+			assert.strictEqual(show.callCount, 1);
+			assert.strictEqual(openedPath(), inside);
+			assert.strictEqual(revealRange.callCount, 1);
+			const [range, revealType] = revealRange.firstCall.args as [
+				vscode.Range,
+				vscode.TextEditorRevealType,
+			];
+			assert.ok(
+				range.isEqual(new vscode.Range(4, 2, 4, 2)),
+				`expected 4:2, got ${range.start.line}:${range.start.character}`,
+			);
+			assert.strictEqual(revealType, vscode.TextEditorRevealType.AtTop);
+		});
+
+		test("refuses a relative path without a prompt", async function () {
+			// Uri.file roots a relative string, so only the handler's own check refuses it.
+			await goToFile(path.join("events", "irm.txt"));
+
+			assert.strictEqual(warn.called, false);
+			assert.strictEqual(show.called, false);
+		});
+	});
 });
 
 suite("FileExplorer", function () {
