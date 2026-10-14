@@ -82,6 +82,7 @@
 * Delegate graph tooltips, retain only the active hover neighborhood, and clean up tooltip timers and scratch state when replacing a graph; assert node/core scratch collections stay bounded to the active neighborhood. (#503)
 * Validate optional imported graph details, display names and file locations before replacement, and keep generic nodes safely hoverable without navigation metadata. (#842)
 * Limit automatic plaintext language promotion to the selected mod, configured parent mods and the server's configured or auto-discovered vanilla content roots, including symlink targets used by definitions. Recheck open vanilla scripts after the server reports its install. (#836)
+* Test that activation starts no language server when no workspace root has a `descriptor.mod` file, including a root where `descriptor.mod` is a directory, or when `cwtools.enable` is false. Two new host labels, `gate-descriptor` and `gate-disabled`, run in `test:smoke` and in CI with `multi-root` and `watched`. (#999)
 * Exercise graph hover classes, drawing and canvas transforms against real headless Cytoscape, including lazy tooltip creation, detail expansion, simple/expanded mouseout behavior and replacement cleanup. (#881)
 * Prefer game content markers over folder names and ignore unrelated ancestor names during game detection. The `common/dynasties` marker CK2 and CK3 share still follows a CK2 name. (#839)
 * Keep server graphs, JSON imports and restored graphs ordered by the latest committed request; cancelling an import dialog preserves pending work. (#840)

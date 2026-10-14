@@ -117,7 +117,7 @@ Open the repo in VS Code and launch **Quick update, Build and Launch Extension**
 ```bash
 npm run test:node      # node-only unit tests for the pure modules (vitest, fast)
 npm test               # the same node tests
-npm run test:smoke     # smoke, live, multi-root, watched, and restart host labels
+npm run test:smoke     # smoke, live, multi-root, watched, restart, and gate host labels
 npm run test:host      # host label except live; includes hover and completion
 npm run test:rules-sync  # network-free rules sync host label
 npm run test:coverage  # host, live, and restart labels with validated V8 coverage
@@ -212,9 +212,9 @@ pinned input revisions and when re-blessing a baseline is appropriate.
 
 CI runs the node tests and the VS Code `unit` label in the fast client job.
 After building the server and client, it runs `rules-sync` against the checked-in
-offline fixture, then runs `multi-root` and `watched` in a separate host-test
-step. The `live` label runs once, together with `host` and isolated `restart`
-under coverage; `host` includes the smoke, hover and completion suites against
+offline fixture, then runs `multi-root`, `watched`, `gate-descriptor` and
+`gate-disabled` in a separate host-test step. The `live` label runs once,
+together with `host` and isolated `restart` under coverage; `host` includes the smoke, hover and completion suites against
 the real server. The engine suite, cargo-deny and diagnostics guards run
 alongside these client checks. See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
