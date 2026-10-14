@@ -1,6 +1,11 @@
 import * as assert from "assert";
+import * as fs from "fs";
+import * as path from "path";
 import { suite, test } from "vitest";
 import {
+	CWT_WATCH_GLOB,
+	LOCALISATION_WATCH_GLOB,
+	SCRIPT_WATCH_GLOB,
 	createWatchedPathExcluder,
 	forwardWatchedFileEvent,
 } from "../../src/host/watchedFiles";
@@ -103,7 +108,44 @@ const OUTSIDE_CASES: [root: string, path: string, excluded: boolean][] = [
 	["/mod", "/x.txt", false],
 ];
 
+// The file classes the server indexes, read from the engine source so the
+// globs are checked against it and not against a copy of their own list.
+function engineFileClasses() {
+	const crates = path.resolve(__dirname, "../../../engine/crates");
+	const read = (file: string) => fs.readFileSync(path.join(crates, file), "utf8");
+	const quoted = (text: string) => [...text.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+	const fileManager = read("file_manager/src/file_manager.rs");
+	const lspPaths = read("lsp/src/paths.rs");
+	const script = /pub const SCRIPT_EXTENSIONS: &\[&str\] = &\[([^\]]*)\]/.exec(fileManager);
+	const locExtensions = /pub fn is_loc_ext\(ext: &str\) -> bool \{([^}]*)\}/.exec(fileManager);
+	const locDirs = /const LOC_DIR_NAMES: \[&str; \d+\] = \[([^\]]*)\]/.exec(lspPaths);
+	const cwt = /fn is_cwt_file[^}]*ends_with\("\.(\w+)"\)/.exec(lspPaths);
+	assert.ok(
+		script && locExtensions && locDirs && cwt,
+		"the engine's file-class definitions moved; update this parser",
+	);
+	return {
+		script: quoted(script[1]).sort(),
+		locExtensions: quoted(locExtensions[1]).sort(),
+		locDirs: quoted(locDirs[1]).sort(),
+		cwt: cwt[1],
+	};
+}
+
 suite("watchedFiles", () => {
+	test("watches every file class the server indexes", () => {
+		const engine = engineFileClasses();
+		const sorted = (list: string) => list.split(",").sort();
+		const script = /^\*\*\/\*\.\{([^}]+)\}$/.exec(SCRIPT_WATCH_GLOB);
+		assert.ok(script, SCRIPT_WATCH_GLOB);
+		assert.deepStrictEqual(sorted(script[1]), engine.script);
+		const loc = /^\*\*\/\{([^}]+)\}\/\*\*\/\*\.\{([^}]+)\}$/.exec(LOCALISATION_WATCH_GLOB);
+		assert.ok(loc, LOCALISATION_WATCH_GLOB);
+		assert.deepStrictEqual(sorted(loc[1]), engine.locDirs);
+		assert.deepStrictEqual(sorted(loc[2]), engine.locExtensions);
+		assert.strictEqual(CWT_WATCH_GLOB, `**/*.${engine.cwt}`);
+	});
+
 	test("drops what the server's discovery walk would skip", () => {
 		const excluded = createWatchedPathExcluder(POSIX_ROOT);
 		for (const [path, expected] of POSIX_CASES) {

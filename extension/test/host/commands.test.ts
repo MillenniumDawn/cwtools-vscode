@@ -8,6 +8,7 @@ import {
 	openDocumentAndShow,
 	SAMPLE_ROOT,
 	waitForLanguageServer,
+	waitForServerReady,
 	waitUntil,
 } from "../support/utils";
 
@@ -151,5 +152,235 @@ suite("workspace commands cross the LSP boundary", function () {
 			messages.some((message) => /^CWTools: Formatted \d+ file/.test(message)),
 			`expected a Formatted toast, got: ${messages.join(" | ")}`,
 		);
+	});
+});
+
+const messagesOf = (stub: sinon.SinonStub): string[] =>
+	stub.getCalls().map((call) => String(call.args[0]));
+
+suite("lspClient user-facing results", function () {
+	this.timeout(120000);
+
+	let sandbox: sinon.SinonSandbox;
+
+	suiteSetup(async function () {
+		const api = await activate();
+		assert.ok(api, "activation API should be exposed");
+		assert.ok(
+			await waitForServerReady(api),
+			`server never finished its initial scan, last status: ${api.serverStatusText()}`,
+		);
+	});
+
+	setup(function () {
+		sandbox = sinon.createSandbox();
+	});
+
+	teardown(function () {
+		sandbox.restore();
+	});
+
+	// A stuck scan or a cancelled request is the only way the real server
+	// returns the odd shapes below, so they are fed in at the progress call that
+	// carries its reply; the client code that reads the reply is the real one.
+	function serverReplies(title: string, result: unknown): sinon.SinonStub {
+		const withProgress = sandbox
+			.stub(vscode.window, "withProgress")
+			.callThrough();
+		const reply = withProgress.withArgs(sinon.match.has("title", title));
+		reply.resolves(result);
+		return reply;
+	}
+
+	test("validateWorkspace shows the diagnostic summary", async function () {
+		const info = sandbox
+			.stub(vscode.window, "showInformationMessage")
+			.resolves(undefined);
+		await vscode.commands.executeCommand("validateWorkspace");
+		const summary = info
+			.getCalls()
+			.find((call) => /^CWTools: validated \d+ of \d+ files;/.test(String(call.args[0])));
+		assert.ok(
+			summary,
+			`expected a validation summary, got: ${messagesOf(info).join(" | ")}`,
+		);
+		const counts = /^CWTools: validated (\d+) of (\d+) files; \d+ with errors, \d+ errors, \d+ warnings, \d+ infos, \d+ hints\./.exec(
+			String(summary.args[0]),
+		);
+		assert.ok(counts, `summary wording changed: ${String(summary.args[0])}`);
+		const [validated, total] = counts.slice(1).map(Number);
+		assert.ok(validated > 0 && validated <= total, "summary should count the scanned files");
+		assert.strictEqual(summary.args[1], "Show Problems");
+	});
+
+	test("validateWorkspace puts each count in its place and names the held-back files", async function () {
+		const info = sandbox
+			.stub(vscode.window, "showInformationMessage")
+			.resolves(undefined);
+		serverReplies("CWTools: Validate workspace", {
+			totalFiles: 20,
+			validatedFiles: 18,
+			heldBackFiles: 2,
+			filesWithErrors: 3,
+			totalErrors: 7,
+			totalWarnings: 5,
+			totalInfos: 4,
+			totalHints: 1,
+		});
+		await vscode.commands.executeCommand("validateWorkspace");
+		assert.ok(
+			messagesOf(info).includes(
+				"CWTools: validated 18 of 20 files; 3 with errors, 7 errors, 5 warnings, 4 infos, 1 hints. Problems leaves out 2 closed files past the workspace diagnostics budget.",
+			),
+			`got: ${messagesOf(info).join(" | ")}`,
+		);
+	});
+
+	test("genlocall opens each non-empty stub as an untitled document with a BOM", async function () {
+		const english = 'l_english:\n irm_one:0 "TODO"\n';
+		const french = 'l_french:\n irm_one:0 "TODO"\n';
+		serverReplies("CWTools: Generate missing loc for all files", [
+			{ language: "english", content: english },
+			{ language: "german", content: "" },
+			{ language: "spanish" },
+			{ language: "french", content: french },
+		]);
+		const opened = sandbox.spy(vscode.workspace, "openTextDocument");
+		const shown = sandbox.spy(vscode.window, "showTextDocument");
+		await vscode.commands.executeCommand("genlocall");
+		const documents = shown
+			.getCalls()
+			.map((call) => call.args[0] as unknown as vscode.TextDocument);
+		try {
+			// VS Code folds the leading U+FEFF into the document's BOM flag, so the
+			// document text no longer shows it; the request is where it is visible.
+			assert.deepStrictEqual(
+				opened.getCalls().map((call) => call.args[0]),
+				[
+					{ content: `\uFEFF${english}`, language: "paradox-localisation" },
+					{ content: `\uFEFF${french}`, language: "paradox-localisation" },
+				],
+			);
+			assert.deepStrictEqual(
+				documents.map((document) => [document.isUntitled, document.getText()]),
+				[
+					[true, english],
+					[true, french],
+				],
+			);
+			assert.deepStrictEqual(
+				shown.getCalls().map((call) => call.args[1]),
+				[{ preview: false }, { preview: false }],
+			);
+		} finally {
+			for (const document of documents) {
+				await vscode.window.showTextDocument(document);
+				await vscode.commands.executeCommand(
+					"workbench.action.revertAndCloseActiveEditor",
+				);
+			}
+		}
+	});
+
+	const nothingMissing: Array<[name: string, reply: unknown]> = [
+		["an empty list", []],
+		["stubs without content", [{ content: "" }, {}]],
+	];
+	for (const [name, reply] of nothingMissing) {
+		test(`genlocall says so when nothing is missing: ${name}`, async function () {
+			const info = sandbox
+				.stub(vscode.window, "showInformationMessage")
+				.resolves(undefined);
+			const shown = sandbox.spy(vscode.window, "showTextDocument");
+			serverReplies("CWTools: Generate missing loc for all files", reply);
+			await vscode.commands.executeCommand("genlocall");
+			assert.ok(
+				messagesOf(info).includes("CWTools: no missing localisation found."),
+				`got: ${messagesOf(info).join(" | ")}`,
+			);
+			assert.strictEqual(shown.callCount, 0, "no document should open");
+		});
+	}
+
+	const validateReplies: Array<
+		[name: string, reply: unknown, channel: "info" | "warning", text: string]
+	> = [
+		["a busy server", { busy: true }, "warning", "another scan is still running"],
+		["a cancelled run", { cancelled: true }, "info", "validateWorkspace cancelled."],
+		[
+			"a reply without a summary",
+			{ message: "workspace validation did not complete" },
+			"warning",
+			"did not return a summary",
+		],
+		[
+			"a negative count",
+			{
+				totalFiles: 3,
+				validatedFiles: 3,
+				heldBackFiles: 0,
+				filesWithErrors: 0,
+				totalErrors: -1,
+				totalWarnings: 0,
+				totalInfos: 0,
+				totalHints: 0,
+			},
+			"warning",
+			"did not return a summary",
+		],
+		["a non-object reply", "done", "warning", "did not return a summary"],
+	];
+	for (const [name, reply, channel, text] of validateReplies) {
+		test(`validateWorkspace says so on ${name}`, async function () {
+			const info = sandbox
+				.stub(vscode.window, "showInformationMessage")
+				.resolves(undefined);
+			const warning = sandbox
+				.stub(vscode.window, "showWarningMessage")
+				.resolves(undefined);
+			const served = serverReplies("CWTools: Validate workspace", reply);
+			await vscode.commands.executeCommand("validateWorkspace");
+			assert.ok(served.calledOnce, "the command should have asked the server once");
+			const [shown, other] = channel === "info" ? [info, warning] : [warning, info];
+			assert.ok(
+				messagesOf(shown).some((message) => message.includes(text)),
+				`expected ${channel} "${text}", got: ${messagesOf(shown).join(" | ")}`,
+			);
+			assert.ok(
+				!messagesOf(other).some((message) => message.includes(text)),
+				`"${text}" should not be shown as the other severity`,
+			);
+			assert.ok(
+				!messagesOf(info).some((message) => message.startsWith("CWTools: validated")),
+				"no summary should be shown",
+			);
+		});
+	}
+
+	test("a reload-only settings change prompts once and reloads the window when accepted", async function () {
+		const setting = "inlayHints.scopes";
+		const config = vscode.workspace.getConfiguration("cwtools");
+		const previous = config.inspect(setting)?.globalValue;
+		const prompt = sandbox
+			.stub(vscode.window, "showInformationMessage")
+			.resolves("Reload Window" as never);
+		const prompts = () =>
+			messagesOf(prompt).filter((message) => message.startsWith("CWTools settings changed."));
+		const reload = sandbox
+			.stub(vscode.commands, "executeCommand")
+			.callThrough()
+			.withArgs("workbench.action.reloadWindow")
+			.resolves(undefined);
+		try {
+			await config.update(setting, !previous, vscode.ConfigurationTarget.Global);
+			assert.ok(await waitUntil(() => reload.called), "accepting the prompt should reload the window");
+			assert.strictEqual(prompts().length, 1);
+			assert.strictEqual(reload.callCount, 1);
+		} finally {
+			prompt.resolves(undefined);
+			await config.update(setting, previous, vscode.ConfigurationTarget.Global);
+			assert.ok(await waitUntil(() => prompts().length >= 2), "restoring the setting should prompt again");
+		}
+		assert.strictEqual(reload.callCount, 1, "declining the prompt must not reload");
 	});
 });
