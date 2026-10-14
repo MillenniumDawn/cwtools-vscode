@@ -151,23 +151,23 @@ export async function runCancellableExecuteCommand(
 			activeCommandProgress += 1;
 			const subscriptions: Disposable[] = [];
 			const progressToken = useToken ? newProgressToken() : undefined;
-			if (progressToken !== undefined) {
-				subscriptions.push(
-					pipeServerProgress(client, progressToken, progress),
-					token.onCancellationRequested(() => {
-						void client
-							.sendNotification(WorkDoneProgressCancelNotification.type, {
-								token: progressToken,
-							})
-							.catch(() => {
-								// A server that already finished (or died) has nothing
-								// to cancel; the request's own settlement is what ends
-								// the notification either way.
-							});
-					}),
-				);
-			}
 			try {
+				if (progressToken !== undefined) {
+					subscriptions.push(pipeServerProgress(client, progressToken, progress));
+					subscriptions.push(
+						token.onCancellationRequested(() => {
+							void client
+								.sendNotification(WorkDoneProgressCancelNotification.type, {
+									token: progressToken,
+								})
+								.catch(() => {
+									// A server that already finished (or died) has nothing
+									// to cancel; the request's own settlement is what ends
+									// the notification either way.
+								});
+						}),
+					);
+				}
 				const result: unknown = await client.sendRequest(
 					ExecuteCommandRequest.type,
 					{

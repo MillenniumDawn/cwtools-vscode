@@ -97,6 +97,34 @@ suite("commandProgress", () => {
 	});
 
 	suite("token path (server drives progress)", () => {
+		test("resets active state when progress subscription setup throws", async () => {
+			const failure = new Error("progress registration failed");
+			const client = progressCapableClient(
+				vi.fn(),
+				() => {
+					throw failure;
+				},
+			);
+
+			await assert.rejects(() => reindex(client), (err: unknown) => err === failure);
+
+			assert.strictEqual(commandProgressActive(), false);
+		});
+
+		test("disposes progress when cancellation subscription setup throws", async () => {
+			const failure = new Error("cancellation registration failed");
+			const disposeProgress = vi.fn();
+			state.token.onCancellationRequested = () => {
+				throw failure;
+			};
+			const client = progressCapableClient(vi.fn(), () => ({ dispose: disposeProgress }));
+
+			await assert.rejects(() => reindex(client), (err: unknown) => err === failure);
+
+			assert.strictEqual(disposeProgress.mock.calls.length, 1);
+			assert.strictEqual(commandProgressActive(), false);
+		});
+
 		// Threading the VS Code token here would raise $/cancelRequest, which
 		// tower-lsp answers by dropping the handler, killing the graceful
 		// "cancelled" reply this path exists to receive.
