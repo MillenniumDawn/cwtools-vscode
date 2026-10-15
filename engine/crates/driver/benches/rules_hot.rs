@@ -17,7 +17,8 @@
 //! resolution, construction paths, and the validation save/restore lifecycle.
 //!
 //! The ruleset comes from a `cwtools-hoi4-config` checkout, same input as the
-//! corpus guard, named by `CWTOOLS_RULES` or found under `CWTOOLS_PROJECTS`:
+//! corpus guard, named by `CWTOOLS_RULES` or found under `CWTOOLS_PROJECTS` or
+//! as a sibling of this repo:
 //!
 //!   CWTOOLS_RULES=/path/to/cwtools-hoi4-config/Config cargo bench -p cwtools_driver
 //!
@@ -25,7 +26,6 @@
 //! measures nothing.
 
 use std::hint::black_box;
-use std::path::PathBuf;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use cwtools_driver::{RulesInput, load_rules};
@@ -34,6 +34,7 @@ use cwtools_game::scope_engine::{ScopeContext, ScopeResult};
 use cwtools_index::TypeIndex;
 use cwtools_parser::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_support::rules_dir;
 use cwtools_validation::position::{rules_at_pos, value_rules_for_key};
 use cwtools_validation::{Prepared, build_scope_registry_arc};
 
@@ -120,15 +121,6 @@ fn cursor_at(text: &str, needle: &str) -> (u32, u16) {
         .unwrap_or_else(|| panic!("fixture has no line starting with {needle}"));
     let indent = line.len() - line.trim_start().len();
     (idx as u32 + 1, indent as u16)
-}
-
-fn rules_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_RULES") {
-        return Some(PathBuf::from(dir));
-    }
-    let projects = std::env::var("CWTOOLS_PROJECTS").ok()?;
-    let dir = PathBuf::from(projects).join("cwtools-hoi4-config/Config");
-    dir.is_dir().then_some(dir)
 }
 
 fn bench_rules_hot(c: &mut Criterion) {

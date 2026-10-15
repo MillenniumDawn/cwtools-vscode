@@ -18,10 +18,11 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use cwtools_test_support::checkout;
 use serde_json::{Value, json};
 use tower_lsp::lsp_types::Url;
 
@@ -250,24 +251,6 @@ fn run() {
         !summaries.is_empty(),
         "expected at least one cwtools_completion summary line in stderr"
     );
-}
-
-/// A checkout named by `var`, else found under `CWTOOLS_PROJECTS`, else beside
-/// this repo.
-fn checkout(var: &str, name: &str) -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var(var) {
-        return Some(PathBuf::from(dir));
-    }
-    let projects = match std::env::var("CWTOOLS_PROJECTS") {
-        Ok(dir) => PathBuf::from(dir),
-        // crates/lsp -> repo root is ../../.., siblings sit next to it.
-        Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../..")
-            .canonicalize()
-            .ok()?,
-    };
-    let dir = projects.join(name);
-    dir.is_dir().then_some(dir)
 }
 
 fn file_uri(path: &Path) -> String {

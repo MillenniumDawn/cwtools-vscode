@@ -43,7 +43,14 @@ import {
 } from "./reindexSettings";
 import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import type { RulesSetup } from "./rulesSetup";
-import { createWatchedPathExcluder, forwardWatchedFileEvent } from "./watchedFiles";
+import {
+	CWT_WATCH_GLOB,
+	LOCALISATION_WATCH_GLOB,
+	SCRIPT_WATCH_GLOB,
+	createWatchedPathExcluder,
+	forwardWatchedFileEvent,
+} from "./watchedFiles";
+import { MAX_RESTARTS, recordCrash } from "./restartWindow";
 import { logError, logInfo, errorMessage, outputChannel } from "./logger";
 import {
 	isServerCommand,
@@ -279,7 +286,6 @@ async function openGeneratedLoc(result: unknown): Promise<void> {
 function createRestartLimitingErrorHandler(
 	onStopped: () => void,
 ): ErrorHandler {
-	const maxRestartCount = 4;
 	const restarts: number[] = [];
 	return {
 		// Deliberately unlike DefaultErrorHandler, which shuts down whenever
@@ -296,23 +302,17 @@ function createRestartLimitingErrorHandler(
 				? { action: ErrorAction.Continue }
 				: { action: ErrorAction.Shutdown },
 		closed: () => {
-			restarts.push(Date.now());
-			if (restarts.length <= maxRestartCount) {
+			if (recordCrash(restarts, Date.now())) {
 				return { action: CloseAction.Restart };
 			}
-			const diff = restarts[restarts.length - 1] - restarts[0];
-			if (diff <= 3 * 60 * 1000) {
-				onStopped();
-				return {
-					action: CloseAction.DoNotRestart,
-					message: l10n.t(
-						"CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.",
-						maxRestartCount + 1,
-					),
-				};
-			}
-			restarts.shift();
-			return { action: CloseAction.Restart };
+			onStopped();
+			return {
+				action: CloseAction.DoNotRestart,
+				message: l10n.t(
+					"CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.",
+					MAX_RESTARTS + 1,
+				),
+			};
 		},
 	};
 }
@@ -353,13 +353,11 @@ export function createLanguageClient(
 	// under gfx/, portraits/ or dlc/ went unwatched. Loc keeps its directory
 	// scope, which the server's own loc check requires.
 	const fileEvents = [
-		workspace.createFileSystemWatcher("**/*.{txt,gui,gfx,sfx,asset,map}"),
-		workspace.createFileSystemWatcher(
-			"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
-		),
+		workspace.createFileSystemWatcher(SCRIPT_WATCH_GLOB),
+		workspace.createFileSystemWatcher(LOCALISATION_WATCH_GLOB),
 	];
 	// Preserve structural lint for every workspace .cwt.
-	const cwtWatcher = workspace.createFileSystemWatcher("**/*.cwt");
+	const cwtWatcher = workspace.createFileSystemWatcher(CWT_WATCH_GLOB);
 	fileEvents.push(cwtWatcher);
 	context.subscriptions.push(...fileEvents);
 

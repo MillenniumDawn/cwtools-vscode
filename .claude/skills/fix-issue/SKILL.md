@@ -140,8 +140,8 @@ cover.
   `engine/crates/cache/src/workspace.rs`. The bump turns a stale cache into a
   miss instead of a load error.
 - **Tests run on Windows CI.** No bare `/foo` absolute paths reaching
-  `Url::from_file_path` or `Path::is_absolute`; use the `abs()` helper pattern
-  from `engine/crates/cli/src/report.rs`. Don't assert an exact
+  `Url::from_file_path` or `Path::is_absolute`; use `cwtools_test_support::abs`
+  or `abs_path` from `engine/crates/test_support`. Don't assert an exact
   `Url::to_file_path` or `canonicalize` result without checking it holds on
   both platforms (`engine/crates/lsp/src/access.rs` shows the `#[cfg(unix)]`
   gate with a comment).

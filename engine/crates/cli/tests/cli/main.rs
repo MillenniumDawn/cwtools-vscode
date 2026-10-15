@@ -1,0 +1,13 @@
+mod common;
+mod config_toml;
+mod fix_format;
+mod help_codes_completions;
+mod loc;
+mod parents;
+mod parse_discover_rules;
+mod report_scope_and_gate;
+mod reports;
+mod suppression;
+mod validate;
+mod vanilla_auto_cache;
+mod vanilla_cache;

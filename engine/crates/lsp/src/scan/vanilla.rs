@@ -564,23 +564,7 @@ mod tests {
     use cwtools_info::vanilla_cache::{VanillaCacheAux, VanillaCacheData};
     use cwtools_info::{SourceLocation, TypeInstance};
 
-    use crate::state::DocumentState;
-
-    fn test_backend() -> Backend {
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().unwrap();
-        Backend { client, state }
-    }
+    use crate::testing::test_backend;
 
     fn vanilla_data(var_names: Vec<&str>) -> VanillaCacheData {
         VanillaCacheData {
