@@ -60,7 +60,18 @@ export async function checkHostTestDiscovery(root = repoRoot) {
 		name.endsWith(".test.ts"),
 	);
 	const configUrl = pathToFileURL(path.join(root, ".vscode-test.mjs"));
-	const { default: config } = await import(configUrl.href);
+	const previousDiscovery = process.env.CWTOOLS_TEST_CONFIG_DISCOVERY;
+	process.env.CWTOOLS_TEST_CONFIG_DISCOVERY = "1";
+	let config;
+	try {
+		({ default: config } = await import(configUrl.href));
+	} finally {
+		if (previousDiscovery === undefined) {
+			delete process.env.CWTOOLS_TEST_CONFIG_DISCOVERY;
+		} else {
+			process.env.CWTOOLS_TEST_CONFIG_DISCOVERY = previousDiscovery;
+		}
+	}
 	const unassigned = findUnassignedHostTests(sourceNames, config.tests);
 	const stale = findStaleHostTests(sourceNames, config.tests);
 	const problems = [];

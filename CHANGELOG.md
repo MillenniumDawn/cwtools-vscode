@@ -76,6 +76,7 @@
 
 #### Extension
 
+* Make automated extension-host tests Linux-only and fail closed without Xvfb or headless Ozone; strip inherited desktop variables, pin Xvfb runs to Electron's X11 backend, reject direct test-cli launches, and reserve visible native windows for explicit local debugging.
 * Exercise GraphPanel's registered goToFile listener with a real editor open and zero-coordinate clamping. (#993)
 * Hold command-progress cancellation until the server opens its progress token, so an early Cancel click is not lost before the server registers it.
 * The served-root watcher host test no longer sleeps 250 ms and hopes its observers are live. It rewrites a probe in each root until that root's observer reports it, the gate #960 added for external rules, so a slow host cannot drop the create event the test asserts. Five runs pinned to two busy cores pass. (#1027)

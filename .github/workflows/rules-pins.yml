@@ -18,6 +18,8 @@ jobs:
   bump:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      CWTOOLS_TEST_DISPLAY: xvfb
     permissions:
       contents: read
     outputs:
@@ -50,6 +52,13 @@ jobs:
         if: steps.pins.outputs.changed == 'true'
         with:
           cache-vscode: true
+      - name: Install virtual display test dependencies
+        if: steps.pins.outputs.changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes xvfb xauth
+          command -v xvfb-run
+          command -v xauth
       - name: Client checks
         if: steps.pins.outputs.changed == 'true'
         run: |

@@ -24,9 +24,16 @@ so they do not open a VS Code window on your desktop.
   Arch           sudo pacman -S xorg-server-xvfb
 
 Or pick another backend:
-  npm run test:native          a visible window, on purpose
+  npm run test:native          an explicit visible window for local debugging
   CWTOOLS_TEST_DISPLAY=ozone   Electron's headless Ozone backend, no package\
 """
+DISPLAY_ENV_VARS = (
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+    "WAYLAND_SOCKET",
+    "XAUTHORITY",
+    "ELECTRON_OZONE_PLATFORM_HINT",
+)
 
 
 class Display(NamedTuple):
@@ -35,7 +42,26 @@ class Display(NamedTuple):
     note: str | None
 
     def env(self) -> dict[str, str]:
-        return {**os.environ, "CWTOOLS_TEST_DISPLAY": self.name}
+        env = {
+            **os.environ,
+            "CWTOOLS_TEST_DISPLAY": self.name,
+            "CWTOOLS_TEST_LAUNCHER": "hosttest",
+            "CWTOOLS_TEST_NATIVE_DEBUG": "1" if self.name == "native" else "0",
+        }
+        env.pop("CWTOOLS_TEST_CONFIG_DISCOVERY", None)
+        if self.name != "native":
+            for name in DISPLAY_ENV_VARS:
+                env.pop(name, None)
+        return env
+
+
+def in_ci() -> bool:
+    values = os.environ
+    false_values = {"", "0", "false", "no", "off"}
+    return any(
+        values.get(key, "").strip().lower() not in false_values
+        for key in ("CI", "GITHUB_ACTIONS")
+    )
 
 
 def resolve_display(*, native: bool = False, platform: str | None = None) -> Display:
@@ -45,8 +71,21 @@ def resolve_display(*, native: bool = False, platform: str | None = None) -> Dis
         raise RuntimeError(
             f"CWTOOLS_TEST_DISPLAY={choice} is not one of {', '.join(BACKENDS)}"
         )
-    if choice == "native":
+    if choice == "native" and not native:
+        raise RuntimeError(
+            "CWTOOLS_TEST_DISPLAY=native is not an automatic test backend; "
+            "use `npm run test:native` for explicit local debugging"
+        )
+    if native:
+        if in_ci():
+            raise RuntimeError(
+                "--native is disabled in CI; host tests must stay headless"
+            )
         return Display("native", [], None)
+    if choice in {"xvfb", "ozone"} and not system.startswith("linux"):
+        raise RuntimeError(
+            f"the {choice} headless backend is only supported on Linux, not {system}"
+        )
     if choice == "ozone":
         return Display("ozone", [], None)
     if choice == "xvfb" or system.startswith("linux"):
@@ -55,11 +94,10 @@ def resolve_display(*, native: bool = False, platform: str | None = None) -> Dis
             raise RuntimeError(XVFB_MISSING)
         # -a picks a free server number, so concurrent runs do not collide.
         return Display("xvfb", [xvfb_run, "-a"], None)
-    return Display(
-        "native",
-        [],
-        f"no virtual display backend on {system}, so VS Code opens a window. "
-        "Only Linux has one today (MillenniumDawn/cwtools-vscode#406).",
+    raise RuntimeError(
+        f"no headless extension-host backend is configured for {system}; "
+        "automated host tests currently require Linux with Xvfb. "
+        "Use `npm run test:native` only for explicit local debugging"
     )
 
 

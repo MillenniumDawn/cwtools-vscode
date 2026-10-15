@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -48,19 +49,19 @@ def test_linux_without_xvfb_run_fails_with_install_instructions(
 
 
 @pytest.mark.usefixtures("no_override")
-def test_other_platforms_run_native_with_a_notice() -> None:
-    display = hosttest.resolve_display(platform="darwin")
-
-    assert display.name == "native"
-    assert display.prefix == []
-    assert display.note is not None
-    assert "darwin" in display.note
+def test_unsupported_platform_fails_closed() -> None:
+    with pytest.raises(
+        RuntimeError, match="automated host tests currently require Linux"
+    ):
+        hosttest.resolve_display(platform="darwin")
 
 
 @pytest.mark.usefixtures("no_override")
 def test_native_flag_wins_over_the_linux_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(shutil, "which", found("/usr/bin/xvfb-run"))
 
     display = hosttest.resolve_display(native=True, platform="linux")
@@ -73,17 +74,56 @@ def test_native_flag_wins_over_the_linux_backend(
 def test_ozone_override_adds_no_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "ozone")
 
-    display = hosttest.resolve_display(platform="win32")
+    display = hosttest.resolve_display(platform="linux")
 
     assert display.name == "ozone"
     assert display.prefix == []
 
 
-def test_xvfb_override_applies_off_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_xvfb_override_fails_off_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "xvfb")
     monkeypatch.setattr(shutil, "which", found("/bin/xvfb-run"))
 
-    assert hosttest.resolve_display(platform="darwin").name == "xvfb"
+    with pytest.raises(RuntimeError, match="only supported on Linux"):
+        hosttest.resolve_display(platform="darwin")
+
+
+def test_native_environment_override_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "native")
+
+    with pytest.raises(RuntimeError, match="explicit local debugging"):
+        hosttest.resolve_display(platform="linux")
+
+
+@pytest.mark.parametrize("ci_name,ci_value", [("CI", "1"), ("GITHUB_ACTIONS", "true")])
+def test_native_flag_is_rejected_in_ci(
+    monkeypatch: pytest.MonkeyPatch, ci_name: str, ci_value: str
+) -> None:
+    monkeypatch.setenv(ci_name, ci_value)
+
+    with pytest.raises(RuntimeError, match="disabled in CI"):
+        hosttest.resolve_display(native=True, platform="linux")
+
+
+@pytest.mark.parametrize("ci_value", ["1", "true", "yes"])
+def test_ci_detection_accepts_truthy_values(
+    monkeypatch: pytest.MonkeyPatch, ci_value: str
+) -> None:
+    monkeypatch.setenv("CI", ci_value)
+
+    assert hosttest.in_ci()
+
+
+@pytest.mark.parametrize("ci_value", ["", "0", "false", "no", "off"])
+def test_ci_detection_accepts_false_values(
+    monkeypatch: pytest.MonkeyPatch, ci_value: str
+) -> None:
+    monkeypatch.setenv("CI", ci_value)
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+
+    assert not hosttest.in_ci()
 
 
 def test_an_unknown_backend_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,10 +142,97 @@ def test_vendored_test_cli_path_resolves_to_file() -> None:
 
 
 @pytest.mark.usefixtures("no_override")
-def test_env_carries_the_resolved_backend() -> None:
-    display = hosttest.resolve_display(platform="darwin")
+def test_virtual_display_environment_drops_inherited_desktops(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(shutil, "which", found("/usr/bin/xvfb-run"))
+    for name in hosttest.DISPLAY_ENV_VARS:
+        monkeypatch.setenv(name, f"inherited-{name.lower()}")
+    monkeypatch.setenv("CWTOOLS_TEST_CONFIG_DISCOVERY", "1")
 
-    assert display.env()["CWTOOLS_TEST_DISPLAY"] == "native"
+    env = hosttest.resolve_display(platform="linux").env()
+
+    assert env["CWTOOLS_TEST_DISPLAY"] == "xvfb"
+    assert env["CWTOOLS_TEST_LAUNCHER"] == "hosttest"
+    assert env["CWTOOLS_TEST_NATIVE_DEBUG"] == "0"
+    assert "CWTOOLS_TEST_CONFIG_DISCOVERY" not in env
+    assert all(name not in env for name in hosttest.DISPLAY_ENV_VARS)
+
+
+def test_test_cli_config_requires_launcher_and_selects_safe_platform() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    config_module = REPO_ROOT / "scripts/build/hosttest_config.mjs"
+    script = (
+        "import {hostTestLaunchArgs} from "
+        "'" + config_module.as_uri() + "'; "
+        "console.log(JSON.stringify(hostTestLaunchArgs(JSON.parse(process.argv[1]))))"
+    )
+
+    direct = subprocess.run(
+        [node, "--input-type=module", "--eval", script, json.dumps({})],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert direct.returncode != 0
+    assert "must be launched through scripts/build/hosttest.py" in direct.stderr
+
+    launched = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "--eval",
+            script,
+            json.dumps(
+                {
+                    "CWTOOLS_TEST_LAUNCHER": "hosttest",
+                    "CWTOOLS_TEST_DISPLAY": "xvfb",
+                }
+            ),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if sys.platform.startswith("linux"):
+        assert launched.returncode == 0, launched.stderr
+        assert json.loads(launched.stdout) == ["--ozone-platform=x11"]
+    else:
+        assert launched.returncode != 0
+        assert "only supported on Linux" in launched.stderr
+
+    discovery = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "--eval",
+            script,
+            json.dumps({"CWTOOLS_TEST_CONFIG_DISCOVERY": "1"}),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert discovery.returncode == 0, discovery.stderr
+    assert json.loads(discovery.stdout) == []
+
+
+def test_native_debug_keeps_the_interactive_desktop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("DISPLAY", ":9")
+
+    env = hosttest.resolve_display(native=True, platform="linux").env()
+
+    assert env["DISPLAY"] == ":9"
+    assert env["CWTOOLS_TEST_NATIVE_DEBUG"] == "1"
 
 
 @pytest.fixture(name="installed_cli")
@@ -166,6 +293,8 @@ def run_main_fixture(
             return subprocess.CompletedProcess(command, returncode)
 
         monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "")
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
         monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
         monkeypatch.setattr(hosttest, "TEST_CLI", INSTALLED_CLI)
         monkeypatch.setattr(subprocess, "run", fake_run)
@@ -225,13 +354,12 @@ def test_xvfb_run_preserves_a_failing_child_exit_code() -> None:
 
 
 def test_reports_the_missing_backend_on_other_platforms(
-    run_main: Callable[..., Run],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = run_main([], platform="darwin")
+    monkeypatch.setenv("CWTOOLS_TEST_DISPLAY", "")
 
-    assert result.status == 0
-    assert result.command[0] == "/usr/bin/node"
-    assert "darwin" in result.stderr
+    with pytest.raises(RuntimeError, match="host tests currently require Linux"):
+        hosttest.resolve_display(platform="darwin")
 
 
 def test_says_nothing_when_a_backend_was_found(run_main: Callable[..., Run]) -> None:
