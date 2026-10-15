@@ -37,3 +37,7 @@ harness = false
 [[bench]]
 name = "snapshot_clone"
 harness = false
+
+[[bench]]
+name = "workspace_load"
+harness = false

@@ -592,25 +592,40 @@ impl AliasKeyCache {
             return Vec::new();
         }
         let file: Arc<str> = Arc::from(file_uri);
-        let mut keys = HashSet::new();
-        for (site_index, site) in sites.iter().enumerate() {
+        let mut grouped: HashMap<&str, Vec<usize>> = HashMap::new();
+        if !patterns.is_empty() {
+            for (site_index, site) in sites.iter().enumerate() {
+                grouped.entry(&site.key).or_default().push(site_index);
+            }
+        }
+        let mut per_instance: HashMap<_, Vec<AliasKeyCandidate>> = HashMap::new();
+        for (key, site_indices) in grouped {
             for (pattern_index, pattern) in patterns.iter().enumerate() {
-                let Some(middle) = strip_affix(&site.key, &pattern.prefix, &pattern.suffix) else {
+                let Some(middle) = strip_affix(key, &pattern.prefix, &pattern.suffix) else {
                     continue;
                 };
                 let key = (pattern.type_name.clone(), middle.to_ascii_lowercase());
-                self.by_instance
-                    .entry(key.clone())
+                per_instance
+                    .entry(key)
                     .or_default()
-                    .push(AliasKeyCandidate {
+                    .extend(site_indices.iter().map(|&site_index| AliasKeyCandidate {
                         file: Arc::clone(&file),
                         site_index,
                         pattern_index,
-                    });
-                keys.insert(key);
+                    }));
             }
         }
-        let keys: Vec<_> = keys.into_iter().collect();
+        let mut keys = Vec::with_capacity(per_instance.len());
+        for (key, mut candidates) in per_instance {
+            // Restore source/pattern order across case-folded and overlapping groups.
+            candidates
+                .sort_unstable_by_key(|candidate| (candidate.site_index, candidate.pattern_index));
+            self.by_instance
+                .entry(key.clone())
+                .and_modify(|existing| existing.append(&mut candidates))
+                .or_insert(candidates);
+            keys.push(key);
+        }
         self.file_keys.insert(Arc::clone(&file), keys.clone());
         self.sites.insert(file, sites);
         keys
@@ -939,6 +954,117 @@ mod tests {
         index.remove_file("b.txt");
         assert!(index.map.is_empty(), "{:?}", index.map);
         assert!(index.file_keys.is_empty(), "{:?}", index.file_keys);
+    }
+
+    #[test]
+    fn alias_candidate_grouping_preserves_sites_patterns_and_file_order() {
+        let patterns: Vec<_> = [
+            ("", "", "effect"),
+            ("pre_", "_post", "effect"),
+            ("pre_", "_post", "other"),
+            ("", "", "effect"),
+        ]
+        .into_iter()
+        .map(|(prefix, suffix, type_name)| super::TypePatternAlias {
+            prefix: prefix.to_string(),
+            suffix: suffix.to_string(),
+            type_name: type_name.to_string(),
+        })
+        .collect();
+        let keys = [
+            "pre_FOO_post",
+            "plain",
+            "pre_foo_post",
+            "pre_FOO_post",
+            "Pre_FOO_post",
+            "pre__post",
+            "ÄBC",
+            "äbc",
+            "",
+        ];
+        let sites: Vec<_> = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| super::AliasKeySite {
+                key: (*key).to_string(),
+                location: SourceLocation {
+                    line: index as u32 + 1,
+                    col: 0,
+                    end: (index as u32 + 1, key.len() as u16),
+                },
+            })
+            .collect();
+        let mut cache = super::AliasKeyCache::default();
+        let mut expected: HashMap<_, Vec<_>> = HashMap::new();
+        for uri in ["other.txt", "caller.txt"] {
+            let merged = cache.merge_file(uri, sites.clone(), &patterns);
+            let mut file_keys = HashSet::new();
+            for (site_index, key) in keys.iter().enumerate() {
+                for (pattern_index, pattern) in patterns.iter().enumerate() {
+                    if let Some(middle) = super::strip_affix(key, &pattern.prefix, &pattern.suffix)
+                    {
+                        let key = (pattern.type_name.clone(), middle.to_ascii_lowercase());
+                        expected.entry(key.clone()).or_default().push((
+                            uri.to_string(),
+                            site_index,
+                            pattern_index,
+                        ));
+                        file_keys.insert(key);
+                    }
+                }
+            }
+            assert_eq!(merged.into_iter().collect::<HashSet<_>>(), file_keys);
+        }
+        let actual: HashMap<_, Vec<_>> = cache
+            .by_instance
+            .iter()
+            .map(|(key, candidates)| {
+                (
+                    key.clone(),
+                    candidates
+                        .iter()
+                        .map(|candidate| {
+                            (
+                                candidate.file.to_string(),
+                                candidate.site_index,
+                                candidate.pattern_index,
+                            )
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(cache.candidates_for("effect", "FOO").len(), 6);
+        assert_eq!(cache.candidates_for("effect", "ÄBC").len(), 4);
+        assert_eq!(cache.candidates_for("effect", "äbc").len(), 4);
+
+        cache.merge_file("caller.txt", sites[..1].to_vec(), &patterns);
+        let remaining = cache.candidates_for("effect", "foo");
+        assert_eq!(remaining.len(), 4);
+        assert_eq!(remaining.last().unwrap().file.as_ref(), "caller.txt");
+        assert_eq!(remaining.last().unwrap().site_index, 0);
+        assert!(
+            cache
+                .candidates_for("effect", "plain")
+                .iter()
+                .all(|candidate| { candidate.file.as_ref() == "other.txt" })
+        );
+        assert!(
+            cache
+                .merge_file("caller.txt", Vec::new(), &patterns)
+                .is_empty()
+        );
+        assert_eq!(cache.candidates_for("effect", "foo").len(), 3);
+        cache.remove_file("other.txt");
+        assert!(cache.by_instance.is_empty());
+        assert!(cache.file_keys.is_empty());
+        assert!(cache.sites.is_empty());
+        assert!(cache.merge_file("no-patterns.txt", sites, &[]).is_empty());
+        assert_eq!(cache.sites("no-patterns.txt").len(), keys.len());
+        cache.remove_file("no-patterns.txt");
+        assert!(cache.file_keys.is_empty());
+        assert!(cache.sites.is_empty());
     }
 
     const RULES: &str = r#"
