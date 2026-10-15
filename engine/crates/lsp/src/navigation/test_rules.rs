@@ -1,13 +1,13 @@
 //! Ruleset fixtures shared by the tests that exercise type-instance use sites
 //! — the AST walk in [`super::use_sites`] and the code lens counts built on top
-//! of it.
+//! of it — and by the completion tests.
 
 use cwtools_rules::rules_types::{
     EnumDefinition, NewField, Options, PathOptions, RootRule, RuleSet, RuleType, TypeDefinition,
     ValueType,
 };
 
-fn make_leaf_rule(key: &str, right: NewField) -> cwtools_rules::rules_types::NewRule {
+pub(crate) fn make_leaf_rule(key: &str, right: NewField) -> cwtools_rules::rules_types::NewRule {
     (
         RuleType::LeafRule {
             left: NewField::SpecificField(key.to_string()),

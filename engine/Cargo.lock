@@ -364,6 +364,7 @@ dependencies = [
  "cwtools_i18n",
  "cwtools_parser",
  "cwtools_string_table",
+ "cwtools_test_support",
  "rkyv",
  "tempfile",
  "thiserror",
@@ -389,6 +390,7 @@ dependencies = [
  "cwtools_profiling",
  "cwtools_rules",
  "cwtools_string_table",
+ "cwtools_test_support",
  "cwtools_validation",
  "libc",
  "predicates",
@@ -411,7 +413,7 @@ dependencies = [
  "cwtools_parser",
  "cwtools_rules",
  "cwtools_string_table",
- "cwtools_test_rules",
+ "cwtools_test_support",
  "cwtools_validation",
  "rayon",
  "tempfile",
@@ -515,7 +517,7 @@ dependencies = [
  "cwtools_profiling",
  "cwtools_rules",
  "cwtools_string_table",
- "cwtools_test_rules",
+ "cwtools_test_support",
  "cwtools_validation",
  "futures-util",
  "parking_lot",
@@ -535,6 +537,7 @@ version = "3.4.0"
 dependencies = [
  "criterion",
  "cwtools_string_table",
+ "cwtools_test_support",
  "smallvec",
  "thiserror",
  "tracing",
@@ -558,7 +561,7 @@ dependencies = [
  "cwtools_game",
  "cwtools_parser",
  "cwtools_string_table",
- "cwtools_test_rules",
+ "cwtools_test_support",
  "rayon",
  "rustc-hash",
  "tempfile",
@@ -575,7 +578,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cwtools_test_rules"
+name = "cwtools_test_support"
 version = "3.4.0"
 dependencies = [
  "serde_json",
@@ -596,7 +599,7 @@ dependencies = [
  "cwtools_parser",
  "cwtools_rules",
  "cwtools_string_table",
- "cwtools_test_rules",
+ "cwtools_test_support",
  "rustc-hash",
  "smallvec",
  "tempfile",

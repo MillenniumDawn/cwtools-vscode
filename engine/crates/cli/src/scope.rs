@@ -159,6 +159,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cwtools_test_support::abs;
 
     /// The same file, however the spelling reached us, is one key.
     #[test]
@@ -244,16 +245,6 @@ mod tests {
             command.env_remove(key);
         }
         command.output().is_ok_and(|o| o.status.success())
-    }
-
-    /// An absolute path spelled the host's way: a leading `/` names the current
-    /// drive's root on Windows, which is not what an absolute path means there.
-    fn abs(tail: &str) -> String {
-        if cfg!(windows) {
-            format!("C:/{tail}")
-        } else {
-            format!("/{tail}")
-        }
     }
 
     /// Git answers in its own spelling of the repo root. Where that differs from

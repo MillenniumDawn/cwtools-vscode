@@ -4,6 +4,11 @@
 // (MillenniumDawn/cwtools#314), so mirror both lists here and drop the events
 // rather than have a changelog or a build directory validated as game script.
 
+export const SCRIPT_WATCH_GLOB = "**/*.{txt,gui,gfx,sfx,asset,map}";
+export const LOCALISATION_WATCH_GLOB =
+	"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}";
+export const CWT_WATCH_GLOB = "**/*.cwt";
+
 // cwtools_file_manager's FileManagerConfig::default().exclude_patterns, matched
 // against the file name as the engine does: case-sensitive, `*.md` as a suffix.
 const EXCLUDED_FILE_NAMES = [
