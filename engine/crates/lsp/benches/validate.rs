@@ -6,7 +6,8 @@
 //! and `after` pair for the change (#87) that made them cheaper.
 //!
 //! `index_parsed_file` indexes three large Millennium-Dawn files (a focus
-//! tree, an events file and an equipment file) against the real hoi4 rules:
+//! tree, an events file and an equipment file) against the real hoi4 rules.
+//! Its collector cases include output drops, like clearing a prior file index:
 //!
 //!   CWTOOLS_CORPUS=/path/to/Millennium-Dawn \
 //!   CWTOOLS_RULES=/path/to/cwtools-hoi4-config/Config \
@@ -189,6 +190,34 @@ fn bench_index_parsed_file(c: &mut Criterion) {
         );
 
         let mut group = c.benchmark_group(format!("index_parsed_file/{label}"));
+        group.bench_function("collect_defined_variables", |b| {
+            b.iter(|| {
+                black_box(cwtools_info::collect_defined_variables_from_rules(
+                    &ruleset,
+                    &parsed,
+                    logical_path,
+                    &table,
+                    None,
+                ))
+            })
+        });
+        group.bench_function("collect_value_sets", |b| {
+            b.iter(|| {
+                black_box(cwtools_info::dynamic_values::collect_value_set_members(
+                    &ruleset, &parsed, &table,
+                ))
+            })
+        });
+        group.bench_function("collect_complex_enums", |b| {
+            b.iter(|| {
+                black_box(cwtools_info::dynamic_values::collect_complex_enum_values(
+                    &ruleset,
+                    &parsed,
+                    logical_path,
+                    &table,
+                ))
+            })
+        });
         group.bench_function("collect_type_instances_with_subtypes", |b| {
             b.iter(|| {
                 let collected = cwtools_info::collect_type_instances_with_subtypes(
@@ -231,6 +260,21 @@ fn bench_index_parsed_file(c: &mut Criterion) {
             &uri,
             cwtools_info::collect_type_instances(&ruleset, &parsed, logical_path, &table),
         );
+        let mut collectors = cwtools_info::bench_support::FileCollectors::new(&ruleset);
+        group.bench_function("collect_type_refs", |b| {
+            b.iter(|| black_box(collectors.type_refs(&parsed, &table, &ruleset, logical_path)))
+        });
+        group.bench_function("replace_alias_candidates", |b| {
+            b.iter(|| collectors.replace_alias_candidates(&uri, &parsed, &table))
+        });
+        collectors.replace_alias_candidates(&uri, &parsed, &table);
+        eprintln!(
+            "index_parsed_file/{label}: {}",
+            collectors.alias_summary(&uri)
+        );
+        group.bench_function("classify_alias_keys", |b| {
+            b.iter(|| black_box(collectors.alias_refs(&uri, &type_index)))
+        });
         group.bench_function("cw100_recollect_check", |b| {
             b.iter(|| {
                 let per_type =
