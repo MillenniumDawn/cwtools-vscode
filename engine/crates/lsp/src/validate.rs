@@ -1905,7 +1905,8 @@ impl Backend {
 #[cfg(test)]
 mod info_revision_tests {
     use super::*;
-    use crate::{Backend, CompletionCacheEntry, DocumentState};
+    use crate::testing::test_backend;
+    use crate::{Backend, CompletionCacheEntry};
     use cwtools_rules::rules_types::{PathOptions, TypeDefinition};
     use std::sync::atomic::Ordering;
 
@@ -1920,19 +1921,9 @@ mod info_revision_tests {
         format!("{WORKSPACE_URI}/common/ideas/00_ideas.txt")
     }
 
-    fn test_backend() -> Backend {
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().unwrap();
+    fn idea_backend() -> Backend {
+        let backend = test_backend();
+        let state = &backend.state;
         state.config.write().workspace_prefix =
             Some(crate::paths::workspace_prefix_of(WORKSPACE_URI));
         let mut ruleset = RuleSet::new();
@@ -1958,7 +1949,7 @@ mod info_revision_tests {
         });
         ruleset.reindex();
         state.rules.write().ruleset = Some(Arc::new(ruleset));
-        Backend { client, state }
+        backend
     }
 
     fn index(backend: &Backend, uri: &str, text: &str) {
@@ -2032,7 +2023,7 @@ mod info_revision_tests {
     /// process-lifetime table, two slots at a time, and never released.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_typing_burst_does_not_grow_the_string_table() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         let typed = "idea_a = { cost = 100 modifier = { research_speed_factor = 0.1 } }";
         let seed = "idea_a = { }";
@@ -2066,7 +2057,7 @@ mod info_revision_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn closing_a_document_releases_its_overlay_region() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         open_loc_doc(&backend, &uri, "idea_a = { }");
         type_one_edit(&backend, &uri, 2, "idea_a = { novel_token_xyz = 1 }").await;
@@ -2085,7 +2076,7 @@ mod info_revision_tests {
     /// well past the edit that replaced it.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_held_ast_still_resolves_after_the_document_moves_on() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         open_loc_doc(&backend, &uri, "idea_a = { }");
         type_one_edit(&backend, &uri, 2, "idea_a = { held_token_abc = 1 }").await;
@@ -2114,7 +2105,7 @@ mod info_revision_tests {
     /// being typed still matches once it is defined elsewhere (#475).
     #[tokio::test(flavor = "multi_thread")]
     async fn doc_tokens_match_a_name_first_seen_mid_edit() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         open_loc_doc(&backend, &uri, "idea_a = { }");
         type_one_edit(&backend, &uri, 2, "idea_a = { ref = Only_Typed_Here }").await;
@@ -2129,7 +2120,7 @@ mod info_revision_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_loc_cache_miss_is_parsed_and_installed() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = format!("{WORKSPACE_URI}/localisation/target_l_english.yml");
         open_loc_doc(&backend, &uri, "l_english:\n KEY:0 \"$other_ref$\"\n");
 
@@ -2153,7 +2144,7 @@ mod info_revision_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_fatal_loc_parse_stays_a_cache_miss() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = format!("{WORKSPACE_URI}/localisation/target_l_english.yml");
         open_loc_doc(&backend, &uri, "l_english");
 
@@ -2178,7 +2169,7 @@ mod info_revision_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_loc_key_change_only_invalidates_the_overlay_cache() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
         let text: Arc<str> = Arc::from("l_english:\n NEW_KEY:0 \"$new_key$\"\n");
         backend
@@ -2222,7 +2213,7 @@ mod info_revision_tests {
     /// translation of a key the edit keeps is left alone (#476).
     #[tokio::test(flavor = "multi_thread")]
     async fn a_loc_key_edited_away_drops_its_text_without_a_rescan() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = format!("{WORKSPACE_URI}/localisation/test_l_english.yml");
         let other = format!("{WORKSPACE_URI}/localisation/other_l_english.yml");
         backend.state.loc_text.write().insert(
@@ -2284,7 +2275,7 @@ mod info_revision_tests {
 
     #[test]
     fn clearing_ignored_loc_state_invalidates_both_overlays() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = format!("{WORKSPACE_URI}/localisation/ignored_l_english.yml");
         backend
             .loc_live_overlay_mut()
@@ -2307,7 +2298,7 @@ mod info_revision_tests {
 
     #[tokio::test]
     async fn first_index_of_a_new_file_bumps_the_revision() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let before = revision(&backend);
         index(&backend, &ideas_uri(), "my_idea = {\n\tcost = 5\n}\n");
         assert_ne!(
@@ -2320,7 +2311,7 @@ mod info_revision_tests {
 
     #[tokio::test]
     async fn editing_a_rule_body_leaves_the_derived_caches_valid() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         index(&backend, &uri, "my_idea = {\n\tcost = 5\n}\n");
         let settled = revision(&backend);
@@ -2351,7 +2342,7 @@ mod info_revision_tests {
 
     #[tokio::test]
     async fn adding_an_export_bumps_and_invalidates() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         index(&backend, &uri, "my_idea = {\n\tcost = 5\n}\n");
         let settled = revision(&backend);
@@ -2373,7 +2364,7 @@ mod info_revision_tests {
 
     #[tokio::test]
     async fn renaming_an_export_bumps_and_invalidates() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         index(&backend, &uri, "my_idea = {\n\tcost = 5\n}\n");
         let settled = revision(&backend);
@@ -2390,7 +2381,7 @@ mod info_revision_tests {
 
     #[tokio::test]
     async fn removing_every_export_bumps_and_invalidates() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         index(&backend, &uri, "my_idea = {\n\tcost = 5\n}\n");
         let settled = revision(&backend);
@@ -2408,7 +2399,7 @@ mod info_revision_tests {
 
     #[tokio::test]
     async fn defined_variables_and_event_targets_bump_the_revision() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = ideas_uri();
         index(&backend, &uri, "my_idea = {\n\tcost = 5\n}\n");
 
@@ -2447,7 +2438,7 @@ mod info_revision_tests {
 
     #[tokio::test]
     async fn a_file_with_no_exports_never_bumps() {
-        let backend = test_backend();
+        let backend = idea_backend();
         let uri = format!("{WORKSPACE_URI}/events/some_events.txt");
         let before = revision(&backend);
         index(&backend, &uri, "country_event = {\n\tid = test.1\n}\n");
@@ -3107,7 +3098,8 @@ mod ignored_tests {
     use std::future::Future;
     use std::sync::Arc;
 
-    use crate::state::{DocumentState, ParsedDoc};
+    use crate::state::ParsedDoc;
+    use crate::testing::{test_backend, test_backend_with_socket};
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
     use futures_util::FutureExt;
@@ -3143,9 +3135,9 @@ mod ignored_tests {
     }
 
     fn backend_with_ignore(patterns: Vec<String>, workspace_uri: Option<&str>) -> Backend {
-        let state = Arc::new(DocumentState::new());
+        let backend = test_backend();
         {
-            let mut cfg = state.config.write();
+            let mut cfg = backend.state.config.write();
             cfg.ignore_file_patterns = patterns;
             if let Some(ws) = workspace_uri {
                 cfg.workspace_prefix = Some(crate::paths::workspace_prefix_of(ws));
@@ -3160,18 +3152,7 @@ mod ignored_tests {
                 }
             }
         }
-        let captured = Arc::new(Mutex::new(None));
-        let slot = captured.clone();
-        let st = state.clone();
-        let (_svc, _sock) = LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: st.clone(),
-            }
-        });
-        let client = captured.lock().take().expect("client");
-        Backend { client, state }
+        backend
     }
 
     /// Like `backend_with_ignore`, but the client has passed the `initialize`
@@ -3225,22 +3206,6 @@ mod ignored_tests {
         (Backend { client, state }, socket)
     }
 
-    fn backend_with_socket() -> (Backend, tower_lsp::ClientSocket) {
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(Mutex::new(None));
-        let slot = captured.clone();
-        let st = state.clone();
-        let (_svc, socket) = LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: st.clone(),
-            }
-        });
-        let client = captured.lock().take().expect("client");
-        (Backend { client, state }, socket)
-    }
-
     fn backend_with_ignore_and_dirs(
         file_patterns: Vec<String>,
         dir_patterns: Vec<String>,
@@ -3256,7 +3221,7 @@ mod ignored_tests {
 
     #[tokio::test]
     async fn revalidate_other_open_loc_files_drops_stale_snapshot() {
-        let (backend, mut socket) = backend_with_socket();
+        let (backend, mut socket) = test_backend_with_socket();
         let uri = if cfg!(windows) {
             "file:///C:/ws/localisation/target_l_english.yml".to_string()
         } else {

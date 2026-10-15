@@ -57,7 +57,7 @@ enums = {
 
 #[test]
 fn test_parse_real_cwt() {
-    let config = cwtools_test_rules::stellaris_config();
+    let config = cwtools_test_support::stellaris_config();
     let table = StringTable::new();
     let convert = |file: &str| {
         let input = std::fs::read_to_string(config.join(file)).unwrap();

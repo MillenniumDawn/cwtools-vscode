@@ -978,7 +978,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no token at {line}:{start} in {tokens:#?}"))
     }
 
-    fn abs(line: u32, start: u32, length: u32, token_type: u32) -> AbsToken {
+    fn abs_token(line: u32, start: u32, length: u32, token_type: u32) -> AbsToken {
         AbsToken {
             line,
             start,
@@ -990,7 +990,7 @@ mod tests {
 
     #[test]
     fn encode_first_token_is_absolute() {
-        let out = encode(vec![abs(3, 7, 4, TY_PROPERTY)]);
+        let out = encode(vec![abs_token(3, 7, 4, TY_PROPERTY)]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].delta_line, 3, "first line delta is from line 0");
         assert_eq!(out[0].delta_start, 7, "first start is absolute");
@@ -1001,9 +1001,9 @@ mod tests {
     #[test]
     fn encode_same_line_deltas_start_relative_to_previous() {
         let out = encode(vec![
-            abs(0, 0, 3, TY_PROPERTY),
-            abs(0, 4, 1, TY_OPERATOR),
-            abs(0, 6, 3, TY_STRING),
+            abs_token(0, 0, 3, TY_PROPERTY),
+            abs_token(0, 4, 1, TY_OPERATOR),
+            abs_token(0, 6, 3, TY_STRING),
         ]);
         let deltas: Vec<(u32, u32, u32)> = out
             .iter()
@@ -1014,21 +1014,24 @@ mod tests {
 
     #[test]
     fn encode_new_line_resets_start_to_absolute() {
-        let out = encode(vec![abs(0, 10, 2, TY_PROPERTY), abs(2, 4, 2, TY_PROPERTY)]);
+        let out = encode(vec![
+            abs_token(0, 10, 2, TY_PROPERTY),
+            abs_token(2, 4, 2, TY_PROPERTY),
+        ]);
         assert_eq!((out[1].delta_line, out[1].delta_start), (2, 4));
     }
 
     #[test]
     fn encode_sorts_out_of_order_input() {
         let sorted = encode(vec![
-            abs(0, 0, 1, TY_PROPERTY),
-            abs(1, 0, 1, TY_PROPERTY),
-            abs(1, 5, 1, TY_PROPERTY),
+            abs_token(0, 0, 1, TY_PROPERTY),
+            abs_token(1, 0, 1, TY_PROPERTY),
+            abs_token(1, 5, 1, TY_PROPERTY),
         ]);
         let shuffled = encode(vec![
-            abs(1, 5, 1, TY_PROPERTY),
-            abs(0, 0, 1, TY_PROPERTY),
-            abs(1, 0, 1, TY_PROPERTY),
+            abs_token(1, 5, 1, TY_PROPERTY),
+            abs_token(0, 0, 1, TY_PROPERTY),
+            abs_token(1, 0, 1, TY_PROPERTY),
         ]);
         assert_eq!(sorted, shuffled);
     }
@@ -1036,11 +1039,11 @@ mod tests {
     #[test]
     fn encode_round_trips_back_to_absolute_positions() {
         let input = vec![
-            abs(0, 0, 3, TY_PROPERTY),
-            abs(0, 4, 1, TY_OPERATOR),
-            abs(0, 6, 3, TY_STRING),
-            abs(1, 2, 5, TY_COMMENT),
-            abs(9, 0, 1, TY_NUMBER),
+            abs_token(0, 0, 3, TY_PROPERTY),
+            abs_token(0, 4, 1, TY_OPERATOR),
+            abs_token(0, 6, 3, TY_STRING),
+            abs_token(1, 2, 5, TY_COMMENT),
+            abs_token(9, 0, 1, TY_NUMBER),
         ];
         let encoded = encode(input.clone());
         let mut line = 0u32;
@@ -1068,7 +1071,10 @@ mod tests {
 
     #[test]
     fn encode_drops_zero_length_tokens() {
-        let out = encode(vec![abs(0, 0, 0, TY_PROPERTY), abs(0, 4, 2, TY_STRING)]);
+        let out = encode(vec![
+            abs_token(0, 0, 0, TY_PROPERTY),
+            abs_token(0, 4, 2, TY_STRING),
+        ]);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].delta_start, 4, "the dropped token leaves no gap");
     }
@@ -1300,19 +1306,9 @@ mod tests {
     };
 
     fn backend_with_open_doc() -> Backend {
-        let state = std::sync::Arc::new(crate::state::DocumentState::new());
-        let captured = std::sync::Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().unwrap();
-        state
+        let backend = crate::testing::test_backend();
+        backend
+            .state
             .documents
             .lock()
             .open(
@@ -1327,7 +1323,7 @@ mod tests {
                 },
             )
             .unwrap();
-        Backend { client, state }
+        backend
     }
 
     fn full_params() -> SemanticTokensParams {
