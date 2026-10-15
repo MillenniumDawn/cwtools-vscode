@@ -563,8 +563,15 @@ suite("GraphPanel", function () {
 			);
 			show.callsFake(async () => {
 				const editor = await originalShow(vscode.Uri.file(tempFile));
-				actualReveal = sandbox.spy(editor, "revealRange");
-				return editor;
+				// VS Code freezes TextEditor API objects, so observe the call through
+				// a delegating facade instead of trying to replace editor.revealRange.
+				actualReveal = sandbox.spy(
+					(range: vscode.Range, revealType: vscode.TextEditorRevealType) =>
+						editor.revealRange(range, revealType),
+				);
+				const facade = Object.create(editor) as vscode.TextEditor;
+				Object.defineProperty(facade, "revealRange", { value: actualReveal });
+				return facade;
 			});
 			assert.ok(receive, "GraphPanel should register its webview message listener");
 
@@ -574,6 +581,7 @@ suite("GraphPanel", function () {
 			assert.ok(editor, "the file should open in a real editor");
 			assert.strictEqual(editor.document.uri.fsPath, vscode.Uri.file(tempFile).fsPath);
 			assert.strictEqual(show.callCount, 1);
+			assert.strictEqual(actualReveal.callCount, 1);
 			const range = actualReveal.firstCall.args[0] as vscode.Range;
 			assert.deepStrictEqual(range.start, new vscode.Position(0, 0));
 			assert.strictEqual(warn.callCount, 1);
