@@ -4,6 +4,10 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { activate, waitForServerReady, waitUntil } from "../support/utils";
 
+// Matches none of the server's or client's watch globs, so only the test
+// observers see it.
+const READY_PROBE = "watch-ready.probe";
+
 suite("served-root file watchers", function () {
 	this.timeout(90_000);
 	test("tracks external create, change and delete in served roots", async () => {
@@ -19,16 +23,36 @@ suite("served-root file watchers", function () {
 			// are independently covered by the diagnostic assertions below.
 			const relativePath = index === 2 ? "probe.cwt" : "events/probe.txt";
 			const watcher = vscode.workspace.createFileSystemWatcher(
-				new vscode.RelativePattern(folder.uri, relativePath),
+				new vscode.RelativePattern(folder.uri, `{${relativePath},${READY_PROBE}}`),
 			);
 			watcher.onDidCreate((uri) => { observedEvents.add(`create:${uri.fsPath}`); });
 			watcher.onDidChange((uri) => { observedEvents.add(`change:${uri.fsPath}`); });
 			watcher.onDidDelete((uri) => { observedEvents.add(`delete:${uri.fsPath}`); });
 			return watcher;
 		});
-		// Let VS Code finish registering the observers before writing probes.
-		await new Promise((resolve) => setTimeout(resolve, 250));
 		try {
+			// VS Code starts a watch asynchronously, signals no readiness and drops
+			// events from before it is live, so rewrite a probe until each observer
+			// reports it.
+			for (const folder of folders) {
+				const ready = path.join(folder.uri.fsPath, READY_PROBE);
+				let lastProbe = 0;
+				try {
+					assert.ok(
+						await waitUntil(async () => {
+							if (observedEvents.has(`create:${ready}`) || observedEvents.has(`change:${ready}`)) return true;
+							if (Date.now() - lastProbe >= 500) {
+								lastProbe = Date.now();
+								await fs.writeFile(ready, String(lastProbe));
+							}
+							return false;
+						}, 20_000),
+						`the observer never went live: ${folder.uri.fsPath}`,
+					);
+				} finally {
+					await fs.rm(ready, { force: true });
+				}
+			}
 			for (const [index, folder] of folders.entries()) {
 				const expectScriptDiagnostics = index !== 2;
 				const file = path.join(folder.uri.fsPath, index === 2 ? "probe.cwt" : "events/probe.txt");

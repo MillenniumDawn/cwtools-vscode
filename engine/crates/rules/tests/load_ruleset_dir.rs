@@ -194,7 +194,7 @@ fn load_ruleset_dir_merges_cwt_files_in_sorted_order() {
 fn load_hoi4_config_dir() {
     let table = StringTable::new();
     let (ruleset, errors) = load_ruleset_from_dir(
-        cwtools_test_rules::hoi4_config(),
+        cwtools_test_support::hoi4_config(),
         &table,
         cwtools_file_manager::file_manager::ScanBudget::default(),
     );

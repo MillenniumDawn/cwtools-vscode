@@ -146,78 +146,7 @@ export class GraphPanel {
 		// Handle messages from the webview
 		this._disposables.push(
 			this._panel.webview.onDidReceiveMessage(
-				async (message: WebviewMessage) => {
-					try {
-						switch (message.command) {
-							case "goToFile": {
-								// A relative string would be silently rooted by Uri.file,
-								// so it never reaches the containment check below.
-								if (!path.isAbsolute(message.uri)) {
-									logWarn(
-										`Refusing to open ${message.uri}: not an absolute file path.`,
-									);
-									return;
-								}
-								const uri = vscode.Uri.file(message.uri);
-								if (!(await confirmOpen(uri))) {
-									return;
-								}
-								// GraphLocation is 1-based, vscode.Range is 0-based.
-								// Clamped so a defensive 0 can't go negative.
-								const line = Math.max(0, message.line - 1);
-								const column = Math.max(0, message.column - 1);
-								const range = new vscode.Range(line, column, line, column);
-								const texteditor = await vscode.window.showTextDocument(uri);
-								texteditor.revealRange(
-									range,
-									vscode.TextEditorRevealType.AtTop,
-								);
-								return;
-							}
-							case "saveImage": {
-								const image = message.image;
-								const dest = await vscode.window.showSaveDialog({
-									filters: { Image: ["png"] },
-								});
-								if (dest) {
-									await writeFile(dest.fsPath, image, "base64");
-								}
-								return;
-							}
-							case "saveJson": {
-								const json = message.json;
-								const dest = await vscode.window.showSaveDialog({
-									filters: { Json: ["json"] },
-								});
-								if (dest) {
-									await writeFile(dest.fsPath, json, "utf-8");
-								}
-								return;
-							}
-							case "showError":
-								vscode.window.showErrorMessage(message.message);
-								return;
-							case "ready":
-								if (this._state === State.DataReady) {
-									this._state = State.Done;
-									this.flushPendingMessage();
-								} else {
-									this._state = State.ClientReady;
-								}
-								return;
-							case "cytoscapeRenderedResult": {
-								const pending = this.pendingRequest;
-								if (pending?.id === message.id) {
-									this.pendingRequest = null;
-									pending.answer(message.rendered);
-								}
-								return;
-							}
-						}
-					} catch (error) {
-						logError("graph webview message handler failed", error);
-					}
-				},
+				(message: WebviewMessage) => this.handleWebviewMessage(message),
 				null,
 				this._disposables,
 			),
@@ -251,6 +180,76 @@ export class GraphPanel {
 		);
 
 		vscode.commands.executeCommand("setContext", "cwtoolsWebview", true);
+	}
+
+	private async handleWebviewMessage(message: WebviewMessage): Promise<void> {
+		try {
+			switch (message.command) {
+				case "goToFile": {
+					// A relative string would be silently rooted by Uri.file,
+					// so it never reaches the containment check below.
+					if (!path.isAbsolute(message.uri)) {
+						logWarn(
+							`Refusing to open ${message.uri}: not an absolute file path.`,
+						);
+						return;
+					}
+					const uri = vscode.Uri.file(message.uri);
+					if (!(await confirmOpen(uri))) {
+						return;
+					}
+					// GraphLocation is 1-based, vscode.Range is 0-based.
+					// Clamped so a defensive 0 can't go negative.
+					const line = Math.max(0, message.line - 1);
+					const column = Math.max(0, message.column - 1);
+					const range = new vscode.Range(line, column, line, column);
+					const texteditor = await vscode.window.showTextDocument(uri);
+					texteditor.revealRange(range, vscode.TextEditorRevealType.AtTop);
+					return;
+				}
+				case "saveImage": {
+					const image = message.image;
+					const dest = await vscode.window.showSaveDialog({
+						filters: { Image: ["png"] },
+					});
+					if (dest) {
+						await writeFile(dest.fsPath, image, "base64");
+					}
+					return;
+				}
+				case "saveJson": {
+					const json = message.json;
+					const dest = await vscode.window.showSaveDialog({
+						filters: { Json: ["json"] },
+					});
+					if (dest) {
+						await writeFile(dest.fsPath, json, "utf-8");
+					}
+					return;
+				}
+				case "showError":
+					vscode.window.showErrorMessage(message.message);
+					return;
+				case "ready":
+					if (this._state === State.DataReady) {
+						this._state = State.Done;
+						this.flushPendingMessage();
+					} else {
+						this._state = State.ClientReady;
+					}
+					return;
+				case "cytoscapeRenderedResult": {
+					const pending = this.pendingRequest;
+					if (pending?.id === message.id) {
+						this.pendingRequest = null;
+						pending.answer(message.rendered);
+					}
+					return;
+				}
+			}
+		} catch (error) {
+			logError("graph webview message handler failed", error);
+		}
 	}
 
 	public initialiseGraph(

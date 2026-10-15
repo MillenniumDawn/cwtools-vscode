@@ -32,10 +32,14 @@ suite("Rules sync — hoi4 fixture", function () {
 		const hoi4Cache = path.join(cacheRoot, "hoi4");
 		const markerPath = path.join(hoi4Cache, MARKER_PATH);
 
+		let head = "";
 		const populated = await waitUntil(async () => {
 			try {
 				const text = await fsPromises.readFile(markerPath, "utf8");
-				return text.includes("marker = new_pin");
+				if (!text.includes("marker = new_pin")) return false;
+				// Checkout writes the tree before it moves HEAD.
+				head = (await git(["-C", hoi4Cache, "rev-parse", "HEAD"])).trim();
+				return true;
 			} catch {
 				return false;
 			}
@@ -44,8 +48,6 @@ suite("Rules sync — hoi4 fixture", function () {
 			populated,
 			`rules cache should be populated with the pinned fixture content at ${markerPath}`,
 		);
-
-		const head = (await git(["-C", hoi4Cache, "rev-parse", "HEAD"])).trim();
 		assert.strictEqual(head, NEW_PIN, "cache should land on the pinned commit");
 
 		await assert.rejects(

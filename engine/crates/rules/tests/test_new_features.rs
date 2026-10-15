@@ -4,32 +4,35 @@ use cwtools_rules::rules_types::*;
 use cwtools_string_table::string_table::StringTable;
 
 #[test]
-fn test_new_field_variants() {
-    let input = r#"
-alias[effect:test] = {
-    ## cardinality = 1..1
-    name = value_set[local_variable]
-    ## cardinality = 0..1
-    count = int_value_field
-    ## cardinality = 0..inf
-    value = value_field
-    ##cardinality = 0..1
-    pct = percentage_field
-    loc = localisation
-    p2 = filepath[gfx,dds]
-    scope_test = scope[country]
-    var_test = variable_field
-    int_var = int_variable_field
-    enum_test = enum[power_types]
+fn values_block_collects_its_members() {
+    let ruleset = parse_ruleset(
+        r#"
+values = {
+    value[my_values] = {
+        alpha
+        beta
+        gamma
+    }
+}
+"#,
+    );
+
+    assert_eq!(ruleset.values.len(), 1);
+    let my_vals = ruleset
+        .values
+        .get("my_values")
+        .expect("my_values not found");
+    assert_eq!(
+        my_vals.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        vec!["alpha", "beta", "gamma"]
+    );
 }
 
+#[test]
+fn complex_enum_is_collected() {
+    let ruleset = parse_ruleset(
+        r#"
 enums = {
-    ### Power Type enum
-    enum[power_types] = {
-        civic
-        military
-    }
-    
     complex_enum[my_complex] = {
         path = game/common/complex
         name = {
@@ -38,7 +41,44 @@ enums = {
         start_from_root = yes
     }
 }
+"#,
+    );
 
+    assert_eq!(ruleset.complex_enums.len(), 1);
+    assert_eq!(ruleset.complex_enums[0].name, "my_complex");
+    assert!(ruleset.complex_enums[0].start_from_root);
+    assert!(matches!(
+        ruleset.complex_enums[0].name_tree,
+        ComplexEnumNameTree::Entries(_)
+    ));
+}
+
+#[test]
+fn enum_description_comes_from_the_triple_hash_comment() {
+    let ruleset = parse_ruleset(
+        r#"
+enums = {
+    ### Power Type enum
+    enum[power_types] = {
+        civic
+        military
+    }
+}
+"#,
+    );
+
+    let pe = ruleset
+        .enums
+        .iter()
+        .find(|e| e.key == "power_types")
+        .unwrap();
+    assert_eq!(pe.description, "Power Type enum");
+}
+
+#[test]
+fn type_metadata_is_read() {
+    let ruleset = parse_ruleset(
+        r#"
 ## type_key_filter <> ship barrier
 ## graph_related_types = { country character }
 types = {
@@ -52,49 +92,9 @@ types = {
         unique = yes
     }
 }
-
-values = {
-    value[my_values] = {
-        alpha
-        beta
-        gamma
-    }
-}
-"#;
-
-    let table = StringTable::new();
-    let parsed = parse_string(input, &table);
-    let ruleset = ast_to_ruleset(&parsed, &table);
-
-    // G: values block
-    assert_eq!(ruleset.values.len(), 1);
-    let my_vals = ruleset
-        .values
-        .get("my_values")
-        .expect("my_values not found");
-    assert_eq!(
-        my_vals.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-        vec!["alpha", "beta", "gamma"]
+"#,
     );
 
-    // F: complex_enum
-    assert_eq!(ruleset.complex_enums.len(), 1);
-    assert_eq!(ruleset.complex_enums[0].name, "my_complex");
-    assert!(ruleset.complex_enums[0].start_from_root);
-    assert!(matches!(
-        ruleset.complex_enums[0].name_tree,
-        ComplexEnumNameTree::Entries(_)
-    ));
-
-    // F: enum description from ###
-    let pe = ruleset
-        .enums
-        .iter()
-        .find(|e| e.key == "power_types")
-        .unwrap();
-    assert_eq!(pe.description, "Power Type enum");
-
-    // C: type metadata
     let mt = ruleset.types.iter().find(|t| t.name == "my_type").unwrap();
     assert!(mt.path_options.path_strict);
     assert!(mt.warning_only);
@@ -102,98 +102,62 @@ values = {
     assert!(mt.unique);
     assert_eq!(mt.starts_with, Some("my_".to_string()));
     assert_eq!(mt.key_prefix, Some("MY_".to_string()));
+}
 
-    // B: cardinality parsing
-    let (_, (rule, _opts)) = ruleset
-        .aliases
-        .first()
-        .expect("expected at least one alias");
-    let RuleType::NodeRule { rules, .. } = rule else {
-        panic!("expected a node rule for the alias, got {rule:?}");
-    };
+#[test]
+fn exact_cardinality_is_strict() {
+    let (_, opts) =
+        first_alias_rule("    ## cardinality = 1..1\n    name = value_set[local_variable]");
 
-    // name: 1..1 strict
-    let (_, name_opts) = &rules[0];
-    assert_eq!(name_opts.min, 1);
-    assert_eq!(name_opts.max, 1);
-    assert!(name_opts.strict_min);
+    assert_eq!(opts.min, 1);
+    assert_eq!(opts.max, 1);
+    assert!(opts.strict_min);
+}
 
-    // count: int_value_field
-    let (count_rule, _) = &rules[1];
-    let RuleType::LeafRule { right, .. } = count_rule else {
-        panic!("expected a leaf rule for count, got {count_rule:?}");
-    };
+#[test]
+fn cardinality_comment_without_a_space_is_read() {
+    let (_, opts) = first_alias_rule("    ##cardinality = 0..1\n    pct = percentage_field");
+
+    assert_eq!(opts.min, 0);
+    assert_eq!(opts.max, 1);
+}
+
+#[test]
+fn percentage_field_is_a_percent_value() {
     assert!(matches!(
-        right,
-        NewField::ValueScopeMarkerField { is_int: true, .. }
+        parse_field("percentage_field"),
+        NewField::ValueField(ValueType::Percent)
     ));
+}
 
-    // pct: ##cardinality= (no space) + percentage_field
-    let (_, pct_opts) = &rules[3];
-    assert_eq!(pct_opts.min, 0);
-    assert_eq!(pct_opts.max, 1);
-    let (pct_rule, _) = &rules[3];
-    let RuleType::LeafRule { right, .. } = pct_rule else {
-        panic!("expected a leaf rule for pct, got {pct_rule:?}");
-    };
-    assert!(matches!(right, NewField::ValueField(ValueType::Percent)));
-
-    // filepath[gfx,dds]
-    let (fp_rule, _) = &rules[5];
-    let RuleType::LeafRule { right, .. } = fp_rule else {
-        panic!("expected a leaf rule for filepath, got {fp_rule:?}");
-    };
+#[test]
+fn filepath_field_carries_prefix_and_extension() {
     assert!(matches!(
-        right,
+        parse_field("filepath[gfx,dds]"),
         NewField::FilepathField {
             prefix: Some(_),
             extension: Some(_)
         }
     ));
+}
 
-    // scope[country]
-    let (sc_rule, _) = &rules[6];
-    let RuleType::LeafRule { right, .. } = sc_rule else {
-        panic!("expected a leaf rule for scope, got {sc_rule:?}");
-    };
-    assert!(matches!(right, NewField::ScopeField(_)));
-
-    // variable_field
-    let (vf_rule, _) = &rules[7];
-    let RuleType::LeafRule { right, .. } = vf_rule else {
-        panic!("expected a leaf rule for variable_field, got {vf_rule:?}");
-    };
+#[test]
+fn scope_field_is_a_scope_field() {
     assert!(matches!(
-        right,
-        NewField::VariableField {
-            is_int: false,
-            is_32bit: false,
-            ..
-        }
-    ));
-
-    // int_variable_field
-    let (ivf_rule, _) = &rules[8];
-    let RuleType::LeafRule { right, .. } = ivf_rule else {
-        panic!("expected a leaf rule for int_variable_field, got {ivf_rule:?}");
-    };
-    assert!(matches!(
-        right,
-        NewField::VariableField {
-            is_int: true,
-            is_32bit: false,
-            ..
-        }
+        parse_field("scope[country]"),
+        NewField::ScopeField(_)
     ));
 }
 
-// Parse a single bounded field form through ast_to_ruleset and return its
-// right-hand NewField. The form is the value of a leaf inside an alias clause.
-fn parse_field(input: &str) -> NewField {
-    let cwt = format!("alias[effect:test] = {{\n    field = {input}\n}}");
+fn parse_ruleset(input: &str) -> RuleSet {
     let table = StringTable::new();
-    let parsed = parse_string(&cwt, &table);
-    let ruleset = ast_to_ruleset(&parsed, &table);
+    let parsed = parse_string(input, &table);
+    ast_to_ruleset(&parsed, &table)
+}
+
+// Parse `body` as the clause of an alias and return its first rule.
+fn first_alias_rule(body: &str) -> (RuleType, Options) {
+    let ruleset = parse_ruleset(&format!("alias[effect:test] = {{\n{body}\n}}"));
     let (_, (rule, _)) = ruleset
         .aliases
         .first()
@@ -201,11 +165,17 @@ fn parse_field(input: &str) -> NewField {
     let RuleType::NodeRule { rules, .. } = rule else {
         panic!("expected a node rule, got {rule:?}");
     };
-    let (field_rule, _) = &rules[0];
+    rules[0].clone()
+}
+
+// Parse a single bounded field form through ast_to_ruleset and return its
+// right-hand NewField. The form is the value of a leaf inside an alias clause.
+fn parse_field(input: &str) -> NewField {
+    let (field_rule, _) = first_alias_rule(&format!("    field = {input}"));
     let RuleType::LeafRule { right, .. } = field_rule else {
         panic!("expected a leaf rule, got {field_rule:?}");
     };
-    right.clone()
+    right
 }
 
 fn assert_variable_field(input: &str, is_int: bool, is_32bit: bool, min: f64, max: f64) {

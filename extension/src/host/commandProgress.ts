@@ -66,6 +66,7 @@ function pipeServerProgress(
 	client: LanguageClient,
 	token: string,
 	progress: Progress<{ message?: string; increment?: number }>,
+	onBegin?: () => void,
 ): Disposable {
 	let reported = 0;
 	return client.onProgress(
@@ -74,6 +75,9 @@ function pipeServerProgress(
 		(value: WorkDoneProgressValue) => {
 			if (value.kind === "end") {
 				return;
+			}
+			if (value.kind === "begin") {
+				onBegin?.();
 			}
 			const percentage =
 				typeof value.percentage === "number" ? value.percentage : undefined;
@@ -152,18 +156,32 @@ export async function runCancellableExecuteCommand(
 			const subscriptions: Disposable[] = [];
 			const progressToken = useToken ? newProgressToken() : undefined;
 			if (progressToken !== undefined) {
+				let progressBegan = false;
+				let cancellationRequested = false;
+				let cancelSent = false;
+				const sendCancelWhenReady = () => {
+					if (!progressBegan || !cancellationRequested || cancelSent) {
+						return;
+					}
+					cancelSent = true;
+					void client
+						.sendNotification(WorkDoneProgressCancelNotification.type, {
+							token: progressToken,
+						})
+						.catch(() => {
+							// A server that already finished (or died) has nothing
+							// to cancel; the request's own settlement ends the
+							// notification either way.
+						});
+				};
 				subscriptions.push(
-					pipeServerProgress(client, progressToken, progress),
+					pipeServerProgress(client, progressToken, progress, () => {
+						progressBegan = true;
+						sendCancelWhenReady();
+					}),
 					token.onCancellationRequested(() => {
-						void client
-							.sendNotification(WorkDoneProgressCancelNotification.type, {
-								token: progressToken,
-							})
-							.catch(() => {
-								// A server that already finished (or died) has nothing
-								// to cancel; the request's own settlement is what ends
-								// the notification either way.
-							});
+						cancellationRequested = true;
+						sendCancelWhenReady();
 					}),
 				);
 			}
