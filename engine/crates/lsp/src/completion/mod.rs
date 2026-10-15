@@ -936,11 +936,35 @@ mod tests {
     #[test]
     fn type_generated_modifier_keys_are_completed() {
         let table = cwtools_string_table::string_table::StringTable::new();
-        let (ruleset, _errors) = cwtools_rules::ruleset_loader::load_ruleset_from_dir(
-            cwtools_test_rules::stellaris_config(),
+        let (mut ruleset, _errors) = cwtools_rules::ruleset_loader::load_ruleset_from_dir(
+            cwtools_test_support::stellaris_config(),
             &table,
             cwtools_file_manager::file_manager::ScanBudget::default(),
         );
+        ruleset
+            .types
+            .iter_mut()
+            .find(|td| td.name == "job")
+            .expect("pinned Stellaris config should declare type[job]")
+            .modifiers
+            .extend([
+                cwtools_rules::rules_types::TypeModifier {
+                    prefix: String::new(),
+                    suffix: String::new(),
+                    is_template: true,
+                    category: "Planets".to_string(),
+                    documentation: None,
+                    explicit: false,
+                },
+                cwtools_rules::rules_types::TypeModifier {
+                    prefix: String::new(),
+                    suffix: String::new(),
+                    is_template: false,
+                    category: "Planets".to_string(),
+                    documentation: None,
+                    explicit: false,
+                },
+            ]);
         let mut type_index = cwtools_info::TypeIndex::new();
         type_index.merge(
             "file:///game/common/pop_jobs/00_jobs.txt",
@@ -1009,6 +1033,27 @@ mod tests {
             Some("0_job_farmer_add".to_string())
         );
         assert_eq!(sort_text_in("Ship"), Some("z_job_farmer_add".to_string()));
+
+        let bare_items = completions_from_rules(
+            &rules,
+            &ruleset,
+            &info,
+            "stellaris",
+            &modifier_keys,
+            &modifier_scopes,
+            Some(registry.as_ref()),
+            registry.id_of("Planet"),
+            "farmer",
+        )
+        .0;
+        assert!(
+            bare_items.iter().any(|item| item.label == "farmer"),
+            "a bare `$` template should complete its type instance"
+        );
+        assert!(
+            !bare_items.iter().any(|item| item.label == "planets"),
+            "a plain non-template modifier declaration should remain excluded"
+        );
     }
 
     #[test]

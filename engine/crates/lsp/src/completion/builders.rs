@@ -784,7 +784,7 @@ pub fn expanded_modifier_scopes(
     }
     for td in &ruleset.types {
         for modifier in &td.modifiers {
-            if modifier.prefix.is_empty() && modifier.suffix.is_empty() {
+            if !modifier.is_template {
                 continue;
             }
             let scopes = ruleset

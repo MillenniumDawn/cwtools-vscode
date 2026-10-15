@@ -35,10 +35,9 @@ pub fn build_modifier_keys(
     }
     for td in &ruleset.types {
         for modifier in &td.modifiers {
-            // Type-attached modifier declarations in Stellaris use `$` in the
-            // generated key, which the converter stores as a non-empty prefix
-            // or suffix. A plain, non-template entry is not a generated key.
-            if modifier.prefix.is_empty() && modifier.suffix.is_empty() {
+            // A bare `$` has empty sides too, so template identity must come
+            // from the rule parser rather than the extracted key parts.
+            if !modifier.is_template {
                 continue;
             }
             for (_, inst) in type_index.instances(&td.name) {

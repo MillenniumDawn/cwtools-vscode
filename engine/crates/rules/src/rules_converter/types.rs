@@ -370,6 +370,7 @@ pub(crate) fn parse_modifiers_block(
             TypeModifier {
                 prefix,
                 suffix,
+                is_template: true,
                 category: value,
                 documentation,
                 explicit,
@@ -380,6 +381,7 @@ pub(crate) fn parse_modifiers_block(
             TypeModifier {
                 prefix,
                 suffix,
+                is_template: true,
                 category: key,
                 documentation,
                 explicit,
@@ -388,6 +390,7 @@ pub(crate) fn parse_modifiers_block(
             TypeModifier {
                 prefix: String::new(),
                 suffix: String::new(),
+                is_template: false,
                 category: key,
                 documentation,
                 explicit,
@@ -423,20 +426,36 @@ mod option_directive_tests {
         let def = parse_typedef(
             r#"types = { type[job] = {
                 path = "game/common/pop_jobs"
-                modifiers = { "job_$_add" = Planets }
+                modifiers = {
+                    "job_$_add" = Planets
+                    "$" = Bare
+                    Legacy = "$"
+                    Static = Planets
+                }
             } }"#,
         );
 
         assert_eq!(
-            def.modifiers,
-            vec![TypeModifier {
+            def.modifiers[0],
+            TypeModifier {
                 prefix: "job_".to_string(),
                 suffix: "_add".to_string(),
+                is_template: true,
                 category: "Planets".to_string(),
                 documentation: None,
                 explicit: false,
-            }]
+            }
         );
+        assert_eq!(def.modifiers[1].prefix, "");
+        assert_eq!(def.modifiers[1].suffix, "");
+        assert!(def.modifiers[1].is_template);
+        assert_eq!(def.modifiers[1].category, "Bare");
+        assert_eq!(def.modifiers[2].prefix, "");
+        assert_eq!(def.modifiers[2].suffix, "");
+        assert!(def.modifiers[2].is_template);
+        assert_eq!(def.modifiers[2].category, "Legacy");
+        assert!(!def.modifiers[3].is_template);
+        assert_eq!(def.modifiers[3].category, "Static");
     }
 
     #[test]
