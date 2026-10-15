@@ -549,6 +549,101 @@ suite("registered workspace commands", () => {
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
 		});
 
+		test("explains why a saved JSON graph cannot be restored when selection is canceled", async () => {
+			state.showOpenDialog.mockResolvedValue(undefined);
+			const serializer = await serializerFor(fakeClient([]));
+
+			await serializer.deserializeWebviewPanel(webviewPanel, {
+				source: "json",
+				fileName: "saved-graph.json",
+			});
+
+			assert.deepStrictEqual(state.showInformationMessage.mock.calls, [[
+				"CWTools: graph data from a JSON export isn't persisted across reloads. Run 'CWTools: Recreate graph from json' to rebuild it.",
+			]]);
+			assert.deepStrictEqual(state.readFile.mock.calls, []);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
+		});
+
+		test("falls back to the latest entity type and current depth when state is absent", async () => {
+			const requests = mockGraphRequests();
+			const client = fakeClient(["getGraphData"]);
+			const serializer = await serializerFor(client, "latest-type");
+			state.showInputBox.mockResolvedValue("2");
+			const depthChange = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			requests[0].result.resolve([{ id: "depth-update" }]);
+			await depthChange;
+
+			const restoring = serializer.deserializeWebviewPanel(webviewPanel, undefined);
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+			assert.deepStrictEqual(
+				[requests[1].entityType, requests[1].depth],
+				["latest-type", 2],
+			);
+			requests[1].result.resolve([{ id: "fallback" }]);
+			await restoring;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "depth-update" }], 1, {
+					source: "server",
+					entityType: "latest-type",
+					depth: 2,
+				}],
+				[[{ id: "fallback" }], 1, {
+					source: "server",
+					entityType: "latest-type",
+					depth: 2,
+				}],
+			]);
+		});
+
+		test("warns when the restored server does not provide graph data", async () => {
+			const serializer = await serializerFor(fakeClient([]));
+
+			await serializer.deserializeWebviewPanel(webviewPanel, {
+				source: "server",
+				entityType: "saved-type",
+				depth: 5,
+			});
+
+			assert.deepStrictEqual(state.showWarningMessage.mock.calls, [[
+				"CWTools: this language server doesn't provide graph data, so the graph can't be restored.",
+			]]);
+			assert.deepStrictEqual(state.executeCommand.mock.calls, []);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
+		});
+
+		test("explains the missing saved graph when the server cannot rebuild it", async () => {
+			const serializer = await serializerFor(fakeClient([]), "latest-type");
+
+			await serializer.deserializeWebviewPanel(webviewPanel, undefined);
+
+			assert.deepStrictEqual(state.showInformationMessage.mock.calls, [[
+				"CWTools: graph data isn't persisted across reloads. Run 'CWTools: Show graph' to rebuild the graph.",
+			]]);
+			assert.deepStrictEqual(state.executeCommand.mock.calls, []);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
+		});
+
+		test("logs failures reading a re-selected JSON graph", async () => {
+			const channelError = vi.fn();
+			initializeLogger({ error: channelError } as unknown as LogOutputChannel);
+			state.showOpenDialog.mockResolvedValue([{ fsPath: "/tmp/rebuilt-graph.json" }]);
+			state.readFile.mockRejectedValue(new Error("saved file could not be read"));
+			const serializer = await serializerFor(fakeClient([]));
+
+			await serializer.deserializeWebviewPanel(webviewPanel, {
+				source: "json",
+				fileName: "old-graph.json",
+			});
+
+			assert.deepStrictEqual(channelError.mock.calls, [[
+				"graph panel restore failed: saved file could not be read",
+			]]);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
+		});
+
 		test("keeps a newer show graph when the restore finishes later", async () => {
 			const requests = mockGraphRequests();
 			const serializer = await serializerFor(fakeClient(["getGraphData"]));
