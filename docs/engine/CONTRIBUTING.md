@@ -212,11 +212,11 @@ Then, from `engine/`:
 
 ```sh
 mkdir -p fuzz/corpus/parse_string fuzz/corpus/parse_loc_text \
-  fuzz/corpus/decode_capped fuzz/corpus/with_archived_file \
+  fuzz/corpus/parse_rules fuzz/corpus/decode_capped fuzz/corpus/with_archived_file \
   fuzz/corpus/read_errors_from_file fuzz/corpus/vanilla_cache_load
 cargo +nightly fuzz run parse_string          fuzz/corpus/parse_string          fuzz/seeds/parse_string
 rules_corpus=$(mktemp -d)
-cargo +nightly-2026-07-24 run --locked -p cwtools_test_rules --example pinned_fuzz_corpus -- "$rules_corpus"
+cargo +nightly run --locked -p cwtools_test_support --example pinned_fuzz_corpus -- "$rules_corpus"
 cargo +nightly fuzz run parse_rules           fuzz/corpus/parse_rules           "$rules_corpus"
 cargo +nightly fuzz run parse_loc_text        fuzz/corpus/parse_loc_text        fuzz/seeds/parse_loc_text
 cargo +nightly fuzz run decode_capped         fuzz/corpus/decode_capped         fuzz/seeds/decode_capped
@@ -230,9 +230,10 @@ after a fresh checkout, and libFuzzer refuses to start on a corpus directory
 that doesn't exist rather than creating one.
 
 The first directory is the working corpus libFuzzer grows, the second is the
-committed seeds. Order matters: new inputs are only written to the first one,
-which is what keeps them out of `seeds/`. Ctrl-C when you're bored, or bound it
-with `-- -max_total_time=300`.
+committed seeds. For `parse_rules`, the second corpus is the temporary set of
+pinned upstream rules generated above. Order matters: new inputs are only
+written to the first one, which keeps them out of `seeds/`. Ctrl-C when you're
+bored, or bound it with `-- -max_total_time=300`.
 
 A crash writes the input to `fuzz/artifacts/<target>/` and prints the path.
 Replay it with `cargo +nightly fuzz run <target> <that-file>`.
@@ -253,7 +254,7 @@ Both are fixed. The seeds are there so they stay fixed. Add a seed whenever a
 fuzz run finds something, in the same commit as the fix.
 
 `parse_rules` uses a temporary corpus generated from every `.cwt` file in the
-Stellaris and HOI4 checkouts returned by `cwtools_test_rules`, so its inputs
+Stellaris and HOI4 checkouts returned by `cwtools_test_support`, so its inputs
 come from the exact commits in `rules-pins.json` and are never committed as
 copied config files. The staging destination must be empty (`mktemp -d` above
 provides one).

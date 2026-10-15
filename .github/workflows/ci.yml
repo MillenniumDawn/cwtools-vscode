@@ -418,7 +418,7 @@ jobs:
         run: |
           corpus="$(mktemp -d)"
           echo "PINNED_RULES_CORPUS=$corpus" >> "$GITHUB_ENV"
-          cargo +nightly-2026-07-24 run --locked -p cwtools_test_rules --example pinned_fuzz_corpus -- "$corpus"
+          cargo +nightly-2026-07-24 run --locked -p cwtools_test_support --example pinned_fuzz_corpus -- "$corpus"
       - name: parse_rules over pinned upstream configs
         run: >-
           cargo +nightly-2026-07-24 fuzz run parse_rules

@@ -6,7 +6,7 @@ fn main() {
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            eprintln!("usage: cargo run -p cwtools_test_rules --example pinned_fuzz_corpus -- <destination>");
+            eprintln!("usage: cargo +nightly run --locked -p cwtools_test_support --example pinned_fuzz_corpus -- <destination>");
             std::process::exit(2);
         });
     let count = stage_pinned_fuzz_corpus(&destination).unwrap_or_else(|error| {
@@ -23,8 +23,8 @@ fn main() {
 
 fn stage_pinned_fuzz_corpus(destination: &Path) -> std::io::Result<usize> {
     stage_cwt_corpus(
-        cwtools_test_rules::stellaris_config(),
-        cwtools_test_rules::hoi4_config(),
+        cwtools_test_support::stellaris_config(),
+        cwtools_test_support::hoi4_config(),
         destination,
     )
 }
