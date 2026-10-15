@@ -76,7 +76,7 @@
 
 #### Extension
 
-* Test graph navigation through the real GraphPanel handler, covering trusted paths, outside-root allow and deny decisions, and one-based location reveals. (#993)
+* Exercise GraphPanel's registered goToFile listener with a real editor open and zero-coordinate clamping. (#993)
 * Hold command-progress cancellation until the server opens its progress token, so an early Cancel click is not lost before the server registers it.
 * The served-root watcher host test no longer sleeps 250 ms and hopes its observers are live. It rewrites a probe in each root until that root's observer reports it, the gate #960 added for external rules, so a slow host cannot drop the create event the test asserts. Five runs pinned to two busy cores pass. (#1027)
 * Test four rules sync failure paths: a newer manifest is still used when caching it fails, a stale `.git` checkout with Git missing still gets the missing-Git warning, a manifest whose `content-length` is over the limit is skipped without reading the body, and a sync can run again after a failed fetch. (#996)

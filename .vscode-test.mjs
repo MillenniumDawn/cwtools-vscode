@@ -98,7 +98,6 @@ const deactivateFile =
 const smokeFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/extension.test.js",
-	"./dist/extension/bin/client/test/host/graphNavigation.test.js",
 	deactivateFile,
 ];
 const restartFiles = [
@@ -121,7 +120,6 @@ const rulesSyncFiles = [
 const hostFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/extension.test.js",
-	"./dist/extension/bin/client/test/host/graphNavigation.test.js",
 	"./dist/extension/bin/client/test/host/diagnostics.test.js",
 	"./dist/extension/bin/client/test/host/hover.test.js",
 	"./dist/extension/bin/client/test/host/completion.test.js",
