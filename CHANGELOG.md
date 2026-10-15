@@ -1,7 +1,5 @@
 ### Unreleased
 
-* Cover real graph PNG and JSON exports and save-dialog cancellation in the extension host
-
 #### Engine
 
 * Finish deduplicating the test helpers. Ten `cwtools_lsp` unit-test `Backend` setups use `testing::test_backend()` or `test_backend_with_socket()`; the two that drive the `initialize` handshake keep their own. `write_tree` moves to `cwtools_test_support`, which also builds its two fixture workspaces with it, and `specific_keys` moves to the validation integration `common` module. The benches find their sibling checkouts through one `cwtools_test_support::checkout`, so the `semantic_tokens` corpus case now also honors `CWTOOLS_PROJECTS`. Test counts are unchanged at 2,592. (#1028)
@@ -78,6 +76,7 @@
 
 #### Extension
 
+* Verify exported graph PNG bytes match the webview payload and JSON exports preserve its raw bytes.
 * Hold command-progress cancellation until the server opens its progress token, so an early Cancel click is not lost before the server registers it.
 * The served-root watcher host test no longer sleeps 250 ms and hopes its observers are live. It rewrites a probe in each root until that root's observer reports it, the gate #960 added for external rules, so a slow host cannot drop the create event the test asserts. Five runs pinned to two busy cores pass. (#1027)
 * Test four rules sync failure paths: a newer manifest is still used when caching it fails, a stale `.git` checkout with Git missing still gets the missing-Git warning, a manifest whose `content-length` is over the limit is skipped without reading the body, and a sync can run again after a failed fetch. (#996)

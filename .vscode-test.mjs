@@ -1,7 +1,7 @@
 // Single source for the host-based extension tests. Pick a config with
 // `vscode-test --label <name>` (see the npm `test:*` scripts):
 //
-//   smoke       activation, graph panel/export, and deactivation in the sample workspace
+//   smoke       activation, the graph panel and deactivation, in the sample workspace
 //   vscode-floor activation and server initialization on the declared minimum
 //   multi-root  server-backed descriptor/root selection in a multi-root fixture
 //   watched     served-root exclusions and watched-file updates, in its own workspace
@@ -98,7 +98,6 @@ const deactivateFile =
 const smokeFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/extension.test.js",
-	"./dist/extension/bin/client/test/host/graphExports.test.js",
 	deactivateFile,
 ];
 const restartFiles = [
@@ -121,7 +120,6 @@ const rulesSyncFiles = [
 const hostFiles = [
 	abortDiagnostics,
 	"./dist/extension/bin/client/test/host/extension.test.js",
-	"./dist/extension/bin/client/test/host/graphExports.test.js",
 	"./dist/extension/bin/client/test/host/diagnostics.test.js",
 	"./dist/extension/bin/client/test/host/hover.test.js",
 	"./dist/extension/bin/client/test/host/completion.test.js",
