@@ -54,7 +54,9 @@ function progressCapableClient(sendRequest: SendRequest, onProgress?: unknown) {
 			capabilities: { executeCommandProvider: { workDoneProgress: true } },
 		},
 		onProgress: onProgress ?? (() => ({ dispose: () => undefined })),
-		sendNotification: vi.fn(() => Promise.resolve()),
+		sendNotification: vi.fn(
+			(_type: unknown, _params: unknown) => Promise.resolve(),
+		),
 		sendRequest,
 	};
 }
@@ -176,15 +178,21 @@ suite("commandProgress", () => {
 
 		test("cancel sends window/workDoneProgress/cancel for its own token", async () => {
 			let fireCancel: (() => void) | undefined;
+			let emit: ((value: unknown) => void) | undefined;
 			state.token.onCancellationRequested = (listener: () => void) => {
 				fireCancel = listener;
 				return { dispose: () => undefined };
 			};
 			const sendRequest = vi.fn().mockImplementation(() => {
+				emit?.({ kind: "begin", title: "x", percentage: 0 });
 				fireCancel?.();
 				return Promise.resolve("Re-index cancelled.");
 			});
-			const client = progressCapableClient(sendRequest);
+			const onProgress = (_type: unknown, _token: string, handler: unknown) => {
+				emit = handler as (value: unknown) => void;
+				return { dispose: () => undefined };
+			};
+			const client = progressCapableClient(sendRequest, onProgress);
 
 			// The server returns normally with an honest message; cancelling is
 			// not an error on this path.
@@ -193,6 +201,122 @@ suite("commandProgress", () => {
 				[
 					WorkDoneProgressCancelNotification.type,
 					{ token: sentToken(sendRequest) },
+				],
+			]);
+		});
+
+		test("holds an early cancel until the server registers its progress token", async () => {
+			let fireCancel: (() => void) | undefined;
+			let emit: ((value: unknown) => void) | undefined;
+			let serverRegisteredToken = false;
+			let serverObservedCancel = false;
+			state.token.onCancellationRequested = (listener: () => void) => {
+				fireCancel = listener;
+				return { dispose: () => undefined };
+			};
+			const sendRequest = vi.fn().mockImplementation(() => {
+				fireCancel?.();
+				assert.strictEqual(
+					serverObservedCancel,
+					false,
+					"the server has not registered the token before progress begins",
+				);
+				emit?.({ kind: "begin", title: "x", percentage: 0 });
+				return Promise.resolve("Re-index cancelled.");
+			});
+			const onProgress = (_type: unknown, _token: string, handler: unknown) => {
+				emit = (value: unknown) => {
+					serverRegisteredToken = true;
+					(handler as (value: unknown) => void)(value);
+				};
+				return { dispose: () => undefined };
+			};
+			const client = progressCapableClient(sendRequest, onProgress);
+			client.sendNotification.mockImplementation((_type, _params) => {
+				if (serverRegisteredToken) serverObservedCancel = true;
+				return Promise.resolve();
+			});
+
+			await reindex(client);
+
+			assert.strictEqual(serverObservedCancel, true);
+			assert.deepStrictEqual(client.sendNotification.mock.calls, [
+				[
+					WorkDoneProgressCancelNotification.type,
+					{ token: sentToken(sendRequest) },
+				],
+			]);
+		});
+
+		test("replays an early cancel only for its own concurrent command token", async () => {
+			const cancellationListeners: Array<() => void> = [];
+			const progressHandlers = new Map<string, (value: unknown) => void>();
+			const registeredTokens = new Set<string>();
+			const resolutions = new Map<string, (value: string) => void>();
+			state.token.onCancellationRequested = (listener: () => void) => {
+				cancellationListeners.push(listener);
+				return { dispose: () => undefined };
+			};
+			const sendRequest = vi.fn().mockImplementation(
+				(
+					_type: unknown,
+					params: { workDoneToken: string },
+				) =>
+					new Promise<string>((resolve) => {
+						resolutions.set(params.workDoneToken, resolve);
+					}),
+			);
+			const onProgress = (
+				_type: unknown,
+				token: string,
+				handler: unknown,
+			) => {
+				progressHandlers.set(token, (value) => {
+					if (
+						typeof value === "object" &&
+						value !== null &&
+						"kind" in value &&
+						value.kind === "begin"
+					) {
+						registeredTokens.add(token);
+					}
+					(handler as (value: unknown) => void)(value);
+				});
+				return { dispose: () => undefined };
+			};
+			const client = progressCapableClient(sendRequest, onProgress);
+			client.sendNotification.mockImplementation((_type, params) => {
+				assert.ok(
+					registeredTokens.has(
+						(params as { token: string }).token,
+					),
+				);
+				return Promise.resolve();
+			});
+
+			const commandA = reindex(client);
+			const commandB = reindex(client);
+			const tokenA = sentToken(sendRequest, 0);
+			const tokenB = sentToken(sendRequest, 1);
+			assert.ok(tokenA);
+			assert.ok(tokenB);
+			assert.notStrictEqual(tokenA, tokenB);
+
+			cancellationListeners[0]?.();
+			cancellationListeners[0]?.();
+			progressHandlers.get(tokenB)?.({ kind: "begin", title: "B" });
+			assert.strictEqual(client.sendNotification.mock.calls.length, 0);
+			progressHandlers.get(tokenA)?.({ kind: "begin", title: "A" });
+			cancellationListeners[0]?.();
+
+			resolutions.get(tokenA)?.("A cancelled");
+			resolutions.get(tokenB)?.("B completed");
+			await Promise.all([commandA, commandB]);
+
+			assert.deepStrictEqual(client.sendNotification.mock.calls, [
+				[
+					WorkDoneProgressCancelNotification.type,
+					{ token: tokenA },
 				],
 			]);
 		});
