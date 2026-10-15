@@ -21,6 +21,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 cwtools_file_manager = { workspace = true }
+cwtools_test_support = { workspace = true }
 criterion = { workspace = true }
 
 [[bench]]

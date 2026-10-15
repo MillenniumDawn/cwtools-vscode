@@ -498,17 +498,8 @@ mod tests {
     use super::*;
     use cwtools_parser::ast::{SourcePos, SourceRange};
     use cwtools_parser::fix::SuggestedFix;
+    use cwtools_test_support::abs;
     use std::path::PathBuf;
-
-    /// Absolute path spelled the host's way. On Windows a leading `/` is not
-    /// absolute (no drive), so tests must not hardcode it.
-    fn abs(tail: &str) -> String {
-        if cfg!(windows) {
-            format!("C:/{tail}")
-        } else {
-            format!("/{tail}")
-        }
-    }
 
     fn err_base() -> ValidationError {
         ValidationError {

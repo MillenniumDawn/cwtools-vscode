@@ -700,21 +700,12 @@ fn parse(text: &str, path: &Path) -> Result<Vec<Entry>, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cwtools_test_support::abs;
 
     fn write(dir: &Path, body: &str) -> PathBuf {
         let p = dir.join(FILE_NAME);
         std::fs::write(&p, body).unwrap();
         p
-    }
-
-    /// An absolute path spelled the host's way: on Windows a leading `/` names
-    /// the current drive's root, so it is still resolved against the config.
-    fn abs(tail: &str) -> String {
-        if cfg!(windows) {
-            format!("C:/{tail}")
-        } else {
-            format!("/{tail}")
-        }
     }
 
     #[test]

@@ -14,8 +14,13 @@ use cwtools_parser::parser::{MAX_CLAUSE_DEPTH, parse_string};
 use cwtools_string_table::string_table::StringTable;
 use std::path::Path;
 
+mod common;
+
+use common::{is_bad_header, written_bytes};
+
 const MAGIC: [u8; 4] = *b"CWB\x00";
 const FORMAT_VERSION: u8 = 5;
+const BAD_HEADER: &str = "incompatible or missing cache header";
 
 /// A small but structurally complete cache: leaves, a nested clause, a comment.
 fn sample_bytes() -> Vec<u8> {
@@ -32,9 +37,9 @@ nested = {
     let parsed = parse_string(input, &table);
     let cached = convert::arena_to_cached(&parsed.arena, &parsed.root_children, &table);
 
-    let tmp = tempfile::NamedTempFile::with_suffix(".cwb").unwrap();
-    io::serialize_to_file(&cached, tmp.path()).unwrap();
-    std::fs::read(tmp.path()).unwrap()
+    written_bytes(".cwb", |path| {
+        io::serialize_to_file(&cached, path).unwrap();
+    })
 }
 
 /// Write `bytes` to a temp `.cwb` and take it through the full load path the
@@ -85,16 +90,6 @@ fn fingerprint(bytes: &[u8]) -> Result<Result<String, CacheError>, CacheError> {
     let tmp = tempfile::NamedTempFile::with_suffix(".cwb").unwrap();
     std::fs::write(tmp.path(), bytes).unwrap();
     fingerprint_path(tmp.path())
-}
-
-fn is_bad_header(e: &CacheError) -> bool {
-    matches!(
-        e,
-        CacheError::Deserialize {
-            msg: "incompatible or missing cache header",
-            ..
-        }
-    )
 }
 
 fn is_rejection(e: &CacheError, expected: &str) -> bool {
@@ -148,7 +143,7 @@ fn sample_bytes_load_clean() {
 #[test]
 fn zero_byte_file_is_rejected_as_a_bad_header() {
     let err = load(&[]).expect_err("empty file must not load");
-    assert!(is_bad_header(&err), "got {err:?}");
+    assert!(is_bad_header(&err, BAD_HEADER), "got {err:?}");
 }
 
 /// Any prefix shorter than magic+version is the same crash-mid-write case.
@@ -157,7 +152,7 @@ fn header_shorter_than_magic_plus_version_is_rejected() {
     let bytes = sample_bytes();
     for len in 0..MAGIC.len() + 1 {
         let err = load(&bytes[..len]).unwrap_err();
-        assert!(is_bad_header(&err), "len {len} gave {err:?}");
+        assert!(is_bad_header(&err, BAD_HEADER), "len {len} gave {err:?}");
     }
 }
 
@@ -171,7 +166,10 @@ fn wrong_format_version_is_rejected() {
         let mut corrupt = bytes.clone();
         corrupt[MAGIC.len()] = version;
         let err = load(&corrupt).unwrap_err();
-        assert!(is_bad_header(&err), "version {version} gave {err:?}");
+        assert!(
+            is_bad_header(&err, BAD_HEADER),
+            "version {version} gave {err:?}"
+        );
     }
 }
 
@@ -182,14 +180,17 @@ fn missing_magic_is_rejected() {
     let bytes = sample_bytes();
     let headerless = &bytes[MAGIC.len() + 1..];
     let err = load(headerless).unwrap_err();
-    assert!(is_bad_header(&err), "got {err:?}");
+    assert!(is_bad_header(&err, BAD_HEADER), "got {err:?}");
 
     // And a single wrong magic byte is enough.
     for i in 0..MAGIC.len() {
         let mut corrupt = bytes.clone();
         corrupt[i] ^= 0xff;
         let err = load(&corrupt).unwrap_err();
-        assert!(is_bad_header(&err), "magic byte {i} gave {err:?}");
+        assert!(
+            is_bad_header(&err, BAD_HEADER),
+            "magic byte {i} gave {err:?}"
+        );
     }
 }
 

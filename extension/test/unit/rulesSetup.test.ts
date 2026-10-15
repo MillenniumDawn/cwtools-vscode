@@ -117,6 +117,7 @@ vi.mock("../../src/host/engine", async () => {
 import { LANGUAGE_REPOS, RULES_MANIFEST_REVISION } from "../../src/host/games";
 import {
 	RULES_MANIFEST_CACHE_KEY,
+	RULES_MANIFEST_MAX_BYTES,
 	RULES_MANIFEST_TIMEOUT_MS,
 	RULES_MANIFEST_URL,
 	type RulesManifest,
@@ -160,7 +161,7 @@ function stubManifestFetch(value: RulesManifest | string) {
 }
 
 // One sync against a fake memento and client, recording what each was told.
-function session(cached?: RulesManifest) {
+function session(cached?: RulesManifest, updateError?: Error) {
 	let stored = cached;
 	const updates: Array<[string, unknown]> = [];
 	const requests: unknown[] = [];
@@ -169,6 +170,9 @@ function session(cached?: RulesManifest) {
 			key === RULES_MANIFEST_CACHE_KEY ? stored : undefined,
 		update(key: string, value: unknown): Promise<void> {
 			updates.push([key, value]);
+			if (updateError) {
+				return Promise.reject(updateError);
+			}
 			stored = value as RulesManifest;
 			return Promise.resolve();
 		},
@@ -292,6 +296,35 @@ suite("rulesSetup", () => {
 		assert.ok(info.includes(sha("c")) && info.includes(sha("f")), info);
 	});
 
+	test("uses a newer manifest when caching it fails", async () => {
+		const reviewed = manifest(sha("f"));
+		stubManifestFetch(reviewed);
+		const { sync, updates } = session(undefined, new Error("disk full"));
+
+		await settle(sync());
+
+		assert.deepStrictEqual(updates, [[RULES_MANIFEST_CACHE_KEY, reviewed]]);
+		assert.strictEqual(state.rulesFetches[0]?.ref, sha("f"));
+		assert.deepStrictEqual(logger.logWarn.mock.calls, [
+			["Could not cache rules manifest: disk full"],
+		]);
+	});
+
+	test("skips an oversized response by content-length without reading the body", async () => {
+		const response = new Response(JSON.stringify(manifest(sha("f"))), {
+			status: 200,
+			headers: { "content-length": String(RULES_MANIFEST_MAX_BYTES + 1) },
+		});
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+		const { sync, updates } = session();
+
+		await settle(sync());
+
+		assert.strictEqual(response.bodyUsed, false);
+		assert.deepStrictEqual(updates, []);
+		assert.strictEqual(state.rulesFetches[0]?.ref, LANGUAGE_REPOS.hoi4.ref);
+	});
+
 	test.each<[string, RulesManifest | undefined, RulesManifest | string, string]>([
 		["a cached pin beats an invalid remote manifest", manifest(sha("c")), "{", sha("c")],
 		["a newer cached pin beats a stale remote manifest", manifest(sha("c"), NEXT + 1), manifest(sha("d")), sha("c")],
@@ -346,6 +379,37 @@ suite("rulesSetup", () => {
 		assert.strictEqual(warnings().length, 1);
 		assert.match(warnings()[0], /CWTools needs Git on your PATH/);
 		assert.doesNotMatch(warnings()[0], /check your network/);
+	});
+
+	test("still warns about missing git when a stale .git directory is present", async () => {
+		state.hasGitDirectory = true;
+		state.head = sha("e");
+		state.gitMissing = true;
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
+
+		await settle(sync());
+
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(warnings().length, 1);
+		assert.match(warnings()[0], /CWTools needs Git on your PATH/);
+		assert.doesNotMatch(warnings()[0], /check your network/);
+	});
+
+	test("a sync can be retried after a failed fetch completes", async () => {
+		state.gitMissing = true;
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
+
+		await settle(sync());
+		assert.strictEqual(state.rulesFetches.length, 1);
+		assert.deepStrictEqual(requests, []);
+
+		state.gitMissing = false;
+		await settle(sync());
+
+		assert.strictEqual(state.rulesFetches.length, 2);
+		assert.deepStrictEqual(requests, RELOAD);
 	});
 
 	test("a checkout that lands on another commit warns and does not reload", async () => {

@@ -1,3 +1,4 @@
+import * as assert from "assert";
 import * as fs from "node:fs";
 import * as vscode from "vscode";
 import * as path from "path";
@@ -54,6 +55,25 @@ export async function activate(): Promise<CwtoolsApi | undefined> {
 		);
 		return ext.exports as CwtoolsApi | undefined;
 	}
+}
+
+/**
+ * Activate the extension and assert the activation gate refused to start a
+ * language client. Activation must have completed first: an extension that
+ * failed to activate exposes no API, which would otherwise read as "no server".
+ */
+export async function assertGateRefused(): Promise<void> {
+	const api = await activate();
+	assert.ok(api, "activation should complete and expose its API");
+	assert.ok(
+		vscode.extensions.getExtension(EXTENSION_ID)?.isActive,
+		"extension should be active",
+	);
+	assert.strictEqual(api.serverProcessId(), undefined, "server process");
+	assert.strictEqual(api.serverOutputChannel(), undefined, "client output");
+	assert.strictEqual(api.serverStatusText(), undefined, "status item");
+	assert.strictEqual(api.rulesCacheRoot(), undefined, "rules cache root");
+	assert.deepStrictEqual(api.serverCommands(), [], "server commands");
 }
 
 /**
