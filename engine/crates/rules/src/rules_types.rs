@@ -1196,6 +1196,7 @@ impl TypeLocalisation {
 pub struct TypeModifier {
     pub prefix: String,
     pub suffix: String,
+    pub is_template: bool,
     pub category: String, // ModifierCategory simplified
     pub documentation: Option<String>,
     pub explicit: bool,
