@@ -414,6 +414,15 @@ jobs:
         run: >-
           cargo +nightly-2026-07-24 install cargo-fuzz --version 0.13.2
           --locked
+      - name: Generate pinned rules seed corpus
+        run: |
+          corpus="$(mktemp -d)"
+          echo "PINNED_RULES_CORPUS=$corpus" >> "$GITHUB_ENV"
+          cargo +nightly-2026-07-24 run --locked -p cwtools_test_support --example pinned_fuzz_corpus -- "$corpus"
+      - name: parse_rules over pinned upstream configs
+        run: >-
+          cargo +nightly-2026-07-24 fuzz run parse_rules
+          "$PINNED_RULES_CORPUS" -- -runs=0
       - name: parse_string over seed corpus
         run: >-
           cargo +nightly-2026-07-24 fuzz run parse_string

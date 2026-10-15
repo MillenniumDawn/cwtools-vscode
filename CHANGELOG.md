@@ -23,6 +23,7 @@
 * Remove an unused test-only `Arc` placeholder from completion tests. (#966)
 * Move the eight ignored perf tests into `cwtools_lsp` and `cwtools_cache` benches that find their checkouts under `CWTOOLS_PROJECTS`, like the existing benches. The per-test path variables and home-directory defaults are gone, and the indexing bench now reads Millennium Dawn files instead of a base-game install. With those unrun test bodies gone, the Rust line-coverage floor rises from 91.5 to 92.3. (#886)
 * Fuzz the format and fix edit writers with committed smoke corpora, and property-test format/parse round trips for AST preservation. (#525)
+* Add a `parse_rules` fuzz target for CWT parsing and conversion, using a temporary corpus generated from pinned Stellaris and HOI4 configs. The generator example now lives in the shared `cwtools_test_support` crate; upstream rules stay out of the repository.
 * Give a lowercase string one string-table slot and one map entry instead of two, and skip the `to_lowercase` allocation for ASCII input with no uppercase. The Millennium Dawn string table drops from 1,050,164 to 916,655 entries. (#486)
 * Index specific rule keys per rule body and bucket alias patterns by prefix byte, preserving candidate and overload order while avoiding repeated full scans. (#874)
 * Cache root type-rule lookups and collect rule-defined variable sets in one path-filtered file traversal, avoiding per-clause key allocation when no variable rule matches. (#482)
