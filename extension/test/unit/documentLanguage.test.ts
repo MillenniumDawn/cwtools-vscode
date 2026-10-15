@@ -176,6 +176,44 @@ suite("documentLanguage", () => {
 		assert.strictEqual(state.logError.mock.calls.length, 0);
 	});
 
+	test("coalesces multiple editor switches during the timeout cooldown", async () => {
+		const { requests } = await startTracker();
+
+		state.switchEditor!(fakeEditor("initial"));
+		await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+		assert.strictEqual(requests.length, 1);
+		await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+		assert.strictEqual(requests[0].token.isCancellationRequested, true);
+		requests[0].reject(new Error("request cancelled"));
+		await settle();
+
+		state.switchEditor!(fakeEditor("superseded"));
+		await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+		state.switchEditor!(fakeEditor("latest"));
+		await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+		assert.strictEqual(requests.length, 1, "cooldown should hold later requests");
+
+		await vi.advanceTimersByTimeAsync(BACKOFF_MS - 2 * DEBOUNCE_MS);
+		assert.strictEqual(requests.length, 2);
+		assert.strictEqual(
+			requests[1].uri,
+			"file:///workspace/events/latest.txt",
+			"only the latest editor during cooldown should be classified",
+		);
+		requests[1].resolve(["event"]);
+		await settle();
+	});
+
+	test("disposing before the first debounce prevents the classification request", async () => {
+		const { requests, context } = await startTracker();
+
+		state.switchEditor!(fakeEditor("before-debounce"));
+		for (const subscription of context.subscriptions) subscription.dispose();
+		await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+
+		assert.strictEqual(requests.length, 0);
+	});
+
 	test("nothing is written after the tracker is disposed", async () => {
 		const { tracker, requests, context } = await startTracker();
 

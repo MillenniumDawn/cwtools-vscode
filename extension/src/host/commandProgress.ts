@@ -155,37 +155,39 @@ export async function runCancellableExecuteCommand(
 			activeCommandProgress += 1;
 			const subscriptions: Disposable[] = [];
 			const progressToken = useToken ? newProgressToken() : undefined;
-			if (progressToken !== undefined) {
-				let progressBegan = false;
-				let cancellationRequested = false;
-				let cancelSent = false;
-				const sendCancelWhenReady = () => {
-					if (!progressBegan || !cancellationRequested || cancelSent) {
-						return;
-					}
-					cancelSent = true;
-					void client
-						.sendNotification(WorkDoneProgressCancelNotification.type, {
-							token: progressToken,
-						})
-						.catch(() => {
-							// A server that already finished (or died) has nothing
-							// to cancel; the request's own settlement ends the
-							// notification either way.
-						});
-				};
-				subscriptions.push(
-					pipeServerProgress(client, progressToken, progress, () => {
-						progressBegan = true;
-						sendCancelWhenReady();
-					}),
-					token.onCancellationRequested(() => {
-						cancellationRequested = true;
-						sendCancelWhenReady();
-					}),
-				);
-			}
 			try {
+				if (progressToken !== undefined) {
+					let progressBegan = false;
+					let cancellationRequested = false;
+					let cancelSent = false;
+					const sendCancelWhenReady = () => {
+						if (!progressBegan || !cancellationRequested || cancelSent) {
+							return;
+						}
+						cancelSent = true;
+						void client
+							.sendNotification(WorkDoneProgressCancelNotification.type, {
+								token: progressToken,
+							})
+							.catch(() => {
+								// A server that already finished (or died) has nothing
+								// to cancel; the request's own settlement ends the
+								// notification either way.
+							});
+					};
+					subscriptions.push(
+						pipeServerProgress(client, progressToken, progress, () => {
+							progressBegan = true;
+							sendCancelWhenReady();
+						}),
+					);
+					subscriptions.push(
+						token.onCancellationRequested(() => {
+							cancellationRequested = true;
+							sendCancelWhenReady();
+						}),
+					);
+				}
 				const result: unknown = await client.sendRequest(
 					ExecuteCommandRequest.type,
 					{

@@ -33,6 +33,22 @@ pub fn build_modifier_keys(
             }
         }
     }
+    for td in &ruleset.types {
+        for modifier in &td.modifiers {
+            // A bare `$` has empty sides too, so template identity must come
+            // from the rule parser rather than the extracted key parts.
+            if !modifier.is_template {
+                continue;
+            }
+            for (_, inst) in type_index.instances(&td.name) {
+                expanded.clear();
+                expanded.push_str(&modifier.prefix);
+                expanded.push_str(&inst.name);
+                expanded.push_str(&modifier.suffix);
+                mk.insert(expanded.to_lowercase());
+            }
+        }
+    }
     mk
 }
 
