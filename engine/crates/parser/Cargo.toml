@@ -17,6 +17,7 @@ smallvec = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+cwtools_test_support = { workspace = true }
 
 [[bench]]
 name = "parse"

@@ -17,6 +17,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use cwtools_cache::{convert, io, workspace};
 use cwtools_parser::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_support::checkout;
 use std::hint::black_box;
 use std::path::{Path, PathBuf};
 
@@ -74,22 +75,6 @@ fn bench_cache(c: &mut Criterion) {
     group.finish();
 }
 
-fn corpus_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_CORPUS") {
-        return Some(PathBuf::from(dir));
-    }
-    let projects = match std::env::var("CWTOOLS_PROJECTS") {
-        Ok(dir) => PathBuf::from(dir),
-        // crates/cache -> repo root is ../../.., siblings sit next to it.
-        Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../..")
-            .canonicalize()
-            .ok()?,
-    };
-    let dir = projects.join("Millennium-Dawn");
-    dir.is_dir().then_some(dir)
-}
-
 fn collect_txt(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -109,7 +94,7 @@ fn bench_parse_cache(c: &mut Criterion) {
         eprintln!("parse_cache: path-keyed cache lookups are unsupported on this platform");
         return;
     }
-    let Some(root) = corpus_dir() else {
+    let Some(root) = checkout("CWTOOLS_CORPUS", "Millennium-Dawn") else {
         eprintln!(
             "parse_cache: no corpus. Set CWTOOLS_CORPUS to a Millennium-Dawn checkout (or \
              CWTOOLS_PROJECTS to the folder holding it)"

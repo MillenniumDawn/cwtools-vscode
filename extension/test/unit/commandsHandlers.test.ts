@@ -1,10 +1,15 @@
 import * as assert from "assert";
 import { beforeEach, suite, test, vi } from "vitest";
 import { LSPErrorCodes } from "vscode-languageserver-protocol";
-import type { ExtensionContext } from "vscode";
+import { CancellationError } from "vscode";
+import type { ExtensionContext, LogOutputChannel, WebviewPanel } from "vscode";
 import type * as VscodeStub from "./_stubs/vscode";
 import type { EditorTracker } from "../../src/host/documentLanguage";
 import type { LanguageClient } from "vscode-languageclient/node";
+
+interface Serializer {
+	deserializeWebviewPanel(panel: WebviewPanel, state: unknown): Promise<void>;
+}
 
 // registerCommands' handlers are the only seam between the palette entries and
 // the server. The host suites run the happy path against the real server; these
@@ -14,6 +19,7 @@ import type { LanguageClient } from "vscode-languageclient/node";
 
 const state = vi.hoisted(() => {
 	const registeredCommands = new Map<string, (...args: never[]) => unknown>();
+	const serializers: Serializer[] = [];
 	const initialiseGraph = vi.fn();
 	const token = {
 		isCancellationRequested: false,
@@ -30,6 +36,7 @@ const state = vi.hoisted(() => {
 	);
 	return {
 		registeredCommands,
+		serializers,
 		requestType: {},
 		token,
 		withProgress,
@@ -66,7 +73,13 @@ vi.mock("vscode", async (importOriginal) => {
 			showErrorMessage: state.showErrorMessage,
 			showInputBox: state.showInputBox,
 			showSaveDialog: state.showSaveDialog,
-			registerWebviewPanelSerializer: () => ({ dispose: () => undefined }),
+			registerWebviewPanelSerializer: (
+				_viewType: string,
+				serializer: Serializer,
+			) => {
+				state.serializers.push(serializer);
+				return { dispose: () => undefined };
+			},
 		},
 		workspace: {
 			...original.workspace,
@@ -84,11 +97,19 @@ import {
 	registerCommands,
 } from "../../src/host/commands";
 import { GraphPanel } from "../../src/host/graphPanel";
+import { initializeLogger } from "../../src/host/logger";
 
-vi.spyOn(GraphPanel, "create").mockImplementation(() => {
+const createPanel = vi.spyOn(GraphPanel, "create").mockImplementation(() => {
 	GraphPanel.currentPanel = {
 		initialiseGraph: state.initialiseGraph,
 	} as unknown as GraphPanel;
+});
+const restorePanel = vi.spyOn(GraphPanel, "restore").mockImplementation(() => {
+	const revived = {
+		initialiseGraph: state.initialiseGraph,
+	} as unknown as GraphPanel;
+	GraphPanel.currentPanel = revived;
+	return revived;
 });
 
 interface FakeClient {
@@ -245,6 +266,24 @@ suite("registered workspace commands", () => {
 			]);
 		});
 
+		test("does not revive a stale graph after the newest request is cancelled", async () => {
+			const requests = mockGraphRequests();
+			state.showInputBox.mockResolvedValue("1");
+			register(fakeClient(["getGraphData"]), "event");
+
+			const oldRequest = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const newRequest = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			requests[1].result.reject(new CancellationError());
+			await newRequest;
+			requests[0].result.resolve([{ id: "old" }]);
+			await oldRequest;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
+		});
+
 		test("does not revive a stale graph after the newest request fails", async () => {
 			const requests = mockGraphRequests();
 			state.showInputBox.mockResolvedValue("1");
@@ -263,6 +302,26 @@ suite("registered workspace commands", () => {
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
 		});
 
+		test("ignores a stale rejection after the newest graph renders", async () => {
+			const requests = mockGraphRequests();
+			state.showInputBox.mockResolvedValue("1");
+			register(fakeClient(["getGraphData"]), "event");
+
+			const oldRequest = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const newRequest = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			requests[1].result.resolve([{ id: "new" }]);
+			await newRequest;
+			requests[0].result.reject(new Error("stale failed"));
+			await oldRequest;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "new" }], 1, { source: "server", entityType: "event", depth: 1 }],
+			]);
+		});
+
 		test("keeps a newer import when an older server graph completes", async () => {
 			const requests = mockGraphRequests();
 			register(fakeClient(["getGraphData"]), "event");
@@ -277,6 +336,27 @@ suite("registered workspace commands", () => {
 
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
 				["new json", 1, { source: "json", fileName: "graph.json" }],
+			]);
+		});
+
+		test("keeps a newer server graph when an older import finishes reading", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			state.showOpenDialog.mockResolvedValue([{ fsPath: "/tmp/graph.json" }]);
+			const importBytes = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(importBytes.promise);
+
+			const imported = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			const server = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			requests[0].result.resolve([{ id: "new" }]);
+			await server;
+			importBytes.resolve(bytes("old json"));
+			await imported;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "new" }], 1, { source: "server", entityType: "event", depth: 3 }],
 			]);
 		});
 
@@ -319,6 +399,25 @@ suite("registered workspace commands", () => {
 			assert.deepStrictEqual(state.readFile.mock.calls, []);
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
 				[[{ id: "pending" }], 1, { source: "server", entityType: "event", depth: 3 }],
+			]);
+		});
+
+		test("does not supersede a pending import when the next import dialog is cancelled", async () => {
+			register(fakeClient([]));
+			state.showOpenDialog.mockResolvedValueOnce([{ fsPath: "/tmp/graph.json" }]);
+			const importBytes = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(importBytes.promise);
+
+			const imported = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			state.showOpenDialog.mockResolvedValueOnce(undefined);
+			await handler("cwtools.graphFromJson")();
+			importBytes.resolve(bytes("pending"));
+			await imported;
+
+			assert.strictEqual(state.readFile.mock.calls.length, 1);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				["pending", 1, { source: "json", fileName: "graph.json" }],
 			]);
 		});
 	});
@@ -375,6 +474,119 @@ suite("registered workspace commands", () => {
 				prompts().map((prompt) => prompt.value),
 				["3", "2", "2"],
 			);
+		});
+	});
+
+	suite("graph panel restore after a window reload", () => {
+		const webviewPanel = {} as WebviewPanel;
+		const channelError = vi.fn();
+
+		beforeEach(() => {
+			initializeLogger({ error: channelError } as unknown as LogOutputChannel);
+		});
+
+		async function serializerFor(
+			client: FakeClient,
+			latestType = "event",
+		): Promise<Serializer> {
+			state.serializers.length = 0;
+			register(client, latestType);
+			await vi.waitFor(() => assert.strictEqual(state.serializers.length, 1));
+			return state.serializers[0];
+		}
+
+		test("re-requests a persisted server graph with its entity type and depth", async () => {
+			state.executeCommand.mockResolvedValue([{ id: "restored" }]);
+			const serializer = await serializerFor(fakeClient(["getGraphData"]));
+
+			await serializer.deserializeWebviewPanel(webviewPanel, {
+				source: "server",
+				entityType: "idea",
+				depth: 4,
+			});
+
+			assert.deepStrictEqual(restorePanel.mock.calls, [["/ext", webviewPanel]]);
+			assert.deepStrictEqual(state.executeCommand.mock.calls, [
+				["getGraphData", "idea", 4],
+			]);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "restored" }], 1, { source: "server", entityType: "idea", depth: 4 }],
+			]);
+		});
+
+		test("prompts for the export of a persisted JSON graph and renders the file picked", async () => {
+			state.showOpenDialog.mockResolvedValue([{ fsPath: "/tmp/graph.json" }]);
+			state.readFile.mockResolvedValue(bytes("exported json"));
+			const serializer = await serializerFor(fakeClient([]));
+
+			await serializer.deserializeWebviewPanel(webviewPanel, { source: "json" });
+
+			assert.deepStrictEqual(state.showOpenDialog.mock.calls, [
+				[{ filters: { Json: ["json"] } }],
+			]);
+			assert.deepStrictEqual(state.readFile.mock.calls, [
+				[{ fsPath: "/tmp/graph.json" }],
+			]);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				["exported json", 1, { source: "json", fileName: "graph.json" }],
+			]);
+			assert.deepStrictEqual(
+				createPanel.mock.calls,
+				[],
+				"a reload renders in the revived panel instead of revealing another",
+			);
+		});
+
+		test("tells the user and sends no request when nothing was persisted and no file type is active", async () => {
+			const serializer = await serializerFor(fakeClient(["getGraphData"]), "");
+
+			await serializer.deserializeWebviewPanel(webviewPanel, undefined);
+
+			assert.deepStrictEqual(state.showInformationMessage.mock.calls, [
+				["CWTools: no graph for this file."],
+			]);
+			assert.deepStrictEqual(state.executeCommand.mock.calls, []);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
+		});
+
+		test("keeps a newer show graph when the restore finishes later", async () => {
+			const requests = mockGraphRequests();
+			const serializer = await serializerFor(fakeClient(["getGraphData"]));
+			const restore = serializer.deserializeWebviewPanel(webviewPanel, {
+				source: "server",
+				entityType: "idea",
+				depth: 4,
+			});
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const show = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+
+			requests[1].result.resolve([{ id: "new" }]);
+			await show;
+			requests[0].result.resolve([{ id: "restored" }]);
+			await restore;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, [
+				[[{ id: "new" }], 1, { source: "server", entityType: "event", depth: 3 }],
+			]);
+		});
+
+		test("logs a restore failure instead of rejecting", async () => {
+			state.executeCommand.mockRejectedValue(new Error("server down"));
+			const serializer = await serializerFor(fakeClient(["getGraphData"]));
+
+			await assert.doesNotReject(
+				serializer.deserializeWebviewPanel(webviewPanel, {
+					source: "server",
+					entityType: "idea",
+					depth: 3,
+				}),
+			);
+
+			assert.deepStrictEqual(channelError.mock.calls, [
+				["graph panel restore failed: server down"],
+			]);
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
 		});
 	});
 

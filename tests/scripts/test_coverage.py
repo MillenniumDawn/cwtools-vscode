@@ -301,6 +301,7 @@ def test_host_coverage_drops_match_vitest_owned_host_modules() -> None:
         for path in included
         if path.startswith(("extension/src/host/", "extension/src/common/"))
     }
+    assert "extension/src/host/restartWindow.ts" in host_owned
     assert set(HOST_COVERAGE_DROPS) == host_owned
 
 

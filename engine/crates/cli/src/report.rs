@@ -494,6 +494,7 @@ fn sarif_result_from(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cwtools_test_support::abs;
 
     fn diag(file: &str, line: u32, col: u32, code: &'static str, message: &str) -> Diag {
         Diag {
@@ -507,17 +508,6 @@ mod tests {
             legacy_hash: "fedcba9876543210".to_string(),
             end: None,
             related: Vec::new(),
-        }
-    }
-
-    /// An absolute path spelled the host's way. On Windows a leading `/` names
-    /// the current drive's root, so a base and a file that both start with one
-    /// still relate to each other, but neither renders without the drive.
-    fn abs(tail: &str) -> String {
-        if cfg!(windows) {
-            format!("C:/{tail}")
-        } else {
-            format!("/{tail}")
         }
     }
 

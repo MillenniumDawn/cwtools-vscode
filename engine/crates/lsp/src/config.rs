@@ -1550,23 +1550,7 @@ mod tests {
     use cwtools_localization::Lang;
     use serde_json::json;
 
-    use crate::state::DocumentState;
-
-    fn test_backend() -> Backend {
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().unwrap();
-        Backend { client, state }
-    }
+    use crate::testing::test_backend;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn did_change_configuration_reloads_rules_and_changes_rule_diagnostics() {
