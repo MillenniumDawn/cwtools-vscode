@@ -23,13 +23,23 @@ impl LocIndex {
         let mut per_language: FxHashMap<Lang, LocKeySet> = FxHashMap::default();
         let mut union = LocKeySet::default();
         let mut entries: FxHashMap<LocKey, LocEntry> = FxHashMap::default();
+        let mut languages_with_data = service.languages();
+        // The memo pays off across translations, not in single-language indexes.
+        let mut normalized =
+            (languages_with_data.len() > 1).then(FxHashMap::<&str, LocKey>::default);
 
         for file in service.files() {
             let Some(lang) = file.lang else { continue };
             let set = per_language.entry(lang).or_default();
             for entry in &file.entries {
-                let lower = Self::intern_key(&mut union, entry.key.to_lowercase());
-                set.insert(Arc::clone(&lower));
+                let lower =
+                    match normalized.as_mut() {
+                        Some(cache) => Arc::clone(cache.entry(&entry.key).or_insert_with(|| {
+                            Self::intern_key(&mut union, entry.key.to_lowercase())
+                        })),
+                        None => Self::intern_key(&mut union, entry.key.to_lowercase()),
+                    };
+                set.insert(lower);
             }
         }
         let english = per_language.get(&Lang::English);
@@ -39,9 +49,11 @@ impl LocIndex {
                 if entry.commands.is_empty() && entry.jomini_commands.is_empty() {
                     continue;
                 }
-                let Some(lower) = union.get(entry.key.to_lowercase().as_str()).cloned() else {
-                    continue;
+                let lower = match normalized.as_ref() {
+                    Some(cache) => cache.get(entry.key.as_str()).cloned(),
+                    None => union.get(entry.key.to_lowercase().as_str()).cloned(),
                 };
+                let Some(lower) = lower else { continue };
                 if lang != Lang::English && english.is_some_and(|s| s.contains(&lower)) {
                     continue;
                 }
@@ -54,7 +66,6 @@ impl LocIndex {
             }
         }
 
-        let mut languages_with_data = service.languages();
         if let Some(set) = langs {
             languages_with_data.retain(|l| set.contains(l));
         }
@@ -226,6 +237,46 @@ mod tests {
             .unwrap();
         assert!(Arc::ptr_eq(union, english));
         assert!(Arc::ptr_eq(union, german));
+    }
+
+    #[test]
+    fn unicode_case_variants_share_keys_and_keep_english_duplicate_precedence() {
+        let english = (
+            "b_l_english.yml",
+            "l_english:\n Ä_Key: \"[First]\"\n ä_KEY: \"[Last]\"\n İTEM: \"[ROOT.GetName]\"\n",
+        );
+        let svc = service_from(&[
+            ("unknown.yml", "l_unknown:\n ignored: \"[Ignored]\"\n"),
+            ("a_l_french.yml", "l_french:\n Ä_KEY: \"[French]\"\n"),
+            english,
+            (
+                "c_l_german.yml",
+                "l_german:\n ä_KEY: \"[German]\"\n i\u{307}tem: \"[German]\"\n",
+            ),
+        ]);
+        let idx = LocIndex::build(&svc);
+        assert_eq!(idx.union.len(), 2);
+        assert!(!idx.exists_any("ignored"));
+        assert_eq!(idx.entry("ä_key").unwrap().desc, "\"[Last]\"");
+        assert_eq!(idx.entry("i\u{307}tem").unwrap().key, "İTEM");
+        for lang in [Lang::English, Lang::German, Lang::French] {
+            assert!(Arc::ptr_eq(
+                idx.union.get("ä_key").unwrap(),
+                idx.per_language[&lang].get("ä_key").unwrap(),
+            ));
+        }
+        assert!(Arc::ptr_eq(
+            idx.union.get("ä_key").unwrap(),
+            idx.entries.get_key_value("ä_key").unwrap().0,
+        ));
+        assert!(Arc::ptr_eq(
+            idx.union.get("i\u{307}tem").unwrap(),
+            idx.per_language[&Lang::German].get("i\u{307}tem").unwrap(),
+        ));
+        let english_only = LocIndex::build(&service_from(&[english]));
+        assert_eq!(english_only.union, idx.union);
+        assert_eq!(english_only.entries, idx.entries);
+        assert_eq!(english_only.languages_with_data(), &[Lang::English]);
     }
 
     #[test]
