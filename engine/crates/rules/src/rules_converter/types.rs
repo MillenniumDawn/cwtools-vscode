@@ -359,12 +359,29 @@ pub(crate) fn parse_modifiers_block(
             .find(|s| s.starts_with("###"))
             .map(|s| s.trim_start_matches('#').trim().to_string());
 
-        let modifier = if let Some(dollar_idx) = value.find('$') {
+        // Type modifier templates in CWT put the generated key in the left
+        // hand side (for example, `"job_$_add" = Planets`). Keep accepting
+        // the older value-template form as well, but prefer the key when it
+        // carries `$`, since that is the canonical config shape.
+        let unquoted_key = unquote(&key);
+        let modifier = if let Some(dollar_idx) = unquoted_key.find('$') {
+            let prefix = unquoted_key[..dollar_idx].to_string();
+            let suffix = unquoted_key[dollar_idx + 1..].to_string();
+            TypeModifier {
+                prefix,
+                suffix,
+                is_template: true,
+                category: value,
+                documentation,
+                explicit,
+            }
+        } else if let Some(dollar_idx) = value.find('$') {
             let prefix = value[..dollar_idx].to_string();
             let suffix = value[dollar_idx + 1..].to_string();
             TypeModifier {
                 prefix,
                 suffix,
+                is_template: true,
                 category: key,
                 documentation,
                 explicit,
@@ -373,6 +390,7 @@ pub(crate) fn parse_modifiers_block(
             TypeModifier {
                 prefix: String::new(),
                 suffix: String::new(),
+                is_template: false,
                 category: key,
                 documentation,
                 explicit,
@@ -388,7 +406,10 @@ mod option_directive_tests {
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
 
-    use crate::{rules_converter::ast_to_ruleset, rules_types::TypeDefinition};
+    use crate::{
+        rules_converter::ast_to_ruleset,
+        rules_types::{TypeDefinition, TypeModifier},
+    };
 
     fn parse_typedef(cwt: &str) -> TypeDefinition {
         let table = StringTable::new();
@@ -398,6 +419,43 @@ mod option_directive_tests {
             .into_iter()
             .next()
             .expect("no type parsed")
+    }
+
+    #[test]
+    fn type_modifier_template_is_read_from_the_cwt_key() {
+        let def = parse_typedef(
+            r#"types = { type[job] = {
+                path = "game/common/pop_jobs"
+                modifiers = {
+                    "job_$_add" = Planets
+                    "$" = Bare
+                    Legacy = "$"
+                    Static = Planets
+                }
+            } }"#,
+        );
+
+        assert_eq!(
+            def.modifiers[0],
+            TypeModifier {
+                prefix: "job_".to_string(),
+                suffix: "_add".to_string(),
+                is_template: true,
+                category: "Planets".to_string(),
+                documentation: None,
+                explicit: false,
+            }
+        );
+        assert_eq!(def.modifiers[1].prefix, "");
+        assert_eq!(def.modifiers[1].suffix, "");
+        assert!(def.modifiers[1].is_template);
+        assert_eq!(def.modifiers[1].category, "Bare");
+        assert_eq!(def.modifiers[2].prefix, "");
+        assert_eq!(def.modifiers[2].suffix, "");
+        assert!(def.modifiers[2].is_template);
+        assert_eq!(def.modifiers[2].category, "Legacy");
+        assert!(!def.modifiers[3].is_template);
+        assert_eq!(def.modifiers[3].category, "Static");
     }
 
     #[test]

@@ -782,6 +782,26 @@ pub fn expanded_modifier_scopes(
             }
         }
     }
+    for td in &ruleset.types {
+        for modifier in &td.modifiers {
+            if !modifier.is_template {
+                continue;
+            }
+            let scopes = ruleset
+                .modifier_categories
+                .get(&modifier.category)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            for (_, inst) in type_index.instances(&td.name) {
+                let name =
+                    format!("{}{}{}", modifier.prefix, inst.name, modifier.suffix).to_lowercase();
+                // A concrete key can be declared both globally and from a
+                // type template. Preserve the established global entry when
+                // present; only add scope metadata for generated-only keys.
+                map.entry(name).or_insert_with(|| scopes.to_vec());
+            }
+        }
+    }
     map
 }
 
