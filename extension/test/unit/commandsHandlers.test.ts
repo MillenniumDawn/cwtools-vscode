@@ -420,6 +420,25 @@ suite("registered workspace commands", () => {
 				["pending", 1, { source: "json", fileName: "graph.json" }],
 			]);
 		});
+
+		test("a failed selected import still suppresses an older server result", async () => {
+			const requests = mockGraphRequests();
+			register(fakeClient(["getGraphData"]), "event");
+			const server = handler("cwtools.showGraph")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			state.showOpenDialog.mockResolvedValue([{ fsPath: "broken.json" }]);
+			const read = deferred<Uint8Array>();
+			state.readFile.mockReturnValue(read.promise);
+
+			const selectedImport = handler("cwtools.graphFromJson")();
+			await vi.waitFor(() => assert.strictEqual(state.readFile.mock.calls.length, 1));
+			read.reject(new Error("unreadable import"));
+			await assert.rejects(selectedImport, /unreadable import/);
+			requests[0].result.resolve([{ id: "stale-server" }]);
+			await server;
+
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
+		});
 	});
 
 	suite("cwtools.setGraphDepth", () => {
