@@ -199,12 +199,13 @@ mod tests {
     };
 
     use super::*;
+    use crate::Backend;
     use crate::access::recorded_reads_under;
     use crate::navigation::test_rules::type_ref_ruleset;
     use crate::navigation::{ast_leaf_visits, reset_ast_leaf_visits};
     use crate::paths::{path_to_uri, workspace_prefix_of};
     use crate::state::ParsedDoc;
-    use crate::{Backend, DocumentState};
+    use crate::testing::test_backend;
 
     const DEFINITION: &str = "foo = { id = my_instance }\n";
     const REFERENCE: &str = "use_type = { base = \"my_instance\" }\n";
@@ -226,26 +227,14 @@ mod tests {
         std::fs::write(events.join("def.txt"), DEFINITION).expect("write def");
         std::fs::write(events.join("use.txt"), REFERENCE).expect("write use");
 
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().expect("client");
+        let backend = test_backend();
         {
-            let mut config = state.config.write();
+            let mut config = backend.state.config.write();
             config.workspace_roots = vec![workspace.path().to_path_buf()];
             config.refresh_roots();
             config.workspace_prefix = Some(workspace_prefix_of(&path_to_uri(workspace.path())));
         }
-        state.rules.write().ruleset = Some(Arc::new(type_ref_ruleset()));
-        let backend = Backend { client, state };
+        backend.state.rules.write().ruleset = Some(Arc::new(type_ref_ruleset()));
 
         let definition_uri = path_to_uri(&events.join("def.txt"));
         let reference_uri = path_to_uri(&events.join("use.txt"));

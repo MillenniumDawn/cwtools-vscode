@@ -2,6 +2,7 @@ use cwtools_cache::{convert, io};
 use cwtools_file_manager::file_manager::{FileManager, FileManagerConfig};
 use cwtools_parser::parser::parse_string;
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_support::testfiles;
 
 #[test]
 fn roundtrip_simple_file() {
@@ -41,10 +42,8 @@ nested = {
 
 #[test]
 fn roundtrip_real_file() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../testfiles/performancetest2/common/static_modifiers/cc_colony_events_static_modifiers.txt"
-    );
+    let path = testfiles()
+        .join("performancetest2/common/static_modifiers/cc_colony_events_static_modifiers.txt");
     let input = std::fs::read_to_string(path).unwrap();
     let table = StringTable::new();
     let parsed = parse_string(&input, &table);
@@ -167,13 +166,8 @@ key_a key_b = { x = 1 }
 fn archived_to_arena_matches_reference_over_corpus() {
     use cwtools_parser::ast::Value;
 
-    let test_dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../testfiles/performancetest2/"
-    );
-
     let config = FileManagerConfig {
-        root: std::path::PathBuf::from(test_dir),
+        root: testfiles().join("performancetest2"),
         ..Default::default()
     };
     let mut manager = FileManager::new(config);
@@ -283,19 +277,20 @@ fn archived_to_arena_matches_reference_over_corpus() {
 /// Gate: Cache round-trip verified for all 52 test files.
 #[test]
 fn roundtrip_all_performancetest_files() {
-    let test_dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../testfiles/performancetest2/"
-    );
+    let test_dir = testfiles().join("performancetest2");
 
     let config = FileManagerConfig {
-        root: std::path::PathBuf::from(test_dir),
+        root: test_dir.clone(),
         ..Default::default()
     };
     let mut manager = FileManager::new(config);
     let files = manager.discover_and_parse().unwrap();
 
-    assert!(!files.is_empty(), "No files discovered in {}", test_dir);
+    assert!(
+        !files.is_empty(),
+        "No files discovered in {}",
+        test_dir.display()
+    );
 
     let mut total_files = 0;
     let mut total_leaves = 0;

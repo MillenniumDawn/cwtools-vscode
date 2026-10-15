@@ -7,6 +7,7 @@ import {
 	activate,
 	SAMPLE_ROOT,
 	serverOutputChannel,
+	wait,
 	waitForLanguageServer,
 	waitUntil,
 } from "../support/utils";
@@ -19,6 +20,9 @@ const workspaceRulesFolder = ".cwtools-test-rules";
 const hoverTimeoutMs = 30_000;
 const localisationPosition = new vscode.Position(1, 9);
 const ownerPosition = new vscode.Position(2, 2);
+
+const rulesText = (...names: string[]) =>
+	`types = { ${names.map((name) => `type[${name}] = { path = "common/${name}" }`).join(" ")} }\n`;
 
 async function hoverText(
 	uri: vscode.Uri,
@@ -184,8 +188,19 @@ suite("Live settings", function () {
 		assert.ok(text.includes("**Localisation key** —"));
 	});
 
-	test("switches rules folders and watches external rules files live", async function () {
-		this.timeout(45_000);
+	interface ExternalRules {
+		root: string;
+		file: string;
+		loads: (types?: number) => string[];
+		sawEvent: (file: string) => boolean;
+	}
+
+	// Points rules_folder at a temp folder outside the workspace and returns once
+	// the watcher on it is live. Each reload logs one "Loaded rules from" line
+	// carrying the type count, which is how the callers tell reloads apart.
+	async function withExternalRules(
+		run: (rules: ExternalRules) => Promise<void>,
+	): Promise<void> {
 		const cfg = cwtoolsConfig();
 		assert.strictEqual(cfg.get<boolean>("rules.autoReload"), true);
 		const previousFolder = cfg.get<string>("rules_folder");
@@ -203,16 +218,22 @@ suite("Live settings", function () {
 				Reflect.apply(target, thisArg, args);
 			},
 		});
-		const matchingLoads = () =>
-			messages.filter((message) =>
-				message.includes(`Loaded rules from ${rulesRoot}`),
+		const matchingLoads = (types?: number) =>
+			messages.filter(
+				(message) =>
+					message.includes(`Loaded rules from ${rulesRoot}`) &&
+					(types === undefined || message.includes(`(${types} types`)),
 			);
 		const watcherReadyMessage = `Watching rules in ${rulesRoot}`;
+		const delivered = new Set<string>();
+		const observer = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(vscode.Uri.file(rulesRoot), "**/*.cwt"),
+		);
+		for (const event of [observer.onDidCreate, observer.onDidChange]) {
+			event((uri) => delivered.add(uri.fsPath));
+		}
 		try {
-			await fs.writeFile(
-				rulesFile,
-				'types = { type[first] = { path = "common/first" } }\n',
-			);
+			await fs.writeFile(rulesFile, rulesText("first"));
 			process.env.CWTOOLS_TEST_RULES_FOLDER = rulesRoot;
 			await cfg.update(
 				"rules_folder",
@@ -227,14 +248,26 @@ suite("Live settings", function () {
 				await waitUntil(() => messages.includes(watcherReadyMessage), 15_000),
 				"the external rules watcher should be registered before the file edit",
 			);
-			await fs.writeFile(
-				rulesFile,
-				'types = { type[second] = { path = "common/second" } }\n',
-			);
+			// VS Code drops edits made before the watch is live and signals no readiness.
+			let probes = 0;
+			let lastProbe = 0;
 			assert.ok(
-				await waitUntil(() => matchingLoads().length >= 2, 15_000),
-				"an edit under the external rules folder should trigger one rules reload",
+				await waitUntil(async () => {
+					if (matchingLoads().length >= 2) return true;
+					if (Date.now() - lastProbe >= 2_000) {
+						lastProbe = Date.now();
+						await fs.writeFile(rulesFile, rulesText(`probe${probes++}`));
+					}
+					return false;
+				}, 20_000),
+				"the external rules watcher should deliver an edit once it is live",
 			);
+			await run({
+				root: rulesRoot,
+				file: rulesFile,
+				loads: matchingLoads,
+				sawEvent: (file) => delivered.has(file),
+			});
 		} finally {
 			process.env.CWTOOLS_TEST_RULES_FOLDER = previousTestFolder;
 			await cfg.update(
@@ -242,9 +275,71 @@ suite("Live settings", function () {
 				previousFolder,
 				vscode.ConfigurationTarget.Global,
 			);
+			observer.dispose();
 			await fs.rm(rulesRoot, { recursive: true, force: true });
 			output.info = info;
 		}
+	}
+
+	test("switches rules folders and watches external rules files live", async function () {
+		this.timeout(70_000);
+		await withExternalRules(async ({ file, loads }) => {
+			await fs.writeFile(file, rulesText("second", "third"));
+			assert.ok(
+				await waitUntil(() => loads(2).length > 0, 15_000),
+				"an edit under the external rules folder should trigger a rules reload",
+			);
+		});
+	});
+
+	test("collapses a burst of rules-file edits into one reload", async function () {
+		this.timeout(70_000);
+		await withExternalRules(async ({ root, loads }) => {
+			// New files, not rewrites of one: the watcher may coalesce repeated
+			// writes to a single path, which would make the burst a single event.
+			for (let i = 0; i < 6; i++) {
+				await fs.writeFile(path.join(root, `burst${i}.cwt`), rulesText(`burst${i}`));
+			}
+			assert.ok(
+				await waitUntil(() => loads(7).length > 0, 15_000),
+				"the burst should reload the rules",
+			);
+			// Reloads are logged in order, so once this later edit's reload is in, a
+			// second reload for the burst would be too.
+			await fs.writeFile(path.join(root, "after.cwt"), rulesText("after"));
+			assert.ok(
+				await waitUntil(() => loads(8).length > 0, 15_000),
+				"a later edit should reload again",
+			);
+			assert.strictEqual(loads(7).length, 1, "the burst should reload the rules once");
+		});
+	});
+
+	test("leaves rules alone on external edits while rules.autoReload is off", async function () {
+		this.timeout(70_000);
+		await withExternalRules(async ({ root, loads, sawEvent }) => {
+			const cfg = cwtoolsConfig();
+			const offFile = path.join(root, "off.cwt");
+			await cfg.update("rules.autoReload", false, vscode.ConfigurationTarget.Global);
+			try {
+				await fs.writeFile(offFile, rulesText("off"));
+				assert.ok(
+					await waitUntil(() => sawEvent(offFile), 15_000),
+					"the edit should reach the watchers",
+				);
+				// A negative needs a window: three debounce periods after delivery.
+				await wait(1_500);
+				assert.strictEqual(loads(2).length, 0, "autoReload off should not reload");
+			} finally {
+				await cfg.update("rules.autoReload", undefined, vscode.ConfigurationTarget.Global);
+			}
+			await fs.writeFile(path.join(root, "on.cwt"), rulesText("on"));
+			assert.ok(
+				await waitUntil(() => loads(3).length > 0, 15_000),
+				"with autoReload back on, the watcher should reload again",
+			);
+			assert.strictEqual(loads(2).length, 0, "the edit made while off should never have reloaded");
+		});
 	});
 
 	test("updates resolved scope hover output in the running server", async () => {

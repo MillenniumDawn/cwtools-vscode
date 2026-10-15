@@ -1215,24 +1215,11 @@ mod tests {
     #[test]
     fn backend_graph_source_bounds_high_fanout_before_graph_walk() {
         use crate::navigation::test_rules::type_ref_ruleset;
-        use crate::state::DocumentState;
+        use crate::testing::test_backend;
         use cwtools_parser::parser::parse_string;
 
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let backend = Backend {
-            client: captured.lock().take().expect("the builder ran"),
-            state: state.clone(),
-        };
+        let backend = test_backend();
+        let state = backend.state.clone();
         let rules = type_ref_ruleset();
         state.rules.write().ruleset = Some(Arc::new(rules.clone()));
         {

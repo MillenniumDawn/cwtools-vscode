@@ -7,20 +7,23 @@
 //   watched     served-root exclusions and watched-file updates, in its own workspace
 //   live        the live-settings suite, in sample-live (its own workspace
 //               because .vscode/settings.json attempts to set rules_folder)
+//   gate-descriptor  the activation gate refusing to start a server when no root
+//               holds a descriptor.mod file, including one where it is a directory
+//   gate-disabled  the activation gate refusing to start a server when
+//               cwtools.enable is false, in a workspace with a real descriptor
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
 //               (see below; its own CI step, not part of test:smoke)
-//   editor-tracker active-editor classification races against a controlled
-//               transport in a server-free fixture workspace
 //   host        sample-workspace suites, including smoke, hover and completion;
-//               excludes live, multi-root, restart, rules-sync and watched
+//               excludes live, multi-root, restart, rules-sync, watched and the
+//               gate-* labels
 //   restart     destructive server-crash/recovery test in an isolated host
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
 // Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
 // `--label live`, `--label multi-root`, `--label watched`, `--label restart`,
-// and `--label editor-tracker` to cover the host workspaces, the external-file
-// watcher and active-editor tracker suites.
+// `--label gate-descriptor`, and `--label gate-disabled` to cover the host
+// workspaces and the external-file watcher suite.
 //
 // The hover and completion suites assert on rule-driven data, which needs the
 // workspace to detect as a real game rather than the generic `paradox`
@@ -32,9 +35,10 @@
 // binary, so it is gated in ci.yml's `build` job rather than `check`.
 //
 // The multi-root fixture needs a staged server, so CI runs it alongside watched
-// after the build step has produced one, and locally it runs with smoke under
-// test:smoke. The editor-tracker label is server-free; the server-free unit
-// tests are the vitest suites under extension/test/unit.
+// and the gate labels after the build step has produced one, and locally it runs
+// with smoke under test:smoke. Every label needs the server: the gate labels
+// assert that none starts, which proves nothing without a binary to refuse. The
+// server-free tests are the vitest suites under extension/test/unit.
 //
 // rules-sync exercises the opposite gap: sample-hoi4's folder name and
 // common/ai_strategy dir make it detect as hoi4, so activation's real
@@ -62,6 +66,9 @@ const multiRootWorkspace =
 	"./extension/test/workspaces/multiroot.code-workspace";
 const liveWorkspace = "./extension/test/workspaces/live";
 const rulesSyncWorkspace = "./extension/test/workspaces/hoi4";
+const gateDescriptorWorkspace =
+	"./extension/test/workspaces/gate-descriptor/gate-descriptor.code-workspace";
+const gateDisabledWorkspace = "./extension/test/workspaces/gate-disabled";
 const sampleFile = "./extension/test/workspaces/stellaris/events/irm.txt";
 const multiRootSampleFile =
 	"./extension/test/workspaces/multiroot-stellaris/events/selected.txt";
@@ -145,17 +152,6 @@ export default defineConfig({
 	tests: [
 		{
 			...base,
-			label: "editor-tracker",
-			files: [
-				abortDiagnostics,
-				"./dist/extension/bin/client/test/host/documentLanguage.test.js",
-			],
-			workspaceFolder: "./extension/test/workspaces/editor-tracker",
-			launchArgs: [softwareRendering, disableCrashReporter, ...headless],
-			env: { CWTOOLS_TEST_EDITOR_TRACKER: "1" },
-		},
-		{
-			...base,
 			label: "watched",
 			files: [abortDiagnostics, "./dist/extension/bin/client/test/host/watchedFiles.test.js"],
 			workspaceFolder: "./extension/test/workspaces/watched/watched.code-workspace",
@@ -189,6 +185,26 @@ export default defineConfig({
 				disableCrashReporter,
 				...headless,
 			],
+		},
+		{
+			...base,
+			label: "gate-descriptor",
+			files: [
+				abortDiagnostics,
+				"./dist/extension/bin/client/test/host/gateDescriptor.test.js",
+			],
+			workspaceFolder: gateDescriptorWorkspace,
+			launchArgs: [softwareRendering, disableCrashReporter, ...headless],
+		},
+		{
+			...base,
+			label: "gate-disabled",
+			files: [
+				abortDiagnostics,
+				"./dist/extension/bin/client/test/host/gateDisabled.test.js",
+			],
+			workspaceFolder: gateDisabledWorkspace,
+			launchArgs: [softwareRendering, disableCrashReporter, ...headless],
 		},
 		{
 			...base,

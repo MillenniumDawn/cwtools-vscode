@@ -91,20 +91,12 @@ pub(super) fn ignore_code_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cwtools_test_support::abs_path;
 
     fn diagnostic(code: &str) -> Diagnostic {
         Diagnostic {
             code: Some(NumberOrString::String(code.to_string())),
             ..Default::default()
-        }
-    }
-
-    // `/ws` is not absolute on Windows; Url::from_file_path rejects it.
-    fn abs(tail: &str) -> std::path::PathBuf {
-        if cfg!(windows) {
-            std::path::PathBuf::from(format!("C:/{tail}"))
-        } else {
-            std::path::PathBuf::from(format!("/{tail}"))
         }
     }
 
@@ -171,7 +163,7 @@ mod tests {
 
     #[test]
     fn actions_are_built_per_unique_code() {
-        let root = abs("ws");
+        let root = abs_path("ws");
         let diags = vec![
             diagnostic("CW100"),
             diagnostic("CW100"),
@@ -201,7 +193,7 @@ mod tests {
             code: Some(NumberOrString::Number(100)),
             ..Default::default()
         };
-        let root = abs("ws");
+        let root = abs_path("ws");
         let actions = ignore_code_actions(&[numeric], &[], Some(&root), None);
         assert!(actions.is_empty(), "numeric codes have no name to ignore");
 

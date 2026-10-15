@@ -132,11 +132,6 @@ def _esbuild_test_args(
             set(),
         ),
         (
-            'const tracker = process.env.CWTOOLS_TEST_EDITOR_TRACKER === "1";',
-            {"CWTOOLS_TEST_EDITOR_TRACKER"},
-            set(),
-        ),
-        (
             'const rules = process.env["CWTOOLS_TEST_BRACKET"];',
             set(),
             {"CWTOOLS_TEST_BRACKET"},
@@ -351,9 +346,7 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
     source = tmp_path / "repo.ts"
     source.write_text(
         "export const repo = process.env.CWTOOLS_TEST_RULES_FOLDER ?? "
-        '"https://ok.example";\n'
-        'export const tracker = process.env.CWTOOLS_TEST_EDITOR_TRACKER === "1" '
-        '? "documentLanguageTrackerForTests" : "";\n',
+        '"https://ok.example";\n',
         encoding="utf-8",
     )
     dropped = tmp_path / "dropped.js"
@@ -379,8 +372,6 @@ def test_release_define_drops_cwtools_test_from_js(tmp_path: Path) -> None:
     assert "CWTOOLS_TEST" not in dropped_js
     assert "https://ok.example" in dropped_js
     assert "CWTOOLS_TEST" in kept_js
-    assert "documentLanguageTrackerForTests" not in dropped_js
-    assert "documentLanguageTrackerForTests" in kept_js
 
 
 @pytest.mark.parametrize("webview", [False, True], ids=["extension", "webview"])
