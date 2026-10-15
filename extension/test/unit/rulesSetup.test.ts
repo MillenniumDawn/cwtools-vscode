@@ -16,7 +16,6 @@ const state = vi.hoisted(() => ({
 	head: null as string | null,
 	checkoutHead: null as string | null,
 	gitMissing: false,
-	gitFailureNext: false,
 	hostileResponse: undefined as
 		| "declared-oversized"
 		| "streamed-oversized"
@@ -105,10 +104,6 @@ vi.mock("../../src/host/engine", async () => {
 			// the real runGit has no rev-parse special case.
 			if (state.gitMissing) {
 				return Promise.reject(new GitNotFoundError());
-			}
-			if (state.gitFailureNext) {
-				state.gitFailureNext = false;
-				return Promise.reject(new Error("simulated git transport failure"));
 			}
 			if (args.includes("rev-parse")) {
 				return state.head === null
@@ -199,7 +194,7 @@ function stubManifestFetch(value: RulesManifest | string) {
 }
 
 // One sync against a fake memento and client, recording what each was told.
-function session(cached?: RulesManifest) {
+function session(cached?: RulesManifest, updateError?: Error) {
 	let stored = cached;
 	const updates: Array<[string, unknown]> = [];
 	const requests: unknown[] = [];
@@ -208,6 +203,9 @@ function session(cached?: RulesManifest) {
 			key === RULES_MANIFEST_CACHE_KEY ? stored : undefined,
 		update(key: string, value: unknown): Promise<void> {
 			updates.push([key, value]);
+			if (updateError) {
+				return Promise.reject(updateError);
+			}
 			stored = value as RulesManifest;
 			return Promise.resolve();
 		},
@@ -248,7 +246,6 @@ suite("rulesSetup", () => {
 		state.head = null;
 		state.checkoutHead = null;
 		state.gitMissing = false;
-		state.gitFailureNext = false;
 		state.hostileResponse = undefined;
 		state.streamedBodyCancelled = false;
 		state.rulesFetches.length = 0;
@@ -334,6 +331,88 @@ suite("rulesSetup", () => {
 		assert.ok(info.includes(sha("c")) && info.includes(sha("f")), info);
 	});
 
+	test("uses a newer manifest when caching it fails", async () => {
+		const reviewed = manifest(sha("f"));
+		stubManifestFetch(reviewed);
+		const { sync, updates } = session(undefined, new Error("disk full"));
+
+		await settle(sync());
+
+		assert.deepStrictEqual(updates, [[RULES_MANIFEST_CACHE_KEY, reviewed]]);
+		assert.strictEqual(state.rulesFetches[0]?.ref, sha("f"));
+		assert.deepStrictEqual(logger.logWarn.mock.calls, [
+			["Could not cache rules manifest: disk full"],
+		]);
+	});
+
+	test("skips an oversized response by content-length without reading the body", async () => {
+		vi.useFakeTimers();
+		const response = new Response(JSON.stringify(manifest(sha("f"))), {
+			status: 200,
+			headers: { "content-length": String(RULES_MANIFEST_MAX_BYTES + 1) },
+		});
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+		const { sync, updates } = session();
+
+		await settle(sync());
+
+		assert.strictEqual(response.bodyUsed, false);
+		assert.deepStrictEqual(updates, []);
+		assert.strictEqual(state.rulesFetches[0]?.ref, LANGUAGE_REPOS.hoi4.ref);
+		assert.strictEqual(vi.getTimerCount(), 0, "the fetch timeout should be cleared");
+	});
+
+	test.each<
+		[
+			string,
+			"declared-oversized" | "streamed-oversized",
+			RulesManifest | undefined,
+			string,
+		]
+	>([
+		[
+			"declared oversized response preserves the cached pin",
+			"declared-oversized",
+			manifest(sha("c")),
+			sha("c"),
+		],
+		[
+			"streamed oversized response uses the bundled pin",
+			"streamed-oversized",
+			undefined,
+			LANGUAGE_REPOS.hoi4.ref,
+		],
+		[
+			"streamed oversized response preserves the cached pin",
+			"streamed-oversized",
+			manifest(sha("c")),
+			sha("c"),
+		],
+	])("%s", async (_name, hostileResponse, cached, expectedRef) => {
+		vi.useFakeTimers();
+		state.hostileResponse = hostileResponse;
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, updates } = session(cached);
+
+		await settle(sync());
+
+		assert.deepStrictEqual(updates, [], "an oversized manifest must not be cached");
+		assert.strictEqual(state.rulesFetches[0]?.ref, expectedRef);
+		assert.ok(
+			logger.logWarn.mock.calls.some(([message]) =>
+				String(message).includes(
+					`Rules manifest refresh failed; using ${cached ? "cached" : "bundled"} pins: Rules manifest response is too large.`,
+				),
+			),
+			"the rejected remote manifest should leave the cached or bundled pin in use",
+		);
+		assert.strictEqual(
+			state.streamedBodyCancelled,
+			hostileResponse === "streamed-oversized",
+		);
+		assert.strictEqual(vi.getTimerCount(), 0, "the fetch timeout should be cleared");
+	});
+
 	test.each<[string, RulesManifest | undefined, RulesManifest | string, string]>([
 		["a cached pin beats an invalid remote manifest", manifest(sha("c")), "{", sha("c")],
 		["a newer cached pin beats a stale remote manifest", manifest(sha("c"), NEXT + 1), manifest(sha("d")), sha("c")],
@@ -390,22 +469,35 @@ suite("rulesSetup", () => {
 		assert.doesNotMatch(warnings()[0], /check your network/);
 	});
 
-	test("retries a failed initial clone for the same client after the failure settles", async () => {
-		state.gitFailureNext = true;
+	test("still warns about missing git when a stale .git directory is present", async () => {
+		state.hasGitDirectory = true;
+		state.head = sha("e");
+		state.gitMissing = true;
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, requests } = session();
+
+		await settle(sync());
+
+		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(warnings().length, 1);
+		assert.match(warnings()[0], /CWTools needs Git on your PATH/);
+		assert.doesNotMatch(warnings()[0], /check your network/);
+	});
+
+	test("a sync can be retried after a failed fetch completes", async () => {
+		state.gitMissing = true;
 		const reviewed = manifest(sha("f"));
 		stubManifestFetch(reviewed);
-		const { sync, requests, updates } = session();
+		const { sync, updates, requests } = session();
 
 		const failedAttempt = sync();
 		await settle(failedAttempt);
-		assert.deepStrictEqual(requests, []);
 		assert.strictEqual(state.rulesFetches.length, 1);
+		assert.deepStrictEqual(requests, []);
 		assert.strictEqual(warnings().length, 1);
-		assert.match(warnings()[0], /failed to download the hoi4 rules/);
-		assert.deepStrictEqual(logger.logError.mock.calls, [
-			["Rule fetch failed for hoi4", "simulated git transport failure"],
-		]);
+		const errorsAfterFailure = [...logger.logError.mock.calls];
 
+		state.gitMissing = false;
 		const retry = sync();
 		assert.notStrictEqual(
 			retry,
@@ -419,67 +511,10 @@ suite("rulesSetup", () => {
 		assert.strictEqual(warnings().length, 1, "the successful retry should not warn");
 		assert.deepStrictEqual(
 			logger.logError.mock.calls,
-			[["Rule fetch failed for hoi4", "simulated git transport failure"]],
+			errorsAfterFailure,
 			"the successful retry should not add an error log",
 		);
 		assert.deepStrictEqual(updates, [[RULES_MANIFEST_CACHE_KEY, reviewed]]);
-	});
-
-	test.each<
-		[
-			string,
-			"declared-oversized" | "streamed-oversized",
-			RulesManifest | undefined,
-			string,
-		]
-	>([
-		[
-			"declared oversized response uses the bundled pin",
-			"declared-oversized",
-			undefined,
-			LANGUAGE_REPOS.hoi4.ref,
-		],
-		[
-			"declared oversized response preserves the cached pin",
-			"declared-oversized",
-			manifest(sha("c")),
-			sha("c"),
-		],
-		[
-			"streamed oversized response uses the bundled pin",
-			"streamed-oversized",
-			undefined,
-			LANGUAGE_REPOS.hoi4.ref,
-		],
-		[
-			"streamed oversized response preserves the cached pin",
-			"streamed-oversized",
-			manifest(sha("c")),
-			sha("c"),
-		],
-	])("%s", async (_name, hostileResponse, cached, expectedRef) => {
-		vi.useFakeTimers();
-		state.hostileResponse = hostileResponse;
-		stubManifestFetch(manifest(sha("f")));
-		const { sync, updates } = session(cached);
-
-		await settle(sync());
-
-		assert.deepStrictEqual(updates, [], "an oversized manifest must not be cached");
-		assert.strictEqual(state.rulesFetches[0]?.ref, expectedRef);
-		assert.ok(
-			logger.logWarn.mock.calls.some(([message]) =>
-				String(message).includes(
-					`Rules manifest refresh failed; using ${cached ? "cached" : "bundled"} pins: Rules manifest response is too large.`,
-				),
-			),
-			"the rejected remote manifest should leave the cached or bundled pin in use",
-		);
-		assert.strictEqual(
-			state.streamedBodyCancelled,
-			hostileResponse === "streamed-oversized",
-		);
-		assert.strictEqual(vi.getTimerCount(), 0, "the fetch timeout should be cleared");
 	});
 
 	test("a checkout that lands on another commit warns and does not reload", async () => {

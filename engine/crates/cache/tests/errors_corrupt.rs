@@ -3,33 +3,28 @@
 use cwtools_cache::cache_format::{CachedErrors, CachedParseError};
 use cwtools_cache::io::{self, CacheError};
 
+mod common;
+
+use common::{is_bad_header, written_bytes};
+
 const MAGIC: [u8; 4] = *b"CWE\x00";
 const FORMAT_VERSION: u8 = 2;
 const HEADER_LEN: usize = MAGIC.len() + 1;
+const BAD_HEADER: &str = "incompatible or missing error-cache header";
 
 fn sample_bytes() -> Vec<u8> {
     let cached = CachedErrors {
         errors: vec![CachedParseError::Pos(3, 4, "invalid value".into())],
     };
-    let tmp = tempfile::NamedTempFile::with_suffix(".cwe").unwrap();
-    io::serialize_errors_to_file(&cached, tmp.path()).unwrap();
-    std::fs::read(tmp.path()).unwrap()
+    written_bytes(".cwe", |path| {
+        io::serialize_errors_to_file(&cached, path).unwrap();
+    })
 }
 
 fn read(bytes: &[u8]) -> Result<CachedErrors, CacheError> {
     let tmp = tempfile::NamedTempFile::with_suffix(".cwe").unwrap();
     std::fs::write(tmp.path(), bytes).unwrap();
     io::read_errors_from_file(tmp.path())
-}
-
-fn is_bad_header(error: &CacheError) -> bool {
-    matches!(
-        error,
-        CacheError::Deserialize {
-            msg: "incompatible or missing error-cache header",
-            source: None,
-        }
-    )
 }
 
 #[test]
@@ -51,11 +46,14 @@ fn bad_magic_and_wrong_version_are_rejected() {
 
     let mut bad_magic = bytes.clone();
     bad_magic[0] ^= 0xff;
-    assert!(is_bad_header(&read(&bad_magic).unwrap_err()));
+    assert!(is_bad_header(&read(&bad_magic).unwrap_err(), BAD_HEADER));
 
     let mut wrong_version = bytes;
     wrong_version[MAGIC.len()] = FORMAT_VERSION + 1;
-    assert!(is_bad_header(&read(&wrong_version).unwrap_err()));
+    assert!(is_bad_header(
+        &read(&wrong_version).unwrap_err(),
+        BAD_HEADER
+    ));
 }
 
 #[test]
@@ -64,7 +62,7 @@ fn truncated_sidecars_are_rejected() {
 
     for len in 0..HEADER_LEN {
         let error = read(&bytes[..len]).unwrap_err();
-        assert!(is_bad_header(&error), "length {len}: {error:?}");
+        assert!(is_bad_header(&error, BAD_HEADER), "length {len}: {error:?}");
     }
 
     // Keep a valid header but remove the archive body entirely, as when a

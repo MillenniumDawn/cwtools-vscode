@@ -24,7 +24,6 @@
 
 use std::collections::HashMap;
 use std::hint::black_box;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -34,6 +33,7 @@ use cwtools_index::{
     variable_defining_effects,
 };
 use cwtools_string_table::string_table::StringTable;
+use cwtools_test_support::{checkout, rules_dir};
 
 /// Millennium Dawn rather than Kaiserreich: it is the larger of the two pinned
 /// corpora and the one whose flag-heavy scripts fill `value_set_values`.
@@ -46,31 +46,6 @@ const SYNTH_TYPES: &[&str] = &["state", "character", "technology", "country_even
 const SYNTH_INSTANCES_PER_TYPE_PER_FILE: usize = 6;
 const SYNTH_VALUE_SETS: &[&str] = &["country_flag", "global_flag", "state_flag"];
 const SYNTH_VALUES_PER_SET_PER_FILE: usize = 4;
-
-fn projects_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_PROJECTS") {
-        return Some(PathBuf::from(dir));
-    }
-    // crates/driver -> repo root is ../../.., siblings sit next to it.
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    repo.join("..").canonicalize().ok()
-}
-
-fn rules_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_RULES") {
-        return Some(PathBuf::from(dir));
-    }
-    let dir = projects_dir()?.join("cwtools-hoi4-config/Config");
-    dir.is_dir().then_some(dir)
-}
-
-fn corpus_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("CWTOOLS_CORPUS") {
-        return Some(PathBuf::from(dir));
-    }
-    let dir = projects_dir()?.join(CORPUS_NAME);
-    dir.is_dir().then_some(dir)
-}
 
 fn synthetic_index() -> TypeIndex {
     let mut idx = TypeIndex::new();
@@ -158,7 +133,7 @@ fn bench_snapshot_clone(c: &mut Criterion) {
         );
         return;
     };
-    let Some(corpus) = corpus_dir() else {
+    let Some(corpus) = checkout("CWTOOLS_CORPUS", CORPUS_NAME) else {
         eprintln!("snapshot_clone: no corpus. Set CWTOOLS_CORPUS to a {CORPUS_NAME} checkout");
         return;
     };

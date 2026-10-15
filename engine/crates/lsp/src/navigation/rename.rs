@@ -571,25 +571,9 @@ mod tests {
     use crate::state::{DocumentState, ParsedDoc};
 
     fn backend() -> (Backend, Arc<DocumentState>) {
-        let state = Arc::new(DocumentState::new());
-        let captured = Arc::new(parking_lot::Mutex::new(None));
-        let slot = captured.clone();
-        let server_state = state.clone();
-        let (_service, _socket) = tower_lsp::LspService::new(move |client| {
-            *slot.lock() = Some(client.clone());
-            Backend {
-                client,
-                state: server_state.clone(),
-            }
-        });
-        let client = captured.lock().take().expect("the builder ran");
-        (
-            Backend {
-                client,
-                state: state.clone(),
-            },
-            state,
-        )
+        let backend = crate::testing::test_backend();
+        let state = backend.state.clone();
+        (backend, state)
     }
 
     #[tokio::test(flavor = "multi_thread")]
