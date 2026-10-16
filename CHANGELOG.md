@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.0
+
 #### Engine
 
 * Preserve empty key sides in type-declared `$` modifier templates, so bare `$` templates are validated and completed while ordinary non-template rules remain excluded.
