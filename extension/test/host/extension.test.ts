@@ -212,6 +212,12 @@ suite("GraphPanel", function () {
 			);
 			gp.GraphPanel.currentPanel?.dispose();
 		}
+		if (
+			vscode.window.activeTextEditor?.document.uri.fsPath ===
+			vscode.Uri.file(tempFile).fsPath
+		) {
+			await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+		}
 		fs.rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -497,8 +503,30 @@ suite("GraphPanel", function () {
 		let show: sinon.SinonStub;
 		let revealRange: sinon.SinonStub;
 		let warn: sinon.SinonStub;
+		let receive: Parameters<vscode.Webview["onDidReceiveMessage"]>[0] | undefined;
+		let originalShow: typeof vscode.window.showTextDocument;
+		let actualReveal: sinon.SinonSpy;
 
 		setup(() => {
+			receive = undefined;
+			const createWebviewPanelOriginal = vscode.window.createWebviewPanel.bind(
+				vscode.window,
+			);
+			sandbox
+				.stub(vscode.window, "createWebviewPanel")
+				.callsFake((...args) => {
+					const created = createWebviewPanelOriginal(...args);
+					const webview = created.webview;
+					const register = webview.onDidReceiveMessage.bind(webview);
+					sandbox
+						.stub(webview, "onDidReceiveMessage")
+						.callsFake((listener, thisArgs, disposables) => {
+							receive = listener;
+							return register(listener, thisArgs, disposables);
+						});
+					return created;
+				});
+			originalShow = vscode.window.showTextDocument.bind(vscode.window);
 			panel = createPanel();
 			revealRange = sandbox.stub();
 			show = sandbox
@@ -518,7 +546,7 @@ suite("GraphPanel", function () {
 
 			assert.strictEqual(warn.callCount, 1);
 			assert.ok(
-				String(warn.firstCall.args[0]).includes(tempFile),
+				String(warn.firstCall.args[0]).includes(vscode.Uri.file(tempFile).fsPath),
 				`prompt should name the path, got: ${String(warn.firstCall.args[0])}`,
 			);
 			assert.deepStrictEqual(warn.firstCall.args[1], { modal: true });
@@ -535,7 +563,38 @@ suite("GraphPanel", function () {
 
 			assert.strictEqual(warn.callCount, 1);
 			assert.strictEqual(show.callCount, 1);
-			assert.strictEqual(openedPath(), tempFile);
+			assert.strictEqual(openedPath(), vscode.Uri.file(tempFile).fsPath);
+		});
+
+		test("opens through the registered listener and clamps zero coordinates", async function () {
+			warn.callsFake(
+				(_message: string, _options: vscode.MessageOptions, ...items: string[]) =>
+					Promise.resolve(items[0]),
+			);
+			show.callsFake(async () => {
+				const editor = await originalShow(vscode.Uri.file(tempFile));
+				// VS Code freezes TextEditor API objects, so observe the call through
+				// a delegating facade instead of trying to replace editor.revealRange.
+				actualReveal = sandbox.spy(
+					(range: vscode.Range, revealType: vscode.TextEditorRevealType) =>
+						editor.revealRange(range, revealType),
+				);
+				const facade = Object.create(editor) as vscode.TextEditor;
+				Object.defineProperty(facade, "revealRange", { value: actualReveal });
+				return facade;
+			});
+			assert.ok(receive, "GraphPanel should register its webview message listener");
+
+			await receive({ command: "goToFile", uri: tempFile, line: 0, column: 0 });
+
+			const editor = vscode.window.activeTextEditor;
+			assert.ok(editor, "the file should open in a real editor");
+			assert.strictEqual(editor.document.uri.fsPath, vscode.Uri.file(tempFile).fsPath);
+			assert.strictEqual(show.callCount, 1);
+			assert.strictEqual(actualReveal.callCount, 1);
+			const range = actualReveal.firstCall.args[0] as vscode.Range;
+			assert.deepStrictEqual(range.start, new vscode.Position(0, 0));
+			assert.strictEqual(warn.callCount, 1);
 		});
 
 		test("opens a workspace file without a prompt at the 0-based line and column", async function () {
@@ -545,7 +604,7 @@ suite("GraphPanel", function () {
 
 			assert.strictEqual(warn.called, false);
 			assert.strictEqual(show.callCount, 1);
-			assert.strictEqual(openedPath(), inside);
+			assert.strictEqual(openedPath(), vscode.Uri.file(inside).fsPath);
 			assert.strictEqual(revealRange.callCount, 1);
 			const [range, revealType] = revealRange.firstCall.args as [
 				vscode.Range,

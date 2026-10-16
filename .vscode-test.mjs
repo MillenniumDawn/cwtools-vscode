@@ -59,6 +59,7 @@
 
 import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";
+import { hostTestLaunchArgs } from "./scripts/build/hosttest_config.mjs";
 
 const sampleWorkspace = "./extension/test/workspaces/stellaris";
 const vscodeCompatibilityFloor = "1.91.0";
@@ -134,14 +135,10 @@ const hostFiles = [
 const softwareRendering = "--disable-gpu";
 const disableCrashReporter = "--disable-crash-reporter";
 
-// scripts/build/hosttest.py resolves the display backend and exports the name
-// it settled on. `ozone` is Electron's own headless Chromium backend: it needs
-// no system package, but the flag is an undocumented Chromium detail, so it is
-// opt-in (CWTOOLS_TEST_DISPLAY=ozone) rather than the Linux default.
-const headless =
-	process.env.CWTOOLS_TEST_DISPLAY === "ozone"
-		? ["--ozone-platform=headless"]
-		: [];
+// The launcher confirms a headless backend and supplies its Electron platform.
+// Direct test-cli runs fail closed; use hosttest.py or the explicit native
+// debugging command instead.
+const headless = hostTestLaunchArgs();
 
 const base = {
 	version: "stable",

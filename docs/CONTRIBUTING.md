@@ -164,33 +164,38 @@ also what keeps `scripts/coverage.py` from shadowing the `coverage` package.
 
 ### The extension-host window
 
-Every host label runs through `scripts/build/hosttest.py`, which picks a display
-backend before it hands off to `vscode-test`. The point is that running the
-tests should not throw a VS Code window onto the desktop you are working on.
-
-On Linux the backend is `xvfb-run -a`. If `xvfb-run` is not installed the run
-fails and tells you how to install it; it does not quietly fall back to a
-visible window. macOS and Windows have no equivalent (Electron has no supported
-headless desktop mode, and Xvfb is Linux-only), so they run natively and print a
-notice saying so. Issue #406 tracks closing that gap, most likely with a
-container.
+Every host label and host-coverage run goes through
+`scripts/build/hosttest.py`, which selects a display backend before handing
+off to `vscode-test`. Automated host tests currently run only on Linux and
+always fail closed if a headless backend is unavailable. The default backend
+is `xvfb-run -a`; the launcher removes inherited desktop display variables,
+and Electron is explicitly pinned to X11 so it cannot attach to a Wayland
+desktop. Install `xvfb` and `xauth` if the launcher reports they are missing.
+The opt-in `ozone` backend uses Electron's headless Ozone mode on Linux.
+macOS and Windows automated host runs fail closed because neither backend is
+supported there.
+These constraints apply to `npm run test:host`, `npm run test:smoke`,
+`npm run test:coverage`, and the host coverage runner. On Debian or Ubuntu,
+install the Xvfb backend with `sudo apt install xvfb xauth`.
 
 `CWTOOLS_TEST_DISPLAY` overrides the choice:
 
 | value    | effect |
 | -------- | ------ |
-| `xvfb`   | force `xvfb-run -a`, and fail if it is missing |
-| `ozone`  | pass `--ozone-platform=headless` to Electron. No system package, but the flag is an undocumented Chromium detail, so it is opt-in |
-| `native` | a real window, same as `npm run test:native` |
+| `xvfb`   | force `xvfb-run -a` and Electron's X11 backend; fail if unavailable |
+| `ozone`  | pass `--ozone-platform=headless` to Electron on Linux |
 
-`npm run test:native` is the documented escape hatch for debugging something
-you can only see, and it takes the same arguments as the other commands
-(`npm run test:native -- --label host`). Unrecognized arguments pass straight
-through to `vscode-test`, so `--grep` works everywhere.
+`npm run test:native` is an explicit local-only escape hatch for debugging a
+visible window (`npm run test:native -- --label host`). It is rejected in CI.
+Setting `CWTOOLS_TEST_DISPLAY=native` is not an override; it fails so a stale
+environment variable cannot silently expose a desktop. Direct `vscode-test`
+CLI launches also fail closed; use the wrapper so the backend is configured.
+Unrecognized wrapper arguments pass through to `vscode-test`, so `--grep`
+works with the host launcher.
 
-CI runs the same commands with no wrapper of its own: the runner resolves xvfb
-on the Linux runners. A green Linux run is not evidence about native Windows or
-macOS behavior, and the host suites are not currently run on either.
+CI installs and verifies `xvfb` and `xauth`, selects the Xvfb backend
+explicitly, and runs the real host suites under that isolated display. The
+host suites do not claim coverage of native Windows or macOS behavior.
 
 The Rust side has its own suite and its own gates:
 
