@@ -16,6 +16,11 @@ const state = vi.hoisted(() => ({
 	head: null as string | null,
 	checkoutHead: null as string | null,
 	gitMissing: false,
+	hostileResponse: undefined as
+		| "declared-oversized"
+		| "streamed-oversized"
+		| undefined,
+	streamedBodyCancelled: false,
 	rulesFetches: [] as Array<{
 		cacheDir: string;
 		repo: string;
@@ -146,16 +151,44 @@ function manifest(ref: string, revision = NEXT): RulesManifest {
 
 function stubManifestFetch(value: RulesManifest | string) {
 	const text = typeof value === "string" ? value : JSON.stringify(value);
-	const fetch = vi.fn().mockImplementation(() =>
-		Promise.resolve(
+	const fetch = vi.fn().mockImplementation(() => {
+		if (state.hostileResponse === "declared-oversized") {
+			return Promise.resolve(
+				new Response("{}", {
+					status: 200,
+					headers: {
+						"content-length": String(RULES_MANIFEST_MAX_BYTES + 1),
+					},
+				}),
+			);
+		}
+		if (state.hostileResponse === "streamed-oversized") {
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(
+						new Uint8Array(RULES_MANIFEST_MAX_BYTES + 1),
+					);
+				},
+				cancel() {
+					state.streamedBodyCancelled = true;
+				},
+			});
+			return Promise.resolve(
+				new Response(body, {
+					status: 200,
+					headers: { "content-length": "1" },
+				}),
+			);
+		}
+		return Promise.resolve(
 			new Response(text, {
 				status: 200,
 				headers: {
 					"content-length": String(new TextEncoder().encode(text).length),
 				},
 			}),
-		),
-	);
+		);
+	});
 	vi.stubGlobal("fetch", fetch);
 	return fetch;
 }
@@ -213,6 +246,8 @@ suite("rulesSetup", () => {
 		state.head = null;
 		state.checkoutHead = null;
 		state.gitMissing = false;
+		state.hostileResponse = undefined;
+		state.streamedBodyCancelled = false;
 		state.rulesFetches.length = 0;
 		state.progress = undefined;
 		state.progressStarted = new Promise<void>((resolve) => {
@@ -311,6 +346,7 @@ suite("rulesSetup", () => {
 	});
 
 	test("skips an oversized response by content-length without reading the body", async () => {
+		vi.useFakeTimers();
 		const response = new Response(JSON.stringify(manifest(sha("f"))), {
 			status: 200,
 			headers: { "content-length": String(RULES_MANIFEST_MAX_BYTES + 1) },
@@ -323,6 +359,58 @@ suite("rulesSetup", () => {
 		assert.strictEqual(response.bodyUsed, false);
 		assert.deepStrictEqual(updates, []);
 		assert.strictEqual(state.rulesFetches[0]?.ref, LANGUAGE_REPOS.hoi4.ref);
+		assert.strictEqual(vi.getTimerCount(), 0, "the fetch timeout should be cleared");
+	});
+
+	test.each<
+		[
+			string,
+			"declared-oversized" | "streamed-oversized",
+			RulesManifest | undefined,
+			string,
+		]
+	>([
+		[
+			"declared oversized response preserves the cached pin",
+			"declared-oversized",
+			manifest(sha("c")),
+			sha("c"),
+		],
+		[
+			"streamed oversized response uses the bundled pin",
+			"streamed-oversized",
+			undefined,
+			LANGUAGE_REPOS.hoi4.ref,
+		],
+		[
+			"streamed oversized response preserves the cached pin",
+			"streamed-oversized",
+			manifest(sha("c")),
+			sha("c"),
+		],
+	])("%s", async (_name, hostileResponse, cached, expectedRef) => {
+		vi.useFakeTimers();
+		state.hostileResponse = hostileResponse;
+		stubManifestFetch(manifest(sha("f")));
+		const { sync, updates } = session(cached);
+
+		await settle(sync());
+
+		assert.deepStrictEqual(updates, [], "an oversized manifest must not be cached");
+		assert.strictEqual(state.rulesFetches[0]?.ref, expectedRef);
+		assert.ok(
+			logger.logWarn.mock.calls.some(([message]) =>
+				String(message).includes(
+					`Rules manifest refresh failed; using ${cached ? "cached" : "bundled"} pins: Rules manifest response is too large.`,
+				),
+			),
+			"the rejected remote manifest should leave the cached or bundled pin in use",
+		);
+		assert.strictEqual(
+			state.streamedBodyCancelled,
+			hostileResponse === "streamed-oversized",
+		);
+		assert.strictEqual(vi.getTimerCount(), 0, "the fetch timeout should be cleared");
 	});
 
 	test.each<[string, RulesManifest | undefined, RulesManifest | string, string]>([
@@ -398,18 +486,35 @@ suite("rulesSetup", () => {
 
 	test("a sync can be retried after a failed fetch completes", async () => {
 		state.gitMissing = true;
-		stubManifestFetch(manifest(sha("f")));
-		const { sync, requests } = session();
+		const reviewed = manifest(sha("f"));
+		stubManifestFetch(reviewed);
+		const { sync, updates, requests } = session();
 
-		await settle(sync());
+		const failedAttempt = sync();
+		await settle(failedAttempt);
 		assert.strictEqual(state.rulesFetches.length, 1);
 		assert.deepStrictEqual(requests, []);
+		assert.strictEqual(warnings().length, 1);
+		const errorsAfterFailure = [...logger.logError.mock.calls];
 
 		state.gitMissing = false;
-		await settle(sync());
+		const retry = sync();
+		assert.notStrictEqual(
+			retry,
+			failedAttempt,
+			"a settled failed fetch should be removed from the in-flight map",
+		);
+		await settle(retry);
 
 		assert.strictEqual(state.rulesFetches.length, 2);
 		assert.deepStrictEqual(requests, RELOAD);
+		assert.strictEqual(warnings().length, 1, "the successful retry should not warn");
+		assert.deepStrictEqual(
+			logger.logError.mock.calls,
+			errorsAfterFailure,
+			"the successful retry should not add an error log",
+		);
+		assert.deepStrictEqual(updates, [[RULES_MANIFEST_CACHE_KEY, reviewed]]);
 	});
 
 	test("a checkout that lands on another commit warns and does not reload", async () => {
