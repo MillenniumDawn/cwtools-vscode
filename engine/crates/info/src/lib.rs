@@ -28,10 +28,18 @@ pub use references::{
 /// parsing and the rest of indexing would hide it (#866).
 #[doc(hidden)]
 pub mod bench_support {
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use crate::references::CollectedRef;
-    use crate::{ReferenceIndex, SourceLocation};
+    use cwtools_parser::ast::ParsedFile;
+    use cwtools_rules::rules_types::RuleSet;
+    use cwtools_string_table::string_table::StringTable;
+
+    use crate::references::{
+        AliasKeyCache, CollectedRef, TypeRefRule, build_schema_keys, build_type_ref_keys,
+        classify_alias_key_sites, collect_alias_key_candidates, collect_type_ref_uses,
+    };
+    use crate::{ReferenceIndex, SourceLocation, TypeIndex, TypePatternAlias, build_type_patterns};
 
     /// One file's references to a single type, ready for [`merge`].
     #[derive(Clone)]
@@ -55,6 +63,96 @@ pub mod bench_support {
                         value: at,
                     })
                     .collect(),
+            )
+        }
+    }
+
+    pub struct FileCollectors {
+        type_refs: HashMap<String, Vec<TypeRefRule>>,
+        schema_keys: HashSet<String>,
+        patterns: Vec<TypePatternAlias>,
+        alias_cache: AliasKeyCache,
+    }
+
+    impl FileCollectors {
+        pub fn new(ruleset: &RuleSet) -> Self {
+            Self {
+                type_refs: build_type_ref_keys(ruleset),
+                schema_keys: build_schema_keys(ruleset),
+                patterns: build_type_patterns(ruleset),
+                alias_cache: AliasKeyCache::default(),
+            }
+        }
+
+        pub fn type_refs(
+            &self,
+            ast: &ParsedFile,
+            table: &StringTable,
+            ruleset: &RuleSet,
+            logical_path: &str,
+        ) -> Refs {
+            let mut refs = Vec::new();
+            collect_type_ref_uses(
+                &ast.root_children,
+                &ast.arena,
+                table,
+                &self.type_refs,
+                ruleset,
+                logical_path,
+                &mut refs,
+            );
+            Refs(refs)
+        }
+
+        pub fn replace_alias_candidates(
+            &mut self,
+            uri: &str,
+            ast: &ParsedFile,
+            table: &StringTable,
+        ) -> usize {
+            let mut candidates = Vec::new();
+            collect_alias_key_candidates(
+                &ast.root_children,
+                &ast.arena,
+                table,
+                &self.schema_keys,
+                &mut candidates,
+            );
+            self.alias_cache
+                .merge_file(uri, candidates, &self.patterns)
+                .len()
+        }
+
+        pub fn alias_refs(&self, uri: &str, type_index: &TypeIndex) -> Refs {
+            Refs(classify_alias_key_sites(
+                self.alias_cache.sites(uri),
+                uri,
+                &self.patterns,
+                type_index,
+            ))
+        }
+
+        pub fn alias_summary(&self, uri: &str) -> String {
+            let sites = self.alias_cache.sites(uri);
+            let keys: HashSet<_> = sites.iter().map(|site| site.key.as_str()).collect();
+            let mut pairs = 0;
+            let mut distinct = HashSet::new();
+            for site in sites {
+                for pattern in &self.patterns {
+                    if let Some(middle) =
+                        crate::references::strip_affix(&site.key, &pattern.prefix, &pattern.suffix)
+                    {
+                        pairs += 1;
+                        distinct.insert((pattern.type_name.as_str(), middle.to_ascii_lowercase()));
+                    }
+                }
+            }
+            format!(
+                "{} sites, {} distinct keys, {} patterns, {pairs} matched pairs, {} distinct pairs",
+                sites.len(),
+                keys.len(),
+                self.patterns.len(),
+                distinct.len(),
             )
         }
     }
@@ -948,6 +1046,67 @@ mod tests {
             );
         }
         (info, table)
+    }
+
+    #[test]
+    fn benchmark_collectors_match_file_reference_indexes() {
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+
+        let table = StringTable::new();
+        let ruleset = ast_to_ruleset(
+            &parse_string(
+                r#"
+                types = {
+                    type[scripted_effect] = { path = "common/scripted_effects" }
+                    type[decision] = { path = "common/decisions" }
+                }
+                scripted_effect = { alias_name[effect] = alias_match_left[effect] }
+                decision = { my_ref = <scripted_effect> }
+                alias[effect:<scripted_effect>] = yes
+                "#,
+                &table,
+            ),
+            &table,
+        );
+        let mut info = InfoService::new();
+        info.index_file_with_path(
+            "effects.txt",
+            &parse_string("my_effect = {}", &table),
+            &table,
+            &ruleset,
+            "common/scripted_effects/effects.txt",
+        );
+        let uri = "decisions.txt";
+        let path = "common/decisions/decisions.txt";
+        let ast = parse_string("decision = { my_ref = my_effect my_effect = yes }", &table);
+        info.index_file_with_path(uri, &ast, &table, &ruleset, path);
+
+        let mut collectors = bench_support::FileCollectors::new(&ruleset);
+        let mut refs = ReferenceIndex::default();
+        bench_support::merge(
+            &mut refs,
+            uri,
+            collectors.type_refs(&ast, &table, &ruleset, path),
+        );
+        assert_eq!(refs.references("scripted_effect", "my_effect").len(), 1);
+        assert_eq!(
+            refs.file_fingerprint(uri),
+            info.reference_index.file_fingerprint(uri)
+        );
+
+        assert!(collectors.replace_alias_candidates(uri, &ast, &table) > 0);
+        let mut aliases = ReferenceIndex::default();
+        bench_support::merge(
+            &mut aliases,
+            uri,
+            collectors.alias_refs(uri, &info.type_index),
+        );
+        assert_eq!(aliases.references("scripted_effect", "my_effect").len(), 1);
+        assert_eq!(
+            aliases.file_fingerprint(uri),
+            info.alias_key_index.file_fingerprint(uri)
+        );
+        assert!(!collectors.alias_summary(uri).is_empty());
     }
 
     #[test]

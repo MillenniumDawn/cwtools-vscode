@@ -247,6 +247,9 @@ suite("GraphPanel", function () {
 
 	type SaveCommand = "cwtools.saveGraphImage" | "cwtools.saveGraphJson";
 	type SaveMessage = "saveImage" | "saveJson";
+	type SavePayload =
+		| { command: "saveImage"; image: string }
+		| { command: "saveJson"; json: string };
 	const saves: readonly (readonly [SaveCommand, SaveMessage])[] = [
 		["cwtools.saveGraphImage", "saveImage"],
 		["cwtools.saveGraphJson", "saveJson"],
@@ -261,7 +264,7 @@ suite("GraphPanel", function () {
 	) {
 		const handler = sandbox.spy(
 			panel as unknown as {
-				handleWebviewMessage: (message: { command: string }) => Promise<void>;
+				handleWebviewMessage: (message: SavePayload) => Promise<void>;
 			},
 			"handleWebviewMessage",
 		);
@@ -275,15 +278,20 @@ suite("GraphPanel", function () {
 			await waitUntil(() => handled() !== undefined, 30_000),
 			`${message} should reach the host`,
 		);
-		await handled()!.returnValue;
+		const call = handled()!;
+		await call.returnValue;
 		assert.strictEqual(dialog.callCount, 1);
+		return call.args[0];
 	}
 
 	async function assertRenderedGraph(panel: GraphPanelNamespace.GraphPanel) {
 		await waitForRenderedGraph(panel);
 		const dest = path.join(tempDir, "export.json");
-		await runSave(panel, "cwtools.saveGraphJson", "saveJson", dest);
-		const graph = JSON.parse(fs.readFileSync(dest, "utf8")) as {
+		const payload = await runSave(panel, "cwtools.saveGraphJson", "saveJson", dest);
+		assert.strictEqual(payload.command, "saveJson");
+		const bytes = fs.readFileSync(dest);
+		assert.deepStrictEqual(bytes, Buffer.from(payload.json, "utf8"));
+		const graph = JSON.parse(payload.json) as {
 			elements: ElementsDefinition;
 		};
 		assert.deepStrictEqual(
@@ -332,9 +340,11 @@ suite("GraphPanel", function () {
 		await waitForRenderedGraph(panel);
 		const dest = path.join(tempDir, "export.png");
 
-		await runSave(panel, "cwtools.saveGraphImage", "saveImage", dest);
+		const payload = await runSave(panel, "cwtools.saveGraphImage", "saveImage", dest);
+		assert.strictEqual(payload.command, "saveImage");
 
 		const png = fs.readFileSync(dest);
+		assert.deepStrictEqual(png, Buffer.from(payload.image, "base64"));
 		assert.deepStrictEqual(
 			png.subarray(0, 8),
 			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),

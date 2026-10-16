@@ -151,6 +151,46 @@ AST set before localisation indexing to keep the large-workspace memory bound.
 A stale `.cwv` rebuild reuses the base-game install's entries, parsing only its
 new or changed source files.
 
+## Localisation indexing and alias candidate replacement
+
+Alias candidate replacement groups repeated raw keys before expanding patterns,
+then restores source/pattern order within each referenced-name bucket. It keeps
+all positions, duplicate patterns, case-sensitive affixes and ASCII-folded name
+lookups. Rulesets with no alias patterns skip grouping.
+
+`LocIndex::build_scoped` reuses each raw key's lowercased `Arc` across translations
+and its command-selection pass. The memo lasts only for the build;
+single-language indexes skip it. English precedence, Unicode lowercasing and
+shared key allocations are unchanged.
+
+Measured against `a561b53e` on Linux x86-64, i9-12900K, Rust 1.99.0, with the
+existing release profile. Inputs were frozen script/localisation exports from
+Millennium Dawn `bcbf8ed2ef59ad58068feecaea68bff1c06c2552` and the HOI4 rules at
+`40a563ccfded2f56d32e83d8def1a20c27fcdb1d`. There were 7,653 scripts, 3,074
+localisation files, 2,364,950 entries and 240,190 normalized keys. No base game
+was configured.
+
+Before and after binaries were built separately, then run in alternating order
+with warm page caches and CPU affinity fixed to CPU 0. These Criterion point
+estimates use 15 samples for localisation and 20 for indexing:
+
+| Workload | Before | After |
+| --- | ---: | ---: |
+| Localisation index build | 574.53 ms | 464.50 ms |
+| Iran focus-tree replacement | 15.428 ms | 12.344 ms |
+| Iran alias-candidate replacement alone | 7.4465 ms | 4.0890 ms |
+| France events replacement | 7.3998 ms | 6.1024 ms |
+| Plane-equipment replacement | 1.3836 ms | 1.0900 ms |
+| Synthetic many-type replacement, no alias patterns | 77.862 us | 79.159 us |
+
+Run `cargo bench -p cwtools_driver --bench workspace_load -- loc_index` and
+`cargo bench -p cwtools_lsp --bench validate -- index_parsed_file` from `engine/`,
+with `CWTOOLS_PROJECTS` pointing at the frozen inputs. Localisation excludes
+output destruction; file replacement includes clearing its prior results. The
+per-file cases use single-file index state, not a full running server workspace.
+These are component timings, not end-to-end editor latency or memory savings.
+Both temporary maps add build-time storage; no memory reduction is claimed.
+
 ## Localisation file-record churn (#846)
 
 `LocLocations` releases a removed file's URI immediately and keeps its ID

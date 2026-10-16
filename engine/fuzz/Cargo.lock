@@ -100,6 +100,7 @@ dependencies = [
  "cwtools_index",
  "cwtools_localization",
  "cwtools_parser",
+ "cwtools_rules",
  "cwtools_string_table",
  "libfuzzer-sys",
  "tempfile",
@@ -161,6 +162,7 @@ dependencies = [
  "rkyv",
  "rustc-hash",
  "serde_json",
+ "smallvec",
  "tracing",
  "zstd",
 ]
