@@ -1,4 +1,4 @@
-use super::common::{as_block, child_is_always_no, under_dir_segment};
+use super::common::{Block, as_block, child_is_always_no, under_dir_segment};
 use crate::{ValidationError, error_codes};
 use cwtools_game::constants::Game;
 use cwtools_parser::ast::{Child, ParsedFile, SourceRange, Value};
@@ -178,85 +178,85 @@ fn validate_event_every_tick(
     }
 }
 
-fn validate_if_else_order(
-    children: &[Child],
-    ast: &ParsedFile,
-    table: &StringTable,
-    kw: &Keywords,
-    file_path: &crate::FilePath,
-    errors: &mut Vec<ValidationError>,
-) {
-    for child in children {
-        let Some(block) = as_block(child, ast) else {
+struct Pass<'a> {
+    ast: &'a ParsedFile,
+    table: &'a StringTable,
+    kw: &'a Keywords,
+    file_path: &'a crate::FilePath,
+    cw223_msg: &'a str,
+}
+
+fn check_if_else_order(pass: &Pass, block: &Block, errors: &mut Vec<ValidationError>) {
+    let Pass {
+        ast,
+        table,
+        kw,
+        file_path,
+        ..
+    } = *pass;
+    let key = block.key_lower;
+    if key == kw.limit || key == kw.modifier {
+        return;
+    }
+
+    let mut prev_was_if = key == kw.if_ || key == kw.else_if;
+    for c in block.children {
+        let Some(inner) = as_block(c, ast) else {
             continue;
         };
-        let key = block.key_lower;
-
-        if key != kw.limit && key != kw.modifier {
-            let mut prev_was_if = key == kw.if_ || key == kw.else_if;
-            for c in block.children {
-                let Some(inner) = as_block(c, ast) else {
-                    continue;
-                };
-                let k = inner.key_lower;
-                if k != kw.if_ && k != kw.else_ && k != kw.else_if {
-                    continue;
-                }
-                if !prev_was_if && k != kw.if_ {
-                    let key_len = table.with_string(key, |s| s.chars().count()).unwrap_or(0);
-                    let follower = table.with_string(k, |s| s.to_string()).unwrap_or_default();
-                    let follower_range =
-                        key_token_range(inner.range.start, follower.chars().count());
-                    let code = &error_codes::CW238_IF_ELSE_ORDER;
-                    let range = key_token_range(block.range.start, key_len);
-                    errors.push(
-                        ValidationError::from_code(
-                            code,
-                            file_path,
-                            range.start.line,
-                            range.start.col,
-                            &[],
-                        )
-                        .with_end(range.end)
-                        .with_related(
-                            format!("this {follower} has no preceding if"),
-                            follower_range,
-                        ),
-                    );
-                    break;
-                }
-                prev_was_if = k == kw.if_ || k == kw.else_if;
-            }
+        let k = inner.key_lower;
+        if k != kw.if_ && k != kw.else_ && k != kw.else_if {
+            continue;
         }
-
-        validate_if_else_order(block.children, ast, table, kw, file_path, errors);
+        if !prev_was_if && k != kw.if_ {
+            let key_len = table.with_string(key, |s| s.chars().count()).unwrap_or(0);
+            let follower = table.with_string(k, |s| s.to_string()).unwrap_or_default();
+            let follower_range = key_token_range(inner.range.start, follower.chars().count());
+            let code = &error_codes::CW238_IF_ELSE_ORDER;
+            let range = key_token_range(block.range.start, key_len);
+            errors.push(
+                ValidationError::from_code(code, file_path, range.start.line, range.start.col, &[])
+                    .with_end(range.end)
+                    .with_related(
+                        format!("this {follower} has no preceding if"),
+                        follower_range,
+                    ),
+            );
+            break;
+        }
+        prev_was_if = k == kw.if_ || k == kw.else_if;
     }
 }
 
 fn walk(
+    pass: &Pass,
     children: &[Child],
-    ast: &ParsedFile,
-    kw: &Keywords,
-    file_path: &crate::FilePath,
     parent: BoolState,
-    cw223_msg: &str,
     errors: &mut Vec<ValidationError>,
+    if_else_errors: &mut Vec<ValidationError>,
 ) {
+    let Pass {
+        ast,
+        kw,
+        file_path,
+        cw223_msg,
+        ..
+    } = *pass;
     for (idx, child) in children.iter().enumerate() {
         let Some(block) = as_block(child, ast) else {
             continue;
         };
         let key = block.key_lower;
 
+        check_if_else_order(pass, &block, if_else_errors);
+
         if is_bool_operator(key, kw) && is_math_expression(block.children, ast, kw) {
             walk(
+                pass,
                 block.children,
-                ast,
-                kw,
-                file_path,
                 BoolState::Neutral,
-                cw223_msg,
                 errors,
+                if_else_errors,
             );
             continue;
         }
@@ -344,7 +344,7 @@ fn walk(
             BoolState::And
         };
 
-        walk(block.children, ast, kw, file_path, state, cw223_msg, errors);
+        walk(pass, block.children, state, errors, if_else_errors);
     }
 }
 
@@ -360,18 +360,25 @@ pub fn validate_structural(
         _ => error_codes::CW223_INCORRECT_NOT_USAGE.message(),
     };
     let kw = Keywords::new(table);
-    walk(
-        &ast.root_children,
+    let pass = Pass {
         ast,
-        &kw,
+        table,
+        kw: &kw,
         file_path,
-        BoolState::And,
         cw223_msg,
+    };
+    // Buffered so CW238 still follows CW107, as it did when it had its own walk.
+    let mut if_else_errors = Vec::new();
+    walk(
+        &pass,
+        &ast.root_children,
+        BoolState::And,
         errors,
+        &mut if_else_errors,
     );
 
     validate_event_every_tick(ast, table, &kw, file_path, errors);
-    validate_if_else_order(&ast.root_children, ast, table, &kw, file_path, errors);
+    errors.extend(if_else_errors);
 }
 
 #[cfg(test)]
@@ -611,6 +618,12 @@ mod tests {
     }
 
     #[test]
+    fn math_expression_block_still_checks_if_else_order() {
+        let src = "x = { not = { value = 3 equals = 3 else = { a = 1 } } }\n";
+        assert_eq!(codes(src), ["CW238"]);
+    }
+
+    #[test]
     fn triggers_below_a_math_block_are_still_checked() {
         let src = "x = { set_temp_variable = { v = { value = 0\n\
                    if = { limit = { NOT = { has_war = yes tag = GER } } add = 1 }\n\
@@ -676,6 +689,15 @@ mod tests {
             "my_event = { trigger = { always = yes } }\n",
         );
         assert!(c.contains(&"CW107"), "got: {:?}", c);
+    }
+
+    #[test]
+    fn structural_codes_are_emitted_walk_then_cw107_then_cw238() {
+        let src = "a_event = { else = { x = 1 } NOT = { b = 1 c = 2 } }\n";
+        assert_eq!(
+            codes_at("events/test.txt", src),
+            ["CW223", "CW107", "CW238"]
+        );
     }
 
     #[test]

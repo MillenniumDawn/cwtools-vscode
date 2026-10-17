@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Fuse the structural hint walk and the CW238 if/else order walk into one recursive pass, so each file pays one arena traversal for CW121, CW223, CW238, CW251 and CW281 instead of two. Diagnostics and their emit order are unchanged. (#597)
+
 ### 4.0.0
 
 #### Engine
