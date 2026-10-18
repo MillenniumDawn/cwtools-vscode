@@ -133,20 +133,36 @@ to preview.
 Before/after guard checks used the same release binary (SHA-256
 `d2b4decb35f2c787a297f63d47aee9d43d353e66e89202e6a453d8a60035c78a`), identical
 vanilla fixture bytes, separate empty cache directories, and the same pinned
-baseline. The base was `bffea3567c534d21c995fa2adb957aea78efef55`; the candidate
-worktree adds the re-bless preview and its tests and documentation. On both
-revisions, the clean fixture matched 5 rows and exited 0. Changing one missing
-event reference from `no.such.event` to `no.such.perturbed.event` changed one CW222 row; both
+baseline. The base was
+`bffea3567c534d21c995fa2adb957aea78efef55`; the candidate code and tests were
+`b9f69b91ec8d075f55380f72760acf517768665c`. On both revisions, the clean
+fixture matched 5 rows and exited 0. Changing one missing event reference from
+`no.such.event` to `no.such.perturbed.event` changed one CW222 row; both
 revisions reported `-1 +1` and exited 1.
 
 Ten interleaved repetitions per case measured the entire small-fixture guard
-run, including process startup and validation. Clean base runs had a median of
-0.204 s (0.129–0.320); candidate runs had 0.248 s (0.152–0.375). Perturbed base
-runs had 0.295 s (0.128–0.359); candidate runs had 0.276 s (0.159–0.384). The
-ranges overlap widely and these tiny-fixture results are noisy, so they do not
-establish a whole-suite performance change. CI invokes the guard without
-`--bless`; the new diff preview runs only for a maintainer's explicit re-bless.
-The normal guard path performs no additional diff work on a clean report.
+run, including process startup and validation, on Linux x86_64 with Python
+3.12.14 and Git 2.52.0:
+
+| Case | Base median (range) | Candidate median (range) |
+| --- | ---: | ---: |
+| Clean, 5 rows | 0.134 s (0.097–0.265) | 0.129 s (0.113–0.268) |
+| One CW222 row changed | 0.131 s (0.097–0.198) | 0.119 s (0.104–0.172) |
+
+Ten separate 1 ms-sampled process-tree RSS runs per case gave these median
+peaks and ranges:
+
+| Case | Base peak RSS | Candidate peak RSS |
+| --- | ---: | ---: |
+| Clean | 26.3 MiB (24.7–26.8) | 26.1 MiB (14.8–26.8) |
+| One CW222 row changed | 25.9 MiB (14.8–26.4) | 26.1 MiB (24.8–26.7) |
+
+The timing ranges overlap widely, and sampled RSS occasionally missed a short
+process peak; summed RSS also double-counts shared pages. These tiny-fixture
+results are noisy and do not establish a whole-suite performance change. CI
+invokes the guard without `--bless`; the new diff preview runs only for an
+explicit re-bless. The normal guard path does no diff work on a clean report.
+No full CI timing or MD-scale re-bless timing was measured.
 
 The full Millennium Dawn guard was not used for this before/after check because
 the available corpus and rules revisions differ from the committed MD baseline
