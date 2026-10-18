@@ -342,6 +342,12 @@ def code_from_diff_line(line: str) -> str:
     return "(no-code)"
 
 
+def validation_env(cache: Path) -> dict[str, str]:
+    # Parser builds share a cache fingerprint, so comparisons must start cold.
+    cache.mkdir()
+    return os.environ | {"XDG_CACHE_HOME": str(cache), "LOCALAPPDATA": str(cache)}
+
+
 def run_guard(config: Config) -> int:
     if not config.corpus.is_dir():
         if config.preset == "md":
@@ -495,6 +501,7 @@ def run_guard(config: Config) -> int:
             with log_path.open("w", encoding="utf-8", errors="surrogateescape") as log:
                 status = subprocess.run(
                     cmd,
+                    env=validation_env(work / "current-cache"),
                     stdout=log,
                     stderr=subprocess.STDOUT,
                     check=False,
@@ -557,6 +564,7 @@ def run_guard(config: Config) -> int:
                 ) as log:
                     comparison_status = subprocess.run(
                         comparison_cmd,
+                        env=validation_env(work / "comparison-cache"),
                         stdout=log,
                         stderr=subprocess.STDOUT,
                         check=False,
