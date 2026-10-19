@@ -210,40 +210,6 @@ fn walk_name_tree(
     }
 }
 
-/// the block form, a `flag`/`name`/`token`/`var`/`variable` child carries it.
-pub fn collect_value_set_members(
-    ruleset: &RuleSet,
-    parsed: &ParsedFile,
-    table: &StringTable,
-) -> HashMap<String, Vec<String>> {
-    let mut out: HashMap<String, Vec<String>> = HashMap::new();
-    if ruleset.value_set_effects().is_empty() {
-        return out;
-    }
-    collect_value_sets_in(&parsed.root_children, parsed, ruleset, table, &mut out);
-    out
-}
-
-fn collect_value_sets_in(
-    children: &[Child],
-    ast: &ParsedFile,
-    ruleset: &RuleSet,
-    table: &StringTable,
-    out: &mut HashMap<String, Vec<String>>,
-) {
-    for child in children {
-        let Child::Leaf(idx) = child else { continue };
-        let leaf = &ast.arena.leaves[*idx as usize];
-        let ns = value_set_leaf(leaf, ast, ruleset, table, out);
-        // Descend into every clause EXCEPT a `variable`-namespace block, whose
-        if let Value::Clause(sub) = &leaf.value
-            && ns.as_deref() != Some("variable")
-        {
-            collect_value_sets_in(sub, ast, ruleset, table, out);
-        }
-    }
-}
-
 /// `value_set_effects`; if it names a set, captures the member from a scalar RHS
 /// or (block form) from the block's direct children — a binding-field match, or
 /// block is skipped — variables have their own collection path). `None` when the
@@ -458,7 +424,7 @@ alias[effect:set_country_flag] = {
             "my_effect = {\n\tset_country_flag = simple_flag\n\tset_country_flag = stamped_flag@1936.1.1\n\tset_country_flag = { flag = block_flag value = 2 }\n}\n",
             &table,
         );
-        let got = collect_value_set_members(&rs, &file, &table);
+        let got = crate::collect_variables_and_value_sets(&file, &rs, &table, None).value_sets;
         let vals = got.get("country_flag").expect("collected");
         assert!(vals.contains(&"simple_flag".to_string()), "got {:?}", vals);
         assert!(vals.contains(&"stamped_flag".to_string()));
@@ -483,7 +449,7 @@ alias[effect:generate_character] = {
             "my_effect = {\n\tgenerate_character = {\n\t\ttoken_base = empowered_legislative\n\t\tname = NAME_x\n\t}\n}\n",
             &table,
         );
-        let got = collect_value_set_members(&rs, &file, &table);
+        let got = crate::collect_variables_and_value_sets(&file, &rs, &table, None).value_sets;
         let tokens = got
             .get("character_token")
             .expect("character_token collected");

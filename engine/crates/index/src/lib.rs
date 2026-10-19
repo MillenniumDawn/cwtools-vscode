@@ -11,10 +11,11 @@ mod type_index;
 mod variables;
 
 pub use collect::{
-    CollectedTypeInstances, InstanceNode, SubtypeCollector, collect_scripted_gui_callback_names,
-    collect_scripted_loc_names, collect_type_instances, collect_type_instances_with_subtypes,
-    for_each_instance_node, hash_instance_exports, index_discovered_files, mix_export_symbol,
-    skip_root_key_matches, type_key_matches,
+    CollectedTypeInstances, CollectedVariablesAndValueSets, InstanceNode, SubtypeCollector,
+    collect_scripted_gui_callback_names, collect_scripted_loc_names, collect_type_instances,
+    collect_type_instances_with_subtypes, collect_variables_and_value_sets, for_each_instance_node,
+    hash_instance_exports, index_discovered_files, mix_export_symbol, skip_root_key_matches,
+    type_key_matches,
 };
 pub use path_match::{
     NormalizedPath, check_path_dir, check_path_dir_norm, dir_matches_pattern, path_contains_segment,
@@ -23,8 +24,7 @@ pub use type_index::{
     FileIndex, ScriptedGuiIndex, ScriptedLocIndex, TypeIndex, TypeInstance, VarIndex,
 };
 pub use variables::{
-    DefinedVariable, collect_defined_variables_from_rules, collect_set_variable_defs,
-    collect_set_variable_names, variable_defining_effects,
+    DefinedVariable, collect_defined_variables_from_rules, variable_defining_effects,
 };
 
 /// Decrement a refcount entry in `map`, removing it when the count reaches 0.

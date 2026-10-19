@@ -16,8 +16,8 @@ use cwtools_game::constants::Game;
 use cwtools_game::scope_registry::ScopeRegistry;
 use cwtools_index::vanilla_cache::{self, VanillaCacheData};
 use cwtools_index::{
-    FileIndex, TypeIndex, collect_set_variable_names, collect_type_instances_with_subtypes,
-    index_discovered_files, variable_defining_effects,
+    CollectedVariablesAndValueSets, FileIndex, TypeIndex, collect_type_instances_with_subtypes,
+    collect_variables_and_value_sets, index_discovered_files, variable_defining_effects,
 };
 use cwtools_localization::{Lang, LocDiagnostic, LocIndex, LocService};
 use cwtools_parser::ast::{ParseError, ParsedFile};
@@ -489,13 +489,16 @@ impl Session {
                     &rules_table,
                     cwtools_validation::subtype_membership_for_instance,
                 );
-                let mut var_names: Vec<String> = Vec::new();
-                collect_set_variable_names(&src.parsed, &rules_table, &var_effects, &mut var_names);
-                let value_sets = cwtools_index::dynamic_values::collect_value_set_members(
-                    &ruleset,
+                let CollectedVariablesAndValueSets {
+                    variables,
+                    value_sets,
+                } = collect_variables_and_value_sets(
                     &src.parsed,
+                    &ruleset,
                     &rules_table,
+                    Some(&var_effects),
                 );
+                let var_names = variables.into_iter().map(|d| d.name).collect();
                 let complex = cwtools_index::dynamic_values::collect_complex_enum_values(
                     &ruleset,
                     &src.parsed,

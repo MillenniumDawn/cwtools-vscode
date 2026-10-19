@@ -17,6 +17,8 @@ pub struct DefinedVariable {
     pub value: Option<String>,
 }
 
+/// `at_vars` are the file's `@` definitions when the caller already walked for
+/// them, even if there were none; `None` walks the file here.
 pub fn collect_defined_variables_from_rules(
     ruleset: &RuleSet,
     file: &ParsedFile,
@@ -30,9 +32,8 @@ pub fn collect_defined_variables_from_rules(
         Some(vars) if !vars.is_empty() => {
             result.insert("@".to_string(), vars);
         }
-        _ => {
-            collect_at_vars(&file.root_children, &file.arena, table, &mut result);
-        }
+        Some(_) => {}
+        None => collect_at_vars(&file.root_children, &file.arena, table, &mut result),
     }
 
     let np = NormalizedPath::new(logical_path);
@@ -408,53 +409,6 @@ pub fn variable_defining_effects(ruleset: &RuleSet) -> HashSet<String> {
         }
     }
     out
-}
-
-/// For every block whose key is a variable-defining effect, the defined name is
-pub fn collect_set_variable_names(
-    file: &ParsedFile,
-    table: &StringTable,
-    effects: &HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    let mut defs = Vec::new();
-    collect_set_variable_defs(file, table, effects, &mut defs);
-    out.extend(defs.into_iter().map(|d| d.name));
-}
-
-/// location and, where the block provides one, its assigned value (the `value`
-pub fn collect_set_variable_defs(
-    file: &ParsedFile,
-    table: &StringTable,
-    effects: &HashSet<String>,
-    out: &mut Vec<DefinedVariable>,
-) {
-    fn walk(
-        children: &[Child],
-        arena: &Arena,
-        table: &StringTable,
-        effects: &HashSet<String>,
-        out: &mut Vec<DefinedVariable>,
-    ) {
-        for child in children {
-            if let Child::Leaf(li) = child {
-                let leaf = &arena.leaves[*li as usize];
-                if let Value::Clause(ch) = &leaf.value {
-                    let in_effects = table
-                        .with_string(leaf.key.normal, |k| {
-                            effects.contains(k.to_ascii_lowercase().as_str())
-                        })
-                        .unwrap_or(false);
-                    if in_effects {
-                        extract_set_variable_defs_block(ch, arena, table, out);
-                    }
-                    walk(ch, arena, table, effects, out);
-                }
-            }
-        }
-    }
-
-    walk(&file.root_children, &file.arena, table, effects, out);
 }
 
 fn variable_def(name: String, value: Option<String>, pos: SourceRange) -> DefinedVariable {
