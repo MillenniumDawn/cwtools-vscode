@@ -26,7 +26,7 @@ pub enum ScopeResult {
     AnyScope,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedContext {
     pub root: ScopeId,
     pub scopes: SmallVec<[ScopeId; 8]>,
