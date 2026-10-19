@@ -157,7 +157,7 @@ fn build_diagnostics(
         out.push(d);
     }
 
-    // CW254: localisation files must be UTF-8 with BOM. Only enforced when the
+    // Emit CW254 only when a detected file encoding can establish that the BOM is missing.
     if emit_cw254 {
         out.push(LocDiagnostic {
             file: file_path.to_string(),
@@ -433,7 +433,7 @@ mod tests {
         }
     }
 
-    /// The scripted-localisation registry is the second gate (#348) — without it
+    /// Command validation also needs a scripted-localisation registry to distinguish known calls (#348).
     #[test]
     fn the_project_command_pass_needs_a_registry() {
         let svc = service_from(&[(
@@ -675,7 +675,7 @@ mod tests {
         );
     }
 
-    /// The BOM has to survive the read as a BOM and not as three characters of
+    /// The reader preserves the BOM marker so the parser can strip it before parsing the language header.
     #[test]
     fn a_real_bom_does_not_leak_into_the_language_header() {
         let tmp = tempfile::tempdir().unwrap();
@@ -792,7 +792,7 @@ mod tests {
                 ignore_keys: vec![],
             },
         );
-        // Scripted variable registry must be `Sync` so the parallel pipeline
+        // The parallel pipeline shares the scripted-variable callback across workers, so it must be `Sync`.
         fn is_known_var(name: &str) -> bool {
             name.eq_ignore_ascii_case("war_support")
         }

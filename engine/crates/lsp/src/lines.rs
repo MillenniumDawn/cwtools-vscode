@@ -1,4 +1,5 @@
-//! (#541). Build a [`DocLines`] at the handler's entry and index into it
+//! Convert parser character columns to LSP positions in the negotiated encoding. Build a
+//! [`DocLines`] at handler entry and reuse it for the response.
 
 use std::collections::HashMap;
 
@@ -7,8 +8,7 @@ use tower_lsp::lsp_types::{Position, PositionEncodingKind, Range};
 use crate::FileTextSnapshot;
 use crate::paths::{encoded_position_len, position_byte_index, source_column_to_lsp};
 
-/// A document's lines plus the negotiated position encoding: everything a
-/// CHAR columns, but the client reads columns in the encoding negotiated at
+/// A document's lines and negotiated encoding, used to translate parser character columns to LSP columns.
 pub struct DocLines<'a> {
     lines: Vec<&'a str>,
     encoding: PositionEncodingKind,

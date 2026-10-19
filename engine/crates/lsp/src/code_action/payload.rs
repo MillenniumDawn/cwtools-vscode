@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn fixable_span_edits_create_loc_key_payload_yields_empty() {
-        // The invariant that keeps CW100 out of the fixAllWorkspace store
+        // Create-loc-key diagnostics carry commands rather than replacement spans, so Fix All skips them.
         let diag = create_loc_key_diag();
         assert!(fixable_span_edits(&diag).is_empty());
     }

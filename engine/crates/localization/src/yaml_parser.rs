@@ -546,8 +546,8 @@ mod tests {
 
     #[test]
     fn test_bom_prefixed_header_resolves_language() {
-        // Loc files are UTF-8-with-BOM and the disk reader keeps the BOM in the
-        // index silently empties → mass false CW100). See the BOM-strip in
+        // The disk reader preserves the BOM; the parser must strip it or the language header is lost,
+        // leaving the localization index empty and causing false CW100 diagnostics.
         let text = "\u{feff}l_english:\n KEY_A: \"value\"\n";
         let file = parse_loc_text(text, "abilities_l_english.yml").unwrap();
         assert_eq!(file.lang, Some(Lang::English), "BOM must not hide the lang");

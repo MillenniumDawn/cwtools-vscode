@@ -127,7 +127,7 @@ impl Backend {
     }
 }
 
-/// The invariants of one file's walk, threaded by reference through the
+/// Immutable context shared while collecting document links for one parsed file.
 struct LinkWalk<'a> {
     ast: &'a ParsedFile,
     table: &'a StringTable,

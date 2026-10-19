@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     fn test_hover_separates_sections() {
-        // #38: a horizontal rule divides description, required scope, and the
+        // #38: the markdown separates description, required scopes, and reference scope information.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "set_country_flag".to_string(),
@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_hover_resolved_scope_line() {
-        // #37: when a resolved/target scope is supplied and differs from the
+        // #37: show the resolved scope when it differs from the target scope.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "owner".to_string(),
@@ -915,7 +915,7 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
 
     #[test]
     fn test_append_localisation_strips_quoted_value() {
-        // #317: a quoted leaf value (`"my_war_flag"`) carries the surrounding
+        // #317: strip the AST's surrounding quotes before looking up a leaf-value localisation key.
         let mut md = String::new();
         append_localisation(
             &mut md,

@@ -55,8 +55,7 @@ pub fn type_key_matches(td: &TypeDefinition, key: &str) -> bool {
     type_key_filter_matches(td, key) && starts_with_matches(td, key) && key_prefix_matches(td, key)
 }
 
-/// The field name an instance's `## primary` localisation is taken from, when it
-/// localisation — those need nothing captured at index time.
+/// Explicit child field supplying an instance's primary localisation key; pattern-based keys need no capture.
 fn primary_explicit_loc_field(td: &TypeDefinition) -> Option<&str> {
     td.localisation
         .iter()
@@ -64,8 +63,7 @@ fn primary_explicit_loc_field(td: &TypeDefinition) -> Option<&str> {
         .and_then(|l| l.explicit_field.as_deref())
 }
 
-/// The child fields a type's `## required` localisation entries read their key
-/// from (`## required title = title`). Empty for the usual `$`-pattern types, so
+/// Child fields read by explicit-key `## required` localisation entries; `$`-pattern entries need no capture.
 fn required_explicit_loc_fields(td: &TypeDefinition) -> impl Iterator<Item = &str> {
     td.localisation
         .iter()
@@ -351,7 +349,7 @@ fn collect_type_instances_inner(
         let mut instances: Vec<TypeInstance> = Vec::new();
 
         if td.type_per_file {
-            // Normalise separators first: the LSP on Windows derives logical
+            // Normalize separators before deriving the file name on Windows.
             let norm = logical_path.replace('\\', "/");
             let name = norm
                 .rsplit('/')
@@ -383,11 +381,11 @@ fn collect_type_instances_inner(
                              node_key: &str,
                              clause_children: &[Child],
                              location| {
-                // Capture the explicit-field primary loc key (e.g. an event's
+                // Capture the explicit-field primary loc key (for example, an event's `title`).
                 let primary_loc_key = primary_explicit_loc_field(td).and_then(|field| {
                     field_value_from_children(field, clause_children, arena, table)
                 });
-                // Same read for the `## required` explicit-field entries, whose
+                // Capture required localisation keys from their declared child fields too.
                 let required_loc_keys: Vec<String> = required_explicit_loc_fields(td)
                     .filter_map(|field| {
                         field_value_from_children(field, clause_children, arena, table)
@@ -487,8 +485,8 @@ fn walk_variables_and_value_sets(
             }
         }
 
-        // Value-set collector: per-leaf member capture. A `variable`-namespace
-        // block returns `ns == "variable"`, marking a subtree the value-set walk
+        // Value-set collection stops at variable-namespace blocks because variable definitions
+        // use a separate collector; variable traversal can still proceed independently.
         let ns = if vs_active {
             dynamic_values::value_set_leaf(leaf, file, ruleset, table, &mut out.value_sets)
         } else {

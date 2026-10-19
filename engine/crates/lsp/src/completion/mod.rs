@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn alias_bool_trigger_completes_with_equals_and_yesno() {
-        // #67: `alias[trigger:always] = bool` must complete to
+        // #67: boolean trigger aliases complete to an equals sign followed by yes/no choices.
         let rs = bool_trigger_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = vec![(
@@ -632,7 +632,7 @@ mod tests {
             "bool trigger must insert 'always = ', got: {:?}",
             always.insert_text
         );
-        // #77: pin the corrected shape `always = ${1|yes,no|}$0`. A choice on the
+        // #77: use tab stop 1 for the yes/no choice, then finish the snippet at `$0`.
         assert!(
             snip.contains("${1|") && snip.ends_with("$0") && !snip.contains("${0|"),
             "bool trigger must use a non-zero choice tab stop ending in $0, got: {:?}",
@@ -675,7 +675,7 @@ mod tests {
 
     #[test]
     fn alias_dlc_enum_snippet_escapes_and_quotes_choices() {
-        // #77: an enum alias must complete to `has_dlc = ${1|...|}$0` — a choice
+        // #77: enum aliases use a choice tab stop and escape/quote values as needed.
         let rs = dlc_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = vec![(
@@ -733,7 +733,7 @@ mod tests {
 
     #[test]
     fn value_completions_enum_quotes_spaced_values() {
-        // #77: at a value position, an enum member with whitespace inserts quoted
+        // #77: enum values containing whitespace are inserted with quotes.
         let rs = dlc_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let value_rules = vec![(
@@ -889,7 +889,7 @@ mod tests {
 
     #[test]
     fn alias_keys_field_emits_modifier_keys() {
-        // #65: a rule with `alias_keys_field[modifier]` on its left side (as in
+        // #65: alias_keys_field[modifier] on a rule's left side completes from modifier keys.
         let rs = bool_enum_ruleset(); // arbitrary ruleset with reindex() called
         let info = cwtools_info::InfoService::new();
         let modifier_keys: HashSet<String> = ["my_modifier".to_string(), "other_mod".to_string()]
@@ -1108,7 +1108,7 @@ modifiers = {
 
     #[test]
     fn completions_from_rules_deduplicates() {
-        // #66: when the same concrete field appears in multiple rule entries
+        // #66: duplicate rule entries for one concrete field produce only one completion.
         let rs = bool_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = vec![

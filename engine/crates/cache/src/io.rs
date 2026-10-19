@@ -11,7 +11,6 @@ pub enum CacheError {
     Io(#[from] std::io::Error),
     #[error("serialization error")]
     Serialize(#[source] rkyv::rancor::Error),
-    // `Deserialize` covers both rkyv failures (with a source) and the
     #[error("deserialization error: {msg}")]
     Deserialize {
         msg: &'static str,
@@ -22,12 +21,13 @@ pub enum CacheError {
     #[error("compression error")]
     Compression(#[source] std::io::Error),
 }
+/// zstd compression level shared by parse-cache and vanilla-cache writers.
 pub const ZSTD_LEVEL: i32 = 3;
 
+/// Header marker used to reject incompatible cache files before rkyv decoding.
 const MAGIC: &[u8; 4] = b"CWB\x00";
 
-/// Format version. Bump whenever the rkyv layout changes (e.g. widening a field
-/// v1: initial versioned format (adds magic+version header to the raw zstd).
+/// Bump when the serialized rkyv layout changes so incompatible cache entries miss.
 const FORMAT_VERSION: u8 = 5;
 
 const ERRORS_MAGIC: &[u8; 4] = b"CWE\x00";
@@ -63,8 +63,8 @@ pub fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
     Ok(data)
 }
 
-/// Decompress `compressed` into `out`, refusing to write past `max_bytes`.
-/// would cross the cap, before `out` grows to hold it.
+/// Decompress into `out` within `max_bytes`; the frame-size check rejects known
+/// oversized inputs early, and the capped writer bounds frames without a size hint.
 pub fn decode_capped<W: Write>(compressed: &[u8], max_bytes: u64, out: W) -> std::io::Result<()> {
     if let Ok(Some(declared)) = zstd::zstd_safe::get_frame_content_size(compressed)
         && declared > max_bytes
@@ -154,8 +154,8 @@ pub fn write_atomically(
 pub fn serialize_to_file(cached: &CachedFile, path: &Path) -> Result<(), CacheError> {
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(cached).map_err(CacheError::Serialize)?;
 
-    // Frame checksum on. rkyv's checked `access` validates structure, not
-    // archive and get served as a cache hit. The checksum turns that into a
+    // The zstd frame checksum detects payload bit flips: rkyv validates archive
+    // structure, but a changed value could otherwise decode as a cache hit.
     let compressed = {
         let mut encoder =
             zstd::stream::Encoder::new(Vec::new(), ZSTD_LEVEL).map_err(CacheError::Compression)?;
@@ -174,7 +174,7 @@ pub fn serialize_to_file(cached: &CachedFile, path: &Path) -> Result<(), CacheEr
     .map_err(CacheError::Io)
 }
 
-/// Read a `.cwb` file, validate its header, and return the decompressed rkyv
+/// Read a `.cwb`, validate its magic/version header, and return decompressed archive bytes.
 fn read_archive_bytes(path: &Path) -> Result<rkyv::util::AlignedVec, CacheError> {
     let data = read_capped(path, MAX_ARCHIVE_FILE_BYTES)?;
 

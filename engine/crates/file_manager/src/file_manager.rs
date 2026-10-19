@@ -26,7 +26,7 @@ pub fn path_identity(path: &Path) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(key)
 }
 
-/// Windows-1252 → Unicode mapping for the 0x80-0x9F range (the gap not covered
+/// Windows-1252 to Unicode mappings for bytes 0x80–0x9F, which differ from Latin-1.
 /// Source: https://encoding.spec.whatwg.org/index-windows-1252.txt
 const CP1252_HIGH: [char; 32] = [
     '\u{20AC}', // 0x80 €
@@ -77,7 +77,7 @@ fn cp1252_byte(b: u8) -> char {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileEncoding {
-    /// Valid UTF-8 starting with the UTF-8 BOM (`EF BB BF`). What Paradox wants
+    /// Valid UTF-8 starting with the UTF-8 BOM (`EF BB BF`), as expected by the game.
     Utf8Bom,
     /// Valid UTF-8 but with no BOM.
     Utf8NoBom,
@@ -87,8 +87,7 @@ pub enum FileEncoding {
 
 const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
-/// Read a file as text: try UTF-8 first, fall back to Windows-1252.
-/// Windows-1252.  Blindly using `read_to_string` fails on any accented byte
+/// Read a file as UTF-8 when valid, otherwise decode it using Windows-1252.
 pub fn read_text(path: &Path) -> Result<String, FileError> {
     read_text_with_encoding(path).map(|(s, _)| s)
 }
@@ -97,10 +96,7 @@ pub fn read_text_with_encoding(path: &Path) -> Result<(String, FileEncoding), Fi
     Ok(decode_bytes(std::fs::read(path)?))
 }
 
-/// Read a file as text through a hard byte cap. Opens once and reads at most
-/// `max_bytes`; a file that reports a larger length, grows under us, or is a
-/// so callers can enforce a per-scan total-byte budget.
-/// user opened by name), which aren't fed by symlink-following discovery.
+/// Read under a hard byte cap, for discovered files and explicit user-open paths.
 pub fn read_text_capped(path: &Path, max_bytes: u64) -> Result<(String, u64), FileError> {
     read_text_capped_with_encoding(path, max_bytes).map(|(s, _, n)| (s, n))
 }
@@ -251,7 +247,7 @@ pub enum FileError {
     Io(#[from] std::io::Error),
     #[error("directory does not exist: {0}")]
     MissingRoot(PathBuf),
-    /// A file exceeded the hard read cap for a scan. Distinct from a parse
+    /// A file exceeded the hard read cap for a scan; this is distinct from a parse error.
     #[error("file exceeds the {limit} byte read cap: {path}")]
     OverLimit { path: PathBuf, limit: u64 },
 }
@@ -339,8 +335,7 @@ impl Default for ScanBudget {
     }
 }
 
-/// Atomic running total of bytes read in one scan, shared across the parallel
-/// read fan-out so the whole scan stops adding files once the total-byte budget
+/// Atomic running total shared by parallel readers so a scan respects its total-byte budget.
 #[derive(Debug, Default)]
 pub struct ScanBytes(std::sync::atomic::AtomicU64);
 
@@ -753,7 +748,7 @@ fn compute_logical_path_with_root(path: &Path, root_prefix: &str) -> String {
     }
 }
 
-/// Windows hands back `\` separators, so a match target passes through here
+/// Normalize filesystem separators to `/` for portable path matching.
 pub fn to_slash_path(path: &Path) -> String {
     normalize_slashes(path.to_string_lossy()).into_owned()
 }
@@ -766,7 +761,7 @@ fn normalize_slashes(s: std::borrow::Cow<'_, str>) -> std::borrow::Cow<'_, str> 
     }
 }
 
-/// Mirrors F# FileManager.fs:91-125: extracts `name`, `path`, and
+/// Parse a mod descriptor into its name, path, and replacement paths.
 pub(crate) fn parse_mod_descriptor(path: &Path) -> Result<ModDescriptor, FileError> {
     let raw = read_text(path)?;
     // Strip UTF-8 BOM (U+FEFF) so the first key isn't parsed as "\u{FEFF}name".
@@ -803,8 +798,7 @@ fn parse_mod_descriptor_str(content: &str) -> ModDescriptor {
     }
 }
 
-/// (`replace_path = "common/ideas" # keep` -> `common/ideas`). An unquoted value
-/// runs up to an inline `#` comment. The old `trim_matches('"')` left the closing
+/// Parse quoted descriptor values and strip any trailing inline comment.
 fn descriptor_value(v: &str) -> String {
     let v = v.trim();
     if let Some(rest) = v.strip_prefix('"') {
@@ -823,7 +817,7 @@ pub struct ResolvedMod {
     pub root: PathBuf,
 }
 
-/// Mirrors F# FileManager.fs:64-90: reads every `*.mod` file inside the
+/// Read each `*.mod` descriptor in the workspace's `mod` and `mods` folders.
 pub fn expand_multiple_mods(workspace: &Path) -> Vec<ResolvedMod> {
     let mut out = Vec::new();
 
@@ -1466,7 +1460,7 @@ mod tests {
 
     #[test]
     fn path_globs_match_a_location_not_just_a_name() {
-        // #244: the VS Code client rewrites every `errors.ignorefiles` entry to
+        // #244: VS Code may send absolute paths, so the matcher also accepts logical paths.
         assert!(ignore_glob_match("**/skip.txt", "skip.txt", "skip.txt"));
         assert!(ignore_glob_match(
             "**/skip.txt",
@@ -1535,7 +1529,7 @@ mod tests {
         ));
     }
 
-    /// The pre-#169 DP matcher, kept as the reference for the greedy
+    /// Dynamic-programming reference matcher used to check the greedy implementation.
     fn glob_dp_reference(p: &[char], t: &[char]) -> bool {
         let m = p.len();
         let n = t.len();
@@ -1619,11 +1613,11 @@ mod tests {
 
     #[test]
     fn glob_worst_case_pattern_completes() {
-        // #169 regression: a 1 MB '?'-heavy pattern used to force ~255M DP
+        // #169 regression: a 1 MB `?` pattern used to force quadratic DP work.
         let pat = "?".repeat(1024 * 1024);
         let text = "a".repeat(255);
         assert!(!glob_match(&pat, &text));
-        // Star-segment worst case at the config length cap. The '?' keeps the
+        // Exercise the capped star-segment case, including a `?` that prevents an early match.
         let pat = format!("*{}?{}b", "a".repeat(512), "a".repeat(511));
         let text = format!("{}c", "a".repeat(255));
         assert!(!glob_match(&pat, &text));
@@ -2408,7 +2402,7 @@ replace_path = "COMMON/ideas"
         );
     }
 
-    /// `read_text_capped` refuses a file over the cap rather than truncating it,
+    /// `read_text_capped` refuses over-cap files instead of returning truncated text.
     #[test]
     fn read_text_capped_refuses_over_limit() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -2428,7 +2422,7 @@ replace_path = "COMMON/ideas"
         );
     }
 
-    /// `discover_and_parse` must skip a file over the per-file cap instead of
+    /// `discover_and_parse` skips over-cap files instead of parsing truncated content.
     #[test]
     fn discover_and_parse_skips_over_limit_file() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");

@@ -333,7 +333,7 @@ impl Backend {
                 .filter(|l| !l.is_empty())
                 .unwrap_or_else(|| vec![Lang::English])
         };
-        // (#134): a code-action request fires on cursor movement, so without a
+        // Cache discovery because code-action requests also fire on cursor movement (#134).
         let discovered = {
             let cur_sig = *self.state.last_loc_signature.lock();
             let cached = self.state.loc_discovery_cache.lock().clone();
@@ -919,7 +919,7 @@ mod tests {
 
     #[test]
     fn build_create_loc_key_batch_dedupes_a_shared_new_file() {
-        // #142: two candidates resolving to the identical not-yet-existing
+        // #142: candidates for the same not-yet-existing file are combined into one edit.
         let uri: Url = "file:///ws/localisation/cwtools_generated_l_english.yml"
             .parse()
             .unwrap();
@@ -990,7 +990,7 @@ mod tests {
 
     #[test]
     fn build_create_loc_key_batch_folds_a_whole_candidate_across_mixed_tiers() {
-        // #142 follow-up: English already has a loc file but French does
+        // #142 follow-up: English uses an existing file while French needs a generated file.
         let en_uri: Url = "file:///ws/localisation/things_l_english.yml"
             .parse()
             .unwrap();

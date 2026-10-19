@@ -144,7 +144,7 @@ fn key_matches(table: &StringTable, id: StringId, key: &str) -> bool {
             .unwrap_or(false)
 }
 
-/// Walk one level of a complex-enum name tree against `children`, capturing
+/// Walk one level of a complex-enum name tree against `children`, collecting matching values.
 fn walk_name_tree(
     tree: &ComplexEnumNameTree,
     children: &[Child],
@@ -210,9 +210,8 @@ fn walk_name_tree(
     }
 }
 
-/// `value_set_effects`; if it names a set, captures the member from a scalar RHS
-/// or (block form) from the block's direct children — a binding-field match, or
-/// block is skipped — variables have their own collection path). `None` when the
+/// Capture a value-set member from a configured scalar effect or block binding field,
+/// falling back to common name fields; variable namespaces use their separate collector.
 pub(crate) fn value_set_leaf(
     leaf: &Leaf,
     ast: &ParsedFile,
@@ -239,7 +238,7 @@ pub(crate) fn value_set_leaf(
             table.with_string(t.normal, |v| push_member(out, n.to_string(), v));
         }
         (Value::Clause(sub), Some(n)) => {
-            // Block form: the member is the value of the child bound to
+            // For block forms, the configured binding field names the member value.
             let bindings = table
                 .with_string(leaf.key.normal, |s| {
                     LOWER_BUF.with(|buf| {

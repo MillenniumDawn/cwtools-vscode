@@ -227,7 +227,7 @@ pub(crate) struct DocumentState {
     pub(crate) string_table: StringTable,
     pub(crate) info_service: parking_lot::RwLock<cwtools_info::InfoService>,
     pub(crate) vanilla_state: Mutex<VanillaState>,
-    /// (#89) — vanilla is ~2000 loc files that cannot change while the editor is
+    /// Cache the installed game's immutable localization files instead of rescanning them for each workspace pass (#89).
     #[allow(clippy::type_complexity)]
     pub(crate) vanilla_loc:
         Mutex<Option<(crate::scan::VanillaLocKey, Arc<crate::scan::VanillaLoc>)>>,
@@ -236,7 +236,7 @@ pub(crate) struct DocumentState {
     #[allow(clippy::type_complexity)]
     pub(crate) parent_loc: Mutex<Option<(crate::scan::ParentLocKey, Arc<crate::scan::VanillaLoc>)>>,
     pub(crate) loc_index: parking_lot::RwLock<Option<Arc<cwtools_localization::LocIndex>>>,
-    /// (#259) — the editor's counterpart of the batch driver's
+    /// Editor-side inline-script index, updated as workspace files change (#259).
     pub(crate) inline_scripts: parking_lot::RwLock<InlineScripts>,
     pub(crate) loc_key_index: parking_lot::RwLock<Option<Arc<crate::completion::LocKeyIndex>>>,
     pub(crate) loc_text: parking_lot::RwLock<LocText>,

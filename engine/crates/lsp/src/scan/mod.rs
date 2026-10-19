@@ -52,7 +52,7 @@ pub(crate) fn retry_deadline(default: std::time::Duration) -> std::time::Instant
         )
 }
 
-/// (#155): fires at most once per server process, so the e2e suite can
+/// Test hook that injects one watched-batch panic so recovery can be exercised deterministically (#155).
 static WATCHED_BATCH_PANIC_ONCE: AtomicBool = AtomicBool::new(true);
 
 pub(crate) fn env_flag(name: &str) -> bool {
@@ -77,7 +77,7 @@ struct ScannedFile {
     parent_logical_path: Option<String>,
 }
 
-/// `workspace/executeCommand` (#204). `tower-lsp` answers `$/cancelRequest` by
+/// When tower-lsp drops a cancelled `workspace/executeCommand`, this guard releases scan ownership (#204).
 pub(crate) struct ScanGuard {
     client: Client,
     state: Arc<DocumentState>,
@@ -397,7 +397,7 @@ impl Backend {
     }
 
     pub(crate) fn rebuild_modifier_keys(&self) {
-        // Lock order: rules -> info_service. One `rules` write guard holds the
+        // Lock order is rules -> info_service: this path holds the rules write guard while reading info.
         let mut rules = self.state.rules.write();
         let (keys, scopes) = match rules.ruleset.as_ref() {
             Some(rs) => {
@@ -850,7 +850,7 @@ mod tests {
         );
     }
 
-    /// #204: a cancelled `workspace/executeCommand` drops the scanning future
+    /// Cancelling `workspace/executeCommand` drops the scan future; its guard must release scan ownership (#204).
     #[tokio::test]
     async fn test_scan_guard_releases_flag_when_dropped_unfinished() {
         let backend = test_backend();

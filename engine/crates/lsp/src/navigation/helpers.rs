@@ -877,7 +877,7 @@ mod tests {
         );
     }
 
-    /// The goto side of #176: the `FilepathField` value is mod content, so one
+    /// The goto side of #176: resolve mod-authored paths only when they remain inside indexed roots.
     #[tokio::test]
     async fn a_file_ref_that_climbs_out_of_the_roots_resolves_to_nothing() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -1261,7 +1261,7 @@ mod tests {
 
     #[test]
     fn dedup_locations_collapses_identical() {
-        // Issue #62: the same definition reached through two index paths yields
+        // Issue #62: duplicate index paths to one definition yield one location.
         let file = "file:///mod/events/a.txt";
         let locs = vec![
             make_location(file, 2, 0),

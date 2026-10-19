@@ -226,8 +226,7 @@ fn walk_folder_inner(
         if *remaining_files == 0 {
             break;
         }
-        // Reject symlinks and non-regular files outright (see
-        // `file_manager::walk_dir_generic`): a symlink can point outside the
+        // Match `walk_dir_generic`: symlinks can escape scan roots, and special files can block reads.
         if ft.is_symlink() || !(ft.is_dir() || ft.is_file()) {
             continue;
         }

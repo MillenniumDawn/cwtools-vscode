@@ -1,5 +1,5 @@
-//! The symlink half is the discovery walks' rule (#161), applied to reads so
-//!   Not-indexed is the resting state #161 chose; the flip is the price of
+//! LSP reads follow the discovery walkers' symlink policy (#161); opening a symlinked URI
+//! would bypass the rule that keeps workspace indexing and file access inside scanned roots.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -562,7 +562,7 @@ mod tests {
         );
     }
 
-    /// `to_file_path` only yields a path on Windows when the first segment is a
+    /// Scheme validation must precede `to_file_path`, which can convert drive-shaped HTTP paths.
     #[test]
     fn url_to_file_path_ignores_the_scheme() {
         let converted = Url::parse("http://localhost/C:/Windows")
@@ -873,7 +873,7 @@ mod tests {
     fn a_non_file_folder_uri_contributes_no_root() {
         assert_eq!(file_uri_to_path("http://localhost/"), None);
         assert_eq!(file_uri_to_path("untitled:Untitled-1"), None);
-        // On Windows the url crate turns the `..` host of a `file:` URI into a
+        // A file URI with an invalid authority must not be accepted as a workspace root.
         #[cfg(unix)]
         assert_eq!(file_uri_to_path("file://../../etc"), None);
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -1032,7 +1032,7 @@ mod tests {
         );
     }
 
-    /// `realpath` refuses the `gone/..` pair outright (`Unresolvable`); Windows
+    /// Reject `gone/..` even when the intermediate `gone` path does not exist.
     #[test]
     fn rejects_a_new_path_that_climbs_out_with_dot_dot() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");

@@ -946,7 +946,7 @@ mod tests {
 
     #[test]
     fn test_loc_overlay_write_invalidates_the_cached_key_sets() {
-        // #87 caches both overlay-derived key sets. The cache is keyed on
+        // #87: both overlay-derived key sets must be invalidated after a live-overlay write.
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();

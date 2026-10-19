@@ -13,18 +13,15 @@ pub(crate) fn uri_to_path_str(uri: &str) -> String {
     uri.strip_prefix("file://").unwrap_or(uri).to_string()
 }
 
-/// Convert a filesystem path to a `file://` URI, percent-encoding special
+/// Convert a filesystem path to a `file://` URI with percent-encoded special characters.
 pub(crate) fn path_to_uri(path: &std::path::Path) -> String {
     Url::from_file_path(path)
         .map(|u| u.to_string())
         .unwrap_or_else(|_| format!("file://{}", path.display()))
 }
 
-/// That is not hypothetical: VS Code spells the Windows drive as a lower-case
-/// string compare, so on Windows it never matched: every open file was indexed
-/// On Windows that includes a drive-less absolute URI (`file:///a/b.txt`),
-/// on Windows that is the drive letter's *case* as well as the percent-encoding:
-/// server emits on Windows was already going through `Url::from_file_path`, so
+/// Normalize file URI spellings to the path-to-URI form used by index keys.
+/// On Windows this folds VS Code's drive-letter case and percent-encoding differences.
 pub(crate) fn canonical_uri(uri: &str) -> String {
     if let Ok(url) = Url::parse(uri)
         && let Some(canonical) = canonical_url(&url)
@@ -140,7 +137,7 @@ pub(crate) fn encoded_position_len(
     }
 }
 
-/// A parser column (0-based chars) rendered in the negotiated encoding, for
+/// Convert a 0-based parser character column to the negotiated encoding for one line.
 pub(crate) fn source_column_to_lsp(
     line: &str,
     source_column: u32,
@@ -801,8 +798,7 @@ mod tests {
 
     #[test]
     fn test_uri_to_path_percent_decode() {
-        // Paths with spaces must round-trip through percent-encoding. The path
-        // and the non-encoding fallback kicks in.
+        // Paths with spaces must round-trip through percent-encoding to native path spelling.
         #[cfg(not(windows))]
         let path = std::path::Path::new("/home/user/My Mod/events/foo.txt");
         #[cfg(windows)]
@@ -831,7 +827,7 @@ mod tests {
 
     // ── canonical_uri (#319) ──────────────────────────────────────────────
 
-    /// Windows the round trip also upper-cases the drive letter) and only the
+    /// Normalize both drive-letter case and URI encoding through a filesystem-path round trip.
     #[cfg(windows)]
     const CLIENT_URI: &str = "file:///d%3A/a/b.txt";
     #[cfg(not(windows))]
@@ -892,7 +888,7 @@ mod tests {
         assert_eq!(canonical_uri(encoded), decoded);
     }
 
-    /// Windows drive is one key. Which case survives is the round trip's call
+    /// All Windows drive-letter spellings normalize to one key; the round trip chooses its case.
     #[cfg(windows)]
     #[test]
     fn canonical_uri_folds_every_drive_letter_spelling_onto_one_key() {
@@ -944,7 +940,7 @@ mod tests {
         assert_eq!(logical_path_from_uri(&doc, &prefix), "events/foo.txt");
     }
 
-    /// Why the fold matters here rather than being merely tidy: on Windows the
+    /// Without folding, Windows drive-letter case differences prevent workspace-prefix matches.
     #[cfg(windows)]
     #[test]
     fn a_canonical_folder_prefix_strips_a_document_whatever_case_the_client_used() {

@@ -97,7 +97,7 @@ pub(crate) fn path_candidates_for_file<'a>(
     file_path_lower: &str,
     ruleset: &'a RuleSet,
 ) -> Vec<PathCandidate<'a>> {
-    // Logical paths are `/`-separated. A backslash path (Windows, if a caller
+    // Normalize native separators because rule paths use `/` on every platform.
     let normalized = file_path_lower.replace('\\', "/");
     let file_path_lower = normalized.as_str();
     let basename = file_path_lower
@@ -367,7 +367,7 @@ mod tests {
             !path_candidates_for_file("common/foo/x.txt", &rs).is_empty(),
             "forward-slash path should resolve type foo"
         );
-        // A Windows backslash path must resolve the same type, not silently
+        // Windows-style separators resolve the same type as slash-separated logical paths.
         assert!(
             !path_candidates_for_file("common\\foo\\x.txt", &rs).is_empty(),
             "backslash path should resolve type foo too"

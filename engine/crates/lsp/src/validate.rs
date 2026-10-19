@@ -1692,7 +1692,7 @@ impl Backend {
             return (Vec::new(), None);
         }
         let mut diagnostics = Vec::new();
-        // Per-line text + negotiated encoding, so every squiggle spans the whole
+        // Keep line text and negotiated encoding together for diagnostic range conversion.
         let lines = DocLines::new(text, self.state.config.read().position_encoding.clone());
         let inline_ignored = cwtools_validation::inline_ignore::extract_inline_ignored_codes(text);
 
@@ -1828,7 +1828,7 @@ impl Backend {
             // Validation. Lock order: rules -> info_service -> loc_index ->
             let (errors, log_msg) = {
                 let game = self.state.config.read().game();
-                // (CW100/CW122) without a full rescan (#36). Computed before
+                // Compute overlay keys before taking validation locks; these keys support CW100/CW122 without a rescan (#36).
                 let overlay = self.loc_overlay_keys();
                 let rules_guard = self.state.rules.read();
                 if let Some(ruleset) = rules_guard.ruleset.as_ref() {
@@ -1909,7 +1909,7 @@ mod info_revision_tests {
     use cwtools_rules::rules_types::{PathOptions, TypeDefinition};
     use std::sync::atomic::Ordering;
 
-    /// Workspace URI for the fixtures. Drive-lettered on Windows so the derived
+    /// Windows fixtures use a drive-lettered workspace URI so path conversion is valid.
     const WORKSPACE_URI: &str = if cfg!(windows) {
         "file:///C:/ws"
     } else {
@@ -2614,7 +2614,7 @@ mod whole_line_range_tests {
 
     #[test]
     fn loc_keys_of_extracts_lowercased_keys() {
-        // Live-overlay key extraction for #36: keys are lowercased to match the
+        // #36: normalize extracted live-overlay keys so mixed-case references match.
         let keys = loc_keys_of(
             "l_english:\n MY_Key: \"hi\"\n other_key: \"x\"\n",
             "a_l_english.yml",

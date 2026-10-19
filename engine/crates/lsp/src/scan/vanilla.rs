@@ -244,7 +244,7 @@ impl Backend {
             }
         }
 
-        // (#306). Installed here rather than during the per-type merge so it
+        // Install vanilla variable names after merging base-game types (#306).
         if let Some(var_names) = var_names {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)

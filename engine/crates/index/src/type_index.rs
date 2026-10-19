@@ -20,8 +20,7 @@ fn ascii_lowercase_if_needed(value: &str) -> Cow<'_, str> {
 pub struct TypeInstance {
     pub name: String,
     pub location: SourceLocation,
-    /// The loc key for the type's `## primary` localisation when it is taken from
-    /// an explicit field (e.g. an event's `title = <key>`), captured here so hover
+    /// Explicit child-field key for the type's `## primary` localisation, used by hover.
     pub primary_loc_key: Option<String>,
     /// Loc keys this instance must provide that a `## required` localisation
     /// entry takes from a child field's value (`## required title = title`)
@@ -712,7 +711,7 @@ impl TypeIndex {
         locations
     }
 
-    /// The explicit-field primary loc key captured for `name`'s instance of
+    /// The explicit-field primary localisation key for the named instance, if present.
     pub fn primary_loc_key(&self, type_name: &str, name: &str) -> Option<&str> {
         let name = ascii_lowercase_if_needed(name);
         let entries = self.map.get(type_name)?;

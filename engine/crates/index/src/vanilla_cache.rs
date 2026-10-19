@@ -14,20 +14,10 @@ const MAGIC: &[u8; 4] = b"CWV\x00";
 const FILE_PREFIX: &str = "vanilla-";
 const FILE_EXT: &str = ".cwv";
 
-// v3 folds the ruleset shape into the fingerprint (see `combined_fingerprint`):
-// v4 switches the on-disk format from JSON to magic+version-framed zstd(rkyv)
-// live-scanned instances. v7 files lack the end fields, so the rkyv layout
-// lowercased), so a case-sensitive run (--case-sensitive-files) can enforce
-// lowercased, must rebuild or a case-sensitive run would flag every vanilla
-// lack it and restore it as `None` (#141).
-// on every use (#348).
-// so `[!name]` calls can resolve callbacks supplied by vanilla (#350).
-// v14: source positions include a leading BOM in line-1 columns.
+// Bump when serialized fields or derived vanilla-index data change; old versions are rejected.
 const CACHE_VERSION: u8 = 14;
 
-/// Hard caps on a `.cwv` read and on what its body may decompress to. The path
-/// comes from `--vanilla-cache` or an LSP client's `vanillaCache` (#162), so a
-/// few kilobytes of `CWV`-prefixed zstd must not be able to expand until the
+/// Bound `.cwv` input and decompressed size because the cache path is client-selectable (#162).
 const MAX_CACHE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_CACHE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -76,7 +66,7 @@ pub struct VanillaCacheData {
     pub aux: VanillaCacheAux,
 }
 
-/// A stable fingerprint of a base-game install, used to invalidate the cache
+/// Fingerprint a base-game install using its canonical path and available version metadata.
 pub fn fingerprint(dir: &Path) -> String {
     let root = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     let root_hash = fnv1a(root.to_string_lossy().as_bytes(), 0xcbf2_9ce4_8422_2325u64);
@@ -175,8 +165,7 @@ pub fn combined_fingerprint(dir: &Path, ruleset: &RuleSet) -> String {
     format!("{}|rs:{}", fingerprint(dir), ruleset_shape_hash(ruleset))
 }
 
-/// Filename of the cache for `game` at `fingerprint`, versioned in the name so
-/// a fingerprint carries the game version verbatim, and a separator in it would
+/// Build a portable cache filename, replacing separators so game and fingerprint stay one path component each.
 pub fn cache_file_name(game: &str, fingerprint: &str) -> String {
     let safe = |s: &str| -> String {
         s.chars()
@@ -196,8 +185,7 @@ pub fn cache_file_name(game: &str, fingerprint: &str) -> String {
     )
 }
 
-/// [`cache_file_name`] shape, a regular file rather than a symlink or a
-/// directory an LSP client chose (#159), so it has to recognise a cache by what
+/// Accept only a regular, non-symlink cache file with the expected name and magic header (#159).
 pub fn is_cache_file(path: &Path) -> bool {
     let named_like_a_cache = path
         .file_name()
@@ -239,7 +227,7 @@ fn write_cache(
 
     // Frame checksum on, as `.cwb` does. rkyv validates structure, not content,
     // served as a cache hit. The checksum turns that into a decode error, which
-    // CACHE_VERSION doesn't move.
+    // Keep the version byte separate from the compressed archive body.
     let compressed = {
         let mut encoder = zstd::stream::Encoder::new(Vec::new(), ZSTD_LEVEL)?;
         encoder.include_checksum(true)?;
@@ -249,7 +237,7 @@ fn write_cache(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // CLI share a cache dir and key the file by game + fingerprint) destroyed
+    // CLI and LSP can share a game/fingerprint key; atomic replacement avoids truncated cache files.
     write_atomically(path, |file| {
         file.write_all(MAGIC)?;
         file.write_all(&[CACHE_VERSION])?;
@@ -308,8 +296,7 @@ pub fn save_per_type(
     write_cache(instances, game, fingerprint, path, aux)
 }
 
-/// Load a vanilla cache file. Returns `(game, fingerprint, data)`; the caller
-/// compares `fingerprint` against the live install to decide whether it is
+/// Load a vanilla cache file; the caller compares its fingerprint with the live install.
 #[tracing::instrument(skip_all, fields(path = %path.display()))]
 pub fn load(path: &Path) -> std::io::Result<(String, String, VanillaCacheData)> {
     let data = read_capped(path, MAX_CACHE_FILE_BYTES)?;
@@ -547,7 +534,7 @@ mod tests {
         assert_eq!((a.line, a.col, a.end), (2, 1, (4, 1)));
         let b = by_name("GFX_b");
         assert_eq!((b.line, b.col, b.end), (5, 3, (9, 4)));
-        // Explicit-field primary loc key survives the round trip (#141); an
+        // Explicit-field primary localisation keys survive cache serialization (#141).
         let primary_loc_key = |n: &str| {
             sprite
                 .iter()
@@ -626,7 +613,7 @@ mod tests {
 
     #[test]
     fn oversized_cache_is_refused_without_reading_it() {
-        // `vanillaCache` (#162), so an over-cap file has to read as a miss
+        // The LSP cache path is client-selected (#162), so oversized files must be rejected as misses.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(cache_file_name("hoi4", "huge"));
         let mut file = std::fs::File::create(&path).unwrap();
@@ -641,9 +628,7 @@ mod tests {
 
     #[test]
     fn cache_declaring_an_over_cap_body_is_refused() {
-        // Proves `load` hands `decode_capped` its own cap rather than letting
-        // anything through. zstd will not close a frame that lies about its
-        // for the header check, and a truncated-frame error if the cap were not
+        // Verify that load passes its own decoded-size cap to the decompressor.
         let mut encoder = zstd::stream::Encoder::new(Vec::new(), ZSTD_LEVEL).unwrap();
         encoder
             .set_pledged_src_size(Some(MAX_CACHE_DECODED_BYTES + 1))
@@ -818,7 +803,7 @@ mod tests {
         );
     }
 
-    /// The point of `CACHE_VERSION`: a cache from any other layout is refused
+    /// A cache with a different layout version is refused before deserialization.
     #[test]
     fn every_other_version_byte_is_a_clean_miss() {
         let bytes = sample_cache_bytes();
@@ -909,7 +894,7 @@ mod tests {
         );
     }
 
-    /// A body that is not zstd at all: something else ended up in the cache dir
+    /// A cache body that is not a valid zstd frame is rejected.
     #[test]
     fn a_non_zstd_body_is_a_clean_miss() {
         let mut bytes = MAGIC.to_vec();

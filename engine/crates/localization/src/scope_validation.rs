@@ -115,13 +115,13 @@ fn classify_segment(
     SegmentPre::ScopeChange { looks_terminal }
 }
 
-/// `Unknown` on the final segment and how they track lenient intermediates, so
+/// Scope outcomes preserve whether an unknown segment is final and whether an intermediate was lenient.
 enum ScopeOutcome {
     Advanced,
     /// `AnyScope` — advanced leniently (callers may note an "any" intermediate).
     AnyScope,
     ValueEnd,
-    /// `ValueFound` mid-chain — lenient stop-continue (no scope progress, but the
+    /// A value appears mid-chain; continue without changing the current scope.
     ValueMid,
     Wrong {
         command: String,
@@ -201,8 +201,8 @@ fn validate_command_string(
                 return;
             }
             ScopeOutcome::Unknown => {
-                // not scope links, so we remain lenient here.
-                // same scripted-localisation registry (#348).
+                // Tolerate unknown intermediate segments. At the final segment, use the scripted-
+                // localisation registry to distinguish a known command from an unresolved scope link (#348).
                 if is_last
                     && !data.terminal_commands.is_empty()
                     && !looks_terminal

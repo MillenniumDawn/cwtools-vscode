@@ -741,8 +741,7 @@ pub const CW605_RULES_MALFORMED_ALIAS: ErrorCode = ErrorCode {
 
 macro_rules! catalog {
     ($($name:ident),+ $(,)?) => {
-        /// Known diagnostic codes, including wired and pending checks, with the
-        /// const each is declared as.
+        /// Known diagnostic codes paired with the constants that define them.
         pub const CATALOG: &[(&str, ErrorCode)] = &[
             $((stringify!($name), $name),)+
         ];

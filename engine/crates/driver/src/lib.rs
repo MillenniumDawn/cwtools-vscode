@@ -1,4 +1,4 @@
-//! behind an `RwLock`, with no whole-workspace re-parse), which doesn't fit
+//! Batch validation pipeline shared by CLI commands; each session owns workspace state for one run.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -304,7 +304,7 @@ pub fn vanilla_gated_checks(game: Game, has_vanilla: bool) -> &'static [&'static
 
 #[derive(Debug, Clone)]
 pub struct VanillaCacheAuto {
-    /// Directory holding one cache file per game + fingerprint. Same layout and
+    /// Directory holding cache files keyed by game and install fingerprint.
     pub dir: PathBuf,
     pub refresh: bool,
 }
@@ -972,7 +972,7 @@ impl SessionWithFiles {
                     errors.extend(validate_prepared(&parsed, &file_str, &prepared));
                     UsedInstances::default()
                 };
-                // CW100: objects defined here whose `## required` localisation
+                // CW100 checks required localisation keys when both localization and type indexes are available.
                 if let (Some(loc), Some(type_index)) = (prepared.loc_index, prepared.type_index)
                     && !loc.union().is_empty()
                 {
@@ -1107,7 +1107,7 @@ pub fn load_loc_service(
     LocService::from_paths(paths, ScanBudget::default(), langs)
 }
 
-/// Cache file for `game` at `fingerprint` under `dir`. The name comes from the
+/// Build the cache path for a game and install fingerprint under `dir`.
 fn vanilla_cache_path(dir: &Path, game: &str, fingerprint: &str) -> PathBuf {
     dir.join(vanilla_cache::cache_file_name(game, fingerprint))
 }
@@ -1370,7 +1370,7 @@ fn build_vanilla_cache_aux_with_optional_shadow(
     let loc_service = LocService::from_paths(loc_paths, ScanBudget::default(), None);
     let loc_keys = cwtools_localization::loc_index::per_language_keys(&loc_service);
     let mut file_index = cwtools_index::FileIndex::new();
-    // Collect on-disk case so a later case-sensitive run can case-check vanilla
+    // Preserve disk spelling so a case-sensitive run can check vanilla references.
     file_index.set_case_sensitive(true);
     let file_paths = discover_file_index_paths(vanilla_dir, &[], &[], DiscoveryPolicy::Vanilla)
         .into_iter()
@@ -1886,7 +1886,7 @@ mod tests {
         );
     }
 
-    /// The filename must survive both halves of the fingerprint verbatim where
+    /// Both the install-version and ruleset portions of the fingerprint are sanitized for the filename.
     #[test]
     fn vanilla_cache_path_is_sanitized_and_stable() {
         let path = vanilla_cache_path(Path::new("/cache"), "hoi4", "v1.19.2.0|rs:493876ece638460f");
@@ -1940,7 +1940,7 @@ mod tests {
     #[test]
     fn default_cache_dir_is_absolute_and_honors_env() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        // Must be absolute on both Unix and Windows; a relative XDG/LAPPDATA
+        // Cache roots must be absolute on both Unix and Windows, regardless of environment overrides.
         let dir = default_cache_dir().expect("cache dir");
         assert!(
             dir.is_absolute(),

@@ -458,7 +458,7 @@ impl Backend {
             }
         }
 
-        // Canonicalised like the document URIs (#319): `workspace_prefix` is
+        // Canonicalize workspace folder URIs like document URIs before comparing their prefixes (#319).
         let folders: Vec<String> = match &params.workspace_folders {
             Some(folders) if !folders.is_empty() => folders
                 .iter()
@@ -532,8 +532,7 @@ impl Backend {
             }
         }
 
-        // Negotiate position encoding. The parser counts Unicode scalar values
-        // lines for free. Clients that don't advertise utf-32 (VS Code) stay on
+        // Use UTF-32 when advertised; clients such as VS Code otherwise use the UTF-16 default.
         let position_encoding = params
             .capabilities
             .general
@@ -729,7 +728,7 @@ impl Backend {
                         will_delete: None,
                     }),
                 }),
-                // `position_encoding` (above): utf-32 when the client supports
+                // The negotiated encoding above is UTF-32 when supported, otherwise the UTF-16 default.
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -796,7 +795,7 @@ impl Backend {
         let mut diags_by_file: std::collections::HashMap<String, Vec<Diagnostic>> =
             std::collections::HashMap::new();
         for err in &parse_errors {
-            // Shared with the live per-file CWT lint (#43). No file text
+            // Shared with the live per-file CWT lint (#43); workspace parse errors have no open document text.
             diags_by_file
                 .entry(crate::paths::path_to_uri(&err.file))
                 .or_default()
@@ -1775,7 +1774,7 @@ mod tests {
 
     #[test]
     fn extract_ignore_patterns_bounds_count_per_list() {
-        // #169: a hostile config must not be able to grow the per-scan matcher
+        // #169: count caps bound matcher work for hostile client-supplied configuration.
         let files: Vec<String> = (0..MAX_IGNORE_ENTRIES + 50)
             .map(|i| format!("file{i}.txt"))
             .collect();
@@ -1859,7 +1858,7 @@ mod tests {
 
     #[test]
     fn reload_status_message_reports_every_state_combination() {
-        // The client displays this string verbatim, so the exact wording is
+        // The client displays this status string verbatim, so its wording is user-visible.
         let dir = std::path::Path::new("my/rules/dir");
         assert_eq!(
             reload_status_message(true, ScanOutcome::Ran, dir),

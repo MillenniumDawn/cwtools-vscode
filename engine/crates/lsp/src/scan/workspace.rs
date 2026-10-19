@@ -874,7 +874,7 @@ impl Backend {
         }
         *self.state.last_loc_signature.lock() = Some(loc_signature);
 
-        // (#259), so a script created, deleted or edited outside a watched
+        // Refresh inline-script exports for changes a workspace scan finds outside watched events (#259).
         let fresh_inline_scripts = if scan_files.is_empty() {
             None
         } else {
@@ -2354,7 +2354,7 @@ mod tests {
         let _ = collector.await;
     }
 
-    /// #221: a scan with no client token behind it — the startup scan — used to
+    /// Startup scans without a client progress token still need phase sampling (#221).
     #[tokio::test(flavor = "multi_thread")]
     async fn a_tokenless_phase_is_still_sampled() {
         let backend = test_backend();
@@ -2369,7 +2369,7 @@ mod tests {
         );
     }
 
-    /// #435: `enter_phase`'s `quiet` short-circuit used to drop phase
+    /// A quiet phase still reports against its supplied command token (#435).
     #[tokio::test(flavor = "multi_thread")]
     async fn a_quiet_phase_with_a_token_still_reports_against_it() {
         let backend = test_backend();

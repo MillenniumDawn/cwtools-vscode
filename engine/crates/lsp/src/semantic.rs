@@ -1,4 +1,4 @@
-//! Columns and lengths are in the NEGOTIATED position encoding (utf-16 by
+//! Semantic-token columns and lengths use the negotiated encoding (UTF-16 by default).
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -189,7 +189,7 @@ impl Ctx<'_> {
     }
 }
 
-/// Length of `chars` in the negotiated encoding — the same conversion
+/// Length of `chars` in the negotiated position encoding.
 fn encoded_len(chars: &[char], encoding: &PositionEncodingKind) -> u32 {
     if encoding == &PositionEncodingKind::UTF32 {
         chars.len() as u32
@@ -1237,7 +1237,7 @@ mod tests {
 
     #[test]
     fn utf16_columns_and_lengths_count_code_units() {
-        // 😀 is one char to the parser but two UTF-16 code units, so every
+        // The parser sees 😀 as one scalar, while UTF-16 token positions use two code units.
         let text = "a = 😀\n";
         let table = StringTable::new();
         let ast = cwtools_parser::parser::parse_string(text, &table);
@@ -1334,7 +1334,7 @@ mod tests {
         }
     }
 
-    /// A self-deadlock wedges the thread that hit it, so the check cannot ride
+    /// Run the mutex check on a worker and enforce a timeout so a self-deadlock fails instead of wedging the test.
     fn must_finish(name: &str, f: impl FnOnce() + Send + 'static) {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {

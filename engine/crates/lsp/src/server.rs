@@ -320,7 +320,7 @@ impl Backend {
 }
 
 impl Backend {
-    /// (#87): a document has no stored AST from `did_open` until its first
+    /// Open documents may not have an AST until their first validation (#87).
     pub(crate) fn ast_snapshot_for(&self, uri: &str) -> Option<AstSnapshot> {
         let (text, version) = {
             let docs = self.state.documents.lock();
@@ -625,7 +625,7 @@ impl Backend {
             }
             return;
         }
-        // (#90); the entry version guard in `debounced_validate` makes a racing
+        // A pending debounce covers this save; its entry-version guard prevents stale validation from publishing (#90).
         let Some((version, ast_version)) = ({
             let docs = self.state.documents.lock();
             docs.get(&uri).map(|d| (d.version, d.ast_version))
