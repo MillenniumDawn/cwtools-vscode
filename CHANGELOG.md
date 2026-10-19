@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Tooling
+
+* Update the Open VSX publisher CLI to 1.3.0 so it shares the audited VS Code packaging dependency and removes the high-severity transitive advisories. (#1048)
+
 ### 4.0.1
 
 #### Engine
