@@ -146,7 +146,8 @@ rules cannot change how a script file parses, so editing the rules keeps the
 cache warm.
 
 On Unix, disk-file entries use the path, mtime, size, device, inode, and ctime, so a
-warm hit never opens the source, in the CLI or the LSP scan. The LSP takes the
+warm hit parses nothing and reads no source, in the CLI load or the LSP scan.
+The CLI still reads a file to print the source lines of its diagnostics. The LSP takes the
 content hash it uses to match fixable edits to a buffer, and the inline-ignore
 codes, from the sidecar. It still stats each file and charges that size against
 the scan byte budget. A miss, or a file whose key cannot be read, reads the

@@ -51,7 +51,9 @@ Changes to the serialized AST also require bumping `FORMAT_VERSION` in
 clause prefixes; version 4 `.cwb` files are rejected and rebuilt from source.
 Changes to the `.cwe` sidecar bump `ERRORS_FORMAT_VERSION` in the same file.
 Version 3 adds the source's content hash and inline-ignore codes; version 2
-sidecars are rejected and rebuilt from source.
+sidecars are rejected and rebuilt from source. Because the sidecar stores what
+`extract_inline_ignored_codes` returns, a change to that output bumps
+`CACHE_VERSION` too.
 
 ```sh
 cargo fmt --all
