@@ -1194,6 +1194,7 @@ impl LanguageServer for Backend {
                 if backend.move_open_document(old, new).await {
                     let old_uri = old.to_string();
                     let new_uri = new.to_string();
+                    // Bind the removed entry so its guard drops before re-locking this mutex.
                     let moved_tokens = backend.state.semantic_tokens_cache.lock().remove(&old_uri);
                     if let Some(entry) = moved_tokens {
                         backend

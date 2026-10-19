@@ -653,6 +653,7 @@ impl Backend {
             .map(cwtools_cache::workspace::content_hash)
             .unwrap_or(0);
         if text.is_some() {
+            // Bind the lookup so its guard drops before this branch re-locks the cache.
             let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
             if let Some(entry) = cached
                 && entry.hash == hash

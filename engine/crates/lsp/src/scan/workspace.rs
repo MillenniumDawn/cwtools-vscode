@@ -928,6 +928,7 @@ impl Backend {
         let track_uses = scan_ruleset
             .as_ref()
             .is_some_and(|rs| needs_use_tracking(rs, scan_game));
+        // Snapshot documents before info_service, matching request lock order to avoid ABBA.
         let open_doc_asts: Vec<(String, Arc<cwtools_parser::ast::ParsedFile>)> = if track_uses {
             let docs = self.state.documents.lock();
             docs.iter()

@@ -145,6 +145,7 @@ pub(crate) struct AliasMemo {
 #[derive(PartialEq, Eq, Hash)]
 pub(crate) struct SubtypeMergeMemoKey {
     pub(crate) type_identity: usize,
+    // Points into the borrowed RuleSet for this validation run.
     pub(crate) inner_rules_identity: (usize, usize),
     pub(crate) matched_subtype_indices: SmallVec<[usize; 4]>,
     pub(crate) union_all_subtypes: bool,
