@@ -41,9 +41,11 @@ def write_vsix(
     include_flat: bool = False,
     server_files: dict[str, str] | None = None,
     forbidden_paths: list[str] | None = None,
+    version: str = "1.0.0",
 ) -> None:
+    package = {**PACKAGE, "version": version}
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("extension/package.json", json.dumps(PACKAGE))
+        archive.writestr("extension/package.json", json.dumps(package))
         if include_flat:
             archive.writestr(
                 "extension/bin/server/cwtools-server/cwtools-server", "binary\n"
@@ -80,6 +82,24 @@ def test_accepts_targeted_and_universal_vsixes(
     write_vsix(tmp_path / "ext-1.0.0.vsix", list(targets.values()))
 
     assert smoke_test_vsix.main([str(tmp_path), *targets.values()]) == 0
+
+
+def test_checks_each_manifest_version_against_the_expected_version(
+    smoke_test_vsix: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_vsix(tmp_path / "ext-1.0.0.vsix", [], include_flat=True)
+
+    assert smoke_test_vsix.main(
+        [str(tmp_path), "--expected-version", "1.0.0"]
+    ) == 0
+
+    with pytest.raises(SystemExit) as caught:
+        smoke_test_vsix.main([str(tmp_path), "--expected-version", "2.0.0"])
+    assert caught.value.code == 1
+    assert (
+        "::error::ext-1.0.0.vsix: manifest version '1.0.0' does not match "
+        "expected '2.0.0'\n"
+    ) in capsys.readouterr().out
 
 
 def test_accepts_a_lone_universal_vsix_with_only_a_flat_binary(

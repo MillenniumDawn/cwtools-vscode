@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -76,7 +77,7 @@ def check_forbidden_content(names: list[str], vsix: Path) -> None:
         raise SystemExit(1)
 
 
-def check_package(root: Path, vsix: Path) -> None:
+def check_package(root: Path, vsix: Path, expected_version: str | None) -> None:
     package_json = root / "package.json"
     try:
         package = json.loads(package_json.read_text(encoding="utf-8"))
@@ -85,6 +86,12 @@ def check_package(root: Path, vsix: Path) -> None:
         raise SystemExit(1) from None
     if not isinstance(package, dict):
         gh_error(f"{vsix.name}: extension package.json is not an object")
+        raise SystemExit(1)
+    if expected_version is not None and package.get("version") != expected_version:
+        gh_error(
+            f"{vsix.name}: manifest version {package.get('version')!r} "
+            f"does not match expected {expected_version!r}"
+        )
         raise SystemExit(1)
 
     require_file(root, package.get("main"), vsix)
@@ -119,7 +126,9 @@ def check_package(root: Path, vsix: Path) -> None:
                 require_file(root, entry.get("path"), vsix)
 
 
-def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
+def check_vsix(
+    vsix: Path, expected_version: str | None = None
+) -> tuple[str | None, set[str]]:
     print(f"Checking {vsix.name} ...")
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
@@ -127,7 +136,7 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
             check_forbidden_content(zf.namelist(), vsix)
             zf.extractall(workdir)
         root = workdir / "extension"
-        check_package(root, vsix)
+        check_package(root, vsix, expected_version)
 
         present, unexpected = server_binaries(root)
         errors = []
@@ -171,12 +180,16 @@ def check_vsix(vsix: Path) -> tuple[str | None, set[str]]:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if not argv:
-        print(f"Usage: {Path(sys.argv[0]).name} <vsix-dir> [expected-platform ...]")
-        return 1
+    parser = argparse.ArgumentParser(
+        description="Smoke-test VSIX archives and their packaged extension files"
+    )
+    parser.add_argument("vsix_dir", type=Path)
+    parser.add_argument("expected_platforms", nargs="*")
+    parser.add_argument("--expected-version")
+    args = parser.parse_args(argv)
 
-    vsix_dir = Path(argv[0])
-    expected = argv[1:]
+    vsix_dir = args.vsix_dir
+    expected = args.expected_platforms
     vsixes = sorted(vsix_dir.glob("*.vsix"))
     if not vsixes:
         gh_error(f"No .vsix file found in {vsix_dir}")
@@ -185,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     universal: set[str] | None = None
     targeted: set[str] = set()
     for vsix in vsixes:
-        platform, names = check_vsix(vsix)
+        platform, names = check_vsix(vsix, args.expected_version)
         if platform is None:
             universal = names
         else:

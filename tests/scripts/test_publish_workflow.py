@@ -177,6 +177,19 @@ def test_registry_publishers_skip_dependency_scripts_but_keep_optional_clis() ->
     assert "ignore-scripts" not in package_job
     assert "npm run build -- package-prebuilt" in package_job
     assert "python3 scripts/smoke_test_vsix.py artifacts/vsix" in package_job
+    assert '"$CWTOOLS_BUILD_VERSION"' in package_job
+    assert "sha256sum *.vsix > SHA256SUMS" in package_job
+
+    marketplace = _job(workflow, "marketplace")
+    verify = marketplace.split("- name: Verify downloaded VSIX files", maxsplit=1)[1]
+    publish = marketplace.split("- name: Publish to the VS Code Marketplace", maxsplit=1)[1]
+    assert "sha256sum --check SHA256SUMS" in verify
+    assert "python3 scripts/smoke_test_vsix.py artifacts/vsix" in verify
+    assert '"$CWTOOLS_BUILD_VERSION"' in verify
+    assert marketplace.index("Verify downloaded VSIX files") < marketplace.index(
+        "Publish to the VS Code Marketplace"
+    )
+    assert "publish-marketplace" in publish
 
 
 def test_release_failed_guards_every_job_it_waits_on() -> None:
