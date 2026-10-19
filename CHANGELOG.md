@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.1
+
 #### Engine
 
 * Skip the validation a save starts when the open document's current version was already parsed and validated. The save no longer parses, indexes, validates and republishes identical text. Localisation and `.cwt` files never keep a syntax tree, so a save still revalidates them, and so does a save of a version that has not been validated yet. (#1063)
