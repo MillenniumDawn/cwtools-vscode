@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -162,7 +163,95 @@ where
     Some(out)
 }
 
+/// What pass 1 of a scan hands the serial merge for one file.
+struct ParseOutcome {
+    cache_hit: bool,
+    parsed: cwtools_parser::ast::ParsedFile,
+    source_hash: Option<u64>,
+    inline_ignored: InlineIgnoreMap,
+    /// An ignore pattern matches the file, so its index entry is cleared.
+    ignored: bool,
+    /// The file's index entry, built on the rayon pool and merged in scan order
+    /// so the index comes out as a serial pass would leave it. `None` when the
+    /// file is ignored or no ruleset is loaded.
+    collected: Option<cwtools_info::CollectedFile>,
+}
+
+/// The ruleset state that collecting a file's entry reads, snapshotted before
+/// the parallel pass so nothing inside it takes a lock.
+struct IndexCollector {
+    ruleset: Arc<RuleSet>,
+    collector: Arc<cwtools_info::FileCollector>,
+}
+
+impl IndexCollector {
+    fn collect(
+        &self,
+        uri: &str,
+        parsed: &cwtools_parser::ast::ParsedFile,
+        logical_path: &str,
+        table: &cwtools_string_table::string_table::StringTable,
+    ) -> cwtools_info::CollectedFile {
+        let types = cwtools_info::collect_type_instances_with_subtypes(
+            &self.ruleset,
+            parsed,
+            logical_path,
+            table,
+            cwtools_validation::subtype_membership_for_instance,
+        );
+        self.collector
+            .collect(uri, parsed, table, &self.ruleset, logical_path, types)
+    }
+}
+
+/// A scanned file's path relative to its own mod root.
+fn scan_logical_path<'a>(
+    file: &'a ScannedFile,
+    workspace_prefix: &Option<Arc<str>>,
+) -> Cow<'a, str> {
+    match &file.parent_logical_path {
+        Some(logical) => Cow::Borrowed(logical.as_str()),
+        None => Cow::Owned(logical_path_from_uri(&file.uri, workspace_prefix)),
+    }
+}
+
 impl Backend {
+    /// `None` while no ruleset is loaded. Holds `rules` across the collector
+    /// lookup (lock order: rules -> info_service), so a `set_ruleset` cannot
+    /// slip between the two and leave the old ruleset's collector cached.
+    fn index_collector(&self) -> Option<IndexCollector> {
+        let rules = self.state.rules.read();
+        let ruleset = rules.ruleset.clone()?;
+        let collector = self.state.info_service.read().file_collector(&ruleset);
+        Some(IndexCollector { ruleset, collector })
+    }
+
+    /// Merge one scanned file's collected entry, returning whether open-buffer
+    /// reference sites need a refresh. Pass 1 collected against the ruleset the
+    /// scan began with, so a file is indexed again against the current one when
+    /// `set_ruleset` ran since, or when none was loaded then.
+    fn merge_scanned_file(
+        &self,
+        file: &ScannedFile,
+        workspace_prefix: &Option<Arc<str>>,
+        parsed: &cwtools_parser::ast::ParsedFile,
+        collected: Option<cwtools_info::CollectedFile>,
+    ) -> bool {
+        let base_game = file.parent_logical_path.is_some();
+        let mut merged = false;
+        let mut refresh = false;
+        if let Some(collected) = collected {
+            refresh = self.replace_indexed_file(&file.uri, None, |info| {
+                merged = info.merge_collected_file(collected, base_game);
+            });
+        }
+        if !merged {
+            let logical_path = scan_logical_path(file, workspace_prefix);
+            refresh |= self.index_parsed_file_as(&file.uri, parsed, None, &logical_path, base_game);
+        }
+        refresh
+    }
+
     pub(crate) async fn validate_entire_workspace(&self, quiet: bool) -> bool {
         matches!(
             self.validate_entire_workspace_tracked(quiet, None).await,
@@ -451,12 +540,44 @@ impl Backend {
         let mut cache_hits = 0u64;
         let mut cache_misses = 0u64;
         use rayon::prelude::*;
-        type ParseOutcome = (
+        type LoadedFile = (
             bool,
             cwtools_parser::ast::ParsedFile,
             Option<u64>,
             InlineIgnoreMap,
         );
+        // Nothing inside the parallel pass may take a `Backend` lock: the locks
+        // are fair, so a queued writer would stall every worker that reads.
+        let index_collector = self.index_collector();
+        let workspace_prefix = self.state.config.read().workspace_prefix.clone();
+        let finish =
+            |file: &ScannedFile, (cache_hit, parsed, source_hash, inline_ignored): LoadedFile| {
+                let logical_path = scan_logical_path(file, &workspace_prefix);
+                let ignored = cwtools_file_manager::file_manager::is_ignored_path(
+                    &logical_path,
+                    &extra_file_globs,
+                    &extra_dir_globs,
+                );
+                let collected = index_collector
+                    .as_ref()
+                    .filter(|_| !ignored)
+                    .map(|collector| {
+                        collector.collect(
+                            &file.uri,
+                            &parsed,
+                            &logical_path,
+                            &self.state.string_table,
+                        )
+                    });
+                Some(ParseOutcome {
+                    cache_hit,
+                    parsed,
+                    source_hash,
+                    inline_ignored,
+                    ignored,
+                    collected,
+                })
+            };
         let scan_bytes = cwtools_file_manager::file_manager::ScanBytes::new();
         let max_scan_bytes = cwtools_file_manager::file_manager::ScanBudget::default().max_bytes;
         #[cfg(test)]
@@ -477,13 +598,8 @@ impl Backend {
                     if open_uris.contains(&file.uri) {
                         return None;
                     }
-                    let source_key = (workspace_cache::PATH_METADATA_CACHE_SUPPORTED)
-                        .then(|| workspace_cache::source_cache_key(&file.path))
-                        .flatten();
-                    let use_content_cache =
-                        !workspace_cache::PATH_METADATA_CACHE_SUPPORTED || source_key.is_none();
-                    let source_size = match std::fs::metadata(&file.path) {
-                        Ok(metadata) if metadata.is_file() => metadata.len(),
+                    let metadata = match std::fs::metadata(&file.path) {
+                        Ok(metadata) if metadata.is_file() => metadata,
                         Ok(_) => {
                             tracing::warn!(
                                 path = %file.path.display(),
@@ -500,6 +616,11 @@ impl Backend {
                             return None;
                         }
                     };
+                    let source_size = metadata.len();
+                    let source_key = workspace_cache::PATH_METADATA_CACHE_SUPPORTED.then(|| {
+                        workspace_cache::source_cache_key_from_metadata(&file.path, &metadata)
+                    });
+                    let use_content_cache = source_key.is_none();
                     if source_size > crate::access::MAX_URI_READ_BYTES {
                         tracing::warn!(
                             path = %file.path.display(),
@@ -515,20 +636,24 @@ impl Backend {
                         return None;
                     }
                     if let Some((cd, fp)) = cache_info.as_ref()
-                        && let Some((parsed, loaded_source_key, source)) = workspace_cache::load_path(
+                        && let Some(key) = source_key.as_ref()
+                        && let Some((parsed, source)) = workspace_cache::load_path_with_key(
                             cd,
                             *fp,
                             &file.path,
+                            key,
                             &self.state.string_table,
                         )
-                        && source_key.as_ref() == Some(&loaded_source_key)
                     {
-                        return Some((
-                            true,
-                            parsed,
-                            Some(source.content_hash),
-                            source.inline_ignored,
-                        ));
+                        return finish(
+                            file,
+                            (
+                                true,
+                                parsed,
+                                Some(source.content_hash),
+                                source.inline_ignored,
+                            ),
+                        );
                     }
                     let text = match self.read_scan_source(&file.path) {
                         Ok((t, n)) => {
@@ -557,12 +682,15 @@ impl Backend {
                             &self.state.string_table,
                         )
                     {
-                        return Some((
-                            true,
-                            parsed,
-                            Some(cwtools_cache::workspace::content_hash(&text)),
-                            extract_inline_ignored_codes(&text),
-                        ));
+                        return finish(
+                            file,
+                            (
+                                true,
+                                parsed,
+                                Some(cwtools_cache::workspace::content_hash(&text)),
+                                extract_inline_ignored_codes(&text),
+                            ),
+                        );
                     }
                     let parsed = parse_string_without_comments(&text, &self.state.string_table);
                     let source = workspace_cache::SourceMeta::new(
@@ -590,12 +718,15 @@ impl Backend {
                             );
                         }
                     }
-                    Some((
-                        false,
-                        parsed,
-                        Some(source.content_hash),
-                        source.inline_ignored,
-                    ))
+                    finish(
+                        file,
+                        (
+                            false,
+                            parsed,
+                            Some(source.content_hash),
+                            source.inline_ignored,
+                        ),
+                    )
                 })
                 .collect()
         });
@@ -604,7 +735,7 @@ impl Backend {
         }
         let wrote_cache = outcomes
             .iter()
-            .any(|outcome| outcome.as_ref().is_some_and(|(hit, _, _, _)| !hit));
+            .any(|outcome| outcome.as_ref().is_some_and(|outcome| !outcome.cache_hit));
         if wrote_cache && let Some((cache_dir, fingerprint)) = cache_info.as_ref() {
             workspace_cache::prune(cache_dir, *fingerprint);
         }
@@ -615,12 +746,22 @@ impl Backend {
         let mut inline_ignores: Vec<InlineIgnoreMap> = Vec::with_capacity(scan_files.len());
         for (i, (file, outcome)) in scan_files.iter().zip(outcomes).enumerate() {
             let parsed = match outcome {
-                Some((cache_hit, parsed, source_hash, inline_ignored)) => {
-                    match &file.parent_logical_path {
-                        Some(logical) => {
-                            self.index_parsed_file_as(&file.uri, &parsed, None, logical, true);
-                        }
-                        None => self.index_parsed_file(&file.uri, &parsed, None),
+                Some(ParseOutcome {
+                    cache_hit,
+                    parsed,
+                    source_hash,
+                    inline_ignored,
+                    ignored,
+                    collected,
+                }) => {
+                    let refresh_open_refs = if ignored {
+                        self.clear_ignored_file_state(&file.uri);
+                        false
+                    } else {
+                        self.merge_scanned_file(file, &workspace_prefix, &parsed, collected)
+                    };
+                    if refresh_open_refs && file.parent_logical_path.is_none() {
+                        self.refresh_open_reference_sites();
                     }
                     if cache_hit {
                         cache_hits += 1;
@@ -2031,6 +2172,48 @@ mod tests {
             reported(&backend),
             0,
             "a code the user ignores never reaches Problems, so the summary must not count it"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_file_collected_before_a_rules_reload_is_indexed_against_the_new_rules() {
+        let (backend, tmp) = setup_workspace(None);
+        let path = tmp.path().join("common/things/a.txt");
+        let file = ScannedFile {
+            uri: path_to_uri(&path),
+            path,
+            parent_logical_path: None,
+        };
+        let prefix = backend.state.config.read().workspace_prefix.clone();
+        let table = &backend.state.string_table;
+        let parsed = parse_string_without_comments("thing_0 = { }\n", table);
+
+        let stale = backend
+            .index_collector()
+            .expect("the setup loads rules")
+            .collect(&file.uri, &parsed, "common/things/a.txt", table);
+        let mut reloaded = RuleSet::new();
+        let mut renamed = backend
+            .state
+            .rules
+            .read()
+            .ruleset
+            .as_ref()
+            .expect("the setup loads rules")
+            .types[0]
+            .clone();
+        renamed.name = "other_thing".to_string();
+        reloaded.types.push(renamed);
+        reloaded.reindex();
+        backend.set_ruleset(reloaded);
+
+        backend.merge_scanned_file(&file, &prefix, &parsed, Some(stale));
+
+        let info = backend.state.info_service.read();
+        assert!(info.type_index.contains("other_thing", "thing_0"));
+        assert!(
+            !info.type_index.contains("thing", "thing_0"),
+            "the entry collected under the old rules must not be merged"
         );
     }
 

@@ -3,7 +3,7 @@ use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringTable;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use cwtools_index::vanilla_cache;
 pub use cwtools_index::*;
@@ -13,8 +13,9 @@ mod references;
 
 pub use position::{PositionElement, ReferenceHint, element_at_position};
 use references::{
-    AliasKeyCache, CollectedRef, TypeRefRule, build_schema_keys, build_type_ref_keys,
-    classify_alias_key_sites, collect_alias_key_candidates, collect_type_ref_uses, strip_affix,
+    AliasKeyCache, CollectedRef, FileAliasSites, TypeRefRule, build_schema_keys,
+    build_type_ref_keys, classify_alias_key_sites, collect_alias_key_candidates,
+    collect_type_ref_uses, strip_affix,
 };
 pub use references::{
     IndexedUseSite, ReferenceIndex, TypePatternAlias, UseSite, build_type_patterns,
@@ -203,13 +204,172 @@ pub struct InfoService {
     /// `clear_file`.
     variable_defs: HashMap<String, Vec<VariableDef>>,
     pub inline_script_counts: HashMap<String, usize>,
-    var_effects: HashSet<String>,
+    var_effects: Arc<HashSet<String>>,
     pub reference_index: ReferenceIndex,
     pub alias_key_index: ReferenceIndex,
     alias_key_cache: AliasKeyCache,
-    type_ref_keys: Option<HashMap<String, Vec<TypeRefRule>>>,
-    type_patterns: Option<Vec<TypePatternAlias>>,
-    schema_keys: Option<HashSet<String>>,
+    collector: OnceLock<Arc<FileCollector>>,
+}
+
+/// The per-ruleset data that turns a parsed file into a [`CollectedFile`].
+/// Build it with [`InfoService::file_collector`]; it reads nothing from the
+/// service, so a parallel scan can share one across threads and leave only
+/// [`InfoService::merge_collected_file`] to run under the service's lock.
+pub struct FileCollector {
+    var_effects: Arc<HashSet<String>>,
+    type_ref_keys: HashMap<String, Vec<TypeRefRule>>,
+    schema_keys: HashSet<String>,
+    type_patterns: Vec<TypePatternAlias>,
+}
+
+/// One file's contribution to the index, ready to merge. Opaque on purpose:
+/// the merge is the only reader.
+pub struct CollectedFile {
+    collector: Arc<FileCollector>,
+    uri: String,
+    info: FileInfo,
+    instances: HashMap<String, Vec<TypeInstance>>,
+    subtype_instances: HashMap<String, Vec<TypeInstance>>,
+    complex_enum_values: HashMap<String, Vec<String>>,
+    value_sets: HashMap<String, Vec<String>>,
+    scripted_locs: Vec<String>,
+    scripted_guis: Vec<String>,
+    type_refs: Vec<CollectedRef>,
+    alias_sites: FileAliasSites,
+}
+
+impl FileCollector {
+    fn new(ruleset: &RuleSet, var_effects: Arc<HashSet<String>>) -> Self {
+        Self {
+            var_effects,
+            type_ref_keys: build_type_ref_keys(ruleset),
+            schema_keys: build_schema_keys(ruleset),
+            type_patterns: build_type_patterns(ruleset),
+        }
+    }
+
+    /// Walk `ast` once for everything the index keeps from a file. `types` are
+    /// the file's type instances, which the caller collects because subtype
+    /// membership comes from a validation hook this crate cannot see.
+    pub fn collect(
+        self: &Arc<Self>,
+        uri: &str,
+        ast: &ParsedFile,
+        table: &StringTable,
+        ruleset: &RuleSet,
+        logical_path: &str,
+        types: CollectedTypeInstances,
+    ) -> CollectedFile {
+        let CollectedTypeInstances {
+            instances,
+            subtype_instances,
+        } = types;
+        let mut info = FileInfo::default();
+
+        let type_names = ruleset.type_by_name();
+        for child in &ast.root_children {
+            InfoService::index_child_heuristic(child, &ast.arena, table, type_names, &mut info);
+        }
+
+        let CollectedVariablesAndValueSets {
+            variables: set_vars,
+            value_sets,
+        } = collect_variables_and_value_sets(ast, ruleset, table, Some(self.var_effects.as_ref()));
+        let complex_enum_values = cwtools_index::dynamic_values::collect_complex_enum_values(
+            ruleset,
+            ast,
+            logical_path,
+            table,
+        );
+
+        let scripted_locs = cwtools_index::collect_scripted_loc_names(ast, logical_path, table);
+        let scripted_guis =
+            cwtools_index::collect_scripted_gui_callback_names(ast, logical_path, table);
+        for name in &scripted_locs {
+            info.export_loc_registry_hash = info
+                .export_loc_registry_hash
+                .wrapping_add(mix_export_symbol(&["l", &name.to_ascii_lowercase()]));
+        }
+        for name in &scripted_guis {
+            info.export_loc_registry_hash = info
+                .export_loc_registry_hash
+                .wrapping_add(mix_export_symbol(&["g", &name.to_ascii_lowercase()]));
+        }
+
+        info.export_instances_hash = hash_instance_exports(&instances);
+        info.export_instance_names = instances
+            .values()
+            .flat_map(|v| v.iter())
+            .map(|inst| inst.name.to_ascii_lowercase())
+            .collect();
+
+        let at_vars: Vec<DefinedVariable> = info
+            .defined_variables
+            .iter()
+            .map(|(name, loc)| DefinedVariable {
+                name: name.clone(),
+                namespace: None,
+                location: *loc,
+                value: None,
+            })
+            .collect();
+        info.defined_variables_ns =
+            collect_defined_variables_from_rules(ruleset, ast, logical_path, table, Some(at_vars));
+        if !set_vars.is_empty() {
+            info.defined_variables_ns
+                .entry("variable".to_string())
+                .or_default()
+                .extend(set_vars);
+        }
+        for vars in info.defined_variables_ns.values() {
+            for v in vars {
+                info.defined_variables.insert(v.name.clone(), v.location);
+            }
+        }
+
+        info.saved_event_targets.extend(
+            info.saved_event_targets_detailed
+                .iter()
+                .map(|e| e.name.clone()),
+        );
+
+        let mut type_refs = Vec::new();
+        if !self.type_ref_keys.is_empty() {
+            collect_type_ref_uses(
+                &ast.root_children,
+                &ast.arena,
+                table,
+                &self.type_ref_keys,
+                ruleset,
+                logical_path,
+                &mut type_refs,
+            );
+        }
+
+        let mut candidates = Vec::new();
+        collect_alias_key_candidates(
+            &ast.root_children,
+            &ast.arena,
+            table,
+            &self.schema_keys,
+            &mut candidates,
+        );
+        let alias_sites = FileAliasSites::new(uri, candidates, &self.type_patterns);
+
+        CollectedFile {
+            collector: Arc::clone(self),
+            uri: uri.to_string(),
+            info,
+            instances,
+            subtype_instances,
+            complex_enum_values,
+            value_sets,
+            scripted_locs,
+            scripted_guis,
+            type_refs,
+            alias_sites,
+        }
+    }
 }
 
 impl Default for InfoService {
@@ -228,21 +388,17 @@ impl InfoService {
             variable_counts: HashMap::new(),
             variable_defs: HashMap::new(),
             inline_script_counts: HashMap::new(),
-            var_effects: HashSet::new(),
+            var_effects: Arc::default(),
             reference_index: ReferenceIndex::default(),
             alias_key_index: ReferenceIndex::default(),
             alias_key_cache: AliasKeyCache::default(),
-            type_ref_keys: None,
-            type_patterns: None,
-            schema_keys: None,
+            collector: OnceLock::new(),
         }
     }
 
     pub fn update_ruleset_data(&mut self, effects: HashSet<String>) {
-        self.var_effects = effects;
-        self.type_ref_keys = None;
-        self.type_patterns = None;
-        self.schema_keys = None;
+        self.var_effects = Arc::new(effects);
+        self.collector = OnceLock::new();
         self.alias_key_cache = AliasKeyCache::default();
         self.alias_key_index = ReferenceIndex::default();
     }
@@ -307,59 +463,68 @@ impl InfoService {
         subtype_instances: HashMap<String, Vec<TypeInstance>>,
         base_game: bool,
     ) {
-        let mut info = FileInfo::default();
+        let types = CollectedTypeInstances {
+            instances,
+            subtype_instances,
+        };
+        let collected =
+            self.file_collector(ruleset)
+                .collect(uri, ast, table, ruleset, logical_path, types);
+        self.merge_current(collected, base_game);
+    }
 
-        let type_names = ruleset.type_by_name();
-        for child in &ast.root_children {
-            Self::index_child_heuristic(child, &ast.arena, table, type_names, &mut info);
+    /// The collector for `ruleset`, built on first use and kept until
+    /// [`update_ruleset_data`](Self::update_ruleset_data). Takes `&self`, so a
+    /// caller holding only a read lock can fetch it before a parallel pass.
+    pub fn file_collector(&self, ruleset: &RuleSet) -> Arc<FileCollector> {
+        let collector = self
+            .collector
+            .get_or_init(|| Arc::new(FileCollector::new(ruleset, Arc::clone(&self.var_effects))));
+        Arc::clone(collector)
+    }
+
+    /// Merge what [`FileCollector::collect`] produced into the index. Files
+    /// must be merged in the order they should appear in it. `base_game` merges
+    /// the file's definitions with base-game provenance, so they resolve but
+    /// never count as workspace definitions (a parent mod, #786).
+    ///
+    /// Returns `false`, and merges nothing, when [`update_ruleset_data`]
+    /// (Self::update_ruleset_data) ran since `collected` was built: its data
+    /// belongs to the previous ruleset, so the caller collects the file again.
+    pub fn merge_collected_file(&mut self, collected: CollectedFile, base_game: bool) -> bool {
+        let current = self
+            .collector
+            .get()
+            .is_some_and(|current| Arc::ptr_eq(current, &collected.collector));
+        if current {
+            self.merge_current(collected, base_game);
         }
+        current
+    }
 
-        let CollectedVariablesAndValueSets {
-            variables: set_vars,
+    fn merge_current(&mut self, collected: CollectedFile, base_game: bool) {
+        let CollectedFile {
+            collector,
+            uri,
+            info,
+            instances,
+            subtype_instances,
+            complex_enum_values,
             value_sets,
-        } = collect_variables_and_value_sets(ast, ruleset, table, Some(&self.var_effects));
-        Arc::make_mut(&mut self.type_index)
-            .complex_enum_values
-            .merge_file(
-                uri,
-                cwtools_index::dynamic_values::collect_complex_enum_values(
-                    ruleset,
-                    ast,
-                    logical_path,
-                    table,
-                ),
-            );
-        Arc::make_mut(&mut self.type_index)
-            .value_set_values
-            .merge_file(uri, value_sets);
+            scripted_locs,
+            scripted_guis,
+            type_refs,
+            alias_sites,
+        } = collected;
+        let uri = uri.as_str();
 
-        let scripted_locs = cwtools_index::collect_scripted_loc_names(ast, logical_path, table);
-        let scripted_guis =
-            cwtools_index::collect_scripted_gui_callback_names(ast, logical_path, table);
-        for name in &scripted_locs {
-            info.export_loc_registry_hash = info
-                .export_loc_registry_hash
-                .wrapping_add(mix_export_symbol(&["l", &name.to_ascii_lowercase()]));
-        }
-        for name in &scripted_guis {
-            info.export_loc_registry_hash = info
-                .export_loc_registry_hash
-                .wrapping_add(mix_export_symbol(&["g", &name.to_ascii_lowercase()]));
-        }
-        Arc::make_mut(&mut self.type_index)
-            .scripted_loc_index
-            .merge_file(uri, scripted_locs);
-        Arc::make_mut(&mut self.type_index)
-            .scripted_gui_index
-            .merge_file(uri, scripted_guis);
-
-        info.export_instances_hash = hash_instance_exports(&instances);
-        info.export_instance_names = instances
-            .values()
-            .flat_map(|v| v.iter())
-            .map(|inst| inst.name.to_ascii_lowercase())
-            .collect();
         let type_index = Arc::make_mut(&mut self.type_index);
+        type_index
+            .complex_enum_values
+            .merge_file(uri, complex_enum_values);
+        type_index.value_set_values.merge_file(uri, value_sets);
+        type_index.scripted_loc_index.merge_file(uri, scripted_locs);
+        type_index.scripted_gui_index.merge_file(uri, scripted_guis);
         if base_game {
             type_index.merge_base_game(uri, instances);
             if !subtype_instances.is_empty() {
@@ -371,36 +536,6 @@ impl InfoService {
                 type_index.merge(uri, subtype_instances);
             }
         }
-
-        let at_vars: Vec<DefinedVariable> = info
-            .defined_variables
-            .iter()
-            .map(|(name, loc)| DefinedVariable {
-                name: name.clone(),
-                namespace: None,
-                location: *loc,
-                value: None,
-            })
-            .collect();
-        info.defined_variables_ns =
-            collect_defined_variables_from_rules(ruleset, ast, logical_path, table, Some(at_vars));
-        if !set_vars.is_empty() {
-            info.defined_variables_ns
-                .entry("variable".to_string())
-                .or_default()
-                .extend(set_vars);
-        }
-        for vars in info.defined_variables_ns.values() {
-            for v in vars {
-                info.defined_variables.insert(v.name.clone(), v.location);
-            }
-        }
-
-        info.saved_event_targets.extend(
-            info.saved_event_targets_detailed
-                .iter()
-                .map(|e| e.name.clone()),
-        );
 
         for (type_name, locs) in &info.type_definitions {
             self.all_type_defs
@@ -433,42 +568,9 @@ impl InfoService {
             *self.inline_script_counts.entry(script.clone()).or_insert(0) += 1;
         }
 
-        let type_ref_keys = self
-            .type_ref_keys
-            .get_or_insert_with(|| build_type_ref_keys(ruleset));
-        if !type_ref_keys.is_empty() {
-            let mut refs = Vec::new();
-            collect_type_ref_uses(
-                &ast.root_children,
-                &ast.arena,
-                table,
-                type_ref_keys,
-                ruleset,
-                logical_path,
-                &mut refs,
-            );
-            self.reference_index.merge(uri, refs);
-        }
+        self.reference_index.merge(uri, type_refs);
 
-        if self.schema_keys.is_none() {
-            self.schema_keys = Some(build_schema_keys(ruleset));
-        }
-        if self.type_patterns.is_none() {
-            self.type_patterns = Some(build_type_patterns(ruleset));
-        }
-        let mut candidates = Vec::new();
-        collect_alias_key_candidates(
-            &ast.root_children,
-            &ast.arena,
-            table,
-            self.schema_keys.as_ref().expect("schema keys just set"),
-            &mut candidates,
-        );
-        let candidate_names = self.alias_key_cache.merge_file(
-            uri,
-            candidates,
-            self.type_patterns.as_deref().unwrap_or_default(),
-        );
+        let candidate_names = self.alias_key_cache.merge_prepared(alias_sites);
         for (type_name, lower_name) in candidate_names {
             if !self.type_index.contains(&type_name, &lower_name)
                 && self
@@ -479,16 +581,17 @@ impl InfoService {
                     .mark_instance_name_dirty(&type_name, Arc::from(lower_name));
             }
         }
-        self.classify_file_alias_keys(uri, ruleset);
+        self.classify_alias_keys_with(uri, &collector.type_patterns);
 
         self.files.insert(uri.to_string(), info);
     }
 
     pub fn classify_file_alias_keys(&mut self, uri: &str, ruleset: &RuleSet) {
-        if self.type_patterns.is_none() {
-            self.type_patterns = Some(build_type_patterns(ruleset));
-        }
-        let patterns = self.type_patterns.as_ref().expect("type patterns just set");
+        let collector = self.file_collector(ruleset);
+        self.classify_alias_keys_with(uri, &collector.type_patterns);
+    }
+
+    fn classify_alias_keys_with(&mut self, uri: &str, patterns: &[TypePatternAlias]) {
         if patterns.is_empty() {
             self.alias_key_index.remove_file(uri);
             return;
@@ -504,9 +607,6 @@ impl InfoService {
     }
 
     pub fn rebuild_alias_key_index(&mut self, ruleset: &RuleSet) {
-        if self.type_patterns.is_none() {
-            self.type_patterns = Some(build_type_patterns(ruleset));
-        }
         self.alias_key_index = ReferenceIndex::default();
         let uris: Vec<String> = self
             .alias_key_cache
@@ -530,10 +630,8 @@ impl InfoService {
         if changes.is_empty() {
             return None;
         }
-        if self.type_patterns.is_none() {
-            self.type_patterns = Some(build_type_patterns(ruleset));
-        }
-        let patterns = self.type_patterns.as_deref().unwrap_or_default();
+        let collector = self.file_collector(ruleset);
+        let patterns = collector.type_patterns.as_slice();
         let mut refs_by_file: HashMap<Arc<str>, Vec<CollectedRef>> = HashMap::new();
         let mut visited = 0;
         for (type_name, name) in &changes {
@@ -648,15 +746,13 @@ impl InfoService {
         ruleset: &RuleSet,
         logical_path: &str,
     ) -> Vec<IndexedUseSite> {
-        let type_ref_keys = self
-            .type_ref_keys
-            .get_or_insert_with(|| build_type_ref_keys(ruleset));
+        let collector = self.file_collector(ruleset);
         let mut type_refs = Vec::new();
         collect_type_ref_uses(
             &ast.root_children,
             &ast.arena,
             table,
-            type_ref_keys,
+            &collector.type_ref_keys,
             ruleset,
             logical_path,
             &mut type_refs,
@@ -675,26 +771,16 @@ impl InfoService {
             })
             .collect();
 
-        if self.schema_keys.is_none() {
-            self.schema_keys = Some(build_schema_keys(ruleset));
-        }
-        if self.type_patterns.is_none() {
-            self.type_patterns = Some(build_type_patterns(ruleset));
-        }
         let mut candidates = Vec::new();
         collect_alias_key_candidates(
             &ast.root_children,
             &ast.arena,
             table,
-            self.schema_keys.as_ref().expect("schema keys just set"),
+            &collector.schema_keys,
             &mut candidates,
         );
-        let alias_refs = classify_alias_key_sites(
-            &candidates,
-            uri,
-            self.type_patterns.as_ref().expect("type patterns just set"),
-            &self.type_index,
-        );
+        let alias_refs =
+            classify_alias_key_sites(&candidates, uri, &collector.type_patterns, &self.type_index);
         sites.extend(alias_refs.into_iter().map(|reference| IndexedUseSite {
             type_name: reference.ref_type.to_string(),
             name: reference.name,
@@ -1727,6 +1813,41 @@ second = {
             "common/decisions/new.txt",
         );
         assert_eq!(service.reference_index.references("focus", "NEW").len(), 1);
+    }
+
+    #[test]
+    fn a_collected_file_from_before_a_ruleset_change_is_not_merged() {
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+
+        let table = StringTable::new();
+        let rules = ast_to_ruleset(
+            &parse_string(
+                "types = { type[decision] = { path = \"common/decisions\" } }",
+                &table,
+            ),
+            &table,
+        );
+        let parsed = parse_string("my_decision = { }", &table);
+        let logical = "common/decisions/d.txt";
+        let collect = |svc: &InfoService| {
+            let types = CollectedTypeInstances {
+                instances: collect_type_instances(&rules, &parsed, logical, &table),
+                subtype_instances: HashMap::new(),
+            };
+            svc.file_collector(&rules)
+                .collect("d.txt", &parsed, &table, &rules, logical, types)
+        };
+
+        let mut svc = InfoService::new();
+        let stale = collect(&svc);
+        svc.update_ruleset_data(HashSet::new());
+        assert!(!svc.merge_collected_file(stale, false));
+        assert!(svc.files.is_empty());
+        assert!(!svc.type_index.contains("decision", "my_decision"));
+
+        let fresh = collect(&svc);
+        assert!(svc.merge_collected_file(fresh, false));
+        assert!(svc.type_index.contains("decision", "my_decision"));
     }
 
     #[test]

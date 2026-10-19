@@ -11,6 +11,8 @@ use cwtools_validation::build_modifier_keys;
 use crate::command_progress::{CommandProgress, ScanOutcome};
 use crate::{Backend, DocumentState, LoadingBar, UpdateFileList};
 
+#[cfg(test)]
+mod index_parity;
 mod loc;
 mod reindex;
 mod vanilla;
