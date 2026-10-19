@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
@@ -217,7 +218,7 @@ impl Backend {
         let planned = tokio::task::spawn_blocking(move || {
             let mut skipped = 0usize;
             let mut unclosed: Vec<String> = Vec::new();
-            let mut changed: Vec<(String, String, Vec<SpanEdit>)> = Vec::new();
+            let mut changed: Vec<(String, Arc<str>, Vec<SpanEdit>)> = Vec::new();
             for uri in uris {
                 if cancel.is_cancelled() {
                     return None;

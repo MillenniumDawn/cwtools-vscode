@@ -172,7 +172,7 @@ impl Backend {
         let texts: HashMap<String, String> = current
             .iter()
             .filter(|(uri, _)| edits_snapshot.contains_key(*uri))
-            .map(|(uri, snapshot)| (uri.clone(), snapshot.text.clone()))
+            .map(|(uri, snapshot)| (uri.clone(), snapshot.text.to_string()))
             .collect();
         let planned = plan_workspace_fixes(&edits_snapshot, &texts);
         let encoding = self.state.config.read().position_encoding.clone();
@@ -322,7 +322,7 @@ mod tests {
         snapshots.insert(
             uri.to_string(),
             crate::FileTextSnapshot {
-                text: "aaaa\n".to_string(),
+                text: "aaaa\n".into(),
                 version: Some(7),
                 content_hash: 0,
             },
@@ -366,19 +366,19 @@ mod tests {
             content_hash: Some(7),
         };
         let open_v2 = crate::FileTextSnapshot {
-            text: "aaaa\n".to_string(),
+            text: "aaaa\n".into(),
             version: Some(2),
             content_hash: 7,
         };
         assert!(!fixable_edits_match(&versioned, Some(&open_v2)));
         let unchanged_versioned = crate::FileTextSnapshot {
-            text: "aaaa\n".to_string(),
+            text: "aaaa\n".into(),
             version: Some(1),
             content_hash: 7,
         };
         assert!(fixable_edits_match(&versioned, Some(&unchanged_versioned)));
         let reopened_same_version = crate::FileTextSnapshot {
-            text: "bbbb\n".to_string(),
+            text: "bbbb\n".into(),
             version: Some(1),
             content_hash: 8,
         };
@@ -393,7 +393,7 @@ mod tests {
             content_hash: Some(7),
         };
         let changed = crate::FileTextSnapshot {
-            text: "bbbb\n".to_string(),
+            text: "bbbb\n".into(),
             version: None,
             content_hash: 8,
         };

@@ -476,12 +476,12 @@ impl Backend {
     ) -> Option<Vec<DocumentChangeOperation>> {
         match target {
             LocInsertTarget::ExistingFileAfterLine { uri, after_line0 } => {
-                let text = texts.get(uri.as_str())?.text.as_str();
+                let text = &*texts.get(uri.as_str())?.text;
                 let (pos, insert_text) = insert_stub_after_line(text, *after_line0, stub, encoding);
                 Some(vec![insert_edit_op(uri.clone(), pos, insert_text)])
             }
             LocInsertTarget::ExistingFileAppend { uri } => {
-                let text = texts.get(uri.as_str())?.text.as_str();
+                let text = &*texts.get(uri.as_str())?.text;
                 let last_line0 = text.lines().count().saturating_sub(1) as u32;
                 let (pos, insert_text) = insert_stub_after_line(text, last_line0, stub, encoding);
                 Some(vec![insert_edit_op(uri.clone(), pos, insert_text)])
