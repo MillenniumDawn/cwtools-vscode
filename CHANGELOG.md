@@ -1,5 +1,7 @@
 ### Unreleased
 
+* Verify Marketplace VSIX downloads against their recorded SHA-256 checksums and expected manifest version before publish. (#544)
+
 ### 4.0.1
 
 #### Engine

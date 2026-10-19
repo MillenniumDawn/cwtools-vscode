@@ -182,7 +182,9 @@ def test_registry_publishers_skip_dependency_scripts_but_keep_optional_clis() ->
 
     marketplace = _job(workflow, "marketplace")
     verify = marketplace.split("- name: Verify downloaded VSIX files", maxsplit=1)[1]
-    publish = marketplace.split("- name: Publish to the VS Code Marketplace", maxsplit=1)[1]
+    publish = marketplace.split(
+        "- name: Publish to the VS Code Marketplace", maxsplit=1
+    )[1]
     assert "sha256sum --check SHA256SUMS" in verify
     assert "python3 scripts/smoke_test_vsix.py artifacts/vsix" in verify
     assert '"$CWTOOLS_BUILD_VERSION"' in verify
