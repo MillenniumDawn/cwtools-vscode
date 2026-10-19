@@ -3,7 +3,11 @@
 The guard baselines remain plain CSV. Gzip makes the Millennium Dawn file much
 smaller in a checkout, but Git already compresses text blobs; in the measured
 object database the additional saving was small, the diff became opaque, and
-reading the report became slower and used more peak memory.
+reading the report became slower and used more peak memory. Per-code summaries
+were also prototyped: a digest preserves aggregate pass/fail detection but
+throws away row-level review, while sample hashes can miss a changed row. The
+useful improvement is a `--bless` preview: show row changes before replacing
+the CSV and retain a full diff when rows move.
 
 ## Recorded results
 
@@ -38,6 +42,116 @@ e1a7678bc07fea8cb1c4433bb3680be3198d560f  blob 447     467     # gzip vanilla
 
 The compressed diff replaced **19,595 readable MD lines** with one binary
 blob. Reviewers could no longer inspect a changed diagnostic row in the diff.
+
+## Other representations considered
+
+The MD baseline contains 19,591 diagnostic rows across 20 codes. A temporary
+prototype grouped those codes and compared three small text summaries. The
+sizes below are generated representations, not measured Git object sizes; the
+zlib column is a level-9 estimate that explains why Git can already pack the
+plain baseline efficiently.
+
+| Representation | MD bytes | MD zlib-9 bytes | Vanilla bytes | Vanilla zlib-9 bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Plain CSV | 4,092,688 | 168,219 | 832 | 435 |
+| Per-code counts | 193 | 115 | 53 | 44 |
+| Per-code count + SHA-256 of all sorted rows | 1,515 | 879 | 400 | 260 |
+| Per-code count + hashes of first 3 sorted rows | 1,137 | 675 | 164 | 130 |
+
+Counts alone do not detect a changed message or line if the number of
+diagnostics for that code stays the same. Adding a SHA-256 over all sorted rows
+detects that drift, but it replaces thousands of actionable rows with one
+opaque hash per code. Sampling the first three rows is smaller but weaker: in
+the 1,555-row CW100 group, changing its last sorted row leaves the count and
+all three sample hashes unchanged, while the full digest changes. Keeping the
+CSV retains the exact row that changed and the ordinary readable Git diff.
+
+This snippet reproduces the candidate byte and zlib-9 sizes above. It is a
+size experiment only; it does not change or write the committed baselines.
+
+```python
+import csv
+import hashlib
+import zlib
+from pathlib import Path
+
+
+def encode_row(row):
+    return ",".join(
+        '"' + value.replace('"', '""') + '"'
+        if any(char in value for char in ',"\n')
+        else value
+        for value in row
+    )
+
+
+for name in ("md-baseline.csv", "vanilla-baseline.csv"):
+    source = Path("scripts") / name
+    lines = [line for line in source.read_text().splitlines() if not line.startswith("#")]
+    rows = list(csv.reader(lines))[1:]
+    groups = {}
+    for row in rows:
+        groups.setdefault(row[3], []).append(encode_row(row))
+    counts = "# code,count\n" + "".join(
+        f"{code},{len(values)}\n" for code, values in sorted(groups.items())
+    )
+    digests = "# code,count,sha256-of-sorted-rows\n" + "".join(
+        f"{code},{len(values)},{hashlib.sha256(chr(10).join(values).encode()).hexdigest()}\n"
+        for code, values in sorted(groups.items())
+    )
+    samples = "# code,count,first-3-sorted-row-hashes\n" + "".join(
+        f"{code},{len(values)},"
+        + ";".join(hashlib.sha256(row.encode()).hexdigest()[:16] for row in values[:3])
+        + "\n"
+        for code, values in sorted(groups.items())
+    )
+    variants = {
+        "plain": source.read_bytes(),
+        "counts": counts.encode(),
+        "per-code-sha256": digests.encode(),
+        "first-three-samples": samples.encode(),
+    }
+    for label, data in variants.items():
+        print(name, label, len(data), len(zlib.compress(data, 9)))
+```
+
+Storing the baseline in the corpus checkout would split the expected output
+away from the guard code and its CI review. It also complicates the pin
+relationship because the baseline is derived from the same corpus revision it
+would live beside. No versioned capture file or external artifact was added.
+
+## Re-blessing and guard parity
+
+When `--bless` finds an existing report with changed rows, it now prints the
+removed/added counts and first 40 unified-diff lines before writing the new
+baseline. It keeps `bless.diff` and `current.csv` in the reported temporary
+directory so the complete change remains inspectable. If rows are unchanged,
+the temporary directory is still removed; changed input pins are reported
+separately even when there is no row diff. A first baseline has no prior rows
+to preview.
+
+Before/after guard checks used the same release binary (SHA-256
+`d2b4decb35f2c787a297f63d47aee9d43d353e66e89202e6a453d8a60035c78a`), identical
+vanilla fixture bytes, separate empty cache directories, and the same pinned
+baseline. The base was `bffea3567c534d21c995fa2adb957aea78efef55`; the candidate
+worktree adds the re-bless preview and its tests and documentation. On both
+revisions, the clean fixture matched 5 rows and exited 0. Changing one missing
+event reference from `no.such.event` to `no.such.perturbed.event` changed one CW222 row; both
+revisions reported `-1 +1` and exited 1.
+
+Ten interleaved repetitions per case measured the entire small-fixture guard
+run, including process startup and validation. Clean base runs had a median of
+0.204 s (0.129–0.320); candidate runs had 0.248 s (0.152–0.375). Perturbed base
+runs had 0.295 s (0.128–0.359); candidate runs had 0.276 s (0.159–0.384). The
+ranges overlap widely and these tiny-fixture results are noisy, so they do not
+establish a whole-suite performance change. CI invokes the guard without
+`--bless`; the new diff preview runs only for a maintainer's explicit re-bless.
+The normal guard path performs no additional diff work on a clean report.
+
+The full Millennium Dawn guard was not used for this before/after check because
+the available corpus and rules revisions differ from the committed MD baseline
+pins. These results establish the required clean/drift parity on the committed
+vanilla fixture, not MD-wide diagnostic parity or CI wall time.
 
 An interleaved read test ran 20 repetitions per format, alternating which
 format ran first. Each repetition read the complete file and checked its bytes
@@ -160,18 +274,13 @@ The recorded compression timings used the same clock and memory tracer around
 10 `gzip.compress(raw, compresslevel=9, mtime=0)` calls and verified each result
 with `gzip.decompress`. Git object sizes were measured separately with the
 `git cat-file` command above; those physical sizes depend on the repository's
-pack layout. The earlier gzip implementation passed its guard unit tests for a
-clean report and for a deliberately changed code/message. Its full script test
-run before a round-trip test was added reported **394 passed, 5 skipped**; the
-focused guard and pin run after that test reported **47 passed**. Commands were
-`pytest tests/scripts -q` and
-`pytest tests/scripts/test_guard.py tests/scripts/test_resolve_pins.py -q`.
-On the final plain-CSV branch, those same suites reported **392 passed, 5
-skipped** and **44 passed**, respectively. No CI-time benchmark was run: the
-final branch retains the original guard and baseline format, so it introduces
-no CI behavior change.
-The decompressed MD and vanilla files compared byte-for-byte with the original
-tracked CSVs. The real MD guard could not
-provide a clean corpus parity run: the available corpus and rules revisions
-differed from the baseline pins, so it correctly reported input and diagnostic
-drift.
+pack layout. The earlier isolated gzip prototype passed guard unit tests for a
+clean report and a deliberately changed code/message. Its test totals are
+historical and are not the validation results for this branch. The current
+plain-CSV branch with the re-bless preview passed **393 tests, 5 skipped**;
+`tests/scripts/test_guard.py` passed **26 tests**. Ruff, Black, Pylint (10/10),
+and strict mypy all passed. The five skips require unavailable esbuild,
+`@vscode/test-cli`, or `xvfb-run`. No MD-wide parity run was possible: the
+available corpus and rules revisions differ from the committed MD baseline
+pins. The vanilla before/after parity run above covers the acceptance fixture,
+not the MD corpus or CI wall time.

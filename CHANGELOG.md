@@ -12,7 +12,7 @@
 * Give each diagnostics guard validation binary a separate empty parse cache, keeping comparisons independent of the caller's cache and of each other. (#1055)
 * Cover edit supersession while validation waits for a permit and while synchronous validation is in flight, checking latest-only diagnostics, AST replacement, task cleanup and permit recovery. (#868)
 * Add a Stellaris diagnostics guard for the GPL-3.0 Universum Infinitum prescripted-country corpus and its pinned upstream rules. `python3 scripts/guard.py stellaris` uses only the mod's scripted data, with its own baseline and contributor guidance; it needs no game install or companion mods, and CI does not run it. (#320)
-* Measure compressed diagnostic baselines against Git object storage and guard read cost. Retain the readable CSV baselines: the large working-tree reduction becomes a 10.8% Git object reduction, with opaque diffs and slower reads. (#988)
+* Keep diagnostic baselines as readable CSV after measuring compressed and aggregate formats. When `--bless` changes rows, show the row diff before replacing the baseline and retain the full diff for review. (#988)
 
 ### 4.0.0
 

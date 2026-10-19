@@ -427,6 +427,70 @@ def test_run_guard_bless_writes_expected_baseline(
     assert not work.exists()
 
 
+def test_run_guard_bless_previews_diagnostic_changes_before_replacing(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    corpus = tmp_path / "mod"
+    raw = (
+        "file,line,severity,code,message,hash\n"
+        f"{corpus}/common/x.txt,4,Warning,CW222,new message,0123456789abcdef\n"
+    )
+    baseline = tmp_path / "baseline.csv"
+    baseline.write_text(
+        "# cwtools guard baseline\n"
+        f"# corpus: mod @ {REVISION}\n"
+        f"# rules:  config/Config @ {REVISION}\n"
+        "file,line,severity,code,message\n"
+        "common/x.txt,4,Warning,CW100,old message\n",
+        encoding="utf-8",
+    )
+    _stub_subprocess(monkeypatch, guard, raw)
+    work = tmp_path / "work"
+    _fixed_work_dir(monkeypatch, guard, work)
+    config = guard.build_config(_config_args(tmp_path, bless=True), {})
+    original_write_text = Path.write_text
+    output_before_write: list[str] = []
+
+    def check_preview_precedes_write(
+        path: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if path == baseline:
+            shown = capsys.readouterr().out
+            assert "-common/x.txt,4,Warning,CW100,old message" in shown
+            assert "+common/x.txt,4,Warning,CW222,new message" in shown
+            assert "full diff:" in shown
+            assert "old message" in baseline.read_text(encoding="utf-8")
+            output_before_write.append(shown)
+        return original_write_text(
+            path, data, encoding=encoding, errors=errors, newline=newline
+        )
+
+    monkeypatch.setattr(Path, "write_text", check_preview_precedes_write)
+
+    assert guard.run_guard(config) == 0
+
+    assert output_before_write
+    output = output_before_write[0] + capsys.readouterr().out
+    diff = (work / "bless.diff").read_text(encoding="utf-8")
+    assert "guard: re-blessing " in output
+    assert "(1 -> 1 diagnostics; -1 +1 rows)" in output
+    assert "-common/x.txt,4,Warning,CW100,old message" in output
+    assert "+common/x.txt,4,Warning,CW222,new message" in output
+    assert f"full diff: {work / 'bless.diff'}" in output
+    assert "-common/x.txt,4,Warning,CW100,old message" in diff
+    assert "common/x.txt,4,Warning,CW222,new message" in baseline.read_text(
+        encoding="utf-8"
+    )
+    assert work.exists()
+
+
 def test_run_guard_missing_corpus_dies_with_setup_error(
     guard: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
