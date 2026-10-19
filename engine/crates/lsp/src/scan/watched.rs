@@ -318,7 +318,8 @@ impl Backend {
     }
 
     pub(crate) fn workspace_rel_for_file_index(&self, uri: &str) -> Option<String> {
-        let root = self.state.config.read().workspace_roots.first().cloned()?;
+        // `authorized_path` is canonical (`\\?\` on Windows), so the raw root never matches.
+        let root = self.state.config.read().editable_roots.first().cloned()?;
         let abs = self.authorized_path(uri)?;
         let rel = abs.strip_prefix(&root).ok()?;
         rel.to_str().map(|s| s.replace('\\', "/"))
