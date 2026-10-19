@@ -1,5 +1,7 @@
 ### Unreleased
 
+* Cancel the editor-type lookup backoff timer when the extension tracker is disposed, so queued editor switches cannot hold its lifecycle open. (#877)
+
 ### 4.0.1
 
 #### Engine

@@ -214,6 +214,27 @@ suite("documentLanguage", () => {
 		assert.strictEqual(requests.length, 0);
 	});
 
+	test("disposing during timeout backoff clears its timer and queued switch", async () => {
+		const { requests, context } = await startTracker();
+
+		await focus(fakeEditor("initial"));
+		await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+		requests[0].reject(new Error("request cancelled"));
+		await settle();
+
+		state.switchEditor!(fakeEditor("queued"));
+		await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+		assert.strictEqual(vi.getTimerCount(), 1, "the backoff timer is pending");
+
+		for (const subscription of context.subscriptions) subscription.dispose();
+		await settle();
+		assert.strictEqual(vi.getTimerCount(), 0, "disposal clears both timers");
+		await vi.advanceTimersByTimeAsync(BACKOFF_MS);
+
+		assert.strictEqual(requests.length, 1);
+		assert.strictEqual(state.logError.mock.calls.length, 0);
+	});
+
 	test("nothing is written after the tracker is disposed", async () => {
 		const { tracker, requests, context } = await startTracker();
 

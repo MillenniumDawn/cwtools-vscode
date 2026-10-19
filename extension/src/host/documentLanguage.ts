@@ -154,7 +154,17 @@ export async function registerDocumentLanguage(
 				// dropped when drained). A settled response drains immediately.
 				const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
 				if (delay > 0) {
-					await new Promise<void>((resolve) => setTimeout(resolve, delay));
+					await new Promise<void>((resolve) => {
+						const timer = setTimeout(() => {
+							cancelBackoffTimer = undefined;
+							resolve();
+						}, delay);
+						cancelBackoffTimer = () => {
+							clearTimeout(timer);
+							cancelBackoffTimer = undefined;
+							resolve();
+						};
+					});
 				}
 				getFileTypesInFlight = false;
 			}
@@ -169,6 +179,7 @@ export async function registerDocumentLanguage(
 	}
 
 	let debounceTimer: NodeJS.Timeout | undefined;
+	let cancelBackoffTimer: (() => void) | undefined;
 	context.subscriptions.push(
 		window.onDidChangeActiveTextEditor((editor) => {
 			const gen = ++generation;
@@ -183,6 +194,7 @@ export async function registerDocumentLanguage(
 		{
 			dispose: () => {
 				clearTimeout(debounceTimer);
+				cancelBackoffTimer?.();
 				generation++;
 			},
 		},
