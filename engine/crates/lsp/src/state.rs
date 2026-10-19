@@ -696,6 +696,18 @@ impl DocumentStore {
             .map(|document| document.text.clone())
     }
 
+    /// The open buffer shared by reference with its stored hash, so a reader
+    /// neither copies nor rehashes the text. Text and hash are only ever
+    /// written together (`open_with_hash`, `change_with_hash`).
+    pub(crate) fn text_snapshot(&self, uri: &str) -> Option<FileTextSnapshot> {
+        let document = self.documents.get(uri)?;
+        Some(FileTextSnapshot {
+            text: document.text.clone(),
+            version: Some(document.version),
+            content_hash: self.content_hash(uri)?,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn line_index_of(&self, uri: &str) -> Option<Arc<LineIndex>> {
         self.line_indices.get(uri).cloned()
@@ -1284,7 +1296,7 @@ impl ParsedDoc {
 }
 
 pub(crate) struct FileTextSnapshot {
-    pub(crate) text: String,
+    pub(crate) text: Arc<str>,
     pub(crate) version: Option<i32>,
     pub(crate) content_hash: u64,
 }

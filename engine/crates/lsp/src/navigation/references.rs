@@ -823,19 +823,11 @@ impl Backend {
                 if !seen.insert(uri.as_str()) {
                     continue;
                 }
-                if let Some(doc) = docs.get(uri) {
-                    if !budget.reserve_retained(doc.text.len()) {
+                if let Some(snapshot) = docs.text_snapshot(uri) {
+                    if !budget.reserve_retained(snapshot.text.len()) {
                         return Err(navigation_snapshot_budget_error());
                     }
-                    let text = doc.text.to_string();
-                    snapshots.insert(
-                        uri.clone(),
-                        FileTextSnapshot {
-                            content_hash: cwtools_cache::workspace::content_hash(&text),
-                            text,
-                            version: Some(doc.version),
-                        },
-                    );
+                    snapshots.insert(uri.clone(), snapshot);
                 } else {
                     closed.push(uri.clone());
                 }
@@ -867,7 +859,7 @@ impl Backend {
                             uri,
                             FileTextSnapshot {
                                 content_hash: cwtools_cache::workspace::content_hash(&text),
-                                text,
+                                text: Arc::from(text),
                                 version: None,
                             },
                         )
@@ -891,16 +883,8 @@ impl Backend {
         {
             let docs = self.state.documents.lock();
             for uri in uris {
-                if let Some(doc) = docs.get(uri) {
-                    let text = doc.text.to_string();
-                    snapshots.insert(
-                        uri.clone(),
-                        FileTextSnapshot {
-                            content_hash: cwtools_cache::workspace::content_hash(&text),
-                            text,
-                            version: Some(doc.version),
-                        },
-                    );
+                if let Some(snapshot) = docs.text_snapshot(uri) {
+                    snapshots.insert(uri.clone(), snapshot);
                 } else if seen_closed.insert(uri.clone()) {
                     closed.push(uri.clone());
                 }
@@ -924,7 +908,7 @@ impl Backend {
                         uri,
                         FileTextSnapshot {
                             content_hash: cwtools_cache::workspace::content_hash(&text),
-                            text,
+                            text: Arc::from(text),
                             version: None,
                         },
                     ))
@@ -1715,8 +1699,8 @@ mod tests {
             .await
             .expect("4 open bytes + 10 bytes peak closed-read allowance");
         assert_eq!(snapshots.len(), 2, "duplicate URIs get one snapshot");
-        assert_eq!(snapshots[&open_uri].text, "open");
-        assert_eq!(snapshots[&closed_uri].text, "c");
+        assert_eq!(&*snapshots[&open_uri].text, "open");
+        assert_eq!(&*snapshots[&closed_uri].text, "c");
 
         let error = backend
             .file_text_snapshots_for_navigation_with_limit(&uris, 13)
@@ -1742,6 +1726,59 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn open_snapshots_share_the_buffer_and_take_the_stored_hash() {
+        use cwtools_cache::workspace::content_hash;
+
+        let (backend, state) = backend();
+        let ws = tempfile::TempDir::new().expect("tmpdir");
+        let open_uri = Url::from_file_path(ws.path().join("open.txt"))
+            .expect("absolute path")
+            .to_string();
+        let first: Arc<str> = Arc::from("open");
+        state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 3,
+                    text: first.clone(),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("the store accepts one small doc");
+        let stored = state.documents.lock().text_of(&open_uri).expect("open doc");
+        let uris = [open_uri.clone()];
+
+        let navigation = backend
+            .file_text_snapshots_for_navigation_with_limit(&uris, 4)
+            .await
+            .expect("the open buffer fits its own length");
+        let general = backend.file_text_snapshots_for(&uris).await;
+        for snapshot in [&navigation[&open_uri], &general[&open_uri]] {
+            assert!(Arc::ptr_eq(&snapshot.text, &stored), "the buffer is shared");
+            assert_eq!(snapshot.content_hash, content_hash(&first));
+            assert_eq!(snapshot.version, Some(3));
+        }
+
+        let second: Arc<str> = Arc::from("changed");
+        state
+            .documents
+            .lock()
+            .change(&open_uri, 4, second.clone())
+            .expect("the open doc accepts the change");
+        let after = backend.file_text_snapshots_for(&uris).await;
+        let snapshot = &after[&open_uri];
+        assert!(Arc::ptr_eq(&snapshot.text, &second));
+        assert_eq!(snapshot.content_hash, content_hash(&second));
+        assert_ne!(snapshot.content_hash, content_hash(&first));
+        assert_eq!(snapshot.version, Some(4));
     }
 
     #[tokio::test]
