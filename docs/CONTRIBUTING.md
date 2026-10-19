@@ -175,6 +175,8 @@ the behavior that actually runs it.
 | `scripts/build/host-test-discovery.mjs` | Stay | It imports the real `.vscode-test.mjs` module and checks its test list from Node; reimplementing that config loading in Python would duplicate JavaScript behavior. |
 | `.vscode-test.mjs` | Stay | `vscode-test` discovers this conventional JavaScript config directly; migrating it would require bypassing that runner entry point. |
 | `eslint.config.mjs` | Stay | ESLint's flat config is a native JavaScript module that imports ESLint and TypeScript ESLint configuration objects. |
+| `build.sh` | Stay | The Unix entry point forwards arguments to the shared Node-to-Python launcher, preserving the established `./build.sh <command>` interface. |
+| `build.cmd` | Stay | The Windows entry point forwards arguments to the same launcher, preserving the established `build.cmd <command>` interface. |
 
 The Python implementation and its tests remain covered by the Python
 toolchain described above; these decisions only cover the Node-facing glue
