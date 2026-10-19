@@ -565,6 +565,58 @@ pub(crate) struct AliasKeyCandidate {
     pub(crate) pattern_index: usize,
 }
 
+/// One file's alias-key sites with the candidate buckets they fall into. The
+/// pattern matching is done here so it can run off the cache, which only has to
+/// merge the result in.
+pub(crate) struct FileAliasSites {
+    file: Arc<str>,
+    sites: Vec<AliasKeySite>,
+    per_instance: HashMap<(String, String), Vec<AliasKeyCandidate>>,
+}
+
+impl FileAliasSites {
+    pub(crate) fn new(
+        file_uri: &str,
+        sites: Vec<AliasKeySite>,
+        patterns: &[TypePatternAlias],
+    ) -> Self {
+        let file: Arc<str> = Arc::from(file_uri);
+        let mut per_instance: HashMap<_, Vec<AliasKeyCandidate>> = HashMap::new();
+        if !patterns.is_empty() {
+            let mut grouped: HashMap<&str, Vec<usize>> = HashMap::new();
+            for (site_index, site) in sites.iter().enumerate() {
+                grouped.entry(&site.key).or_default().push(site_index);
+            }
+            for (key, site_indices) in grouped {
+                for (pattern_index, pattern) in patterns.iter().enumerate() {
+                    let Some(middle) = strip_affix(key, &pattern.prefix, &pattern.suffix) else {
+                        continue;
+                    };
+                    let key = (pattern.type_name.clone(), middle.to_ascii_lowercase());
+                    per_instance
+                        .entry(key)
+                        .or_default()
+                        .extend(site_indices.iter().map(|&site_index| AliasKeyCandidate {
+                            file: Arc::clone(&file),
+                            site_index,
+                            pattern_index,
+                        }));
+                }
+            }
+        }
+        for candidates in per_instance.values_mut() {
+            // Restore source/pattern order across case-folded and overlapping groups.
+            candidates
+                .sort_unstable_by_key(|candidate| (candidate.site_index, candidate.pattern_index));
+        }
+        Self {
+            file,
+            sites,
+            per_instance,
+        }
+    }
+}
+
 impl AliasKeyCache {
     pub(crate) fn remove_file(&mut self, file_uri: &str) {
         self.sites.remove(file_uri);
@@ -587,39 +639,21 @@ impl AliasKeyCache {
         sites: Vec<AliasKeySite>,
         patterns: &[TypePatternAlias],
     ) -> Vec<(String, String)> {
-        self.remove_file(file_uri);
+        self.merge_prepared(FileAliasSites::new(file_uri, sites, patterns))
+    }
+
+    pub(crate) fn merge_prepared(&mut self, prepared: FileAliasSites) -> Vec<(String, String)> {
+        let FileAliasSites {
+            file,
+            sites,
+            per_instance,
+        } = prepared;
+        self.remove_file(&file);
         if sites.is_empty() {
             return Vec::new();
         }
-        let file: Arc<str> = Arc::from(file_uri);
-        let mut grouped: HashMap<&str, Vec<usize>> = HashMap::new();
-        if !patterns.is_empty() {
-            for (site_index, site) in sites.iter().enumerate() {
-                grouped.entry(&site.key).or_default().push(site_index);
-            }
-        }
-        let mut per_instance: HashMap<_, Vec<AliasKeyCandidate>> = HashMap::new();
-        for (key, site_indices) in grouped {
-            for (pattern_index, pattern) in patterns.iter().enumerate() {
-                let Some(middle) = strip_affix(key, &pattern.prefix, &pattern.suffix) else {
-                    continue;
-                };
-                let key = (pattern.type_name.clone(), middle.to_ascii_lowercase());
-                per_instance
-                    .entry(key)
-                    .or_default()
-                    .extend(site_indices.iter().map(|&site_index| AliasKeyCandidate {
-                        file: Arc::clone(&file),
-                        site_index,
-                        pattern_index,
-                    }));
-            }
-        }
         let mut keys = Vec::with_capacity(per_instance.len());
         for (key, mut candidates) in per_instance {
-            // Restore source/pattern order across case-folded and overlapping groups.
-            candidates
-                .sort_unstable_by_key(|candidate| (candidate.site_index, candidate.pattern_index));
             self.by_instance
                 .entry(key.clone())
                 .and_modify(|existing| existing.append(&mut candidates))

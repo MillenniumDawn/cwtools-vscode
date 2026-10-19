@@ -107,6 +107,12 @@ pub struct SourceCacheKey {
 /// Capture the path, mtime, and size key used for a no-read cache lookup.
 pub fn source_cache_key(path: &Path) -> Option<SourceCacheKey> {
     let metadata = fs::metadata(path).ok()?;
+    Some(source_cache_key_from_metadata(path, &metadata))
+}
+
+/// [`source_cache_key`] from the `fs::metadata` of `path` that the caller
+/// already has, so one `stat` serves both the key and its own size check.
+pub fn source_cache_key_from_metadata(path: &Path, metadata: &fs::Metadata) -> SourceCacheKey {
     let modified = metadata
         .modified()
         .ok()
@@ -135,7 +141,7 @@ pub fn source_cache_key(path: &Path) -> Option<SourceCacheKey> {
         hash = fnv1a(&metadata.creation_time().to_le_bytes(), hash);
         hash = fnv1a(&metadata.file_attributes().to_le_bytes(), hash);
     }
-    Some(SourceCacheKey { hash })
+    SourceCacheKey { hash }
 }
 
 /// Settings fingerprint: encodes everything that changes how a file parses.
@@ -608,8 +614,46 @@ fn load_path_inner(
         return None;
     }
     let key = source_cache_key(source_path)?;
-    let (parsed, source) = load_hash(cache_dir, fingerprint, key.hash, table, load_errors)?;
-    (source_cache_key(source_path).as_ref() == Some(&key)).then_some((parsed, key, source))
+    let (parsed, source) = load_keyed(
+        cache_dir,
+        fingerprint,
+        source_path,
+        &key,
+        table,
+        load_errors,
+    )?;
+    Some((parsed, key, source))
+}
+
+/// Load the entry for `key`, then re-stat the source: a file that changed while
+/// the entry was read no longer matches the key it was filed under.
+fn load_keyed(
+    cache_dir: &Path,
+    fingerprint: u64,
+    source_path: &Path,
+    key: &SourceCacheKey,
+    table: &StringTable,
+    load_errors: bool,
+) -> Option<(ParsedFile, Option<SourceMeta>)> {
+    let loaded = load_hash(cache_dir, fingerprint, key.hash, table, load_errors)?;
+    (source_cache_key(source_path).as_ref() == Some(key)).then_some(loaded)
+}
+
+/// [`load_path`] for a caller that already has `key`, taken from the source's
+/// current metadata. It stats the source once, after the read, to confirm the
+/// key still holds, where [`load_path`] also stats it up front.
+pub fn load_path_with_key(
+    cache_dir: &Path,
+    fingerprint: u64,
+    source_path: &Path,
+    key: &SourceCacheKey,
+    table: &StringTable,
+) -> Option<(ParsedFile, SourceMeta)> {
+    if !PATH_METADATA_CACHE_SUPPORTED {
+        return None;
+    }
+    let (parsed, source) = load_keyed(cache_dir, fingerprint, source_path, key, table, true)?;
+    Some((parsed, source?))
 }
 
 /// Load a source's parse and stored [`SourceMeta`] by its metadata key, without
@@ -1114,6 +1158,76 @@ mod tests {
         assert_eq!(key, source_key);
         assert_eq!(loaded, stored);
         assert_eq!(loaded.content_hash, content_hash(text));
+    }
+
+    #[test]
+    fn a_key_from_held_metadata_matches_the_key_that_stats_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, "a = 1\n").unwrap();
+
+        let metadata = fs::metadata(&source).unwrap();
+        assert_eq!(
+            Some(source_cache_key_from_metadata(&source, &metadata)),
+            source_cache_key(&source)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_keyed_load_hits_and_returns_the_stored_source_meta() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.txt");
+        let text = "a = 1 # cwtools-ignore CW100\n";
+        fs::write(&source, text).unwrap();
+        let table = StringTable::new();
+        let fp = 14;
+        validate_or_clear(tmp.path(), fp).unwrap();
+        let parsed = parse_string(text, &table);
+        let stored = SourceMeta::new(text, HashMap::from([(1, codes(["cw100"]))]));
+        let source_key = source_cache_key(&source).unwrap();
+        store_path(
+            tmp.path(),
+            fp,
+            &source,
+            &source_key,
+            &parsed,
+            &stored,
+            &table,
+        );
+
+        let (_, loaded) =
+            load_path_with_key(tmp.path(), fp, &source, &source_key, &table).expect("keyed hit");
+        assert_eq!(loaded, stored);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_keyed_load_misses_a_source_changed_since_the_key_was_taken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, "a = 1\n").unwrap();
+        let table = StringTable::new();
+        let fp = 15;
+        validate_or_clear(tmp.path(), fp).unwrap();
+        let parsed = parse_string("a = 1\n", &table);
+        let source_key = source_cache_key(&source).unwrap();
+        store_path(
+            tmp.path(),
+            fp,
+            &source,
+            &source_key,
+            &parsed,
+            &meta("a = 1\n"),
+            &table,
+        );
+        assert!(load_path_with_key(tmp.path(), fp, &source, &source_key, &table).is_some());
+
+        fs::write(&source, "a = 200\n").unwrap();
+        assert!(
+            load_path_with_key(tmp.path(), fp, &source, &source_key, &table).is_none(),
+            "the entry is still on disk under the old key, but the source no longer matches it"
+        );
     }
 
     #[cfg(unix)]

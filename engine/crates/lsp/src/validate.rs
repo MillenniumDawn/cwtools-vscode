@@ -715,6 +715,31 @@ impl Backend {
                 cwtools_validation::subtype_membership_for_instance,
             )
         });
+        self.replace_indexed_file(uri, parsed_version, |info| {
+            if let (Some(ruleset), Some(collected)) = (ruleset.as_ref(), collected) {
+                info.index_file_with_precomputed_instances(
+                    uri,
+                    parsed,
+                    &self.state.string_table,
+                    ruleset,
+                    logical_path,
+                    collected.instances,
+                    collected.subtype_instances,
+                    base_game,
+                );
+            }
+        })
+    }
+
+    /// Swap `uri`'s index entry for whatever `index` puts back, under one
+    /// `info_service` write lock. Returns whether alias publication requires an
+    /// unlocked overlay refresh.
+    pub(crate) fn replace_indexed_file(
+        &self,
+        uri: &str,
+        parsed_version: Option<i32>,
+        index: impl FnOnce(&mut cwtools_info::InfoService),
+    ) -> bool {
         if let Some(version) = parsed_version
             && self
                 .state
@@ -729,18 +754,7 @@ impl Backend {
         let exports_before = info.export_fingerprint(uri);
         info.begin_file_replacement(uri);
         info.clear_file(uri);
-        if let (Some(ruleset), Some(collected)) = (ruleset.as_ref(), collected) {
-            info.index_file_with_precomputed_instances(
-                uri,
-                parsed,
-                &self.state.string_table,
-                ruleset,
-                logical_path,
-                collected.instances,
-                collected.subtype_instances,
-                base_game,
-            );
-        }
+        index(&mut info);
         info.finish_file_replacement(uri);
         let exports_changed = info.export_fingerprint(uri) != exports_before;
         drop(info);
