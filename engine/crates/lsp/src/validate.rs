@@ -1856,6 +1856,8 @@ impl Backend {
                         scope_checks,
                         var_checks,
                     );
+                    #[cfg(test)]
+                    self.hold(crate::state::HoldPoint::ValidatePrepared);
                     let track = needs_use_tracking(ruleset, game);
                     let (mut errs, used) = if track {
                         let (errs, used) = validate_prepared_tracking_uses(&parsed, uri, &prepared);
@@ -3097,6 +3099,7 @@ mod ignored_tests {
     use super::*;
     use std::future::Future;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
 
     use crate::state::ParsedDoc;
     use crate::testing::{test_backend, test_backend_with_socket};
@@ -4373,6 +4376,181 @@ mod ignored_tests {
                 .contains_key(ignored_uri.as_str()),
             "ignored watched file must not retain signature"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn superseded_validation_waiting_for_a_permit_skips_stale_text() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/ideas/edit.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        open_stale_publication_doc(&backend, &uri, "obsolete = {");
+        let held = backend
+            .state
+            .validation_permits
+            .acquire_many(2)
+            .await
+            .unwrap();
+        let stale =
+            backend.debounced_validate(uri.clone(), 1, 0, crate::ValidateTrigger::DidChange);
+        tokio::pin!(stale);
+        assert!(futures_util::poll!(&mut stale).is_pending());
+
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::from("current = { cost = 1 }"))
+            .unwrap();
+        drop(held);
+        tokio::time::timeout(std::time::Duration::from_secs(5), stale)
+            .await
+            .unwrap();
+        assert!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .unwrap()
+                .ast
+                .is_none()
+        );
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.debounced_validate(uri.clone(), 2, 0, crate::ValidateTrigger::DidChange),
+        )
+        .await
+        .expect("the current validation must finish");
+        let mut publications = Vec::new();
+        while let Some(Some(message)) = socket.next().now_or_never() {
+            if message.method() == "textDocument/publishDiagnostics" {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(message.params().cloned().unwrap()).unwrap();
+                publications.push(params);
+            }
+        }
+        assert_eq!(publications.len(), 1);
+        assert_eq!(publications[0].uri.as_str(), uri);
+        assert_eq!(publications[0].version, Some(2));
+        assert!(publications[0].diagnostics.is_empty());
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .unwrap()
+                .ast_version,
+            Some(2)
+        );
+        assert_eq!(backend.state.validation_permits.available_permits(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn superseded_in_flight_validation_publishes_only_the_latest_edit() {
+        use crate::state::{HoldGate, HoldPoint};
+
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/ideas/edit.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset =
+            Some(Arc::new(cwtools_rules::rules_types::RuleSet::default()));
+        let spare = backend.state.validation_permits.acquire().await.unwrap();
+        let gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        backend
+            .did_open_impl(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: Url::parse(&uri).unwrap(),
+                    language_id: "paradox".into(),
+                    version: 1,
+                    text: "obsolete = {".into(),
+                },
+            })
+            .await;
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("the first validation must reach its synchronous phase");
+        }
+        let first = backend
+            .state
+            .debounce_handles
+            .lock()
+            .get(&uri)
+            .unwrap()
+            .abort
+            .clone();
+        let change = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.did_change_impl(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: Url::parse(&uri).unwrap(),
+                    version: 2,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: "current = { cost = 1 }".into(),
+                }],
+            }),
+        )
+        .await;
+        let first_still_running = !first.is_finished();
+        let permits_while_held = backend.state.validation_permits.available_permits();
+        gate.release();
+        change.expect("accepting a new edit must not wait for synchronous validation");
+        assert!(
+            first_still_running,
+            "the stale validation must still be parked"
+        );
+        assert_eq!(
+            permits_while_held, 0,
+            "both validation permits must be in use"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !first.is_finished() || !backend.state.debounce_handles.lock().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("validation permits and debounce tasks must recover");
+
+        let mut publications = Vec::new();
+        while let Some(Some(message)) = socket.next().now_or_never() {
+            if message.method() == "textDocument/publishDiagnostics" {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(message.params().cloned().unwrap()).unwrap();
+                publications.push(params);
+            }
+        }
+        assert_eq!(publications.len(), 1);
+        assert_eq!(publications[0].uri.as_str(), uri);
+        assert_eq!(publications[0].version, Some(2));
+        assert!(publications[0].diagnostics.is_empty());
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .unwrap()
+                .ast_version,
+            Some(2)
+        );
+        assert_eq!(backend.state.validation_permits.available_permits(), 1);
+        drop(spare);
+        assert_eq!(backend.state.validation_permits.available_permits(), 2);
     }
 
     /// #477: a watched batch must take a validation slot per file, not per

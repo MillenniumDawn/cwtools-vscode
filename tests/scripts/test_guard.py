@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from types import ModuleType
@@ -174,6 +175,71 @@ def test_run_guard_compare_prints_drift_table_and_cleans_worktree(
     assert f"guard: artifacts in {work}" in output
     assert not (work / "comparison-worktree").exists()
     assert (work / "drift.diff").is_file()
+
+
+@pytest.mark.parametrize("compare", [False, True])
+@pytest.mark.parametrize("inherit_cache", [False, True])
+def test_validate_runs_use_separate_empty_caches(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    compare: bool,
+    inherit_cache: bool,
+) -> None:
+    args = _compare_args(tmp_path, REVISION) if compare else _config_args(tmp_path)
+    config = guard.build_config(args, {})
+    (tmp_path / "baseline.csv").write_text(
+        "file,line,severity,code,message\n", encoding="utf-8"
+    )
+    work = tmp_path / "work"
+    _fixed_work_dir(monkeypatch, guard, work)
+    monkeypatch.setattr(guard, "describe", lambda _directory: REVISION)
+    inherited = tmp_path / "user-cache"
+    inherited.mkdir()
+    sentinel = inherited / "keep"
+    sentinel.write_bytes(b"user cache")
+    for key in ("XDG_CACHE_HOME", "LOCALAPPDATA"):
+        if inherit_cache:
+            monkeypatch.setenv(key, str(inherited))
+        else:
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CWTOOLS_CACHE_TEST", "preserved")
+    original_env = dict(os.environ)
+    caches: list[Path] = []
+
+    def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[0] == "git":
+            if "add" in command:
+                binary = work / "comparison-worktree/engine/target/release/cwtools"
+                binary.parent.mkdir(parents=True)
+                binary.write_text("comparison", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout=f"{REVISION}\n")
+        if command[0] == "cargo":
+            return subprocess.CompletedProcess(command, 0)
+
+        assert command[1] == "validate"
+        env = cast(dict[str, str], kwargs["env"])
+        assert env["CWTOOLS_CACHE_TEST"] == "preserved"
+        cache = Path(env["XDG_CACHE_HOME"])
+        assert env["LOCALAPPDATA"] == str(cache)
+        assert cache.is_relative_to(work)
+        assert cache.is_dir()
+        assert not list(cache.iterdir())
+        assert cache not in caches
+        caches.append(cache)
+        (cache / "parsed-by-this-binary").write_text(command[0], encoding="utf-8")
+        output = Path(command[command.index("--output-file") + 1])
+        output.write_text("file,line,severity,code,message,hash\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+
+    assert guard.run_guard(config) == 0
+    assert len(caches) == (2 if compare else 1)
+    assert dict(os.environ) == original_env
+    assert list(inherited.iterdir()) == [sentinel]
+    assert sentinel.read_bytes() == b"user cache"
+    assert not work.exists()
 
 
 def test_run_guard_missing_pins_are_compatible(

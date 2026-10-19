@@ -1,0 +1,530 @@
+{
+  "metadata": {
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "cpus": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "cpu_max": "400000 100000",
+    "memory_max": "17179869184",
+    "sample_interval_s": 0.02,
+    "baseline_commit": "bffea3567c534d21c995fa2adb957aea78efef55",
+    "candidate_commit": "980cb79a406bc678a2ec4175904002c5b18ec457",
+    "binary_sha256": {
+      "/workspace/cwtools-evidence/baseline-bin/cwtools_lsp-1fe986a1908145ee": "6b642a26dbff3d95c4f6c2436f4d4f86b17308972bc273aaa961f028ad993b6c",
+      "/workspace/cwtools-evidence/baseline-bin/cwtools": "d2b4decb35f2c787a297f63d47aee9d43d353e66e89202e6a453d8a60035c78a",
+      "/workspace/cwtools-evidence/baseline-bin/lsp-7045500f040f0a54": "1d24648ec315ef7aa584d239d89af48542c8e661482e6abe0da6afb9d1159afb",
+      "/workspace/cwtools-evidence/baseline-bin/cwtools-server": "c526cd5beeee39525b17986faef4b07a9a69b47f9604b84250d1bf3042a88fcc",
+      "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54": "1d24648ec315ef7aa584d239d89af48542c8e661482e6abe0da6afb9d1159afb",
+      "/workspace/cwtools-evidence/candidate-bin/cwtools-server": "ec76cbd909be00613739a83e04faed9f07104ea42b68600cc28c33a8f674dfde"
+    },
+    "memory_note": "Sampled summed RSS includes shared pages once per process; not physical RAM. Short-lived peaks may be missed.",
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "profile": "cargo test debug, locked dependencies, no RUSTFLAGS overrides",
+    "integration_tests": 253,
+    "fixture_note": "Identical compiled integration test binary; per-test synthetic fixtures and scratch home/cache. Server executable selected by CARGO_BIN_EXE_cwtools-server.",
+    "harness_sha256": "9efb3c18f4b299b30a2c9d61e580ea0cc8031f18decade91421a15cd5606e704",
+    "timing_note": "Wall time includes launch, sampling, and final polling. Effective sample cadence is 20ms plus /proc scan time. Cgroup CPU includes sampler and other cgroup activity.",
+    "cgroup_memory_events_at_completion": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    },
+    "ambient_runtime_flags": {
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null,
+      "RUST_LOG": "codex_exec_server=info,codex_cli=info,error",
+      "CWTOOLS_PROFILE": null,
+      "RUST_TEST_THREADS": null
+    }
+  },
+  "warmups": [
+    {
+      "label": "base4",
+      "run": "warmup",
+      "threads": 4,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/baseline-bin/lsp-7045500f040f0a54",
+        "--test-threads=4"
+      ],
+      "elapsed_s": 21.258285971000078,
+      "peak_summed_rss_bytes": 134340608,
+      "peak_server_summed_rss_bytes": 116953088,
+      "peak_server_processes": 4,
+      "samples": 976,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 14978224,
+        "user_usec": 10597341,
+        "system_usec": 4380884,
+        "nice_usec": 0,
+        "nr_periods": 213,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate4",
+      "run": "warmup",
+      "threads": 4,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=4"
+      ],
+      "elapsed_s": 21.108038367000063,
+      "peak_summed_rss_bytes": 133517312,
+      "peak_server_summed_rss_bytes": 115458048,
+      "peak_server_processes": 4,
+      "samples": 987,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 13992430,
+        "user_usec": 10173739,
+        "system_usec": 3818690,
+        "nice_usec": 0,
+        "nr_periods": 211,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate16",
+      "run": "warmup",
+      "threads": 16,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=16"
+      ],
+      "elapsed_s": 7.964137554999979,
+      "peak_summed_rss_bytes": 443228160,
+      "peak_server_summed_rss_bytes": 420954112,
+      "peak_server_processes": 16,
+      "samples": 364,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 15778589,
+        "user_usec": 11725221,
+        "system_usec": 4053369,
+        "nice_usec": 0,
+        "nr_periods": 79,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate32",
+      "run": "warmup",
+      "threads": 32,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=32"
+      ],
+      "elapsed_s": 6.548030632000064,
+      "peak_summed_rss_bytes": 812457984,
+      "peak_server_summed_rss_bytes": 787542016,
+      "peak_server_processes": 32,
+      "samples": 293,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 18725172,
+        "user_usec": 14332185,
+        "system_usec": 4392986,
+        "nice_usec": 0,
+        "nr_periods": 66,
+        "nr_throttled": 22,
+        "throttled_usec": 108352,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    }
+  ],
+  "runs": [
+    {
+      "label": "base4",
+      "run": 1,
+      "threads": 4,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/baseline-bin/lsp-7045500f040f0a54",
+        "--test-threads=4"
+      ],
+      "elapsed_s": 21.368338274000052,
+      "peak_summed_rss_bytes": 129568768,
+      "peak_server_summed_rss_bytes": 112951296,
+      "peak_server_processes": 4,
+      "samples": 995,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 14772632,
+        "user_usec": 10535897,
+        "system_usec": 4236735,
+        "nice_usec": 0,
+        "nr_periods": 213,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate4",
+      "run": 1,
+      "threads": 4,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=4"
+      ],
+      "elapsed_s": 21.54028317899997,
+      "peak_summed_rss_bytes": 132169728,
+      "peak_server_summed_rss_bytes": 114880512,
+      "peak_server_processes": 4,
+      "samples": 985,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 15478159,
+        "user_usec": 11044114,
+        "system_usec": 4434046,
+        "nice_usec": 0,
+        "nr_periods": 216,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate16",
+      "run": 1,
+      "threads": 16,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=16"
+      ],
+      "elapsed_s": 7.5464341140000215,
+      "peak_summed_rss_bytes": 443244544,
+      "peak_server_summed_rss_bytes": 421081088,
+      "peak_server_processes": 16,
+      "samples": 341,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 13903506,
+        "user_usec": 10251668,
+        "system_usec": 3651838,
+        "nice_usec": 0,
+        "nr_periods": 75,
+        "nr_throttled": 1,
+        "throttled_usec": 1757,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate32",
+      "run": 1,
+      "threads": 32,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=32"
+      ],
+      "elapsed_s": 6.35640348000004,
+      "peak_summed_rss_bytes": 826224640,
+      "peak_server_summed_rss_bytes": 799809536,
+      "peak_server_processes": 32,
+      "samples": 270,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 16813202,
+        "user_usec": 13053663,
+        "system_usec": 3759538,
+        "nice_usec": 0,
+        "nr_periods": 64,
+        "nr_throttled": 18,
+        "throttled_usec": 98677,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate32",
+      "run": 2,
+      "threads": 32,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=32"
+      ],
+      "elapsed_s": 6.010966577999966,
+      "peak_summed_rss_bytes": 833478656,
+      "peak_server_summed_rss_bytes": 808534016,
+      "peak_server_processes": 32,
+      "samples": 241,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 15223462,
+        "user_usec": 11401940,
+        "system_usec": 3821521,
+        "nice_usec": 0,
+        "nr_periods": 60,
+        "nr_throttled": 7,
+        "throttled_usec": 18707,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate16",
+      "run": 2,
+      "threads": 16,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=16"
+      ],
+      "elapsed_s": 7.5744828130000315,
+      "peak_summed_rss_bytes": 445313024,
+      "peak_server_summed_rss_bytes": 422879232,
+      "peak_server_processes": 16,
+      "samples": 347,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 13740170,
+        "user_usec": 9789582,
+        "system_usec": 3950589,
+        "nice_usec": 0,
+        "nr_periods": 76,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate4",
+      "run": 2,
+      "threads": 4,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=4"
+      ],
+      "elapsed_s": 21.420059589999937,
+      "peak_summed_rss_bytes": 129847296,
+      "peak_server_summed_rss_bytes": 113676288,
+      "peak_server_processes": 4,
+      "samples": 1001,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 15005519,
+        "user_usec": 11017999,
+        "system_usec": 3987519,
+        "nice_usec": 0,
+        "nr_periods": 214,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "base4",
+      "run": 2,
+      "threads": 4,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/baseline-bin/lsp-7045500f040f0a54",
+        "--test-threads=4"
+      ],
+      "elapsed_s": 21.273793561999923,
+      "peak_summed_rss_bytes": 133574656,
+      "peak_server_summed_rss_bytes": 117379072,
+      "peak_server_processes": 4,
+      "samples": 973,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 13913597,
+        "user_usec": 9890254,
+        "system_usec": 4023344,
+        "nice_usec": 0,
+        "nr_periods": 213,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "base4",
+      "run": 3,
+      "threads": 4,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/baseline-bin/lsp-7045500f040f0a54",
+        "--test-threads=4"
+      ],
+      "elapsed_s": 21.322043691999852,
+      "peak_summed_rss_bytes": 132636672,
+      "peak_server_summed_rss_bytes": 114290688,
+      "peak_server_processes": 4,
+      "samples": 963,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 14273378,
+        "user_usec": 10248501,
+        "system_usec": 4024877,
+        "nice_usec": 0,
+        "nr_periods": 213,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate4",
+      "run": 3,
+      "threads": 4,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=4"
+      ],
+      "elapsed_s": 21.01221707400009,
+      "peak_summed_rss_bytes": 135528448,
+      "peak_server_summed_rss_bytes": 116768768,
+      "peak_server_processes": 4,
+      "samples": 963,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 14206305,
+        "user_usec": 10318680,
+        "system_usec": 3887624,
+        "nice_usec": 0,
+        "nr_periods": 210,
+        "nr_throttled": 0,
+        "throttled_usec": 0,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate16",
+      "run": 3,
+      "threads": 16,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=16"
+      ],
+      "elapsed_s": 7.380270397999993,
+      "peak_summed_rss_bytes": 445591552,
+      "peak_server_summed_rss_bytes": 422260736,
+      "peak_server_processes": 16,
+      "samples": 338,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 13117193,
+        "user_usec": 9521416,
+        "system_usec": 3595777,
+        "nice_usec": 0,
+        "nr_periods": 74,
+        "nr_throttled": 2,
+        "throttled_usec": 1078,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    },
+    {
+      "label": "candidate32",
+      "run": 3,
+      "threads": 32,
+      "command": [
+        "taskset",
+        "-c",
+        "0,1,2,3",
+        "/workspace/cwtools-evidence/candidate-bin/lsp-7045500f040f0a54",
+        "--test-threads=32"
+      ],
+      "elapsed_s": 5.747247281999989,
+      "peak_summed_rss_bytes": 832786432,
+      "peak_server_summed_rss_bytes": 808075264,
+      "peak_server_processes": 32,
+      "samples": 260,
+      "exit_code": 0,
+      "result": "test result: ok. 253 passed; 0 failed;",
+      "cgroup_cpu_delta": {
+        "usage_usec": 13367290,
+        "user_usec": 10239189,
+        "system_usec": 3128102,
+        "nice_usec": 0,
+        "nr_periods": 57,
+        "nr_throttled": 14,
+        "throttled_usec": 86666,
+        "nr_bursts": 0,
+        "burst_usec": 0
+      }
+    }
+  ]
+}

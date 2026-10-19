@@ -7,6 +7,11 @@
 * Collect a file's `set_variable` definitions and its value-set members in one walk instead of two, in the language server's per-file index and the CLI's index, which now share `collect_variables_and_value_sets` with the vanilla index. The server also stops re-walking a file for `@` variables when indexing already found none. Results and their order are unchanged. (#481)
 * Stop reading and hashing every source file on an LSP start with a warm parse cache. The `.cwe` sidecar now also stores the source's content hash and its inline-ignore codes, so a metadata hit takes both from the cache and never opens the file, and inline scripts reload from the cache the same way. The sidecar format (`ERRORS_FORMAT_VERSION`) moves to 3, so an existing `.cwe` is a miss and each file is parsed once more after upgrading. Windows keeps its content-hash lookup, because stable `std` has no file id or ChangeTime to build a sound metadata key from; `PROFILING.md` says so. (#867)
 
+#### Tooling
+
+* Give each diagnostics guard validation binary a separate empty parse cache, keeping comparisons independent of the caller's cache and of each other. (#1055)
+* Cover edit supersession while validation waits for a permit and while synchronous validation is in flight, checking latest-only diagnostics, AST replacement, task cleanup and permit recovery. (#868)
+
 ### 4.0.0
 
 #### Engine
