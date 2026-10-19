@@ -14,6 +14,16 @@ pub struct CachedFile {
 #[rkyv(derive(Debug))]
 pub struct CachedErrors {
     pub errors: Vec<CachedParseError>,
+    pub source: Option<CachedSource>,
+}
+
+/// What a scan needs from a source's text besides its parse, so a metadata hit
+/// can skip reading the file. Ignore lines and codes are sorted.
+#[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[rkyv(derive(Debug))]
+pub struct CachedSource {
+    pub content_hash: u64,
+    pub inline_ignored: Vec<(u32, Vec<String>)>,
 }
 
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]

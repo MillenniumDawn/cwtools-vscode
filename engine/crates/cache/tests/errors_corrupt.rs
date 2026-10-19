@@ -1,6 +1,6 @@
 //! Header validation and corruption handling for `.cwe` sidecars.
 
-use cwtools_cache::cache_format::{CachedErrors, CachedParseError};
+use cwtools_cache::cache_format::{CachedErrors, CachedParseError, CachedSource};
 use cwtools_cache::io::{self, CacheError};
 
 mod common;
@@ -8,13 +8,17 @@ mod common;
 use common::{is_bad_header, written_bytes};
 
 const MAGIC: [u8; 4] = *b"CWE\x00";
-const FORMAT_VERSION: u8 = 2;
+const FORMAT_VERSION: u8 = 3;
 const HEADER_LEN: usize = MAGIC.len() + 1;
 const BAD_HEADER: &str = "incompatible or missing error-cache header";
 
 fn sample_bytes() -> Vec<u8> {
     let cached = CachedErrors {
         errors: vec![CachedParseError::Pos(3, 4, "invalid value".into())],
+        source: Some(CachedSource {
+            content_hash: 7,
+            inline_ignored: vec![(1, vec!["cw100".into()])],
+        }),
     };
     written_bytes(".cwe", |path| {
         io::serialize_errors_to_file(&cached, path).unwrap();
@@ -33,7 +37,12 @@ fn valid_sidecar_round_trips_errors() {
     assert!(bytes.starts_with(&MAGIC));
     assert_eq!(bytes[MAGIC.len()], FORMAT_VERSION);
 
-    let parsed = cwtools_cache::convert::cached_errors_to_parse(read(&bytes).unwrap());
+    let cached = read(&bytes).unwrap();
+    let source = cached.source.as_ref().expect("the sample carries a source");
+    assert_eq!(source.content_hash, 7);
+    assert_eq!(source.inline_ignored, [(1, vec!["cw100".to_string()])]);
+
+    let parsed = cwtools_cache::convert::cached_errors_to_parse(cached);
     assert!(matches!(
         parsed.as_slice(),
         [cwtools_parser::ast::ParseError::Pos(3, 4, message)] if message == "invalid value"

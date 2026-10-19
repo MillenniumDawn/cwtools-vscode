@@ -124,12 +124,14 @@ fn bench_parse_cache(c: &mut Criterion) {
             };
             if let Ok(text) = std::fs::read_to_string(path) {
                 let parsed = parse_string(&text, &table);
+                let source = workspace::SourceMeta::new(&text, Default::default());
                 workspace::store_path(
                     cache.path(),
                     fingerprint,
                     path,
                     &source_key,
                     &parsed,
+                    &source,
                     &table,
                 );
                 stored += 1;

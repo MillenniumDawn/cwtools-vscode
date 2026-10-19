@@ -1,6 +1,8 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::cache_format::CachedSource;
 use crate::convert::{
     archived_to_arena, arena_to_cached, cached_errors_to_parse, errors_to_cached,
 };
@@ -23,6 +25,7 @@ use cwtools_string_table::string_table::StringTable;
 /// now suppresses, so unchanged files receive the current diagnostics.
 const CACHE_VERSION: u32 = 11;
 
+// Off on Windows: stable std has no file id or ChangeTime, so a restored mtime hides an edit.
 pub const PATH_METADATA_CACHE_SUPPORTED: bool = cfg!(unix);
 
 // ── Fingerprinting ──────────────────────────────────────────────────────────
@@ -44,6 +47,55 @@ const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 /// Content hash of a file's text. FNV-1a is fast for short-to-medium files and
 pub fn content_hash(text: &str) -> u64 {
     fnv1a(text.as_bytes(), FNV_OFFSET)
+}
+
+/// A source's content hash and inline-ignore codes, stored beside its parse so a
+/// metadata hit does not have to read the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceMeta {
+    pub content_hash: u64,
+    pub inline_ignored: HashMap<u32, HashSet<String>>,
+}
+
+impl SourceMeta {
+    pub fn new(text: &str, inline_ignored: HashMap<u32, HashSet<String>>) -> Self {
+        Self {
+            content_hash: content_hash(text),
+            inline_ignored,
+        }
+    }
+}
+
+impl From<&SourceMeta> for CachedSource {
+    fn from(meta: &SourceMeta) -> Self {
+        let mut inline_ignored: Vec<(u32, Vec<String>)> = meta
+            .inline_ignored
+            .iter()
+            .map(|(line, codes)| {
+                let mut codes: Vec<String> = codes.iter().cloned().collect();
+                codes.sort_unstable();
+                (*line, codes)
+            })
+            .collect();
+        inline_ignored.sort_unstable_by_key(|(line, _)| *line);
+        Self {
+            content_hash: meta.content_hash,
+            inline_ignored,
+        }
+    }
+}
+
+impl From<CachedSource> for SourceMeta {
+    fn from(cached: CachedSource) -> Self {
+        Self {
+            content_hash: cached.content_hash,
+            inline_ignored: cached
+                .inline_ignored
+                .into_iter()
+                .map(|(line, codes)| (line, codes.into_iter().collect()))
+                .collect(),
+        }
+    }
 }
 
 /// Source metadata captured before reading and parsing a file.
@@ -479,7 +531,7 @@ fn load_hash(
     hash: u64,
     table: &StringTable,
     load_errors: bool,
-) -> Option<ParsedFile> {
+) -> Option<(ParsedFile, Option<SourceMeta>)> {
     let dir = workspace_cache_dir(cache_dir, fingerprint);
     let path = file_cache_path(&dir, hash);
     let (arena, root_children) =
@@ -490,20 +542,23 @@ fn load_hash(
                 return None;
             }
         };
-    let errors = if load_errors {
+    let (errors, source) = if load_errors {
         let error_path = error_cache_path(&dir, hash);
         match read_errors_from_file(&error_path) {
-            Ok(errors) => cached_errors_to_parse(errors),
+            Ok(mut errors) => {
+                let source = errors.source.take().map(SourceMeta::from);
+                (cached_errors_to_parse(errors), source)
+            }
             Err(error) => {
                 log_cache_read_error(&error_path, &error);
                 return None;
             }
         }
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
     // Rehydrated from the on-disk cache through the base table, so no overlay.
-    Some(ParsedFile::new(arena, root_children, errors))
+    Some((ParsedFile::new(arena, root_children, errors), source))
 }
 
 fn log_cache_read_error(path: &Path, error: &crate::io::CacheError) {
@@ -523,6 +578,7 @@ fn store_hash(
     fingerprint: u64,
     hash: u64,
     parsed: &ParsedFile,
+    source: Option<&SourceMeta>,
     table: &StringTable,
 ) {
     let dir = workspace_cache_dir(cache_dir, fingerprint);
@@ -533,7 +589,8 @@ fn store_hash(
         return;
     }
     let error_path = error_cache_path(&dir, hash);
-    if let Err(error) = serialize_errors_to_file(&errors_to_cached(&parsed.errors), &error_path) {
+    let errors = errors_to_cached(&parsed.errors, source.map(CachedSource::from));
+    if let Err(error) = serialize_errors_to_file(&errors, &error_path) {
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&error_path);
         tracing::warn!(path = %error_path.display(), error = %error, "parse error cache write failed");
@@ -546,22 +603,25 @@ fn load_path_inner(
     source_path: &Path,
     table: &StringTable,
     load_errors: bool,
-) -> Option<(ParsedFile, SourceCacheKey)> {
+) -> Option<(ParsedFile, SourceCacheKey, Option<SourceMeta>)> {
     if !PATH_METADATA_CACHE_SUPPORTED {
         return None;
     }
     let key = source_cache_key(source_path)?;
-    let parsed = load_hash(cache_dir, fingerprint, key.hash, table, load_errors)?;
-    (source_cache_key(source_path).as_ref() == Some(&key)).then_some((parsed, key))
+    let (parsed, source) = load_hash(cache_dir, fingerprint, key.hash, table, load_errors)?;
+    (source_cache_key(source_path).as_ref() == Some(&key)).then_some((parsed, key, source))
 }
 
+/// Load a source's parse and stored [`SourceMeta`] by its metadata key, without
+/// opening the source. An entry stored without a `SourceMeta` is a miss.
 pub fn load_path(
     cache_dir: &Path,
     fingerprint: u64,
     source_path: &Path,
     table: &StringTable,
-) -> Option<(ParsedFile, SourceCacheKey)> {
-    load_path_inner(cache_dir, fingerprint, source_path, table, true)
+) -> Option<(ParsedFile, SourceCacheKey, SourceMeta)> {
+    let (parsed, key, source) = load_path_inner(cache_dir, fingerprint, source_path, table, true)?;
+    Some((parsed, key, source?))
 }
 
 pub fn load_path_for_index(
@@ -570,7 +630,8 @@ pub fn load_path_for_index(
     source_path: &Path,
     table: &StringTable,
 ) -> Option<(ParsedFile, SourceCacheKey)> {
-    load_path_inner(cache_dir, fingerprint, source_path, table, false)
+    let (parsed, key, _) = load_path_inner(cache_dir, fingerprint, source_path, table, false)?;
+    Some((parsed, key))
 }
 
 /// captured before the source was read.
@@ -580,10 +641,18 @@ pub fn store_path(
     source_path: &Path,
     source_key: &SourceCacheKey,
     parsed: &ParsedFile,
+    source: &SourceMeta,
     table: &StringTable,
 ) {
     if PATH_METADATA_CACHE_SUPPORTED && source_cache_key(source_path).as_ref() == Some(source_key) {
-        store_hash(cache_dir, fingerprint, source_key.hash, parsed, table);
+        store_hash(
+            cache_dir,
+            fingerprint,
+            source_key.hash,
+            parsed,
+            Some(source),
+            table,
+        );
     }
 }
 
@@ -594,13 +663,14 @@ fn load_inner(
     table: &StringTable,
     load_errors: bool,
 ) -> Option<ParsedFile> {
-    load_hash(
+    let (parsed, _) = load_hash(
         cache_dir,
         fingerprint,
         content_hash(text),
         table,
         load_errors,
-    )
+    )?;
+    Some(parsed)
 }
 
 pub fn load(
@@ -628,7 +698,14 @@ pub fn store(
     parsed: &ParsedFile,
     table: &StringTable,
 ) {
-    store_hash(cache_dir, fingerprint, content_hash(text), parsed, table);
+    store_hash(
+        cache_dir,
+        fingerprint,
+        content_hash(text),
+        parsed,
+        None,
+        table,
+    );
 }
 
 #[cfg(test)]
@@ -898,7 +975,7 @@ mod tests {
     #[test]
     fn corrupt_sidecars_degrade_to_a_miss_and_index_load_still_hits() {
         const ERRORS_MAGIC: &[u8; 4] = b"CWE\0";
-        const ERRORS_FORMAT_VERSION: u8 = 2;
+        const ERRORS_FORMAT_VERSION: u8 = 3;
 
         let tmp = tempfile::tempdir().unwrap();
         let table = StringTable::new();
@@ -967,11 +1044,125 @@ mod tests {
         let parsed = parse_string("a = 1\n", &table);
 
         let source_key = source_cache_key(&source).unwrap();
-        store_path(tmp.path(), fp, &source, &source_key, &parsed, &table);
+        store_path(
+            tmp.path(),
+            fp,
+            &source,
+            &source_key,
+            &parsed,
+            &meta("a = 1\n"),
+            &table,
+        );
         assert!(load_path(tmp.path(), fp, &source, &table).is_some());
 
         fs::write(&source, "a = 200\n").unwrap();
         assert!(load_path(tmp.path(), fp, &source, &table).is_none());
+    }
+
+    fn meta(text: &str) -> SourceMeta {
+        SourceMeta::new(text, HashMap::new())
+    }
+
+    fn codes<const N: usize>(list: [&str; N]) -> HashSet<String> {
+        list.into_iter().map(String::from).collect()
+    }
+
+    #[test]
+    fn source_meta_is_stored_sorted_and_round_trips() {
+        let meta = SourceMeta::new(
+            "x",
+            HashMap::from([(9, codes(["cw246", "cw100"])), (2, codes([]))]),
+        );
+
+        let cached = CachedSource::from(&meta);
+
+        assert_eq!(
+            cached.inline_ignored,
+            [
+                (2, vec![]),
+                (9, vec!["cw100".to_string(), "cw246".to_string()])
+            ]
+        );
+        assert_eq!(SourceMeta::from(cached), meta);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_hit_returns_the_stored_source_meta() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.txt");
+        let text = "a = 1 # cwtools-ignore CW100\n";
+        fs::write(&source, text).unwrap();
+        let table = StringTable::new();
+        let fp = 11;
+        validate_or_clear(tmp.path(), fp).unwrap();
+        let parsed = parse_string(text, &table);
+        let stored = SourceMeta::new(text, HashMap::from([(1, codes(["cw100"]))]));
+
+        let source_key = source_cache_key(&source).unwrap();
+        store_path(
+            tmp.path(),
+            fp,
+            &source,
+            &source_key,
+            &parsed,
+            &stored,
+            &table,
+        );
+
+        let (_, key, loaded) = load_path(tmp.path(), fp, &source, &table).expect("path hit");
+        assert_eq!(key, source_key);
+        assert_eq!(loaded, stored);
+        assert_eq!(loaded.content_hash, content_hash(text));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn full_path_load_misses_a_sidecar_without_source_meta() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, "a = 1\n").unwrap();
+        let table = StringTable::new();
+        let fp = 12;
+        validate_or_clear(tmp.path(), fp).unwrap();
+        let parsed = parse_string("a = 1\n", &table);
+        let source_key = source_cache_key(&source).unwrap();
+        store_hash(tmp.path(), fp, source_key.hash, &parsed, None, &table);
+
+        assert!(load_path(tmp.path(), fp, &source, &table).is_none());
+        assert!(load_path_for_index(tmp.path(), fp, &source, &table).is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn previous_sidecar_version_is_a_clean_miss_for_a_full_path_load() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source.txt");
+        fs::write(&source, "a = 1\n").unwrap();
+        let table = StringTable::new();
+        let fp = 13;
+        validate_or_clear(tmp.path(), fp).unwrap();
+        let parsed = parse_string("a = 1\n", &table);
+        let source_key = source_cache_key(&source).unwrap();
+        store_path(
+            tmp.path(),
+            fp,
+            &source,
+            &source_key,
+            &parsed,
+            &meta("a = 1\n"),
+            &table,
+        );
+        assert!(load_path(tmp.path(), fp, &source, &table).is_some());
+
+        let dir = workspace_cache_dir(tmp.path(), fp);
+        let path = error_cache_path(&dir, source_key.hash);
+        let mut bytes = fs::read(&path).unwrap();
+        bytes[4] = 2; // the sidecar layout before it carried a `SourceMeta` (#867)
+        fs::write(&path, bytes).unwrap();
+
+        assert!(load_path(tmp.path(), fp, &source, &table).is_none());
+        assert!(load_path_for_index(tmp.path(), fp, &source, &table).is_some());
     }
 
     #[cfg(not(unix))]
@@ -986,7 +1177,15 @@ mod tests {
         let parsed = parse_string("a = 1\n", &table);
 
         let source_key = source_cache_key(&source).unwrap();
-        store_path(tmp.path(), fp, &source, &source_key, &parsed, &table);
+        store_path(
+            tmp.path(),
+            fp,
+            &source,
+            &source_key,
+            &parsed,
+            &meta("a = 1\n"),
+            &table,
+        );
         assert!(load_path(tmp.path(), fp, &source, &table).is_none());
     }
 
@@ -1002,7 +1201,15 @@ mod tests {
         validate_or_clear(tmp.path(), fp).unwrap();
         let parsed = parse_string("a = 1\n", &table);
         let source_key = source_cache_key(&source).unwrap();
-        store_path(tmp.path(), fp, &source, &source_key, &parsed, &table);
+        store_path(
+            tmp.path(),
+            fp,
+            &source,
+            &source_key,
+            &parsed,
+            &meta("a = 1\n"),
+            &table,
+        );
 
         fs::write(&source, "a = 2\n").unwrap();
         fs::File::options()
@@ -1026,7 +1233,15 @@ mod tests {
         let parsed = parse_string("a = 1\n", &table);
 
         fs::write(&source, "a = 200\n").unwrap();
-        store_path(tmp.path(), fp, &source, &source_key, &parsed, &table);
+        store_path(
+            tmp.path(),
+            fp,
+            &source,
+            &source_key,
+            &parsed,
+            &meta("a = 1\n"),
+            &table,
+        );
         assert!(load_hash(tmp.path(), fp, source_key.hash, &table, true).is_none());
     }
 

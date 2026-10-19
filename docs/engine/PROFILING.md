@@ -132,8 +132,9 @@ steady-state RSS unchanged.
 **3b (on-disk persisted) — shipped.** The LSP and CLI share the parse cache
 under `<cache_dir>/parse-cache/<root-fingerprint>/`, one namespace per
 mod/workspace or base-game install. Each entry contains a self-contained `.cwb`
-AST and a recovered-parse-error sidecar (`.cwe`). Loading interns its strings
-into the current process's `StringTable`.
+AST and a sidecar (`.cwe`) with the recovered parse errors, the source's content
+hash and its `# cwtools-ignore` codes. Loading interns its strings into the
+current process's `StringTable`.
 
 `<cache_dir>` is the LSP's `cacheDir` initializationOption when the client sends
 one. Otherwise, and always for the CLI, it is `XDG_CACHE_HOME/cwtools`, else
@@ -145,8 +146,22 @@ rules cannot change how a script file parses, so editing the rules keeps the
 cache warm.
 
 On Unix, disk-file entries use the path, mtime, size, device, inode, and ctime, so a
-warm hit skips reading the source. Other platforms use a content hash after the
-read. The CLI caches both indexing and validation, but still drops the first
+warm hit never opens the source, in the CLI or the LSP scan. The LSP takes the
+content hash it uses to match fixable edits to a buffer, and the inline-ignore
+codes, from the sidecar. It still stats each file and charges that size against
+the scan byte budget. A miss, or a file whose key cannot be read, reads the
+source, parses it and rewrites the entry. Inline scripts under
+`common/inline_scripts/` are reloaded from the cache the same way each scan.
+
+Windows has no path key, so both binaries read every file and look the cache up
+by content hash. Stable `std` offers no file id (`file_index` and
+`volume_serial_number` are behind `windows_by_handle`) and no ChangeTime
+(`windows_change_time`). Creation time is not an identity, because NTFS tunneling
+can give a recreated file its old one, and a write time can be set back. A
+same-size edit with a restored mtime would then serve a stale AST, which the Unix
+key catches through ctime.
+
+The CLI caches both indexing and validation, but still drops the first
 AST set before localisation indexing to keep the large-workspace memory bound.
 A stale `.cwv` rebuild reuses the base-game install's entries, parsing only its
 new or changed source files.

@@ -49,6 +49,9 @@ invalidates the speculative unclosed leaf-value quote errors stored by version 1
 Changes to the serialized AST also require bumping `FORMAT_VERSION` in
 `crates/cache/src/io.rs`. Version 5 records explicit `rgb`, `hsv` and `hsv360`
 clause prefixes; version 4 `.cwb` files are rejected and rebuilt from source.
+Changes to the `.cwe` sidecar bump `ERRORS_FORMAT_VERSION` in the same file.
+Version 3 adds the source's content hash and inline-ignore codes; version 2
+sidecars are rejected and rebuilt from source.
 
 ```sh
 cargo fmt --all
