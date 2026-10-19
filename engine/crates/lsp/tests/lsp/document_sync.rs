@@ -206,11 +206,11 @@ fn test_did_save_on_ignored_open_file_publishes_empty_diagnostics() {
 }
 
 #[test]
-fn test_did_save_revalidates_the_open_document() {
-    // did_save takes its own path: no text arrives with the notification
-    // (`include_text` is false), nothing is written to the document store, and
-    // the edit generation is read rather than bumped — it re-validates the
-    // buffer the server already holds. Nothing pinned that it validates at all.
+fn test_did_save_of_a_validated_version_does_not_revalidate() {
+    // No text arrives with a save (`include_text` is false), so it can only
+    // re-validate the buffer the server already holds. The open validated that
+    // exact version, so the save has nothing new to say and must stay silent.
+    // The unit tests in `validate.rs` pin the save that does validate.
     let mut server = storm_server();
     let uri = server.write_file_uri("common/decisions/s.txt", STORM_FILE);
 
@@ -223,19 +223,19 @@ fn test_did_save_revalidates_the_open_document() {
     );
 
     server.save_uri(&uri);
-    let saved = server.drain_after_first(Duration::from_millis(800), Duration::from_secs(6));
+    let saved = server.drain_until_quiet(Duration::from_millis(800), Duration::from_secs(6));
     let log = server.profiling_log();
     server.stop();
 
     assert_eq!(
         count_validate_log(&log, "didSave"),
-        1,
-        "a save must validate the document once, tagged as a save"
+        0,
+        "a save of an already validated version must not validate again"
     );
     assert_eq!(
         count_publishes(&saved, "s.txt"),
-        1,
-        "a save must republish the saved document's diagnostics"
+        0,
+        "and must not republish the same diagnostics"
     );
 }
 

@@ -630,12 +630,16 @@ impl Backend {
             return;
         }
         // (#90); the entry version guard in `debounced_validate` makes a racing
-        let Some(version) = ({
+        let Some((version, ast_version)) = ({
             let docs = self.state.documents.lock();
-            docs.get(&uri).map(|d| d.version)
+            docs.get(&uri).map(|d| (d.version, d.ast_version))
         }) else {
             return;
         };
+        if ast_version == Some(version) {
+            tracing::debug!(%uri, version, "didSave already validated at this version");
+            return;
+        }
         if self.state.debounce_handles.lock().contains_key(&uri) {
             tracing::debug!(%uri, version, "didSave covered by pending validation");
             return;
