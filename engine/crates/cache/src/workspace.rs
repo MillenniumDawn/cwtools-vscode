@@ -263,6 +263,7 @@ pub struct Removal {
     pub files: usize,
     pub failures: Vec<(PathBuf, std::io::Error)>,
 }
+/// Remove only verified entries from the client-selected cache root, leaving symlinks untouched.
 pub fn remove_all(cache_dir: &Path) -> Removal {
     let root = cache_dir.join(PARSE_CACHE_DIR);
     let mut removal = Removal::default();
@@ -310,8 +311,7 @@ fn is_real_dir(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
-/// Whether `dir` is one of the per-fingerprint directories this module writes:
-/// a real directory named by a fingerprint, carrying the `settings.sig` that
+/// A real fingerprint directory with an 8-byte `settings.sig` proves this module owns it.
 fn is_owned_cache_dir(dir: &Path) -> bool {
     if !is_real_dir(dir) {
         return false;
@@ -330,6 +330,7 @@ fn is_owned_cache_dir(dir: &Path) -> bool {
             .is_ok_and(|metadata| metadata.is_file() && metadata.len() == 8)
 }
 
+/// Delete only regular files in an owned cache dir; leave symlinks and subdirectories alone.
 fn remove_owned_cache_dir(dir: &Path, removal: &mut Removal) -> bool {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -413,6 +414,7 @@ fn prune_all_cache_dirs_with_caps(
     current_dir: Option<&Path>,
 ) {
     let root = cache_dir.join(PARSE_CACHE_DIR);
+    // Prune only positively identified cache directories; other client-owned paths stay untouched (#159).
     let Ok(dirs) = fs::read_dir(root) else {
         return;
     };
@@ -679,6 +681,7 @@ pub fn store_path(
     source: &SourceMeta,
     table: &StringTable,
 ) {
+    // Recheck the pre-read metadata snapshot so a concurrent edit cannot cache stale parsed bytes.
     if PATH_METADATA_CACHE_SUPPORTED && source_cache_key(source_path).as_ref() == Some(source_key) {
         store_hash(
             cache_dir,

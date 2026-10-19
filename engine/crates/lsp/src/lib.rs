@@ -695,11 +695,9 @@ mod tests {
         assert!(state.documents.lock().is_empty());
     }
 
-    /// the receiver to still be there when the client answers, so dropping the
-    /// future that awaits the reply panics the whole server. Every edit aborts
-    /// the previous debounced validation, and that validation ends on
-    /// `code_lens_refresh` — so typing used to be enough to kill the process
-    /// (#675). The reply must land safely even after the abort.
+    /// Regression: keep the pending receiver alive through an aborted validation; otherwise a late
+    /// client reply panics the server (#675). Every edit aborts the prior debounced validation, so
+    /// typing during `code_lens_refresh` must leave the pending request safe to complete.
     #[tokio::test]
     async fn an_aborted_code_lens_refresh_survives_the_clients_reply() {
         use futures_util::{SinkExt, StreamExt};

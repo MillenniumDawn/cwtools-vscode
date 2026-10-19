@@ -70,6 +70,7 @@ fn generated_loc_file_path(workspace_root: &Path, lang: Lang) -> PathBuf {
         .join(format!("cwtools_generated_l_{lang}.yml"))
 }
 
+/// Check each insertion tier against editable roots so a refused target falls through (#160).
 fn resolve_loc_insert_target(
     lang: Lang,
     siblings: &[String],

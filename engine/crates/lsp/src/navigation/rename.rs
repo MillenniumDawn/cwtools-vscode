@@ -362,6 +362,8 @@ impl Backend {
         .await
     }
 
+    // A rename is all-or-nothing because indexed sites can include base-game files (#160).
+    // Keep own-document-only edits for untitled buffers that have no path to authorize.
     fn first_refused_edit_target(
         &self,
         by_uri: &[(String, Vec<TextEdit>)],

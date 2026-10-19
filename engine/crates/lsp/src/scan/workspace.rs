@@ -129,6 +129,7 @@ where
         before_chunk,
         after_chunk,
     } = mapper;
+    // These slices are lock-step; zip would silently drop unmatched tail entries (#328).
     assert_eq!(first.len(), second.len());
     assert_eq!(first.len(), third.len());
     assert_eq!(first.len(), fourth.len());

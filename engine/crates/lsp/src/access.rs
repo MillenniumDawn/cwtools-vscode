@@ -113,7 +113,7 @@ impl Backend {
     }
 }
 
-/// Windows verbatim `\\?\` prefix stops them ever matching.
+/// Resolve a readable client URI only inside canonical roots, rejecting symlink leaves (#177).
 pub(crate) fn authorized_path(uri: &str, roots: &[PathBuf]) -> Option<PathBuf> {
     let Some(path) = file_uri_to_path(uri) else {
         tracing::debug!(%uri, "access: not a usable file URI");
@@ -172,6 +172,7 @@ fn canonicalize_for_containment(path: &Path) -> Option<PathBuf> {
         }
     }
 }
+/// Canonical containment keeps mod-authored references, including symlinks, inside search roots (#176).
 pub(crate) async fn contained_search_path(roots: &[PathBuf], rel: &Path) -> Option<PathBuf> {
     if rel
         .components()

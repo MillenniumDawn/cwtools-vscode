@@ -16,6 +16,7 @@ use crate::cache_purge::purge_caches;
 use crate::command_progress::{CommandProgress, Phase, ScanOutcome};
 use crate::paths::default_cache_dir;
 
+// Bound client-supplied ignore matching work per scan (#169).
 const MAX_IGNORE_ENTRIES: usize = 200;
 const MAX_IGNORE_PATTERN_LEN: usize = 1024;
 const MAX_IGNORED_ERROR_CODES: usize = 200;
@@ -774,6 +775,7 @@ impl Backend {
             return false;
         }
 
+        // Keep this snapshot only while park sites stay await-free, or initialized may flush first (#98).
         let handshake_complete = self
             .state
             .handshake_complete

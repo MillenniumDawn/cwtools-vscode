@@ -55,6 +55,7 @@ impl Backend {
         *guard = Some(self.spawn_watched_batch_window(false));
     }
 
+    // Retry bypasses the live-slot gate; cap recovery at one immediate retry to prevent panic loops (#155).
     fn spawn_watched_batch_window(&self, retried: bool) -> tokio::task::JoinHandle<()> {
         let client = self.client.clone();
         let state = self.state.clone();

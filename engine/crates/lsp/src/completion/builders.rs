@@ -543,8 +543,7 @@ pub(crate) fn type_instance_detail(
         })
 }
 
-/// KEYWORD item (cwtools-vscode#64).
-/// scope-specific requirement is ranked into the top bucket (#78). The scope test
+/// Add keyword completions; scope matches rank first, but mismatches stay visible because tracking can be incomplete (#78).
 #[allow(clippy::too_many_arguments)]
 fn push_alias_keys<'a>(
     items: &mut Vec<CompletionItem>,

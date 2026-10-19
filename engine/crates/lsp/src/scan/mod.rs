@@ -416,14 +416,11 @@ impl Backend {
     }
 }
 
-/// the oneshot receiver to still be alive when the reply lands
-/// (`service/client/pending.rs`). Dropping the future that awaits the reply
-/// leaves the slot behind, so the client's answer panics the whole process
-/// (#675) — and `spawn_debounced_validate` aborts the previous validation on
-/// every keystroke. Running the request on its own task moves the receiver out
-/// of the abortable future: dropping a `JoinHandle` detaches, it does not
-/// cancel, so the reply still finds a live receiver. Awaiting the handle keeps
-/// the caller's ordering and return value; `None` means the task panicked.
+/// Detach the request so cancellation cannot drop its oneshot receiver before the reply.
+/// `tower-lsp` leaves the pending slot behind when its waiting future is dropped, so a late
+/// reply panics the server (#675). Debounced validation aborts previous runs on every edit;
+/// spawning the request separately preserves its receiver while awaiting the handle keeps
+/// caller ordering and return value. `None` means the task panicked.
 pub(crate) async fn detached_client_request<T, F>(fut: F) -> Option<T>
 where
     F: std::future::Future<Output = T> + Send + 'static,
