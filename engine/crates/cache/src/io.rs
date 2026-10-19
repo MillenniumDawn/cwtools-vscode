@@ -35,7 +35,8 @@ const MAGIC: &[u8; 4] = b"CWB\x00";
 const FORMAT_VERSION: u8 = 5;
 
 const ERRORS_MAGIC: &[u8; 4] = b"CWE\x00";
-const ERRORS_FORMAT_VERSION: u8 = 2;
+/// v3: the sidecar also carries the source's content hash and inline-ignore codes.
+const ERRORS_FORMAT_VERSION: u8 = 3;
 
 /// Hard caps on a `.cwb` read and on what its body may decompress to. A cache
 /// path is chosen by a CLI flag or an LSP client (#162), so neither the read nor

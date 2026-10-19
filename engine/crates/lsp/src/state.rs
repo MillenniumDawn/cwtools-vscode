@@ -306,6 +306,8 @@ pub(crate) struct DocumentState {
     pub(crate) navigation_snapshot_budget_override: parking_lot::Mutex<Option<usize>>,
     #[cfg(test)]
     pub(crate) workspace_scan_budget_override: parking_lot::Mutex<Option<u64>>,
+    #[cfg(test)]
+    pub(crate) scan_source_reads: std::sync::atomic::AtomicUsize,
     pub(crate) settings_generation: AtomicU64,
     pub(crate) start: std::time::Instant,
     pub(crate) last_activity_ms: AtomicU64,
@@ -1756,6 +1758,8 @@ impl DocumentState {
             navigation_snapshot_budget_override: parking_lot::Mutex::new(None),
             #[cfg(test)]
             workspace_scan_budget_override: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            scan_source_reads: std::sync::atomic::AtomicUsize::new(0),
             settings_generation: AtomicU64::new(0),
             start: std::time::Instant::now(),
             last_activity_ms: AtomicU64::new(0),

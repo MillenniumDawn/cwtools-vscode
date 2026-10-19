@@ -27,6 +27,7 @@ use cwtools_rules::ruleset_loader::{
     RuleParseError, load_ruleset_from_dir, load_ruleset_from_file,
 };
 use cwtools_string_table::string_table::StringTable;
+use cwtools_validation::inline_ignore::extract_inline_ignored_codes;
 use cwtools_validation::references::{UsedInstances, check_unused_instances, needs_use_tracking};
 use cwtools_validation::{
     ErrorSeverity, InlineScripts, Prepared, ValidationError, build_modifier_keys,
@@ -118,6 +119,7 @@ fn load_or_parse(
         let cached = match cache_use {
             ParseCacheUse::Full => {
                 workspace_cache::load_path(&cache.dir, cache.fingerprint, path, table)
+                    .map(|(parsed, key, _)| (parsed, key))
             }
             ParseCacheUse::Index => {
                 workspace_cache::load_path_for_index(&cache.dir, cache.fingerprint, path, table)
@@ -177,12 +179,15 @@ fn load_or_parse(
         if let Some(source_key) = metadata.as_ref()
             && workspace_cache::PATH_METADATA_CACHE_SUPPORTED
         {
+            let source =
+                workspace_cache::SourceMeta::new(&text, extract_inline_ignored_codes(&text));
             workspace_cache::store_path(
                 &cache.dir,
                 cache.fingerprint,
                 path,
                 source_key,
                 &parsed,
+                &source,
                 table,
             );
             cache.wrote.store(true, Ordering::Relaxed);

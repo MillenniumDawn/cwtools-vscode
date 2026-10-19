@@ -514,10 +514,23 @@ impl Backend {
                         );
                         return None;
                     }
-                    let text = match cwtools_file_manager::file_manager::read_text_capped(
-                        &file.path,
-                        crate::access::MAX_URI_READ_BYTES,
-                    ) {
+                    if let Some((cd, fp)) = cache_info.as_ref()
+                        && let Some((parsed, loaded_source_key, source)) = workspace_cache::load_path(
+                            cd,
+                            *fp,
+                            &file.path,
+                            &self.state.string_table,
+                        )
+                        && source_key.as_ref() == Some(&loaded_source_key)
+                    {
+                        return Some((
+                            true,
+                            parsed,
+                            Some(source.content_hash),
+                            source.inline_ignored,
+                        ));
+                    }
+                    let text = match self.read_scan_source(&file.path) {
                         Ok((t, n)) => {
                             if n > source_size
                                 && !scan_bytes.try_reserve(n - source_size, max_scan_bytes)
@@ -535,25 +548,6 @@ impl Backend {
                             return None;
                         }
                     };
-                    if let Some((cd, fp)) = cache_info.as_ref()
-                        && let Some((parsed, loaded_source_key)) = workspace_cache::load_path(
-                            cd,
-                            *fp,
-                            &file.path,
-                            &self.state.string_table,
-                        )
-                        && source_key.as_ref() == Some(&loaded_source_key)
-                    {
-                        let source_hash = (workspace_cache::source_cache_key(&file.path).as_ref()
-                            == Some(&loaded_source_key))
-                        .then(|| cwtools_cache::workspace::content_hash(&text));
-                        return Some((
-                            true,
-                            parsed,
-                            source_hash,
-                            extract_inline_ignored_codes(&text),
-                        ));
-                    }
                     if use_content_cache
                         && let Some((cd, fp)) = cache_info.as_ref()
                         && let Some(parsed) = workspace_cache::load(
@@ -571,6 +565,10 @@ impl Backend {
                         ));
                     }
                     let parsed = parse_string_without_comments(&text, &self.state.string_table);
+                    let source = workspace_cache::SourceMeta::new(
+                        &text,
+                        extract_inline_ignored_codes(&text),
+                    );
                     if let Some((cd, fp)) = cache_info.as_ref() {
                         if let Some(source_key) = source_key.as_ref() {
                             workspace_cache::store_path(
@@ -579,6 +577,7 @@ impl Backend {
                                 &file.path,
                                 source_key,
                                 &parsed,
+                                &source,
                                 &self.state.string_table,
                             );
                         } else {
@@ -594,8 +593,8 @@ impl Backend {
                     Some((
                         false,
                         parsed,
-                        Some(cwtools_cache::workspace::content_hash(&text)),
-                        extract_inline_ignored_codes(&text),
+                        Some(source.content_hash),
+                        source.inline_ignored,
                     ))
                 })
                 .collect()
@@ -743,7 +742,7 @@ impl Backend {
             None
         } else {
             Some(tokio::task::block_in_place(|| {
-                self.rebuild_inline_scripts(&scan_files)
+                self.rebuild_inline_scripts(&scan_files, cache_info.as_ref())
             }))
         };
 
@@ -1159,9 +1158,12 @@ impl Backend {
     }
 
     /// a fresh registry (#259). Re-reads rather than reuses pass 1's ASTs —
+    /// a closed script is reloaded from the parse cache by its metadata key and
+    /// read from disk only on a miss (#867).
     fn rebuild_inline_scripts(
         &self,
         scan_files: &[ScannedFile],
+        cache: Option<&(std::path::PathBuf, u64)>,
     ) -> cwtools_validation::InlineScripts {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let mut registry = cwtools_validation::InlineScripts::default();
@@ -1179,27 +1181,47 @@ impl Backend {
                 .lock()
                 .get(&file.uri)
                 .map(|doc| doc.text.to_string());
-            let text = match open_text {
-                Some(text) => text,
-                None => match cwtools_file_manager::file_manager::read_text_capped(
-                    &file.path,
-                    crate::access::MAX_URI_READ_BYTES,
-                ) {
-                    Ok((text, _)) => text,
-                    Err(error) => {
-                        tracing::warn!(
-                            path = %file.path.display(),
-                            error = %error,
-                            "scan: skipping unreadable inline script"
-                        );
-                        continue;
-                    }
+            let parsed = match open_text {
+                Some(text) => parse_string_without_comments(&text, &self.state.string_table),
+                None => match cache.and_then(|(dir, fingerprint)| {
+                    workspace_cache::load_path_for_index(
+                        dir,
+                        *fingerprint,
+                        &file.path,
+                        &self.state.string_table,
+                    )
+                }) {
+                    Some((parsed, _)) => parsed,
+                    None => match self.read_scan_source(&file.path) {
+                        Ok((text, _)) => {
+                            parse_string_without_comments(&text, &self.state.string_table)
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                path = %file.path.display(),
+                                error = %error,
+                                "scan: skipping unreadable inline script"
+                            );
+                            continue;
+                        }
+                    },
                 },
             };
-            let parsed = parse_string_without_comments(&text, &self.state.string_table);
             registry.insert(&logical_path, parsed);
         }
         registry
+    }
+
+    fn read_scan_source(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(String, u64), cwtools_file_manager::file_manager::FileError> {
+        #[cfg(test)]
+        self.state.scan_source_reads.fetch_add(1, Ordering::Relaxed);
+        cwtools_file_manager::file_manager::read_text_capped(
+            path,
+            crate::access::MAX_URI_READ_BYTES,
+        )
     }
 
     pub(crate) async fn revalidate_all_open_docs(&self, trigger: crate::ValidateTrigger) {
@@ -1812,12 +1834,14 @@ mod tests {
         for (path, text) in &cached_files {
             let source_key = workspace_cache::source_cache_key(path).unwrap();
             let parsed = parse_string_without_comments(text, &seed_table);
+            let source = workspace_cache::SourceMeta::new(text, Default::default());
             workspace_cache::store_path(
                 &cache_dir,
                 fingerprint,
                 path,
                 &source_key,
                 &parsed,
+                &source,
                 &seed_table,
             );
         }
@@ -1910,6 +1934,68 @@ mod tests {
             2,
             "the rejected cache entry must not be reconstructed and intern its key"
         );
+    }
+
+    /// Runs a full scan and returns the reported diagnostic total, the number of
+    /// files validated, and how many source files the scan opened for reading.
+    async fn scan_counting_source_reads(backend: &Backend) -> (usize, usize, usize) {
+        let progress =
+            CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
+        let outcome = backend
+            .validate_entire_workspace_tracked(false, Some(&progress))
+            .await;
+        assert_eq!(outcome, ScanOutcome::Ran);
+        let summary = backend.state.last_scan_summary.lock();
+        let summary = summary.as_ref().expect("a completed scan stores a summary");
+        let reported = summary.total_errors
+            + summary.total_warnings
+            + summary.total_infos
+            + summary.total_hints;
+        let reads = backend.state.scan_source_reads.load(Ordering::Relaxed);
+        (reported, summary.validated_files, reads)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_warm_start_opens_no_source_file() {
+        let (cold, tmp) = setup_workspace(None);
+        // One thing keeps its CW239 off with an inline directive, which a warm
+        // start must restore from the cache because it never reads the file.
+        std::fs::write(
+            tmp.path().join("common/things/a.txt"),
+            "thing_0 = { } # cwtools-ignore CW239\n",
+        )
+        .unwrap();
+        let scripts = tmp.path().join("common/inline_scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        std::fs::write(scripts.join("s.txt"), "s = { }\n").unwrap();
+        cold.state.config.write().cache_dir = Some(tmp.path().join("cache"));
+
+        let (cold_reported, cold_validated, cold_reads) = scan_counting_source_reads(&cold).await;
+        assert_eq!(cold_validated, 4);
+        assert_eq!(cold_reported, 2, "a.txt's CW239 is ignored inline");
+        assert!(cold_reads >= 4, "a cold scan reads every file it parses");
+
+        let warm = test_backend();
+        {
+            let cold_config = cold.state.config.read();
+            let mut warm_config = warm.state.config.write();
+            warm_config.workspace_uri = cold_config.workspace_uri.clone();
+            warm_config.workspace_prefix = cold_config.workspace_prefix.clone();
+            warm_config.cache_dir = cold_config.cache_dir.clone();
+        }
+        warm.state.rules.write().ruleset = cold.state.rules.read().ruleset.clone();
+
+        let (warm_reported, warm_validated, warm_reads) = scan_counting_source_reads(&warm).await;
+        assert_eq!(warm_validated, cold_validated);
+        assert_eq!(warm_reported, cold_reported);
+        assert_eq!(warm.state.inline_scripts.read().len(), 1);
+        // Windows has no metadata key, so there every start reads each file.
+        let expected_reads = if workspace_cache::PATH_METADATA_CACHE_SUPPORTED {
+            0
+        } else {
+            cold_reads
+        };
+        assert_eq!(warm_reads, expected_reads);
     }
 
     #[tokio::test(flavor = "multi_thread")]

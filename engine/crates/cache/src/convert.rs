@@ -61,7 +61,7 @@ pub fn arena_to_cached(
     cached
 }
 
-pub fn errors_to_cached(errors: &[ParseError]) -> CachedErrors {
+pub fn errors_to_cached(errors: &[ParseError], source: Option<CachedSource>) -> CachedErrors {
     CachedErrors {
         errors: errors
             .iter()
@@ -69,6 +69,7 @@ pub fn errors_to_cached(errors: &[ParseError]) -> CachedErrors {
                 CachedParseError::Pos(*line, *col, message.clone())
             })
             .collect(),
+        source,
     }
 }
 
