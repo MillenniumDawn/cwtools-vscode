@@ -145,9 +145,11 @@ through the diff.
 
 ### Stellaris tier
 
-The Stellaris guard exercises the game's validator on a real mod's scripted
-prescripted countries and localization. Run it when changing shared rule-engine
-code, Stellaris dispatch or validation behavior:
+The Stellaris guard runs the rule loader and rule engine over a real mod's
+scripted prescripted countries and localization. Its rows are mostly rule-config
+and generic field diagnostics, not scope or trigger checks. CI does not run it,
+so run it by hand when changing shared rule-engine code, Stellaris dispatch or
+validation behavior:
 
 ```sh
 python3 scripts/guard.py stellaris
@@ -212,8 +214,8 @@ behind the base-game gate. Run it alongside the md guard for anything that
 touches those six codes.
 
 Each baseline records its own corpus and rules revisions and is re-blessed on
-its own. CI reads each tier's revisions out of the header of the baseline that
-tier checks against.
+its own. CI runs the md and vanilla tiers and reads each one's revisions out of
+the header of the baseline it checks against.
 
 When a change is *meant* to move diagnostics, re-bless the baselines it moved
 in the same commit and say in the message which codes moved and why:
