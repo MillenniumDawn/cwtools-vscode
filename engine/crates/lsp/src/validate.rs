@@ -1825,7 +1825,8 @@ impl Backend {
                 self.state.pending_changed_names.lock().insert(name);
             }
 
-            // Validation. Lock order: rules -> info_service -> loc_index ->
+            // Validation acquires these read locks in order: rules ->
+            // info_service -> loc_index -> inline_scripts.
             let (errors, log_msg) = {
                 let game = self.state.config.read().game();
                 // Compute overlay keys before taking validation locks; these keys support CW100/CW122 without a rescan (#36).

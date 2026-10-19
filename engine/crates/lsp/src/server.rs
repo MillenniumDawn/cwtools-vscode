@@ -625,7 +625,6 @@ impl Backend {
             }
             return;
         }
-        // A pending debounce covers this save; its entry-version guard prevents stale validation from publishing (#90).
         let Some((version, ast_version)) = ({
             let docs = self.state.documents.lock();
             docs.get(&uri).map(|d| (d.version, d.ast_version))
@@ -637,6 +636,7 @@ impl Backend {
             return;
         }
         if self.state.debounce_handles.lock().contains_key(&uri) {
+            // A pending debounce covers this save; its version guard prevents stale validation from publishing (#90).
             tracing::debug!(%uri, version, "didSave covered by pending validation");
             return;
         }

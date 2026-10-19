@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_hover_resolved_scope_line() {
-        // #37: show the resolved scope when it differs from the target scope.
+        // #37: show the resolved scope when it differs from the current scope.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "owner".to_string(),

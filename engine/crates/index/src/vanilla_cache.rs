@@ -225,9 +225,10 @@ fn write_cache(
     };
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&cache).map_err(std::io::Error::other)?;
 
-    // Frame checksum on, as `.cwb` does. rkyv validates structure, not content,
-    // served as a cache hit. The checksum turns that into a decode error, which
-    // Keep the version byte separate from the compressed archive body.
+    // Include a frame checksum, as `.cwb` does. rkyv validates archive structure
+    // but not payload integrity, so corrupted bytes could otherwise be served
+    // as a cache hit. The checksum turns corruption into a decode error. Keep
+    // the version byte separate from the compressed archive body.
     let compressed = {
         let mut encoder = zstd::stream::Encoder::new(Vec::new(), ZSTD_LEVEL)?;
         encoder.include_checksum(true)?;

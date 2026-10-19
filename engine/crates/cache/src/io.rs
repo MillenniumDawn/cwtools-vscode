@@ -21,7 +21,7 @@ pub enum CacheError {
     #[error("compression error")]
     Compression(#[source] std::io::Error),
 }
-/// zstd compression level shared by parse-cache and vanilla-cache writers.
+/// Zstd compression level shared by parse-cache and vanilla-cache writers.
 pub const ZSTD_LEVEL: i32 = 3;
 
 /// Header marker used to reject incompatible cache files before rkyv decoding.
