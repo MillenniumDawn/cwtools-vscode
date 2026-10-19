@@ -228,6 +228,7 @@ pub fn validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<
 
 fn try_validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<bool> {
     let dir = workspace_cache_dir(cache_dir, fingerprint);
+    // Refuse symlinks and files so clearing a cache cannot delete data outside it (#159).
     if fs::symlink_metadata(&dir).is_ok_and(|metadata| !metadata.is_dir()) {
         return Err(std::io::Error::other(
             "cannot use a cache directory that is a symlink or a file",

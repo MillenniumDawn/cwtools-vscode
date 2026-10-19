@@ -18,6 +18,7 @@ pub enum CacheError {
         #[source]
         source: Option<rkyv::rancor::Error>,
     },
+    // Keep the source explicit: #[from] would collide with Io's std::io::Error conversion.
     #[error("compression error")]
     Compression(#[source] std::io::Error),
 }
@@ -32,13 +33,12 @@ const FORMAT_VERSION: u8 = 5;
 const ERRORS_MAGIC: &[u8; 4] = b"CWE\x00";
 const ERRORS_FORMAT_VERSION: u8 = 3;
 
-/// Hard caps on a `.cwb` read and on what its body may decompress to. A cache
-/// path is chosen by a CLI flag or an LSP client (#162), so neither the read nor
-/// the decode may run unbounded: a few kilobytes of magic-prefixed zstd can
+/// Cap both `.cwb` input and decompressed size; a client-chosen cache path (#162)
+/// could otherwise provide a tiny zstd frame that expands without bound.
 pub const MAX_ARCHIVE_FILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_ARCHIVE_DECODED_BYTES: u64 = 128 * 1024 * 1024;
 
-/// Cap on a `.cwe` sidecar. Uncompressed rkyv, and it only ever holds one file's
+/// Cap uncompressed `.cwe` sidecars, which hold parse errors for only one source file.
 pub const MAX_ERRORS_FILE_BYTES: u64 = 16 * 1024 * 1024;
 pub fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
     let file = File::open(path)?;

@@ -1194,6 +1194,7 @@ impl Backend {
             .and_then(|ast| self.reference_sites_for_open_ast(&uri, ast));
         let mut first_accepted_ast = false;
         {
+            // Match revalidate_open_dependents: lock doc_tokens before documents to avoid ABBA.
             self.update_doc_tokens(&uri, parsed.as_ref());
             let mut docs = self.state.documents.lock();
             let still_current = docs
