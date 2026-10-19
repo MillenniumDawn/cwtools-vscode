@@ -4553,6 +4553,100 @@ mod ignored_tests {
         assert_eq!(backend.state.validation_permits.available_permits(), 2);
     }
 
+    /// Sends `didSave` for `uri`, waits out the validation it started, if any,
+    /// and returns how many validations the save started.
+    async fn save_and_settle(backend: &Backend, uri: &str) -> u64 {
+        let started_before = backend.state.next_debounce_id.load(Ordering::Relaxed);
+        backend
+            .did_save_impl(DidSaveTextDocumentParams {
+                text_document: TextDocumentIdentifier {
+                    uri: Url::parse(uri).unwrap(),
+                },
+                text: None,
+            })
+            .await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !backend.state.debounce_handles.lock().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the save's validation must finish");
+        backend.state.next_debounce_id.load(Ordering::Relaxed) - started_before
+    }
+
+    fn drain_publication_versions(socket: &mut tower_lsp::ClientSocket) -> Vec<Option<i32>> {
+        let mut versions = Vec::new();
+        while let Some(Some(message)) = socket.next().now_or_never() {
+            if message.method() == "textDocument/publishDiagnostics" {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(message.params().cloned().unwrap()).unwrap();
+                versions.push(params.version);
+            }
+        }
+        versions
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn did_save_skips_a_version_that_was_already_validated() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/ideas/edit.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        open_stale_publication_doc(&backend, &uri, "current = { cost = 1 }");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.debounced_validate(uri.clone(), 1, 0, crate::ValidateTrigger::DidOpen),
+        )
+        .await
+        .expect("the open's validation must finish");
+        assert_eq!(drain_publication_versions(&mut socket), [Some(1)]);
+
+        let started = save_and_settle(&backend, &uri).await;
+
+        assert_eq!(started, 0, "a validated version needs no save validation");
+        assert!(drain_publication_versions(&mut socket).is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn did_save_validates_a_version_that_was_not_validated_yet() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/ideas/edit.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        open_stale_publication_doc(&backend, &uri, "current = { cost = 1 }");
+
+        let started = save_and_settle(&backend, &uri).await;
+
+        assert_eq!(started, 1, "a save before any validation must validate");
+        assert_eq!(drain_publication_versions(&mut socket), [Some(1)]);
+
+        // The version-1 AST must not stand in for version 2.
+        backend
+            .state
+            .documents
+            .lock()
+            .change(&uri, 2, Arc::from("current = { cost = 2 }"))
+            .unwrap();
+
+        let started = save_and_settle(&backend, &uri).await;
+
+        assert_eq!(started, 1, "a save after an unvalidated edit must validate");
+        assert_eq!(drain_publication_versions(&mut socket), [Some(2)]);
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .unwrap()
+                .ast_version,
+            Some(2)
+        );
+    }
+
     /// #477: a watched batch must take a validation slot per file, not per
     /// batch. With one slot already taken (a `didClose` or another sweep), a
     /// batch-wide permit would leave a keystroke validation queued behind every
