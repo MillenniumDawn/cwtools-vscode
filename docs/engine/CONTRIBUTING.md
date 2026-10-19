@@ -119,7 +119,9 @@ engine or a validator should run it, because a refactor that was supposed to
 change nothing is easy to believe and hard to prove.
 
 It validates the pinned Millennium Dawn mod and diffs the report against a
-committed baseline (`scripts/md-baseline.csv`, 9208 diagnostics as of writing).
+committed baseline (`scripts/md-baseline.csv`). Why it stays plain CSV is
+recorded in
+[`DIAGNOSTIC_BASELINE_STORAGE.md`](DIAGNOSTIC_BASELINE_STORAGE.md).
 Run it from the repo root:
 
 ```sh
@@ -128,8 +130,10 @@ python3 scripts/guard.py md
 
 Exit 0 means the report matched. Exit 1 prints what moved: row counts, a
 per-code gone/new tally, and the first 40 lines of the diff, with the full diff
-written to a temp dir. Exit 2 means the run never happened (missing corpus,
-missing binary, validator crashed).
+written to a temp dir. Re-blessing an existing baseline shows the row counts
+and the first 40 diff lines before overwriting it, retaining the full diff in
+the same temp dir when rows move. Exit 2 means the run never happened (missing
+corpus, missing binary, validator crashed).
 
 Two inputs, both git checkouts, looked for side by side next to this repo
 (point `CWTOOLS_PROJECTS` at wherever you keep them):

@@ -101,6 +101,21 @@ def report_body(text: str) -> list[str]:
     return out
 
 
+def report_diff(
+    before: list[str], after: list[str], before_name: str, after_name: str
+) -> list[str]:
+    return list(
+        difflib.unified_diff(
+            before,
+            after,
+            fromfile=before_name,
+            tofile=after_name,
+            n=0,
+            lineterm="",
+        )
+    )
+
+
 def parse_pins(text: str) -> dict[str, str]:
     pins: dict[str, str] = {}
     for line in text.splitlines():
@@ -669,16 +684,69 @@ def run_guard(config: Config) -> int:
         current_body = report_body(current)
 
         if config.bless:
+            baseline_body: list[str] | None = None
+            bless_pin_mismatches: list[tuple[str, str, str]] = []
             if config.baseline.is_file():
-                before = max(
-                    len(report_body(config.baseline.read_text(encoding="utf-8"))) - 1, 0
+                baseline_text = config.baseline.read_text(
+                    encoding="utf-8", errors="surrogateescape"
+                )
+                baseline_body = report_body(baseline_text)
+                before = max(len(baseline_body) - 1, 0)
+                bless_pin_mismatches = compare_pins(
+                    parse_pins(baseline_text), parse_pins(current)
                 )
             else:
                 before = 0
             after = max(len(current_body) - 1, 0)
+
+            diff_lines = (
+                report_diff(baseline_body, current_body, "baseline", "current")
+                if baseline_body is not None
+                else []
+            )
+            if diff_lines:
+                keep = True
+                diff_path = work / "bless.diff"
+                diff_path.write_text(
+                    "\n".join(diff_lines) + "\n", encoding="utf-8", newline="\n"
+                )
+                removed = sum(
+                    line.startswith("-") and not line.startswith("---")
+                    for line in diff_lines
+                )
+                added = sum(
+                    line.startswith("+") and not line.startswith("+++")
+                    for line in diff_lines
+                )
+                print(
+                    f"guard: re-blessing {config.baseline} "
+                    f"({before} -> {after} diagnostics; -{removed} +{added} rows)"
+                )
+                if bless_pin_mismatches:
+                    print(
+                        "  input revisions: "
+                        f"{format_pin_mismatches(bless_pin_mismatches)}"
+                    )
+                print("  first 40 diff lines:")
+                for line in diff_lines[2:42]:
+                    print(f"    {line}")
+                print(f"  full diff: {diff_path}")
+                print(f"  full report: {current_path}")
+            else:
+                message = (
+                    f"guard: blessed {config.baseline} "
+                    f"({before} -> {after} diagnostics)"
+                )
+                if baseline_body is not None:
+                    message += "; no row changes"
+                print(message)
+                if bless_pin_mismatches:
+                    print(
+                        "  input revisions: "
+                        f"{format_pin_mismatches(bless_pin_mismatches)}"
+                    )
             config.baseline.parent.mkdir(parents=True, exist_ok=True)
             config.baseline.write_text(current, encoding="utf-8", newline="\n")
-            print(f"guard: blessed {config.baseline} ({before} -> {after} diagnostics)")
             return 0
 
         if comparison_body is not None:
@@ -720,17 +788,11 @@ def run_guard(config: Config) -> int:
             return 0
 
         keep = True
-        diff_lines = list(
-            difflib.unified_diff(
-                baseline_body,
-                current_body,
-                fromfile=(
-                    "comparison" if comparison_revision is not None else "baseline"
-                ),
-                tofile="current",
-                n=0,
-                lineterm="",
-            )
+        diff_lines = report_diff(
+            baseline_body,
+            current_body,
+            "comparison" if comparison_revision is not None else "baseline",
+            "current",
         )
         drift_path = work / "drift.diff"
         drift_path.write_text(
