@@ -38,6 +38,7 @@ export async function registerDocumentLanguage(
 	// Bumped on every active-editor change. A reply or queued switch from an
 	// older generation belongs to an editor that is no longer focused.
 	let generation = 0;
+	let disposed = false;
 	let graphFileContext: boolean | undefined;
 	const getFileTypesTimeoutMs = 5000;
 	const getFileTypesBackoffMs = 2000;
@@ -85,7 +86,7 @@ export async function registerDocumentLanguage(
 		editor: vscode.TextEditor | undefined,
 		gen: number,
 	): Promise<void> {
-		if (gen !== generation) return;
+		if (disposed || gen !== generation) return;
 		latestType = "";
 		try {
 			if (!editor) return;
@@ -152,7 +153,9 @@ export async function registerDocumentLanguage(
 				// guard stays held through the wait, so switches during the cooldown
 				// coalesce into pendingSwitch (freshest wins, a superseded one is
 				// dropped when drained). A settled response drains immediately.
-				const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
+				const delay = disposed
+					? 0
+					: pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
 				if (delay > 0) {
 					await new Promise<void>((resolve) => {
 						const timer = setTimeout(() => {
@@ -193,6 +196,7 @@ export async function registerDocumentLanguage(
 		}),
 		{
 			dispose: () => {
+				disposed = true;
 				clearTimeout(debounceTimer);
 				cancelBackoffTimer?.();
 				generation++;

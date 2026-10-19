@@ -214,6 +214,23 @@ suite("documentLanguage", () => {
 		assert.strictEqual(requests.length, 0);
 	});
 
+	test("disposing before a timed-out request rejects prevents a new backoff", async () => {
+		const { requests, context } = await startTracker();
+
+		await focus(fakeEditor("initial"));
+		await vi.advanceTimersByTimeAsync(TIMEOUT_MS);
+		assert.strictEqual(requests[0].token.isCancellationRequested, true);
+
+		for (const subscription of context.subscriptions) subscription.dispose();
+		requests[0].reject(new Error("request cancelled"));
+		await settle();
+
+		assert.strictEqual(vi.getTimerCount(), 0);
+		await vi.advanceTimersByTimeAsync(BACKOFF_MS);
+		assert.strictEqual(requests.length, 1);
+		assert.strictEqual(state.logError.mock.calls.length, 0);
+	});
+
 	test("disposing during timeout backoff clears its timer and queued switch", async () => {
 		const { requests, context } = await startTracker();
 
