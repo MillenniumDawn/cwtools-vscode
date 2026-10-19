@@ -68,6 +68,36 @@ for a quick where-did-the-time-go read without pulling in the full span output:
 CWTOOLS_TIMINGS=1 cargo run --release -p cwtools_cli -- validate --game hoi4 ...
 ```
 
+## Manual parser and corpus probes
+
+The `cwtools_cli` `md_bench` example walks six script directories from a
+Millennium Dawn checkout and prints the file count, AST leaf count, and one
+parse-time sample. It keeps the parsed batches alive and waits ten seconds at
+the end so a developer can inspect resident memory. From `engine/`, run it
+with an explicit checkout:
+
+```plaintext
+CWTOOLS_CORPUS=/path/to/Millennium-Dawn \
+  cargo run --release -p cwtools_cli --example md_bench
+```
+
+If `CWTOOLS_CORPUS` is unset, the example looks for `Millennium-Dawn` under
+`CWTOOLS_PROJECTS`, then beside the repository. `CWTOOLS_CORPUS` takes
+precedence when both are set.
+
+The parser crate's `probe` example prints the AST and parser errors for four
+small hard-coded inputs. Edit those inputs in
+`engine/crates/parser/examples/probe.rs` to isolate a parser behavior, then run
+it from `engine/`:
+
+```plaintext
+cargo run -p cwtools_parser --example probe
+```
+
+These examples are quick inspection tools, not repeatable performance
+benchmarks. For before/after claims, use the Criterion benches above with the
+same frozen inputs and interleaved runs.
+
 ## Add a new hot path
 
 Put `#[tracing::instrument(skip_all)]` on the function (use `skip_all` so large

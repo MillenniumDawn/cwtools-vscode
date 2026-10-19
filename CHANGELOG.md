@@ -1,5 +1,7 @@
 ### Unreleased
 
+* Document the `md_bench` corpus probe and parser `probe` example, including their input paths and limits as one-shot measurements. (#915)
+
 ### 4.0.1
 
 #### Engine
