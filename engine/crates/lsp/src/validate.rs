@@ -1698,8 +1698,12 @@ impl Backend {
 
         if crate::paths::is_loc_file(uri) {
             let path = uri_to_path_str(uri);
-            // first sight fire the whole-file cross-file sweep (#90). Watched
-            // paths already fence their sync work. (#87)
+            // Only open documents enter `loc_live_overlay`. Putting watched
+            // closed files there left stale entries and triggered a whole-file
+            // first-sight sweep (#90); watched files use `loc_watched_overlay` and
+            // the coalesced sweep instead.
+            // Parsing and linting are synchronous CPU work, so `block_in_place`
+            // keeps large loc buffers from holding a runtime worker (#87).
             let (changed_keys, diagnostics, cache) = tokio::task::block_in_place(|| {
                 let parsed_loc = try_parse_loc_buffer(text, &path);
                 let cache_version = parsed_version.filter(|_| parsed_loc.is_ok());

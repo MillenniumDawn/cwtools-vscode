@@ -1,5 +1,6 @@
-//! char column) verbatim; the LSP conversion is deferred to the handler, the one
-//! shares one not-yet-existing file instead of each recreating it (#142).
+//! Code actions retain parser character columns verbatim; the LSP conversion is
+//! deferred to the handler. Creation actions also share one not-yet-existing file
+//! instead of each recreating it (#142).
 
 mod create_loc_key;
 mod fix_all;

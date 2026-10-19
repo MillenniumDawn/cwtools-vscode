@@ -424,8 +424,9 @@ fn variable_def(name: String, value: Option<String>, pos: SourceRange) -> Define
     }
 }
 
-/// effect block (`set_variable = { ... }` and friends): the explicit
-/// blocks stays with the caller.
+/// Nonrecursive core for one effect body: collect explicit `var`/`variable`
+/// forms (and `array`) or shorthand assignments. The caller walks nested
+/// clauses to find effect blocks.
 pub(crate) fn extract_set_variable_defs_block(
     children: &[Child],
     arena: &Arena,

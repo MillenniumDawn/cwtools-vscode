@@ -705,10 +705,10 @@ mod tests {
         use tower_lsp::jsonrpc;
         use tower_lsp::lsp_types::{InitializeParams, InitializeResult};
 
-        // has answered an `initialize` request, so without a handshake the
-        // refresh never reaches the socket. Only the inbound half is stubbed:
-        // driving `initialize` through the real `Backend` would put its own
-        // client requests on the socket ahead of the refresh.
+        // tower-lsp suppresses server-to-client messages until the service has
+        // answered `initialize`, so without this handshake the refresh never
+        // reaches the socket. Only the inbound half is stubbed: running initialize
+        // through the real `Backend` would enqueue its own client requests first.
         struct Handshake;
         #[tower_lsp::async_trait]
         impl LanguageServer for Handshake {

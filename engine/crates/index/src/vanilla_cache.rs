@@ -1,4 +1,6 @@
-// zstd level, the atomic write and the bounded read/decode used by the `.cwb`
+// The vanilla cache uses the same zstd level, atomic writes, and bounded reads
+// and decodes as `.cwb`; these keep its on-disk format consistent and its input
+// bounded when loading cache data.
 use cwtools_cache::io::{ZSTD_LEVEL, decode_capped, read_capped, write_atomically};
 use std::collections::HashMap;
 use std::io::{Read, Write};
