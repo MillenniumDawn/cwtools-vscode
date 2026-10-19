@@ -11,6 +11,7 @@
 
 * Give each diagnostics guard validation binary a separate empty parse cache, keeping comparisons independent of the caller's cache and of each other. (#1055)
 * Cover edit supersession while validation waits for a permit and while synchronous validation is in flight, checking latest-only diagnostics, AST replacement, task cleanup and permit recovery. (#868)
+* Add a Stellaris diagnostics guard for the GPL-3.0 Universum Infinitum prescripted-country corpus and its pinned upstream rules. `python3 scripts/guard.py stellaris` uses only the mod's scripted data, with its own baseline and contributor guidance; it needs no game install or companion mods, and CI does not run it. (#320)
 
 ### 4.0.0
 

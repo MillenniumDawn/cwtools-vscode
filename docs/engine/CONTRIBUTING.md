@@ -143,6 +143,47 @@ against are recorded in its `#` header, and the script prints the revisions it
 actually ran on, so an input that has moved on is visible before you go hunting
 through the diff.
 
+### Stellaris tier
+
+The Stellaris guard exercises the game's validator on a real mod's scripted
+prescripted countries and localization. Run it when changing shared rule-engine
+code, Stellaris dispatch or validation behavior:
+
+```sh
+python3 scripts/guard.py stellaris
+```
+
+By default it reads `ui-prescripted-countries/` from the sibling
+`stellaris-ui-prescripted-countries` checkout and the `config/` directory from
+the sibling `cwtools-stellaris-config` checkout. The corpus is pinned to
+`hmlendea/stellaris-ui-prescripted-countries` commit
+`d28c9fd781c1fc297cd07950aa0cfa4e501105aa`; its repository declares GPL-3.0
+and its `LICENSE` is included in the checkout. The rules revision is the
+Stellaris commit in `rules-pins.json` (`99147efe8072b331005b50536762dcc0b8573224`).
+The guard reads only the mod's own tracked subtree, so it does not need a game
+installation or the three companion mods named by its README. It does not use
+the repository README image or the mod thumbnail. Both checkouts can be placed
+elsewhere with `CWTOOLS_PROJECTS`, or individually overridden with
+`--corpus` / `--rules` or `CWTOOLS_CORPUS` / `CWTOOLS_RULES`.
+
+Set up the pinned sibling checkouts with:
+
+```sh
+git clone https://github.com/hmlendea/stellaris-ui-prescripted-countries.git
+git -C stellaris-ui-prescripted-countries checkout --detach d28c9fd781c1fc297cd07950aa0cfa4e501105aa
+git clone https://github.com/cwtools/cwtools-stellaris-config.git
+git -C cwtools-stellaris-config checkout --detach 99147efe8072b331005b50536762dcc0b8573224
+```
+
+`scripts/stellaris-baseline.csv` records the expected diagnostics for those
+input revisions. To deliberately update it after reviewing a change, run
+`python3 scripts/guard.py stellaris --bless` and explain the changed diagnostics
+in the commit message. This pinned report has 56 mod diagnostics across all 26
+prescripted-country scripts and 116 rule-config diagnostics; baseline rows keep
+diagnostic paths and messages, not source text. References provided by the
+companion mods can remain unresolved because those mods are not part of this
+corpus.
+
 ### Vanilla tier
 
 CW113, CW222, CW227, CW229, CW250 and CW500 compare script against the union of

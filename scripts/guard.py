@@ -50,13 +50,19 @@ def csv_escape(s: str) -> str:
     return s
 
 
-def relativize_file(file: str, corpus: Path) -> str:
+def relativize_file(file: str, corpus: Path, rules: Path | None = None) -> str:
     file_slash = file.replace("\\", "/")
-    roots = {
-        str(corpus).replace("\\", "/").rstrip("/"),
-        corpus.as_posix().rstrip("/"),
-        str(corpus.resolve()).replace("\\", "/").rstrip("/"),
-    }
+    roots: set[str] = set()
+    for root_path in (corpus, rules):
+        if root_path is None:
+            continue
+        roots.update(
+            {
+                str(root_path).replace("\\", "/").rstrip("/"),
+                root_path.as_posix().rstrip("/"),
+                str(root_path.resolve()).replace("\\", "/").rstrip("/"),
+            }
+        )
     for root in sorted(roots, key=len, reverse=True):
         prefix = root + "/"
         if file_slash.startswith(prefix):
@@ -66,7 +72,7 @@ def relativize_file(file: str, corpus: Path) -> str:
     return file_slash
 
 
-def normalize_rows(raw: str, corpus: Path) -> list[str]:
+def normalize_rows(raw: str, corpus: Path, rules: Path | None = None) -> list[str]:
     lines = raw.splitlines()
     if not lines:
         return []
@@ -79,7 +85,7 @@ def normalize_rows(raw: str, corpus: Path) -> list[str]:
             row = row[:-1]
         if not row:
             continue
-        row[0] = relativize_file(row[0], corpus)
+        row[0] = relativize_file(row[0], corpus, rules)
         rows.append(",".join(csv_escape(c) for c in row))
     rows.sort()
     return rows
@@ -146,6 +152,27 @@ def describe(directory: Path) -> str:
     if dirty.returncode == 0 and dirty.stdout.strip():
         return f"{sha_s} (dirty)"
     return sha_s
+
+
+def full_revision(directory: Path) -> str:
+    revision = subprocess.run(
+        ["git", "-C", str(directory), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if revision.returncode != 0 or not revision.stdout.strip():
+        return "not a git checkout"
+    status = subprocess.run(
+        ["git", "-C", str(directory), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    sha = revision.stdout.strip()
+    if status.returncode == 0 and status.stdout.strip():
+        return f"{sha} (dirty)"
+    return sha
 
 
 def resolve_bin(bin_path: Path) -> Path:
@@ -221,9 +248,12 @@ def build_config(
     parser.add_argument(
         "preset",
         nargs="?",
-        choices=("md", "vanilla"),
+        choices=("md", "stellaris", "vanilla"),
         default="md",
-        help="md (Millennium Dawn, default) or vanilla (fixture)",
+        help=(
+            "md (Millennium Dawn, default), stellaris (pinned mod), "
+            "or vanilla (fixture)"
+        ),
     )
     parser.add_argument("--corpus", help="mod corpus to validate (env CWTOOLS_CORPUS)")
     parser.add_argument("--rules", help=".cwt ruleset directory (env CWTOOLS_RULES)")
@@ -232,7 +262,9 @@ def build_config(
         "--baseline", help="committed baseline report (env CWTOOLS_BASELINE)"
     )
     parser.add_argument("--bin", help="cwtools binary (env CWTOOLS_BIN)")
-    parser.add_argument("--game", help="game id, default hoi4 (env CWTOOLS_GAME)")
+    parser.add_argument(
+        "--game", help="game id (default depends on preset; env CWTOOLS_GAME)"
+    )
     parser.add_argument(
         "--no-build",
         action="store_true",
@@ -293,6 +325,20 @@ def build_config(
                 else script_dir / "vanilla-baseline.csv"
             )
 
+    if args.preset == "stellaris":
+        if args.corpus is None and not env.get("CWTOOLS_CORPUS"):
+            corpus = (
+                projects
+                / "stellaris-ui-prescripted-countries"
+                / "ui-prescripted-countries"
+            )
+        if args.rules is None and not env.get("CWTOOLS_RULES"):
+            rules = projects / "cwtools-stellaris-config" / "config"
+        if args.baseline is None and not env.get("CWTOOLS_BASELINE"):
+            baseline = script_dir / "stellaris-baseline.csv"
+        if args.game is None and not env.get("CWTOOLS_GAME"):
+            game = "stellaris"
+
     return Config(
         preset=args.preset,
         corpus=corpus,
@@ -328,6 +374,17 @@ def compose_current(
         f"# corpus: {config.corpus.name} @ {corpus_rev}",
         f"# rules:  {rules_label} @ {rules_rev}",
     ]
+    if config.preset == "stellaris":
+        lines.extend(
+            [
+                "# corpus-source: https://github.com/hmlendea/stellaris-ui-prescripted-countries",
+                "# corpus-license: GPL-3.0; scoped to ui-prescripted-countries/",
+                f"# corpus-commit: {full_revision(config.corpus)}",
+                "# corpus-excludes: README and repository/mod thumbnail images",
+                "# rules-source: https://github.com/cwtools/cwtools-stellaris-config",
+                f"# rules-commit: {full_revision(config.rules)}",
+            ]
+        )
     if config.vanilla is not None and vanilla_rev is not None:
         lines.append(f"# vanilla: {config.vanilla.name} @ {vanilla_rev}")
     lines.append(COLUMN_HEADER)
@@ -356,6 +413,12 @@ def run_guard(config: Config) -> int:
                 "  Set CWTOOLS_CORPUS, pass --corpus, or clone Millennium-Dawn "
                 "under CWTOOLS_PROJECTS."
             )
+        if config.preset == "stellaris":
+            die(
+                f"corpus not found: {config.corpus}\n"
+                "  Set CWTOOLS_CORPUS, pass --corpus, or clone "
+                "hmlendea/stellaris-ui-prescripted-countries under CWTOOLS_PROJECTS."
+            )
         die(
             f"corpus not found: {config.corpus}\n"
             "  Pass --corpus or restore the committed "
@@ -367,6 +430,12 @@ def run_guard(config: Config) -> int:
                 f"rules not found: {config.rules}\n"
                 "  Set CWTOOLS_RULES, pass --rules, or clone cwtools-hoi4-config "
                 "under CWTOOLS_PROJECTS."
+            )
+        if config.preset == "stellaris":
+            die(
+                f"rules not found: {config.rules}\n"
+                "  Set CWTOOLS_RULES, pass --rules, or clone "
+                "cwtools/cwtools-stellaris-config under CWTOOLS_PROJECTS."
             )
         die(
             f"rules not found: {config.rules}\n"
@@ -532,7 +601,8 @@ def run_guard(config: Config) -> int:
             die(f"validate wrote no report to {raw_path}")
 
         raw = raw_path.read_text(encoding="utf-8", errors="surrogateescape")
-        rows = normalize_rows(raw, corpus)
+        rule_root = rules if config.preset == "stellaris" else None
+        rows = normalize_rows(raw, corpus, rule_root)
         current = compose_current(rows, config, corpus_rev, rules_rev, vanilla_rev)
         current_path.write_text(current, encoding="utf-8", newline="\n")
 
@@ -590,7 +660,7 @@ def run_guard(config: Config) -> int:
             comparison_raw = comparison_raw_path.read_text(
                 encoding="utf-8", errors="surrogateescape"
             )
-            comparison_rows = normalize_rows(comparison_raw, corpus)
+            comparison_rows = normalize_rows(comparison_raw, corpus, rule_root)
             comparison = compose_current(
                 comparison_rows, config, corpus_rev, rules_rev, vanilla_rev
             )

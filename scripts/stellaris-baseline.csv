@@ -1,0 +1,182 @@
+# cwtools guard baseline. Regenerate with python3 scripts/guard.py stellaris --bless
+# corpus: ui-prescripted-countries @ d28c9fd
+# rules:  cwtools-stellaris-config/config @ 99147ef
+# corpus-source: https://github.com/hmlendea/stellaris-ui-prescripted-countries
+# corpus-license: GPL-3.0; scoped to ui-prescripted-countries/
+# corpus-commit: d28c9fd781c1fc297cd07950aa0cfa4e501105aa
+# corpus-excludes: README and repository/mod thumbnail images
+# rules-source: https://github.com/cwtools/cwtools-stellaris-config
+# rules-commit: 99147efe8072b331005b50536762dcc0b8573224
+file,line,severity,code,message
+common/defines.cwt,3088,Error,CW601,rule references undefined type `modifier`
+effects.cwt,1124,Error,CW601,rule references undefined type `target`
+effects.cwt,18,Error,CW601,rule references undefined type `global_starbase_design`
+effects.cwt,4549,Error,CW601,rule references undefined enum `storm_mission_counter`
+effects.cwt,4562,Error,CW601,rule references undefined enum `storm_mission_counter`
+effects.cwt,6,Error,CW601,rule references undefined enum `scripted_effect_params`
+effects.cwt,8,Error,CW601,rule references undefined enum `scripted_effect_params`
+modifier.cwt,9,Error,CW601,rule references undefined type `modifier`
+modifier_rule.cwt,16,Error,CW601,rule references undefined type `trigger`
+modifier_rule.cwt,181,Error,CW601,rule references undefined type `trigger`
+modifier_rule.cwt,187,Error,CW601,rule references undefined type `trigger`
+modifier_rule.cwt,238,Error,CW601,rule references undefined type `trigger`
+modifier_rule.cwt,26,Error,CW601,rule references undefined type `trigger`
+modifier_rule.cwt,36,Error,CW601,rule references undefined type `trigger`
+modifier_rule.cwt,46,Error,CW601,rule references undefined type `trigger`
+modifier_rule.cwt,99,Error,CW601,rule references undefined type `modifier`
+prescripted_countries/ui_civbe_africa.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_civbe_africa.txt,76,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_civbe_brasilia.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_civbe_brasilia.txt,79,Error,CW240,"Field 'leader_class' has value '""general""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_civbe_franco-iberia.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_civbe_franco-iberia.txt,99,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_civbe_integr.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_civbe_kavithan-protectorate.txt,100,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_civbe_kavithan-protectorate.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_civbe_panasian-cooperative.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_civbe_polystralia.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_civbe_polystralia.txt,99,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_civbe_slavic_federation.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_civbe_slavic_federation.txt,90,Error,CW240,"Field 'leader_class' has value '""admiral""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_elderscrolls_aldmeri.txt,100,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_elderscrolls_aldmeri.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_elderscrolls_argonia.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_elderscrolls_argonia.txt,81,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_arabian.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_arabian.txt,85,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_celtic.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_celtic.txt,83,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_french.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_french.txt,83,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_hellenic.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_hellenic.txt,83,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_italian.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_italian.txt,83,Error,CW240,"Field 'leader_class' has value '""admiral""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_japanese.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_japanese.txt,75,Error,CW240,"Field 'leader_class' has value '""admiral""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_norse.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_norse.txt,75,Error,CW240,"Field 'leader_class' has value '""admiral""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_ottoman.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_ottoman.txt,85,Error,CW240,"Field 'leader_class' has value '""general""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_extra_human_roman.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_extra_human_roman.txt,75,Error,CW240,"Field 'leader_class' has value '""general""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_galciv_altarian.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_galciv_altarian.txt,24,Warning,CW242,"Field 'adjective' appears 0 time(s), expected at least 1"
+prescripted_countries/ui_galciv_altarian.txt,24,Warning,CW242,"Field 'name' appears 0 time(s), expected at least 1"
+prescripted_countries/ui_galciv_altarian.txt,24,Warning,CW242,"Field 'plural' appears 0 time(s), expected at least 1"
+prescripted_countries/ui_galciv_altarian.txt,27,Error,CW262,Unexpected block 'species_name'
+prescripted_countries/ui_galciv_altarian.txt,30,Error,CW262,Unexpected block 'species_plural'
+prescripted_countries/ui_galciv_altarian.txt,33,Error,CW262,Unexpected block 'species_adjective'
+prescripted_countries/ui_galciv_altarian.txt,98,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_galciv_drengin.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_galciv_drengin.txt,87,Error,CW240,"Field 'leader_class' has value '""general""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_galciv_krynn.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_galciv_krynn.txt,77,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_galciv_torian.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_galciv_torian.txt,79,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_galciv_yor.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_galciv_yor.txt,78,Error,CW240,"Field 'leader_class' has value '""governor""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_starcraft_protoss.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_starcraft_protoss.txt,74,Error,CW240,"Field 'leader_class' has value '""admiral""', expected Enum(""leader_classes"")"
+prescripted_countries/ui_starcraft_terran.txt,2,Error,CW263,Unexpected field 'key'
+prescripted_countries/ui_starcraft_terran.txt,70,Error,CW240,"Field 'leader_class' has value '""admiral""', expected Enum(""leader_classes"")"
+scope_changes.cwt,1004,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1049,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1094,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1139,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1183,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1227,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1258,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1302,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1346,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1390,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1434,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1478,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1548,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1579,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1623,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1654,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1699,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1743,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1788,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1832,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1876,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1947,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,1991,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2035,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2079,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2112,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2145,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2178,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2211,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2324,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2395,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2442,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2531,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2607,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2667,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2727,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2789,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2859,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2919,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,2987,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3047,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3107,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3167,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3227,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3289,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3351,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3395,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3473,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3504,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3564,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3624,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3668,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3744,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3804,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3890,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,3986,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4030,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4072,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4132,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4192,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4254,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4314,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4374,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4434,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4500,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4556,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4616,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4684,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4776,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4820,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4868,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,4922,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5157,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5193,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5237,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5281,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5325,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5369,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5413,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5457,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5530,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5614,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5659,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5704,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5749,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5794,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5839,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,5974,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,6019,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,703,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,750,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,781,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,826,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,871,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,915,Error,CW601,rule references undefined type `trigger`
+scope_changes.cwt,959,Error,CW601,rule references undefined type `trigger`
+triggers.cwt,10,Error,CW601,rule references undefined enum `scripted_effect_params`
+triggers.cwt,12,Error,CW601,rule references undefined enum `scripted_effect_params`
+triggers.cwt,2299,Error,CW601,rule references undefined type `resource_name`
+triggers.cwt,3090,Error,CW605,Malformed alias directive `alias[trigger:is_market_leader`; expected `alias[category:name]` with nonempty names

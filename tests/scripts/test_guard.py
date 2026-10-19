@@ -557,6 +557,31 @@ def test_normalize_strips_prefix_and_hash(guard: ModuleType) -> None:
     assert rows == ["common/x.txt,10,Warning,CW100,Localisation key FOO is not defined"]
 
 
+def test_normalize_strips_rules_prefix_and_hash(guard: ModuleType) -> None:
+    raw = (
+        "file,line,severity,code,message,hash\n"
+        "/ws/rules/config/effects.cwt,18,Error,CW601,"
+        "rule references undefined type `modifier`,0123456789abcdef\n"
+    )
+    rows = guard.normalize_rows(raw, Path("/ws/mod"), Path("/ws/rules/config"))
+    assert rows == [
+        "effects.cwt,18,Error,CW601,rule references undefined type `modifier`"
+    ]
+
+
+def test_normalize_keeps_rules_path_without_rules_root(guard: ModuleType) -> None:
+    raw = (
+        "file,line,severity,code,message,hash\n"
+        "/ws/rules/config/effects.cwt,18,Error,CW601,"
+        "rule references undefined type `modifier`,0123456789abcdef\n"
+    )
+    rows = guard.normalize_rows(raw, Path("/ws/mod"))
+    assert rows == [
+        "/ws/rules/config/effects.cwt,18,Error,CW601,"
+        "rule references undefined type `modifier`"
+    ]
+
+
 def test_normalize_keeps_a_quoted_comma_path(guard: ModuleType) -> None:
     raw = (
         "file,line,severity,code,message,hash\n"
@@ -608,6 +633,26 @@ def test_compare_pins_treats_matching_dirty_revision_as_mismatch(
     ) == [("rules", "abc1234 (dirty)", "abc1234 (dirty)")]
 
 
+def test_full_revision_marks_a_dirty_checkout(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    revision = "a" * 40
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        stdout = f"{revision}\n" if "rev-parse" in command else " M mod.txt\n"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout)
+
+    monkeypatch.setattr(guard.subprocess, "run", run)
+
+    assert guard.full_revision(tmp_path) == f"{revision} (dirty)"
+    assert commands == [
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        ["git", "-C", str(tmp_path), "status", "--porcelain"],
+    ]
+
+
 def test_default_projects_falls_back_to_the_repo_root_parent(
     guard: ModuleType,
 ) -> None:
@@ -647,6 +692,59 @@ def test_md_reads_the_env(guard: ModuleType) -> None:
     )
     assert config.corpus == Path("/tmp/MD")
     assert config.game == "hoi4"
+
+
+def test_stellaris_uses_the_pinned_corpus_defaults(guard: ModuleType) -> None:
+    config = guard.build_config(["stellaris"], {"CWTOOLS_PROJECTS": "/tmp/projects"})
+    assert config.corpus == Path(
+        "/tmp/projects/stellaris-ui-prescripted-countries/ui-prescripted-countries"
+    )
+    assert config.rules == Path("/tmp/projects/cwtools-stellaris-config/config")
+    assert config.game == "stellaris"
+    assert config.baseline == guard.SCRIPT_DIR / "stellaris-baseline.csv"
+
+
+def test_stellaris_honors_explicit_input_overrides(guard: ModuleType) -> None:
+    config = guard.build_config(
+        ["stellaris", "--corpus", "/tmp/mod", "--rules", "/tmp/rules"],
+        {
+            "CWTOOLS_CORPUS": "/tmp/env-mod",
+            "CWTOOLS_RULES": "/tmp/env-rules",
+            "CWTOOLS_GAME": "other-game",
+            "CWTOOLS_BASELINE": "/tmp/baseline.csv",
+            "CWTOOLS_PROJECTS": "/tmp/projects",
+        },
+    )
+    assert config.corpus == Path("/tmp/mod")
+    assert config.rules == Path("/tmp/rules")
+    assert config.game == "other-game"
+    assert config.baseline == Path("/tmp/baseline.csv")
+
+
+def test_stellaris_baseline_records_sources_and_full_revisions(
+    guard: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(guard, "full_revision", lambda _directory: "a" * 40)
+    config = guard.build_config(["stellaris"], {})
+    baseline = guard.compose_current(
+        ["mod.txt,1,Error,CW100,message"], config, "c0ffee0", "rules123", None
+    )
+
+    assert "# corpus: ui-prescripted-countries @ c0ffee0" in baseline
+    assert (
+        "# corpus-source: https://github.com/hmlendea/stellaris-ui-prescripted-countries"
+        in baseline
+    )
+    assert "# corpus-license: GPL-3.0; scoped to ui-prescripted-countries/" in baseline
+    assert f"# corpus-commit: {'a' * 40}" in baseline
+    assert (
+        "# rules-source: https://github.com/cwtools/cwtools-stellaris-config"
+        in baseline
+    )
+    assert f"# rules-commit: {'a' * 40}" in baseline
+    assert baseline.endswith(
+        "file,line,severity,code,message\nmod.txt,1,Error,CW100,message\n"
+    )
 
 
 def test_vanilla_overrides_the_game_env(guard: ModuleType) -> None:
