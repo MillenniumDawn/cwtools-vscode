@@ -89,9 +89,7 @@ def test_checks_each_manifest_version_against_the_expected_version(
 ) -> None:
     write_vsix(tmp_path / "ext-1.0.0.vsix", [], include_flat=True)
 
-    assert smoke_test_vsix.main(
-        [str(tmp_path), "--expected-version", "1.0.0"]
-    ) == 0
+    assert smoke_test_vsix.main([str(tmp_path), "--expected-version", "1.0.0"]) == 0
 
     with pytest.raises(SystemExit) as caught:
         smoke_test_vsix.main([str(tmp_path), "--expected-version", "2.0.0"])
