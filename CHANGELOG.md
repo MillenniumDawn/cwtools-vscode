@@ -1,5 +1,7 @@
 ### Unreleased
 
+* Document per-file keep/migrate decisions for the Node-facing build helpers and tool-native configuration. (#987)
+
 ### 4.0.1
 
 #### Engine

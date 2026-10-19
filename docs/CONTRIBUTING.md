@@ -162,6 +162,24 @@ it through `source-roots`. The standalone entry points in `scripts/` have no
 sibling imports and load by path from `tests/scripts/conftest.py`, which is
 also what keeps `scripts/coverage.py` from shadowing the `coverage` package.
 
+### Build helper language decisions
+
+The small JavaScript files in the build and test path stay JavaScript. Each
+uses a Node or VS Code test-runner interface directly; moving it to Python
+would add a second interface layer without making the Python toolchain cover
+the behavior that actually runs it.
+
+| File | Decision | Reason |
+| ---- | -------- | ------ |
+| `scripts/build/python.mjs` | Stay | npm invokes this Node shim to find the platform's Python command and forward its arguments, standard streams, and exit status. |
+| `scripts/build/host-test-discovery.mjs` | Stay | It imports the real `.vscode-test.mjs` module and checks its test list from Node; reimplementing that config loading in Python would duplicate JavaScript behavior. |
+| `.vscode-test.mjs` | Stay | `vscode-test` discovers this conventional JavaScript config directly; migrating it would require bypassing that runner entry point. |
+| `eslint.config.mjs` | Stay | ESLint's flat config is a native JavaScript module that imports ESLint and TypeScript ESLint configuration objects. |
+
+The Python implementation and its tests remain covered by the Python
+toolchain described above; these decisions only cover the Node-facing glue
+and tool-native configuration.
+
 ### The extension-host window
 
 Every host label and host-coverage run goes through
