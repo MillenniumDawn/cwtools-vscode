@@ -83,6 +83,24 @@ impl<'a> Parser<'a> {
 
     fn advance(&mut self) -> Option<char> {
         let c = self.chars.next()?;
+        self.step(c);
+        Some(c)
+    }
+
+    /// Consume the next char only if `pred` accepts it, decoding it once.
+    fn next_if(&mut self, pred: impl FnOnce(char) -> bool) -> Option<char> {
+        let mut rest = self.chars.clone();
+        let c = rest.next().filter(|&c| pred(c))?;
+        self.chars = rest;
+        self.step(c);
+        Some(c)
+    }
+
+    fn advance_while(&mut self, mut pred: impl FnMut(char) -> bool) {
+        while self.next_if(&mut pred).is_some() {}
+    }
+
+    fn step(&mut self, c: char) {
         if c == '\n' {
             self.line += 1;
             self.col = 0;
@@ -90,17 +108,10 @@ impl<'a> Parser<'a> {
             // '\r' is not counted toward column (CRLF line endings: \r\n is one newline).
             self.col = self.col.saturating_add(1);
         }
-        Some(c)
     }
 
     fn peek(&self) -> Option<char> {
         self.chars.clone().next()
-    }
-
-    fn peek2(&self) -> Option<char> {
-        let mut it = self.chars.clone();
-        it.next();
-        it.next()
     }
 
     fn peek_n<const N: usize>(&self) -> ([char; N], usize) {
@@ -114,25 +125,14 @@ impl<'a> Parser<'a> {
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(c) = self.peek() {
-            if c.is_whitespace() {
-                self.advance();
-            } else {
-                break;
-            }
-        }
+        self.advance_while(char::is_whitespace);
     }
 
     fn consume_comment(&mut self) -> Option<Comment> {
         if self.peek() == Some('#') {
             let start = self.pos();
             let start_byte = self.byte_pos();
-            while let Some(c) = self.peek() {
-                if c == '\n' {
-                    break;
-                }
-                self.advance();
-            }
+            self.advance_while(|c| c != '\n');
             let end = self.pos();
             return Some(Comment {
                 text: self.input[start_byte..self.byte_pos()].to_string(),
@@ -144,56 +144,42 @@ impl<'a> Parser<'a> {
 
     fn skip_comment(&mut self) -> bool {
         if self.peek() == Some('#') {
-            while let Some(c) = self.peek() {
-                if c == '\n' {
-                    break;
-                }
-                self.advance();
-            }
+            self.advance_while(|c| c != '\n');
             return true;
         }
         false
     }
 
-    fn skip_quoted(&mut self) {
-        self.advance(); // opening '"'
-        while let Some(c) = self.peek() {
-            if c == '\n' {
-                break;
-            }
-            self.advance();
+    /// Skip a quoted string whose opening `"` is already consumed.
+    fn skip_quoted_body(&mut self) {
+        while let Some(c) = self.next_if(|c| c != '\n') {
             if c == '"' {
                 break;
             }
-            if c == '\\' && self.peek().is_some_and(|n| n == '"' || n == '\\') {
-                self.advance();
+            if c == '\\' {
+                self.next_if(|n| n == '"' || n == '\\');
             }
         }
     }
 
     fn parse_operator(&mut self) -> Option<Operator> {
-        let c1 = self.peek()?;
-        let c2 = self.peek2();
-        let op = match (c1, c2) {
-            ('<', Some('=')) => Some(Operator::LessThanOrEqual),
-            ('>', Some('=')) => Some(Operator::GreaterThanOrEqual),
-            ('!', Some('=')) => Some(Operator::NotEqual),
-            ('=', Some('=')) => Some(Operator::EqualEqual),
-            ('?', Some('=')) => Some(Operator::QuestionEqual),
-            ('=', _) => Some(Operator::Equals),
-            ('>', _) => Some(Operator::GreaterThan),
-            ('<', _) => Some(Operator::LessThan),
-            _ => None,
+        // Operators are ASCII, so their bytes match without decoding.
+        let op = match self.chars.as_str().as_bytes() {
+            [b'<', b'=', ..] => Operator::LessThanOrEqual,
+            [b'>', b'=', ..] => Operator::GreaterThanOrEqual,
+            [b'!', b'=', ..] => Operator::NotEqual,
+            [b'=', b'=', ..] => Operator::EqualEqual,
+            [b'?', b'=', ..] => Operator::QuestionEqual,
+            [b'=', ..] => Operator::Equals,
+            [b'>', ..] => Operator::GreaterThan,
+            [b'<', ..] => Operator::LessThan,
+            _ => return None,
         };
-
-        if let Some(ref o) = op {
-            let len = o.as_str().len();
-            for _ in 0..len {
-                self.advance();
-            }
-            self.skip_whitespace();
+        for _ in 0..op.as_str().len() {
+            self.advance();
         }
-        op
+        self.skip_whitespace();
+        Some(op)
     }
 
     fn read_key(&mut self) -> Option<Cow<'a, str>> {
@@ -204,15 +190,13 @@ impl<'a> Parser<'a> {
         } else {
             let input = self.input;
             let start = self.byte_pos();
-            while let Some(c) = self.peek() {
-                if c == '?' && self.peek2() == Some('=') {
+            loop {
+                self.advance_while(|c| c != '?' && is_key_char(c));
+                let rest = self.chars.as_str();
+                if !rest.starts_with('?') || rest.starts_with("?=") {
                     break;
                 }
-                if is_key_char(c) {
-                    self.advance();
-                } else {
-                    break;
-                }
+                self.advance();
             }
             let s = &input[start..self.byte_pos()];
             if s.is_empty() {
@@ -232,19 +216,20 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
         }
         let start = self.pos();
+        let first = self.peek();
 
-        if self.peek() == Some('{') {
+        if first == Some('{') {
             return self
                 .parse_clause()
                 .map(|value| self.finish_value(start, value, None));
         }
 
-        if self.peek() == Some('"') {
+        if first == Some('"') {
             let value = self.parse_quoted_value(leafvalue);
             return Some(self.finish_value(start, value, None));
         }
 
-        let (peek7, peek7_len) = match self.peek() {
+        let (peek7, peek7_len) = match first {
             Some('r' | 'R' | 'h' | 'H' | 'y' | 'n' | '@') => self.peek_n::<7>(),
             _ => (['\0'; 7], 0),
         };
@@ -338,27 +323,19 @@ impl<'a> Parser<'a> {
         let mut unescaped: Option<String> = None;
         let mut seg_start = self.byte_pos();
         let mut closed = false;
-        while let Some(c) = self.peek() {
-            if c == '\n' {
-                break;
-            }
+        while let Some(c) = self.next_if(|c| c != '\n') {
             if c == '\\' {
-                let esc_start = self.byte_pos();
-                self.advance(); // consume '\'
-                if let Some(e @ ('"' | '\\')) = self.peek() {
+                let esc_start = self.byte_pos() - c.len_utf8();
+                if let Some(e) = self.next_if(|e| matches!(e, '"' | '\\')) {
                     let buf = unescaped.get_or_insert_with(|| String::from('"'));
                     buf.push_str(&input[seg_start..esc_start]);
                     buf.push(e);
-                    self.advance();
                     seg_start = self.byte_pos();
                 }
-                continue;
             } else if c == '"' {
-                self.advance();
                 closed = true;
                 break;
             }
-            self.advance();
         }
         if !closed {
             if report_unclosed {
@@ -431,18 +408,9 @@ impl<'a> Parser<'a> {
         let num_start = self.byte_pos();
         let mut had_dot = false;
 
-        if matches!(self.peek(), Some('-' | '+')) {
-            self.advance();
-        }
-        while let Some(c) = self.peek() {
-            if c.is_ascii_digit() {
-                self.advance();
-            } else if c == '.' && !had_dot {
-                had_dot = true;
-                self.advance();
-            } else {
-                break;
-            }
+        self.next_if(|c| matches!(c, '-' | '+'));
+        while let Some(c) = self.next_if(|c| c.is_ascii_digit() || (c == '.' && !had_dot)) {
+            had_dot |= c == '.';
         }
         let num_str = &self.input[num_start..self.byte_pos()];
 
@@ -463,13 +431,7 @@ impl<'a> Parser<'a> {
         self.restore(num_saved);
 
         let start = self.byte_pos();
-        while let Some(c) = self.peek() {
-            if is_value_char(c) {
-                self.advance();
-            } else {
-                break;
-            }
-        }
+        self.advance_while(is_value_char);
         let s = &self.input[start..self.byte_pos()];
         if s.is_empty() {
             return None;
@@ -501,19 +463,21 @@ impl<'a> Parser<'a> {
         let mut children = Vec::new();
         loop {
             self.skip_whitespace();
-            if self.peek() == Some('}') {
-                self.advance();
-                break;
+            match self.peek() {
+                Some('}') => {
+                    self.advance();
+                    break;
+                }
+                None => {
+                    self.errors.push(ParseError::Pos(
+                        self.pos().line,
+                        self.pos().col,
+                        "unclosed clause: expected '}' before end of file".to_string(),
+                    ));
+                    break;
+                }
+                Some(_) => self.parse_statement(&mut children),
             }
-            if self.peek().is_none() {
-                self.errors.push(ParseError::Pos(
-                    self.pos().line,
-                    self.pos().col,
-                    "unclosed clause: expected '}' before end of file".to_string(),
-                ));
-                break;
-            }
-            self.parse_statement(&mut children);
         }
         self.depth -= 1;
 
@@ -525,7 +489,7 @@ impl<'a> Parser<'a> {
         self.advance(); // '{'
         let mut open = 1u32;
         while open > 0 {
-            match self.peek() {
+            match self.advance() {
                 None => {
                     self.errors.push(ParseError::Pos(
                         self.pos().line,
@@ -534,21 +498,11 @@ impl<'a> Parser<'a> {
                     ));
                     return;
                 }
-                Some('#') => {
-                    self.skip_comment();
-                }
-                Some('"') => self.skip_quoted(),
-                Some('{') => {
-                    self.advance();
-                    open += 1;
-                }
-                Some('}') => {
-                    self.advance();
-                    open -= 1;
-                }
-                Some(_) => {
-                    self.advance();
-                }
+                Some('#') => self.advance_while(|c| c != '\n'),
+                Some('"') => self.skip_quoted_body(),
+                Some('{') => open += 1,
+                Some('}') => open -= 1,
+                Some(_) => {}
             }
         }
     }
@@ -699,16 +653,8 @@ impl<'a> Parser<'a> {
         }
         self.advance(); // '['
 
-        let mut found_close = false;
-        while let Some(c) = self.peek() {
-            if c == ']' {
-                self.advance();
-                found_close = true;
-                break;
-            }
-            self.advance();
-        }
-        if !found_close {
+        self.advance_while(|c| c != ']');
+        if self.next_if(|c| c == ']').is_none() {
             self.errors.push(ParseError::Pos(
                 self.pos().line,
                 self.pos().col,
@@ -1413,6 +1359,57 @@ shorthand { nested = value }
     }
 
     #[test]
+    fn columns_count_chars_through_multibyte_keys_values_and_comments() {
+        let table = StringTable::new();
+        let src = "clé = vàlue # ünï\nnext = \"日本語\" # 😀\r\nlast = 1";
+        let result = parse_string(src, &table);
+        let range = |start: (u32, u16), end: (u32, u16)| SourceRange {
+            start: SourcePos {
+                line: start.0,
+                col: start.1,
+            },
+            end: SourcePos {
+                line: end.0,
+                col: end.1,
+            },
+        };
+        let leaves = &result.arena.leaves;
+        assert_eq!(leaves.len(), 3);
+        assert_eq!(leaves[0].value_pos, range((1, 6), (1, 11)));
+        assert_eq!(leaves[1].pos.start, SourcePos { line: 2, col: 0 });
+        assert_eq!(leaves[1].value_pos, range((2, 7), (2, 12)));
+        assert_eq!(leaves[2].pos.start, SourcePos { line: 3, col: 0 });
+        let comments = &result.arena.comments;
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].text, "# ünï");
+        assert_eq!(comments[0].pos, range((1, 12), (1, 17)));
+        assert_eq!(comments[1].text, "# 😀\r");
+        assert_eq!(comments[1].pos, range((2, 13), (2, 16)));
+    }
+
+    #[test]
+    fn crlf_inside_quoted_string_and_comment_is_not_a_column() {
+        let table = StringTable::new();
+        let result = parse_string("a = \"x\r y\" # c\r\nb = 1", &table);
+        let leaf = &result.arena.leaves[0];
+        assert_eq!(
+            leaf.value_pos,
+            SourceRange {
+                start: SourcePos { line: 1, col: 4 },
+                end: SourcePos { line: 1, col: 9 },
+            }
+        );
+        assert_eq!(
+            result.arena.comments[0].pos.end,
+            SourcePos { line: 1, col: 13 }
+        );
+        assert_eq!(
+            result.arena.leaves[1].pos.start,
+            SourcePos { line: 2, col: 0 }
+        );
+    }
+
+    #[test]
     fn metaprogramming_prefix() {
         let table = StringTable::new();
         let input = r"x = @\[expr]";
@@ -1681,6 +1678,27 @@ shorthand { nested = value }
         }
     }
 
+    #[test]
+    fn question_marks_inside_keys_stop_only_at_question_equal() {
+        for (src, key, value_col) in [
+            ("ключ?= 1", "ключ", 7),
+            ("a?b?= 1", "a?b", 6),
+            ("a??= 1", "a?", 5),
+        ] {
+            let table = StringTable::new();
+            let result = parse_string(src, &table);
+            assert_eq!(result.root_children.len(), 1, "{src}");
+            let leaf = &result.arena.leaves[0];
+            assert_eq!(
+                table.get_string(leaf.key.normal).unwrap_or_default(),
+                key,
+                "{src}"
+            );
+            assert_eq!(leaf.op, Operator::QuestionEqual, "{src}");
+            assert_eq!(leaf.value_pos.start.col, value_col, "{src}");
+        }
+    }
+
     // Clause nesting is bounded. A stack overflow aborts the process instead of
 
     fn nested_clauses(depth: usize) -> String {
@@ -1766,6 +1784,43 @@ shorthand { nested = value }
             })
             .expect("`last = 2` must survive the skipped subtree");
         assert_eq!(last, Value::Int(2));
+    }
+
+    #[test]
+    fn depth_cap_skips_comments_and_quotes_inside_the_clause() {
+        let table = StringTable::new();
+        let mut src = String::from("root = ");
+        for _ in 0..MAX_CLAUSE_DEPTH {
+            src.push_str("{ a = ");
+        }
+        src.push_str("{ # }}} \"\n \"}\\\"é}\" x }");
+        for _ in 0..MAX_CLAUSE_DEPTH {
+            src.push_str(" }");
+        }
+        src.push_str("\nlast = 2");
+        let result = parse_string(&src, &table);
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert_eq!(depth_errors(&result).len(), 1, "{:?}", result.errors);
+        assert_eq!(result.root_children.len(), 2);
+        let last = result.arena.leaves.last().expect("`last` leaf");
+        assert_eq!(last.value, Value::Int(2));
+        assert_eq!(last.pos.start, SourcePos { line: 3, col: 0 });
+    }
+
+    #[test]
+    fn backslash_before_newline_leaves_the_quote_unclosed() {
+        let table = StringTable::new();
+        let result = parse_string("a = \"abc\\\nb = 1", &table);
+        let messages: Vec<String> = result.errors.iter().map(|e| e.to_string()).collect();
+        assert_eq!(messages, ["1:4: unclosed quoted string starting at line 1"]);
+        assert_eq!(result.root_children.len(), 2);
+        let Value::QString(value) = &result.arena.leaves[0].value else {
+            panic!("expected a quoted value");
+        };
+        assert_eq!(
+            table.get_string(value.normal).unwrap_or_default(),
+            "\"abc\\\""
+        );
     }
 
     #[test]
