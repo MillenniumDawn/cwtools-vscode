@@ -106,7 +106,6 @@ impl Backend {
                 continue;
             };
             let rel = std::path::Path::new(c.rel_path.trim_start_matches(['/', '\\']));
-            // is mod content that must not reach outside the roots (#176).
             let Some(target) = crate::access::contained_search_path(&roots, rel).await else {
                 continue;
             };

@@ -185,7 +185,6 @@ impl Backend {
         Some(built)
     }
 
-    /// definition sites and the same keys (#89).
     fn vanilla_loc(
         &self,
         loc_languages: Option<&[Lang]>,
@@ -253,8 +252,6 @@ impl Backend {
 
     #[tracing::instrument(skip_all)]
     pub(crate) async fn rebuild_and_publish_loc(&self, root_path: &std::path::Path) {
-        // so hover shows translations for keys that exist only there (#51). The
-        // one read per session, not one per scan (#89).
         let (loc_languages, ignore_files, ignore_dirs) = {
             let config = self.state.config.read();
             (
@@ -287,7 +284,6 @@ impl Backend {
 
         let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) =
             tokio::task::block_in_place(|| {
-                // workspace is walked again (#89).
                 let parent = self.parent_loc(root_path, parsed_languages, primary_lang, hover_all);
                 let vanilla = self.vanilla_loc(parsed_languages, primary_lang, hover_all);
                 let cached_vanilla_loc = {

@@ -168,7 +168,6 @@ pub(crate) fn scan_use_sites_bounded(
     results
 }
 
-/// rules/table/path needed to classify a candidate. Invariant across the walk of
 struct TypeRefSearch<'a> {
     type_name: &'a str,
     instance_name: &'a str,

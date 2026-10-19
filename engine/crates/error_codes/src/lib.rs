@@ -551,14 +551,12 @@ pub const CW222_UNDEFINED_EVENT: ErrorCode = ErrorCode {
 
 // -- Tier G: game-specific, need vanilla data / cross-file registries.
 
-/// research_leader missing `area`. F# `ResearchLeaderArea`.
 pub const CW108_RESEARCH_LEADER_AREA: ErrorCode = ErrorCode {
     id: "CW108",
     severity: ErrorSeverity::Error,
     message_template: "This research_leader is missing required \"area\"",
 };
 
-/// research_leader area disagrees with the technology. F# `ResearchLeaderTech`.
 pub const CW109_RESEARCH_LEADER_TECH: ErrorCode = ErrorCode {
     id: "CW109",
     severity: ErrorSeverity::Information,
@@ -731,8 +729,6 @@ pub const CW605_RULES_MALFORMED_ALIAS: ErrorCode = ErrorCode {
     severity: ErrorSeverity::Error,
     message_template: "{}",
 };
-
-// error_code_hash deleted: no callers, and it wasn't actually a hash.
 
 // ── The catalog as a list ──────────────────────────────
 //

@@ -18,16 +18,11 @@ pub enum CacheError {
         #[source]
         source: Option<rkyv::rancor::Error>,
     },
-    // zstd returns `io::Error`; a `#[from]` here would collide with `Io`'s, so
     #[error("compression error")]
     Compression(#[source] std::io::Error),
 }
-
-/// zstd compression level for cache bodies. Shared by the `.cwb` parse cache
-/// checksum on top; see `serialize_to_file`.
 pub const ZSTD_LEVEL: i32 = 3;
 
-/// reject files written by an incompatible layout before rkyv gets confused.
 const MAGIC: &[u8; 4] = b"CWB\x00";
 
 /// Format version. Bump whenever the rkyv layout changes (e.g. widening a field
@@ -35,7 +30,6 @@ const MAGIC: &[u8; 4] = b"CWB\x00";
 const FORMAT_VERSION: u8 = 5;
 
 const ERRORS_MAGIC: &[u8; 4] = b"CWE\x00";
-/// v3: the sidecar also carries the source's content hash and inline-ignore codes.
 const ERRORS_FORMAT_VERSION: u8 = 3;
 
 /// Hard caps on a `.cwb` read and on what its body may decompress to. A cache
@@ -46,9 +40,6 @@ pub const MAX_ARCHIVE_DECODED_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Cap on a `.cwe` sidecar. Uncompressed rkyv, and it only ever holds one file's
 pub const MAX_ERRORS_FILE_BYTES: u64 = 16 * 1024 * 1024;
-
-/// runs past `max_bytes`.
-/// between the stat and the read still cannot outrun the cap.
 pub fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
     let file = File::open(path)?;
     if !file.metadata()?.is_file() {
@@ -144,7 +135,7 @@ pub fn write_atomically(
     if let Err(error) = std::fs::rename(&temp, path) {
         #[cfg(windows)]
         if path.exists() {
-            // Windows rename can refuse an existing destination (a reader holding
+            // On Windows, an open reader can make rename refuse the destination; remove then retry.
             let replaced = std::fs::remove_file(path).and_then(|()| std::fs::rename(&temp, path));
             if let Err(error) = replaced {
                 let _ = std::fs::remove_file(&temp);
@@ -187,7 +178,6 @@ pub fn serialize_to_file(cached: &CachedFile, path: &Path) -> Result<(), CacheEr
 fn read_archive_bytes(path: &Path) -> Result<rkyv::util::AlignedVec, CacheError> {
     let data = read_capped(path, MAX_ARCHIVE_FILE_BYTES)?;
 
-    // letting rkyv silently misread mismatched bytes.
     if data.len() < MAGIC.len() + 1
         || &data[..MAGIC.len()] != MAGIC
         || data[MAGIC.len()] != FORMAT_VERSION

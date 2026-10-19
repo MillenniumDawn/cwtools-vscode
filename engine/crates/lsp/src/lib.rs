@@ -180,7 +180,6 @@ mod tests {
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
 
-    /// generated edit write into the user's game install (#160).
     #[test]
     fn refresh_roots_keeps_read_only_roots_out_of_the_edit_boundary() {
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -696,7 +695,6 @@ mod tests {
         assert!(state.documents.lock().is_empty());
     }
 
-    /// tower-lsp holds a pending slot per server→client request and `expect`s
     /// the receiver to still be there when the client answers, so dropping the
     /// future that awaits the reply panics the whole server. Every edit aborts
     /// the previous debounced validation, and that validation ends on
@@ -709,7 +707,6 @@ mod tests {
         use tower_lsp::jsonrpc;
         use tower_lsp::lsp_types::{InitializeParams, InitializeResult};
 
-        // tower-lsp suppresses every server→client message until the service
         // has answered an `initialize` request, so without a handshake the
         // refresh never reaches the socket. Only the inbound half is stubbed:
         // driving `initialize` through the real `Backend` would put its own

@@ -18,7 +18,6 @@ impl LocService {
         Self::from_files_with_encoding(files.into_iter().map(|(p, t)| (p, t, None)).collect())
     }
 
-    /// the UTF-8-BOM rule (CW254) can be enforced.
     pub fn from_files_with_encoding(files: Vec<(String, String, Option<FileEncoding>)>) -> Self {
         use rayon::prelude::*;
 
@@ -59,7 +58,6 @@ impl LocService {
         Self::from_paths(paths, budget, langs)
     }
 
-    /// the file budget.
     pub fn discover_files_filtered(
         folders: &[&Path],
         budget: ScanBudget,

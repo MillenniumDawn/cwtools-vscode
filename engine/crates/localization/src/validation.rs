@@ -27,7 +27,6 @@ pub struct LocValidationError {
     pub fix: Option<SuggestedFix>,
 }
 
-/// unbalanced quote. The span covers the trimmed desc; the replacement strips any
 fn cw268_quote_fix(entry: &LocEntry) -> Option<SuggestedFix> {
     let desc = &entry.desc;
     let lead = desc.chars().count() - desc.trim_start().chars().count();

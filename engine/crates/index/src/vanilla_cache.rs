@@ -14,7 +14,6 @@ const MAGIC: &[u8; 4] = b"CWV\x00";
 const FILE_PREFIX: &str = "vanilla-";
 const FILE_EXT: &str = ".cwv";
 
-// v2 adds `fingerprint` (game version) so a cache can be validated against the
 // v3 folds the ruleset shape into the fingerprint (see `combined_fingerprint`):
 // v4 switches the on-disk format from JSON to magic+version-framed zstd(rkyv)
 // live-scanned instances. v7 files lack the end fields, so the rkyv layout
@@ -60,7 +59,6 @@ struct VanillaCacheFile {
     scripted_gui_names: Vec<String>,
 }
 
-/// editor cannot quietly restore a subset of what the CLI wrote (#283).
 #[derive(Clone, Debug, Default)]
 pub struct VanillaCacheAux {
     pub loc_keys: Vec<(String, Vec<String>)>,
@@ -114,7 +112,6 @@ fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
     hash
 }
 
-/// if the game version is identical, so this is folded into the fingerprint.
 pub(crate) fn ruleset_shape_hash(ruleset: &RuleSet) -> String {
     let skip_str = |s: &SkipRootKey| match s {
         SkipRootKey::SpecificKey(k) => format!("s:{k}"),
@@ -259,9 +256,6 @@ fn write_cache(
     })?;
     Ok(count)
 }
-
-/// instance count written. `fingerprint` ties the cache to a specific game
-/// version (see [`fingerprint`]).
 pub fn save(
     index: &TypeIndex,
     game: &str,
@@ -457,7 +451,6 @@ mod tests {
 
     #[test]
     fn fingerprint_distinguishes_unreadable_installs() {
-        // collide on a single "unknown" cache key (#9).
         let a = fingerprint(Path::new("/nonexistent/install/alpha"));
         let b = fingerprint(Path::new("/nonexistent/install/beta"));
         assert_ne!(
@@ -581,7 +574,6 @@ mod tests {
 
     #[test]
     fn save_per_type_preserves_source_file() {
-        // real base-game file (the "<vanilla-cache>" sentinel bug, #62).
         let mut per: HashMap<String, Vec<(Arc<str>, TypeInstance)>> = HashMap::new();
         per.insert(
             "event".to_string(),
@@ -739,7 +731,6 @@ mod tests {
         std::fs::read(&path).unwrap()
     }
 
-    /// the consumers use: the read cap, the header, the version, zstd, rkyv and
     fn load_bytes(bytes: &[u8]) -> std::io::Result<(String, String, VanillaCacheData)> {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(cache_file_name("hoi4", "corrupt"));
@@ -785,7 +776,6 @@ mod tests {
         assert_eq!(data.per_type.len(), 2);
     }
 
-    /// reach zstd or rkyv at all.
     #[test]
     fn zero_byte_cache_is_a_clean_miss() {
         let err = load_bytes(&[]).unwrap_err();
@@ -842,7 +832,6 @@ mod tests {
         }
     }
 
-    /// after the header landed, or the disk filled up. zstd and rkyv have to
     #[test]
     fn a_truncated_body_is_a_clean_miss() {
         let bytes = sample_cache_bytes();
@@ -860,7 +849,6 @@ mod tests {
         }
     }
 
-    /// is the bad case: rkyv validates structure, not content, so a flipped
     /// The zstd frame checksum is what closes that. With it off, 191 of 846 flips
     /// here restored an altered cache and were served as hits (#245).
     #[test]
@@ -891,7 +879,6 @@ mod tests {
             "{altered} of {attempts} bit flips restored different cache data and \
              were accepted as a cache hit"
         );
-        // original exactly. Harmless, but if it were most of them the checksum
         assert!(
             same * 4 < attempts,
             "{same} of {attempts} bit flips round-tripped unchanged"

@@ -13,8 +13,6 @@ use super::{
 };
 
 impl Backend {
-    /// for deleted/moved files until a window reload (#52).
-    /// single trailing window (#90) instead of applying inline on the message
     #[tracing::instrument(skip_all)]
     pub(crate) async fn did_change_watched_files_impl(&self, params: DidChangeWatchedFilesParams) {
         let mut enqueued = false;
@@ -28,7 +26,6 @@ impl Backend {
                 FileChangeType::DELETED => {
                     tracing::debug!(%uri, "watched file deleted; queued");
                     self.state.watched_deleted.lock().insert(uri);
-                    // re-walks (#134). Clearing on any create/delete (not just
                     *self.state.loc_discovery_cache.lock() = None;
                     enqueued = true;
                 }
@@ -58,7 +55,6 @@ impl Backend {
         *guard = Some(self.spawn_watched_batch_window(false));
     }
 
-    /// panic, the clones go back onto the queues (#155). `retried` bounds
     fn spawn_watched_batch_window(&self, retried: bool) -> tokio::task::JoinHandle<()> {
         let client = self.client.clone();
         let state = self.state.clone();
@@ -378,7 +374,6 @@ impl Backend {
                 sigs.remove(uri);
             }
         }
-        // and reports CW274 instead of the (now-gone) body (#259).
         {
             let removed_scripts: HashSet<String> = deletes
                 .iter()

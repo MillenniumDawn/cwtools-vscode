@@ -142,7 +142,6 @@ pub(crate) struct AliasMemo {
     entries: FxHashMap<AliasMemoKey, AliasMemoEntry>,
 }
 
-// inner_rules_identity points into the borrowed RuleSet for this validation run.
 #[derive(PartialEq, Eq, Hash)]
 pub(crate) struct SubtypeMergeMemoKey {
     pub(crate) type_identity: usize,

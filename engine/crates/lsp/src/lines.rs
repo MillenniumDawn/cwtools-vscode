@@ -24,7 +24,6 @@ impl<'a> DocLines<'a> {
         }
     }
 
-    /// squiggle stays one character wide. The encoding is never consulted
     pub(crate) fn none() -> Self {
         Self {
             lines: Vec::new(),
@@ -88,7 +87,6 @@ impl<'a> DocLines<'a> {
         !self.lines.is_empty()
     }
 
-    /// published verbatim bleeds onto the following line (#107). Floors at
     pub(crate) fn clamped_end_position(&self, line: u32, col: u32, start: Position) -> Position {
         let (mut line, mut col) = (line, col);
         loop {

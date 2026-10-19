@@ -78,7 +78,6 @@ impl Backend {
                 }
             }
             append_localisation(&mut md, &element, &self.state.loc_text.read());
-            // explicit-field key or a name-derived key. (#40)
             if let ReferenceHint::TypeRef { type_name, value } = &hint {
                 let info_guard = self.state.info_service.read();
                 let loc_text = self.state.loc_text.read();
@@ -327,7 +326,6 @@ pub(crate) fn build_hover_markdown(
             cwtools_i18n::t(cwtools_i18n::Key::HoverScope),
             scope
         )];
-        // for it and it actually differs from the ambient scope. (#37)
         if let Some(resolved) = scopes.resolved.filter(|r| Some(*r) != scopes.current) {
             scope_lines.push(format!(
                 "**{}**: {}",
@@ -350,7 +348,6 @@ pub(crate) fn build_hover_markdown(
         scope_lines.join("  \n")
     });
 
-    // paragraph (matches the F#/Tboby hover layout). (#38)
     let mut sections: Vec<String> = Vec::new();
     if !info.is_empty() {
         sections.push(info.join("\n\n"));
@@ -410,7 +407,6 @@ pub(crate) fn append_localisation(md: &mut String, element: &PositionElement, lo
     }
 }
 
-/// the F# build showed (#40).
 pub(crate) fn append_type_localisation(
     md: &mut String,
     type_name: &str,
@@ -1022,7 +1018,6 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
 
     #[test]
     fn test_append_localisation_mismatched_quote_not_stripped() {
-        // single leading or trailing quote stays verbatim and must not
         let loc = loc_map_with(&[("my_war_flag", "War Flag")]);
         for bad in [
             "\"my_war_flag",

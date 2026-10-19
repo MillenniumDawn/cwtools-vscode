@@ -1,7 +1,6 @@
 use cwtools_index::{dir_matches_pattern, type_key_matches};
 use cwtools_rules::rules_types::*;
 
-/// paths are `/`-separated, so a Windows backslash path would make `rsplit('/')`
 fn lookup_path(file_path: &str) -> String {
     file_path.to_lowercase().replace('\\', "/")
 }

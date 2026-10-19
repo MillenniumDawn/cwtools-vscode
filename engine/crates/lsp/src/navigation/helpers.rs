@@ -1239,7 +1239,6 @@ mod tests {
         );
     }
 
-    /// node and the request never comes back (#541); the whole point of
     #[test]
     fn document_symbols_of_a_huge_file_stay_linear() {
         const CLAUSES: usize = 100_000;

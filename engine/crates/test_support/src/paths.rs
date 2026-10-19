@@ -30,7 +30,6 @@ pub fn projects_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("CWTOOLS_PROJECTS") {
         return Some(PathBuf::from(dir));
     }
-    // crates/test_support -> repo root is ../../.., siblings sit next to it.
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     repo.join("..").canonicalize().ok()
 }

@@ -93,7 +93,6 @@ pub fn read_text(path: &Path) -> Result<String, FileError> {
     read_text_with_encoding(path).map(|(s, _)| s)
 }
 
-/// enforce encoding rules (e.g. localisation must be UTF-8 BOM).
 pub fn read_text_with_encoding(path: &Path) -> Result<(String, FileEncoding), FileError> {
     Ok(decode_bytes(std::fs::read(path)?))
 }
@@ -114,7 +113,6 @@ pub fn read_text_capped_with_encoding(
     use std::io::Read as _;
     let file = std::fs::File::open(path)?;
     let mut bytes = Vec::new();
-    // under us or misreports its length still can't outrun the cap.
     file.take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)?;
     let n = bytes.len() as u64;
@@ -128,7 +126,6 @@ pub fn read_text_capped_with_encoding(
     Ok((text, enc, n))
 }
 
-/// through a cap) but still need script files to decode identically.
 pub fn decode_bytes(bytes: Vec<u8>) -> (String, FileEncoding) {
     let has_bom = bytes.starts_with(&UTF8_BOM);
     // Fast path: valid UTF-8 (includes pure ASCII). The BOM, when present, is
@@ -337,8 +334,7 @@ impl Default for ScanBudget {
         Self {
             max_files: 100_000,
             max_bytes: 2 * 1024 * 1024 * 1024, // 2 GiB
-            // script cap (2 MB) is separate (`FileManagerConfig::max_file_size`).
-            max_file_size: 64 * 1024 * 1024, // 64 MB
+            max_file_size: 64 * 1024 * 1024,   // 64 MB
         }
     }
 }
@@ -762,7 +758,6 @@ pub fn to_slash_path(path: &Path) -> String {
     normalize_slashes(path.to_string_lossy()).into_owned()
 }
 
-/// the string contains none (the common case on Unix).
 fn normalize_slashes(s: std::borrow::Cow<'_, str>) -> std::borrow::Cow<'_, str> {
     if s.contains('\\') {
         std::borrow::Cow::Owned(s.replace('\\', "/"))
@@ -1270,7 +1265,6 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
     glob_match_general(pattern, text)
 }
 
-/// which the callers' pattern-length caps keep bounded (#169).
 fn glob_match_general(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
@@ -1286,7 +1280,6 @@ fn has_path_pattern(patterns: &[String]) -> bool {
     patterns.iter().any(|p| is_path_pattern(p))
 }
 
-/// file it names instead of nothing at all (#244).
 pub fn ignore_glob_match(pattern: &str, name: &str, relative: &str) -> bool {
     if is_path_pattern(pattern) {
         path_glob_match(pattern, relative)
@@ -1712,7 +1705,6 @@ mod tests {
         );
     }
 
-    /// discovery, so the two paths agree on directory ignore semantics (#412).
     #[test]
     fn exclude_dir_patterns_skips_matching_dirs_multi_mod() {
         use std::fs;

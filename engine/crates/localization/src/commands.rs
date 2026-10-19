@@ -190,13 +190,11 @@ mod tests {
 
     #[test]
     fn test_lang_from_name_tolerant() {
-        // bare name, case-insensitive, and the l_ prefix all resolve
         assert_eq!(Lang::from_name("english"), Some(Lang::English));
         assert_eq!(Lang::from_name("English"), Some(Lang::English));
         assert_eq!(Lang::from_name("  German "), Some(Lang::German));
         assert_eq!(Lang::from_name("simp_chinese"), Some(Lang::SimpChinese));
         assert_eq!(Lang::from_name("l_french"), Some(Lang::French));
-        // editor-setting spellings
         assert_eq!(Lang::from_name("Chinese"), Some(Lang::SimpChinese));
         assert_eq!(Lang::from_name("Braz_Por"), Some(Lang::BrazPor));
         assert_eq!(Lang::from_name("klingon"), None);

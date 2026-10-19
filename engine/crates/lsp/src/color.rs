@@ -710,13 +710,11 @@ mod tests {
 
     #[test]
     fn hsv_converts_to_the_expected_rgb() {
-        // hue 0, full saturation and value -> pure red.
         let red = to_color(&lit("hsv { 0.0 1.0 1.0 }"));
         assert_eq!((red.red, red.green, red.blue), (1.0, 0.0, 0.0));
         // 120 degrees -> pure green.
         let green = to_color(&lit("hsv360 { 120 100 100 }"));
         assert!(approx(green.red, 0.0) && approx(green.green, 1.0) && approx(green.blue, 0.0));
-        // zero saturation -> grey at the value level.
         let grey = to_color(&lit("hsv { 0.3 0.0 0.5 }"));
         assert!(approx(grey.red, 0.5) && approx(grey.green, 0.5) && approx(grey.blue, 0.5));
     }

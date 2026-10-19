@@ -33,7 +33,6 @@ fn plan_workspace_fixes(
         .collect()
 }
 
-/// surviving edit, converted to LSP `TextEdit`s with the negotiated encoding
 fn workspace_edit_changes(
     planned: &[PlannedFileFixes],
     texts: &HashMap<String, String>,
@@ -121,7 +120,6 @@ impl Backend {
             return "No auto-fixable problems in the workspace.".to_string();
         }
 
-        // canonicalization, so keep it off the request worker too (#160).
         let edit_roots = self.state.config.read().editable_roots.clone();
         let candidate_uris: Vec<String> = snapshot.keys().cloned().collect();
         let editable = tokio::task::spawn_blocking(move || {

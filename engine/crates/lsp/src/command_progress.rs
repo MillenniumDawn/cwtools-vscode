@@ -8,7 +8,6 @@ use crate::{Backend, DocumentState};
 
 const SAMPLE_INTERVAL_MS: u64 = 200;
 
-/// period down makes "the percentage moves inside a phase" — the whole of #221
 fn sample_interval() -> std::time::Duration {
     parse_sample_interval(std::env::var("CWTOOLS_SAMPLE_INTERVAL_MS").ok().as_deref())
 }
@@ -131,7 +130,6 @@ impl ProgressSink {
     }
 }
 
-/// phase and read as a hang (#221).
 pub(crate) struct PhaseTicker {
     live: Option<LivePhase>,
 }
@@ -175,7 +173,6 @@ impl Drop for PhaseTicker {
     }
 }
 
-/// command starts is handed the one that started it (#228). Nothing about the
 pub(crate) struct CommandProgress {
     state: Arc<DocumentState>,
     sink: Option<ProgressSink>,

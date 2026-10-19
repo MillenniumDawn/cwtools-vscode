@@ -20,7 +20,6 @@ pub(super) struct FixPayload {
     pub(super) create_loc_key: Option<String>,
 }
 
-/// document text and the negotiated encoding are available.
 pub(crate) fn fix_to_data(fix: &SuggestedFix) -> serde_json::Value {
     let edits: Vec<serde_json::Value> = fix
         .edits
@@ -105,7 +104,6 @@ pub(crate) fn source_range_to_lsp(range: SourceRange, lines: &DocLines) -> Range
     }
 }
 
-/// handler and its test exercise the same mapping. `text`/`encoding` drive the
 pub(super) fn code_actions_from_diagnostics(
     uri: &Url,
     diagnostics: &[Diagnostic],
@@ -248,7 +246,6 @@ mod tests {
 
     #[test]
     fn payload_round_trips_through_data() {
-        // back verbatim on the codeAction request).
         let fix = SuggestedFix::replace("Wrap the value in quotes", range(5, 3, 5, 8), "\"hi\"");
         let data = fix_to_data(&fix);
         let parsed = fix_from_data(&data).expect("payload parses");
@@ -331,7 +328,6 @@ mod tests {
 
     #[test]
     fn diagnostic_range_and_fix_edit_agree_on_non_bmp_line() {
-        // the client's UTF-16 column (3) differ. The published diagnostic and the
         let text = "😀 set_empire_name = { }\n";
         let fix = SuggestedFix::replace("Rename to set_name", range(1, 2, 1, 17), "set_name");
         let err = cwtools_validation::ValidationError {

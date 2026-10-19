@@ -84,7 +84,6 @@ pub fn check_loc_file_lang(file: &str, header_key: &str) -> Option<LangHeaderDia
 
     let header_lang = key_to_language(header_key);
 
-    // l_default in the header is always OK (mirrors F# `STLLang.Default` branch)
     if header_key.eq_ignore_ascii_case("l_default") {
         return None;
     }
@@ -204,7 +203,6 @@ fn parse_entry(
     }
 
     let Some(colon_pos) = trimmed.find(':') else {
-        // continue recovering (lenient parser; mirrors F# `Failure` path).
         return Err(LocParseError {
             line: line_idx + 1,
             message: format!("unexpected content (no ':' separator): {:?}", trimmed),
@@ -223,7 +221,6 @@ fn parse_entry(
         None
     };
 
-    // strip one leading space (the convention after `:`)
     let desc = remainder.strip_prefix(' ').unwrap_or(remainder);
 
     let position = Position::new(Arc::clone(stream_name), line_idx + 1, 1); // 1-based line numbers

@@ -97,9 +97,6 @@ const DEFAULT_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
 #[cfg(test)]
 const DEFAULT_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
     WorkspacePublishThrottle::new(std::time::Duration::ZERO);
-
-/// behavioral, which the parity tests below pin (#328).
-/// instead, and let the invariant fail loudly at the boundary it belongs to.
 struct ChunkMapper<F, Before, After> {
     map: F,
     before_chunk: Before,
@@ -362,7 +359,6 @@ impl Backend {
     ) -> bool {
         let cancel = cancel_flag_of(progress);
         cwtools_profiling::log_rss("workspace_scan_start");
-        // sit on "Validating workspace… 70%" for the whole of pass 2 (#221).
         let mut phase = PhaseTicker::inert();
         self.enter_phase(&mut phase, progress, quiet, Phase::Discover, 0)
             .await;
@@ -396,7 +392,6 @@ impl Backend {
         let ruleset = self.state.rules.read().ruleset.clone();
         let parent_roots = self.state.config.read().parent_roots.clone();
 
-        // layering in one place (#284).
         let discovery = tokio::task::block_in_place(|| {
             let mut fm_config =
                 cwtools_driver::workspace_discovery_config(&root_path, ruleset.as_deref());
@@ -933,7 +928,6 @@ impl Backend {
         let track_uses = scan_ruleset
             .as_ref()
             .is_some_and(|rs| needs_use_tracking(rs, scan_game));
-        // them in the other order here would be an ABBA deadlock). Both scan
         let open_doc_asts: Vec<(String, Arc<cwtools_parser::ast::ParsedFile>)> = if track_uses {
             let docs = self.state.documents.lock();
             docs.iter()
@@ -951,7 +945,6 @@ impl Backend {
         );
         let type_index_snap = Arc::clone(&self.state.info_service.read().type_index);
         let loc_index_snap = self.state.loc_index.read().clone();
-        // invariant bug surfaces instead of silently dropping diagnostics.
         assert_eq!(scan_files.len(), parsed_files.len());
         assert_eq!(scan_files.len(), source_hashes.len());
         assert_eq!(scan_files.len(), inline_ignores.len());
@@ -1291,14 +1284,12 @@ impl Backend {
 
         self.revalidate_all_open_docs(crate::ValidateTrigger::Reindex)
             .await;
-        // and ask the client to re-request visible files (#184).
         self.invalidate_all_semantic_tokens();
         self.request_semantic_refresh().await;
         self.request_code_lens_refresh().await;
         true
     }
 
-    /// a fresh registry (#259). Re-reads rather than reuses pass 1's ASTs —
     /// a closed script is reloaded from the parse cache by its metadata key and
     /// read from disk only on a miss (#867).
     fn rebuild_inline_scripts(
@@ -2418,7 +2409,6 @@ mod tests {
         progress.finish(None).await;
     }
 
-    /// silent, unchanged from before #435.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_quiet_phase_with_no_token_stays_inert() {
         let backend = test_backend();
@@ -2478,7 +2468,6 @@ mod tests {
         let _ = collector.await;
     }
 
-    /// the shortest, so without the assert a length-invariant bug upstream would
     #[tokio::test]
     #[should_panic]
     async fn mismatched_lengths_panic_rather_than_truncate() {

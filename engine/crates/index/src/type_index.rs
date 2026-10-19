@@ -27,9 +27,6 @@ pub struct TypeInstance {
     /// entry takes from a child field's value (`## required title = title`)
     pub required_loc_keys: Vec<String>,
 }
-
-/// default (Windows-authored mods); after [`FileIndex::set_case_sensitive`] the
-/// from the on-disk path by case is caught for the case-sensitive filesystems
 #[derive(Debug, Clone, Default)]
 pub struct FileIndex {
     files: FxHashSet<String>,
@@ -88,7 +85,6 @@ impl FileIndex {
         self.files.len()
     }
 
-    /// case-sensitive for live-walked files after [`FileIndex::set_case_sensitive`].
     pub fn contains(&self, path: &str) -> bool {
         if self.case_sensitive {
             self.contains_exact(path)
@@ -117,7 +113,6 @@ impl FileIndex {
         })
     }
 
-    /// case-sensitive filesystem). Falls back to case-insensitive membership
     fn contains_exact(&self, path: &str) -> bool {
         thread_local! {
             static NORM_BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
@@ -193,7 +188,6 @@ impl FileIndex {
         self.files.iter()
     }
 
-    /// later case-sensitive run can restore exact case. Empty unless
     pub fn paths_exact(&self) -> impl Iterator<Item = &String> {
         self.files_exact.values()
     }
@@ -216,7 +210,6 @@ impl FileIndex {
                 } else {
                     format!("{}/{}", dir.join("/"), value)
                 };
-                // case-sensitive mode: the directory segments are recovered from
                 return self.contains_ci(&sibling);
             }
         }
@@ -227,7 +220,6 @@ impl FileIndex {
 #[derive(Debug, Clone, Default)]
 pub struct VarIndex {
     names: HashMap<String, usize>,
-    /// replaces the previous contribution instead of double-counting (#306).
     vanilla_names: FxHashSet<String>,
 }
 
@@ -250,7 +242,6 @@ impl VarIndex {
         len
     }
 
-    /// before any `?`/`^` selector. Mirrors F# `getVariableFromString` plus the
     pub fn normalize(raw: &str) -> String {
         let mut buf = String::new();
         Self::normalize_into(raw, &mut buf);
@@ -289,7 +280,6 @@ impl VarIndex {
         })
     }
 
-    /// that mod file (#306).
     pub fn set_vanilla_names(&mut self, names: Vec<String>) {
         self.vanilla_names.clear();
         for raw in names {
@@ -328,7 +318,6 @@ impl VarIndex {
     }
 }
 
-/// one read as an unknown command (#348). The engine already fixes that folder
 #[derive(Debug, Clone, Default)]
 pub struct ScriptedLocIndex {
     names: FxHashMap<Arc<str>, usize>,
@@ -1131,7 +1120,6 @@ mod tests {
 
     #[test]
     fn instance_locations_finds_dotted_id_case_insensitive() {
-        // goto-definition (#39): an event/decision reference resolves by its
         let mut idx = TypeIndex::new();
         let mut map = HashMap::new();
         map.insert(
@@ -2231,7 +2219,6 @@ mod tests {
         assert!(snap2.contains("event", "ev_a"));
     }
 
-    /// diagnostics, which is the trap #332's "keep them out of the snapshot"
     #[test]
     fn clone_carries_dynamic_value_indexes() {
         let mut idx = TypeIndex::new();
@@ -2277,7 +2264,6 @@ mod tests {
         assert!(snap.value_set_values.contains("character_token", "tok_a"));
     }
 
-    /// against a compacted vec and hand back somebody else's (#328).
     #[test]
     fn clone_instances_in_file_is_a_snapshot_of_the_live_index() {
         let mut idx = TypeIndex::new();

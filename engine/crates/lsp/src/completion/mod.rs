@@ -82,7 +82,6 @@ mod tests {
 
     #[test]
     fn test_completion_scalar_key_inserts_equals() {
-        // not a bare `name` (cwtools-vscode#16).
         let rs = bool_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let first_root = rs.root_rules.first().expect("expected root rule");
@@ -487,7 +486,6 @@ mod tests {
 
     #[test]
     fn control_flow_effects_rank_with_scope_matched_effects() {
-        // not sink below them (#94).
         let rs = scoped_effect_ruleset();
         let info = cwtools_info::InfoService::new();
         let reg = country_registry();
@@ -528,7 +526,6 @@ mod tests {
 
     #[test]
     fn typed_token_ranks_exact_match_first_and_survives_cap() {
-        // otherwise typing `if` in a big effect block buries or drops `if` (#94).
         let mut items: Vec<CompletionItem> = (0..1500)
             .map(|i| {
                 let label = format!("ai_f_{:04}", i);

@@ -189,7 +189,6 @@ impl Backend {
             )
         };
         if let Some(per_type) = per_type {
-            // fell back to whatever document the user had open (#62).
             let per_type = match (&vanilla_dir, &replacement_shadow) {
                 (Some(vanilla_root), Some(shadow)) => {
                     cwtools_driver::filter_vanilla_index(per_type, vanilla_root, shadow)
@@ -255,7 +254,6 @@ impl Backend {
             self.bump_info_revision();
         }
 
-        // naming one must resolve without the mod having to define it (#348).
         if let Some(names) = scripted_loc_names {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)

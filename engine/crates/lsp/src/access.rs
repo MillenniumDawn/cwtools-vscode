@@ -124,7 +124,6 @@ pub(crate) fn authorized_path(uri: &str, roots: &[PathBuf]) -> Option<PathBuf> {
         tracing::debug!(path = %canonical.display(), "access: outside every authorized root");
         return None;
     }
-    // false both for a symlink (the discovery walks' rule, #177) and for
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if meta.file_type().is_symlink() {
             tracing::debug!(path = %path.display(), "access: symlink");
@@ -173,9 +172,6 @@ fn canonicalize_for_containment(path: &Path) -> Option<PathBuf> {
         }
     }
 }
-
-/// file exists anywhere on disk (#176). Both sides of the test go through
-/// a Windows verbatim `\\?\` prefix does not survive that round trip.
 pub(crate) async fn contained_search_path(roots: &[PathBuf], rel: &Path) -> Option<PathBuf> {
     if rel
         .components()
@@ -621,7 +617,6 @@ mod tests {
         assert_eq!(authorized_path(&uri(&file), &roots([&root])), None);
     }
 
-    /// of the #177 stance agree on it, since the discovery walks skip the link
     #[cfg(unix)]
     #[test]
     fn rejects_a_symlink_pointing_out_of_the_root() {
@@ -634,7 +629,6 @@ mod tests {
         assert_eq!(authorized_path(&uri(&link), &roots([root.path()])), None);
     }
 
-    /// this file, so a URI naming it must not read it either (#177).
     #[cfg(unix)]
     #[test]
     fn rejects_a_symlink_that_resolves_inside_the_root() {
@@ -842,7 +836,6 @@ mod tests {
         );
     }
 
-    /// readable (pre-Jomini mods) rather than dropping them as invalid UTF-8.
     #[test]
     fn decodes_cp1252_like_the_file_manager() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");

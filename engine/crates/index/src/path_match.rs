@@ -122,7 +122,6 @@ impl NormalizedPath {
 pub fn check_path_dir_norm(opts: &PathOptions, np: &NormalizedPath) -> bool {
     let basename_lower: &str = &np.basename_lower;
 
-    // path_file: exact filename constraint (precomputed by reindex when available).
     if let Some(pf_lower) = &opts.path_file_lower {
         if basename_lower != pf_lower.as_str() {
             return false;
@@ -133,7 +132,6 @@ pub fn check_path_dir_norm(opts: &PathOptions, np: &NormalizedPath) -> bool {
         return false;
     }
 
-    // path_extension: file extension constraint (precomputed by reindex when available).
     let check_ext = |ext: &str| {
         if !ext.is_empty() {
             let has_ext = basename_lower.rsplit('.').next().is_some_and(|e| e == ext);

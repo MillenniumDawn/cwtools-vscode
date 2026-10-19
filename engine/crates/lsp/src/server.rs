@@ -52,7 +52,6 @@ const DEBOUNCE_MS: u64 = 250;
 static VALIDATE_PANIC_ONCE: AtomicBool = AtomicBool::new(true);
 
 impl Backend {
-    /// the handle (#182); the next edit is the retry. This site keeps its own
     fn spawn_debounced_validate(
         &self,
         uri: String,
@@ -441,7 +440,6 @@ impl Backend {
         Some(CursorResolution { rctx, ruleset })
     }
 
-    /// its `[start, end)` range in the negotiated position encoding. `None` when
     pub(crate) fn loc_ref_at_cursor_doc(
         &self,
         uri: &str,
@@ -540,7 +538,6 @@ impl Backend {
             return;
         }
 
-        // hold the bounded request queue (#90). `debounced_validate`'s
         let generation = self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.invalidate_semantic_tokens(&uri);
         self.spawn_debounced_validate(uri, version, generation, ValidateTrigger::DidOpen, 0);
@@ -599,7 +596,6 @@ impl Backend {
         // can use it when its `previousResultId` is still current, then replace
         // it with tokens for the current buffer.
 
-        // debounce tasks (#47).
         self.spawn_debounced_validate(
             uri,
             version,
@@ -753,7 +749,6 @@ impl Backend {
                 DiskState::Absent => {
                     self.state.info_service.write().clear_file(&uri);
                     self.bump_info_revision();
-                    // callers; queue its name for the sweep below (#259).
                     if let Some(name) = self.remove_inline_script(&uri) {
                         self.state.pending_changed_names.lock().insert(name);
                     }
@@ -795,7 +790,6 @@ impl Backend {
             return;
         };
 
-        // full scan (#133). Queued names land in the sweep below.
         if let DiskState::Parsed {
             parsed,
             discarded_edits: true,
@@ -803,7 +797,6 @@ impl Backend {
         } = &disk_ast
             && !self.state.documents.lock().contains_key(&uri)
         {
-            // keystroke path fences (#87).
             tokio::task::block_in_place(|| self.refresh_type_uses_from_parsed(&uri, parsed));
         }
 
@@ -899,7 +892,6 @@ impl LanguageServer for Backend {
         let reindex_client = self.client.clone();
         let reindex_state = self.state.clone();
         tokio::spawn(async move {
-            // silently ending periodic reindexing with no trace (#155).
             crate::scan::spawn_logging_panics("background reindex loop", async move {
                 Backend {
                     client: reindex_client,
@@ -1202,7 +1194,6 @@ impl LanguageServer for Backend {
                 if backend.move_open_document(old, new).await {
                     let old_uri = old.to_string();
                     let new_uri = new.to_string();
-                    // same non-reentrant mutex (#334).
                     let moved_tokens = backend.state.semantic_tokens_cache.lock().remove(&old_uri);
                     if let Some(entry) = moved_tokens {
                         backend

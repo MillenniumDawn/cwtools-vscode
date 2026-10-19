@@ -164,7 +164,6 @@ pub fn parse_loc_buffer(text: &str, path: &str) -> Vec<cwtools_localization::Loc
     try_parse_loc_buffer(text, path).unwrap_or_default()
 }
 
-/// parse used to keep the live overlay current on edit (#36).
 fn loc_keys_of(text: &str, path: &str) -> HashSet<String> {
     loc_keys_from(&parse_loc_buffer(text, path))
 }
@@ -857,7 +856,6 @@ impl Backend {
         }
     }
 
-    /// workspace scan (#259). Cheap to call unconditionally: the path check
     pub(crate) fn refresh_inline_script(&self, uri: &str, text: &str) -> Option<String> {
         if self.is_ignored_uri(uri) {
             return None;
@@ -950,7 +948,6 @@ impl Backend {
         changed
     }
 
-    /// keep describing text that never reached disk (#133).
     pub(crate) fn refresh_type_uses_from_parsed(&self, uri: &str, parsed: &ParsedFile) {
         let game = self.state.config.read().game();
         let rules_guard = self.state.rules.read();
@@ -1197,7 +1194,6 @@ impl Backend {
             .and_then(|ast| self.reference_sites_for_open_ast(&uri, ast));
         let mut first_accepted_ast = false;
         {
-            // acquired before documents everywhere to avoid ABBA deadlock with
             self.update_doc_tokens(&uri, parsed.as_ref());
             let mut docs = self.state.documents.lock();
             let still_current = docs
@@ -1206,7 +1202,6 @@ impl Backend {
             if !still_current {
                 return;
             }
-            // is still published. (#41) Loc/.cwt files always parse to None
             if let Some(ast) = parsed {
                 let had_no_ast = docs
                     .get(&uri)
@@ -1373,9 +1368,6 @@ impl Backend {
             }
         }
     }
-
-    /// to a watched one — resolves without a full rescan (#36). Bounded by the
-    /// in the batch even though nothing between them changed (#87). The revision
     pub(crate) fn loc_overlay_keys(&self) -> Arc<HashSet<String>> {
         let revision = self
             .state
@@ -1403,7 +1395,6 @@ impl Backend {
         keys
     }
 
-    /// workspace rescan (#53). Takes the shared parse of the edited buffer.
     /// Replaces what `uri` contributed before, so a key edited away loses its
     /// text at once and another file's translation of the same key stays (#476).
     fn update_loc_text_for_file(&self, uri: &str, files: &[cwtools_localization::LocFile]) {
@@ -1669,7 +1660,6 @@ impl Backend {
         overlay.read().get(uri).is_some_and(|prev| prev == new_keys)
     }
 
-    /// whole watched batch whose loc key sets changed (#90). `changed_keys` is
     pub(crate) async fn refresh_after_watched_loc_changes(&self, changed_keys: &HashSet<String>) {
         let additional_loc_keys = self.loc_overlay_keys();
         let extra = self.loc_ref_names();
@@ -1707,11 +1697,9 @@ impl Backend {
 
         if crate::paths::is_loc_file(uri) {
             let path = uri_to_path_str(uri);
-            // full rescan. Record which keys were added or removed. (#36)
             // first sight fire the whole-file cross-file sweep (#90). Watched
             // paths already fence their sync work. (#87)
             let (changed_keys, diagnostics, cache) = tokio::task::block_in_place(|| {
-                // whole file itself, and two of them copied it first (#87).
                 let parsed_loc = try_parse_loc_buffer(text, &path);
                 let cache_version = parsed_version.filter(|_| parsed_loc.is_ok());
                 let parsed_loc = parsed_loc.unwrap_or_default();
@@ -1742,7 +1730,6 @@ impl Backend {
                     &additional_loc_keys,
                     &extra,
                 );
-                // edits without waiting for a full workspace rescan (#53).
                 self.update_loc_text_for_file(uri, &parsed_loc);
                 // Only the two triggers whose `text` is the file on disk: a
                 // watched change, or a close reading back what was saved.
@@ -1769,7 +1756,6 @@ impl Backend {
                     "localisation cache not retained"
                 );
             }
-            // key without a full rescan. (#36) The sweep is scoped to the docs
             if !changed_keys.is_empty() {
                 let additional_loc_keys = self.loc_overlay_keys();
                 let extra = self.loc_ref_names();
@@ -1801,7 +1787,6 @@ impl Backend {
             return (diagnostics, None);
         }
 
-        // flag every rule field as unknown). See #43.
         if crate::paths::is_cwt_file(uri) {
             let parsed = parse_string(text, &self.state.string_table);
             let path = std::path::PathBuf::from(uri_to_path_str(uri));
@@ -1826,7 +1811,6 @@ impl Backend {
 
         tracing::debug!(%uri, "[validate] parsing");
 
-        // that do the same work already fence theirs. (#87)
         tokio::task::block_in_place(|| {
             // Mid-edit text: intern its novel strings into a reclaimable region so
             // half-typed identifiers do not accumulate in the base table (#475).
@@ -1836,7 +1820,6 @@ impl Backend {
 
             self.index_parsed_file(uri, &parsed, parsed_version);
 
-            // see it on THIS pass too (#259).
             if let Some(name) = self.refresh_inline_script(uri, text) {
                 self.state.pending_changed_names.lock().insert(name);
             }
@@ -1917,7 +1900,6 @@ impl Backend {
     }
 }
 
-/// export fingerprint moved (#289). These pin both halves: an edit that changes
 #[cfg(test)]
 mod info_revision_tests {
     use super::*;

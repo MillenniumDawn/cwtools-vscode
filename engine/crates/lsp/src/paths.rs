@@ -65,7 +65,6 @@ pub fn workspace_prefix_of(workspace_uri: &str) -> std::sync::Arc<str> {
 }
 
 pub fn logical_path_from_uri(uri: &str, workspace_prefix: &Option<std::sync::Arc<str>>) -> String {
-    // indexing, path matching). On Windows `uri_to_path_str` yields backslashes,
     let path = normalize_separators(uri_to_path_str(uri));
     if let Some(prefix) = workspace_prefix
         && let Some(rel) = path.strip_prefix(prefix.as_ref())
@@ -75,7 +74,6 @@ pub fn logical_path_from_uri(uri: &str, workspace_prefix: &Option<std::sync::Arc
     path
 }
 
-/// allocation or scan-and-copy; only Windows paths actually pay the `replace`.
 fn normalize_separators(path: String) -> String {
     if path.contains('\\') {
         path.replace('\\', "/")
@@ -101,7 +99,6 @@ pub(crate) fn lsp_pos_to_source_in_text(
     (pos.line + 1, column.min(u16::MAX as usize) as u16)
 }
 
-/// the wrong document once (the `"<vanilla-cache>"` sentinel, #62), so a stray
 pub(crate) fn parse_uri(uri_str: impl AsRef<str>, fallback: &Url) -> Url {
     let uri_str = uri_str.as_ref();
     uri_str.parse().unwrap_or_else(|_| {
@@ -301,7 +298,6 @@ pub(crate) fn is_script_file(uri: &str) -> bool {
         })
 }
 
-/// line. `col` uses the negotiated LSP position encoding. Returns the
 pub(crate) fn loc_ref_at_cursor_with_encoding(
     line: &str,
     col: u32,
@@ -424,7 +420,6 @@ pub(crate) fn strip_loc_comment(s: &str) -> &str {
     }
 }
 
-/// the quotes is kept as data (issue #50) while a trailing `# comment` after the
 pub(crate) fn loc_display_text(desc: &str) -> &str {
     if let Some(rest) = desc.strip_prefix('"') {
         if let Some(end) = rest.rfind('"') {
@@ -474,11 +469,9 @@ mod tests {
 
     #[test]
     fn is_loc_file_matches_all_loc_extensions() {
-        // hover/goto, completion, and validate must agree (#2/#217).
         assert!(is_loc_file("file:///mod/localisation/foo_l_english.yml"));
         assert!(is_loc_file("file:///mod/localisation/foo_l_english.yaml"));
         assert!(is_loc_file("file:///mod/localisation/names.csv"));
-        // case-insensitive (Windows), extension and directory alike
         assert!(is_loc_file("file:///MOD/LOCALISATION/FOO.YML"));
         assert!(is_loc_file("file:///MOD/Localisation/FOO.YAML"));
         assert!(!is_loc_file("file:///mod/common/ideas/foo.txt"));
@@ -935,7 +928,6 @@ mod tests {
         assert_eq!(uri, client_uri_canonical());
     }
 
-    /// with a plain compare. `workspace_prefix_of` percent-decodes, so encoding
     #[test]
     fn workspace_prefix_of_a_canonical_folder_uri_strips_a_canonical_document() {
         #[cfg(windows)]

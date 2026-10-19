@@ -206,13 +206,11 @@ pub fn completions_from_rules(
     let mut items: Vec<CompletionItem> = Vec::new();
     // Per-request memo so a repeated enum is only collected/sorted once (#46).
     let mut enum_cache: HashMap<String, Vec<&str>> = HashMap::new();
-    // appear in this block (#44).
     let mut scope_names: Option<Vec<String>> = None;
     let scope_ctx: ScopeCtx = match (current_scope, registry) {
         (Some(s), Some(reg)) if s != SCOPE_ANY => Some((s, reg)),
         _ => None,
     };
-    // category triggered them, so emit them at most once per block (#76).
     let mut scope_links_emitted = false;
     let mut seen_alias_cats: HashSet<&str> = HashSet::new();
 
@@ -335,14 +333,12 @@ pub fn completions_from_rules(
         }
     }
 
-    // the most specific snippet) (cwtools-vscode#66).
     let mut seen_labels: HashSet<String> = HashSet::new();
     items.retain(|item| seen_labels.insert(item.label.clone()));
 
     (items, flt.dropped())
 }
 
-/// for short enums, a bare tab stop otherwise — cwtools-vscode#16).
 fn push_specific_leaf_key(
     items: &mut Vec<CompletionItem>,
     k: &str,
@@ -360,7 +356,6 @@ fn push_specific_leaf_key(
                 Some(format!("{} = $0", k))
             }
         }
-        // a bare `key` with no operator (cwtools-vscode#16).
         _ => Some(format!("{} = $0", k)),
     };
     items.push(CompletionItem {
@@ -596,13 +591,11 @@ fn push_alias_keys<'a>(
         if !flt.retain_token_match(k) {
             continue;
         }
-        // contexts), so a valid key must never silently vanish (#78).
         let mut scope_rank = match verdicts.as_ref().and_then(|v| v.get(k)) {
             Some(&(false, _)) => ScopeRank::Mismatch,
             Some(&(true, true)) => ScopeRank::SpecificMatch,
             _ => ScopeRank::Neutral,
         };
-        // below every scope-matched plain effect (#94).
         if !matches!(scope_rank, ScopeRank::Mismatch) && recurses_into_category(rule, cat) {
             scope_rank = ScopeRank::SpecificMatch;
         }
@@ -722,7 +715,6 @@ fn push_alias_keys<'a>(
     }
 
     if cat == "modifier" {
-        // scope is unknown (#78).
         for m in modifier_keys {
             if !flt.admit(m) {
                 continue;
@@ -805,7 +797,6 @@ pub fn expanded_modifier_scopes(
     map
 }
 
-/// item per type instance the link's `data_source` names (#76). Only prefixed
 fn push_scope_link_keys(
     items: &mut Vec<CompletionItem>,
     ruleset: &RuleSet,
@@ -1067,7 +1058,6 @@ pub fn value_completions(
     let mut seen_alias_cats: HashSet<&str> = HashSet::new();
     // Per-request memo so a repeated enum is only collected/sorted once (#46).
     let mut enum_cache: HashMap<String, Vec<&str>> = HashMap::new();
-    // value rules arrive here (#44).
     let mut scope_names: Option<Vec<String>> = None;
     let mut push = |label: String,
                     kind: CompletionItemKind,
@@ -1159,7 +1149,6 @@ pub fn value_completions(
                     );
                 }
             }
-            // variable dump (cwtools-vscode#74).
             NewField::LocalisationField { .. } => {
                 for k in sets.loc_keys {
                     if !flt.retain_token_match(k) {

@@ -12,7 +12,6 @@ use crate::io::{
 use cwtools_parser::ast::ParsedFile;
 use cwtools_string_table::string_table::StringTable;
 
-/// fingerprint algorithm changes) so stale `.cwb` files are ignored
 /// v2: switched fingerprinting from `DefaultHasher` (SipHash, toolchain-unstable)
 /// to a stable FNV-1a. The version is folded into the fingerprint, so old
 /// v7: dropped ruleset shape from the fingerprint. A `.cwt` edit cannot change
@@ -229,8 +228,6 @@ pub fn validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<
 
 fn try_validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<bool> {
     let dir = workspace_cache_dir(cache_dir, fingerprint);
-    // not a directory of ours is refused rather than cleared: a symlink here
-    // would send `clear_cache_dir` at its target's files (#159).
     if fs::symlink_metadata(&dir).is_ok_and(|metadata| !metadata.is_dir()) {
         return Err(std::io::Error::other(
             "cannot use a cache directory that is a symlink or a file",
@@ -265,13 +262,9 @@ pub struct Removal {
     pub files: usize,
     pub failures: Vec<(PathBuf, std::io::Error)>,
 }
-
-/// fingerprint-named directories, each carrying the `settings.sig` written when
-/// it was created. Nothing here recurses and no symlink is followed, so a
 pub fn remove_all(cache_dir: &Path) -> Removal {
     let root = cache_dir.join(PARSE_CACHE_DIR);
     let mut removal = Removal::default();
-    // stops us reading the root (a file or a symlink in the way, no
     match fs::symlink_metadata(&root) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
@@ -347,7 +340,6 @@ fn remove_owned_cache_dir(dir: &Path, removal: &mut Removal) -> bool {
     let mut emptied = true;
     for entry in entries.flatten() {
         let path = entry.path();
-        // symlink to its target, so nothing destructive can slip through the
         if !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
             emptied = false;
             continue;
@@ -423,7 +415,6 @@ fn prune_all_cache_dirs_with_caps(
     let Ok(dirs) = fs::read_dir(root) else {
         return;
     };
-    // to sit under a `parse-cache` is none of our business (#159).
     let dirs: Vec<PathBuf> = dirs
         .flatten()
         .map(|entry| entry.path())
@@ -678,7 +669,6 @@ pub fn load_path_for_index(
     Some((parsed, key))
 }
 
-/// captured before the source was read.
 pub fn store_path(
     cache_dir: &Path,
     fingerprint: u64,
@@ -824,8 +814,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn validate_or_clear_refuses_a_symlinked_cache_dir() {
-        // and remove_file straight through a symlink sitting at the fingerprint
-        // path: every regular file in its target went (#159). No race needed.
         let tmp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let victim = outside.path().join("payroll.csv");
@@ -1393,7 +1381,6 @@ mod tests {
         let base = std::time::SystemTime::now() - std::time::Duration::from_secs(20);
         let mut paths = Vec::new();
         for fingerprint in [1u64, 2, 3] {
-            // it can identify as ours (#159).
             let dir = workspace_cache_dir(tmp.path(), fingerprint);
             fs::create_dir_all(&dir).unwrap();
             fs::write(settings_sig_path(&dir), fingerprint.to_le_bytes()).unwrap();
@@ -1563,8 +1550,6 @@ mod tests {
 
     #[test]
     fn concurrent_validate_or_clear_shares_a_cache_root() {
-        // not leave it unusable (#159 follow-up, Windows/macOS flake).
-        // fresh fingerprint can still be created afterwards.
         use std::sync::Arc;
         let tmp = tempfile::tempdir().unwrap();
         let cache_root = Arc::new(tmp.path().to_path_buf());

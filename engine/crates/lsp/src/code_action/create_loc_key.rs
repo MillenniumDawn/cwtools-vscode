@@ -70,7 +70,6 @@ fn generated_loc_file_path(workspace_root: &Path, lang: Lang) -> PathBuf {
         .join(format!("cwtools_generated_l_{lang}.yml"))
 }
 
-/// target this returns is one a generated edit may write to (#160). Filtering
 fn resolve_loc_insert_target(
     lang: Lang,
     siblings: &[String],
@@ -106,9 +105,6 @@ fn stub_line(key: &str) -> String {
 fn eol_of(text: &str) -> &'static str {
     if text.contains("\r\n") { "\r\n" } else { "\n" }
 }
-
-/// anchor on at all). `encoding` converts the anchor column for the one case
-/// encoding.
 fn insert_stub_after_line(
     text: &str,
     after_line0: u32,
@@ -149,7 +145,6 @@ struct LocKeyCandidate<'d> {
     targets: Vec<(Lang, LocInsertTarget)>,
 }
 
-/// of independently re-creating the file (#142): two `NewFile` targets built
 fn new_file_owners<'a>(
     all_targets: impl IntoIterator<Item = &'a [(Lang, LocInsertTarget)]>,
 ) -> HashMap<Lang, usize> {
@@ -298,7 +293,6 @@ fn build_create_loc_key_batch<'d>(
 }
 
 impl Backend {
-    /// instead of each inserting their own (#142). A candidate is silently
     pub(super) async fn create_loc_key_actions(
         &self,
         uri: &Url,
@@ -466,7 +460,6 @@ impl Backend {
             .unwrap_or_default()
     }
 
-    /// and dedupes it directly instead, since it needs no file read (#142).
     fn loc_insert_operations(
         &self,
         target: &LocInsertTarget,

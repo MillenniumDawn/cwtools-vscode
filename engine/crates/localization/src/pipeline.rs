@@ -246,7 +246,6 @@ pub fn validate_loc_project_with_union(
         .par_iter()
         .filter(|file| lang_selected(file, langs))
         .flat_map_iter(|file| {
-            // encoding is missing/wrong BOM.
             build_diagnostics(
                 file,
                 &file.path,
@@ -261,7 +260,6 @@ pub fn validate_loc_project_with_union(
         .collect()
 }
 
-/// command validator stays fully lenient and this finds nothing.
 pub fn validate_loc_project_commands(
     service: &LocService,
     langs: Option<&[Lang]>,
@@ -435,7 +433,6 @@ mod tests {
         }
     }
 
-    /// an unknown command has to stay lenient there rather than be invented.
     /// The scripted-localisation registry is the second gate (#348) — without it
     #[test]
     fn the_project_command_pass_needs_a_registry() {
@@ -826,7 +823,6 @@ mod tests {
         );
         // `ScriptedVariables` lacked `Sync`.
         let diags = validate_loc_project_commands(&svc, None, &data);
-        // are accepted. The count proves the rayon `Sync` gate held.
         let flagged = diags
             .iter()
             .filter(|d| d.code == "CW226" || d.code == "CW266")

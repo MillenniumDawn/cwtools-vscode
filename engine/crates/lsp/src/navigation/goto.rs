@@ -129,7 +129,6 @@ impl Backend {
             }
         }
 
-        // still resolves. (#39)
         if let Some(element) = self.element_at_cursor(&uri, pos) {
             // HOI4 scripted loc files are often untyped (#725).
             if let PositionElement::Leaf { key, value } = &element

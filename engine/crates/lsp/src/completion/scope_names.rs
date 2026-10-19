@@ -194,7 +194,6 @@ fn scope_prelude(language: &str) -> &'static [&'static str] {
     }
 }
 
-/// without one, only the prelude keywords are offered (#373 — scope names
 pub(crate) fn scope_completion_names(
     language: &str,
     registry: Option<&cwtools_game::scope_registry::ScopeRegistry>,

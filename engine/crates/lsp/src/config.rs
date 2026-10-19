@@ -16,7 +16,6 @@ use crate::cache_purge::purge_caches;
 use crate::command_progress::{CommandProgress, Phase, ScanOutcome};
 use crate::paths::default_cache_dir;
 
-/// matcher work without bound (#169).
 const MAX_IGNORE_ENTRIES: usize = 200;
 const MAX_IGNORE_PATTERN_LEN: usize = 1024;
 const MAX_IGNORED_ERROR_CODES: usize = 200;
@@ -250,7 +249,6 @@ fn locale_tag(params: &InitializeParams) -> Option<&str> {
     })
 }
 
-/// verbatim, so the wording is the contract: each half (rules loaded or not,
 fn reload_status_message(loaded: bool, outcome: ScanOutcome, dir: &std::path::Path) -> String {
     let status = cwtools_i18n::t(match outcome {
         ScanOutcome::Ran => cwtools_i18n::Key::StatusRevalidated,
@@ -268,7 +266,6 @@ fn reload_status_message(loaded: bool, outcome: ScanOutcome, dir: &std::path::Pa
     }
 }
 
-/// an `l_<lang>:` header then ` KEY:0 "TODO"` entries. The file needs a UTF-8
 fn render_loc_stub(lang: cwtools_localization::Lang, missing: &BTreeSet<String>) -> Value {
     let mut content = format!("l_{}:\n", lang);
     for key in missing {
@@ -360,7 +357,6 @@ impl Backend {
                     .store(dbg, std::sync::atomic::Ordering::Relaxed);
             }
 
-            // the ambient current scope. (#37)
             if let Some(mode) = opts.get("hoverScopeDisplay").and_then(|v| v.as_str()) {
                 self.state
                     .hover_resolved_scope
@@ -678,7 +674,6 @@ impl Backend {
                     },
                 )),
                 inlay_hint_provider: Some(OneOf::Left(true)),
-                // reindex (#184). A `workspace/semanticTokens/refresh` is sent
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -744,7 +739,6 @@ impl Backend {
     }
 
     pub(crate) async fn load_rules_config(&self, cache_path: &std::path::Path) -> bool {
-        // path that doesn't resolve here (e.g. a Windows `rules_folder`
         if !cache_path.is_dir() {
             self.client
                 .log_message(
@@ -780,7 +774,6 @@ impl Backend {
             return false;
         }
 
-        // handshake gate below (#98). Snapshotting once is sound only while the
         let handshake_complete = self
             .state
             .handshake_complete
@@ -828,7 +821,6 @@ impl Backend {
             *previous = current;
         }
 
-        // handshake to flush (#98).
         if handshake_complete {
             for (uri, diags) in to_publish {
                 if let Ok(url) = uri.parse() {
@@ -902,7 +894,6 @@ impl Backend {
             }
             self.set_ruleset(combined_ruleset);
             self.rebuild_modifier_keys();
-            // re-request tokens for visible files (#184).
             self.invalidate_all_semantic_tokens();
             self.request_semantic_refresh().await;
         } else {
@@ -924,7 +915,6 @@ impl Backend {
         &self,
         params: DidChangeWorkspaceFoldersParams,
     ) {
-        // primary keys its `workspace_prefix` the way documents are keyed (#319).
         let removed: Vec<String> = params
             .event
             .removed
@@ -1285,7 +1275,6 @@ impl Backend {
         }
         progress.report_phase(Phase::Vanilla).await;
         self.clear_vanilla_state();
-        // the client cancelling the command mid-index (#204).
         let guard = crate::scan::ScanGuard::for_command(self);
         self.ensure_vanilla_index(Some(&progress), true, false)
             .await;

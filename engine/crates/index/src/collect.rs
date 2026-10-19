@@ -249,7 +249,6 @@ const SCRIPTED_LOC_DIRS: [&str; 3] = [
     "scripted_loc",
 ];
 
-/// of one read as an unknown command (#348). The node key is not checked — HOI4
 pub fn collect_scripted_loc_names(
     file: &ParsedFile,
     logical_path: &str,
@@ -498,7 +497,6 @@ fn walk_variables_and_value_sets(
 
         if let Value::Clause(ch) = &leaf.value {
             let is_var_ns = ns.as_deref() == Some("variable");
-            // descends into every clause but a `variable`-namespace block.
             let descend = var_effects.is_some() || (vs_active && !is_var_ns);
             let vs_child = vs_active && !is_var_ns;
             if descend {
@@ -675,8 +673,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    // macOS filesystems reject filenames with invalid UTF-8 bytes (EILSEQ),
-    // so skip before the test attempts to create its fixture files there.
     #[cfg_attr(
         target_os = "macos",
         ignore = "macOS rejects non-UTF-8 filenames with EILSEQ"
@@ -740,9 +736,6 @@ mod tests {
         assert_eq!(first_names, ["first"]);
         assert_eq!(second_names, ["second"]);
     }
-
-    // the end is the spot just past the closing brace (the parser's
-    // full extent, so a multi-line clause must record an end on the brace's line.
     #[test]
     fn instance_location_end_is_closing_brace() {
         let source = "thing_a = {\n    x = 1\n}";

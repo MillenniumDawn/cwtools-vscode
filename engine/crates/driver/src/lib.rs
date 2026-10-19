@@ -302,7 +302,6 @@ pub fn vanilla_gated_checks(game: Game, has_vanilla: bool) -> &'static [&'static
     }
 }
 
-/// fingerprint matches the install short-circuits the walk, and a
 #[derive(Debug, Clone)]
 pub struct VanillaCacheAuto {
     /// Directory holding one cache file per game + fingerprint. Same layout and
@@ -323,8 +322,6 @@ pub struct SessionConfig<'a> {
     pub ignore_files: &'a [String],
     pub ignore_dirs: &'a [String],
     pub loc_languages: Option<Vec<Lang>>,
-    /// mod's own (live-walked) files. Off by default (Windows-authored mods);
-    /// enable for mods that also target case-sensitive filesystems (Linux/Mac),
     pub case_sensitive_files: bool,
     pub on_rules_diagnostic: Option<&'a mut dyn FnMut(RuleParseError)>,
 }
@@ -510,7 +507,6 @@ impl Session {
                     &src.logical_path,
                     &rules_table,
                 );
-                // reported as an unknown command (#348). Path-driven: the HOI4
                 let scripted_locs = cwtools_index::collect_scripted_loc_names(
                     &src.parsed,
                     &src.logical_path,
@@ -1149,7 +1145,6 @@ fn write_vanilla_cache(
     }
 }
 
-/// by an older format, stale fingerprint) reads as a miss so the caller
 fn load_fresh_vanilla_cache(
     path: &Path,
     game: &str,
@@ -1224,7 +1219,6 @@ pub enum VanillaFiles<'a> {
     Install(&'a Path),
 }
 
-/// so the editor and the CLI answer the same reference the same way (#283).
 /// `parent_roots` are parent mods (#786): a submod may reference any file
 /// they ship, so they index under the same ignore patterns as the workspace.
 pub fn build_file_index(
@@ -1496,7 +1490,6 @@ pub(crate) fn apply_config_folders(config: &mut FileManagerConfig, folders: &[St
     }
 }
 
-/// discover the same file set (#284).
 pub fn workspace_discovery_config(root: &Path, ruleset: Option<&RuleSet>) -> FileManagerConfig {
     let mut config = search_config_for(root);
     if let Some(ruleset) = ruleset {
@@ -1508,7 +1501,6 @@ pub fn workspace_discovery_config(root: &Path, ruleset: Option<&RuleSet>) -> Fil
     config
 }
 
-/// workspaces, so the CLI and LSP share one branching point (#284).
 pub fn discover_workspace_files(
     config: FileManagerConfig,
 ) -> Result<Vec<DiscoveredFile>, FileError> {

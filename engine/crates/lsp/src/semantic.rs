@@ -69,7 +69,6 @@ pub(crate) struct AbsToken {
     pub(crate) modifiers: u32,
 }
 
-/// descending into its clause, which is already source order, but the encoding
 pub(crate) fn encode(mut tokens: Vec<AbsToken>) -> Vec<SemanticToken> {
     tokens.retain(|t| t.length > 0);
     tokens.sort_by_key(|t| (t.line, t.start));
@@ -163,7 +162,6 @@ impl Ctx<'_> {
             .map_or(&[], |l| l.as_slice())
     }
 
-    /// parser char columns into the negotiated encoding. `None` outside the
     fn token(
         &self,
         line0: u32,
@@ -655,7 +653,6 @@ impl Backend {
             .map(cwtools_cache::workspace::content_hash)
             .unwrap_or(0);
         if text.is_some() {
-            // scrutinee would still be alive inside the block (#334).
             let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
             if let Some(entry) = cached
                 && entry.hash == hash
@@ -1349,7 +1346,6 @@ mod tests {
         );
     }
 
-    // went silent mid-scan with no error and no further output (#334).
     #[test]
     fn repeat_full_request_does_not_deadlock_on_the_cache() {
         must_finish("semantic_tokens_full", || {

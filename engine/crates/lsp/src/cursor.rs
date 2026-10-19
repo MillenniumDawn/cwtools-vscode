@@ -18,7 +18,6 @@ pub(crate) struct RuleCursorInfo {
     pub(crate) root_scope: Option<String>,
     pub(crate) prev_scope: Option<String>,
     pub(crate) from_scopes: Vec<String>,
-    /// setting is on and it differs from the current scope. (#37)
     pub(crate) resolved_scope: Option<String>,
 }
 

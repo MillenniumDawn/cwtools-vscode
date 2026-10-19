@@ -274,7 +274,6 @@ pub(crate) fn value_set_leaf(
                     }
                 }
             } else {
-                // for the common flag/name/token block shapes.
                 const NAME_KEYS: &[&str] = &["flag", "name", "token", "var", "variable"];
                 for c in sub {
                     let Child::Leaf(cidx) = c else { continue };
@@ -433,7 +432,6 @@ alias[effect:set_country_flag] = {
 
     #[test]
     fn value_set_member_under_nonobvious_block_key() {
-        // to `value_set[character_token]` in the rules, and must NOT capture the
         let table = StringTable::new();
         let mut rs = ruleset_from(
             r#"

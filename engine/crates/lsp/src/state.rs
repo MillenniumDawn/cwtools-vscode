@@ -179,7 +179,6 @@ impl Config {
 pub(crate) struct RuleData {
     pub(crate) ruleset: Option<Arc<RuleSet>>,
     pub(crate) scope_registry: Option<Arc<cwtools_game::scope_registry::ScopeRegistry>>,
-    /// whole set (#78).
     pub(crate) modifier_keys: Arc<HashSet<String>>,
     pub(crate) modifier_scopes: Arc<HashMap<String, Vec<String>>>,
 }
@@ -242,7 +241,6 @@ pub(crate) struct DocumentState {
     pub(crate) loc_key_index: parking_lot::RwLock<Option<Arc<crate::completion::LocKeyIndex>>>,
     pub(crate) loc_text: parking_lot::RwLock<LocText>,
     pub(crate) loc_locations: parking_lot::RwLock<LocLocations>,
-    /// full rescan (#36). Bounded by the number of open loc files, so it stays
     pub(crate) loc_live_overlay: parking_lot::RwLock<HashMap<String, HashSet<String>>>,
     pub(crate) loc_watched_overlay: parking_lot::RwLock<HashMap<String, HashSet<String>>>,
     pub(crate) loc_overlay_revision: AtomicU64,
@@ -250,7 +248,6 @@ pub(crate) struct DocumentState {
     pub(crate) loc_ref_names_cache: parking_lot::Mutex<Option<(u64, Arc<HashSet<String>>)>>,
     pub(crate) hover_show_all_languages: std::sync::atomic::AtomicBool,
     pub(crate) hover_debug: std::sync::atomic::AtomicBool,
-    /// default — the ambient scope is shown alone. (#37)
     pub(crate) hover_resolved_scope: std::sync::atomic::AtomicBool,
     pub(crate) inlay_hints_loc_titles: std::sync::atomic::AtomicBool,
     pub(crate) inlay_hints_scopes: std::sync::atomic::AtomicBool,
@@ -267,7 +264,6 @@ pub(crate) struct DocumentState {
     pub(crate) handshake_complete: std::sync::atomic::AtomicBool,
     /// `initialize` where the gate above would swallow them (#98).
     pub(crate) deferred_rule_diagnostics: parking_lot::Mutex<Vec<(String, Vec<Diagnostic>)>>,
-    /// toast), parked the same way as the diagnostics above (#98).
     pub(crate) deferred_rules_messages: parking_lot::Mutex<Vec<DeferredRulesMessage>>,
     pub(crate) last_rules_toast: parking_lot::Mutex<Option<String>>,
     /// Unclosed-quote format refusals already shown, so format on save does not repeat the toast.
@@ -312,12 +308,10 @@ pub(crate) struct DocumentState {
     pub(crate) settings_generation: AtomicU64,
     pub(crate) start: std::time::Instant,
     pub(crate) last_activity_ms: AtomicU64,
-    /// bounded request queue (#90).
     pub(crate) watched_pending: Mutex<HashSet<String>>,
     pub(crate) watched_deleted: Mutex<HashSet<String>>,
     pub(crate) watched_debounce: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub(crate) watched_signatures: Mutex<HashMap<String, (u64, u128)>>,
-    /// requested or after invalidation (file change, rename, encoding switch,
     pub(crate) semantic_tokens_cache: Mutex<HashMap<String, SemanticCacheEntry>>,
     pub(crate) semantic_tokens_seq: AtomicU64,
     pub(crate) fixable_edits: Mutex<HashMap<String, FixableEdits>>,
@@ -1342,7 +1336,6 @@ pub(crate) enum DeferredRulesMessage {
     Toast(String),
 }
 
-/// legible in the server log (issue #90) instead of a wall of identical lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValidateTrigger {
     DidOpen,

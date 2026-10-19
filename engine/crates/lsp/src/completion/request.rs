@@ -372,7 +372,6 @@ impl Backend {
             );
         }
 
-        // the #74/#75/#79 bug. Key positions and unresolved contexts keep the
         let t_ast = Instant::now();
         let mut ast_source = AstSource::None;
         let effective_ast: Option<Arc<ParsedFile>> = self.ast_snapshot_for(&uri).map(|snapshot| {
@@ -655,7 +654,6 @@ impl Backend {
             );
             Ok(None)
         } else {
-            // context-aware list replaces it. (#41)
             let mut returned: Vec<CompletionItem> = items
                 .iter()
                 .filter(|it| token_matches(it, &token))

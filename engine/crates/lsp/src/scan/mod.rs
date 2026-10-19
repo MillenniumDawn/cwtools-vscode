@@ -416,7 +416,6 @@ impl Backend {
     }
 }
 
-/// tower-lsp 0.20 keeps a pending slot per server→client request and `expect`s
 /// the oneshot receiver to still be alive when the reply lands
 /// (`service/client/pending.rs`). Dropping the future that awaits the reply
 /// leaves the slot behind, so the client's answer panics the whole process
@@ -433,7 +432,6 @@ where
     tokio::spawn(fut).await.ok()
 }
 
-/// it (#155). `context` names the task in the log line. Returns whether `fut`
 pub(crate) async fn spawn_logging_panics<F>(context: &str, fut: F) -> bool
 where
     F: std::future::Future<Output = ()> + Send + 'static,
@@ -447,7 +445,6 @@ where
     }
 }
 
-/// that parallel load can blow through (#198). Unset, which is every real run,
 pub(crate) async fn hold_scan_for_tests() {
     hold_for_tests(
         "CWTOOLS_SCAN_HOLD_FILE",
@@ -456,7 +453,6 @@ pub(crate) async fn hold_scan_for_tests() {
     .await;
 }
 
-/// phase's ticker demonstrably alive — #434, proving a stray sampler tick
 pub(crate) async fn hold_parse_for_tests() {
     hold_for_tests("CWTOOLS_PARSE_HOLD_FILE", None).await;
 }
@@ -518,7 +514,6 @@ pub(crate) fn stat_signature_for(files: &[std::path::PathBuf]) -> u64 {
     hasher.finish()
 }
 
-/// the decision is independently unit-testable (#155 fix-round-2): at the
 pub(crate) fn watched_batch_slot_is_ours(state: &DocumentState) -> bool {
     state
         .watched_debounce
@@ -1140,7 +1135,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_vanilla_merge_populates_the_file_index() {
-        // workspace, so the check was silently dead in the LSP (#283). Both
         let backend = test_backend();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("mod");

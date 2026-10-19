@@ -362,7 +362,6 @@ impl Backend {
         .await
     }
 
-    /// install (#160). Dropping those quietly would apply a rename the user
     fn first_refused_edit_target(
         &self,
         by_uri: &[(String, Vec<TextEdit>)],

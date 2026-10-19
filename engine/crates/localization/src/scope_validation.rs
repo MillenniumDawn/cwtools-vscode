@@ -55,7 +55,6 @@ impl Default for LocScopeData<'_> {
     }
 }
 
-/// placeholder to satisfy its signature.
 fn build_loc_ctx(data: &LocScopeData<'_>, initial: ScopeId) -> ScopeContext {
     match &data.registry {
         Some(reg) => ScopeContext::from_registry(reg.clone(), initial),
@@ -185,7 +184,6 @@ fn validate_command_string(
         };
 
         match classify_scope_result(ctx.change_scope(seg), is_last) {
-            // does not track lenient intermediates, so all of these just continue.
             ScopeOutcome::Advanced
             | ScopeOutcome::AnyScope
             | ScopeOutcome::ValueEnd
@@ -203,7 +201,6 @@ fn validate_command_string(
                 return;
             }
             ScopeOutcome::Unknown => {
-                // terminal-commands list, accept it (lenient); if we have a
                 // not scope links, so we remain lenient here.
                 // same scripted-localisation registry (#348).
                 if is_last
@@ -236,12 +233,10 @@ fn validate_jomini_chain(
     }
     let last_idx = chain.len() - 1;
     let mut ctx = build_loc_ctx(data, initial_scope);
-    // has an opaque intermediate value and stays lenient. Other multi-segment
     let marker = chain[0].key.strip_prefix('?');
     let has_q_mark = data.question_mark_variable && marker.is_some();
     let reads_through_variable = has_q_mark && marker.is_some_and(|m| reads_a_variable(m, data));
     let lacks_variable_registry = has_q_mark && data.scripted_variables.is_none();
-    // so the tail stays lenient rather than reporting every one of them (#348).
     let lacks_loc_registry = !has_q_mark && data.scripted_locs.is_none();
     let mut had_lenient_intermediate =
         (reads_through_variable || lacks_variable_registry) && chain.len() > 1;
@@ -296,7 +291,6 @@ fn validate_jomini_chain(
                     && !reads_a_variable(seg, data)
                     && !is_scripted_loc(seg, data)
                 {
-                    // nor a scripted-localisation: CW226 (mirrors F# `LocNotFound`).
                     diags.push(LocCommandDiagnostic::NotFound {
                         command: seg.to_string(),
                     });
@@ -339,7 +333,6 @@ fn is_known_name(segment: &str, lookup: Option<ScriptedVariables<'_>>) -> bool {
     name.parse::<f64>().is_ok() || lookup(name)
 }
 
-/// which the registry never holds; strip it before asking. Three forms are taken
 fn reads_a_variable(segment: &str, data: &LocScopeData<'_>) -> bool {
     is_known_name(segment, data.scripted_variables)
 }
@@ -422,7 +415,6 @@ mod tests {
             parameter_variables: true,
             registry: Some(Arc::new(reg)),
             scripted_variables: None,
-            // is a different answer (see the lenient tests below).
             scripted_locs: Some(&|_: &str| false),
             scripted_guis: Some(&|_: &str| false),
         }
@@ -707,7 +699,6 @@ mod tests {
         );
     }
 
-    /// scripted localisation (#348).
     #[test]
     fn bare_scripted_loc_command_is_accepted() {
         let entry = make_entry_with_commands(vec!["AST_GetNavyName".into()]);

@@ -74,7 +74,6 @@ fn token_match_rank(hay: &str, token: &str) -> u8 {
     }
 }
 
-/// token can never be truncated away behind better-bucketed items (#94). An
 pub(crate) fn filter_by_token(items: Vec<CompletionItem>, token: &str) -> Vec<CompletionItem> {
     let mut items = items;
     items.retain(|it| token_matches(it, token));
