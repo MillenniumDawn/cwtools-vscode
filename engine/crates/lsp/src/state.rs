@@ -22,7 +22,7 @@ pub(crate) use crate::loc_text::LocText;
 /// Where a test may park a background pipeline mid-flight so it can observe
 /// the state in between. Pass 2 of the workspace scan has three points; the
 /// watched batch has one at the top of every per-file iteration, outside the
-/// validation permit (#477).
+/// validation permit (#477). Validation has one inside its synchronous phase.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HoldPoint {
@@ -30,6 +30,7 @@ pub(crate) enum HoldPoint {
     Pass2Mid,
     Pass2After,
     WatchedFile,
+    ValidatePrepared,
 }
 
 /// A one-shot condvar gate: the first `hold` at the configured point blocks
