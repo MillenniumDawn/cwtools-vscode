@@ -314,6 +314,10 @@ impl InfoService {
             Self::index_child_heuristic(child, &ast.arena, table, type_names, &mut info);
         }
 
+        let CollectedVariablesAndValueSets {
+            variables: set_vars,
+            value_sets,
+        } = collect_variables_and_value_sets(ast, ruleset, table, Some(&self.var_effects));
         Arc::make_mut(&mut self.type_index)
             .complex_enum_values
             .merge_file(
@@ -327,10 +331,7 @@ impl InfoService {
             );
         Arc::make_mut(&mut self.type_index)
             .value_set_values
-            .merge_file(
-                uri,
-                cwtools_index::dynamic_values::collect_value_set_members(ruleset, ast, table),
-            );
+            .merge_file(uri, value_sets);
 
         let scripted_locs = cwtools_index::collect_scripted_loc_names(ast, logical_path, table);
         let scripted_guis =
@@ -383,15 +384,11 @@ impl InfoService {
             .collect();
         info.defined_variables_ns =
             collect_defined_variables_from_rules(ruleset, ast, logical_path, table, Some(at_vars));
-        if !self.var_effects.is_empty() {
-            let mut set_vars: Vec<DefinedVariable> = Vec::new();
-            collect_set_variable_defs(ast, table, &self.var_effects, &mut set_vars);
-            if !set_vars.is_empty() {
-                info.defined_variables_ns
-                    .entry("variable".to_string())
-                    .or_default()
-                    .extend(set_vars);
-            }
+        if !set_vars.is_empty() {
+            info.defined_variables_ns
+                .entry("variable".to_string())
+                .or_default()
+                .extend(set_vars);
         }
         for vars in info.defined_variables_ns.values() {
             for v in vars {
@@ -1461,6 +1458,19 @@ effect = {
         }
     }
 
+    fn set_variable_names(
+        ruleset: &RuleSet,
+        parsed: &ParsedFile,
+        table: &StringTable,
+        effects: &HashSet<String>,
+    ) -> Vec<String> {
+        collect_variables_and_value_sets(parsed, ruleset, table, Some(effects))
+            .variables
+            .into_iter()
+            .map(|d| d.name)
+            .collect()
+    }
+
     #[test]
     fn test_collect_set_variable_names() {
         const RULES: &str = r#"
@@ -1485,8 +1495,7 @@ alias[effect:set_temp_variable] = {
 
         let script = "foo = { set_variable = { var = my_explicit value = 3 } set_temp_variable = { my_shorthand = 5 } }";
         let parsed = parse_string(script, &table);
-        let mut names = Vec::new();
-        collect_set_variable_names(&parsed, &table, &effects, &mut names);
+        let names = set_variable_names(&ruleset, &parsed, &table, &effects);
         assert!(
             names.contains(&"my_explicit".to_string()),
             "got: {:?}",
@@ -1524,8 +1533,7 @@ alias[effect:resize_array] = {
 
         let script = "foo = { add_to_array = { array = my_arr value = 3 } resize_array = { array = other_arr size = 2 } }";
         let parsed = parse_string(script, &table);
-        let mut names = Vec::new();
-        collect_set_variable_names(&parsed, &table, &effects, &mut names);
+        let names = set_variable_names(&ruleset, &parsed, &table, &effects);
         assert!(names.contains(&"my_arr".to_string()), "got: {:?}", names);
         assert!(names.contains(&"other_arr".to_string()), "got: {:?}", names);
         assert!(!names.contains(&"array".to_string()), "got: {:?}", names);
@@ -1551,8 +1559,8 @@ alias[effect:set_temp_variable] = {
 
         let script = "foo = { set_variable = { var = my_explicit value = 3 } set_temp_variable = { my_shorthand = 5 } }";
         let parsed = parse_string(script, &table);
-        let mut defs = Vec::new();
-        collect_set_variable_defs(&parsed, &table, &effects, &mut defs);
+        let defs =
+            collect_variables_and_value_sets(&parsed, &ruleset, &table, Some(&effects)).variables;
 
         let explicit = defs
             .iter()
@@ -1564,6 +1572,117 @@ alias[effect:set_temp_variable] = {
             .find(|d| d.name == "my_shorthand")
             .expect("my_shorthand");
         assert_eq!(shorthand.value.as_deref(), Some("5"));
+    }
+
+    #[test]
+    fn index_file_collects_variables_value_sets_and_complex_enums() {
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+        const RULES: &str = r#"
+enums = {
+    complex_enum[root_scalar] = {
+        path = "game/common/foo"
+        start_from_root = yes
+        name = {
+            enum_name = scalar
+        }
+    }
+}
+alias[effect:set_variable] = {
+    var = value_set[variable]
+    value = int_variable_field
+}
+alias[effect:set_temp_variable] = {
+    value_set[variable] = int_variable_field
+}
+alias[effect:set_country_flag] = value_set[country_flag]
+alias[effect:set_country_flag] = {
+    flag = value_set[country_flag]
+    value = int
+}
+"#;
+        const SCRIPT: &str = r#"
+@my_const = 10
+root_scalar = yes
+first = {
+    set_country_flag = plain_flag
+    set_variable = { var = outer_var value = 1 }
+    set_temp_variable = { shorthand_var = 2 }
+    set_country_flag = { flag = block_flag value = 3 }
+    nested = {
+        set_country_flag = nested_flag
+        set_variable = { var = nested_var }
+    }
+}
+second = {
+    set_variable = {
+        var = holder
+        set_country_flag = hidden_flag
+        wrapper = { set_variable = { var = deep_var } }
+    }
+    set_country_flag = { flag = flagged set_variable = { var = in_flag_block } }
+}
+"#;
+        let table = StringTable::new();
+        let ruleset = ast_to_ruleset(&parse_string(RULES, &table), &table);
+        let parsed = parse_string(SCRIPT, &table);
+
+        let mut service = InfoService::new();
+        service.update_ruleset_data(variable_defining_effects(&ruleset));
+        service.index_file_with_path("test.txt", &parsed, &table, &ruleset, "common/foo/test.txt");
+
+        let fi = &service.files["test.txt"];
+        let defs = |ns: &str| -> Vec<(&str, Option<&str>)> {
+            fi.defined_variables_ns[ns]
+                .iter()
+                .map(|v| (v.name.as_str(), v.value.as_deref()))
+                .collect()
+        };
+        assert_eq!(defs("@"), [("@my_const", None)]);
+        assert_eq!(
+            defs("variable"),
+            [
+                ("outer_var", Some("1")),
+                ("shorthand_var", Some("2")),
+                ("nested_var", None),
+                ("holder", None),
+                ("deep_var", None),
+                ("in_flag_block", None),
+            ],
+            "set_variable blocks are found at any depth, in encounter order"
+        );
+
+        fn sorted(mut values: Vec<&str>) -> Vec<&str> {
+            values.sort_unstable();
+            values
+        }
+        let type_index = &service.type_index;
+        assert_eq!(
+            sorted(type_index.value_set_values.values("country_flag").collect()),
+            ["block_flag", "flagged", "nested_flag", "plain_flag"],
+            "a value-set effect inside a set_variable block is not a member"
+        );
+        assert_eq!(
+            sorted(
+                type_index
+                    .complex_enum_values
+                    .values("root_scalar")
+                    .collect()
+            ),
+            ["@my_const", "root_scalar"]
+        );
+        for name in [
+            "outer_var",
+            "shorthand_var",
+            "nested_var",
+            "holder",
+            "deep_var",
+            "in_flag_block",
+        ] {
+            assert!(
+                type_index.var_index.contains(name),
+                "{name} not in var_index"
+            );
+        }
     }
 
     #[test]

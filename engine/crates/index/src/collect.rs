@@ -424,34 +424,38 @@ fn collect_type_instances_inner(
     result
 }
 
-/// block (`set_variable = { .. }`), whose members are collected on the dedicated
-fn collect_variables_and_value_sets(
+#[derive(Default)]
+pub struct CollectedVariablesAndValueSets {
+    pub variables: Vec<DefinedVariable>,
+    pub value_sets: HashMap<String, Vec<String>>,
+}
+
+/// Collect a file's `set_variable`-style definitions and its value-set members
+/// in one walk. `var_effects` names the variable-defining effects, and an empty
+/// set means there are none. The definitions come in source order.
+pub fn collect_variables_and_value_sets(
     file: &ParsedFile,
     ruleset: &RuleSet,
     table: &StringTable,
     var_effects: Option<&HashSet<String>>,
-    var_names_out: &mut Vec<String>,
-    value_sets_out: &mut HashMap<String, Vec<String>>,
-) {
+) -> CollectedVariablesAndValueSets {
+    let var_effects = var_effects.filter(|effects| !effects.is_empty());
     let vs_active = !ruleset.value_set_effects().is_empty();
-    if var_effects.is_none() && !vs_active {
-        return;
+    let mut out = CollectedVariablesAndValueSets::default();
+    if var_effects.is_some() || vs_active {
+        walk_variables_and_value_sets(
+            &file.root_children,
+            file,
+            ruleset,
+            table,
+            var_effects,
+            vs_active,
+            &mut out,
+        );
     }
-    let mut var_defs: Vec<DefinedVariable> = Vec::new();
-    walk_variables_and_value_sets(
-        &file.root_children,
-        file,
-        ruleset,
-        table,
-        var_effects,
-        vs_active,
-        &mut var_defs,
-        value_sets_out,
-    );
-    var_names_out.extend(var_defs.into_iter().map(|d| d.name));
+    out
 }
 
-#[allow(clippy::too_many_arguments)]
 fn walk_variables_and_value_sets(
     children: &[Child],
     file: &ParsedFile,
@@ -459,8 +463,7 @@ fn walk_variables_and_value_sets(
     table: &StringTable,
     var_effects: Option<&HashSet<String>>,
     vs_active: bool,
-    var_defs: &mut Vec<DefinedVariable>,
-    value_sets: &mut HashMap<String, Vec<String>>,
+    out: &mut CollectedVariablesAndValueSets,
 ) {
     let arena = &file.arena;
     for child in children {
@@ -476,14 +479,19 @@ fn walk_variables_and_value_sets(
                 })
                 .unwrap_or(false);
             if in_effects {
-                crate::variables::extract_set_variable_defs_block(ch, arena, table, var_defs);
+                crate::variables::extract_set_variable_defs_block(
+                    ch,
+                    arena,
+                    table,
+                    &mut out.variables,
+                );
             }
         }
 
         // Value-set collector: per-leaf member capture. A `variable`-namespace
         // block returns `ns == "variable"`, marking a subtree the value-set walk
         let ns = if vs_active {
-            dynamic_values::value_set_leaf(leaf, file, ruleset, table, value_sets)
+            dynamic_values::value_set_leaf(leaf, file, ruleset, table, &mut out.value_sets)
         } else {
             None
         };
@@ -494,16 +502,7 @@ fn walk_variables_and_value_sets(
             let descend = var_effects.is_some() || (vs_active && !is_var_ns);
             let vs_child = vs_active && !is_var_ns;
             if descend {
-                walk_variables_and_value_sets(
-                    ch,
-                    file,
-                    ruleset,
-                    table,
-                    var_effects,
-                    vs_child,
-                    var_defs,
-                    value_sets,
-                );
+                walk_variables_and_value_sets(ch, file, ruleset, table, var_effects, vs_child, out);
             }
         }
     }
@@ -517,8 +516,6 @@ pub fn index_discovered_files(
     subtype_collector: Option<SubtypeCollector>,
 ) -> TypeIndex {
     use rayon::prelude::*;
-
-    let var_effects = var_effects.filter(|e| !e.is_empty());
 
     let files: Vec<cwtools_file_manager::file_manager::ParsedFile> = files.into_iter().collect();
 
@@ -554,16 +551,11 @@ pub fn index_discovered_files(
                     HashMap::new(),
                 ),
             };
-            let mut var_names: Vec<String> = Vec::new();
-            let mut value_sets: HashMap<String, Vec<String>> = HashMap::new();
-            collect_variables_and_value_sets(
-                &pf,
-                ruleset,
-                table,
-                var_effects,
-                &mut var_names,
-                &mut value_sets,
-            );
+            let CollectedVariablesAndValueSets {
+                variables,
+                value_sets,
+            } = collect_variables_and_value_sets(&pf, ruleset, table, var_effects);
+            let var_names = variables.into_iter().map(|d| d.name).collect();
             let complex = dynamic_values::collect_complex_enum_values(
                 ruleset,
                 &pf,
@@ -905,5 +897,171 @@ unrelated_root = {
                 "{path} must not be read as the scripted-GUI folder"
             );
         }
+    }
+
+    // ── Variables and value sets, one walk ────────────────────────────────────
+
+    // The two separate walks the fused one replaced, kept as its reference.
+    fn reference_variables(
+        children: &[Child],
+        arena: &Arena,
+        table: &StringTable,
+        effects: &HashSet<String>,
+        out: &mut Vec<DefinedVariable>,
+    ) {
+        for child in children {
+            let Child::Leaf(li) = child else { continue };
+            let leaf = &arena.leaves[*li as usize];
+            let Value::Clause(ch) = &leaf.value else {
+                continue;
+            };
+            let in_effects = table
+                .with_string(leaf.key.normal, |k| {
+                    effects.contains(k.to_ascii_lowercase().as_str())
+                })
+                .unwrap_or(false);
+            if in_effects {
+                crate::variables::extract_set_variable_defs_block(ch, arena, table, out);
+            }
+            reference_variables(ch, arena, table, effects, out);
+        }
+    }
+
+    fn reference_value_sets(
+        children: &[Child],
+        file: &ParsedFile,
+        ruleset: &RuleSet,
+        table: &StringTable,
+        out: &mut HashMap<String, Vec<String>>,
+    ) {
+        for child in children {
+            let Child::Leaf(li) = child else { continue };
+            let leaf = &file.arena.leaves[*li as usize];
+            let ns = dynamic_values::value_set_leaf(leaf, file, ruleset, table, out);
+            if let Value::Clause(sub) = &leaf.value
+                && ns.as_deref() != Some("variable")
+            {
+                reference_value_sets(sub, file, ruleset, table, out);
+            }
+        }
+    }
+
+    type VariableRow = (String, Option<String>, Option<String>, u32, u16, (u32, u16));
+
+    fn variable_rows(defs: &[DefinedVariable]) -> Vec<VariableRow> {
+        defs.iter()
+            .map(|d| {
+                let SourceLocation { line, col, end } = d.location;
+                (
+                    d.name.clone(),
+                    d.namespace.clone(),
+                    d.value.clone(),
+                    line,
+                    col,
+                    end,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn fused_walk_matches_the_separate_walks() {
+        use crate::variable_defining_effects;
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+
+        const RULES: &str = r#"
+alias[effect:set_variable] = {
+    var = value_set[variable]
+    value = int_variable_field
+}
+alias[effect:set_temp_variable] = {
+    value_set[variable] = int_variable_field
+}
+alias[effect:set_country_flag] = value_set[country_flag]
+alias[effect:set_country_flag] = {
+    flag = value_set[country_flag]
+    value = int
+}
+"#;
+        const SCRIPT: &str = r#"
+first = {
+    set_country_flag = plain_flag
+    set_variable = { var = outer_var value = 1 }
+    set_temp_variable = { shorthand_var = 2 }
+    set_country_flag = { flag = block_flag value = 3 }
+    nested = {
+        set_country_flag = nested_flag
+        set_variable = { var = nested_var }
+    }
+}
+second = {
+    set_variable = {
+        var = holder
+        set_country_flag = hidden_flag
+        wrapper = { set_variable = { var = deep_var } }
+    }
+    set_country_flag = { flag = flagged set_variable = { var = in_flag_block } }
+}
+"#;
+        let table = StringTable::new();
+        let with_value_sets = ast_to_ruleset(&parse_string(RULES, &table), &table);
+        let without_value_sets = RuleSet::new();
+        let file = parse_string(SCRIPT, &table);
+        let effects = variable_defining_effects(&with_value_sets);
+        let no_effects = HashSet::new();
+
+        for ruleset in [&with_value_sets, &without_value_sets] {
+            for var_effects in [Some(&effects), Some(&no_effects), None] {
+                let fused = collect_variables_and_value_sets(&file, ruleset, &table, var_effects);
+
+                let mut variables = Vec::new();
+                if let Some(effects) = var_effects {
+                    reference_variables(
+                        &file.root_children,
+                        &file.arena,
+                        &table,
+                        effects,
+                        &mut variables,
+                    );
+                }
+                let mut value_sets = HashMap::new();
+                if !ruleset.value_set_effects().is_empty() {
+                    reference_value_sets(
+                        &file.root_children,
+                        &file,
+                        ruleset,
+                        &table,
+                        &mut value_sets,
+                    );
+                }
+
+                assert_eq!(
+                    variable_rows(&fused.variables),
+                    variable_rows(&variables),
+                    "variables, in order"
+                );
+                assert_eq!(fused.value_sets, value_sets, "value sets, in order");
+            }
+        }
+
+        let both =
+            collect_variables_and_value_sets(&file, &with_value_sets, &table, Some(&effects));
+        let names: Vec<_> = both.variables.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "outer_var",
+                "shorthand_var",
+                "nested_var",
+                "holder",
+                "deep_var",
+                "in_flag_block"
+            ]
+        );
+        assert_eq!(
+            both.value_sets["country_flag"],
+            ["plain_flag", "block_flag", "nested_flag", "flagged"],
+            "hidden_flag sits inside a variable-namespace block"
+        );
     }
 }

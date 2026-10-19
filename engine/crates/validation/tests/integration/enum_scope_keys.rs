@@ -229,7 +229,7 @@ alias[effect:set_character_flag] = value_set[character_flag]
         &table,
     );
     let members =
-        cwtools_index::dynamic_values::collect_value_set_members(&ruleset, &define, &table);
+        cwtools_index::collect_variables_and_value_sets(&define, &ruleset, &table, None).value_sets;
     assert!(
         members
             .get("character_token")

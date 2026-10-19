@@ -4,6 +4,7 @@
 
 * Fuse the structural hint walk and the CW238 if/else order walk into one recursive pass, so each file pays one arena traversal for CW121, CW223, CW238, CW251 and CW281 instead of two. Diagnostics and their emit order are unchanged. (#597)
 * Decode each character once in the parser's scan loops. `next_if` and `advance_while` consume a char from the one decode that tested it, replacing the `peek` then `advance` pairs, and the operator and `?=` checks match on bytes instead of decoding ahead. The AST, positions and errors are unchanged, so the parse cache keeps its version. (#576)
+* Collect a file's `set_variable` definitions and its value-set members in one walk instead of two, in the language server's per-file index and the CLI's index, which now share `collect_variables_and_value_sets` with the vanilla index. The server also stops re-walking a file for `@` variables when indexing already found none. Results and their order are unchanged. (#481)
 
 ### 4.0.0
 

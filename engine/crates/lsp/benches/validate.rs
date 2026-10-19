@@ -203,8 +203,8 @@ fn bench_index_parsed_file(c: &mut Criterion) {
         });
         group.bench_function("collect_value_sets", |b| {
             b.iter(|| {
-                black_box(cwtools_info::dynamic_values::collect_value_set_members(
-                    &ruleset, &parsed, &table,
+                black_box(cwtools_info::collect_variables_and_value_sets(
+                    &parsed, &ruleset, &table, None,
                 ))
             })
         });
