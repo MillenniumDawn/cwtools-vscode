@@ -737,6 +737,8 @@ def run_guard(config: Config) -> int:
         if compare_worktree is not None:
             remove_compare_worktree(config.repo_root, compare_worktree)
         if keep:
+            for cache in ("current-cache", "comparison-cache"):
+                shutil.rmtree(work / cache, ignore_errors=True)
             print(f"guard: artifacts in {work}")
         else:
             shutil.rmtree(work, ignore_errors=True)

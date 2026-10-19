@@ -1857,12 +1857,7 @@ impl Backend {
                         var_checks,
                     );
                     #[cfg(test)]
-                    {
-                        let gate = self.state.hold_gate.lock().clone();
-                        if let Some(gate) = gate {
-                            gate.hold(crate::state::HoldPoint::ValidatePrepared);
-                        }
-                    }
+                    self.hold(crate::state::HoldPoint::ValidatePrepared);
                     let track = needs_use_tracking(ruleset, game);
                     let (mut errs, used) = if track {
                         let (errs, used) = validate_prepared_tracking_uses(&parsed, uri, &prepared);
@@ -4515,8 +4510,13 @@ mod ignored_tests {
         let permits_while_held = backend.state.validation_permits.available_permits();
         gate.release();
         change.expect("accepting a new edit must not wait for synchronous validation");
-        eprintln!(
-            "supersession: stale task running={first_still_running}, available permits={permits_while_held}"
+        assert!(
+            first_still_running,
+            "the stale validation must still be parked"
+        );
+        assert_eq!(
+            permits_while_held, 0,
+            "both validation permits must be in use"
         );
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             while !first.is_finished() || !backend.state.debounce_handles.lock().is_empty() {
