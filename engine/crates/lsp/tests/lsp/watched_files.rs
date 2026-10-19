@@ -4,7 +4,8 @@ use serde_json::{Value, json};
 
 use crate::common::{
     STORM_FILE, TestServer, count_publishes, count_validate_log, path_uri, poll_until,
-    storm_builder, storm_server, storm_start, wait_for_scan_release, watched_changes,
+    publish_has_code, storm_base, storm_builder, storm_server, storm_start, wait_for_scan_release,
+    watched_changes, watched_created,
 };
 
 #[test]
@@ -228,6 +229,132 @@ fn test_watched_bulk_flood_uses_rescan_not_per_file() {
     assert!(
         publishes > 0,
         "the bulk rescan should still republish workspace diagnostics"
+    );
+}
+
+const RESOURCE_RULES: &str = r#"
+types = {
+    type[decision] = { path = "game/common/decisions" }
+}
+decision = {
+    ## cardinality = 0..1
+    picture = filepath[gfx/,.dds]
+}
+"#;
+
+const PICTURE_DOC_REL: &str = "common/decisions/d.txt";
+
+/// A started server whose file index holds one texture, with a decision open
+/// whose `picture` names a texture that is not on disk yet (CW113).
+fn resource_server() -> TestServer {
+    let mut server = storm_start(
+        storm_base()
+            .rules_file("r.cwt", RESOURCE_RULES)
+            .file("gfx/present.dds", "dds"),
+    );
+    let text = "adec = {\n    picture = new_pic\n}\n";
+    server.write_file(PICTURE_DOC_REL, text);
+    server.open(PICTURE_DOC_REL, text);
+    let opened = server.wait_for_diagnostics("d.txt");
+    assert!(
+        publish_has_code(&opened, "CW113"),
+        "the missing texture must report CW113 before it exists, got: {opened}"
+    );
+    server
+}
+
+/// The last diagnostics published for the open decision.
+fn last_picture_publish(frames: &[Value]) -> &Value {
+    frames
+        .iter()
+        .rev()
+        .find(|frame| {
+            frame["method"] == "textDocument/publishDiagnostics"
+                && frame["params"]["uri"]
+                    .as_str()
+                    .is_some_and(|uri| uri.ends_with("d.txt"))
+        })
+        .unwrap_or_else(|| panic!("the open decision was not republished, got: {frames:?}"))
+}
+
+/// Creates the referenced texture plus `filler` unrelated ones, reports them in
+/// one watched batch, and checks the open decision revalidates in place.
+fn created_textures_clear_cw113(filler: usize) {
+    let mut server = resource_server();
+    let mut uris: Vec<String> = (0..filler)
+        .map(|i| server.write_file_uri(&format!("gfx/burst/t{i}.dds"), "dds"))
+        .collect();
+    uris.push(server.write_file_uri("gfx/new_pic.dds", "dds"));
+
+    server.send(&watched_created(&uris));
+
+    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let log = server.profiling_log();
+    server.stop();
+
+    assert!(
+        !publish_has_code(last_picture_publish(&frames), "CW113"),
+        "CW113 must clear once the texture is reported, got: {frames:?}"
+    );
+    assert_eq!(
+        count_publishes(&frames, ".dds"),
+        0,
+        "a resource must never be published, got: {frames:?}"
+    );
+    assert!(
+        !log.contains("watched batch over cap"),
+        "textures must not count toward the rescan cap, got: {log}"
+    );
+    assert_eq!(
+        count_validate_log(&log, "watched"),
+        0,
+        "a resource must never be parsed or validated, got: {log}"
+    );
+    assert_eq!(
+        count_validate_log(&log, "reindex"),
+        0,
+        "the open decision must revalidate without a reindex, got: {log}"
+    );
+}
+
+#[test]
+fn test_watched_created_texture_clears_cw113_without_a_reindex() {
+    created_textures_clear_cw113(0);
+}
+
+#[test]
+fn test_watched_texture_burst_does_not_force_a_rescan() {
+    // More events than WATCHED_BULK_CAP (200), all resources: a folder copy.
+    created_textures_clear_cw113(205);
+}
+
+#[test]
+fn test_watched_localisation_extension_outside_a_loc_folder_is_ignored() {
+    // The resource watcher is broad, so it reports files such as a CI workflow
+    // or a map table. Discovery never indexes them, so neither may the watcher.
+    let mut server = storm_server();
+    let script = server.write_file_uri("common/decisions/a.txt", STORM_FILE);
+    let csv = server.write_file_uri("map/definition.csv", "0;0;0;0;land;false;plains;0\n");
+    let yml = server.write_file_uri(".github/workflows/ci.yml", "name: ci\n");
+
+    server.send(&watched_changes(&[script, csv, yml]));
+
+    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let log = server.profiling_log();
+    server.stop();
+
+    // The script is the precondition: without it a dead watcher passes too.
+    assert_eq!(count_publishes(&frames, "a.txt"), 1, "got: {frames:?}");
+    assert_eq!(
+        count_publishes(&frames, "definition.csv"),
+        0,
+        "got: {frames:?}"
+    );
+    assert_eq!(count_publishes(&frames, "ci.yml"), 0, "got: {frames:?}");
+    assert_eq!(
+        count_validate_log(&log, "watched"),
+        1,
+        "only the script may validate, got: {log}"
     );
 }
 

@@ -4341,6 +4341,118 @@ mod ignored_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn watched_batch_resources_update_only_the_file_index() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws_uri = Url::from_file_path(tmp.path()).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        let texture = tmp.path().join("gfx/new.dds");
+        std::fs::create_dir_all(texture.parent().unwrap()).unwrap();
+        std::fs::write(&texture, [0xFF, 0xFE, 0x00]).unwrap();
+        let uri = Url::from_file_path(&texture).unwrap().to_string();
+        {
+            let mut info = backend.state.info_service.write();
+            Arc::make_mut(&mut info.type_index)
+                .file_index
+                .insert("dummy.txt");
+        }
+        let revision = || backend.state.info_revision.load(Ordering::Relaxed);
+        let indexed = || {
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("gfx/new.dds")
+        };
+
+        let created = std::collections::HashSet::from([uri.clone()]);
+        backend.process_watched_batch(created.clone(), vec![]).await;
+        assert!(indexed(), "a created resource must reach the file index");
+        assert!(
+            !backend
+                .state
+                .watched_signatures
+                .lock()
+                .contains_key(uri.as_str()),
+            "a resource is never read, so it keeps no stat signature"
+        );
+
+        let after_create = revision();
+        backend.process_watched_batch(created, vec![]).await;
+        assert_eq!(
+            revision(),
+            after_create,
+            "re-saving an indexed resource must not touch the index"
+        );
+
+        // The index merges workspace, parent and vanilla paths, so a delete must not
+        // remove a key another layer may still provide.
+        std::fs::remove_file(&texture).unwrap();
+        backend
+            .process_watched_batch(Default::default(), vec![uri])
+            .await;
+        assert!(
+            indexed(),
+            "a resource delete must leave the file index alone"
+        );
+        assert_eq!(revision(), after_create);
+
+        let ghost = Url::from_file_path(tmp.path().join("gfx/ghost.dds"))
+            .unwrap()
+            .to_string();
+        backend
+            .process_watched_batch(std::collections::HashSet::from([ghost]), vec![])
+            .await;
+        assert!(
+            !backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("gfx/ghost.dds"),
+            "an event for a file that is gone must not index it"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_batch_skips_resources_under_the_excluded_root_folder() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws_uri = Url::from_file_path(tmp.path()).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        let skipped = tmp.path().join("resources/shot.png");
+        let nested = tmp.path().join("gfx/resources/shot.png");
+        for path in [&skipped, &nested] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, [0x00]).unwrap();
+        }
+        {
+            let mut info = backend.state.info_service.write();
+            Arc::make_mut(&mut info.type_index)
+                .file_index
+                .insert("dummy.txt");
+        }
+
+        let changes = [&skipped, &nested]
+            .map(|path| Url::from_file_path(path).unwrap().to_string())
+            .into_iter()
+            .collect();
+        backend.process_watched_batch(changes, vec![]).await;
+
+        let info = backend.state.info_service.read();
+        let index = &info.type_index.file_index;
+        assert!(
+            !index.contains("resources/shot.png"),
+            "discovery skips a root-level resources folder"
+        );
+        assert!(
+            index.contains("gfx/resources/shot.png"),
+            "only the root-level folder is excluded"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn watched_batch_ignored_dir_not_inserted_into_file_index() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let ws_uri = Url::from_file_path(tmp.path()).unwrap().to_string();

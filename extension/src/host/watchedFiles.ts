@@ -8,6 +8,10 @@ export const SCRIPT_WATCH_GLOB = "**/*.{txt,gui,gfx,sfx,asset,map}";
 export const LOCALISATION_WATCH_GLOB =
 	"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}";
 export const CWT_WATCH_GLOB = "**/*.cwt";
+// The engine classifies every other extension as a resource (textures, meshes,
+// sounds) and indexes it by path, so no extension list can mirror that class.
+// The server picks out what it indexes, which keeps this from drifting.
+export const RESOURCE_WATCH_GLOB = "**/*";
 
 // cwtools_file_manager's FileManagerConfig::default().exclude_patterns, matched
 // against the file name as the engine does: case-sensitive, `*.md` as a suffix.

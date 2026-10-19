@@ -4,6 +4,7 @@
 
 * Skip the validation a save starts when the open document's current version was already parsed and validated. The save no longer parses, indexes, validates and republishes identical text. Localisation and `.cwt` files never keep a syntax tree, so a save still revalidates them, and so does a save of a version that has not been validated yet. (#1063)
 * Fuse the structural hint walk and the CW238 if/else order walk into one recursive pass, so each file pays one arena traversal for CW121, CW223, CW238, CW251 and CW281 instead of two. Diagnostics and their emit order are unchanged. (#597)
+* Add new resource files to the file index from watched-file events. A texture, mesh or sound created mid-session updates the index only: the server never reads, parses, validates or publishes it. A texture folder copy no longer counts toward the 200-file rescan cap. When a new path is indexed, open documents revalidate in place, so a CW113 on a new texture clears without a reindex. Resource deletes are ignored, because the index merges workspace, parent and vanilla paths and a delete could hide a copy from another layer. Watched localisation extensions outside a localisation folder are ignored, as discovery already ignores them. Watched files now find their index path against the canonical workspace root, which also fixes new script files never reaching the file index on Windows, where the canonical `\\?\` path never matched the raw root. (#1023)
 * Decode each character once in the parser's scan loops. `next_if` and `advance_while` consume a char from the one decode that tested it, replacing the `peek` then `advance` pairs, and the operator and `?=` checks match on bytes instead of decoding ahead. The AST, positions and errors are unchanged, so the parse cache keeps its version. (#576)
 * Collect a file's `set_variable` definitions and its value-set members in one walk instead of two, in the language server's per-file index and the CLI's index, which now share `collect_variables_and_value_sets` with the vanilla index. The server also stops re-walking a file for `@` variables when indexing already found none. Results and their order are unchanged. (#481)
 * Share open buffers with the text snapshots that references, rename and the edit commands build, instead of copying and rehashing them. An open document's text is now the same `Arc<str>` as the buffer and its content hash comes from the document store, so a request no longer copies or hashes every open file it touches while holding the document lock. Closed files are still read and hashed from disk. Results and the stale-snapshot checks are unchanged. (#1064)
@@ -16,6 +17,10 @@
 * Cover edit supersession while validation waits for a permit and while synchronous validation is in flight, checking latest-only diagnostics, AST replacement, task cleanup and permit recovery. (#868)
 * Add a Stellaris diagnostics guard for the GPL-3.0 Universum Infinitum prescripted-country corpus and its pinned upstream rules. `python3 scripts/guard.py stellaris` uses only the mod's scripted data, with its own baseline and contributor guidance; it needs no game install or companion mods, and CI does not run it. (#320)
 * Keep diagnostic baselines as readable CSV after measuring compressed and aggregate formats. When `--bless` changes rows, show the row diff before replacing the baseline and retain the full diff for review. (#988)
+
+#### Extension
+
+* Watch every workspace file so the server hears about new resources such as `.dds`, `.png` and `.mesh`. The watcher uses the same excluded file and directory filter as the script watchers, so `.git`, `target` and `node_modules` stay quiet. (#1023)
 
 ### 4.0.0
 

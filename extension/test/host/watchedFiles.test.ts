@@ -4,8 +4,8 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { activate, waitForServerReady, waitUntil } from "../support/utils";
 
-// Matches none of the server's or client's watch globs, so only the test
-// observers see it.
+// Matches no script, localisation or rules glob, so the server never validates
+// it; the broad resource watcher only reports it to the file index.
 const READY_PROBE = "watch-ready.probe";
 
 suite("served-root file watchers", function () {
