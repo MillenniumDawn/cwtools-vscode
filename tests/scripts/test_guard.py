@@ -491,6 +491,50 @@ def test_run_guard_bless_previews_diagnostic_changes_before_replacing(
     assert work.exists()
 
 
+def test_run_guard_bless_reports_pin_only_changes(
+    guard: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    corpus = tmp_path / "mod"
+    raw = (
+        "file,line,severity,code,message,hash\n"
+        f"{corpus}/common/x.txt,4,Warning,CW100,same message,0123456789abcdef\n"
+    )
+    baseline = tmp_path / "baseline.csv"
+    baseline.write_text(
+        "# cwtools guard baseline\n"
+        "# corpus: mod @ old-corpus\n"
+        "# rules:  config/Config @ old-rules\n"
+        "file,line,severity,code,message\n"
+        "common/x.txt,4,Warning,CW100,same message\n",
+        encoding="utf-8",
+    )
+    _stub_subprocess(monkeypatch, guard, raw)
+    monkeypatch.setattr(
+        guard,
+        "describe",
+        lambda directory: (
+            "current-corpus" if directory.name == "mod" else "current-rules"
+        ),
+    )
+    work = tmp_path / "work"
+    _fixed_work_dir(monkeypatch, guard, work)
+    config = guard.build_config(_config_args(tmp_path, bless=True), {})
+
+    assert guard.run_guard(config) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert f"guard: blessed {baseline} (1 -> 1 diagnostics); no row changes" in lines
+    assert (
+        "  input revisions: corpus: baseline old-corpus, current current-corpus; "
+        "rules: baseline old-rules, current current-rules"
+    ) in lines
+    assert "# corpus: mod @ current-corpus" in baseline.read_text(encoding="utf-8")
+    assert not work.exists()
+
+
 def test_run_guard_missing_corpus_dies_with_setup_error(
     guard: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

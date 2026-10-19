@@ -119,8 +119,8 @@ engine or a validator should run it, because a refactor that was supposed to
 change nothing is easy to believe and hard to prove.
 
 It validates the pinned Millennium Dawn mod and diffs the report against a
-committed baseline (`scripts/md-baseline.csv`, 19,591 diagnostics). The storage
-experiment and these row counts are recorded in
+committed baseline (`scripts/md-baseline.csv`). Why it stays plain CSV is
+recorded in
 [`DIAGNOSTIC_BASELINE_STORAGE.md`](DIAGNOSTIC_BASELINE_STORAGE.md).
 Run it from the repo root:
 
