@@ -5,6 +5,7 @@ import { suite, test } from "vitest";
 import {
 	CWT_WATCH_GLOB,
 	LOCALISATION_WATCH_GLOB,
+	RESOURCE_WATCH_GLOB,
 	SCRIPT_WATCH_GLOB,
 	createWatchedPathExcluder,
 	forwardWatchedFileEvent,
@@ -30,6 +31,12 @@ const POSIX_CASES: Case[] = [
 	["/mod/OUT/gfx/x.gfx", true],
 	["/mod/common/ideas/x.txt", false],
 	["/mod/portraits/leaders/x.txt", false],
+	// Resource files go through the same filter as script.
+	["/mod/gfx/interface/icon.dds", false],
+	["/mod/gfx/models/ship.mesh", false],
+	["/mod/target/icon.dds", true],
+	["/mod/dist/gfx/icon.png", true],
+	["/mod/.git/objects/pack/x.pack", true],
 	// Whole segments only: a directory merely starting with an excluded name,
 	// or a file merely ending with one, still counts.
 	["/mod/history/dist_x/a.txt", false],
@@ -45,6 +52,8 @@ const WINDOWS_CASES: Case[] = [
 	["C:\\mod\\target\\debug\\x.txt", true],
 	["C:\\mod\\.git\\x.txt", true],
 	["C:\\mod\\common\\ideas\\x.txt", false],
+	["C:\\mod\\gfx\\interface\\icon.dds", false],
+	["C:\\mod\\obj\\icon.dds", true],
 	["C:\\mod\\history\\dist_x\\a.txt", false],
 	// VS Code lowercases the drive letter, and Windows ignores path case.
 	["c:\\MOD\\target\\x.txt", true],
@@ -120,11 +129,13 @@ function engineFileClasses() {
 	const locExtensions = /pub fn is_loc_ext\(ext: &str\) -> bool \{([^}]*)\}/.exec(fileManager);
 	const locDirs = /const LOC_DIR_NAMES: \[&str; \d+\] = \[([^\]]*)\]/.exec(lspPaths);
 	const cwt = /fn is_cwt_file[^}]*ends_with\("\.(\w+)"\)/.exec(lspPaths);
+	const classify = /fn classify_extension[\s\S]*?\n\}/.exec(fileManager);
 	assert.ok(
-		script && locExtensions && locDirs && cwt,
+		script && locExtensions && locDirs && cwt && classify,
 		"the engine's file-class definitions moved; update this parser",
 	);
 	return {
+		resourceFallthrough: /\} else \{\s*FileKind::Resource\s*\}\s*\}$/.test(classify[0]),
 		script: quoted(script[1]).sort(),
 		locExtensions: quoted(locExtensions[1]).sort(),
 		locDirs: quoted(locDirs[1]).sort(),
@@ -144,6 +155,17 @@ suite("watchedFiles", () => {
 		assert.deepStrictEqual(sorted(loc[1]), engine.locDirs);
 		assert.deepStrictEqual(sorted(loc[2]), engine.locExtensions);
 		assert.strictEqual(CWT_WATCH_GLOB, `**/*.${engine.cwt}`);
+	});
+
+	test("watches every resource file because the engine's resource class is the fallthrough", () => {
+		// Any extension that is not script or localisation is a resource, so only
+		// a glob without an extension list can keep up. If the engine ever lists
+		// resource extensions, this fails and the glob needs the same list.
+		assert.ok(
+			engineFileClasses().resourceFallthrough,
+			"classify_extension no longer ends in a Resource fallthrough",
+		);
+		assert.strictEqual(RESOURCE_WATCH_GLOB, "**/*");
 	});
 
 	test("drops what the server's discovery walk would skip", () => {

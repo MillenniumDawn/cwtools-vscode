@@ -280,6 +280,16 @@ pub(crate) fn is_cwt_file(uri: &str) -> bool {
     uri.to_ascii_lowercase().ends_with(".cwt")
 }
 
+/// A file discovery indexes by path only. `.cwt` classifies as a resource too, but the rules lint owns it.
+pub(crate) fn is_resource_file(uri: &str) -> bool {
+    !is_script_file(uri) && !has_loc_ext(uri) && !is_cwt_file(uri)
+}
+
+/// A localisation extension outside a localisation folder: discovery skips it, so a watched event for it is noise.
+pub(crate) fn is_stray_loc_file(uri: &str) -> bool {
+    has_loc_ext(uri) && !is_loc_file(uri)
+}
+
 pub(crate) fn is_script_file(uri: &str) -> bool {
     std::path::Path::new(uri)
         .extension()
@@ -547,6 +557,39 @@ mod tests {
         ] {
             assert!(!is_script_file(uri), "{uri}");
         }
+    }
+
+    #[test]
+    fn is_resource_file_is_neither_script_localisation_nor_rules() {
+        for uri in [
+            "file:///mod/gfx/icon.dds",
+            "file:///mod/gfx/ICON.DDS",
+            "file:///mod/gfx/icon.png",
+            "file:///mod/gfx/models/ship.mesh",
+            "file:///mod/sound/boom.wav",
+        ] {
+            assert!(is_resource_file(uri), "{uri}");
+        }
+        for uri in [
+            "file:///mod/common/ideas/foo.txt",
+            "file:///mod/interface/foo.gfx",
+            "file:///mod/localisation/foo_l_english.yml",
+            "file:///rules/Config/events.cwt",
+            "file:///RULES/FOO.CWT",
+        ] {
+            assert!(!is_resource_file(uri), "{uri}");
+        }
+    }
+
+    #[test]
+    fn is_stray_loc_file_is_a_loc_extension_outside_a_localisation_folder() {
+        assert!(is_stray_loc_file("file:///repo/.github/workflows/ci.yml"));
+        assert!(is_stray_loc_file("file:///mod/map/definition.csv"));
+        assert!(!is_stray_loc_file(
+            "file:///mod/localisation/foo_l_english.yml"
+        ));
+        assert!(!is_stray_loc_file("file:///mod/gfx/icon.dds"));
+        assert!(!is_stray_loc_file("file:///mod/common/ideas/foo.txt"));
     }
 
     #[test]

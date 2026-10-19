@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use tower_lsp::lsp_types::*;
 
 use crate::Backend;
-use crate::paths::uri_to_path_str;
+use crate::paths::{is_resource_file, is_stray_loc_file, uri_to_path_str};
 
 use super::{
     WATCHED_BATCH_PANIC_ONCE, WATCHED_DEBOUNCE_MS, env_flag, resolve_watched_deletes,
@@ -20,6 +20,10 @@ impl Backend {
         let mut enqueued = false;
         for event in params.changes {
             let uri = event.uri.to_string();
+            if is_stray_loc_file(&uri) {
+                tracing::debug!(%uri, "watched localisation file outside a localisation folder; skipping");
+                continue;
+            }
             match event.typ {
                 FileChangeType::DELETED => {
                     tracing::debug!(%uri, "watched file deleted; queued");
@@ -126,6 +130,17 @@ impl Backend {
         changes: HashSet<String>,
         deletes: Vec<String>,
     ) {
+        // Resources skip the rescan cap, so a texture folder copy stays cheap (#1023).
+        let (resource_changes, changes): (HashSet<String>, HashSet<String>) =
+            changes.into_iter().partition(|uri| is_resource_file(uri));
+        // A resource delete is dropped: the index merges workspace, parent and vanilla paths,
+        // so removing a key could hide a copy from another layer.
+        let deletes: Vec<String> = deletes
+            .into_iter()
+            .filter(|uri| !is_resource_file(uri))
+            .collect();
+        let resources_changed = self.sync_watched_resources(&resource_changes);
+        let only_resources = changes.is_empty() && deletes.is_empty();
         let mut lost_scan_cas = false;
         if watched_batch_over_cap(changes.len(), deletes.len()) {
             tracing::info!(
@@ -227,8 +242,9 @@ impl Backend {
                     }
                 }
             }
-            let sweep_pending =
-                !changed_loc_keys.is_empty() || !self.state.pending_changed_names.lock().is_empty();
+            let sweep_pending = !changed_loc_keys.is_empty()
+                || !self.state.pending_changed_names.lock().is_empty()
+                || resources_changed;
             if sweep_pending {
                 // The cross-file sweeps are one more unit of work under one slot.
                 let Some(_permit) = self.validation_permit().await else {
@@ -240,15 +256,18 @@ impl Backend {
                 }
                 let queued: HashSet<String> =
                     { self.state.pending_changed_names.lock().drain().collect() };
-                if !queued.is_empty() {
+                if resources_changed || !queued.is_empty() {
                     let generation = self.state.edit_generation.load(Ordering::Relaxed);
-                    self.revalidate_open_dependents("", generation, Some(&queued))
-                        .await;
+                    // Any filepath can resolve differently, so a resource change has no name scope.
+                    let scope = (!resources_changed).then_some(&queued);
+                    self.revalidate_open_dependents("", generation, scope).await;
                 }
             }
-            self.invalidate_all_semantic_tokens();
-            self.request_semantic_refresh().await;
-            self.request_code_lens_refresh().await;
+            if !only_resources {
+                self.invalidate_all_semantic_tokens();
+                self.request_semantic_refresh().await;
+                self.request_code_lens_refresh().await;
+            }
         }
         *self.state.watched_debounce.lock() = None;
         if lost_scan_cas {
@@ -262,6 +281,40 @@ impl Backend {
         if pending_more || deleted_more {
             self.arm_watched_batch();
         }
+    }
+
+    /// Resource events update the file index only. True when a new path was added (#1023).
+    fn sync_watched_resources(&self, changes: &HashSet<String>) -> bool {
+        let mut added: Vec<String> = changes
+            .iter()
+            .filter(|uri| !self.is_ignored_uri(uri))
+            .filter(|uri| std::path::Path::new(&uri_to_path_str(uri)).is_file())
+            .filter_map(|uri| self.workspace_rel_for_file_index(uri))
+            // Discovery skips a root-level `resources` folder, so the watcher does too.
+            .filter(|rel| {
+                !rel.split('/')
+                    .next()
+                    .is_some_and(cwtools_file_manager::is_excluded_root_dir)
+            })
+            .collect();
+        if added.is_empty() {
+            return false;
+        }
+        let mut info = self.state.info_service.write();
+        if info.type_index.file_index.is_empty() {
+            return false;
+        }
+        added.retain(|rel| !info.type_index.file_index.contains(rel));
+        if added.is_empty() {
+            return false;
+        }
+        let index = &mut Arc::make_mut(&mut info.type_index).file_index;
+        for rel in &added {
+            index.insert(rel);
+        }
+        drop(info);
+        self.bump_info_revision();
+        true
     }
 
     pub(crate) fn workspace_rel_for_file_index(&self, uri: &str) -> Option<String> {

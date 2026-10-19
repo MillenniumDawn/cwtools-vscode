@@ -46,6 +46,7 @@ import type { RulesSetup } from "./rulesSetup";
 import {
 	CWT_WATCH_GLOB,
 	LOCALISATION_WATCH_GLOB,
+	RESOURCE_WATCH_GLOB,
 	SCRIPT_WATCH_GLOB,
 	createWatchedPathExcluder,
 	forwardWatchedFileEvent,
@@ -351,10 +352,13 @@ export function createLanguageClient(
 	// filters by SCRIPT_EXTENSIONS (txt, gui, gfx, sfx, asset, map), so a
 	// per-directory glob here is always narrower than what it indexes: .txt
 	// under gfx/, portraits/ or dlc/ went unwatched. Loc keeps its directory
-	// scope, which the server's own loc check requires.
+	// scope, which the server's own loc check requires. The resource watcher is
+	// the exception: it takes every file and the server sorts out textures and
+	// meshes, so a filepath to a new one stops reporting CW113.
 	const fileEvents = [
 		workspace.createFileSystemWatcher(SCRIPT_WATCH_GLOB),
 		workspace.createFileSystemWatcher(LOCALISATION_WATCH_GLOB),
+		workspace.createFileSystemWatcher(RESOURCE_WATCH_GLOB),
 	];
 	// Preserve structural lint for every workspace .cwt.
 	const cwtWatcher = workspace.createFileSystemWatcher(CWT_WATCH_GLOB);
