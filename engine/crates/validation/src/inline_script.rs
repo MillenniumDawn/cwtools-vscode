@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use cwtools_parser::ast::{Arena, Child, Comment, Leaf, LeafValue, ParsedFile, Value};
+use cwtools_parser::ast::{Arena, Child, Leaf, LeafValue, ParsedFile, Value};
 use cwtools_string_table::string_table::StringTable;
 
 use crate::common::leaf_value_to_string;
@@ -151,6 +151,8 @@ pub(crate) fn expand(
     };
 
     let mut out = Arena::new();
+    // Cloned comments keep their pool ranges, so share the script's pool.
+    out.comment_pool = script.ast.arena.comment_pool.clone();
     let root_children = clone_children(
         &script.ast.root_children,
         &script.ast.arena,
@@ -200,13 +202,7 @@ fn clone_children(
                     color_prefix: lv.color_prefix,
                 }))
             }
-            Child::Comment(idx) => {
-                let comment = &src.comments[*idx as usize];
-                Child::Comment(out.push_comment(Comment {
-                    text: comment.text.clone(),
-                    pos: comment.pos,
-                }))
-            }
+            Child::Comment(idx) => Child::Comment(out.push_comment(src.comments[*idx as usize])),
         })
         .collect()
 }
@@ -277,6 +273,8 @@ fn substitute(text: &str, args: &HashMap<String, String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use cwtools_parser::parser::parse_string;
 
@@ -368,6 +366,40 @@ mod tests {
             Some("air_bonus")
         );
         assert_eq!(leaf_value_to_string(&body.value, &table), "5");
+    }
+
+    /// Expansion comments resolve through the script's own pool (#575).
+    #[test]
+    fn expansion_shares_the_script_comment_pool() {
+        let table = StringTable::new();
+        let scripts = registry(
+            &[(
+                "common/inline_scripts/documented.txt",
+                "# kept\n$WHICH$ = 1",
+            )],
+            &table,
+        );
+        let (parsed, idx) = call_leaf("inline_script = { script = documented }", &table);
+        let leaf = &parsed.arena.leaves[idx as usize];
+        let expanded = expand(leaf, &parsed.arena, &table, &scripts, &[]).expect("expands");
+
+        let Child::Comment(comment_idx) = expanded.ast.root_children[0] else {
+            panic!("expected the script's comment child");
+        };
+        let arena = &expanded.ast.arena;
+        assert_eq!(
+            arena.comment_text(&arena.comments[comment_idx as usize]),
+            Some("# kept"),
+            "the expanded body must still resolve the retained comment"
+        );
+        // The expansion holds the same pool the script parse built.
+        assert!(Arc::ptr_eq(
+            arena.comment_pool.as_ref().unwrap(),
+            scripts
+                .get("documented")
+                .and_then(|script| script.ast.arena.comment_pool.as_ref())
+                .unwrap()
+        ));
     }
 
     #[test]

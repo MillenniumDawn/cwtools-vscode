@@ -295,7 +295,10 @@ fn severity_value_is_unrecognized(value: &str) -> bool {
 pub(crate) fn validate_comment_directives(ast: &ParsedFile, path: &Path) -> Vec<RuleParseError> {
     let mut errors = Vec::new();
     for comment in &ast.arena.comments {
-        let text = comment.text.trim();
+        let Some(text) = ast.arena.comment_text(comment) else {
+            continue;
+        };
+        let text = text.trim();
         let Some(rest) = text.strip_prefix("##") else {
             continue;
         };

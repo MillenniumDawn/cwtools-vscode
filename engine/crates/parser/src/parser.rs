@@ -1,7 +1,10 @@
+use std::borrow::Cow;
+use std::mem;
+use std::str::Chars;
+use std::sync::Arc;
+
 use crate::ast::*;
 use cwtools_string_table::string_table::StringTable;
-use std::borrow::Cow;
-use std::str::Chars;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentMode {
@@ -23,6 +26,10 @@ struct Parser<'a> {
     /// Line of the first leaf-value quote read to end of line unclosed; the
     /// formatter refuses files carrying one.
     unclosed_leaf_value_quote_line: Option<u32>,
+    /// Pooled comment text; comments store only a [`CommentRange`] into it
+    /// (#575). Grows like any `Vec`, so retaining a comment allocates nothing
+    /// of its own.
+    comment_pool: String,
 }
 
 #[derive(Clone)]
@@ -51,6 +58,7 @@ impl<'a> Parser<'a> {
             comment_mode,
             depth: 0,
             unclosed_leaf_value_quote_line: None,
+            comment_pool: String::new(),
         }
     }
 
@@ -134,8 +142,14 @@ impl<'a> Parser<'a> {
             let start_byte = self.byte_pos();
             self.advance_while(|c| c != '\n');
             let end = self.pos();
+            let text_start = self.comment_pool.len() as u32;
+            self.comment_pool
+                .push_str(&self.input[start_byte..self.byte_pos()]);
             return Some(Comment {
-                text: self.input[start_byte..self.byte_pos()].to_string(),
+                text: CommentRange {
+                    start: text_start,
+                    end: self.comment_pool.len() as u32,
+                },
                 pos: SourceRange { start, end },
             });
         }
@@ -674,6 +688,10 @@ impl<'a> Parser<'a> {
         while self.peek().is_some() {
             self.parse_statement(&mut root_children);
         }
+        // Empty pool (Discard mode or comment-free file) keeps no buffer.
+        let comment_pool =
+            (!self.comment_pool.is_empty()).then(|| Arc::new(mem::take(&mut self.comment_pool)));
+        self.arena.comment_pool = comment_pool;
         ParsedFile {
             arena: self.arena,
             root_children,
@@ -762,6 +780,38 @@ fn parse_string_with_comment_mode(
     Parser::new(stripped, table, comment_mode, u16::from(has_bom)).parse()
 }
 
+/// Counting allocator, per-thread via TLS so concurrent test threads cannot
+/// pollute the per-comment allocation gate.
+#[cfg(test)]
+struct CountingAlloc;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_ALLOC_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static TEST_ALLOC_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        // try_with skips defunct threads; const-init Cells never allocate.
+        let _ = TEST_ALLOC_ON.try_with(|on| {
+            if on.get() {
+                TEST_ALLOC_COUNT.with(|count| count.set(count.get() + 1));
+            }
+        });
+        unsafe { std::alloc::System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+}
+
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: CountingAlloc = CountingAlloc;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,6 +844,85 @@ mod tests {
                 "range includes the prefix: {source}"
             );
         }
+    }
+
+    fn comment_heavy_source(comment_count: usize) -> String {
+        use std::fmt::Write;
+        let mut input = String::new();
+        for i in 0..comment_count {
+            let _ = writeln!(input, "# comment {i}");
+        }
+        input.push_str("last = 1\n");
+        input
+    }
+
+    #[test]
+    fn retained_comments_resolve_from_one_shared_pool() {
+        let table = StringTable::new();
+        let parsed = parse_string("# first\nnext = 1\n# second\nlast = 2\n", &table);
+        let comments = &parsed.arena.comments;
+        assert_eq!(comments.len(), 2);
+        assert_eq!(parsed.arena.comment_text(&comments[0]), Some("# first"));
+        assert_eq!(parsed.arena.comment_text(&comments[1]), Some("# second"));
+        assert!(parsed.arena.comment_pool.is_some());
+        // A comment-free or discard-mode parse retains no pool buffer at all.
+        let no_comments = parse_string_without_comments("# dropped\na = 1\n", &table);
+        assert!(no_comments.arena.comments.is_empty());
+        assert!(no_comments.arena.comment_pool.is_none());
+    }
+
+    #[test]
+    fn retained_comments_do_not_intern_into_the_overlay() {
+        let base = StringTable::new();
+        let overlay = base.with_overlay();
+        let guard = overlay
+            .overlay_guard()
+            .expect("overlay handle has a region");
+        let entries_before_comments_only = guard.entries();
+        let parsed = parse_string("# uno\ntwo = 2\n# tres\nfour = 4\n", &overlay);
+        // Exactly the two leaf keys are interned; the two comments add nothing.
+        assert_eq!(
+            guard.entries(),
+            entries_before_comments_only + 2,
+            "comment text must be pooled, not interned"
+        );
+        assert_eq!(
+            parsed.arena.comment_text(&parsed.arena.comments[0]),
+            Some("# uno")
+        );
+    }
+
+    /// Counts allocations made on the calling thread between setup and read,
+    /// so concurrent test threads cannot pollute the measurement.
+    fn allocations_on_this_thread<T>(work: impl FnOnce() -> T) -> (T, usize) {
+        TEST_ALLOC_ON.with(|on| on.set(true));
+        TEST_ALLOC_COUNT.with(|count| count.set(0));
+        let result = work();
+        TEST_ALLOC_ON.with(|on| on.set(false));
+        let allocations = TEST_ALLOC_COUNT.with(|count| count.get());
+        (result, allocations)
+    }
+
+    /// Gate for #575: the identical file except for the comment count may only
+    /// grow logarithmically (vec and pool doubling); a per-comment `String`
+    /// would add one allocation per extra comment.
+    #[test]
+    fn retaining_many_comments_does_not_allocate_text_per_comment() {
+        let table = StringTable::new();
+        let one_source = comment_heavy_source(1);
+        let many_source = comment_heavy_source(128);
+        // Warm the interner so "last" costs the same in both measured parses.
+        let _ = parse_string(&one_source, &table);
+
+        let (_, one) = allocations_on_this_thread(|| parse_string(&one_source, &table));
+        let (_, many) = allocations_on_this_thread(|| parse_string(&many_source, &table));
+
+        assert!(
+            many.saturating_sub(one) < 64,
+            "127 extra comments cost {} allocations; the pool must absorb them without \
+             allocating per comment",
+            many.saturating_sub(one)
+        );
     }
 
     #[test]
@@ -1382,9 +1511,9 @@ shorthand { nested = value }
         assert_eq!(leaves[2].pos.start, SourcePos { line: 3, col: 0 });
         let comments = &result.arena.comments;
         assert_eq!(comments.len(), 2);
-        assert_eq!(comments[0].text, "# ünï");
+        assert_eq!(result.arena.comment_text(&comments[0]), Some("# ünï"));
         assert_eq!(comments[0].pos, range((1, 12), (1, 17)));
-        assert_eq!(comments[1].text, "# 😀\r");
+        assert_eq!(result.arena.comment_text(&comments[1]), Some("# 😀\r"));
         assert_eq!(comments[1].pos, range((2, 13), (2, 16)));
     }
 

@@ -394,15 +394,20 @@ impl<'a> Printer<'a> {
             Child::Leaf(i) => self.emit_leaf(*i),
             Child::LeafValue(i) => self.emit_leaf_value(*i),
             Child::Comment(i) => {
-                let text = &self.arena.comments[*i as usize].text;
-                self.push_str(text);
+                let arena = self.arena;
+                if let Some(text) = arena.comment_text(&arena.comments[*i as usize]) {
+                    self.push_str(text);
+                }
             }
         }
     }
 
     fn emit_comment(&mut self, child: &Child) {
         if let Child::Comment(i) = child {
-            self.push_str(&self.arena.comments[*i as usize].text);
+            let arena = self.arena;
+            if let Some(text) = arena.comment_text(&arena.comments[*i as usize]) {
+                self.push_str(text);
+            }
         }
     }
 
@@ -736,7 +741,12 @@ mod tests {
 
     fn ast_child(arena: &Arena, child: &Child, table: &StringTable) -> AstChild {
         match child {
-            Child::Comment(i) => AstChild::Comment(arena.comments[*i as usize].text.clone()),
+            Child::Comment(i) => AstChild::Comment(
+                arena
+                    .comment_text(&arena.comments[*i as usize])
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
             Child::LeafValue(i) => {
                 let leaf_value = &arena.leaf_values[*i as usize];
                 AstChild::LeafValue {

@@ -1,11 +1,12 @@
 use crate::cache_format::*;
 use crate::io::CacheError;
 use cwtools_parser::ast::{
-    Arena, Child, ColorPrefix, Comment, Leaf, LeafValue, Operator, ParseError, SourcePos,
-    SourceRange, Value,
+    Arena, Child, ColorPrefix, Comment, CommentRange, Leaf, LeafValue, Operator, ParseError,
+    SourcePos, SourceRange, Value,
 };
 use cwtools_parser::parser::MAX_CLAUSE_DEPTH;
 use cwtools_string_table::string_table::{StringTable, StringTokens};
+use std::sync::Arc;
 
 /// [`MAX_CLAUSE_DEPTH`] levels it descends into, plus the empty clause it leaves
 const MAX_CACHED_CLAUSE_DEPTH: u32 = MAX_CLAUSE_DEPTH + 1;
@@ -43,6 +44,24 @@ pub fn arena_to_cached(
         string
     });
 
+    let mut comment_text_pool = String::new();
+    let mut comments = Vec::with_capacity(arena.comments.len());
+    for c in &arena.comments {
+        let text_start = comment_text_pool.len() as u32;
+        if let Some(text) = arena.comment_text(c) {
+            comment_text_pool.push_str(text);
+        }
+        let (sl, sc, el, ec) = range_to_cached(&c.pos);
+        comments.push(CachedComment {
+            text_start,
+            text_end: comment_text_pool.len() as u32,
+            start_line: sl,
+            start_col: sc,
+            end_line: el,
+            end_col: ec,
+        });
+    }
+
     let cached = CachedFile {
         root_children: children_to_cached(root_children),
         leaves: arena
@@ -55,7 +74,8 @@ pub fn arena_to_cached(
             .iter()
             .map(|lv| leaf_value_to_cached(lv, &mut strings))
             .collect(),
-        comments: arena.comments.iter().map(comment_to_cached).collect(),
+        comments,
+        comment_text_pool,
     };
     debug_assert!(strings.next().is_none(), "resolved string count mismatch");
     cached
@@ -89,6 +109,7 @@ pub fn archived_to_arena(
 ) -> Result<(Arena, Vec<Child>), CacheError> {
     validate_archived_child_bounds(cached)?;
     validate_archived_clause_depth(cached)?;
+    validate_archived_comment_pool(cached)?;
 
     let mut to_intern: Vec<&str> = Vec::new();
     for l in cached.leaves.iter() {
@@ -103,6 +124,8 @@ pub fn archived_to_arena(
     let mut tokens = tokens.into_iter();
 
     let mut arena = Arena::new();
+    arena.comment_pool = (!cached.comment_text_pool.is_empty())
+        .then(|| Arc::new(cached.comment_text_pool.as_str().to_owned()));
     for l in cached.leaves.iter() {
         arena.push_leaf(Leaf {
             key: next_token(&mut tokens)?,
@@ -137,7 +160,10 @@ pub fn archived_to_arena(
     }
     for c in cached.comments.iter() {
         arena.push_comment(Comment {
-            text: c.text.as_str().to_string(),
+            text: CommentRange {
+                start: c.text_start.to_native(),
+                end: c.text_end.to_native(),
+            },
             pos: cached_to_range(
                 c.start_line.to_native(),
                 c.start_col.to_native(),
@@ -150,6 +176,35 @@ pub fn archived_to_arena(
 
     let root = children_from_archived(&cached.root_children);
     Ok((arena, root))
+}
+
+/// Comment byte ranges must tile the comment text pool in order on UTF-8
+/// boundaries, or directive/comment text would be silently lost downstream.
+fn validate_archived_comment_pool(cached: &ArchivedCachedFile) -> Result<(), CacheError> {
+    let pool = cached.comment_text_pool.as_str();
+    let pool_len = pool.len() as u32;
+    let mut carried = 0u32;
+    for c in cached.comments.iter() {
+        let start = c.text_start.to_native();
+        let end = c.text_end.to_native();
+        if end < start || start != carried || end > pool_len {
+            return Err(cache_rejected(
+                "cache comment text range is out of order or past the comment text pool",
+            ));
+        }
+        if !pool.is_char_boundary(start as usize) || !pool.is_char_boundary(end as usize) {
+            return Err(cache_rejected(
+                "cache comment text range is not on a UTF-8 boundary",
+            ));
+        }
+        carried = end;
+    }
+    if carried != pool_len {
+        return Err(cache_rejected(
+            "cache comment text pool is not fully covered by comment ranges",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_archived_child_bounds(cached: &ArchivedCachedFile) -> Result<(), CacheError> {
@@ -488,17 +543,6 @@ fn archived_color_prefix(prefix: &ArchivedCachedColorPrefix) -> ColorPrefix {
         ArchivedCachedColorPrefix::Rgb => ColorPrefix::Rgb,
         ArchivedCachedColorPrefix::Hsv => ColorPrefix::Hsv,
         ArchivedCachedColorPrefix::Hsv360 => ColorPrefix::Hsv360,
-    }
-}
-
-fn comment_to_cached(c: &Comment) -> CachedComment {
-    let (sl, sc, el, ec) = range_to_cached(&c.pos);
-    CachedComment {
-        text: c.text.clone(),
-        start_line: sl,
-        start_col: sc,
-        end_line: el,
-        end_col: ec,
     }
 }
 
