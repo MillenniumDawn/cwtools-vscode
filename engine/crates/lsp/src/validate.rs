@@ -1873,7 +1873,12 @@ impl Backend {
                 if let Some(ruleset) = rules_guard.ruleset.as_ref() {
                     let start = std::time::Instant::now();
                     let info_guard = self.state.info_service.read();
-                    let type_index = &info_guard.type_index;
+                    // Hold a stable Arc snapshot for this validation, but do not
+                    // keep new hovers and indexed-file writers behind CPU work.
+                    // InfoService writers use Arc::make_mut, so this trades a
+                    // possible TypeIndex copy for shorter lock occupancy.
+                    let type_index = Arc::clone(&info_guard.type_index);
+                    drop(info_guard);
                     let loc_guard = self.state.loc_index.read();
                     let inline_guard = self.state.inline_scripts.read();
                     let (scope_checks, var_checks) = {
@@ -1884,7 +1889,7 @@ impl Backend {
                         ruleset,
                         &table,
                         game,
-                        type_index,
+                        &type_index,
                         &rules_guard.modifier_keys,
                         loc_guard.as_deref(),
                         Some(&overlay),
@@ -1904,12 +1909,11 @@ impl Backend {
                     };
                     if let Some(used) = used {
                         errs.extend(
-                            self.unused_instance_errors(uri, used, ruleset, game, type_index),
+                            self.unused_instance_errors(uri, used, ruleset, game, &type_index),
                         );
                     }
                     append_missing_loc_errors(uri, &prepared, &mut errs);
                     drop(loc_guard);
-                    drop(info_guard);
                     let elapsed = start.elapsed();
                     let total = truncate_validation_errors(&mut errs, uri);
                     let msg = format!(
