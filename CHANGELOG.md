@@ -8,6 +8,7 @@
 
 * Record why the Node-facing build helpers, the host-test config and the ESLint and Vitest configs stay JavaScript, and why `build.sh` and `build.cmd` stay thin launchers. (#987)
 * Document the `md_bench` and parser `probe` examples in `docs/engine/PROFILING.md`: how `md_bench` finds its corpus, what each prints, and that neither is a repeatable benchmark. (#915)
+* Update `ovsx` to 1.3.0, which shares the root `@vscode/vsce` 4 instead of nesting its own `@vscode/vsce` 3.9.2. That drops the nested copy's dependency tree and clears all six high-severity `npm audit` findings. (#1048)
 
 ### 4.0.1
 
