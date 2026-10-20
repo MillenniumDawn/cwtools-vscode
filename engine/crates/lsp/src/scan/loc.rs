@@ -185,6 +185,9 @@ impl Backend {
         Some(built)
     }
 
+    /// The base-game install's loc maps, built on first use and kept for the session: vanilla
+    /// loc is ~2000 files that cannot change while the editor runs (#89). `None` when no
+    /// base-game dir is set or it yielded no loc. Blocking; call inside `block_in_place`.
     fn vanilla_loc(
         &self,
         loc_languages: Option<&[Lang]>,
@@ -284,6 +287,8 @@ impl Backend {
 
         let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) =
             tokio::task::block_in_place(|| {
+                // The base game is read once per session and reused; only the workspace
+                // is walked again (#89).
                 let parent = self.parent_loc(root_path, parsed_languages, primary_lang, hover_all);
                 let vanilla = self.vanilla_loc(parsed_languages, primary_lang, hover_all);
                 let cached_vanilla_loc = {

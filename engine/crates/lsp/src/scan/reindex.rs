@@ -4,7 +4,9 @@ use crate::Backend;
 
 use super::{env_flag, spawn_logging_panics};
 
-/// Test-only one-shot panic switch for `CWTOOLS_REINDEX_PANIC_ONCE` (#155):
+/// Test-only one-shot panic switch for `CWTOOLS_REINDEX_PANIC_ONCE` (#155): fires at most
+/// once per server process so the e2e suite can exercise a background task's panic recovery
+/// without leaving the injected panic armed for every later pass.
 static REINDEX_PANIC_ONCE: AtomicBool = AtomicBool::new(true);
 
 impl Backend {
@@ -42,7 +44,9 @@ impl Backend {
         resolve_reindex_idle_ms(env_val.as_deref(), config_secs)
     }
 
-    /// (#155) instead of silently ending periodic reindexing for the rest of
+    /// Periodic quiet re-scan so a long-running session doesn't accumulate stale index state.
+    /// Each cycle re-reads the interval, so toggling it live needs no restart (0 disables).
+    /// Each pass runs via `run_reindex_pass`, so a panic is logged and the loop survives (#155).
     pub(crate) async fn background_reindex_loop(&self) {
         loop {
             let interval_secs = self.effective_reindex_interval_secs();
@@ -176,6 +180,7 @@ mod tests {
         assert_eq!(reindex_wait_tick_ms(5_000), 5_000);
         assert_eq!(reindex_wait_tick_ms(0), 50);
         // ...and huge windows cap at 15s so a live settings change is
+        // noticed promptly, not after the old window elapses.
         assert_eq!(reindex_wait_tick_ms(3_600_000), 15_000);
         assert_eq!(reindex_wait_tick_ms(u64::MAX), 15_000);
     }

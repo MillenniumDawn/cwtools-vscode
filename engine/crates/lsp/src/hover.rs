@@ -78,6 +78,8 @@ impl Backend {
                 }
             }
             append_localisation(&mut md, &element, &self.state.loc_text.read());
+            // A reference to a type with a primary loc key (an event id, …) shows the
+            // localized title, from the captured explicit-field key or a name-derived key (#40).
             if let ReferenceHint::TypeRef { type_name, value } = &hint {
                 let info_guard = self.state.info_service.read();
                 let loc_text = self.state.loc_text.read();
@@ -326,6 +328,8 @@ pub(crate) fn build_hover_markdown(
             cwtools_i18n::t(cwtools_i18n::Key::HoverScope),
             scope
         )];
+        // The scope the hovered link/keyword resolves to, when the setting asks for it and
+        // it actually differs from the ambient scope (#37).
         if let Some(resolved) = scopes.resolved.filter(|r| Some(*r) != scopes.current) {
             scope_lines.push(format!(
                 "**{}**: {}",
@@ -348,6 +352,8 @@ pub(crate) fn build_hover_markdown(
         scope_lines.join("  \n")
     });
 
+    // Join the logical sections with a horizontal rule so documentation, required scope,
+    // and current scope read as distinct blocks, not one run-on paragraph (#38).
     let mut sections: Vec<String> = Vec::new();
     if !info.is_empty() {
         sections.push(info.join("\n\n"));
@@ -407,6 +413,9 @@ pub(crate) fn append_localisation(md: &mut String, element: &PositionElement, lo
     }
 }
 
+/// Append the localized primary text (e.g. an event's title) for a reference to a type with
+/// a primary loc key. An explicit-field binding uses the key captured at index time; a
+/// name-derived one builds `prefix + id + suffix`. The first key with loc text wins (#40).
 pub(crate) fn append_type_localisation(
     md: &mut String,
     type_name: &str,
@@ -688,7 +697,8 @@ mod tests {
 
     #[test]
     fn test_hover_separates_sections() {
-        // #38: the markdown separates description, required scopes, and reference scope information.
+        // #38: a horizontal rule divides description, required scope, and the
+        // current-scope table so they don't read as one run-on block.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "set_country_flag".to_string(),
@@ -717,7 +727,8 @@ mod tests {
 
     #[test]
     fn test_hover_resolved_scope_line() {
-        // #37: show the resolved scope when it differs from the current scope.
+        // #37: when a resolved/target scope is supplied and differs from the
+        // current scope, a `Resolves to` line is shown.
         let md = build_hover_markdown(
             &PositionElement::Leaf {
                 key: "owner".to_string(),
@@ -915,7 +926,9 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
 
     #[test]
     fn test_append_localisation_strips_quoted_value() {
-        // #317: strip the AST's surrounding quotes before looking up a leaf-value localisation key.
+        // #317: a quoted leaf value (`"my_war_flag"`) carries the surrounding quotes
+        // through `leaf_value_to_string`. The loc index stores bare keys, so the lookup
+        // must strip them; otherwise `has_country_flag = "my_war_flag"` never previews its loc.
         let mut md = String::new();
         append_localisation(
             &mut md,
@@ -1018,6 +1031,8 @@ https\:\/\/evil\.tld www\.evil\.tld user\@evil\.tld \<https\:\/\/evil\.tld\>"#
 
     #[test]
     fn test_append_localisation_mismatched_quote_not_stripped() {
+        // Only a balanced pair of surrounding double-quotes is stripped. A single leading
+        // or trailing quote stays verbatim and must not spuriously match the bare loc key.
         let loc = loc_map_with(&[("my_war_flag", "War Flag")]);
         for bad in [
             "\"my_war_flag",

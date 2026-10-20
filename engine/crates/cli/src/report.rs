@@ -630,6 +630,7 @@ mod tests {
         let out = sarif_report(&[&d], &repo(), None);
         assert!(out.contains("\"id\": \"CW113\""), "got: {out}");
         assert!(out.contains("\"name\": \"MissingFile\""), "got: {out}");
+        // The `shortDescription` is the catalog's message template.
         assert!(out.contains("\"shortDescription\""), "got: {out}");
         assert!(out.contains("\"defaultConfiguration\""), "got: {out}");
         assert!(out.contains("\"ruleIndex\": 0"), "got: {out}");

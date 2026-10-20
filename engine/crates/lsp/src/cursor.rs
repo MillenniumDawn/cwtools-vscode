@@ -18,6 +18,9 @@ pub(crate) struct RuleCursorInfo {
     pub(crate) root_scope: Option<String>,
     pub(crate) prev_scope: Option<String>,
     pub(crate) from_scopes: Vec<String>,
+    /// The scope the hovered key resolves to (run through `change_scope`). Shown as a
+    /// `Resolves to` line only when `hover.scopeDisplay = "resolved"` is on and it differs
+    /// from the current scope (#37).
     pub(crate) resolved_scope: Option<String>,
 }
 

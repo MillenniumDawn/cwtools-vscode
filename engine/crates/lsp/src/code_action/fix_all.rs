@@ -33,6 +33,9 @@ fn plan_workspace_fixes(
         .collect()
 }
 
+/// The `workspace/applyEdit` `changes` map for every file with at least one surviving
+/// edit, converted to LSP `TextEdit`s with the negotiated encoding against each file's
+/// own text. A URI that fails to parse is dropped rather than panicking.
 fn workspace_edit_changes(
     planned: &[PlannedFileFixes],
     texts: &HashMap<String, String>,
@@ -120,6 +123,8 @@ impl Backend {
             return "No auto-fixable problems in the workspace.".to_string();
         }
 
+        // The edit boundary is workspace-only and performs synchronous canonicalization,
+        // so keep it off the request worker too (#160).
         let edit_roots = self.state.config.read().editable_roots.clone();
         let candidate_uris: Vec<String> = snapshot.keys().cloned().collect();
         let editable = tokio::task::spawn_blocking(move || {

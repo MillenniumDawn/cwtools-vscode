@@ -181,6 +181,7 @@ fn scan_children_for_varset(
     rule_bodies: &[RuleBody<'_>],
     out: &mut Vec<OrderedDefinition>,
 ) {
+    // For the explicit `var = value_set[variable]` / `value = variable_field` form,
     // the assigned value lives in a sibling `value` leaf of the same block.
     // Computed lazily: most blocks never hit the arm that needs it.
     let sibling_value = std::cell::OnceCell::<Option<String>>::new();

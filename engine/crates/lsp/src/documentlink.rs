@@ -106,6 +106,9 @@ impl Backend {
                 continue;
             };
             let rel = std::path::Path::new(c.rel_path.trim_start_matches(['/', '\\']));
+            // Async, and contained before it is probed: a link request must not block the
+            // runtime on a sync filesystem syscall, and a leaf value is mod content that
+            // must not reach outside the roots (#176).
             let Some(target) = crate::access::contained_search_path(&roots, rel).await else {
                 continue;
             };

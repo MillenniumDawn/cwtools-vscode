@@ -20,7 +20,9 @@ pub const PATH_METADATA_CACHE_SUPPORTED: bool = cfg!(unix);
 
 // ── Fingerprinting ──────────────────────────────────────────────────────────
 
-/// Continue the stable, dependency-free FNV-1a hash used by `cwtools_info::vanilla_cache`.
+/// FNV-1a over `bytes`, continuing from `hash`. Unlike `DefaultHasher` it is stable
+/// across toolchains, so cache keys survive restarts. Mirrors
+/// `cwtools_index::vanilla_cache::fnv1a`.
 fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     for &b in bytes {
@@ -253,10 +255,14 @@ pub struct Removal {
     pub files: usize,
     pub failures: Vec<(PathBuf, std::io::Error)>,
 }
-/// Remove only verified entries from the client-selected cache root, leaving symlinks untouched.
+
+/// Remove every parse cache under `cache_dir`, and nothing else. The root is client-chosen
+/// (#159), so an entry goes only when it is positively ours and no symlink is followed.
 pub fn remove_all(cache_dir: &Path) -> Removal {
     let root = cache_dir.join(PARSE_CACHE_DIR);
     let mut removal = Removal::default();
+    // A missing root is the ordinary case. Any other failure must reach the caller,
+    // since silence there reads as success.
     match fs::symlink_metadata(&root) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
@@ -290,6 +296,8 @@ pub fn remove_all(cache_dir: &Path) -> Removal {
         owned += 1;
         swept_all &= remove_owned_cache_dir(&dir, &mut removal);
     }
+    // Only remove the root after clearing something out of it; an empty one we
+    // never wrote to is not ours.
     if swept_all && owned > 0 {
         let _ = fs::remove_dir(&root);
     }
@@ -332,6 +340,8 @@ fn remove_owned_cache_dir(dir: &Path, removal: &mut Removal) -> bool {
     let mut emptied = true;
     for entry in entries.flatten() {
         let path = entry.path();
+        // `remove_file` unlinks the name and never follows a symlink, so nothing
+        // destructive can slip in between this check and that call.
         if !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
             emptied = false;
             continue;
@@ -404,10 +414,12 @@ fn prune_all_cache_dirs_with_caps(
     current_dir: Option<&Path>,
 ) {
     let root = cache_dir.join(PARSE_CACHE_DIR);
-    // Prune only positively identified cache directories; other client-owned paths stay untouched (#159).
     let Ok(dirs) = fs::read_dir(root) else {
         return;
     };
+    // Ownership-checked, not just `is_dir`: the cache root comes from the LSP client, and
+    // the sweep below deletes. An unrelated directory that happens to sit under a
+    // `parse-cache` is none of our business (#159).
     let dirs: Vec<PathBuf> = dirs
         .flatten()
         .map(|entry| entry.path())
@@ -452,7 +464,8 @@ fn count_cache_entries(dir: &Path) -> usize {
         .count()
 }
 
-/// Cap-parameterized core of [`prune_cache_dir`] so tests can exercise eviction with small limits.
+/// Cap-parameterized core of [`prune_cache_dir`] (lets tests use small caps
+/// instead of writing 50k files).
 fn prune_cache_dir_with_caps(dir: &Path, max_entries: usize, max_bytes: u64) {
     let mut entries = Vec::new();
     let mut total_bytes = 0u64;
@@ -662,6 +675,8 @@ pub fn load_path_for_index(
     Some((parsed, key))
 }
 
+/// Persist an entry only if the source metadata still matches the snapshot
+/// captured before the source was read.
 pub fn store_path(
     cache_dir: &Path,
     fingerprint: u64,
@@ -671,7 +686,6 @@ pub fn store_path(
     source: &SourceMeta,
     table: &StringTable,
 ) {
-    // Recheck the pre-read metadata snapshot so a concurrent edit cannot cache stale parsed bytes.
     if PATH_METADATA_CACHE_SUPPORTED && source_cache_key(source_path).as_ref() == Some(source_key) {
         store_hash(
             cache_dir,
@@ -807,6 +821,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn validate_or_clear_refuses_a_symlinked_cache_dir() {
+        // A settings change takes the clearing branch, which used to remove every
+        // file behind a symlink at the fingerprint path (#159).
         let tmp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let victim = outside.path().join("payroll.csv");
@@ -1374,6 +1390,8 @@ mod tests {
         let base = std::time::SystemTime::now() - std::time::Duration::from_secs(20);
         let mut paths = Vec::new();
         for fingerprint in [1u64, 2, 3] {
+            // A real cache dir, signature and all: the sweep only touches dirs
+            // it can identify as ours (#159).
             let dir = workspace_cache_dir(tmp.path(), fingerprint);
             fs::create_dir_all(&dir).unwrap();
             fs::write(settings_sig_path(&dir), fingerprint.to_le_bytes()).unwrap();
@@ -1424,7 +1442,8 @@ mod tests {
 
     #[test]
     fn remove_all_leaves_a_foreign_parse_cache_directory() {
-        // A directory name alone must not make a client-owned cache path eligible for deletion (#159).
+        // The cache root is client input (#159), so a directory that merely happens to be
+        // named `parse-cache` must come through untouched.
         let tmp = tempfile::tempdir().unwrap();
         let foreign = tmp.path().join(PARSE_CACHE_DIR).join("important");
         fs::create_dir_all(&foreign).unwrap();
@@ -1543,6 +1562,8 @@ mod tests {
 
     #[test]
     fn concurrent_validate_or_clear_shares_a_cache_root() {
+        // Two racing `validate_or_clear` calls on one root must not leave it unusable
+        // (#159 follow-up). Empty dirs are pruned, so assert only no hard error.
         use std::sync::Arc;
         let tmp = tempfile::tempdir().unwrap();
         let cache_root = Arc::new(tmp.path().to_path_buf());

@@ -27,6 +27,9 @@ pub struct LocValidationError {
     pub fix: Option<SuggestedFix>,
 }
 
+/// Build the CW268 "wrap the value in quotes" fix for an entry whose desc has an
+/// unbalanced quote. Returns `None` (no fix, don't approximate) when the value carries
+/// an embedded quote or a trailing comment, where a single wrap would be wrong.
 fn cw268_quote_fix(entry: &LocEntry) -> Option<SuggestedFix> {
     let desc = &entry.desc;
     let lead = desc.chars().count() - desc.trim_start().chars().count();

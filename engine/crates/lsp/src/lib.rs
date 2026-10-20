@@ -180,6 +180,8 @@ mod tests {
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
 
+    /// The base game and the rules dir are readable but never writable, so `refresh_roots` must
+    /// keep them out of `editable_roots`, or a generated edit could write into the install (#160).
     #[test]
     fn refresh_roots_keeps_read_only_roots_out_of_the_edit_boundary() {
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -695,9 +697,12 @@ mod tests {
         assert!(state.documents.lock().is_empty());
     }
 
-    /// Regression: keep the pending receiver alive through an aborted validation; otherwise a late
-    /// client reply panics the server (#675). Every edit aborts the prior debounced validation, so
-    /// typing during `code_lens_refresh` must leave the pending request safe to complete.
+    /// tower-lsp holds a pending slot per server→client request and `expect`s
+    /// the receiver to still be there when the client answers, so dropping the
+    /// future that awaits the reply panics the whole server. Every edit aborts
+    /// the previous debounced validation, and that validation ends on
+    /// `code_lens_refresh` — so typing used to be enough to kill the process
+    /// (#675). The reply must land safely even after the abort.
     #[tokio::test]
     async fn an_aborted_code_lens_refresh_survives_the_clients_reply() {
         use futures_util::{SinkExt, StreamExt};
@@ -705,10 +710,11 @@ mod tests {
         use tower_lsp::jsonrpc;
         use tower_lsp::lsp_types::{InitializeParams, InitializeResult};
 
-        // tower-lsp suppresses server-to-client messages until the service has
-        // answered `initialize`, so without this handshake the refresh never
-        // reaches the socket. Only the inbound half is stubbed: running initialize
-        // through the real `Backend` would enqueue its own client requests first.
+        // tower-lsp suppresses every server→client message until the service
+        // has answered an `initialize` request, so without a handshake the
+        // refresh never reaches the socket. Only the inbound half is stubbed:
+        // driving `initialize` through the real `Backend` would put its own
+        // client requests on the socket ahead of the refresh.
         struct Handshake;
         #[tower_lsp::async_trait]
         impl LanguageServer for Handshake {
@@ -946,7 +952,8 @@ mod tests {
 
     #[test]
     fn test_loc_overlay_write_invalidates_the_cached_key_sets() {
-        // #87: both overlay-derived key sets must be invalidated after a live-overlay write.
+        // #87 caches both overlay-derived key sets on `loc_overlay_revision`, so a write must
+        // change what the next read sees, or a key just typed reads as undefined (CW225/CW122).
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();

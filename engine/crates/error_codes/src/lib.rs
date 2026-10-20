@@ -551,12 +551,14 @@ pub const CW222_UNDEFINED_EVENT: ErrorCode = ErrorCode {
 
 // -- Tier G: game-specific, need vanilla data / cross-file registries.
 
+/// `research_leader` missing `area`. F# `ResearchLeaderArea`.
 pub const CW108_RESEARCH_LEADER_AREA: ErrorCode = ErrorCode {
     id: "CW108",
     severity: ErrorSeverity::Error,
     message_template: "This research_leader is missing required \"area\"",
 };
 
+/// `research_leader` area disagrees with the technology. F# `ResearchLeaderTech`.
 pub const CW109_RESEARCH_LEADER_TECH: ErrorCode = ErrorCode {
     id: "CW109",
     severity: ErrorSeverity::Information,
@@ -741,7 +743,8 @@ pub const CW605_RULES_MALFORMED_ALIAS: ErrorCode = ErrorCode {
 
 macro_rules! catalog {
     ($($name:ident),+ $(,)?) => {
-        /// Known diagnostic codes paired with the constants that define them.
+        /// Known diagnostic codes, including wired and pending checks, with the
+        /// const each is declared as.
         pub const CATALOG: &[(&str, ErrorCode)] = &[
             $((stringify!($name), $name),)+
         ];

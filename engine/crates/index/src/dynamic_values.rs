@@ -144,7 +144,8 @@ fn key_matches(table: &StringTable, id: StringId, key: &str) -> bool {
             .unwrap_or(false)
 }
 
-/// Walk one level of a complex-enum name tree against `children`, collecting matching values.
+/// Walk one level of a complex-enum name tree against `children`, capturing member
+/// names per the marker forms (node key, scalar key, `is_name` value, bare value).
 fn walk_name_tree(
     tree: &ComplexEnumNameTree,
     children: &[Child],
@@ -210,8 +211,8 @@ fn walk_name_tree(
     }
 }
 
-/// Capture a value-set member from a configured scalar effect or block binding field,
-/// falling back to common name fields; variable namespaces use their separate collector.
+/// Capture a value-set member for one leaf whose key names a set. Returns the namespace so
+/// the caller can skip a `variable` subtree; `None` means no set (`crate::collect` relies on it).
 pub(crate) fn value_set_leaf(
     leaf: &Leaf,
     ast: &ParsedFile,
@@ -238,7 +239,8 @@ pub(crate) fn value_set_leaf(
             table.with_string(t.normal, |v| push_member(out, n.to_string(), v));
         }
         (Value::Clause(sub), Some(n)) => {
-            // For block forms, the configured binding field names the member value.
+            // Block form: the member is the value of the child bound to
+            // `value_set[ns]` in the rules (e.g. `flag`, `token_base`, `id`).
             let bindings = table
                 .with_string(leaf.key.normal, |s| {
                     LOWER_BUF.with(|buf| {
@@ -273,6 +275,8 @@ pub(crate) fn value_set_leaf(
                     }
                 }
             } else {
+                // No binding-field info: fall back to the fixed-key heuristic for the
+                // common flag/name/token block shapes.
                 const NAME_KEYS: &[&str] = &["flag", "name", "token", "var", "variable"];
                 for c in sub {
                     let Child::Leaf(cidx) = c else { continue };
@@ -431,6 +435,9 @@ alias[effect:set_country_flag] = {
 
     #[test]
     fn value_set_member_under_nonobvious_block_key() {
+        // The member lives under `token_base`, which is NOT one of the fixed NAME_KEYS
+        // guesses, so the collector must read the field bound to `value_set[character_token]`
+        // and must NOT capture the sibling `name = localisation` value as a token.
         let table = StringTable::new();
         let mut rs = ruleset_from(
             r#"

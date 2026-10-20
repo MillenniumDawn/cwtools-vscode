@@ -206,11 +206,15 @@ pub fn completions_from_rules(
     let mut items: Vec<CompletionItem> = Vec::new();
     // Per-request memo so a repeated enum is only collected/sorted once (#46).
     let mut enum_cache: HashMap<String, Vec<&str>> = HashMap::new();
+    // Built (sort + clone) at most once per call even if several scope rules
+    // appear in this block (#44).
     let mut scope_names: Option<Vec<String>> = None;
     let scope_ctx: ScopeCtx = match (current_scope, registry) {
         (Some(s), Some(reg)) if s != SCOPE_ANY => Some((s, reg)),
         _ => None,
     };
+    // Scope-link keys (`mio:ORG = { … }`) are the same whichever alias category
+    // triggered them, so emit them at most once per block (#76).
     let mut scope_links_emitted = false;
     let mut seen_alias_cats: HashSet<&str> = HashSet::new();
 
@@ -333,12 +337,17 @@ pub fn completions_from_rules(
         }
     }
 
+    // Dedup by label: subtype flattening can repeat a field across subtypes. Keep the
+    // first occurrence, which carries the most specific snippet (cwtools-vscode#66).
     let mut seen_labels: HashSet<String> = HashSet::new();
     items.retain(|item| seen_labels.insert(item.label.clone()));
 
     (items, flt.dropped())
 }
 
+/// A concrete leaf key (`key = <value>`): one `FIELD` item completing to `key = ` with a
+/// value-shaped placeholder (yes/no for bools, inline choices for short enums, a bare tab
+/// stop otherwise; cwtools-vscode#16).
 fn push_specific_leaf_key(
     items: &mut Vec<CompletionItem>,
     k: &str,
@@ -356,6 +365,8 @@ fn push_specific_leaf_key(
                 Some(format!("{} = $0", k))
             }
         }
+        // Any other value kind: complete `key = ` with the cursor after the `=`,
+        // not a bare `key` with no operator (cwtools-vscode#16).
         _ => Some(format!("{} = $0", k)),
     };
     items.push(CompletionItem {
@@ -543,7 +554,9 @@ pub(crate) fn type_instance_detail(
         })
 }
 
-/// Add keyword completions; scope matches rank first, but mismatches stay visible because tracking can be incomplete (#78).
+/// Expand type-pattern aliases like `alias[effect:<scripted_effect>] = yes` into one KEYWORD
+/// item per instance (cwtools-vscode#64). With a known `scope`, a scope-specific match ranks
+/// first (#78); the test reuses the validator's `scope_matches_required`.
 #[allow(clippy::too_many_arguments)]
 fn push_alias_keys<'a>(
     items: &mut Vec<CompletionItem>,
@@ -590,11 +603,16 @@ fn push_alias_keys<'a>(
         if !flt.retain_token_match(k) {
             continue;
         }
+        // Scope ranking (never a drop): scope tracking is imperfect (nested/event_target/
+        // half-typed contexts), so a valid key must never silently vanish (#78).
         let mut scope_rank = match verdicts.as_ref().and_then(|v| v.get(k)) {
             Some(&(false, _)) => ScopeRank::Mismatch,
             Some(&(true, true)) => ScopeRank::SpecificMatch,
             _ => ScopeRank::Neutral,
         };
+        // Control-flow wrappers (`if`/`else`/`hidden_effect`/…) are valid in any scope but
+        // carry no scope-specific `## scope`, so without this they sink below every
+        // scope-matched plain effect (#94).
         if !matches!(scope_rank, ScopeRank::Mismatch) && recurses_into_category(rule, cat) {
             scope_rank = ScopeRank::SpecificMatch;
         }
@@ -714,6 +732,8 @@ fn push_alias_keys<'a>(
     }
 
     if cat == "modifier" {
+        // Rank by `supported_scopes`: a scope-specific modifier ranks ahead and a mismatched
+        // one sinks, never dropped (#78).
         for m in modifier_keys {
             if !flt.admit(m) {
                 continue;
@@ -796,6 +816,9 @@ pub fn expanded_modifier_scopes(
     map
 }
 
+/// Emit scope-switch keys for PREFIXED `from_data` scope links (`mio:ORG = { … }`): one
+/// block-opening item per type instance (#76). Bare links (`<country>`) are high-cardinality
+/// and would flood every block on every keystroke; the list is capped for the same reason.
 fn push_scope_link_keys(
     items: &mut Vec<CompletionItem>,
     ruleset: &RuleSet,
@@ -1057,6 +1080,8 @@ pub fn value_completions(
     let mut seen_alias_cats: HashSet<&str> = HashSet::new();
     // Per-request memo so a repeated enum is only collected/sorted once (#46).
     let mut enum_cache: HashMap<String, Vec<&str>> = HashMap::new();
+    // Built (sort + clone) at most once per call even if several scope-typed
+    // value rules arrive here (#44).
     let mut scope_names: Option<Vec<String>> = None;
     let mut push = |label: String,
                     kind: CompletionItemKind,
@@ -1148,6 +1173,9 @@ pub fn value_completions(
                     );
                 }
             }
+            // A free localisation name (`name = localisation`): offer known loc keys
+            // (workspace entities) rather than falling through to the flat variable
+            // dump (cwtools-vscode#74).
             NewField::LocalisationField { .. } => {
                 for k in sets.loc_keys {
                     if !flt.retain_token_match(k) {

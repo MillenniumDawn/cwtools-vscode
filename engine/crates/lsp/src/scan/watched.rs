@@ -13,6 +13,9 @@ use super::{
 };
 
 impl Backend {
+    /// Handle external file changes (e.g. a git checkout), which would otherwise leave stale
+    /// index entries until a window reload (#52). Events are coalesced into one trailing
+    /// window (#90) so a branch switch doesn't stall the message future on per-file work.
     #[tracing::instrument(skip_all)]
     pub(crate) async fn did_change_watched_files_impl(&self, params: DidChangeWatchedFilesParams) {
         let mut enqueued = false;
@@ -26,6 +29,8 @@ impl Backend {
                 FileChangeType::DELETED => {
                     tracing::debug!(%uri, "watched file deleted; queued");
                     self.state.watched_deleted.lock().insert(uri);
+                    // The cached loc discovery may be stale; drop it so the next code-action
+                    // request re-walks (#134). A spurious clear costs one re-walk.
                     *self.state.loc_discovery_cache.lock() = None;
                     enqueued = true;
                 }
@@ -55,7 +60,9 @@ impl Backend {
         *guard = Some(self.spawn_watched_batch_window(false));
     }
 
-    // Retry bypasses the live-slot gate; cap recovery at one immediate retry to prevent panic loops (#155).
+    /// Spawn the debounce-window task without the `is_finished()` gate `arm_watched_batch`
+    /// applies, which would never let the panic-recovery retry run. Events are requeued after
+    /// a panic (#155); `retried` bounds that to ONE retry so a deterministic panic can't loop.
     fn spawn_watched_batch_window(&self, retried: bool) -> tokio::task::JoinHandle<()> {
         let client = self.client.clone();
         let state = self.state.clone();
@@ -375,6 +382,9 @@ impl Backend {
                 sigs.remove(uri);
             }
         }
+        // A deleted `common/inline_scripts` file must stop expanding at its callers: queue its
+        // call name so the sweep below revalidates them and reports CW274 instead of the
+        // now-gone body (#259).
         {
             let removed_scripts: HashSet<String> = deletes
                 .iter()

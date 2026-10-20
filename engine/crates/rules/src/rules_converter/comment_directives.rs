@@ -417,7 +417,9 @@ mod tests {
 
     #[test]
     fn extract_description_crlf_line_endings() {
-        // Windows CRLF: the parser keeps the trailing `\r` in comment text, so
+        // Windows CRLF: the parser keeps the trailing `\r` in comment text, so `### doc\r`
+        // must still extract as documentation (precompute_comments trims it in the real
+        // pipeline; this guards the extractor directly).
         let comments_with_crlf = vec![
             "### First doc line\r".to_string(),
             "## cardinality = 0..1\r".to_string(),

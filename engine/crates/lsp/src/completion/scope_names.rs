@@ -194,6 +194,9 @@ fn scope_prelude(language: &str) -> &'static [&'static str] {
     }
 }
 
+/// Derive scope completion names from the loaded registry when available; without one,
+/// only the prelude keywords are offered (#373: scope names come solely from the
+/// config-built registry now).
 pub(crate) fn scope_completion_names(
     language: &str,
     registry: Option<&cwtools_game::scope_registry::ScopeRegistry>,

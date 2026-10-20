@@ -257,6 +257,7 @@ mod tests {
 
     #[test]
     fn hidden_prefix_stripped() {
+        // `hidden:owner` in an EU4 Province should resolve like plain `owner`.
         let reg = eu4_registry();
         let province = reg.id_of("province").expect("province resolves");
         let country = reg.id_of("country").expect("country resolves");

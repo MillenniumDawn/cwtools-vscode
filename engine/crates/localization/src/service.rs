@@ -18,6 +18,8 @@ impl LocService {
         Self::from_files_with_encoding(files.into_iter().map(|(p, t)| (p, t, None)).collect())
     }
 
+    /// As [`from_files`], but each file carries its detected on-disk encoding so
+    /// the UTF-8-BOM rule (CW254) can be enforced.
     pub fn from_files_with_encoding(files: Vec<(String, String, Option<FileEncoding>)>) -> Self {
         use rayon::prelude::*;
 
@@ -58,6 +60,8 @@ impl LocService {
         Self::from_paths(paths, budget, langs)
     }
 
+    /// Discover loc files with user globs applied before ignored paths consume
+    /// the file budget.
     pub fn discover_files_filtered(
         folders: &[&Path],
         budget: ScanBudget,
@@ -226,7 +230,9 @@ fn walk_folder_inner(
         if *remaining_files == 0 {
             break;
         }
-        // Match `walk_dir_generic`: symlinks can escape scan roots, and special files can block reads.
+        // Reject symlinks and non-regular files outright (see `file_manager::walk_dir_generic`):
+        // a symlink can point outside the root or into a cycle, and a special file can
+        // report length 0.
         if ft.is_symlink() || !(ft.is_dir() || ft.is_file()) {
             continue;
         }

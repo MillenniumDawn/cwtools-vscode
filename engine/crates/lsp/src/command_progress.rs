@@ -8,6 +8,9 @@ use crate::{Backend, DocumentState};
 
 const SAMPLE_INTERVAL_MS: u64 = 200;
 
+/// The sampler's period, overridable by `CWTOOLS_SAMPLE_INTERVAL_MS` so the e2e suite can
+/// make "the percentage moves inside a phase" (#221) a deterministic check, not a race.
+/// Zero is ignored rather than panicking `tokio::time::interval`.
 fn sample_interval() -> std::time::Duration {
     parse_sample_interval(std::env::var("CWTOOLS_SAMPLE_INTERVAL_MS").ok().as_deref())
 }
@@ -130,6 +133,9 @@ impl ProgressSink {
     }
 }
 
+/// Turns a counter the parallel passes bump into a moving percentage, and says so in the
+/// output channel when a phase overruns. Every visible scan gets one, since the startup scan
+/// used to sit on a phase boundary percentage for its longest phase and read as a hang (#221).
 pub(crate) struct PhaseTicker {
     live: Option<LivePhase>,
 }
@@ -173,6 +179,9 @@ impl Drop for PhaseTicker {
     }
 }
 
+/// Owns one command's `$/progress` stream. With no `workDoneToken` every method is a no-op.
+/// Each command hands its own to the work it starts (#228), so a second command cannot
+/// divert the first's phases onto its token.
 pub(crate) struct CommandProgress {
     state: Arc<DocumentState>,
     sink: Option<ProgressSink>,

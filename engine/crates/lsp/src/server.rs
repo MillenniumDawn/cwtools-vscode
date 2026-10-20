@@ -48,10 +48,15 @@ impl tower_lsp::lsp_types::notification::Notification for WorkspaceDiagnosticsBu
 
 const DEBOUNCE_MS: u64 = 250;
 
-/// Test-only one-shot panic switch for `CWTOOLS_VALIDATE_PANIC_ONCE` (#182),
+/// Test-only one-shot panic switch for `CWTOOLS_VALIDATE_PANIC_ONCE` (#182). Fires at most
+/// once per server process so the e2e suite can prove a panicking validation is logged
+/// without arming every later edit.
 static VALIDATE_PANIC_ONCE: AtomicBool = AtomicBool::new(true);
 
 impl Backend {
+    /// Spawn a debounced background validation for `uri`, aborting any predecessor for it.
+    /// A panic is logged instead of vanishing with the handle (#182); this keeps its own join
+    /// rather than `scan::spawn_logging_panics` so a supersede/close abort isn't reported.
     fn spawn_debounced_validate(
         &self,
         uri: String,
@@ -320,7 +325,9 @@ impl Backend {
 }
 
 impl Backend {
-    /// Open documents may not have an AST until their first validation (#87).
+    /// Snapshot the document AST for `uri`, re-parsing the live text when none is cached so
+    /// hover/goto/completion still resolve mid-edit. The fresh parse is memoized by
+    /// `(uri, version)` (#87), since a document has no stored AST until its first validate.
     pub(crate) fn ast_snapshot_for(&self, uri: &str) -> Option<AstSnapshot> {
         let (text, version) = {
             let docs = self.state.documents.lock();
@@ -440,6 +447,9 @@ impl Backend {
         Some(CursorResolution { rctx, ruleset })
     }
 
+    /// The `$KEY$` loc reference under the cursor in an open `.yml` document, plus its
+    /// `[start, end)` range in the negotiated position encoding. `None` when the cursor isn't
+    /// on a reference (or the document isn't open). Shared by hover and goto.
     pub(crate) fn loc_ref_at_cursor_doc(
         &self,
         uri: &str,
@@ -538,6 +548,9 @@ impl Backend {
             return;
         }
 
+        // Offload validation off the message future so a burst of opens can't hold the
+        // bounded request queue (#90). Bump the edit counter so `debounced_validate`'s
+        // dependent sweep is tagged and a later edit supersedes it.
         let generation = self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.invalidate_semantic_tokens(&uri);
         self.spawn_debounced_validate(uri, version, generation, ValidateTrigger::DidOpen, 0);
@@ -596,6 +609,8 @@ impl Backend {
         // can use it when its `previousResultId` is still current, then replace
         // it with tokens for the current buffer.
 
+        // Validate after a short debounce so a burst of keystrokes coalesces into one run; the
+        // helper aborts any pending sleeper so a burst can't stack hundreds of tasks (#47).
         self.spawn_debounced_validate(
             uri,
             version,
@@ -625,6 +640,9 @@ impl Backend {
             }
             return;
         }
+        // A save isn't an edit, so don't bump the edit counter. Offload the validation like
+        // did_change (#90); the entry version guard in `debounced_validate` makes a racing
+        // did_change safe.
         let Some((version, ast_version)) = ({
             let docs = self.state.documents.lock();
             docs.get(&uri).map(|d| (d.version, d.ast_version))
@@ -636,7 +654,8 @@ impl Backend {
             return;
         }
         if self.state.debounce_handles.lock().contains_key(&uri) {
-            // A pending debounce covers this save; its version guard prevents stale validation from publishing (#90).
+            // A pending debounce covers this save; its version guard keeps a stale run
+            // from publishing (#90).
             tracing::debug!(%uri, version, "didSave covered by pending validation");
             return;
         }
@@ -749,6 +768,8 @@ impl Backend {
                 DiskState::Absent => {
                     self.state.info_service.write().clear_file(&uri);
                     self.bump_info_revision();
+                    // Gone from disk too, so it can no longer expand at its callers; queue
+                    // its name for the sweep below (#259).
                     if let Some(name) = self.remove_inline_script(&uri) {
                         self.state.pending_changed_names.lock().insert(name);
                     }
@@ -790,6 +811,9 @@ impl Backend {
             return;
         };
 
+        // A close that discarded unsaved edits leaves `type_uses` describing text that never
+        // reached disk, and no watched event fires to fix it, so a restored reference would
+        // keep a false CW239 until the next full scan (#133). Rebuild the uses from the disk AST.
         if let DiskState::Parsed {
             parsed,
             discarded_edits: true,
@@ -797,6 +821,8 @@ impl Backend {
         } = &disk_ast
             && !self.state.documents.lock().contains_key(&uri)
         {
+            // block_in_place: a whole-file validate, the same sync CPU work the keystroke
+            // path fences (#87).
             tokio::task::block_in_place(|| self.refresh_type_uses_from_parsed(&uri, parsed));
         }
 
@@ -892,6 +918,8 @@ impl LanguageServer for Backend {
         let reindex_client = self.client.clone();
         let reindex_state = self.state.clone();
         tokio::spawn(async move {
+            // Each pass is already panic-safe; this wraps the loop's own task so a panic in its
+            // scaffolding is logged instead of silently ending periodic reindexing (#155).
             crate::scan::spawn_logging_panics("background reindex loop", async move {
                 Backend {
                     client: reindex_client,
@@ -1194,7 +1222,9 @@ impl LanguageServer for Backend {
                 if backend.move_open_document(old, new).await {
                     let old_uri = old.to_string();
                     let new_uri = new.to_string();
-                    // Bind the removed entry so its guard drops before re-locking this mutex.
+                    // Move cached tokens to the new URI so delta resumes. Bound to a `let` so the
+                    // take's guard drops before the insert re-locks the same non-reentrant
+                    // mutex (#334).
                     let moved_tokens = backend.state.semantic_tokens_cache.lock().remove(&old_uri);
                     if let Some(entry) = moved_tokens {
                         backend

@@ -312,6 +312,8 @@ impl Backend {
     }
 
     /// The encoding the client negotiated at `initialize`, which every published
+    /// column is measured in. Cloned out of the config so no handler holds the
+    /// read guard while it converts positions.
     pub(crate) fn position_encoding(&self) -> PositionEncodingKind {
         self.state.config.read().position_encoding.clone()
     }

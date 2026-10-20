@@ -129,5 +129,6 @@ pub fn is_subtype_key(type_name: &str) -> bool {
 pub struct SavedEventTarget {
     pub name: String,
     pub location: SourceLocation,
+    /// True = global (`save_global_event_target_as`).
     pub is_global: bool,
 }

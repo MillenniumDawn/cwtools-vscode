@@ -168,6 +168,9 @@ pub(crate) fn scan_use_sites_bounded(
     results
 }
 
+/// What [`scan_ast_for_type_ref`] is looking for: the reference target plus the
+/// rules/table/path needed to classify a candidate. Invariant across the walk of
+/// one file, so it is threaded by reference through the recursion.
 struct TypeRefSearch<'a> {
     type_name: &'a str,
     instance_name: &'a str,

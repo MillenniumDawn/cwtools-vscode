@@ -11,17 +11,22 @@ pub enum CacheError {
     Io(#[from] std::io::Error),
     #[error("serialization error")]
     Serialize(#[source] rkyv::rancor::Error),
+    // `Deserialize` covers both rkyv failures (with a source) and the
+    // header-validation rejection (`msg` set, no source).
     #[error("deserialization error: {msg}")]
     Deserialize {
         msg: &'static str,
         #[source]
         source: Option<rkyv::rancor::Error>,
     },
-    // Keep the source explicit: #[from] would collide with Io's std::io::Error conversion.
+    // zstd returns `io::Error`; a `#[from]` here would collide with `Io`'s, so
+    // the source is attached explicitly instead.
     #[error("compression error")]
     Compression(#[source] std::io::Error),
 }
-/// Zstd compression level shared by parse-cache and vanilla-cache writers.
+
+/// Zstd level for cache bodies, shared with `cwtools_index::vanilla_cache` so both
+/// caches compress at the same ratio.
 pub const ZSTD_LEVEL: i32 = 3;
 
 /// Header marker used to reject incompatible cache files before rkyv decoding.
@@ -31,6 +36,7 @@ const MAGIC: &[u8; 4] = b"CWB\x00";
 const FORMAT_VERSION: u8 = 5;
 
 const ERRORS_MAGIC: &[u8; 4] = b"CWE\x00";
+/// Since v3 the sidecar also carries the source's content hash and inline-ignore codes.
 const ERRORS_FORMAT_VERSION: u8 = 3;
 
 /// Cap both `.cwb` input and decompressed size; a client-chosen cache path (#162)
@@ -40,6 +46,9 @@ pub const MAX_ARCHIVE_DECODED_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Cap uncompressed `.cwe` sidecars, which hold parse errors for only one source file.
 pub const MAX_ERRORS_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read `path` into memory, refusing anything that is not a regular file or that runs past
+/// `max_bytes`. `is_file` is what refuses `/dev/zero` (length 0); `take` bounds growth.
 pub fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
     let file = File::open(path)?;
     if !file.metadata()?.is_file() {
@@ -63,8 +72,8 @@ pub fn read_capped(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
     Ok(data)
 }
 
-/// Decompress into `out` within `max_bytes`; the frame-size check rejects known
-/// oversized inputs early, and the capped writer bounds frames without a size hint.
+/// Decompress `compressed` into `out`, refusing to write past `max_bytes`. A frame's
+/// declared size is writer-supplied, so it only short-circuits; the capped writer is the bound.
 pub fn decode_capped<W: Write>(compressed: &[u8], max_bytes: u64, out: W) -> std::io::Result<()> {
     if let Ok(Some(declared)) = zstd::zstd_safe::get_frame_content_size(compressed)
         && declared > max_bytes
@@ -135,7 +144,8 @@ pub fn write_atomically(
     if let Err(error) = std::fs::rename(&temp, path) {
         #[cfg(windows)]
         if path.exists() {
-            // On Windows, an open reader can make rename refuse the destination; remove then retry.
+            // Windows rename can refuse an existing destination (a reader holding it
+            // open). Removing it is safe because readers treat a miss as a re-parse.
             let replaced = std::fs::remove_file(path).and_then(|()| std::fs::rename(&temp, path));
             if let Err(error) = replaced {
                 let _ = std::fs::remove_file(&temp);
@@ -154,8 +164,8 @@ pub fn write_atomically(
 pub fn serialize_to_file(cached: &CachedFile, path: &Path) -> Result<(), CacheError> {
     let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(cached).map_err(CacheError::Serialize)?;
 
-    // The zstd frame checksum detects payload bit flips: rkyv validates archive
-    // structure, but a changed value could otherwise decode as a cache hit.
+    // Frame checksum on: rkyv validates structure, not content, so a flipped byte
+    // could be served as a hit. Frames without one still decode, so no version bump.
     let compressed = {
         let mut encoder =
             zstd::stream::Encoder::new(Vec::new(), ZSTD_LEVEL).map_err(CacheError::Compression)?;
