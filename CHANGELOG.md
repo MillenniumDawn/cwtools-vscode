@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.2
+
 #### Engine
 
 * Revalidate open filepath dependents when a watched script adds a new indexed path, so CW113 clears without waiting for a workspace reindex. (#1083)
