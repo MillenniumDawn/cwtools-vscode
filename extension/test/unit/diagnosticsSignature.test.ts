@@ -72,16 +72,14 @@ suite("DiagnosticsSignatureCache", () => {
 		assert.strictEqual(cache.shouldPublish("file:///a.txt", [diag()]), true);
 	});
 
-	test("retains a full workspace pass, then evicts the oldest entry", () => {
+	// #1070: scans publish every closed file in order, so a pass past the old
+	// 2,000-file budget must still dedupe on the next pass.
+	test("retains a full workspace pass larger than the old budget", () => {
 		const cache = new DiagnosticsSignatureCache();
 		const uri = (i: number) => `file:///f${i}.txt`;
-		for (let i = 0; i < 2_000; i++) cache.shouldPublish(uri(i), [diag()]);
-		for (let i = 0; i < 2_000; i++) {
+		for (let i = 0; i < 5_000; i++) cache.shouldPublish(uri(i), [diag()]);
+		for (let i = 0; i < 5_000; i++) {
 			assert.strictEqual(cache.shouldPublish(uri(i), [diag()]), false);
 		}
-
-		cache.shouldPublish(uri(2_000), [diag()]);
-		assert.strictEqual(cache.shouldPublish(uri(1_999), [diag()]), false);
-		assert.strictEqual(cache.shouldPublish(uri(0), [diag()]), true);
 	});
 });

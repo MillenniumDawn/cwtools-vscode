@@ -213,28 +213,39 @@ suite("lspClient user-facing results", function () {
 		assert.strictEqual(summary.args[1], "Show Problems");
 	});
 
-	test("validateWorkspace puts each count in its place and names the held-back files", async function () {
-		const info = sandbox
-			.stub(vscode.window, "showInformationMessage")
-			.resolves(undefined);
-		serverReplies("CWTools: Validate workspace", {
-			totalFiles: 20,
-			validatedFiles: 18,
-			heldBackFiles: 2,
-			filesWithErrors: 3,
-			totalErrors: 7,
-			totalWarnings: 5,
-			totalInfos: 4,
-			totalHints: 1,
+	test("validateWorkspace puts each count in its place without a held-back caveat",
+		async function () {
+			const info = sandbox
+				.stub(vscode.window, "showInformationMessage")
+				.resolves(undefined);
+			serverReplies("CWTools: Validate workspace", {
+				totalFiles: 20,
+				validatedFiles: 18,
+				filesWithErrors: 3,
+				totalErrors: 7,
+				totalWarnings: 5,
+				totalInfos: 4,
+				totalHints: 1,
+			});
+			await vscode.commands.executeCommand("validateWorkspace");
+			const summary = messagesOf(info).find((message) =>
+				/^CWTools: validated 18 of 20 files;/.test(message),
+			);
+			assert.ok(
+				summary,
+				`got: ${messagesOf(info).join(" | ")}`,
+			);
+			assert.ok(
+				messagesOf(info).includes(
+						"CWTools: validated 18 of 20 files; 3 with errors, 7 errors, 5 warnings, 4 infos, 1 hints.",
+				),
+				`got: ${messagesOf(info).join(" | ")}`,
+			);
+			assert.ok(
+				!messagesOf(info).some((message) => message.includes("leaves out")),
+				`#1070 removed the closed-file budget; no held-back caveat may remain: ${messagesOf(info).join(" | ")}`,
+			);
 		});
-		await vscode.commands.executeCommand("validateWorkspace");
-		assert.ok(
-			messagesOf(info).includes(
-				"CWTools: validated 18 of 20 files; 3 with errors, 7 errors, 5 warnings, 4 infos, 1 hints. Problems leaves out 2 closed files past the workspace diagnostics budget.",
-			),
-			`got: ${messagesOf(info).join(" | ")}`,
-		);
-	});
 
 	test("genlocall opens each non-empty stub as an untitled document with a BOM", async function () {
 		const english = 'l_english:\n irm_one:0 "TODO"\n';
@@ -318,7 +329,6 @@ suite("lspClient user-facing results", function () {
 			{
 				totalFiles: 3,
 				validatedFiles: 3,
-				heldBackFiles: 0,
 				filesWithErrors: 0,
 				totalErrors: -1,
 				totalWarnings: 0,
