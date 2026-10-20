@@ -22,3 +22,7 @@ criterion = { workspace = true }
 [[bench]]
 name = "reference_index"
 harness = false
+
+[[bench]]
+name = "residual_walks"
+harness = false
