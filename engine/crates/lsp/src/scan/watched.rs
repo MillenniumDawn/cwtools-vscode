@@ -163,6 +163,7 @@ impl Backend {
             // not the whole batch (#477).
             // open-doc edit path's job (#90).
             let mut changed_loc_keys: HashSet<String> = HashSet::new();
+            let mut file_index_changed = false;
             if !deletes.is_empty() {
                 changed_loc_keys.extend(self.process_watched_deletes(&deletes).await);
             }
@@ -177,6 +178,7 @@ impl Backend {
                     if !info.type_index.file_index.is_empty() {
                         let type_index = Arc::make_mut(&mut info.type_index);
                         for rel in to_insert {
+                            file_index_changed |= !type_index.file_index.contains(&rel);
                             type_index.file_index.insert(&rel);
                         }
                     }
@@ -248,7 +250,8 @@ impl Backend {
             }
             let sweep_pending = !changed_loc_keys.is_empty()
                 || !self.state.pending_changed_names.lock().is_empty()
-                || resources_changed;
+                || resources_changed
+                || file_index_changed;
             if sweep_pending {
                 // The cross-file sweeps are one more unit of work under one slot.
                 let Some(_permit) = self.validation_permit().await else {
@@ -260,10 +263,11 @@ impl Backend {
                 }
                 let queued: HashSet<String> =
                     { self.state.pending_changed_names.lock().drain().collect() };
-                if resources_changed || !queued.is_empty() {
+                if resources_changed || file_index_changed || !queued.is_empty() {
                     let generation = self.state.edit_generation.load(Ordering::Relaxed);
-                    // Any filepath can resolve differently, so a resource change has no name scope.
-                    let scope = (!resources_changed).then_some(&queued);
+                    // Any filepath can resolve differently after an indexed path is added, so
+                    // non-resource file-index changes have no name scope either.
+                    let scope = (!(resources_changed || file_index_changed)).then_some(&queued);
                     self.revalidate_open_dependents("", generation, scope).await;
                 }
             }

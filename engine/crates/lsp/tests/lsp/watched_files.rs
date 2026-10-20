@@ -323,6 +323,49 @@ fn test_watched_created_texture_clears_cw113_without_a_reindex() {
 }
 
 #[test]
+fn test_watched_created_script_clears_cw113_without_a_reindex() {
+    const RULES: &str = r#"
+types = {
+    type[decision] = { path = "game/common/decisions" }
+}
+decision = {
+    ## cardinality = 0..1
+    picture = filepath[gfx/,.gfx]
+}
+"#;
+    let mut server = storm_start(
+        storm_base()
+            .rules_file("r.cwt", RULES)
+            .file("gfx/present.gfx", "# existing script target\n"),
+    );
+    let text = "adec = {\n    picture = new_pic\n}\n";
+    server.write_file(PICTURE_DOC_REL, text);
+    server.open(PICTURE_DOC_REL, text);
+    let opened = server.wait_for_diagnostics("d.txt");
+    assert!(
+        publish_has_code(&opened, "CW113"),
+        "the missing script target must report CW113 before it exists, got: {opened}"
+    );
+
+    let target = server.write_file_uri("gfx/new_pic.gfx", "# no exported names\n");
+    server.send(&watched_created(std::slice::from_ref(&target)));
+
+    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let log = server.profiling_log();
+    server.stop();
+
+    assert!(
+        !publish_has_code(last_picture_publish(&frames), "CW113"),
+        "CW113 must clear after the script target is created, got: {frames:?}"
+    );
+    assert_eq!(
+        count_validate_log(&log, "reindex"),
+        0,
+        "the open decision must revalidate without a full reindex, got: {log}"
+    );
+}
+
+#[test]
 fn test_watched_texture_burst_does_not_force_a_rescan() {
     // More events than WATCHED_BULK_CAP (200), all resources: a folder copy.
     created_textures_clear_cw113(205);
