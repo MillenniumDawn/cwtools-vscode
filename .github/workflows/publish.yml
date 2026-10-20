@@ -292,9 +292,8 @@ jobs:
         with:
           persist-credentials: false
       # @vscode/vsce is a devDependency, so `npx --no-install` needs the tree.
-      # ovsx's nested vsce has optional keytar, whose install script fetches a
-      # native prebuild. The publisher only uploads prebuilt VSIX files, so no
-      # dependency lifecycle script needs to run in this publisher job.
+      # The publisher only uploads prebuilt VSIX files, so no dependency
+      # lifecycle script needs to run in this publisher job.
       - uses: ./.github/actions/setup-node-npm
         with:
           ignore-scripts: true

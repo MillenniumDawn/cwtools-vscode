@@ -782,7 +782,7 @@ fn collect_scope_children(
         }
         let saved = scope_context.save();
         let ambient = scope_context.current();
-        let mut resolved_context: Option<ScopeContext> = None;
+        let mut resolved_context = None;
         let mut conflict = false;
         for (opts, numeric_state_ok) in &scope_options {
             scope_context.restore(saved.clone());
@@ -794,7 +794,8 @@ fn collect_scope_children(
                 *numeric_state_ok,
                 ctx.type_index,
             );
-            let candidate = scope_context.clone();
+            // Probes never change the registry, so the saved state is the whole comparison.
+            let candidate = scope_context.save();
             if let Some(previous) = &resolved_context {
                 conflict |= previous != &candidate;
             } else {
@@ -809,8 +810,8 @@ fn collect_scope_children(
             scope_context.restore(saved);
             continue;
         };
-        let resolved = resolved_context.current();
-        *scope_context = resolved_context;
+        scope_context.restore(resolved_context);
+        let resolved = scope_context.current();
         if leaf.pos.start.line >= start_line
             && leaf.pos.start.line <= end_line
             && resolved != ambient
@@ -1328,6 +1329,58 @@ mod tests {
         assert_eq!(transitions.len(), 1, "got: {transitions:?}");
         assert_eq!(transitions[0].range.start.line, 2);
         assert_eq!(transitions[0].resolved, ScopeId(101));
+    }
+
+    #[test]
+    fn scope_transitions_restore_and_compare_multiple_candidate_states() {
+        use cwtools_game::constants::Game;
+        use cwtools_parser::parser::parse_string;
+        use cwtools_rules::rules_converter::ast_to_ruleset;
+        use cwtools_string_table::string_table::StringTable;
+
+        fn transitions(second_scope: &str) -> Vec<ScopeTransition> {
+            let table = StringTable::new();
+            let rules = parse_string(
+                &format!(
+                    "types = {{ type[foo] = {{ path = \"common/foo\" }} }}\n\
+                     scopes = {{ Country = {{ aliases = {{ country }} }} Character = {{ aliases = {{ character }} }} }}\n\
+                     foo = {{\n\
+                         ## push_scope = character\n\
+                         custom = {{ add = int }}\n\
+                         ## push_scope = {second_scope}\n\
+                         custom = {{ add = int }}\n\
+                     }}\n"
+                ),
+                &table,
+            );
+            let ruleset = ast_to_ruleset(&rules, &table);
+            let registry = crate::build_scope_registry_arc(&ruleset, Some(Game::Hoi4));
+            let prepared = crate::Prepared {
+                ruleset: &ruleset,
+                table: &table,
+                game: Some(Game::Hoi4),
+                type_index: None,
+                modifier_keys: None,
+                loc_index: None,
+                extra_loc_keys: None,
+                inline_scripts: None,
+                registry: registry.as_ref(),
+                scope_checks: true,
+                var_checks: false,
+            };
+            let ast = parse_string("foo = { custom = { add = 1 } }\n", &table);
+            scope_transitions_with_limit(&ast, "common/foo/test.txt", &prepared, 1, 2, usize::MAX)
+        }
+
+        let agreeing = transitions("character");
+        assert_eq!(agreeing.len(), 1, "agreeing candidates: {agreeing:?}");
+        assert_eq!(agreeing[0].resolved, ScopeId(101));
+
+        let conflicting = transitions("country");
+        assert!(
+            conflicting.is_empty(),
+            "conflicting candidates must not emit a transition: {conflicting:?}"
+        );
     }
 
     #[test]
