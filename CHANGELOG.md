@@ -2,8 +2,8 @@
 
 #### Tooling
 
-* Update the Open VSX publisher CLI to 1.3.0 so it shares the audited VS Code packaging dependency and removes the high-severity transitive advisories. (#1048)
 * Document the `md_bench` and parser `probe` examples in `docs/engine/PROFILING.md`: how `md_bench` finds its corpus, what each prints, and that neither is a repeatable benchmark. (#915)
+* Update `ovsx` to 1.3.0, which shares the root `@vscode/vsce` 4 instead of nesting its own `@vscode/vsce` 3.9.2. That drops the nested copy's dependency tree and clears all six high-severity `npm audit` findings. (#1048)
 
 ### 4.0.1
 
