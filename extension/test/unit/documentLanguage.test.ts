@@ -9,6 +9,7 @@ import type * as VscodeStub from "./_stubs/vscode";
 const state = vi.hoisted(() => ({
 	executeCommand: vi.fn(),
 	logError: vi.fn(),
+	activeEditor: undefined as object | undefined,
 	switchEditor: undefined as ((editor: unknown) => void) | undefined,
 }));
 
@@ -26,6 +27,9 @@ vi.mock("vscode", async (importOriginal) => {
 		commands: { executeCommand: state.executeCommand },
 		window: {
 			...original.window,
+			get activeTextEditor() {
+				return state.activeEditor;
+			},
 			onDidChangeActiveTextEditor: (listener: (editor: unknown) => void) => {
 				state.switchEditor = listener;
 				return { dispose: () => {} };
@@ -108,6 +112,7 @@ const graphFileWrites = () =>
 suite("documentLanguage", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		state.activeEditor = undefined;
 	});
 
 	test("a reply for the previous editor does not set the graph file context", async () => {
@@ -231,7 +236,7 @@ suite("documentLanguage", () => {
 		assert.strictEqual(state.logError.mock.calls.length, 0);
 	});
 
-	test("disposing during timeout backoff clears its timer and queued switch", async () => {
+	test("disposing during timeout backoff clears the backoff timer", async () => {
 		const { requests, context } = await startTracker();
 
 		await focus(fakeEditor("initial"));
@@ -245,11 +250,23 @@ suite("documentLanguage", () => {
 
 		for (const subscription of context.subscriptions) subscription.dispose();
 		await settle();
-		assert.strictEqual(vi.getTimerCount(), 0, "disposal clears both timers");
+		assert.strictEqual(vi.getTimerCount(), 0, "disposal clears the backoff timer");
 		await vi.advanceTimersByTimeAsync(BACKOFF_MS);
 
 		assert.strictEqual(requests.length, 1);
 		assert.strictEqual(state.logError.mock.calls.length, 0);
+	});
+
+	test("classifying the active editor after disposal sends nothing", async () => {
+		const { tracker, requests, context } = await startTracker();
+		state.activeEditor = fakeEditor("late");
+
+		for (const subscription of context.subscriptions) subscription.dispose();
+		void tracker.classifyActiveEditor();
+		await settle();
+
+		assert.strictEqual(requests.length, 0);
+		assert.strictEqual(vi.getTimerCount(), 0);
 	});
 
 	test("nothing is written after the tracker is disposed", async () => {

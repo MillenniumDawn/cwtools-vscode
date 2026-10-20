@@ -153,18 +153,12 @@ export async function registerDocumentLanguage(
 				// guard stays held through the wait, so switches during the cooldown
 				// coalesce into pendingSwitch (freshest wins, a superseded one is
 				// dropped when drained). A settled response drains immediately.
-				const delay = disposed
-					? 0
-					: pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
-				if (delay > 0) {
+				const delay = pendingProcessDelayMs(timedOut, getFileTypesBackoffMs);
+				if (delay > 0 && !disposed) {
 					await new Promise<void>((resolve) => {
-						const timer = setTimeout(() => {
-							cancelBackoffTimer = undefined;
-							resolve();
-						}, delay);
+						const timer = setTimeout(resolve, delay);
 						cancelBackoffTimer = () => {
 							clearTimeout(timer);
-							cancelBackoffTimer = undefined;
 							resolve();
 						};
 					});
