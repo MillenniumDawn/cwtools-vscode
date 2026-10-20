@@ -1237,25 +1237,6 @@ pub enum VanillaFiles<'a> {
 /// Build the index a `filepath` reference (CW113) resolves against. Both front ends build it
 /// here, so the editor and the CLI answer the same reference the same way (#283).
 /// `parent_roots` are parent mods (#786): a submod may reference any file they ship.
-pub fn build_file_index(
-    workspace_root: &Path,
-    parent_roots: &[PathBuf],
-    workspace_ignore_files: &[String],
-    workspace_ignore_dirs: &[String],
-    vanilla: VanillaFiles<'_>,
-    case_sensitive: bool,
-) -> FileIndex {
-    build_file_index_with_vanilla_shadow(
-        workspace_root,
-        parent_roots,
-        workspace_ignore_files,
-        workspace_ignore_dirs,
-        vanilla,
-        case_sensitive,
-        None,
-    )
-}
-
 pub fn build_file_index_with_vanilla_shadow(
     workspace_root: &Path,
     parent_roots: &[PathBuf],
@@ -1273,11 +1254,16 @@ pub fn build_file_index_with_vanilla_shadow(
         workspace_ignore_dirs,
         DiscoveryPolicy::Workspace,
     );
-    let workspace_logical_paths: Vec<&str> = workspace_paths.iter().map(String::as_str).collect();
+    // The workspace claims its own paths so a watched delete knows what to drop (#1067).
+    for path in &workspace_paths {
+        index.claim_workspace(path);
+    }
+    // No same-path shadowing by the workspace: a parent file it overrides must still be
+    // seen to survive the override's delete. `replace_path` still hides (#1067).
     let parent_paths = visible_parent_files(
         parent_roots,
         workspace_root,
-        &workspace_logical_paths,
+        &[],
         |root| {
             discover_file_index_paths(
                 root,
@@ -1288,7 +1274,6 @@ pub fn build_file_index_with_vanilla_shadow(
         },
         String::as_str,
     );
-    index.add_paths(workspace_paths);
     index.add_paths(parent_paths);
     match vanilla {
         VanillaFiles::Cached(paths) => index.add_paths(

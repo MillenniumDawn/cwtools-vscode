@@ -12,6 +12,13 @@ use super::{
     spawn_logging_panics, watched_batch_over_cap, watched_batch_slot_is_ours, watched_stat_sig,
 };
 
+/// What a watched delete pass changed, so the batch can scope its dependent sweep
+/// without revalidating files the pass could not have touched.
+struct WatchedDeleteOutcome {
+    removed_file_index: bool,
+    changed_loc_keys: HashSet<String>,
+}
+
 impl Backend {
     /// Handle external file changes (e.g. a git checkout), which would otherwise leave stale
     /// index entries until a window reload (#52). Events are coalesced into one trailing
@@ -137,12 +144,16 @@ impl Backend {
         // Resources skip the rescan cap, so a texture folder copy stays cheap (#1023).
         let (resource_changes, changes): (HashSet<String>, HashSet<String>) =
             changes.into_iter().partition(|uri| is_resource_file(uri));
-        // A resource delete is dropped: the index merges workspace, parent and vanilla paths,
-        // so removing a key could hide a copy from another layer.
-        let deletes: Vec<String> = deletes
-            .into_iter()
-            .filter(|uri| !is_resource_file(uri))
+        let (resource_deletes, deletes): (Vec<String>, Vec<String>) =
+            deletes.into_iter().partition(|uri| is_resource_file(uri));
+        // A resource delete only releases the workspace's own file-index entry (#1067). It
+        // runs before the creates claim: the index ignores case, so DELETED Thing.dds plus
+        // CREATED thing.dds in one window must end owned, not released.
+        let resource_rels: Vec<String> = resource_deletes
+            .iter()
+            .filter_map(|uri| self.workspace_rel_for_file_index(uri))
             .collect();
+        let mut index_changed = self.remove_deleted_rels_from_file_index(resource_rels);
         let resources_changed = self.sync_watched_resources(&resource_changes);
         let only_resources = changes.is_empty() && deletes.is_empty();
         let mut lost_scan_cas = false;
@@ -154,7 +165,10 @@ impl Backend {
             );
             if !self.validate_entire_workspace(true).await {
                 self.state.watched_pending.lock().extend(changes);
-                self.state.watched_deleted.lock().extend(deletes);
+                self.state
+                    .watched_deleted
+                    .lock()
+                    .extend(deletes.into_iter().chain(resource_deletes));
                 lost_scan_cas = true;
             }
         } else {
@@ -164,7 +178,9 @@ impl Backend {
             // open-doc edit path's job (#90).
             let mut changed_loc_keys: HashSet<String> = HashSet::new();
             if !deletes.is_empty() {
-                changed_loc_keys.extend(self.process_watched_deletes(&deletes).await);
+                let outcome = self.process_watched_deletes(&deletes).await;
+                changed_loc_keys.extend(outcome.changed_loc_keys);
+                index_changed |= outcome.removed_file_index;
             }
             {
                 let to_insert: Vec<String> = changes
@@ -177,7 +193,8 @@ impl Backend {
                     if !info.type_index.file_index.is_empty() {
                         let type_index = Arc::make_mut(&mut info.type_index);
                         for rel in to_insert {
-                            type_index.file_index.insert(&rel);
+                            // A changed/created file claims workspace membership (#1067).
+                            type_index.file_index.claim_workspace(&rel);
                         }
                     }
                 }
@@ -248,7 +265,8 @@ impl Backend {
             }
             let sweep_pending = !changed_loc_keys.is_empty()
                 || !self.state.pending_changed_names.lock().is_empty()
-                || resources_changed;
+                || resources_changed
+                || index_changed;
             if sweep_pending {
                 // The cross-file sweeps are one more unit of work under one slot.
                 let Some(_permit) = self.validation_permit().await else {
@@ -260,10 +278,11 @@ impl Backend {
                 }
                 let queued: HashSet<String> =
                     { self.state.pending_changed_names.lock().drain().collect() };
-                if resources_changed || !queued.is_empty() {
+                if resources_changed || index_changed || !queued.is_empty() {
                     let generation = self.state.edit_generation.load(Ordering::Relaxed);
-                    // Any filepath can resolve differently, so a resource change has no name scope.
-                    let scope = (!resources_changed).then_some(&queued);
+                    // Any filepath can resolve differently after a resource change or a
+                    // dropped index entry, so those sweeps have no name scope (#1023, #1067).
+                    let scope = (!(resources_changed || index_changed)).then_some(&queued);
                     self.revalidate_open_dependents("", generation, scope).await;
                 }
             }
@@ -287,7 +306,8 @@ impl Backend {
         }
     }
 
-    /// Resource events update the file index only. True when a new path was added (#1023).
+    /// Resource events update the file index only. True when the index content changed
+    /// (#1023); ownership-only claims and unchanged re-saves stay false.
     fn sync_watched_resources(&self, changes: &HashSet<String>) -> bool {
         let mut added: Vec<String> = changes
             .iter()
@@ -308,17 +328,23 @@ impl Backend {
         if info.type_index.file_index.is_empty() {
             return false;
         }
-        added.retain(|rel| !info.type_index.file_index.contains(rel));
+        // A created resource claims workspace membership even when a lower layer already
+        // provides the path (#1067). An already-claimed key changes nothing, so it is
+        // skipped before the index Arc is cloned.
+        added.retain(|rel| !info.type_index.file_index.is_workspace_claimed(rel));
         if added.is_empty() {
             return false;
         }
         let index = &mut Arc::make_mut(&mut info.type_index).file_index;
+        let mut added_new = false;
         for rel in &added {
-            index.insert(rel);
+            added_new |= index.claim_workspace(rel);
         }
         drop(info);
-        self.bump_info_revision();
-        true
+        if added_new {
+            self.bump_info_revision();
+        }
+        added_new
     }
 
     pub(crate) fn workspace_rel_for_file_index(&self, uri: &str) -> Option<String> {
@@ -329,20 +355,40 @@ impl Backend {
         rel.to_str().map(|s| s.replace('\\', "/"))
     }
 
+    /// Drop the workspace's own file-index contributions of deleted rels (#1067). A key
+    /// a lower layer still provides stays. Returns whether a key left the index.
+    fn remove_deleted_rels_from_file_index(&self, mut rels: Vec<String>) -> bool {
+        if rels.is_empty() {
+            return false;
+        }
+        let mut info = self.state.info_service.write();
+        // A rel the workspace never owned changes nothing, so the index Arc stays shared
+        // with any snapshot holding it.
+        rels.retain(|rel| info.type_index.file_index.is_workspace_owned(rel));
+        if rels.is_empty() {
+            return false;
+        }
+        let index = &mut Arc::make_mut(&mut info.type_index).file_index;
+        let mut removed = false;
+        for rel in &rels {
+            removed |= index.release_workspace(rel);
+        }
+        drop(info);
+        if removed {
+            self.bump_info_revision();
+        }
+        removed
+    }
+
     /// `fixAllWorkspace` entry is dropped with its diagnostics (#133).
-    async fn process_watched_deletes(&self, deletes: &[String]) -> HashSet<String> {
-        let to_remove: Vec<String> = deletes
+    async fn process_watched_deletes(&self, deletes: &[String]) -> WatchedDeleteOutcome {
+        let rels: Vec<String> = deletes
             .iter()
             .filter_map(|uri| self.workspace_rel_for_file_index(uri))
             .collect();
+        let removed_file_index = self.remove_deleted_rels_from_file_index(rels);
         {
             let mut info = self.state.info_service.write();
-            if !to_remove.is_empty() && !info.type_index.file_index.is_empty() {
-                let type_index = Arc::make_mut(&mut info.type_index);
-                for rel in &to_remove {
-                    type_index.file_index.remove(rel);
-                }
-            }
             for uri in deletes {
                 info.clear_file(uri);
             }
@@ -420,6 +466,9 @@ impl Backend {
                 self.publish_if_closed(uri_obj, vec![], None).await;
             }
         }
-        removed_loc_keys
+        WatchedDeleteOutcome {
+            removed_file_index,
+            changed_loc_keys: removed_loc_keys,
+        }
     }
 }
