@@ -19,7 +19,8 @@ file with 256 repeated GUI records. The records include callback clauses,
 inline rules exercise type references, variable definitions, a complex enum,
 and scripted-GUI names.
 
-The benchmark checks this collected-output signature before timing:
+Before timing, the benchmark prints this collected-output signature so two
+binaries can be compared:
 `file_info=0 type_refs=1 variables=256 complex_values=1 scripted_guis=true`.
 The `file_info` count is the number of heuristic `FileInfo.type_references`;
 `type_refs` is the separate typed-reference index.
@@ -61,22 +62,14 @@ Run from `engine/` with Rust 1.99.1 / Cargo 1.99.1 on Linux x86_64 (kernel
 6.18.55), AMD EPYC 9V45, five CPUs available:
 
 ```sh
-PATH=/workspace/.cargo/bin:$PATH \
-CARGO_HOME=/workspace/.cargo \
-RUSTUP_HOME=/workspace/.rustup \
-CARGO_TARGET_DIR=/workspace/cwtools-target-481 \
 cargo bench --locked -p cwtools_info --bench residual_walks -- --noplot
 ```
 
-The timed code is the call to `FileCollector::collect`; Criterion is configured
-for 30 samples, 2-second warm-up and 10-second measurement. For RSS, invoke a
-saved benchmark binary with `--bench --noplot` and sample its process status
-while it runs. The saved stdout, timing logs and sampler are in
-`/workspace/cwtools-evidence-481/` in the local environment.
+The timed code is the call to `FileCollector::collect`. For RSS, run a saved
+benchmark binary with `--bench --noplot` and sample its process status while it
+runs. The run logs and the sampler are not in the repo.
 
-The base engine revision was `aa82ebc6035f8dc672b23aa5a1ee7ca7314e4c05`.
-The benchmark-only change was committed as `f3759f75a8db5f4d41a5bbb92dd60261480a794e`.
-The measured candidate code was committed as
-`7f6d8fb40c83de7b5f87052127256245d127890a`, based on that benchmark commit.
-The candidate commit was reverted after the no-go decision; the final branch
-contains the benchmark and this report, not the combined collector code.
+The base engine revision was `aa82ebc6035f8dc672b23aa5a1ee7ca7314e4c05`. In PR
+#1090's history, the benchmark-only commit is `f3759f75a8db` and the measured
+candidate is `7f6d8fb40c83`, reverted after the no-go decision. Only the benchmark
+and this report were merged.

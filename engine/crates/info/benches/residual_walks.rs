@@ -53,8 +53,7 @@ fn bench_residual_collection(c: &mut Criterion) {
     service.update_ruleset_data(variable_defining_effects(&rules));
     let collector = service.file_collector(&rules);
 
-    // Confirm collection is stable and retain a compact output signature for
-    // comparing the baseline and candidate binaries.
+    // A compact output signature, printed so two binaries can be compared.
     let mut check = InfoService::new();
     check.update_ruleset_data(variable_defining_effects(&rules));
     let check_collector = check.file_collector(&rules);
@@ -92,8 +91,6 @@ fn bench_residual_collection(c: &mut Criterion) {
     );
     eprintln!("RESIDUAL_WALK_SIGNATURE {signature}");
 
-    // Make each measurement the collector call itself: no parse, type-index
-    // walk, clear, merge, or driver/CLI/LSP validation in the timed closure.
     let mut group = c.benchmark_group("info_service/residual_collection");
     group.sample_size(30);
     group.warm_up_time(Duration::from_secs(2));
