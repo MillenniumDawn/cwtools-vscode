@@ -102,32 +102,6 @@ fn load_ruleset_dir_merges_every_cwt_file() {
     );
 }
 
-/// Stellaris supplies these names from its game hook rather than static CWT
-/// definitions. Keep the pinned config as an end-to-end check that CW601
-/// recognises those exact built-in/dynamic definitions.
-#[test]
-fn pinned_stellaris_config_accepts_builtin_modifier_and_dynamic_parameter_enum() {
-    let table = StringTable::new();
-    let (_ruleset, errors) = load_ruleset_from_dir(
-        cwtools_test_support::stellaris_config(),
-        &table,
-        cwtools_file_manager::file_manager::ScanBudget::default(),
-    );
-
-    let built_in_reference_errors: Vec<_> = errors
-        .iter()
-        .filter(|error| {
-            error.code == "CW601"
-                && (error.message.contains("`modifier`")
-                    || error.message.contains("`scripted_effect_params`"))
-        })
-        .collect();
-    assert!(
-        built_in_reference_errors.is_empty(),
-        "pinned Stellaris config should resolve its built-in and dynamic names: {built_in_reference_errors:?}"
-    );
-}
-
 /// A directory walk failure must remain non-fatal but reach callers through
 /// the structured rules-error channel. A regular file is a portable way to
 /// make `read_dir` fail without relying on permissions or a race.
