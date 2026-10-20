@@ -294,21 +294,14 @@ impl Backend {
             Some(p) => p,
             None => return,
         };
-        let vanilla_paths = if let Some(shadow) = replacement_shadow.as_ref() {
-            vanilla_paths
-                .into_iter()
-                .filter(|path| !shadow.hides(path))
-                .collect()
-        } else {
-            vanilla_paths
-        };
-        let file_index = cwtools_driver::build_file_index(
+        let file_index = cwtools_driver::build_file_index_with_vanilla_shadow(
             &workspace_root,
             &parent_roots,
             &ignore_files,
             &ignore_dirs,
             cwtools_driver::VanillaFiles::Cached(vanilla_paths),
             false,
+            replacement_shadow.as_ref(),
         );
         {
             let mut info_guard = self.state.info_service.write();

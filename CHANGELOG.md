@@ -3,10 +3,12 @@
 #### Engine
 
 * Revalidate open filepath dependents when a watched script adds a new indexed path, so CW113 clears without waiting for a workspace reindex. (#1083)
+* Keep parent-mod and base-game file paths visible after deleting a workspace override, and in case-sensitive runs keep the highest layer's spelling of a path instead of the base game's. A watched delete of a single resource file now drops a workspace-only path when its folder still exists, and refreshes filepath errors in open documents. (#1067)
 * Compare and restore saved scope states in the scope-transition probes instead of cloning the whole `ScopeContext` for each candidate. Probes no longer allocate copies of the scope stacks or compare the scope registry. Transitions are unchanged. (#558)
 * Publish diagnostics for every closed file in workspace scans; the 2,000-file per-scan budget that kept larger total-conversion mods' closed-file errors out of Problems is gone, and "Fix all auto-fixable problems in workspace" now covers every closed file too. Turning `cwtools.diagnostics.workspaceWide` off still scopes Problems to open documents and now clears every closed file published earlier. (#1070)
 * Repair the engine comments #643 cut off mid-sentence, and restore the reasons it deleted along with them, from the pre-#643 text where the code still matches. That covers cache bounds and checksums, file-index case sensitivity, LSP position encodings, Windows path behavior, lock order and the `#NNN` regression notes. Comments only; no code changes. (#908)
 * Retained comment text is now stored in one pooled buffer per parse instead of a separate `String` per comment, and inline-script expansions share the script's pool instead of copying comment text. Because the `.cwb` parse-cache layout changed (now v6), existing v5 caches are rejected and re-parse their files once after upgrading. (#575)
+* Recognize Stellaris' built-in `modifier` type and open `scripted_effect_params` enum when checking CWT references for CW601. Other unresolved type and enum names remain errors. (#1008)
 
 #### Tooling
 
