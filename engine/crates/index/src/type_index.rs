@@ -40,9 +40,8 @@ pub struct FileIndex {
     case_sensitive: bool,
     /// Keys the primary workspace supplies; a watched delete drops these first (#1067).
     owned: FxHashSet<String>,
-    /// Lower-layer (parent mod, base game) spelling behind each key, recorded by the
-    /// builders so a workspace override can fall back to it without a reindex (#1067).
-    fallback: FxHashMap<String, String>,
+    /// Owned keys a parent mod or the base game also provides, which survive a delete.
+    overridden: FxHashSet<String>,
 }
 
 impl FileIndex {
@@ -172,16 +171,6 @@ impl FileIndex {
         }
     }
 
-    pub fn remove(&mut self, path: &str) {
-        let norm = path.replace('\\', "/").to_ascii_lowercase();
-        self.files.remove(&norm);
-        if self.case_sensitive {
-            self.files_exact.remove(&norm);
-        }
-        self.owned.remove(&norm);
-        self.fallback.remove(&norm);
-    }
-
     /// Mark `path` as supplied by the primary workspace. Idempotent for an already-claimed
     /// key; `true` when the index changed: a new key, or (case-sensitive mode) an exact
     /// spelling that replaces the previous one.
@@ -189,6 +178,10 @@ impl FileIndex {
         let spelling = path.replace('\\', "/");
         let norm = spelling.to_ascii_lowercase();
         let fresh = self.files.insert(norm.clone());
+        // A key already present without a workspace claim came from a lower layer.
+        if !fresh && !self.owned.contains(&norm) {
+            self.overridden.insert(norm.clone());
+        }
         self.owned.insert(norm.clone());
         if self.case_sensitive && self.files_exact.get(&norm) != Some(&spelling) {
             self.files_exact.insert(norm, spelling);
@@ -216,52 +209,35 @@ impl FileIndex {
         !self.case_sensitive || self.files_exact.get(&norm) == Some(&spelling)
     }
 
-    /// Record the on-disk spelling a lower layer provides for `path`; the first
-    /// (highest-priority) provider wins. Skipped if already recorded.
-    pub fn record_fallback(&mut self, path: &str) {
-        let norm = path.replace('\\', "/").to_ascii_lowercase();
-        self.fallback
-            .entry(norm)
-            .or_insert_with(|| path.replace('\\', "/"));
-    }
-
     /// Drop the workspace's own contribution of `path`: a watched delete (#1067). A key
-    /// a lower layer still provides stays in the index and falls back to that layer's
-    /// spelling; returns whether the key left the index.
+    /// a lower layer still provides stays in the index; returns whether the key left it.
     pub fn release_workspace(&mut self, path: &str) -> bool {
         let norm = path.replace('\\', "/").to_ascii_lowercase();
         if !self.owned.remove(&norm) {
             return false;
         }
-        match self.fallback.get(&norm) {
-            Some(spelling) => {
-                if self.case_sensitive {
-                    self.files_exact.insert(norm, spelling.clone());
-                }
-                false
-            }
-            None => {
-                self.files.remove(&norm);
-                if self.case_sensitive {
-                    self.files_exact.remove(&norm);
-                }
-                true
-            }
+        // The lower layer's exact case is not kept, so a case-sensitive index stops
+        // checking case for the key instead of keeping the deleted file's spelling.
+        self.files_exact.remove(&norm);
+        if self.overridden.remove(&norm) {
+            return false;
         }
+        self.files.remove(&norm);
+        true
     }
 
+    /// Add paths a parent mod or the base game provides, after the workspace's claims.
+    /// A claimed key keeps the workspace spelling and survives its release (#1067).
     pub fn add_paths<I: IntoIterator<Item = String>>(&mut self, paths: I) {
-        if self.case_sensitive {
-            for p in paths {
-                let ci = p.to_ascii_lowercase();
-                self.files.insert(ci.clone());
-                // A lower provider must not overwrite an already-visible spelling (#1067).
-                self.files_exact.entry(ci).or_insert(p);
+        for p in paths {
+            let ci = p.to_ascii_lowercase();
+            if self.owned.contains(&ci) {
+                self.overridden.insert(ci.clone());
             }
-        } else {
-            for p in paths {
-                self.files.insert(p.to_ascii_lowercase());
+            if self.case_sensitive {
+                self.files_exact.entry(ci.clone()).or_insert(p);
             }
+            self.files.insert(ci);
         }
     }
 
@@ -2449,57 +2425,41 @@ mod tests {
         assert!(!cloned.has_instance_name_changes());
     }
 
-    /// A watched delete over a lower layer keeps the key and falls back to the lower
-    /// on-disk spelling; a workspace-only key drops (#1067).
+    /// A release drops a workspace-only key and keeps one a lower layer also
+    /// provides, whether the workspace claimed it before or after that layer (#1067).
     #[test]
-    fn file_index_release_falls_back_to_the_recorded_spelling() {
+    fn file_index_release_keeps_lower_layer_keys() {
         let mut idx = FileIndex::new();
-        idx.set_case_sensitive(true);
-        idx.record_fallback("gfx/Foo.DDS");
-        assert!(idx.claim_workspace("gfx/foo.dds"));
-        assert!(idx.contains("gfx/foo.dds"));
-        assert!(!idx.release_workspace("gfx/foo.dds"));
-        assert!(idx.contains("gfx/Foo.DDS"));
-        assert!(!idx.contains("gfx/foo.dds"));
-        assert!(!idx.release_workspace("gfx/foo.dds"), "idempotent release");
-        assert!(idx.contains("gfx/Foo.DDS"), "fallback persists");
-    }
-
-    #[test]
-    fn file_index_release_drops_a_workspace_only_key() {
-        let mut idx = FileIndex::new();
-        idx.record_fallback("gfx/other.DDS"); // unrelated lower layer stays untouched
-        idx.add_paths(["gfx/other.DDS".to_string()]);
         assert!(idx.claim_workspace("GFX/Solo.dds"));
+        assert!(idx.claim_workspace("gfx/shared.dds"));
+        idx.add_paths(["gfx/Shared.DDS".to_string(), "gfx/base.dds".to_string()]);
+
         assert!(idx.release_workspace("gfx/solo.DDS"));
-        assert!(!idx.contains("gfx/solo.DDS"));
-        assert!(idx.contains("gfx/other.DDS"));
-        assert!(!idx.release_workspace("gfx/NeverThere.dds"));
-        // A re-create over a lower-only path adds no key, only membership (#1067).
-        idx.release_workspace("gfx/other.DDS"); // no-op: never workspace-owned
-        assert!(idx.contains("gfx/other.DDS"));
-        assert!(!idx.claim_workspace("gfx/other.dds"));
-        assert!(idx.contains("gfx/other.dds"));
-        assert!(!idx.release_workspace("gfx/other.dds"));
-        assert!(idx.contains("gfx/other.DDS"));
+        assert!(!idx.contains("gfx/solo.dds"));
+        assert!(!idx.release_workspace("gfx/shared.dds"));
+        assert!(idx.contains("gfx/shared.dds"));
+        assert!(!idx.release_workspace("gfx/base.dds"), "never claimed");
+
+        assert!(!idx.claim_workspace("gfx/Base.dds"), "no new key");
+        assert!(idx.is_workspace_owned("gfx/base.dds"));
+        assert!(!idx.release_workspace("gfx/base.dds"));
+        assert!(idx.contains("gfx/base.dds"));
+        assert!(!idx.is_workspace_owned("gfx/base.dds"));
     }
 
-    /// First (highest-priority) fallback wins; a plain remove clears everything.
+    /// Case-sensitive: the workspace spelling wins while it exists, and the lower
+    /// layer's key stays after the release with its case unchecked (#1067).
     #[test]
-    fn file_index_fallback_is_first_wins_and_remove_is_full() {
+    fn file_index_case_sensitive_claim_keeps_the_workspace_spelling() {
         let mut idx = FileIndex::new();
         idx.set_case_sensitive(true);
-        idx.record_fallback("gfx/a.DDS");
-        idx.record_fallback("gfx/a.dds");
-        idx.add_paths(["gfx/a.DDS".to_string()]);
-        idx.claim_workspace("gfx/b.dds");
-        idx.remove("gfx/B.DDS");
-        assert!(idx.contains("gfx/a.DDS"));
-        assert!(!idx.contains("gfx/a.dds"));
-        assert!(!idx.contains("gfx/b.dds"));
-        assert!(
-            !idx.release_workspace("gfx/b.dds"),
-            "remove dropped ownership"
-        );
+        assert!(idx.claim_workspace("gfx/Shared.DDS"));
+        idx.add_paths(["gfx/shared.dds".to_string()]);
+        assert!(idx.contains("gfx/Shared.DDS"));
+        assert!(!idx.contains("gfx/shared.dds"));
+
+        assert!(!idx.release_workspace("gfx/Shared.DDS"));
+        assert!(idx.contains("gfx/shared.dds"));
+        assert!(idx.contains("gfx/Shared.DDS"));
     }
 }

@@ -1018,17 +1018,6 @@ impl LayerShadow {
         }
     }
 
-    /// Whether a claimed `replace_path` covers `logical_path`, ignoring same-path
-    /// claims. The file-index builder uses this to tell a `replace_path`-hidden parent
-    /// file (gone for good) from one the workspace's same-path file merely shadows
-    /// (#1067).
-    pub fn is_replaced(&self, logical_path: &str) -> bool {
-        let lower = logical_path.replace('\\', "/").to_ascii_lowercase();
-        self.replaced
-            .iter()
-            .any(|prefix| replace_path_covers(prefix, &lower))
-    }
-
     /// Whether this shadow contains any directory-level `replace_path` rule.
     pub fn has_replace_paths(&self) -> bool {
         !self.replaced.is_empty()

@@ -294,8 +294,6 @@ impl Backend {
             Some(p) => p,
             None => return,
         };
-        // Build with the layer shadow too: a same-path workspace or parent entry records
-        // the lower layer's spelling as a watched-delete fallback (#1067).
         let file_index = cwtools_driver::build_file_index_with_vanilla_shadow(
             &workspace_root,
             &parent_roots,

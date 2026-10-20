@@ -282,11 +282,7 @@ impl Backend {
                     let generation = self.state.edit_generation.load(Ordering::Relaxed);
                     // Any filepath can resolve differently after a resource change or a
                     // dropped index entry, so those sweeps have no name scope (#1023, #1067).
-                    let scope = if resources_changed || index_changed {
-                        None
-                    } else {
-                        (!queued.is_empty()).then_some(&queued)
-                    };
+                    let scope = (!(resources_changed || index_changed)).then_some(&queued);
                     self.revalidate_open_dependents("", generation, scope).await;
                 }
             }
@@ -313,7 +309,7 @@ impl Backend {
     /// Resource events update the file index only. True when the index content changed
     /// (#1023); ownership-only claims and unchanged re-saves stay false.
     fn sync_watched_resources(&self, changes: &HashSet<String>) -> bool {
-        let added: Vec<String> = changes
+        let mut added: Vec<String> = changes
             .iter()
             .filter(|uri| !self.is_ignored_uri(uri))
             .filter(|uri| std::path::Path::new(&uri_to_path_str(uri)).is_file())
@@ -333,28 +329,17 @@ impl Backend {
             return false;
         }
         // A created resource claims workspace membership even when a lower layer already
-        // provides the path (#1067). Skip the claim read-only first: an already-owned,
-        // same-spelling key changes nothing, so the index Arc stays shared.
-        let mut to_claim: Vec<String> = Vec::new();
-        {
-            let file_index = &info.type_index.file_index;
-            for rel in added {
-                if !file_index.is_workspace_claimed(&rel) {
-                    to_claim.push(rel);
-                }
-            }
-        }
-        if to_claim.is_empty() {
+        // provides the path (#1067). An already-claimed key changes nothing, so it is
+        // skipped before the index Arc is cloned.
+        added.retain(|rel| !info.type_index.file_index.is_workspace_claimed(rel));
+        if added.is_empty() {
             return false;
         }
-        let added_new = {
-            let index = &mut Arc::make_mut(&mut info.type_index).file_index;
-            let mut added_new = false;
-            for rel in &to_claim {
-                added_new |= index.claim_workspace(rel);
-            }
-            added_new
-        };
+        let index = &mut Arc::make_mut(&mut info.type_index).file_index;
+        let mut added_new = false;
+        for rel in &added {
+            added_new |= index.claim_workspace(rel);
+        }
         drop(info);
         if added_new {
             self.bump_info_revision();
@@ -371,26 +356,22 @@ impl Backend {
     }
 
     /// Drop the workspace's own file-index contributions of deleted rels (#1067). A key
-    /// a lower layer still provides falls back to that layer's spelling, which the
-    /// builders recorded at index build time. Returns whether a key left the index.
-    fn remove_deleted_rels_from_file_index(&self, rels: Vec<String>) -> bool {
+    /// a lower layer still provides stays. Returns whether a key left the index.
+    fn remove_deleted_rels_from_file_index(&self, mut rels: Vec<String>) -> bool {
         if rels.is_empty() {
             return false;
         }
         let mut info = self.state.info_service.write();
-        // Read-only first: a rel the workspace never owned changes nothing, so the index
-        // Arc stays shared with any snapshot holding it.
-        let owned: Vec<&String> = rels
-            .iter()
-            .filter(|rel| info.type_index.file_index.is_workspace_owned(rel))
-            .collect();
-        if owned.is_empty() {
+        // A rel the workspace never owned changes nothing, so the index Arc stays shared
+        // with any snapshot holding it.
+        rels.retain(|rel| info.type_index.file_index.is_workspace_owned(rel));
+        if rels.is_empty() {
             return false;
         }
-        let type_index = Arc::make_mut(&mut info.type_index);
+        let index = &mut Arc::make_mut(&mut info.type_index).file_index;
         let mut removed = false;
-        for rel in owned {
-            removed |= type_index.file_index.release_workspace(rel);
+        for rel in &rels {
+            removed |= index.release_workspace(rel);
         }
         drop(info);
         if removed {
