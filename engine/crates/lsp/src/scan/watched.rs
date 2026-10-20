@@ -194,7 +194,7 @@ impl Backend {
                         let type_index = Arc::make_mut(&mut info.type_index);
                         for rel in to_insert {
                             // A changed/created file claims workspace membership (#1067).
-                            type_index.file_index.claim_workspace(&rel);
+                            index_changed |= type_index.file_index.claim_workspace(&rel);
                         }
                     }
                 }
@@ -280,8 +280,8 @@ impl Backend {
                     { self.state.pending_changed_names.lock().drain().collect() };
                 if resources_changed || index_changed || !queued.is_empty() {
                     let generation = self.state.edit_generation.load(Ordering::Relaxed);
-                    // Any filepath can resolve differently after a resource change or a
-                    // dropped index entry, so those sweeps have no name scope (#1023, #1067).
+                    // Any filepath can resolve differently after a resource change or an added
+                    // or dropped index entry, so those sweeps have no name scope (#1023, #1067).
                     let scope = (!(resources_changed || index_changed)).then_some(&queued);
                     self.revalidate_open_dependents("", generation, scope).await;
                 }

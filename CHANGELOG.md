@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Revalidate open filepath dependents when a watched script adds a new indexed path, so CW113 clears without waiting for a workspace reindex. (#1083)
 * Keep parent-mod and base-game file paths visible after deleting a workspace override, and in case-sensitive runs keep the highest layer's spelling of a path instead of the base game's. A watched delete of a single resource file now drops a workspace-only path when its folder still exists, and refreshes filepath errors in open documents. (#1067)
 * Compare and restore saved scope states in the scope-transition probes instead of cloning the whole `ScopeContext` for each candidate. Probes no longer allocate copies of the scope stacks or compare the scope registry. Transitions are unchanged. (#558)
 * Publish diagnostics for every closed file in workspace scans; the 2,000-file per-scan budget that kept larger total-conversion mods' closed-file errors out of Problems is gone, and "Fix all auto-fixable problems in workspace" now covers every closed file too. Turning `cwtools.diagnostics.workspaceWide` off still scopes Problems to open documents and now clears every closed file published earlier. (#1070)
