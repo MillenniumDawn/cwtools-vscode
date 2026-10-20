@@ -247,7 +247,13 @@ jobs:
       - name: Smoke test VSIX files
         run: |
           python3 scripts/smoke_test_vsix.py artifacts/vsix \
+            --expected-version "$CWTOOLS_BUILD_VERSION" \
             linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
+      # Keep per-file digests beside the VSIX files. upload-artifact/download-
+      # artifact also validate their artifact-level digest, while this gives
+      # publishers an explicit check of the exact archives they upload.
+      - name: Record packaged VSIX digests
+        run: cd artifacts/vsix && sha256sum *.vsix > SHA256SUMS
       # The single hand-off to the three publish jobs. They all publish these
       # bytes, so a failed target can be re-run from the artifact rather than
       # rebuilt -- and every target ships identical files.
@@ -256,7 +262,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: vsix-${{ needs.check.outputs.tag }}
-          path: artifacts/vsix/*.vsix
+          path: artifacts/vsix/*
           if-no-files-found: error
           retention-days: 14
 
@@ -301,6 +307,14 @@ jobs:
         with:
           name: vsix-${{ needs.check.outputs.tag }}
           path: artifacts/vsix
+      - name: Verify downloaded VSIX files
+        run: |
+          cd artifacts/vsix
+          sha256sum --check SHA256SUMS
+          cd ../..
+          python3 scripts/smoke_test_vsix.py artifacts/vsix \
+            --expected-version "$CWTOOLS_BUILD_VERSION" \
+            linux-x64 linux-arm64 win-x64 osx-arm64 osx-x64
       # --pre-release needs no branching here: resolve_version derives it from
       # the tag, and only a pre-release tag carries a -pre.<attempt> suffix.
       - name: Publish to the VS Code Marketplace
