@@ -28,17 +28,24 @@ cargo test --locked -p cwtools_lsp --test lsp -- --test-threads=16
 
 Capture OS, runner image, Rust version, exit status and test count. Treat a
 platform launch/build limitation as an explicit result rather than a pass.
-Separately on Linux, run the existing Rust coverage entry point twice against
-the same commit and toolchain, saving each output before the next run:
+Separately on Linux, compare coverage for only the `cwtools_lsp` `lsp`
+integration target at four and 16 test threads. The local runner still has no
+Cargo, so its `cargo llvm-cov --help` could not be checked here; these commands
+use the upstream CLI's documented `test`, `--package`, `--test`, `--json`, and
+`--summary-only` options and should be confirmed against the CI-installed
+0.8.7 CLI before execution. Run from `engine/`, on the same commit/toolchain:
 
 ```sh
-RUST_TEST_THREADS=4 COVERAGE_THRESHOLD=94.4 python3 ../scripts/coverage.py
-RUST_TEST_THREADS=16 COVERAGE_THRESHOLD=94.4 python3 ../scripts/coverage.py
+cargo llvm-cov clean --workspace
+cargo llvm-cov test --locked -p cwtools_lsp --test lsp --json --summary-only --output-path target/lsp-coverage-4.json -- --test-threads=4
+cargo llvm-cov clean --workspace
+cargo llvm-cov test --locked -p cwtools_lsp --test lsp --json --summary-only --output-path target/lsp-coverage-16.json -- --test-threads=16
 ```
 
-Compare both exit statuses, test counts, and `engine/target/coverage/coverage-summary.json`
-line totals/percentages. `scripts/coverage.py` invokes the repo's real
-`cargo llvm-cov --workspace --all-features` path and applies the normal 94.4%
-line floor. Keep both results as artifacts. This is validation only: make no
-global thread override or production debounce change based on the existing
-local timings alone.
+Compare exit statuses, test counts, and each JSON report's line totals and
+percentages. Preserve both reports and logs as CI artifacts. These commands
+scope the test execution and coverage report to `cwtools_lsp --test lsp`;
+they do not change global test-thread settings. The repository's full-workspace
+`coverage.py` remains the existing coverage gate, not part of this comparison.
+This is validation only: make no global thread override or production debounce
+change based on the existing local timings alone.
