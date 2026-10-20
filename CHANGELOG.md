@@ -13,6 +13,7 @@
 * Smoke-test each packaged VSIX against the release version and record its SHA-256 digest in the artifact. The Marketplace job checks its downloaded copies against those digests and reruns the smoke test before publishing. (#544)
 * Document the `md_bench` and parser `probe` examples in `docs/engine/PROFILING.md`: how `md_bench` finds its corpus, what each prints, and that neither is a repeatable benchmark. (#915)
 * Update `ovsx` to 1.3.0, which shares the root `@vscode/vsce` 4 instead of nesting its own `@vscode/vsce` 3.9.2. That drops the nested copy's dependency tree and clears all six high-severity `npm audit` findings. (#1048)
+* Add a weekly scheduled `npm audit` gate alongside the cargo-deny sweeps (now covering the fuzz workspace's lockfile too), pin the committed `fuzz/Cargo.lock` with `cargo metadata --locked` before the fuzz smoke runs, and give Dependabot a weekly pip entry for the Python toolchain and cover the fuzz lockfile in its cargo entry. (#595)
 
 #### Extension
 
