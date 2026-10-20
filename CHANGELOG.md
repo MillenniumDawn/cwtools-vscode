@@ -9,6 +9,7 @@
 
 #### Tooling
 
+* Record the limited local result and follow-up CI plan for #1025 16-thread LSP validation; this runner has no Rust or llvm-cov toolchain, so no cross-platform result is claimed.
 * Record why the Node-facing build helpers, the host-test config and the ESLint and Vitest configs stay JavaScript, and why `build.sh` and `build.cmd` stay thin launchers. (#987)
 * Smoke-test each packaged VSIX against the release version and record its SHA-256 digest in the artifact. The Marketplace job checks its downloaded copies against those digests and reruns the smoke test before publishing. (#544)
 * Document the `md_bench` and parser `probe` examples in `docs/engine/PROFILING.md`: how `md_bench` finds its corpus, what each prints, and that neither is a repeatable benchmark. (#915)
