@@ -794,9 +794,7 @@ fn collect_scope_children(
                 *numeric_state_ok,
                 ctx.type_index,
             );
-            // The registry is unchanged across candidates. Compare only the
-            // mutable scope state so probes do not clone the full context's
-            // heap-backed Vecs and registry Arc.
+            // Probes never change the registry, so the saved state is the whole comparison.
             let candidate = scope_context.save();
             if let Some(previous) = &resolved_context {
                 conflict |= previous != &candidate;
@@ -812,12 +810,8 @@ fn collect_scope_children(
             scope_context.restore(saved);
             continue;
         };
-        let resolved = resolved_context
-            .scopes
-            .last()
-            .copied()
-            .unwrap_or(resolved_context.root);
         scope_context.restore(resolved_context);
+        let resolved = scope_context.current();
         if leaf.pos.start.line >= start_line
             && leaf.pos.start.line <= end_line
             && resolved != ambient
