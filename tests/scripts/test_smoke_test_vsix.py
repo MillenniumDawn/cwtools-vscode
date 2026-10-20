@@ -82,6 +82,13 @@ def test_accepts_targeted_and_universal_vsixes(
     write_vsix(tmp_path / "ext-1.0.0.vsix", list(targets.values()))
 
     assert smoke_test_vsix.main([str(tmp_path), *targets.values()]) == 0
+    # The argument order publish.yml uses.
+    assert (
+        smoke_test_vsix.main(
+            [str(tmp_path), "--expected-version", "1.0.0", *targets.values()]
+        )
+        == 0
+    )
 
 
 def test_checks_each_manifest_version_against_the_expected_version(

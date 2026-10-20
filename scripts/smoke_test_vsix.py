@@ -126,9 +126,7 @@ def check_package(root: Path, vsix: Path, expected_version: str | None) -> None:
                 require_file(root, entry.get("path"), vsix)
 
 
-def check_vsix(
-    vsix: Path, expected_version: str | None = None
-) -> tuple[str | None, set[str]]:
+def check_vsix(vsix: Path, expected_version: str | None) -> tuple[str | None, set[str]]:
     print(f"Checking {vsix.name} ...")
     with tempfile.TemporaryDirectory() as tmp:
         workdir = Path(tmp)
@@ -186,7 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("vsix_dir", type=Path)
     parser.add_argument("expected_platforms", nargs="*")
     parser.add_argument("--expected-version")
-    args = parser.parse_args(argv)
+    # Python 3.12.3's parse_args rejects platforms that follow an option.
+    args = parser.parse_intermixed_args(argv)
 
     vsix_dir = args.vsix_dir
     expected = args.expected_platforms

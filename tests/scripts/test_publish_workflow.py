@@ -177,20 +177,24 @@ def test_registry_publishers_skip_dependency_scripts_but_keep_optional_clis() ->
     assert "ignore-scripts" not in package_job
     assert "npm run build -- package-prebuilt" in package_job
     assert "python3 scripts/smoke_test_vsix.py artifacts/vsix" in package_job
-    assert '"$CWTOOLS_BUILD_VERSION"' in package_job
+
+
+def test_marketplace_verifies_its_download_before_publishing() -> None:
+    # This only reads the YAML text; test_smoke_test_vsix.py covers the checks
+    # themselves, and the argument order the workflow passes them in.
+    workflow = PUBLISH.read_text(encoding="utf-8")
+    package_job = _job(workflow, "package")
+    assert '--expected-version "$CWTOOLS_BUILD_VERSION"' in package_job
     assert "sha256sum *.vsix > SHA256SUMS" in package_job
 
     marketplace = _job(workflow, "marketplace")
-    verify = marketplace.split("- name: Verify downloaded VSIX files", maxsplit=1)[1]
-    publish = marketplace.split(
-        "- name: Publish to the VS Code Marketplace", maxsplit=1
-    )[1]
+    _, verify_and_publish = marketplace.split(
+        "- name: Verify downloaded VSIX files", maxsplit=1
+    )
+    verify, publish = verify_and_publish.split("- name:", maxsplit=1)
     assert "sha256sum --check SHA256SUMS" in verify
     assert "python3 scripts/smoke_test_vsix.py artifacts/vsix" in verify
-    assert '"$CWTOOLS_BUILD_VERSION"' in verify
-    assert marketplace.index("Verify downloaded VSIX files") < marketplace.index(
-        "Publish to the VS Code Marketplace"
-    )
+    assert '--expected-version "$CWTOOLS_BUILD_VERSION"' in verify
     assert "publish-marketplace" in publish
 
 
