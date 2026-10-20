@@ -2073,7 +2073,9 @@ pub(crate) mod issue_868_measurement {
         }
         eprintln!(
             "CWTOOLS_868 workspace_scripts={} workspace_bytes={} seeded_scripts={}",
-            scripts.len(), total_bytes, indexed
+            scripts.len(),
+            total_bytes,
+            indexed
         );
         assert_eq!(indexed, 48);
     }
