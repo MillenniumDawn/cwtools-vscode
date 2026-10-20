@@ -21,7 +21,6 @@
   "CWTools: workspace validation did not return a summary.": "CWTools：工作區驗證未傳回摘要。",
   "CWTools: validated {0} of {1} files; {2} with errors, {3} errors, {4} warnings, {5} infos, {6} hints.": "CWTools：已驗證 {1} 個檔案中的 {0} 個；{2} 個有錯誤，{3} 個錯誤，{4} 個警告，{5} 則資訊，{6} 則提示。",
   "Problems only lists open files while workspace-wide diagnostics are off.": "關閉工作區範圍診斷時，「問題」面板只列出已開啟的檔案。",
-  "Problems leaves out {0} closed files past the workspace diagnostics budget.": "「問題」面板未列出超出工作區診斷上限的 {0} 個已關閉檔案。",
   "Show Problems": "顯示問題",
   "CWTools: no missing localisation found.": "CWTools：沒有發現缺少的本地化。",
   "CWTools: Build graph": "CWTools：建立圖表",
@@ -53,7 +52,6 @@
   "CWTools: ready": "CWTools：就緒",
   "CWTools: stopped": "CWTools：已停止",
   "Restart Server": "重新啟動伺服器",
-  "CWTools: workspace diagnostics are limited to {0} closed files per scan; {1} more were held back.": "CWTools：每次工作區掃描最多發布 {0} 個已關閉檔案的診斷；另有 {1} 個檔案未發布。",
   "Show Output": "顯示輸出",
   "CWTools: failed to restart the language server: {0}": "CWTools：重新啟動語言伺服器失敗：{0}",
   "CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.": "CWTools：語言伺服器在過去 3 分鐘內當機了 {0} 次，將不會重新啟動。詳情請查看輸出。"

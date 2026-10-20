@@ -9,8 +9,9 @@ on:
       - main
   pull_request:
   schedule:
-    # Weekly cargo-deny sweep so a new advisory against an already-merged
-    # crate is not waiting on the next PR. Other jobs skip this event.
+    # Weekly cargo-deny and npm audit sweep so a new advisory against an
+    # already-merged dependency is not waiting on the next PR. Only lint-rs
+    # and npm-audit run on this event; every other job skips it.
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
@@ -131,6 +132,26 @@ jobs:
           fail-on-severity: high
           fail-on-scopes: runtime, development
           comment-summary-in-pr: on-failure
+
+  # npm's weekly advisory sweep for what a merge already shipped; the PR
+  # path stays on dependency-review. Same severity floor, dev deps included.
+  # workflow_dispatch runs it too, so it can be exercised on demand.
+  npm-audit:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: Scheduled npm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "26"
+      - name: npm audit
+        run: npm audit --audit-level=high
 
   # Full client build: compile the engine and client, run rules-sync plus the
   # live-settings, multi-root and watched-file suites, collect host and node
@@ -284,6 +305,14 @@ jobs:
           EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
         with:
           manifest-path: engine/Cargo.toml
+      # The fuzz workspace is a separate root whose Cargo.lock the engine
+      # run above never scans.
+      - name: cargo-deny (fuzz lockfile)
+        # v2.1.1
+        uses: >-
+          EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        with:
+          manifest-path: engine/fuzz/Cargo.toml
       # Keeps the engine's inheritance posture (repository, [lints], shared
       # test deps) from drifting when a new crate is added. Runs from repo
       # root so the script can see both engine/ and scripts/.
@@ -428,6 +457,13 @@ jobs:
         run: >-
           cargo +nightly-2026-07-24 install cargo-fuzz --version 0.13.2
           --locked
+      # cargo-fuzz 0.13.2 has no --locked for `fuzz run`, and the `-- <args>`
+      # tail reaches libFuzzer, not cargo. `cargo metadata --locked` is the
+      # same enforcement `cargo build --locked` performs.
+      - name: fuzz lockfile matches the committed manifests
+        run: >-
+          cargo +nightly-2026-07-24 metadata --locked --format-version 1
+          --manifest-path fuzz/Cargo.toml
       - name: Generate pinned rules seed corpus
         run: |
           corpus="$(mktemp -d)"

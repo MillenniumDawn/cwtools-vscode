@@ -28,6 +28,12 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+# libfuzzer-sys is licensed (MIT OR Apache-2.0) AND NCSA. It is only in the
+# fuzz workspace's lockfile, which its own cargo-deny job sweeps.
+[[licenses.exceptions]]
+crate = "libfuzzer-sys"
+allow = ["NCSA"]
+
 [bans]
 multiple-versions = "warn"
 # Wildcard bans go here. Empty by default.

@@ -38,6 +38,16 @@ nested = {
     for (actual, expected) in arena2.leaves.iter().zip(&parsed.arena.leaves) {
         assert_eq!(actual.value_pos, expected.value_pos);
     }
+    // The retained comment texts must survive the pool round trip exactly.
+    for (a, b) in arena2.comments.iter().zip(&parsed.arena.comments) {
+        assert_eq!(a.text, b.text, "comment pool range drifted");
+        assert_eq!(a.pos, b.pos);
+        assert_eq!(
+            arena2.comment_text(a),
+            parsed.arena.comment_text(b),
+            "comment text lost in round trip"
+        );
+    }
 }
 
 #[test]
@@ -216,6 +226,11 @@ fn archived_to_arena_matches_reference_over_corpus() {
         for (a, b) in parsed.arena.comments.iter().zip(arch_arena.comments.iter()) {
             assert_eq!(a.text, b.text, "{ctx}");
             assert_eq!(a.pos, b.pos, "{ctx}");
+            assert_eq!(
+                parsed.arena.comment_text(a),
+                arch_arena.comment_text(b),
+                "comment text diverged in {ctx}"
+            );
         }
         assert_eq!(parsed.root_children, arch_root, "{ctx}");
 
@@ -365,6 +380,7 @@ fn out_of_bounds_child_index_is_rejected() {
         leaves: vec![],
         leaf_values: vec![],
         comments: vec![],
+        comment_text_pool: String::new(),
     };
     let tmp = tempfile::NamedTempFile::with_suffix(".cwb").unwrap();
     io::serialize_to_file(&cached, tmp.path()).unwrap();

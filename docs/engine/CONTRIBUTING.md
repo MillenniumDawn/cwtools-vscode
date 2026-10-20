@@ -47,8 +47,10 @@ When parser output changes, bump `CACHE_VERSION` in
 stores diagnostics in `.cwe` sidecars as well as ASTs in `.cwb` files; version 11
 invalidates the speculative unclosed leaf-value quote errors stored by version 10.
 Changes to the serialized AST also require bumping `FORMAT_VERSION` in
-`crates/cache/src/io.rs`. Version 5 records explicit `rgb`, `hsv` and `hsv360`
-clause prefixes; version 4 `.cwb` files are rejected and rebuilt from source.
+`crates/cache/src/io.rs`. Version 6 stores comment text as byte ranges into one
+pooled buffer per file and keeps the explicit `rgb`, `hsv` and `hsv360` clause
+prefixes from version 5; version 5 `.cwb` files are rejected and rebuilt from
+source.
 Changes to the `.cwe` sidecar bump `ERRORS_FORMAT_VERSION` in the same file.
 Version 3 adds the source's content hash and inline-ignore codes; version 2
 sidecars are rejected and rebuilt from source. Because the sidecar stores what
@@ -289,6 +291,11 @@ bored, or bound it with `-- -max_total_time=300`.
 
 A crash writes the input to `fuzz/artifacts/<target>/` and prints the path.
 Replay it with `cargo +nightly fuzz run <target> <that-file>`.
+
+`fuzz/Cargo.lock` is committed, and CI checks it with `--locked`. After a
+dependency change that reaches the fuzz crate, refresh it from `engine/` with
+`cargo +nightly update --workspace --manifest-path fuzz/Cargo.toml` and commit
+the result.
 
 ### Seeds
 

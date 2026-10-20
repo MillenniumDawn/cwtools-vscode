@@ -33,7 +33,11 @@ updates:
   # climbs past it, so a floor bump is a red check rather than something a
   # reviewer has to spot. cargo-deny in the rust lint job is the advisory gate.
   - package-ecosystem: cargo
-    directory: /engine
+    directories:
+      - /engine
+      # The fuzz workspace is its own root with its own Cargo.lock, which CI
+      # checks with --locked.
+      - /engine/fuzz
     schedule:
       interval: weekly
       day: monday
@@ -100,5 +104,32 @@ updates:
       npm-development:
         applies-to: version-updates
         dependency-type: development
+        patterns:
+          - "*"
+
+  # The Python helpers under scripts/ and tests/scripts/ are their own
+  # toolchain, pinned in requirements-dev.txt; CI's Python lint & tests job
+  # is the behavior gate for these PRs.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      # Split out so a security fix never queues behind a routine bump.
+      pip-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      pip:
+        applies-to: version-updates
         patterns:
           - "*"

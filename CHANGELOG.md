@@ -4,7 +4,9 @@
 
 * Keep parent-mod and base-game file paths visible after deleting a workspace override, and in case-sensitive runs keep the highest layer's spelling of a path instead of the base game's. A watched delete of a single resource file now drops a workspace-only path when its folder still exists, and refreshes filepath errors in open documents. (#1067)
 * Compare and restore saved scope states in the scope-transition probes instead of cloning the whole `ScopeContext` for each candidate. Probes no longer allocate copies of the scope stacks or compare the scope registry. Transitions are unchanged. (#558)
+* Publish diagnostics for every closed file in workspace scans; the 2,000-file per-scan budget that kept larger total-conversion mods' closed-file errors out of Problems is gone, and "Fix all auto-fixable problems in workspace" now covers every closed file too. Turning `cwtools.diagnostics.workspaceWide` off still scopes Problems to open documents and now clears every closed file published earlier. (#1070)
 * Repair the engine comments #643 cut off mid-sentence, and restore the reasons it deleted along with them, from the pre-#643 text where the code still matches. That covers cache bounds and checksums, file-index case sensitivity, LSP position encodings, Windows path behavior, lock order and the `#NNN` regression notes. Comments only; no code changes. (#908)
+* Retained comment text is now stored in one pooled buffer per parse instead of a separate `String` per comment, and inline-script expansions share the script's pool instead of copying comment text. Because the `.cwb` parse-cache layout changed (now v6), existing v5 caches are rejected and re-parse their files once after upgrading. (#575)
 
 #### Tooling
 
@@ -12,9 +14,11 @@
 * Smoke-test each packaged VSIX against the release version and record its SHA-256 digest in the artifact. The Marketplace job checks its downloaded copies against those digests and reruns the smoke test before publishing. (#544)
 * Document the `md_bench` and parser `probe` examples in `docs/engine/PROFILING.md`: how `md_bench` finds its corpus, what each prints, and that neither is a repeatable benchmark. (#915)
 * Update `ovsx` to 1.3.0, which shares the root `@vscode/vsce` 4 instead of nesting its own `@vscode/vsce` 3.9.2. That drops the nested copy's dependency tree and clears all six high-severity `npm audit` findings. (#1048)
+* Add a weekly scheduled `npm audit` gate alongside the cargo-deny sweeps (now covering the fuzz workspace's lockfile too), pin the committed `fuzz/Cargo.lock` with `cargo metadata --locked` before the fuzz smoke runs, and give Dependabot a weekly pip entry for the Python toolchain and cover the fuzz lockfile in its cargo entry. (#595)
 
 #### Extension
 
+* Drop the workspace diagnostics budget notice and the "Validate workspace" caveat about held-back closed files, since the server no longer holds any back. (#1070)
 * Leave no editor-type lookup backoff timer behind when the extension is disposed. Disposal cancels a backoff in progress and stops a new one from starting, and classifying the active editor after disposal sends nothing to the server. (#877)
 
 ### 4.0.1

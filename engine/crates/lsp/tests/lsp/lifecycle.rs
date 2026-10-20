@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
@@ -95,28 +96,71 @@ fn test_lsp_full_lifecycle() {
 }
 
 #[test]
-fn test_workspace_diagnostics_budget_notifies_once_per_scan() {
+fn test_workspace_diagnostics_publish_and_clear_every_closed_file() {
+    // #1070: past the old 2,000-file budget, a scan publishes every closed
+    // file, and switching workspace-wide diagnostics off clears every one.
     const CLOSED_FILE_COUNT: usize = 2_001;
     let mut builder = TestServer::builder();
     for i in 0..CLOSED_FILE_COUNT {
-        builder = builder.file(&format!("common/things/f{i}.txt"), "thing = yes\n");
+        builder = builder.file(&format!("common/things/f{i}.txt"), "thing = {\n");
     }
     let mut server = builder.spawn();
     server.initialized();
 
-    let mut notifications = Vec::new();
-    server.read_until("the workspace validation summary", |frame| {
-        if frame["method"] == "workspaceDiagnosticsBudgetReached" {
-            notifications.push(frame["params"].clone());
-        }
-        frame["method"] == "window/logMessage"
-            && frame["params"]["message"]
-                .as_str()
-                .is_some_and(|message| message.starts_with("Workspace validation complete:"))
-    });
-    assert_eq!(notifications.len(), 1, "one notification is sent per scan");
-    assert_eq!(notifications[0]["budget"], 2_000);
-    assert_eq!(notifications[0]["heldBack"], 1);
+    let scan_publishes = |server: &mut TestServer| -> HashMap<String, Vec<usize>> {
+        let mut publishes: HashMap<String, Vec<usize>> = HashMap::new();
+        // Bounded: the collector stops on the scan's completion log, not on EOF.
+        server.read_until("the workspace validation summary", |frame| {
+            if frame["method"] == "textDocument/publishDiagnostics"
+                && let Some(uri) = frame["params"]["uri"].as_str()
+                && uri.contains("/common/things/f")
+            {
+                let count = frame["params"]["diagnostics"]
+                    .as_array()
+                    .map_or(0, Vec::len);
+                publishes.entry(uri.to_string()).or_default().push(count);
+            }
+            frame["method"] == "window/logMessage"
+                && frame["params"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("Workspace validation complete:"))
+        });
+        publishes
+    };
+
+    let first = scan_publishes(&mut server);
+    assert_eq!(
+        first.len(),
+        CLOSED_FILE_COUNT,
+        "every closed file must be published, none held back"
+    );
+    assert!(
+        first.values().all(|counts| counts.iter().any(|&c| c > 0)),
+        "the first scan must publish each closed file's errors"
+    );
+
+    server.notify(
+        "workspace/didChangeConfiguration",
+        json!({ "settings": { "workspaceWideDiagnostics": false } }),
+    );
+    let cleared = scan_publishes(&mut server);
+    server.stop();
+
+    assert_eq!(
+        cleared.len(),
+        CLOSED_FILE_COUNT,
+        "every previously published closed file must be cleared"
+    );
+    let not_one_empty_clear: Vec<_> = cleared
+        .iter()
+        .filter(|(_, counts)| counts.as_slice() != [0])
+        .collect();
+    assert!(
+        not_one_empty_clear.is_empty(),
+        "each closed file must get exactly one empty clear; {} did not, e.g. {:?}",
+        not_one_empty_clear.len(),
+        not_one_empty_clear.first()
+    );
 }
 
 #[test]

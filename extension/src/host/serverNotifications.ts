@@ -29,11 +29,6 @@ interface UpdateFileList {
 	vanillaRoots?: string[];
 }
 
-interface WorkspaceDiagnosticsBudgetReached {
-	budget: number;
-	heldBack: number;
-}
-
 export interface ServerNotifications {
 	initialScanDone: Promise<void>;
 	/** The status bar item's current text, for the host tests. */
@@ -53,7 +48,6 @@ export function registerServerNotifications(
 	let lastFileListSignature: string | undefined;
 	let initialScanStarted = false;
 	let initialScanPending = true;
-	let budgetNoticeShown = false;
 	let acceptFileList = true;
 	let resolveInitialScan: () => void;
 	const initialScanDone = new Promise<void>(
@@ -144,40 +138,6 @@ export function registerServerNotifications(
 			}
 		}
 	});
-	client.onNotification(
-		"workspaceDiagnosticsBudgetReached",
-		(params: WorkspaceDiagnosticsBudgetReached) => {
-			// Every background re-index of a large mod hits the budget again; the
-			// per-scan detail stays in the output log.
-			if (budgetNoticeShown) {
-				return;
-			}
-			budgetNoticeShown = true;
-			const showOutput = l10n.t("Show Output");
-			void Promise.resolve(
-				window.showInformationMessage(
-					l10n.t(
-						"CWTools: workspace diagnostics are limited to {0} closed files per scan; {1} more were held back.",
-						params.budget,
-						params.heldBack,
-					),
-					showOutput,
-				),
-			)
-				.then((choice: string | undefined) => {
-					if (choice === showOutput) {
-						return commands.executeCommand("cwtools.showOutput");
-					}
-					return undefined;
-				})
-				.catch((err: unknown) =>
-					logError(
-						"Failed to open CWTools output after diagnostics budget warning",
-						err,
-					),
-				);
-		},
-	);
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
 		if (!acceptFileList) return;
 		const roots: string[] = [];

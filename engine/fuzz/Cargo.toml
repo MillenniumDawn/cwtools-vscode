@@ -10,6 +10,9 @@ edition = "2024"
 # Not inherited from the workspace: an excluded package can't use
 # `.workspace = true`. Keep in step with ../Cargo.toml by hand.
 rust-version = "1.88.0"
+# Same reason it can't inherit: cargo-deny sweeps this manifest for
+# advisories, and would flag the package itself as unlicensed otherwise.
+license = "MIT"
 
 [package.metadata]
 cargo-fuzz = true

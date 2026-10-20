@@ -8,6 +8,9 @@ pub struct CachedFile {
     pub leaves: Vec<CachedLeaf>,
     pub leaf_values: Vec<CachedLeafValue>,
     pub comments: Vec<CachedComment>,
+    /// Every [`CachedComment`] ranges into this one pooled buffer, mirroring
+    /// the arena's comment pool (#575).
+    pub comment_text_pool: String,
 }
 
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -82,7 +85,10 @@ pub enum CachedColorPrefix {
 #[derive(Debug, Clone, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
 #[rkyv(derive(Debug))]
 pub struct CachedComment {
-    pub text: String,
+    /// Byte range into [`CachedFile::comment_text_pool`], the pooled comment
+    /// text of this entry (#575).
+    pub text_start: u32,
+    pub text_end: u32,
     pub start_line: u32,
     pub start_col: u16,
     pub end_line: u32,

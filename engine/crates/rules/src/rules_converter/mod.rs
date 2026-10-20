@@ -35,7 +35,9 @@ pub(crate) fn precompute_comments(
         match child {
             Child::Comment(cidx) => {
                 let c = &ast.arena.comments[*cidx as usize];
-                pending.push(c.text.trim().to_string());
+                if let Some(text) = ast.arena.comment_text(c) {
+                    pending.push(text.trim().to_string());
+                }
             }
             _ => {
                 if !pending.is_empty() {

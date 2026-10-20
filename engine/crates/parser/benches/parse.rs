@@ -72,10 +72,26 @@ const STATE_FILE: &str = r#"state={
 }
 "#;
 
+fn comment_heavy_fixture() -> String {
+    let mut input = String::with_capacity(16_384);
+    input.push_str("root={\n");
+    for index in 0..256 {
+        writeln!(input, "  # comment {index} about item_{index}").expect("write fixture");
+        writeln!(input, "  item_{index}={index}").expect("write fixture");
+    }
+    input.push_str("}\n");
+    input
+}
+
 fn bench_parse(c: &mut Criterion) {
     let table = StringTable::new();
     c.bench_function("parse_string/focus_tree", |b| {
         b.iter(|| parse_string(black_box(SAMPLE), black_box(&table)))
+    });
+
+    let comment_heavy = comment_heavy_fixture();
+    c.bench_function("parse_string/comment_heavy", |b| {
+        b.iter(|| parse_string(black_box(&comment_heavy), black_box(&table)))
     });
 
     let base = StringTable::new();
