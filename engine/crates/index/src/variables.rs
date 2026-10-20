@@ -181,6 +181,7 @@ fn scan_children_for_varset(
     rule_bodies: &[RuleBody<'_>],
     out: &mut Vec<OrderedDefinition>,
 ) {
+    // For the explicit `var = value_set[variable]` / `value = variable_field` form,
     // the assigned value lives in a sibling `value` leaf of the same block.
     // Computed lazily: most blocks never hit the arm that needs it.
     let sibling_value = std::cell::OnceCell::<Option<String>>::new();
@@ -424,8 +425,9 @@ fn variable_def(name: String, value: Option<String>, pos: SourceRange) -> Define
     }
 }
 
-/// effect block (`set_variable = { ... }` and friends): the explicit
-/// blocks stays with the caller.
+/// Nonrecursive core for one effect body: collect explicit `var`/`variable`
+/// forms (and `array`) or shorthand assignments. The caller walks nested
+/// clauses to find effect blocks.
 pub(crate) fn extract_set_variable_defs_block(
     children: &[Child],
     arena: &Arena,

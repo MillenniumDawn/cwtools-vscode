@@ -180,7 +180,8 @@ mod tests {
     use cwtools_parser::parser::parse_string;
     use cwtools_string_table::string_table::StringTable;
 
-    /// generated edit write into the user's game install (#160).
+    /// The base game and the rules dir are readable but never writable, so `refresh_roots` must
+    /// keep them out of `editable_roots`, or a generated edit could write into the install (#160).
     #[test]
     fn refresh_roots_keeps_read_only_roots_out_of_the_edit_boundary() {
         let ws = tempfile::TempDir::new().expect("tmpdir");
@@ -951,7 +952,8 @@ mod tests {
 
     #[test]
     fn test_loc_overlay_write_invalidates_the_cached_key_sets() {
-        // #87 caches both overlay-derived key sets. The cache is keyed on
+        // #87 caches both overlay-derived key sets on `loc_overlay_revision`, so a write must
+        // change what the next read sees, or a key just typed reads as undefined (CW225/CW122).
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();

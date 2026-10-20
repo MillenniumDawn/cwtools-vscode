@@ -471,7 +471,6 @@ pub(super) fn run(args: ValidateArgs) {
             ));
         }
         ReportType::Cli => {
-            // cli: grouped by file
             let color = color_enabled(output_file.is_none());
             let mut current = "";
             for d in &diags {

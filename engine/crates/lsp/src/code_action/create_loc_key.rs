@@ -70,7 +70,7 @@ fn generated_loc_file_path(workspace_root: &Path, lang: Lang) -> PathBuf {
         .join(format!("cwtools_generated_l_{lang}.yml"))
 }
 
-/// target this returns is one a generated edit may write to (#160). Filtering
+/// Check each insertion tier against editable roots so a refused target falls through (#160).
 fn resolve_loc_insert_target(
     lang: Lang,
     siblings: &[String],
@@ -107,8 +107,9 @@ fn eol_of(text: &str) -> &'static str {
     if text.contains("\r\n") { "\r\n" } else { "\n" }
 }
 
-/// anchor on at all). `encoding` converts the anchor column for the one case
-/// encoding.
+/// Position and text to insert `stub` as a new line after 0-based line `after_line0`. A file
+/// with no trailing newline anchors at the end of its last line and prepends the EOL; an
+/// empty file has nothing to anchor on.
 fn insert_stub_after_line(
     text: &str,
     after_line0: u32,
@@ -149,7 +150,9 @@ struct LocKeyCandidate<'d> {
     targets: Vec<(Lang, LocInsertTarget)>,
 }
 
-/// of independently re-creating the file (#142): two `NewFile` targets built
+/// The first candidate (batch order) needing a not-yet-existing loc file, per language.
+/// A later candidate needing the same new file folds into it instead of re-creating the
+/// file (#142): two `NewFile` targets from one discovery snapshot would duplicate the header.
 fn new_file_owners<'a>(
     all_targets: impl IntoIterator<Item = &'a [(Lang, LocInsertTarget)]>,
 ) -> HashMap<Lang, usize> {
@@ -298,7 +301,9 @@ fn build_create_loc_key_batch<'d>(
 }
 
 impl Backend {
-    /// instead of each inserting their own (#142). A candidate is silently
+    /// Build the "Create localisation key" action for every context diagnostic carrying a
+    /// `create_loc_key` fix payload (CW100). Two keys landing in the same not-yet-existing file
+    /// share one header instead of each inserting their own (#142).
     pub(super) async fn create_loc_key_actions(
         &self,
         uri: &Url,
@@ -338,7 +343,7 @@ impl Backend {
                 .filter(|l| !l.is_empty())
                 .unwrap_or_else(|| vec![Lang::English])
         };
-        // (#134): a code-action request fires on cursor movement, so without a
+        // Cache discovery because code-action requests also fire on cursor movement (#134).
         let discovered = {
             let cur_sig = *self.state.last_loc_signature.lock();
             let cached = self.state.loc_discovery_cache.lock().clone();
@@ -466,7 +471,9 @@ impl Backend {
             .unwrap_or_default()
     }
 
-    /// and dedupes it directly instead, since it needs no file read (#142).
+    /// The `Edit` operations for the two existing-file `LocInsertTarget` variants.
+    /// `NewFile` is `None` here: `build_create_loc_key_batch` builds and dedupes it
+    /// directly instead, since it needs no file read (#142).
     fn loc_insert_operations(
         &self,
         target: &LocInsertTarget,
@@ -925,7 +932,9 @@ mod tests {
 
     #[test]
     fn build_create_loc_key_batch_dedupes_a_shared_new_file() {
-        // #142: two candidates resolving to the identical not-yet-existing
+        // #142: two candidates resolving to the identical not-yet-existing `NewFile`
+        // target must not each carry their own `CreateFile` + header; the merged action
+        // opens the file once, with both stubs.
         let uri: Url = "file:///ws/localisation/cwtools_generated_l_english.yml"
             .parse()
             .unwrap();
@@ -996,7 +1005,9 @@ mod tests {
 
     #[test]
     fn build_create_loc_key_batch_folds_a_whole_candidate_across_mixed_tiers() {
-        // #142 follow-up: English already has a loc file but French does
+        // #142 follow-up: English has a loc file but French does not. A candidate whose French
+        // half folds into another's action must not keep a separate English action, or
+        // applying only one would leave its diagnostic still firing.
         let en_uri: Url = "file:///ws/localisation/things_l_english.yml"
             .parse()
             .unwrap();

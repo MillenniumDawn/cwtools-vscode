@@ -877,7 +877,9 @@ mod tests {
         );
     }
 
-    /// The goto side of #176: the `FilepathField` value is mod content, so one
+    /// The goto side of #176: the `FilepathField` value is mod content, so one climbing out
+    /// of the search roots resolves to nothing rather than reporting whether the file it
+    /// names exists.
     #[tokio::test]
     async fn a_file_ref_that_climbs_out_of_the_roots_resolves_to_nothing() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -1239,7 +1241,8 @@ mod tests {
         );
     }
 
-    /// node and the request never comes back (#541); the whole point of
+    /// A 100k-clause file converts 100k positions; `text.lines().nth(line)` per node is
+    /// O(bytes-before-line) and never returns (#541), so [`DocLines`] keeps it linear.
     #[test]
     fn document_symbols_of_a_huge_file_stay_linear() {
         const CLAUSES: usize = 100_000;
@@ -1262,7 +1265,9 @@ mod tests {
 
     #[test]
     fn dedup_locations_collapses_identical() {
-        // Issue #62: the same definition reached through two index paths yields
+        // Issue #62: the same definition reached through two index paths yields two
+        // Locations at the same (uri, line, char). They must collapse to one (distinct sites
+        // are covered by the tests below).
         let file = "file:///mod/events/a.txt";
         let locs = vec![
             make_location(file, 2, 0),

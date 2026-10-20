@@ -98,14 +98,15 @@ const DEFAULT_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
 const DEFAULT_WORKSPACE_PUBLISH_THROTTLE: WorkspacePublishThrottle =
     WorkspacePublishThrottle::new(std::time::Duration::ZERO);
 
-/// behavioral, which the parity tests below pin (#328).
-/// instead, and let the invariant fail loudly at the boundary it belongs to.
 struct ChunkMapper<F, Before, After> {
     map: F,
     before_chunk: Before,
     after_chunk: After,
 }
 
+/// Map four lock-step slices in parallel, `chunk` at a time, yielding between chunks so a long
+/// scan stays cancellable. The result is identical for every `chunk` size (#328). `None`
+/// means `cancel` latched: a partial `Vec` would publish empty diagnostics over unvalidated files.
 async fn chunked_par_filter_map<A, B, C, D, R, F, Before, After>(
     first: &[A],
     second: &[B],
@@ -132,6 +133,8 @@ where
         before_chunk,
         after_chunk,
     } = mapper;
+    // `chunks().zip()` truncates to the shortest, so assert instead of silently dropping the
+    // tail when a lock-step bug upstream breaks the lengths.
     assert_eq!(first.len(), second.len());
     assert_eq!(first.len(), third.len());
     assert_eq!(first.len(), fourth.len());
@@ -362,7 +365,9 @@ impl Backend {
     ) -> bool {
         let cancel = cancel_flag_of(progress);
         cwtools_profiling::log_rss("workspace_scan_start");
-        // sit on "Validating workspace… 70%" for the whole of pass 2 (#221).
+        // One ticker at a time, handed from phase to phase. It owns the bar between the
+        // boundary reports, so the percentage keeps moving inside a phase (the startup scan
+        // used to sit on "Validating workspace… 70%" for the whole of pass 2, #221).
         let mut phase = PhaseTicker::inert();
         self.enter_phase(&mut phase, progress, quiet, Phase::Discover, 0)
             .await;
@@ -396,7 +401,9 @@ impl Backend {
         let ruleset = self.state.rules.read().ruleset.clone();
         let parent_roots = self.state.config.read().parent_roots.clone();
 
-        // layering in one place (#284).
+        // Discovery goes through the shared driver primitive so `cwtools validate` and the
+        // editor see the same file set, narrowed to the ruleset's `folders` with multi-mod
+        // layering handled in one place (#284).
         let discovery = tokio::task::block_in_place(|| {
             let mut fm_config =
                 cwtools_driver::workspace_discovery_config(&root_path, ruleset.as_deref());
@@ -878,7 +885,8 @@ impl Backend {
         }
         *self.state.last_loc_signature.lock() = Some(loc_signature);
 
-        // (#259), so a script created, deleted or edited outside a watched
+        // Rebuild the inline-script registry from this scan (#259), so a script changed outside
+        // a watched event is picked up. A full rebuild is the only way a deleted one drops out.
         let fresh_inline_scripts = if scan_files.is_empty() {
             None
         } else {
@@ -933,7 +941,9 @@ impl Backend {
         let track_uses = scan_ruleset
             .as_ref()
             .is_some_and(|rs| needs_use_tracking(rs, scan_game));
-        // them in the other order here would be an ABBA deadlock). Both scan
+        // Snapshot open-doc ASTs BEFORE the info guard: request handlers lock `documents`
+        // first, so the other order here would be an ABBA deadlock. Their `<type>` uses still
+        // count, or a definition referenced only from an open buffer would scan up as unused.
         let open_doc_asts: Vec<(String, Arc<cwtools_parser::ast::ParsedFile>)> = if track_uses {
             let docs = self.state.documents.lock();
             docs.iter()
@@ -951,7 +961,9 @@ impl Backend {
         );
         let type_index_snap = Arc::clone(&self.state.info_service.read().type_index);
         let loc_index_snap = self.state.loc_index.read().clone();
-        // invariant bug surfaces instead of silently dropping diagnostics.
+        // Parallel vectors built lock-step in the index phase; `chunks().zip()` truncates to
+        // the shortest on mismatch, so fail fast and let a length bug surface instead of
+        // silently dropping diagnostics.
         assert_eq!(scan_files.len(), parsed_files.len());
         assert_eq!(scan_files.len(), source_hashes.len());
         assert_eq!(scan_files.len(), inline_ignores.len());
@@ -1291,16 +1303,18 @@ impl Backend {
 
         self.revalidate_all_open_docs(crate::ValidateTrigger::Reindex)
             .await;
-        // and ask the client to re-request visible files (#184).
+        // The type index changed globally, so semantic tokens cached under the old ruleset
+        // are stale and would patch incorrectly via delta. Invalidate and ask the client to
+        // re-request visible files (#184).
         self.invalidate_all_semantic_tokens();
         self.request_semantic_refresh().await;
         self.request_code_lens_refresh().await;
         true
     }
 
-    /// a fresh registry (#259). Re-reads rather than reuses pass 1's ASTs —
-    /// a closed script is reloaded from the parse cache by its metadata key and
-    /// read from disk only on a miss (#867).
+    /// Read and parse every `common/inline_scripts` file this scan discovered into a fresh
+    /// registry (#259). An open script's live buffer is read, and a closed one comes from the
+    /// parse cache by metadata key (#867). Synchronous: call inside `block_in_place`.
     fn rebuild_inline_scripts(
         &self,
         scan_files: &[ScannedFile],
@@ -2361,7 +2375,8 @@ mod tests {
         let _ = collector.await;
     }
 
-    /// #221: a scan with no client token behind it — the startup scan — used to
+    /// #221: the startup scan has no client token, and used to get an inert ticker that sat on
+    /// "Validating workspace… 70%" for the whole of pass 2. Only a quiet pass may go unsampled.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_tokenless_phase_is_still_sampled() {
         let backend = test_backend();
@@ -2376,7 +2391,9 @@ mod tests {
         );
     }
 
-    /// #435: `enter_phase`'s `quiet` short-circuit used to drop phase
+    /// #435: `enter_phase`'s `quiet` short-circuit used to drop phase reporting entirely,
+    /// even when the scan carried a command `workDoneToken`. `quiet` must suppress only the
+    /// server's own `loadingBar`/`$/progress` indicator, not a caller's own token.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_quiet_phase_with_a_token_still_reports_against_it() {
         let backend = test_backend();
@@ -2418,6 +2435,7 @@ mod tests {
         progress.finish(None).await;
     }
 
+    /// The mirror case: a quiet pass with no token behind it stays fully
     /// silent, unchanged from before #435.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_quiet_phase_with_no_token_stays_inert() {
@@ -2478,7 +2496,9 @@ mod tests {
         let _ = collector.await;
     }
 
-    /// the shortest, so without the assert a length-invariant bug upstream would
+    /// Slices out of lock-step must fail loudly. `chunks().zip()` truncates to the
+    /// shortest, so without the assert a length-invariant bug upstream would silently
+    /// drop the tail's diagnostics.
     #[tokio::test]
     #[should_panic]
     async fn mismatched_lengths_panic_rather_than_truncate() {

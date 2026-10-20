@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(exit_code(5, false, false), 1); // validation errors
         assert_eq!(exit_code(0, false, true), 2); // report write failed
         assert_eq!(exit_code(0, true, false), 3); // discovery failed
-        // operational failures take precedence over validation errors
+        // Operational failures take precedence over validation errors.
         assert_eq!(exit_code(5, false, true), 2);
         assert_eq!(exit_code(5, true, true), 3);
     }

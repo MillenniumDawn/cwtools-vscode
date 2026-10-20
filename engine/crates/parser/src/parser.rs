@@ -484,7 +484,8 @@ impl<'a> Parser<'a> {
         Some(Value::Clause(children))
     }
 
-    /// Consume a `{ ... }` that [`MAX_CLAUSE_DEPTH`] refused to descend into,
+    /// Consume a `{ ... }` that [`MAX_CLAUSE_DEPTH`] refused to descend into, iteratively so
+    /// the skip cannot overflow. Comments and strings are lexed, so a hidden `}` can't end it.
     fn skip_clause(&mut self) {
         self.advance(); // '{'
         let mut open = 1u32;
@@ -1700,7 +1701,10 @@ shorthand { nested = value }
     }
 
     // Clause nesting is bounded. A stack overflow aborts the process instead of
+    // unwinding, so an unbounded parser lets a 48 KB file kill the language server
+    // on every scan, and the file stays on disk, so it kills it again on every restart.
 
+    /// `root = { a = { a = ... 1 ... } }` nested exactly `depth` clauses deep.
     fn nested_clauses(depth: usize) -> String {
         let mut s = String::with_capacity(depth * 8 + 16);
         s.push_str("root = ");

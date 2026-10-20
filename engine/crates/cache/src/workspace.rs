@@ -12,17 +12,7 @@ use crate::io::{
 use cwtools_parser::ast::ParsedFile;
 use cwtools_string_table::string_table::StringTable;
 
-/// fingerprint algorithm changes) so stale `.cwb` files are ignored
-/// v2: switched fingerprinting from `DefaultHasher` (SipHash, toolchain-unstable)
-/// to a stable FNV-1a. The version is folded into the fingerprint, so old
-/// v7: dropped ruleset shape from the fingerprint. A `.cwt` edit cannot change
-/// v8: folded the display locale into the fingerprint. The `.cwe` sidecar holds
-/// language the server was started in, so a cache built under one locale would
-/// v9: invalidates cached `LeafValue` ranges after they became tight.
-/// v10: invalidates cached source positions after leading BOMs began counting
-/// toward their line-1 columns.
-/// v11: invalidates speculative unclosed leaf-value quote errors that the parser
-/// now suppresses, so unchanged files receive the current diagnostics.
+/// Bump when cache layout or fingerprint semantics change so old parse entries miss.
 const CACHE_VERSION: u32 = 11;
 
 // Off on Windows: stable std has no file id or ChangeTime, so a restored mtime hides an edit.
@@ -30,8 +20,9 @@ pub const PATH_METADATA_CACHE_SUPPORTED: bool = cfg!(unix);
 
 // ── Fingerprinting ──────────────────────────────────────────────────────────
 
-/// FNV-1a over `bytes`, continuing from `hash`. A stable, dependency-free hash
-/// Mirrors `cwtools_info::vanilla_cache::fnv1a`.
+/// FNV-1a over `bytes`, continuing from `hash`. Unlike `DefaultHasher` it is stable
+/// across toolchains, so cache keys survive restarts. Mirrors
+/// `cwtools_index::vanilla_cache::fnv1a`.
 fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     for &b in bytes {
@@ -44,7 +35,7 @@ fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
 /// FNV-1a offset basis — the conventional seed for a fresh hash.
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
-/// Content hash of a file's text. FNV-1a is fast for short-to-medium files and
+/// Fast FNV-1a hash of source text for content-keyed cache entries.
 pub fn content_hash(text: &str) -> u64 {
     fnv1a(text.as_bytes(), FNV_OFFSET)
 }
@@ -144,8 +135,8 @@ pub fn source_cache_key_from_metadata(path: &Path, metadata: &fs::Metadata) -> S
     SourceCacheKey { hash }
 }
 
-/// Settings fingerprint: encodes everything that changes how a file parses.
-/// If the fingerprint differs from `settings.sig`, the cached workspace
+/// Fingerprint inputs that affect cached parses and rendered diagnostic sidecars.
+/// A mismatch with `settings.sig` invalidates the workspace cache.
 pub fn settings_fingerprint(language: &str, workspace_root: &Path) -> u64 {
     fingerprint(language, workspace_root, cwtools_i18n::locale().tag())
 }
@@ -188,7 +179,7 @@ fn error_cache_path(dir: &Path, hash: u64) -> PathBuf {
     dir.join(format!("{:016x}.cwe", hash))
 }
 
-/// Read the stored fingerprint from `settings.sig`. A missing or malformed
+/// Read the stored fingerprint from `settings.sig`; missing or malformed files are cache misses.
 fn read_settings_sig(dir: &Path) -> std::io::Result<Option<u64>> {
     let bytes = match fs::read(settings_sig_path(dir)) {
         Ok(bytes) => bytes,
@@ -210,8 +201,8 @@ fn write_settings_sig(dir: &Path, sig: u64) -> std::io::Result<()> {
 }
 
 pub fn validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<bool> {
-    // `validate_or_clear` with different fingerprints can race: one prunes an
-    // empty fingerprint dir while the other is creating it. Treat a transient
+    // Different fingerprints can race while pruning and creating cache dirs.
+    // Retry transient filesystem errors so the race does not fail a scan.
     match try_validate_or_clear(cache_dir, fingerprint) {
         Err(e)
             if matches!(
@@ -229,8 +220,7 @@ pub fn validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<
 
 fn try_validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<bool> {
     let dir = workspace_cache_dir(cache_dir, fingerprint);
-    // not a directory of ours is refused rather than cleared: a symlink here
-    // would send `clear_cache_dir` at its target's files (#159).
+    // Refuse symlinks and files so clearing a cache cannot delete data outside it (#159).
     if fs::symlink_metadata(&dir).is_ok_and(|metadata| !metadata.is_dir()) {
         return Err(std::io::Error::other(
             "cannot use a cache directory that is a symlink or a file",
@@ -266,12 +256,13 @@ pub struct Removal {
     pub failures: Vec<(PathBuf, std::io::Error)>,
 }
 
-/// fingerprint-named directories, each carrying the `settings.sig` written when
-/// it was created. Nothing here recurses and no symlink is followed, so a
+/// Remove every parse cache under `cache_dir`, and nothing else. The root is client-chosen
+/// (#159), so an entry goes only when it is positively ours and no symlink is followed.
 pub fn remove_all(cache_dir: &Path) -> Removal {
     let root = cache_dir.join(PARSE_CACHE_DIR);
     let mut removal = Removal::default();
-    // stops us reading the root (a file or a symlink in the way, no
+    // A missing root is the ordinary case. Any other failure must reach the caller,
+    // since silence there reads as success.
     match fs::symlink_metadata(&root) {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
@@ -305,19 +296,20 @@ pub fn remove_all(cache_dir: &Path) -> Removal {
         owned += 1;
         swept_all &= remove_owned_cache_dir(&dir, &mut removal);
     }
+    // Only remove the root after clearing something out of it; an empty one we
+    // never wrote to is not ours.
     if swept_all && owned > 0 {
         let _ = fs::remove_dir(&root);
     }
     removal
 }
 
-/// Whether `path` is a directory in its own right, as opposed to a symlink to
+/// Whether `path` names a real directory rather than a symlink to one.
 fn is_real_dir(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
-/// Whether `dir` is one of the per-fingerprint directories this module writes:
-/// a real directory named by a fingerprint, carrying the `settings.sig` that
+/// Identify cache dirs written here by their fingerprint name and 8-byte settings signature.
 fn is_owned_cache_dir(dir: &Path) -> bool {
     if !is_real_dir(dir) {
         return false;
@@ -336,6 +328,7 @@ fn is_owned_cache_dir(dir: &Path) -> bool {
             .is_ok_and(|metadata| metadata.is_file() && metadata.len() == 8)
 }
 
+/// Delete only regular files in an owned cache dir; leave symlinks and subdirectories alone.
 fn remove_owned_cache_dir(dir: &Path, removal: &mut Removal) -> bool {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -347,7 +340,8 @@ fn remove_owned_cache_dir(dir: &Path, removal: &mut Removal) -> bool {
     let mut emptied = true;
     for entry in entries.flatten() {
         let path = entry.path();
-        // symlink to its target, so nothing destructive can slip through the
+        // `remove_file` unlinks the name and never follows a symlink, so nothing
+        // destructive can slip in between this check and that call.
         if !fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
             emptied = false;
             continue;
@@ -423,7 +417,9 @@ fn prune_all_cache_dirs_with_caps(
     let Ok(dirs) = fs::read_dir(root) else {
         return;
     };
-    // to sit under a `parse-cache` is none of our business (#159).
+    // Ownership-checked, not just `is_dir`: the cache root comes from the LSP client, and
+    // the sweep below deletes. An unrelated directory that happens to sit under a
+    // `parse-cache` is none of our business (#159).
     let dirs: Vec<PathBuf> = dirs
         .flatten()
         .map(|entry| entry.path())
@@ -469,6 +465,7 @@ fn count_cache_entries(dir: &Path) -> usize {
 }
 
 /// Cap-parameterized core of [`prune_cache_dir`] (lets tests use small caps
+/// instead of writing 50k files).
 fn prune_cache_dir_with_caps(dir: &Path, max_entries: usize, max_bytes: u64) {
     let mut entries = Vec::new();
     let mut total_bytes = 0u64;
@@ -678,6 +675,7 @@ pub fn load_path_for_index(
     Some((parsed, key))
 }
 
+/// Persist an entry only if the source metadata still matches the snapshot
 /// captured before the source was read.
 pub fn store_path(
     cache_dir: &Path,
@@ -772,9 +770,8 @@ mod tests {
         assert_eq!(base, settings_fingerprint("hoi4", root));
         assert_ne!(base, settings_fingerprint("stellaris", root));
         assert_ne!(base, settings_fingerprint("hoi4", Path::new("/tmp/other")));
-        // So must a display-locale change: the `.cwe` sidecar holds rendered
-        // diagnostics, which are written in the locale's language. Driven
-        // through `fingerprint` rather than the process-global locale so this
+        // Locale changes alter rendered diagnostics in `.cwe` sidecars. Pass
+        // locale explicitly so this test is independent of process-global state.
         assert_ne!(
             fingerprint("hoi4", root, "en"),
             fingerprint("hoi4", root, "de")
@@ -824,8 +821,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn validate_or_clear_refuses_a_symlinked_cache_dir() {
-        // and remove_file straight through a symlink sitting at the fingerprint
-        // path: every regular file in its target went (#159). No race needed.
+        // A settings change takes the clearing branch, which used to remove every
+        // file behind a symlink at the fingerprint path (#159).
         let tmp = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let victim = outside.path().join("payroll.csv");
@@ -862,7 +859,7 @@ mod tests {
 
     #[test]
     fn an_over_cap_entry_misses_instead_of_failing_the_caller() {
-        // The whole degradation contract behind the input bounds (#162): a
+        // Oversized client-provided cache entries degrade to misses (#162).
         let tmp = tempfile::tempdir().unwrap();
         let table = StringTable::new();
         let fp = 162;
@@ -872,7 +869,7 @@ mod tests {
         store(tmp.path(), fp, text, &parsed, &table);
         assert!(load(tmp.path(), fp, text, &table).is_some());
 
-        // Sparsely extended past the read cap, so the entry keeps its valid
+        // Extending the entry past the read cap makes it miss without invalidating other entries.
         let dir = workspace_cache_dir(tmp.path(), fp);
         let path = file_cache_path(&dir, content_hash(text));
         fs::OpenOptions::new()
@@ -1393,6 +1390,7 @@ mod tests {
         let base = std::time::SystemTime::now() - std::time::Duration::from_secs(20);
         let mut paths = Vec::new();
         for fingerprint in [1u64, 2, 3] {
+            // A real cache dir, signature and all: the sweep only touches dirs
             // it can identify as ours (#159).
             let dir = workspace_cache_dir(tmp.path(), fingerprint);
             fs::create_dir_all(&dir).unwrap();
@@ -1444,12 +1442,13 @@ mod tests {
 
     #[test]
     fn remove_all_leaves_a_foreign_parse_cache_directory() {
-        // The cache root is client input (#159), so a directory that merely
+        // The cache root is client input (#159), so a directory that merely happens to be
+        // named `parse-cache` must come through untouched.
         let tmp = tempfile::tempdir().unwrap();
         let foreign = tmp.path().join(PARSE_CACHE_DIR).join("important");
         fs::create_dir_all(&foreign).unwrap();
         fs::write(foreign.join("notes.txt"), b"keep me").unwrap();
-        // A fingerprint-shaped name is not ownership on its own, and neither is
+        // A fingerprint-shaped name and an invalid signature do not prove ownership.
         let lookalike = tmp.path().join(PARSE_CACHE_DIR).join("deadbeefdeadbeef");
         fs::create_dir_all(&lookalike).unwrap();
         fs::write(settings_sig_path(&lookalike), b"no").unwrap();
@@ -1508,7 +1507,7 @@ mod tests {
 
     #[test]
     fn global_prune_leaves_a_foreign_directory_under_parse_cache() {
-        // Regression for #159: the empty-dir sweep used to delete every file in
+        // Regression for #159: pruning an owned cache must leave foreign directories intact.
         let tmp = tempfile::tempdir().unwrap();
         let foreign = tmp.path().join(PARSE_CACHE_DIR).join("Documents");
         fs::create_dir_all(&foreign).unwrap();
@@ -1563,8 +1562,8 @@ mod tests {
 
     #[test]
     fn concurrent_validate_or_clear_shares_a_cache_root() {
-        // not leave it unusable (#159 follow-up, Windows/macOS flake).
-        // fresh fingerprint can still be created afterwards.
+        // Two racing `validate_or_clear` calls on one root must not leave it unusable
+        // (#159 follow-up). Empty dirs are pruned, so assert only no hard error.
         use std::sync::Arc;
         let tmp = tempfile::tempdir().unwrap();
         let cache_root = Arc::new(tmp.path().to_path_buf());

@@ -106,7 +106,9 @@ impl Backend {
                 continue;
             };
             let rel = std::path::Path::new(c.rel_path.trim_start_matches(['/', '\\']));
-            // is mod content that must not reach outside the roots (#176).
+            // Async, and contained before it is probed: a link request must not block the
+            // runtime on a sync filesystem syscall, and a leaf value is mod content that
+            // must not reach outside the roots (#176).
             let Some(target) = crate::access::contained_search_path(&roots, rel).await else {
                 continue;
             };
@@ -128,7 +130,7 @@ impl Backend {
     }
 }
 
-/// The invariants of one file's walk, threaded by reference through the
+/// Immutable context shared while collecting document links for one parsed file.
 struct LinkWalk<'a> {
     ast: &'a ParsedFile,
     table: &'a StringTable,

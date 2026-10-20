@@ -55,7 +55,9 @@ impl Default for LocScopeData<'_> {
     }
 }
 
-/// placeholder to satisfy its signature.
+/// Build the loc scope context from the config registry when provided. Without one,
+/// `ScopeContext::new` builds an empty registry regardless of the `Game`, so the
+/// constant here is just a placeholder to satisfy its signature.
 fn build_loc_ctx(data: &LocScopeData<'_>, initial: ScopeId) -> ScopeContext {
     match &data.registry {
         Some(reg) => ScopeContext::from_registry(reg.clone(), initial),
@@ -116,13 +118,16 @@ fn classify_segment(
     SegmentPre::ScopeChange { looks_terminal }
 }
 
-/// `Unknown` on the final segment and how they track lenient intermediates, so
+/// Neutral classification of a `ScopeResult`, shared by both chain validators. The two
+/// callers differ only in how they treat `Unknown` on the final segment and how they
+/// track lenient intermediates, so those decisions stay in the callers.
 enum ScopeOutcome {
     Advanced,
     /// `AnyScope` — advanced leniently (callers may note an "any" intermediate).
     AnyScope,
     ValueEnd,
-    /// `ValueFound` mid-chain — lenient stop-continue (no scope progress, but the
+    /// `ValueFound` mid-chain: accepted leniently with no scope progress (F# would
+    /// error, we don't).
     ValueMid,
     Wrong {
         command: String,
@@ -185,7 +190,8 @@ fn validate_command_string(
         };
 
         match classify_scope_result(ctx.change_scope(seg), is_last) {
-            // does not track lenient intermediates, so all of these just continue.
+            // Scope changed (incl. AnyScope) or a value-only trigger: this path does not
+            // track lenient intermediates, so all of these just continue.
             ScopeOutcome::Advanced
             | ScopeOutcome::AnyScope
             | ScopeOutcome::ValueEnd
@@ -203,9 +209,9 @@ fn validate_command_string(
                 return;
             }
             ScopeOutcome::Unknown => {
-                // terminal-commands list, accept it (lenient); if we have a
-                // not scope links, so we remain lenient here.
-                // same scripted-localisation registry (#348).
+                // CW226 is not emitted here: this path handles legacy `[command]` strings
+                // (`[var_name|fmt]`), valid HOI4 syntax, so we stay lenient. A bare
+                // `[SomeScriptedLoc]` lands here too and is judged by the registry (#348).
                 if is_last
                     && !data.terminal_commands.is_empty()
                     && !looks_terminal
@@ -236,12 +242,15 @@ fn validate_jomini_chain(
     }
     let last_idx = chain.len() - 1;
     let mut ctx = build_loc_ctx(data, initial_scope);
-    // has an opaque intermediate value and stays lenient. Other multi-segment
+    // A `?` marks a variable read (`[?ROOT.war_support|1]`). A chain reading through a
+    // variable (`[?GER_crisis_id.GERGetCrisisType]`) has an opaque intermediate value and
+    // stays lenient, as do unknown intermediates (country-tag scopes like PAL), tracked below.
     let marker = chain[0].key.strip_prefix('?');
     let has_q_mark = data.question_mark_variable && marker.is_some();
     let reads_through_variable = has_q_mark && marker.is_some_and(|m| reads_a_variable(m, data));
     let lacks_variable_registry = has_q_mark && data.scripted_variables.is_none();
-    // so the tail stays lenient rather than reporting every one of them (#348).
+    // A chain without the `?` ends in a terminal command or a scripted-loc name. With no
+    // scripted-loc registry nothing can tell one from a typo, so the tail stays lenient (#348).
     let lacks_loc_registry = !has_q_mark && data.scripted_locs.is_none();
     let mut had_lenient_intermediate =
         (reads_through_variable || lacks_variable_registry) && chain.len() > 1;
@@ -296,7 +305,8 @@ fn validate_jomini_chain(
                     && !reads_a_variable(seg, data)
                     && !is_scripted_loc(seg, data)
                 {
-                    // nor a scripted-localisation: CW226 (mirrors F# `LocNotFound`).
+                    // Registry present, chain resolved cleanly, and the final segment is no
+                    // known command, variable or scripted loc: CW226 (mirrors F# `LocNotFound`).
                     diags.push(LocCommandDiagnostic::NotFound {
                         command: seg.to_string(),
                     });
@@ -339,7 +349,9 @@ fn is_known_name(segment: &str, lookup: Option<ScriptedVariables<'_>>) -> bool {
     name.parse::<f64>().is_ok() || lookup(name)
 }
 
-/// which the registry never holds; strip it before asking. Three forms are taken
+/// Whether `segment` reads a variable the scripted-variable registry can vouch for.
+/// It carries the `|format` suffix loc syntax allows, which the registry never holds, so
+/// strip it first. Bare numbers, `holder:name` reads and `$ARG$` names are taken on trust.
 fn reads_a_variable(segment: &str, data: &LocScopeData<'_>) -> bool {
     is_known_name(segment, data.scripted_variables)
 }
@@ -422,7 +434,8 @@ mod tests {
             parameter_variables: true,
             registry: Some(Arc::new(reg)),
             scripted_variables: None,
-            // is a different answer (see the lenient tests below).
+            // Present but empty: the project defines no scripted loc, so an unknown
+            // tail really is a typo. `None` would mean "no data", a different answer.
             scripted_locs: Some(&|_: &str| false),
             scripted_guis: Some(&|_: &str| false),
         }
@@ -707,7 +720,8 @@ mod tests {
         );
     }
 
-    /// scripted localisation (#348).
+    /// A bare `[SomeScriptedLoc]` has no dot to split on, so it reaches `validate_command_string`,
+    /// which judged it against `terminal_commands` alone and reported CW266 for every one (#348).
     #[test]
     fn bare_scripted_loc_command_is_accepted() {
         let entry = make_entry_with_commands(vec!["AST_GetNavyName".into()]);

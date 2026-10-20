@@ -1,5 +1,6 @@
-//! char column) verbatim; the LSP conversion is deferred to the handler, the one
-//! shares one not-yet-existing file instead of each recreating it (#142).
+//! `textDocument/codeAction`: turn a diagnostic's suggested fix into a QUICKFIX code action.
+//! Ranges stay in the parser convention (1-based line, 0-based char column) until the
+//! handler, the one place with both the text and the negotiated encoding.
 
 mod create_loc_key;
 mod fix_all;

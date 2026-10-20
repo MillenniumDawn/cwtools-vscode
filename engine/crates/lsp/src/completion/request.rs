@@ -372,7 +372,6 @@ impl Backend {
             );
         }
 
-        // the #74/#75/#79 bug. Key positions and unresolved contexts keep the
         let t_ast = Instant::now();
         let mut ast_source = AstSource::None;
         let effective_ast: Option<Arc<ParsedFile>> = self.ast_snapshot_for(&uri).map(|snapshot| {
@@ -558,6 +557,9 @@ impl Backend {
                     items,
                 })));
             }
+            // A concretely matched value position with no items must not fall back to the
+            // flat variable dump (the #74/#75/#79 bug); key positions and unresolved
+            // contexts still fall back.
             if resolved_value_pos {
                 log_completion_summary(
                     t_start.elapsed(),
@@ -655,7 +657,9 @@ impl Backend {
             );
             Ok(None)
         } else {
-            // context-aware list replaces it. (#41)
+            // Always flag the fallback `is_incomplete` so the client re-requests on each
+            // keystroke; otherwise VS Code keeps filtering this generic dump after the
+            // parse recovers and a context-aware list is available (#41).
             let mut returned: Vec<CompletionItem> = items
                 .iter()
                 .filter(|it| token_matches(it, &token))

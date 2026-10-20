@@ -179,7 +179,9 @@ impl Config {
 pub(crate) struct RuleData {
     pub(crate) ruleset: Option<Arc<RuleSet>>,
     pub(crate) scope_registry: Option<Arc<cwtools_game::scope_registry::ScopeRegistry>>,
-    /// whole set (#78).
+    /// Cached modifier-key set; rebuilt after ruleset load and after each full workspace
+    /// scan when the type index is complete. `Arc` so the workspace scan snapshots it with a
+    /// cheap refcount bump instead of deep-copying the whole set (#78).
     pub(crate) modifier_keys: Arc<HashSet<String>>,
     pub(crate) modifier_scopes: Arc<HashMap<String, Vec<String>>>,
 }
@@ -228,7 +230,9 @@ pub(crate) struct DocumentState {
     pub(crate) string_table: StringTable,
     pub(crate) info_service: parking_lot::RwLock<cwtools_info::InfoService>,
     pub(crate) vanilla_state: Mutex<VanillaState>,
-    /// (#89) — vanilla is ~2000 loc files that cannot change while the editor is
+    /// The base-game install's loc maps, reused for the session (#89): vanilla loc cannot
+    /// change while the editor runs. Dropped by `cacheVanilla` / `clearAllCaches`, which is
+    /// how a user who updated the game picks up the new files.
     #[allow(clippy::type_complexity)]
     pub(crate) vanilla_loc:
         Mutex<Option<(crate::scan::VanillaLocKey, Arc<crate::scan::VanillaLoc>)>>,
@@ -237,12 +241,16 @@ pub(crate) struct DocumentState {
     #[allow(clippy::type_complexity)]
     pub(crate) parent_loc: Mutex<Option<(crate::scan::ParentLocKey, Arc<crate::scan::VanillaLoc>)>>,
     pub(crate) loc_index: parking_lot::RwLock<Option<Arc<cwtools_localization::LocIndex>>>,
-    /// (#259) — the editor's counterpart of the batch driver's
+    /// The mod's `common/inline_scripts` bodies, so an `inline_script` call site expands and
+    /// validates against them instead of standing unchecked (#259). The editor's counterpart
+    /// of the batch driver's `Session::inline_scripts`, rebuilt wholesale on each full scan.
     pub(crate) inline_scripts: parking_lot::RwLock<InlineScripts>,
     pub(crate) loc_key_index: parking_lot::RwLock<Option<Arc<crate::completion::LocKeyIndex>>>,
     pub(crate) loc_text: parking_lot::RwLock<LocText>,
     pub(crate) loc_locations: parking_lot::RwLock<LocLocations>,
-    /// full rescan (#36). Bounded by the number of open loc files, so it stays
+    /// Live loc keys (lowercased) of currently-open loc files, keyed by URI. Overlays the
+    /// scanned `loc_index` so a key added to an open `.yml` resolves in `$ref$` checks
+    /// without a full rescan (#36). It only adds keys, never subtracts from the baseline.
     pub(crate) loc_live_overlay: parking_lot::RwLock<HashMap<String, HashSet<String>>>,
     pub(crate) loc_watched_overlay: parking_lot::RwLock<HashMap<String, HashSet<String>>>,
     pub(crate) loc_overlay_revision: AtomicU64,
@@ -250,7 +258,9 @@ pub(crate) struct DocumentState {
     pub(crate) loc_ref_names_cache: parking_lot::Mutex<Option<(u64, Arc<HashSet<String>>)>>,
     pub(crate) hover_show_all_languages: std::sync::atomic::AtomicBool,
     pub(crate) hover_debug: std::sync::atomic::AtomicBool,
-    /// default — the ambient scope is shown alone. (#37)
+    /// When `true` (the `hover.scopeDisplay = "resolved"` setting), hover adds a `Resolves to`
+    /// line showing the scope the hovered link/keyword evaluates to, alongside the ambient
+    /// current scope. Off by default, where the ambient scope is shown alone (#37).
     pub(crate) hover_resolved_scope: std::sync::atomic::AtomicBool,
     pub(crate) inlay_hints_loc_titles: std::sync::atomic::AtomicBool,
     pub(crate) inlay_hints_scopes: std::sync::atomic::AtomicBool,
@@ -265,9 +275,11 @@ pub(crate) struct DocumentState {
     pub(crate) loading_bar_active: std::sync::atomic::AtomicBool,
     pub(crate) index_ready: std::sync::atomic::AtomicBool,
     pub(crate) handshake_complete: std::sync::atomic::AtomicBool,
-    /// `initialize` where the gate above would swallow them (#98).
+    /// Broken-`.cwt` diagnostics, parked because the rules load runs inside `initialize`
+    /// where the gate above would swallow them (#98).
     pub(crate) deferred_rule_diagnostics: parking_lot::Mutex<Vec<(String, Vec<Diagnostic>)>>,
-    /// toast), parked the same way as the diagnostics above (#98).
+    /// The rules load's user-visible messages (per-error log lines, the error toast), parked
+    /// the same way as the diagnostics above (#98).
     pub(crate) deferred_rules_messages: parking_lot::Mutex<Vec<DeferredRulesMessage>>,
     pub(crate) last_rules_toast: parking_lot::Mutex<Option<String>>,
     /// Unclosed-quote format refusals already shown, so format on save does not repeat the toast.
@@ -312,12 +324,15 @@ pub(crate) struct DocumentState {
     pub(crate) settings_generation: AtomicU64,
     pub(crate) start: std::time::Instant,
     pub(crate) last_activity_ms: AtomicU64,
-    /// bounded request queue (#90).
+    /// URIs of non-open watched files (create/modify) waiting for the next coalescing window,
+    /// so a burst of `didChangeWatchedFiles` events collapses into one drain (#90).
     pub(crate) watched_pending: Mutex<HashSet<String>>,
     pub(crate) watched_deleted: Mutex<HashSet<String>>,
     pub(crate) watched_debounce: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub(crate) watched_signatures: Mutex<HashMap<String, (u64, u128)>>,
-    /// requested or after invalidation (file change, rename, encoding switch,
+    /// Per-URI cached semantic tokens for `full/delta` support. `None` when never requested
+    /// or after invalidation (file change, rename, encoding switch, rules reload). Bounded by
+    /// distinct URIs that requested tokens.
     pub(crate) semantic_tokens_cache: Mutex<HashMap<String, SemanticCacheEntry>>,
     pub(crate) semantic_tokens_seq: AtomicU64,
     pub(crate) fixable_edits: Mutex<HashMap<String, FixableEdits>>,
@@ -1342,7 +1357,9 @@ pub(crate) enum DeferredRulesMessage {
     Toast(String),
 }
 
-/// legible in the server log (issue #90) instead of a wall of identical lines.
+/// What kicked off a `parse_and_validate` call. Threaded through so the `[validate]` log
+/// names its trigger, which makes a validate storm's source legible in the server log
+/// (issue #90) instead of a wall of identical lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ValidateTrigger {
     DidOpen,

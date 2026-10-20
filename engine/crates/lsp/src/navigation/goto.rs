@@ -129,7 +129,9 @@ impl Backend {
             }
         }
 
-        // still resolves. (#39)
+        // Fallback: try the leaf VALUE before the key, since an event reference like
+        // `id = some.1` resolves by its dotted id; the key is second so a definition node
+        // (e.g. `decision = { … }`) still resolves (#39).
         if let Some(element) = self.element_at_cursor(&uri, pos) {
             // HOI4 scripted loc files are often untyped (#725).
             if let PositionElement::Leaf { key, value } = &element

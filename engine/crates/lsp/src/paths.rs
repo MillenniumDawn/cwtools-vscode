@@ -13,18 +13,17 @@ pub(crate) fn uri_to_path_str(uri: &str) -> String {
     uri.strip_prefix("file://").unwrap_or(uri).to_string()
 }
 
-/// Convert a filesystem path to a `file://` URI, percent-encoding special
+/// Convert a filesystem path to a `file://` URI, percent-encoding special characters. This
+/// is the spelling every index keys on; see [`canonical_uri`] for why that matters.
 pub(crate) fn path_to_uri(path: &std::path::Path) -> String {
     Url::from_file_path(path)
         .map(|u| u.to_string())
         .unwrap_or_else(|_| format!("file://{}", path.display()))
 }
 
-/// That is not hypothetical: VS Code spells the Windows drive as a lower-case
-/// string compare, so on Windows it never matched: every open file was indexed
-/// On Windows that includes a drive-less absolute URI (`file:///a/b.txt`),
-/// on Windows that is the drive letter's *case* as well as the percent-encoding:
-/// server emits on Windows was already going through `Url::from_file_path`, so
+/// Normalize file URI spellings to the path-to-URI form used by index keys; on Windows this
+/// folds VS Code's drive-letter case and percent-encoding. The workspace folder URI is folded
+/// too, since [`logical_path_from_uri`] strips its prefix with a plain case-sensitive compare.
 pub(crate) fn canonical_uri(uri: &str) -> String {
     if let Ok(url) = Url::parse(uri)
         && let Some(canonical) = canonical_url(&url)
@@ -65,7 +64,8 @@ pub fn workspace_prefix_of(workspace_uri: &str) -> std::sync::Arc<str> {
 }
 
 pub fn logical_path_from_uri(uri: &str, workspace_prefix: &Option<std::sync::Arc<str>>) -> String {
-    // indexing, path matching). On Windows `uri_to_path_str` yields backslashes,
+    // Logical paths are `/`-separated downstream. On Windows `uri_to_path_str` yields
+    // backslashes, so normalize before stripping, or the path leaks into name extraction.
     let path = normalize_separators(uri_to_path_str(uri));
     if let Some(prefix) = workspace_prefix
         && let Some(rel) = path.strip_prefix(prefix.as_ref())
@@ -75,7 +75,9 @@ pub fn logical_path_from_uri(uri: &str, workspace_prefix: &Option<std::sync::Arc
     path
 }
 
-/// allocation or scan-and-copy; only Windows paths actually pay the `replace`.
+/// Normalize path separators to `/`. On the common (Linux/macOS) path the input has no
+/// backslash, so the owned string is returned unchanged with no allocation or
+/// scan-and-copy; only Windows paths actually pay the `replace`.
 fn normalize_separators(path: String) -> String {
     if path.contains('\\') {
         path.replace('\\', "/")
@@ -101,7 +103,9 @@ pub(crate) fn lsp_pos_to_source_in_text(
     (pos.line + 1, column.min(u16::MAX as usize) as u16)
 }
 
-/// the wrong document once (the `"<vanilla-cache>"` sentinel, #62), so a stray
+/// Parse a string into an LSP Url, falling back to a clone of `fallback` on error. A failed
+/// parse is logged: the fallback silently resolved a location to the wrong document once
+/// (the `"<vanilla-cache>"` sentinel, #62), so a stray non-URI is worth a breadcrumb.
 pub(crate) fn parse_uri(uri_str: impl AsRef<str>, fallback: &Url) -> Url {
     let uri_str = uri_str.as_ref();
     uri_str.parse().unwrap_or_else(|_| {
@@ -143,7 +147,9 @@ pub(crate) fn encoded_position_len(
     }
 }
 
-/// A parser column (0-based chars) rendered in the negotiated encoding, for
+/// A parser column (0-based chars) rendered in the negotiated encoding, for callers that
+/// already hold the line. Every position a handler publishes goes through here off a
+/// [`crate::lines::DocLines`], so no request re-scans the document to find the line.
 pub(crate) fn source_column_to_lsp(
     line: &str,
     source_column: u32,
@@ -301,7 +307,9 @@ pub(crate) fn is_script_file(uri: &str) -> bool {
         })
 }
 
-/// line. `col` uses the negotiated LSP position encoding. Returns the
+/// Locate the `$KEY$` loc-reference token under the cursor in a loc line, as the key plus its
+/// `[start, end)` range in the negotiated encoding. Mirrors the loc parser: a non-identifier
+/// body (a currency `$`) is literal text, not a reference.
 pub(crate) fn loc_ref_at_cursor_with_encoding(
     line: &str,
     col: u32,
@@ -424,7 +432,9 @@ pub(crate) fn strip_loc_comment(s: &str) -> &str {
     }
 }
 
-/// the quotes is kept as data (issue #50) while a trailing `# comment` after the
+/// Extract the display text of a loc line for hover. The value runs from the first `"` to
+/// the LAST `"`, so a `#` inside the quotes is kept as data (issue #50) while a trailing
+/// `# comment` after the closing quote is dropped.
 pub(crate) fn loc_display_text(desc: &str) -> &str {
     if let Some(rest) = desc.strip_prefix('"') {
         if let Some(end) = rest.rfind('"') {
@@ -474,11 +484,11 @@ mod tests {
 
     #[test]
     fn is_loc_file_matches_all_loc_extensions() {
-        // hover/goto, completion, and validate must agree (#2/#217).
+        // Hover/goto, completion, and validate must agree (#2/#217).
         assert!(is_loc_file("file:///mod/localisation/foo_l_english.yml"));
         assert!(is_loc_file("file:///mod/localisation/foo_l_english.yaml"));
         assert!(is_loc_file("file:///mod/localisation/names.csv"));
-        // case-insensitive (Windows), extension and directory alike
+        // Case-insensitive (Windows), extension and directory alike.
         assert!(is_loc_file("file:///MOD/LOCALISATION/FOO.YML"));
         assert!(is_loc_file("file:///MOD/Localisation/FOO.YAML"));
         assert!(!is_loc_file("file:///mod/common/ideas/foo.txt"));
@@ -808,8 +818,9 @@ mod tests {
 
     #[test]
     fn test_uri_to_path_percent_decode() {
-        // Paths with spaces must round-trip through percent-encoding. The path
-        // and the non-encoding fallback kicks in.
+        // Paths with spaces must round-trip through percent-encoding. The path must be
+        // absolute for the platform, or Url::from_file_path rejects it and the
+        // non-encoding fallback kicks in.
         #[cfg(not(windows))]
         let path = std::path::Path::new("/home/user/My Mod/events/foo.txt");
         #[cfg(windows)]
@@ -838,7 +849,9 @@ mod tests {
 
     // ── canonical_uri (#319) ──────────────────────────────────────────────
 
-    /// Windows the round trip also upper-cases the drive letter) and only the
+    /// A client's spelling of a file, and the path it names: on Windows what VS Code sends
+    /// (lower-case drive, encoded colon), elsewhere an encoded path byte. Expectations use
+    /// [`path_to_uri`] rather than a literal, since only the fold onto one key is the contract.
     #[cfg(windows)]
     const CLIENT_URI: &str = "file:///d%3A/a/b.txt";
     #[cfg(not(windows))]
@@ -899,7 +912,9 @@ mod tests {
         assert_eq!(canonical_uri(encoded), decoded);
     }
 
-    /// Windows drive is one key. Which case survives is the round trip's call
+    /// The fold the double-index bug needed: every way a client can spell the Windows drive
+    /// is one key. Which case survives is the round trip's call (today, upper), so assert
+    /// they agree rather than naming a winner.
     #[cfg(windows)]
     #[test]
     fn canonical_uri_folds_every_drive_letter_spelling_onto_one_key() {
@@ -935,7 +950,9 @@ mod tests {
         assert_eq!(uri, client_uri_canonical());
     }
 
-    /// with a plain compare. `workspace_prefix_of` percent-decodes, so encoding
+    /// The workspace folder URI has to be folded at the same boundary the documents are:
+    /// [`logical_path_from_uri`] strips `workspace_prefix` with a plain compare, and only the
+    /// Windows drive-letter case can make it miss.
     #[test]
     fn workspace_prefix_of_a_canonical_folder_uri_strips_a_canonical_document() {
         #[cfg(windows)]
@@ -952,7 +969,9 @@ mod tests {
         assert_eq!(logical_path_from_uri(&doc, &prefix), "events/foo.txt");
     }
 
-    /// Why the fold matters here rather than being merely tidy: on Windows the
+    /// On Windows the prefix and the document URI can disagree on the drive-letter case, and
+    /// `strip_prefix` is a byte compare. A miss leaves every logical path absolute, so no open
+    /// document resolves a type or a rule.
     #[cfg(windows)]
     #[test]
     fn a_canonical_folder_prefix_strips_a_document_whatever_case_the_client_used() {

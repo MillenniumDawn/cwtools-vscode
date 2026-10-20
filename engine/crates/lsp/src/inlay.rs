@@ -1,4 +1,6 @@
-//!   suppressed. This avoids the rejected per-leaf resolver path from issue #99.
+//! `textDocument/inlayHint`: annotate id references with their localized title and
+//! scope-changing keys with the scope their block evaluates in. Resolved scopes come from one
+//! validator-owned pass, avoiding the rejected per-leaf resolver path from issue #99.
 
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{InlayHint, InlayHintLabel, InlayHintParams, Position, Range};

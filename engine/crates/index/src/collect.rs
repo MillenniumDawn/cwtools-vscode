@@ -56,7 +56,8 @@ pub fn type_key_matches(td: &TypeDefinition, key: &str) -> bool {
 }
 
 /// The field name an instance's `## primary` localisation is taken from, when it
-/// localisation — those need nothing captured at index time.
+/// is an explicit field (e.g. an event's `title = title` -> `Some("title")`).
+/// `None` for name-derived (`$`-pattern) keys, which need nothing captured at index time.
 fn primary_explicit_loc_field(td: &TypeDefinition) -> Option<&str> {
     td.localisation
         .iter()
@@ -66,6 +67,7 @@ fn primary_explicit_loc_field(td: &TypeDefinition) -> Option<&str> {
 
 /// The child fields a type's `## required` localisation entries read their key
 /// from (`## required title = title`). Empty for the usual `$`-pattern types, so
+/// the per-instance resolution below costs nothing for them.
 fn required_explicit_loc_fields(td: &TypeDefinition) -> impl Iterator<Item = &str> {
     td.localisation
         .iter()
@@ -249,7 +251,9 @@ const SCRIPTED_LOC_DIRS: [&str; 3] = [
     "scripted_loc",
 ];
 
-/// of one read as an unknown command (#348). The node key is not checked — HOI4
+/// The scripted-loc names (`defined_text = { name = X }`) defined in `file`, or empty when
+/// its path is not a scripted-loc folder. Read off the file, not a ruleset type: the HOI4
+/// config points `type[scripted_loc]` at Stellaris's folder, so every use read as unknown (#348).
 pub fn collect_scripted_loc_names(
     file: &ParsedFile,
     logical_path: &str,
@@ -352,7 +356,9 @@ fn collect_type_instances_inner(
         let mut instances: Vec<TypeInstance> = Vec::new();
 
         if td.type_per_file {
-            // Normalise separators first: the LSP on Windows derives logical
+            // Normalize separators first: the LSP on Windows derives logical paths with
+            // backslashes, else the stem becomes the whole path and references like
+            // `load_oob = "MY_OOB"` flag as false positives.
             let norm = logical_path.replace('\\', "/");
             let name = norm
                 .rsplit('/')
@@ -384,11 +390,13 @@ fn collect_type_instances_inner(
                              node_key: &str,
                              clause_children: &[Child],
                              location| {
-                // Capture the explicit-field primary loc key (e.g. an event's
+                // Capture the explicit-field primary loc key (e.g. an event's `title`)
+                // so hover can resolve the localized title cross-file.
                 let primary_loc_key = primary_explicit_loc_field(td).and_then(|field| {
                     field_value_from_children(field, clause_children, arena, table)
                 });
                 // Same read for the `## required` explicit-field entries, whose
+                // keys CW100 checks for existence.
                 let required_loc_keys: Vec<String> = required_explicit_loc_fields(td)
                     .filter_map(|field| {
                         field_value_from_children(field, clause_children, arena, table)
@@ -490,6 +498,7 @@ fn walk_variables_and_value_sets(
 
         // Value-set collector: per-leaf member capture. A `variable`-namespace
         // block returns `ns == "variable"`, marking a subtree the value-set walk
+        // must not descend into.
         let ns = if vs_active {
             dynamic_values::value_set_leaf(leaf, file, ruleset, table, &mut out.value_sets)
         } else {
@@ -498,6 +507,7 @@ fn walk_variables_and_value_sets(
 
         if let Value::Clause(ch) = &leaf.value {
             let is_var_ns = ns.as_deref() == Some("variable");
+            // The set-variable walk descends into every clause; the value-set walk
             // descends into every clause but a `variable`-namespace block.
             let descend = var_effects.is_some() || (vs_active && !is_var_ns);
             let vs_child = vs_active && !is_var_ns;
@@ -675,8 +685,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    // macOS filesystems reject filenames with invalid UTF-8 bytes (EILSEQ),
-    // so skip before the test attempts to create its fixture files there.
     #[cfg_attr(
         target_os = "macos",
         ignore = "macOS rejects non-UTF-8 filenames with EILSEQ"
@@ -741,8 +749,9 @@ mod tests {
         assert_eq!(second_names, ["second"]);
     }
 
-    // the end is the spot just past the closing brace (the parser's
-    // full extent, so a multi-line clause must record an end on the brace's line.
+    // An instance's location spans its whole definition: the start is the key, the end
+    // is just past the closing brace. Cleanup features (rename/delete a definition) need
+    // the full extent, so a multi-line clause must record an end on the brace's line.
     #[test]
     fn instance_location_end_is_closing_brace() {
         let source = "thing_a = {\n    x = 1\n}";

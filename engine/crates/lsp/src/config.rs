@@ -16,7 +16,9 @@ use crate::cache_purge::purge_caches;
 use crate::command_progress::{CommandProgress, Phase, ScanOutcome};
 use crate::paths::default_cache_dir;
 
-/// matcher work without bound (#169).
+/// Maximum entries accepted from a single ignore array in the init/didChange payload,
+/// and maximum length of one glob, in chars. Longer input is cut at the boundary so a
+/// hostile or accidental config can't grow the per-scan matcher work without bound (#169).
 const MAX_IGNORE_ENTRIES: usize = 200;
 const MAX_IGNORE_PATTERN_LEN: usize = 1024;
 const MAX_IGNORED_ERROR_CODES: usize = 200;
@@ -250,7 +252,9 @@ fn locale_tag(params: &InitializeParams) -> Option<&str> {
     })
 }
 
-/// verbatim, so the wording is the contract: each half (rules loaded or not,
+/// The user-visible `reloadrulesconfig` status. The client toasts this string verbatim,
+/// so the wording is the contract: each half (rules loaded or not, revalidation ran /
+/// queued / still pending) must report honestly.
 fn reload_status_message(loaded: bool, outcome: ScanOutcome, dir: &std::path::Path) -> String {
     let status = cwtools_i18n::t(match outcome {
         ScanOutcome::Ran => cwtools_i18n::Key::StatusRevalidated,
@@ -268,7 +272,9 @@ fn reload_status_message(loaded: bool, outcome: ScanOutcome, dir: &std::path::Pa
     }
 }
 
-/// an `l_<lang>:` header then ` KEY:0 "TODO"` entries. The file needs a UTF-8
+/// Render one loc stub file for `lang` covering every `missing` key, as
+/// `{language, filename_suggestion, content}`: an `l_<lang>:` header then ` KEY:0 "TODO"`
+/// entries. The file needs a UTF-8 BOM on save, which the client prepends.
 fn render_loc_stub(lang: cwtools_localization::Lang, missing: &BTreeSet<String>) -> Value {
     let mut content = format!("l_{}:\n", lang);
     for key in missing {
@@ -360,7 +366,8 @@ impl Backend {
                     .store(dbg, std::sync::atomic::Ordering::Relaxed);
             }
 
-            // the ambient current scope. (#37)
+            // Scope display: "resolved" adds a `Resolves to` line; "context" (default)
+            // shows only the ambient current scope (#37).
             if let Some(mode) = opts.get("hoverScopeDisplay").and_then(|v| v.as_str()) {
                 self.state
                     .hover_resolved_scope
@@ -461,7 +468,9 @@ impl Backend {
             }
         }
 
-        // Canonicalised like the document URIs (#319): `workspace_prefix` is
+        // Canonicalized like the document URIs (#319): `workspace_prefix` is stripped from
+        // them by a plain compare, so a spelling like `file:///d%3A/mod` would otherwise
+        // leave every logical path unstripped.
         let folders: Vec<String> = match &params.workspace_folders {
             Some(folders) if !folders.is_empty() => folders
                 .iter()
@@ -535,8 +544,9 @@ impl Backend {
             }
         }
 
-        // Negotiate position encoding. The parser counts Unicode scalar values
-        // lines for free. Clients that don't advertise utf-32 (VS Code) stay on
+        // Negotiate position encoding. The parser counts chars, which equal UTF-32 code units,
+        // so advertise utf-32 when the client lists it for exact columns with no conversion.
+        // Clients that don't (VS Code) stay on the LSP default (utf-16).
         let position_encoding = params
             .capabilities
             .general
@@ -678,7 +688,9 @@ impl Backend {
                     },
                 )),
                 inlay_hint_provider: Some(OneOf::Left(true)),
-                // reindex (#184). A `workspace/semanticTokens/refresh` is sent
+                // Semantic tokens: the per-URI delta cache is invalidated on file change,
+                // rename, rules reload and full reindex (#184). A
+                // `workspace/semanticTokens/refresh` follows bulk index changes.
                 semantic_tokens_provider: Some(
                     SemanticTokensServerCapabilities::SemanticTokensOptions(
                         SemanticTokensOptions {
@@ -733,7 +745,6 @@ impl Backend {
                         will_delete: None,
                     }),
                 }),
-                // `position_encoding` (above): utf-32 when the client supports
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -744,7 +755,9 @@ impl Backend {
     }
 
     pub(crate) async fn load_rules_config(&self, cache_path: &std::path::Path) -> bool {
-        // path that doesn't resolve here (e.g. a Windows `rules_folder`
+        // Surface a missing rules dir explicitly. The client may hand us a path that
+        // doesn't resolve here (e.g. a Windows `rules_folder`), which otherwise degrades
+        // silently to a generic "no rules loaded" with an empty error list.
         if !cache_path.is_dir() {
             self.client
                 .log_message(
@@ -780,7 +793,9 @@ impl Backend {
             return false;
         }
 
-        // handshake gate below (#98). Snapshotting once is sound only while the
+        // Rules errors are logged, toasted and published, all of which can run inside
+        // `initialize` where tower-lsp drops notifications, so each defers via the handshake
+        // gate (#98). The one snapshot is sound only while the park sites stay await-free.
         let handshake_complete = self
             .state
             .handshake_complete
@@ -801,7 +816,8 @@ impl Backend {
         let mut diags_by_file: std::collections::HashMap<String, Vec<Diagnostic>> =
             std::collections::HashMap::new();
         for err in &parse_errors {
-            // Shared with the live per-file CWT lint (#43). No file text
+            // Shared with the live per-file CWT lint (#43). No file text here to widen
+            // the squiggle, so pass no line info.
             diags_by_file
                 .entry(crate::paths::path_to_uri(&err.file))
                 .or_default()
@@ -828,7 +844,8 @@ impl Backend {
             *previous = current;
         }
 
-        // handshake to flush (#98).
+        // Dropped on the floor before `initialized`, so park them for the handshake to
+        // flush (#98).
         if handshake_complete {
             for (uri, diags) in to_publish {
                 if let Ok(url) = uri.parse() {
@@ -902,7 +919,8 @@ impl Backend {
             }
             self.set_ruleset(combined_ruleset);
             self.rebuild_modifier_keys();
-            // re-request tokens for visible files (#184).
+            // Rule-driven tokens change globally: drop the delta cache so edits do not
+            // patch stale data, and tell the client to re-request them (#184).
             self.invalidate_all_semantic_tokens();
             self.request_semantic_refresh().await;
         } else {
@@ -924,7 +942,9 @@ impl Backend {
         &self,
         params: DidChangeWorkspaceFoldersParams,
     ) {
-        // primary keys its `workspace_prefix` the way documents are keyed (#319).
+        // Both lists use the spelling `initialize_impl` stored (canonicalized), so the removal
+        // compare below still recognizes the primary folder and a new primary keys its
+        // `workspace_prefix` the way documents are keyed (#319).
         let removed: Vec<String> = params
             .event
             .removed
@@ -1285,7 +1305,9 @@ impl Backend {
         }
         progress.report_phase(Phase::Vanilla).await;
         self.clear_vanilla_state();
-        // the client cancelling the command mid-index (#204).
+        // `ensure_vanilla_index` turns the loading bar on but, unlike a full workspace scan,
+        // this command never reaches the code that turns it off. The guard covers both
+        // exits: the normal one below, and the client cancelling the command mid-index (#204).
         let guard = crate::scan::ScanGuard::for_command(self);
         self.ensure_vanilla_index(Some(&progress), true, false)
             .await;
@@ -1785,6 +1807,7 @@ mod tests {
     #[test]
     fn extract_ignore_patterns_bounds_count_per_list() {
         // #169: a hostile config must not be able to grow the per-scan matcher
+        // work without bound. Only the first MAX_IGNORE_ENTRIES survive.
         let files: Vec<String> = (0..MAX_IGNORE_ENTRIES + 50)
             .map(|i| format!("file{i}.txt"))
             .collect();
@@ -1869,6 +1892,7 @@ mod tests {
     #[test]
     fn reload_status_message_reports_every_state_combination() {
         // The client displays this string verbatim, so the exact wording is
+        // the contract and each combination must stay honest.
         let dir = std::path::Path::new("my/rules/dir");
         assert_eq!(
             reload_status_message(true, ScanOutcome::Ran, dir),

@@ -1,4 +1,5 @@
-//! including a foreign directory that happens to be named `parse-cache` (#159).
+//! Remove only cache files owned by CWTools. In particular, leave unrelated
+//! content alone, including a foreign directory named `parse-cache` (#159).
 
 use std::path::Path;
 

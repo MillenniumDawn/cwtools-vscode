@@ -1,5 +1,6 @@
-//! The symlink half is the discovery walks' rule (#161), applied to reads so
-//!   Not-indexed is the resting state #161 chose; the flip is the price of
+//! The only place a client-supplied URI becomes an opened file. The symlink half is the
+//! discovery walks' rule (#161); open buffers are admitted on containment alone, so a
+//! symlinked file can still be edited and is indexed only while it is open.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -113,7 +114,8 @@ impl Backend {
     }
 }
 
-/// Windows verbatim `\\?\` prefix stops them ever matching.
+/// Resolve a readable client URI only inside the authorized roots, rejecting symlink
+/// leaves (#177). Containment is tested on the canonicalized path.
 pub(crate) fn authorized_path(uri: &str, roots: &[PathBuf]) -> Option<PathBuf> {
     let Some(path) = file_uri_to_path(uri) else {
         tracing::debug!(%uri, "access: not a usable file URI");
@@ -124,7 +126,9 @@ pub(crate) fn authorized_path(uri: &str, roots: &[PathBuf]) -> Option<PathBuf> {
         tracing::debug!(path = %canonical.display(), "access: outside every authorized root");
         return None;
     }
-    // false both for a symlink (the discovery walks' rule, #177) and for
+    // Only when it exists: a just-deleted path is authorized but absent, which `did_close`
+    // has to tell from refused. `is_file` is false for a symlink (the discovery walks'
+    // rule, #177) and for `/dev/zero`, whose length-0 report a size check would wave through.
     if let Ok(meta) = std::fs::symlink_metadata(&path) {
         if meta.file_type().is_symlink() {
             tracing::debug!(path = %path.display(), "access: symlink");
@@ -174,8 +178,9 @@ fn canonicalize_for_containment(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// file exists anywhere on disk (#176). Both sides of the test go through
-/// a Windows verbatim `\\?\` prefix does not survive that round trip.
+/// The first of `roots` under which the relative reference `rel` names an existing file.
+/// Contained so a `../` value in mod content can't probe the disk (#176); the plain join is
+/// returned, since a Windows `\\?\` prefix does not survive the round trip to a URI.
 pub(crate) async fn contained_search_path(roots: &[PathBuf], rel: &Path) -> Option<PathBuf> {
     if rel
         .components()
@@ -565,7 +570,9 @@ mod tests {
         );
     }
 
-    /// `to_file_path` only yields a path on Windows when the first segment is a
+    /// The `url` crate's `to_file_path` ignores the scheme, so a non-`file` URI converts to a
+    /// path; the explicit scheme check exists to stop that. The fixture uses a drive letter
+    /// because `to_file_path` only yields a path on Windows for a drive-letter first segment.
     #[test]
     fn url_to_file_path_ignores_the_scheme() {
         let converted = Url::parse("http://localhost/C:/Windows")
@@ -621,7 +628,8 @@ mod tests {
         assert_eq!(authorized_path(&uri(&file), &roots([&root])), None);
     }
 
-    /// of the #177 stance agree on it, since the discovery walks skip the link
+    /// Containment alone already refuses this one; the pin is that both sides of the
+    /// #177 stance agree on it, since the discovery walks skip the link too.
     #[cfg(unix)]
     #[test]
     fn rejects_a_symlink_pointing_out_of_the_root() {
@@ -634,7 +642,9 @@ mod tests {
         assert_eq!(authorized_path(&uri(&link), &roots([root.path()])), None);
     }
 
-    /// this file, so a URI naming it must not read it either (#177).
+    /// The half containment can't reach: the link resolves back inside the root, so only
+    /// the leaf's own type refuses it. The discovery walks never index this file, so a URI
+    /// naming it must not read it either (#177).
     #[cfg(unix)]
     #[test]
     fn rejects_a_symlink_that_resolves_inside_the_root() {
@@ -842,6 +852,7 @@ mod tests {
         );
     }
 
+    /// The boundary owns the read, so it also owns keeping cp1252 script files
     /// readable (pre-Jomini mods) rather than dropping them as invalid UTF-8.
     #[test]
     fn decodes_cp1252_like_the_file_manager() {
@@ -875,11 +886,14 @@ mod tests {
         );
     }
 
+    /// Roots go through the strict conversion too. `uri_to_path_str` would turn
+    /// `http://localhost/` into the path `/`, which as a root authorizes the whole filesystem.
     #[test]
     fn a_non_file_folder_uri_contributes_no_root() {
         assert_eq!(file_uri_to_path("http://localhost/"), None);
         assert_eq!(file_uri_to_path("untitled:Untitled-1"), None);
-        // On Windows the url crate turns the `..` host of a `file:` URI into a
+        // On Windows the url crate turns the `..` host of a `file:` URI into a UNC path
+        // (`\\..\etc`), so the strict converter is `None` only where hosts can't be UNC servers.
         #[cfg(unix)]
         assert_eq!(file_uri_to_path("file://../../etc"), None);
         let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -1038,7 +1052,9 @@ mod tests {
         );
     }
 
-    /// `realpath` refuses the `gone/..` pair outright (`Unresolvable`); Windows
+    /// A `..` in the not-yet-existing tail is refused rather than normalized. Linux `realpath`
+    /// reports `Unresolvable`; Windows `canonicalize` collapses `gone/..` and reports
+    /// `OutsideWorkspace`. Either way the edit is refused, never written.
     #[test]
     fn rejects_a_new_path_that_climbs_out_with_dot_dot() {
         let tmp = tempfile::TempDir::new().expect("tmpdir");

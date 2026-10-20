@@ -362,7 +362,9 @@ impl Backend {
         .await
     }
 
-    /// install (#160). Dropping those quietly would apply a rename the user
+    /// The refusal for the first URI in `by_uri` a generated edit may not write to, if any. A
+    /// rename can reach a base-game definition (#160), so one refused target cancels it all;
+    /// an edit touching only the request's own document is exempt (it works in `untitled:`).
     fn first_refused_edit_target(
         &self,
         by_uri: &[(String, Vec<TextEdit>)],

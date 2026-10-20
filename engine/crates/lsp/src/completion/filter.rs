@@ -74,7 +74,9 @@ fn token_match_rank(hay: &str, token: &str) -> u8 {
     }
 }
 
-/// token can never be truncated away behind better-bucketed items (#94). An
+/// Drop every item whose `filter_text` (or `label`) doesn't subsequence-match `token`, then
+/// sort by match quality so a later truncation keeps an exact match for the typed token
+/// instead of truncating it away behind better-bucketed items (#94).
 pub(crate) fn filter_by_token(items: Vec<CompletionItem>, token: &str) -> Vec<CompletionItem> {
     let mut items = items;
     items.retain(|it| token_matches(it, token));

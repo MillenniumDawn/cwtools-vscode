@@ -52,7 +52,9 @@ pub(crate) fn retry_deadline(default: std::time::Duration) -> std::time::Instant
         )
 }
 
-/// (#155): fires at most once per server process, so the e2e suite can
+/// Test-only one-shot panic switch for `CWTOOLS_WATCHED_BATCH_PANIC_ONCE` (#155): fires at
+/// most once per server process, so the e2e suite can exercise a background task's panic
+/// recovery without leaving the injected panic armed for every later pass.
 static WATCHED_BATCH_PANIC_ONCE: AtomicBool = AtomicBool::new(true);
 
 pub(crate) fn env_flag(name: &str) -> bool {
@@ -77,7 +79,9 @@ struct ScannedFile {
     parent_logical_path: Option<String>,
 }
 
-/// `workspace/executeCommand` (#204). `tower-lsp` answers `$/cancelRequest` by
+/// RAII guard for the loading indicator and, for a full scan, the `scan_in_progress` flag.
+/// `Drop` runs on a panic or a dropped future, so a scan can't wedge later scans or leave the
+/// bar spinning. A client cancelling a `workspace/executeCommand` drops the handler (#204).
 pub(crate) struct ScanGuard {
     client: Client,
     state: Arc<DocumentState>,
@@ -398,6 +402,7 @@ impl Backend {
 
     pub(crate) fn rebuild_modifier_keys(&self) {
         // Lock order: rules -> info_service. One `rules` write guard holds the
+        // ruleset we read from and the modifier data we write into.
         let mut rules = self.state.rules.write();
         let (keys, scopes) = match rules.ruleset.as_ref() {
             Some(rs) => {
@@ -433,7 +438,8 @@ where
     tokio::spawn(fut).await.ok()
 }
 
-/// it (#155). `context` names the task in the log line. Returns whether `fut`
+/// Spawn `fut` on its own task and await it, logging a panic instead of letting it vanish
+/// with a dropped `JoinHandle` (#155). Returns whether `fut` completed without panicking.
 pub(crate) async fn spawn_logging_panics<F>(context: &str, fut: F) -> bool
 where
     F: std::future::Future<Output = ()> + Send + 'static,
@@ -447,7 +453,9 @@ where
     }
 }
 
-/// that parallel load can blow through (#198). Unset, which is every real run,
+/// Hold an in-flight scan open while the file named by `CWTOOLS_SCAN_HOLD_FILE` exists, so a
+/// test ends the hold on a signal it owns rather than betting on a wall-clock window that
+/// parallel load can blow through (#198). Unset, which is every real run, it is a no-op.
 pub(crate) async fn hold_scan_for_tests() {
     hold_for_tests(
         "CWTOOLS_SCAN_HOLD_FILE",
@@ -456,7 +464,9 @@ pub(crate) async fn hold_scan_for_tests() {
     .await;
 }
 
-/// phase's ticker demonstrably alive — #434, proving a stray sampler tick
+/// [`hold_scan_for_tests`], but placed at the start of Parse instead of Discover. Discover
+/// has no per-item counter, so a test that needs a sampled phase's ticker demonstrably
+/// alive (#434) has nothing to hold at in Discover.
 pub(crate) async fn hold_parse_for_tests() {
     hold_for_tests("CWTOOLS_PARSE_HOLD_FILE", None).await;
 }
@@ -518,7 +528,8 @@ pub(crate) fn stat_signature_for(files: &[std::path::PathBuf]) -> u64 {
     hasher.finish()
 }
 
-/// the decision is independently unit-testable (#155 fix-round-2): at the
+/// Whether `state.watched_debounce` holds a live (unfinished) handle. `true` means "safe to
+/// overwrite with a retry"; `false` means something else already moved on (#155).
 pub(crate) fn watched_batch_slot_is_ours(state: &DocumentState) -> bool {
     state
         .watched_debounce
@@ -859,6 +870,7 @@ mod tests {
     }
 
     /// #204: a cancelled `workspace/executeCommand` drops the scanning future
+    /// without ever reaching `finish`.
     #[tokio::test]
     async fn test_scan_guard_releases_flag_when_dropped_unfinished() {
         let backend = test_backend();
@@ -1140,7 +1152,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_vanilla_merge_populates_the_file_index() {
-        // workspace, so the check was silently dead in the LSP (#283). Both
+        // CW113 is gated on a non-empty file index, which stayed empty in the editor (#283).
+        // Both halves have to be there; vanilla alone would flag every reference to a mod file.
         let backend = test_backend();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("mod");

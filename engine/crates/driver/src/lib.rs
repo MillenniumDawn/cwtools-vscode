@@ -1,4 +1,5 @@
-//! behind an `RwLock`, with no whole-workspace re-parse), which doesn't fit
+//! Load-and-validate pipeline shared by the CLI and the LSP. `Session` is the CLI's
+//! batch path; the LSP keeps its own incremental state and calls the helpers here.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -302,10 +303,13 @@ pub fn vanilla_gated_checks(game: Game, has_vanilla: bool) -> &'static [&'static
     }
 }
 
-/// fingerprint matches the install short-circuits the walk, and a
+/// Auto-managed on-disk cache of the base-game index, so a batch run does not
+/// re-parse the whole install every time. Only used when `vanilla` is a directory
+/// and no explicit `vanilla_cache` was supplied.
 #[derive(Debug, Clone)]
 pub struct VanillaCacheAuto {
     /// Directory holding one cache file per game + fingerprint. Same layout and
+    /// filename as the LSP's, so the CLI and the editor share warm caches.
     pub dir: PathBuf,
     pub refresh: bool,
 }
@@ -323,8 +327,9 @@ pub struct SessionConfig<'a> {
     pub ignore_files: &'a [String],
     pub ignore_dirs: &'a [String],
     pub loc_languages: Option<Vec<Lang>>,
-    /// mod's own (live-walked) files. Off by default (Windows-authored mods);
-    /// enable for mods that also target case-sensitive filesystems (Linux/Mac),
+    /// Match CW113 `filepath` references to the mod's own files by exact case. Off by
+    /// default for Windows-authored mods; enable for mods that also target Linux/Mac,
+    /// so a reference that differs from the file only by case is flagged.
     pub case_sensitive_files: bool,
     pub on_rules_diagnostic: Option<&'a mut dyn FnMut(RuleParseError)>,
 }
@@ -510,7 +515,6 @@ impl Session {
                     &src.logical_path,
                     &rules_table,
                 );
-                // reported as an unknown command (#348). Path-driven: the HOI4
                 let scripted_locs = cwtools_index::collect_scripted_loc_names(
                     &src.parsed,
                     &src.logical_path,
@@ -976,7 +980,9 @@ impl SessionWithFiles {
                     errors.extend(validate_prepared(&parsed, &file_str, &prepared));
                     UsedInstances::default()
                 };
-                // CW100: objects defined here whose `## required` localisation
+                // CW100: objects defined here whose `## required` loc keys no loc file
+                // provides. Gated on a non-empty loc index, or a mod with no
+                // `localisation/` would report every key as missing.
                 if let (Some(loc), Some(type_index)) = (prepared.loc_index, prepared.type_index)
                     && !loc.union().is_empty()
                 {
@@ -1111,7 +1117,9 @@ pub fn load_loc_service(
     LocService::from_paths(paths, ScanBudget::default(), langs)
 }
 
-/// Cache file for `game` at `fingerprint` under `dir`. The name comes from the
+/// Cache file for `game` at `fingerprint` under `dir`. The name comes from the cache
+/// module, so a cache warmed by either side is reused by the other and neither
+/// drifts from what `clearAllCaches` recognizes.
 fn vanilla_cache_path(dir: &Path, game: &str, fingerprint: &str) -> PathBuf {
     dir.join(vanilla_cache::cache_file_name(game, fingerprint))
 }
@@ -1149,7 +1157,9 @@ fn write_vanilla_cache(
     }
 }
 
-/// by an older format, stale fingerprint) reads as a miss so the caller
+/// Read a cached base-game index, but only if it was built for this game from this
+/// exact install and ruleset. Anything else reads as a miss so the caller
+/// re-indexes; a stale cache is never silently used.
 fn load_fresh_vanilla_cache(
     path: &Path,
     game: &str,
@@ -1224,9 +1234,9 @@ pub enum VanillaFiles<'a> {
     Install(&'a Path),
 }
 
-/// so the editor and the CLI answer the same reference the same way (#283).
-/// `parent_roots` are parent mods (#786): a submod may reference any file
-/// they ship, so they index under the same ignore patterns as the workspace.
+/// Build the index a `filepath` reference (CW113) resolves against. Both front ends build it
+/// here, so the editor and the CLI answer the same reference the same way (#283).
+/// `parent_roots` are parent mods (#786): a submod may reference any file they ship.
 pub fn build_file_index(
     workspace_root: &Path,
     parent_roots: &[PathBuf],
@@ -1376,7 +1386,7 @@ fn build_vanilla_cache_aux_with_optional_shadow(
     let loc_service = LocService::from_paths(loc_paths, ScanBudget::default(), None);
     let loc_keys = cwtools_localization::loc_index::per_language_keys(&loc_service);
     let mut file_index = cwtools_index::FileIndex::new();
-    // Collect on-disk case so a later case-sensitive run can case-check vanilla
+    // Preserve disk spelling so a case-sensitive run can check vanilla references.
     file_index.set_case_sensitive(true);
     let file_paths = discover_file_index_paths(vanilla_dir, &[], &[], DiscoveryPolicy::Vanilla)
         .into_iter()
@@ -1496,7 +1506,9 @@ pub(crate) fn apply_config_folders(config: &mut FileManagerConfig, folders: &[St
     }
 }
 
-/// discover the same file set (#284).
+/// Build the `FileManagerConfig` a workspace scan should use, narrowed to the ruleset's
+/// `folders`. A multi-mod workspace gets exactly those folders, since its root lacks the
+/// game folders themselves. Shared so the CLI and the editor discover the same files (#284).
 pub fn workspace_discovery_config(root: &Path, ruleset: Option<&RuleSet>) -> FileManagerConfig {
     let mut config = search_config_for(root);
     if let Some(ruleset) = ruleset {
@@ -1508,7 +1520,9 @@ pub fn workspace_discovery_config(root: &Path, ruleset: Option<&RuleSet>) -> Fil
     config
 }
 
-/// workspaces, so the CLI and LSP share one branching point (#284).
+/// Discover the workspace's script files from a config built by
+/// [`workspace_discovery_config`]. Handles single-mod and multi-mod workspaces, so the
+/// CLI and LSP share one branching point (#284).
 pub fn discover_workspace_files(
     config: FileManagerConfig,
 ) -> Result<Vec<DiscoveredFile>, FileError> {
@@ -1895,6 +1909,7 @@ mod tests {
     }
 
     /// The filename must survive both halves of the fingerprint verbatim where
+    /// it can, so a cache stays findable across runs (and shared with the LSP).
     #[test]
     fn vanilla_cache_path_is_sanitized_and_stable() {
         let path = vanilla_cache_path(Path::new("/cache"), "hoi4", "v1.19.2.0|rs:493876ece638460f");
@@ -1949,6 +1964,7 @@ mod tests {
     fn default_cache_dir_is_absolute_and_honors_env() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Must be absolute on both Unix and Windows; a relative XDG/LAPPDATA
+        // override would break the cache-key canonicalization.
         let dir = default_cache_dir().expect("cache dir");
         assert!(
             dir.is_absolute(),

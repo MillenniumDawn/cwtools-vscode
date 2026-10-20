@@ -189,7 +189,6 @@ impl Backend {
             )
         };
         if let Some(per_type) = per_type {
-            // fell back to whatever document the user had open (#62).
             let per_type = match (&vanilla_dir, &replacement_shadow) {
                 (Some(vanilla_root), Some(shadow)) => {
                     cwtools_driver::filter_vanilla_index(per_type, vanilla_root, shadow)
@@ -199,6 +198,9 @@ impl Backend {
             let vanilla_root = vanilla_dir
                 .as_deref()
                 .and_then(|root| std::fs::canonicalize(root).ok());
+            // Convert raw source paths to `file://` URIs, as workspace files are keyed, so goto
+            // lands in the real base-game file; paths outside the install root are dropped. The
+            // old "<vanilla-cache>" sentinel silently fell back to the open document (#62).
             let mut uri_cache: HashMap<Arc<str>, Option<Arc<str>>> = HashMap::new();
             let mut converted: HashMap<String, Vec<(Arc<str>, cwtools_info::TypeInstance)>> =
                 HashMap::with_capacity(per_type.len());
@@ -245,7 +247,8 @@ impl Backend {
             }
         }
 
-        // (#306). Installed here rather than during the per-type merge so it
+        // Base-game variables are a distinct provenance, so a re-merge replaces the previous set
+        // and a mod file sharing a name does not strip the vanilla definition (#306).
         if let Some(var_names) = var_names {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
@@ -255,7 +258,8 @@ impl Backend {
             self.bump_info_revision();
         }
 
-        // naming one must resolve without the mod having to define it (#348).
+        // Base-game scripted loc names, same provenance split: a loc command naming one
+        // must resolve without the mod having to define it (#348).
         if let Some(names) = scripted_loc_names {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)

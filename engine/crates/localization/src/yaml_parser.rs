@@ -84,7 +84,7 @@ pub fn check_loc_file_lang(file: &str, header_key: &str) -> Option<LangHeaderDia
 
     let header_lang = key_to_language(header_key);
 
-    // l_default in the header is always OK (mirrors F# `STLLang.Default` branch)
+    // `l_default` in the header is always OK (mirrors F# `STLLang.Default` branch).
     if header_key.eq_ignore_ascii_case("l_default") {
         return None;
     }
@@ -191,7 +191,9 @@ pub fn parse_loc_text(text: &str, name: &str) -> Result<LocFile, LocFileParseErr
     })
 }
 
-///   records the CW001 parse error and continues recovering (lenient parser).
+/// Parse one entry line into a `LocEntry`; `line_idx` is the 0-based stream index. Returns
+/// `Ok(None)` for a blank or comment line, and `Err` for a malformed line (no `:`), which
+/// the caller records as CW001 and keeps recovering (lenient parser).
 fn parse_entry(
     line: &str,
     line_idx: usize,
@@ -204,6 +206,7 @@ fn parse_entry(
     }
 
     let Some(colon_pos) = trimmed.find(':') else {
+        // Malformed line: no colon separator. Record a CW001 parse error and
         // continue recovering (lenient parser; mirrors F# `Failure` path).
         return Err(LocParseError {
             line: line_idx + 1,
@@ -223,7 +226,8 @@ fn parse_entry(
         None
     };
 
-    // strip one leading space (the convention after `:`)
+    // Strip one leading space (the convention after `:`) but keep everything else,
+    // including `#` comments, because in F# `#` is a valid `isLocValueChar`.
     let desc = remainder.strip_prefix(' ').unwrap_or(remainder);
 
     let position = Position::new(Arc::clone(stream_name), line_idx + 1, 1); // 1-based line numbers
@@ -549,8 +553,9 @@ mod tests {
 
     #[test]
     fn test_bom_prefixed_header_resolves_language() {
-        // Loc files are UTF-8-with-BOM and the disk reader keeps the BOM in the
-        // index silently empties → mass false CW100). See the BOM-strip in
+        // Loc files are UTF-8-with-BOM and the disk reader keeps the BOM in the string.
+        // The header must still resolve to a language (else the loc-key index silently
+        // empties and every CW100 is a false positive). See the BOM-strip in parse_loc_text.
         let text = "\u{feff}l_english:\n KEY_A: \"value\"\n";
         let file = parse_loc_text(text, "abilities_l_english.yml").unwrap();
         assert_eq!(file.lang, Some(Lang::English), "BOM must not hide the lang");

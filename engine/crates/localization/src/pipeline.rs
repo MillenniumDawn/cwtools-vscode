@@ -157,7 +157,8 @@ fn build_diagnostics(
         out.push(d);
     }
 
-    // CW254: localisation files must be UTF-8 with BOM. Only enforced when the
+    // CW254: loc files must be UTF-8 with BOM. Only enforced when the on-disk
+    // encoding is known (the directory-loading path); the caller resolves that into `emit_cw254`.
     if emit_cw254 {
         out.push(LocDiagnostic {
             file: file_path.to_string(),
@@ -246,7 +247,6 @@ pub fn validate_loc_project_with_union(
         .par_iter()
         .filter(|file| lang_selected(file, langs))
         .flat_map_iter(|file| {
-            // encoding is missing/wrong BOM.
             build_diagnostics(
                 file,
                 &file.path,
@@ -261,7 +261,9 @@ pub fn validate_loc_project_with_union(
         .collect()
 }
 
-/// command validator stays fully lenient and this finds nothing.
+/// Run the scope-aware loc-command checks (CW226/CW260/CW266) over every loaded entry, for
+/// the standalone `cwtools loc` lint. Every chain starts at `any`; `data.registry` turns the
+/// checks on, and without one this finds nothing.
 pub fn validate_loc_project_commands(
     service: &LocService,
     langs: Option<&[Lang]>,
@@ -435,8 +437,8 @@ mod tests {
         }
     }
 
-    /// an unknown command has to stay lenient there rather than be invented.
-    /// The scripted-localisation registry is the second gate (#348) — without it
+    /// `cwtools loc` without `--rules` has no registry, so an unknown command must stay
+    /// lenient. The scripted-loc registry is the second gate (#348), hence the empty one here.
     #[test]
     fn the_project_command_pass_needs_a_registry() {
         let svc = service_from(&[(
@@ -678,7 +680,8 @@ mod tests {
         );
     }
 
-    /// The BOM has to survive the read as a BOM and not as three characters of
+    /// The BOM has to survive the read as a BOM, not as three characters of the language
+    /// header, or a file with `l_english:` on line 1 would collect CW255/CW256.
     #[test]
     fn a_real_bom_does_not_leak_into_the_language_header() {
         let tmp = tempfile::tempdir().unwrap();
@@ -796,6 +799,7 @@ mod tests {
             },
         );
         // Scripted variable registry must be `Sync` so the parallel pipeline
+        // can share it across threads.
         fn is_known_var(name: &str) -> bool {
             name.eq_ignore_ascii_case("war_support")
         }
@@ -824,9 +828,12 @@ mod tests {
                 .map(|(p, t)| (p.as_str(), t.as_str()))
                 .collect::<Vec<_>>(),
         );
+        // This is the exact call that previously failed to compile when
         // `ScriptedVariables` lacked `Sync`.
         let diags = validate_loc_project_commands(&svc, None, &data);
-        // are accepted. The count proves the rayon `Sync` gate held.
+        // `totally_unknown` is an unknown terminal command, so with a registry and a
+        // non-empty terminal list it is flagged (CW226 Jomini, CW266 legacy). `war_support`
+        // and `owner.GetName` are accepted. The count proves the rayon `Sync` gate held.
         let flagged = diags
             .iter()
             .filter(|d| d.code == "CW226" || d.code == "CW266")

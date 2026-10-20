@@ -1,4 +1,5 @@
-//! (#541). Build a [`DocLines`] at the handler's entry and index into it
+//! One document's lines, resolved once per request. Walking the text per node is
+//! O(bytes-before-line), so a document-symbol request on a large file never returned (#541).
 
 use std::collections::HashMap;
 
@@ -7,8 +8,9 @@ use tower_lsp::lsp_types::{Position, PositionEncodingKind, Range};
 use crate::FileTextSnapshot;
 use crate::paths::{encoded_position_len, position_byte_index, source_column_to_lsp};
 
-/// A document's lines plus the negotiated position encoding: everything a
-/// CHAR columns, but the client reads columns in the encoding negotiated at
+/// A document's lines plus the negotiated position encoding. The parser reports CHAR columns
+/// but the client reads the negotiated encoding, so every published position goes through
+/// [`source_column_to_lsp`]; a raw column split a diagnostic from its fix on non-BMP lines.
 pub struct DocLines<'a> {
     lines: Vec<&'a str>,
     encoding: PositionEncodingKind,
@@ -24,7 +26,9 @@ impl<'a> DocLines<'a> {
         }
     }
 
-    /// squiggle stays one character wide. The encoding is never consulted
+    /// No document text in hand (the workspace scan's non-open files, ruleset load errors):
+    /// positions keep the parser's raw char column and the squiggle stays one character
+    /// wide. The encoding is never consulted without a line to convert against.
     pub(crate) fn none() -> Self {
         Self {
             lines: Vec::new(),
@@ -88,7 +92,8 @@ impl<'a> DocLines<'a> {
         !self.lines.is_empty()
     }
 
-    /// published verbatim bleeds onto the following line (#107). Floors at
+    /// LSP position for a parser range end, walked back over whitespace to the last content
+    /// character, since a raw end bleeds onto the following line (#107). Floors at `start`.
     pub(crate) fn clamped_end_position(&self, line: u32, col: u32, start: Position) -> Position {
         let (mut line, mut col) = (line, col);
         loop {

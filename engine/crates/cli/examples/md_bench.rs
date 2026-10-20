@@ -9,7 +9,7 @@ fn corpus_dir() -> Option<PathBuf> {
     }
     let projects = match std::env::var("CWTOOLS_PROJECTS") {
         Ok(dir) => PathBuf::from(dir),
-        // crates/cli -> repo root is ../../.., siblings sit next to it.
+        // From crates/cli, the repo root is ../../.., and siblings sit next to it.
         Err(_) => PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../..")
             .canonicalize()

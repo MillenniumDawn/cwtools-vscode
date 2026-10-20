@@ -1,4 +1,4 @@
-//! Columns and lengths are in the NEGOTIATED position encoding (utf-16 by
+//! Semantic-token columns and lengths use the negotiated encoding (UTF-16 by default).
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -60,6 +60,7 @@ pub(crate) fn legend() -> SemanticTokensLegend {
 }
 
 /// One token at its absolute position, before delta encoding. `line` is 0-based;
+/// `start` and `length` are already in the negotiated encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AbsToken {
     pub(crate) line: u32,
@@ -69,7 +70,9 @@ pub(crate) struct AbsToken {
     pub(crate) modifiers: u32,
 }
 
-/// descending into its clause, which is already source order, but the encoding
+/// Delta-encode absolute tokens into the protocol's quintuple stream. Sorts first, since one
+/// out-of-order token would silently shift everything after it; zero-length tokens are
+/// dropped because some clients treat them as malformed.
 pub(crate) fn encode(mut tokens: Vec<AbsToken>) -> Vec<SemanticToken> {
     tokens.retain(|t| t.length > 0);
     tokens.sort_by_key(|t| (t.line, t.start));
@@ -163,7 +166,9 @@ impl Ctx<'_> {
             .map_or(&[], |l| l.as_slice())
     }
 
-    /// parser char columns into the negotiated encoding. `None` outside the
+    /// Absolute token covering `[start_col, end_col)` of `line0`, converted from parser char
+    /// columns into the negotiated encoding. `None` outside the request's span, so a `range`
+    /// result holds only the lines that were asked for.
     fn token(
         &self,
         line0: u32,
@@ -191,7 +196,9 @@ impl Ctx<'_> {
     }
 }
 
-/// Length of `chars` in the negotiated encoding — the same conversion
+/// Length of `chars` in the negotiated encoding: the same conversion
+/// `paths::source_column_to_lsp` does, over an already-split line so a token costs no
+/// allocation.
 fn encoded_len(chars: &[char], encoding: &PositionEncodingKind) -> u32 {
     if encoding == &PositionEncodingKind::UTF32 {
         chars.len() as u32
@@ -655,7 +662,9 @@ impl Backend {
             .map(cwtools_cache::workspace::content_hash)
             .unwrap_or(0);
         if text.is_some() {
-            // scrutinee would still be alive inside the block (#334).
+            // Bound to a `let` so the probe's guard drops here: the insert below takes the
+            // same non-reentrant mutex, and a guard in the `if let` scrutinee would still be
+            // alive inside the block (#334).
             let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
             if let Some(entry) = cached
                 && entry.hash == hash
@@ -1239,7 +1248,8 @@ mod tests {
 
     #[test]
     fn utf16_columns_and_lengths_count_code_units() {
-        // 😀 is one char to the parser but two UTF-16 code units, so every
+        // 😀 is one char to the parser but two UTF-16 code units, so every column after it
+        // shifts by one and the token itself is length 2.
         let text = "a = 😀\n";
         let table = StringTable::new();
         let ast = cwtools_parser::parser::parse_string(text, &table);
@@ -1336,7 +1346,8 @@ mod tests {
         }
     }
 
-    /// A self-deadlock wedges the thread that hit it, so the check cannot ride
+    /// Run `f` on its own thread and fail if it hasn't returned in 30s. A self-deadlock wedges
+    /// the thread that hit it, and `tokio::time::timeout` can't help since it blocks in `poll`.
     fn must_finish(name: &str, f: impl FnOnce() + Send + 'static) {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -1349,7 +1360,8 @@ mod tests {
         );
     }
 
-    // went silent mid-scan with no error and no further output (#334).
+    // The fast path probed the cache in the `if let` scrutinee and re-locked it in the body;
+    // the mutex is not reentrant, so a repeat request wedged tower-lsp's loop silently (#334).
     #[test]
     fn repeat_full_request_does_not_deadlock_on_the_cache() {
         must_finish("semantic_tokens_full", || {

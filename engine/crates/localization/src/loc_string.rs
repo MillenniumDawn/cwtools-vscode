@@ -324,7 +324,8 @@ mod tests {
 
     #[test]
     fn test_jomini_lone_quote_param() {
-        // so stripping "the quotes" sliced [1..0] and panicked the process.
+        // `[GetName(')]`: a single `'` satisfies both starts_with and ends_with, so
+        // stripping "the quotes" sliced [1..0] and panicked the process.
         let elems = parse_loc_elements("[GetName(')]");
         assert_eq!(elems.len(), 1, "{elems:?}");
         let LocElement::JominiCommand(cmds) = &elems[0] else {

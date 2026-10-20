@@ -82,6 +82,7 @@ mod tests {
 
     #[test]
     fn test_completion_scalar_key_inserts_equals() {
+        // A plain field (scalar/int/type value) must autocomplete to `name = `,
         // not a bare `name` (cwtools-vscode#16).
         let rs = bool_enum_ruleset();
         let info = cwtools_info::InfoService::new();
@@ -487,7 +488,8 @@ mod tests {
 
     #[test]
     fn control_flow_effects_rank_with_scope_matched_effects() {
-        // not sink below them (#94).
+        // In a country-scope effect block every `## scope = country` effect ranks in the
+        // top bucket, and `if`/`else` (valid in ANY scope) must not sink below them (#94).
         let rs = scoped_effect_ruleset();
         let info = cwtools_info::InfoService::new();
         let reg = country_registry();
@@ -528,7 +530,9 @@ mod tests {
 
     #[test]
     fn typed_token_ranks_exact_match_first_and_survives_cap() {
-        // otherwise typing `if` in a big effect block buries or drops `if` (#94).
+        // A capped list must keep and lead with the exact match for the typed token, even
+        // when >cap better-bucketed items match it, or typing `if` in a big effect block
+        // buries or drops `if` (#94).
         let mut items: Vec<CompletionItem> = (0..1500)
             .map(|i| {
                 let label = format!("ai_f_{:04}", i);
@@ -602,7 +606,8 @@ mod tests {
 
     #[test]
     fn alias_bool_trigger_completes_with_equals_and_yesno() {
-        // #67: `alias[trigger:always] = bool` must complete to
+        // #67: `alias[trigger:always] = bool` must complete to `always = ${1|yes,no|}$0`,
+        // not a bare `${1|yes,no|}` with no `=`.
         let rs = bool_trigger_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = vec![(
@@ -635,7 +640,9 @@ mod tests {
             "bool trigger must insert 'always = ', got: {:?}",
             always.insert_text
         );
-        // #77: pin the corrected shape `always = ${1|yes,no|}$0`. A choice on the
+        // #77: pin the corrected shape `always = ${1|yes,no|}$0`. A choice on the final
+        // `$0` tab stop (`${0|…|}`) is inserted literally by VS Code, so the choice must
+        // sit on tab stop 1 with a trailing `$0`.
         assert!(
             snip.contains("${1|") && snip.ends_with("$0") && !snip.contains("${0|"),
             "bool trigger must use a non-zero choice tab stop ending in $0, got: {:?}",
@@ -678,7 +685,9 @@ mod tests {
 
     #[test]
     fn alias_dlc_enum_snippet_escapes_and_quotes_choices() {
-        // #77: an enum alias must complete to `has_dlc = ${1|...|}$0` — a choice
+        // #77: an enum alias must complete to `has_dlc = ${1|...|}$0`: a choice on tab
+        // stop 1 (not the unsupported `$0`), with each choice value quoted when it has
+        // whitespace and its delimiters escaped.
         let rs = dlc_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = vec![(
@@ -736,7 +745,8 @@ mod tests {
 
     #[test]
     fn value_completions_enum_quotes_spaced_values() {
-        // #77: at a value position, an enum member with whitespace inserts quoted
+        // #77: at a value position, an enum member with whitespace inserts quoted (so it
+        // parses as one token); a bare identifier inserts as its label.
         let rs = dlc_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let value_rules = vec![(
@@ -893,6 +903,7 @@ mod tests {
     #[test]
     fn alias_keys_field_emits_modifier_keys() {
         // #65: a rule with `alias_keys_field[modifier]` on its left side (as in
+        // `dynamic_modifier` blocks) must offer modifier keys as completions.
         let rs = bool_enum_ruleset(); // arbitrary ruleset with reindex() called
         let info = cwtools_info::InfoService::new();
         let modifier_keys: HashSet<String> = ["my_modifier".to_string(), "other_mod".to_string()]
@@ -1111,7 +1122,8 @@ modifiers = {
 
     #[test]
     fn completions_from_rules_deduplicates() {
-        // #66: when the same concrete field appears in multiple rule entries
+        // #66: when the same concrete field appears in multiple rule entries (e.g. from
+        // subtype-flattening), the label must appear only once.
         let rs = bool_enum_ruleset();
         let info = cwtools_info::InfoService::new();
         let rules = vec![
