@@ -178,8 +178,10 @@ pub fn archived_to_arena(
     Ok((arena, root))
 }
 
-/// Comment byte ranges must tile the comment text pool in order on UTF-8
-/// boundaries, or directive/comment text would be silently lost downstream.
+/// Comment byte ranges must tile the comment text pool in order, each non-empty
+/// and on UTF-8 boundaries, or directive/comment text would be silently lost
+/// downstream. The parser's comment text always starts with `#`, so an empty
+/// range is never genuine.
 fn validate_archived_comment_pool(cached: &ArchivedCachedFile) -> Result<(), CacheError> {
     let pool = cached.comment_text_pool.as_str();
     let pool_len = pool.len() as u32;
@@ -191,6 +193,9 @@ fn validate_archived_comment_pool(cached: &ArchivedCachedFile) -> Result<(), Cac
             return Err(cache_rejected(
                 "cache comment text range is out of order or past the comment text pool",
             ));
+        }
+        if end == start {
+            return Err(cache_rejected("cache comment text range is empty"));
         }
         if !pool.is_char_boundary(start as usize) || !pool.is_char_boundary(end as usize) {
             return Err(cache_rejected(
