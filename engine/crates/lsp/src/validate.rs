@@ -2037,6 +2037,51 @@ pub(crate) mod issue_868_measurement {
         unit
     }
 
+    fn collect_scripts(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("performance fixture directory") {
+            let path = entry.expect("fixture entry").path();
+            if path.is_dir() {
+                collect_scripts(&path, files);
+            } else if path.extension().is_some_and(|extension| extension == "txt") {
+                files.push(path);
+            }
+        }
+    }
+
+    fn seed_fixture_workspace(backend: &Backend, workspace: &std::path::Path) {
+        let fixture_root = cwtools_test_support::testfiles().join("performancetest2");
+        let mut scripts = Vec::new();
+        collect_scripts(&fixture_root, &mut scripts);
+        scripts.sort();
+        let total_bytes: usize = scripts
+            .iter()
+            .map(|path| std::fs::metadata(path).unwrap().len() as usize)
+            .sum();
+        assert_eq!(scripts.len(), 49, "pin performance workspace script count");
+        assert_eq!(total_bytes, 408_936, "pin performance workspace bytes");
+        let mut indexed = 0;
+        for source_path in &scripts {
+            let relative = source_path.strip_prefix(&fixture_root).unwrap();
+            // The measured document itself is indexed by its first validation;
+            // seeding it under a second URI would duplicate every exported event.
+            if relative == std::path::Path::new("events/cc_colony_events.txt") {
+                continue;
+            }
+            let text = std::fs::read_to_string(source_path).unwrap();
+            let ast = parse_string(&text, &backend.state.string_table);
+            let logical_path = format!("game/{}", relative.to_string_lossy().replace('\\', "/"));
+            let uri = crate::paths::path_to_uri(&workspace.join(&logical_path));
+            open_doc(backend, &uri, &text);
+            backend.index_parsed_file_as(&uri, &ast, None, &logical_path, false);
+            indexed += 1;
+        }
+        eprintln!(
+            "CWTOOLS_868 workspace_scripts={} workspace_bytes={} seeded_scripts={}",
+            scripts.len(), total_bytes, indexed
+        );
+        assert_eq!(indexed, 48);
+    }
+
     fn configure(backend: &Backend) {
         let table = &backend.state.string_table;
         let (ruleset, errors) = cwtools_rules::ruleset_loader::load_ruleset_from_dir(
@@ -2131,8 +2176,8 @@ pub(crate) mod issue_868_measurement {
         backend.state.config.write().workspace_prefix =
             Some(crate::paths::workspace_prefix_of(&workspace_uri));
         let large_uri = crate::paths::path_to_uri(&tmp.path().join("game/events/large.txt"));
-        let seed_uri = crate::paths::path_to_uri(&tmp.path().join("game/events/seed.txt"));
         let writer_uri = crate::paths::path_to_uri(&tmp.path().join("game/events/writer.txt"));
+        seed_fixture_workspace(&backend, tmp.path());
         open_doc(&backend, &large_uri, &text);
         let probe_hover = backend
             .hover_impl(make_hover(&large_uri, 12))
@@ -2142,8 +2187,6 @@ pub(crate) mod issue_868_measurement {
             probe_hover.is_some(),
             "the hover fixture position must resolve to an actual rule-backed item"
         );
-        let seed_ast = parse_string(&text, &backend.state.string_table);
-        backend.index_parsed_file_as(&seed_uri, &seed_ast, None, "game/events/seed.txt", false);
         let writer_ast = Arc::new(parse_string(
             "planet_event = { id = writer.1 }",
             &backend.state.string_table,
@@ -2182,7 +2225,6 @@ pub(crate) mod issue_868_measurement {
         let mut validation_ns = Vec::new();
         let mut contention_diag_summaries = Vec::new();
         for _ in 0..SAMPLES {
-            backend.index_parsed_file_as(&seed_uri, &seed_ast, None, "game/events/seed.txt", false);
             let gate = crate::state::HoldGate::new(crate::state::HoldPoint::ValidatePrepared);
             let _release_gate = ReleaseHoldGate(gate.clone());
             *backend.state.hold_gate.lock() = Some(gate.clone());
