@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Compare and restore saved scope states in the scope-transition probes instead of cloning the whole `ScopeContext` for each candidate. Probes no longer allocate copies of the scope stacks or compare the scope registry. Transitions are unchanged. (#558)
+
 #### Tooling
 
 * Document the `md_bench` and parser `probe` examples in `docs/engine/PROFILING.md`: how `md_bench` finds its corpus, what each prints, and that neither is a repeatable benchmark. (#915)
