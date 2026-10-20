@@ -19,6 +19,9 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   # BSD-3-Clause is used by the existing zstd dependency graph.
   "BSD-3-Clause",
+  # NCSA rides along with MIT OR Apache-2.0 in libfuzzer-sys, the fuzz
+  # workspace's harness dependency (swept by the fuzz cargo-deny job).
+  "NCSA",
   "Unicode-3.0",
   "Unlicense",
   # LGPL-2.1-or-later appears via r-efi. Acceptable for a closed-source
