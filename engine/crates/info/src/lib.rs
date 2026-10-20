@@ -15,7 +15,7 @@ pub use position::{PositionElement, ReferenceHint, element_at_position};
 use references::{
     AliasKeyCache, CollectedRef, FileAliasSites, TypeRefRule, build_schema_keys,
     build_type_ref_keys, classify_alias_key_sites, collect_alias_key_candidates,
-    collect_file_reference_data, collect_type_ref_uses, strip_affix,
+    collect_type_ref_uses, strip_affix,
 };
 pub use references::{
     IndexedUseSite, ReferenceIndex, TypePatternAlias, UseSite, build_type_patterns,
@@ -334,16 +334,24 @@ impl FileCollector {
         );
 
         let mut type_refs = Vec::new();
+        if !self.type_ref_keys.is_empty() {
+            collect_type_ref_uses(
+                &ast.root_children,
+                &ast.arena,
+                table,
+                &self.type_ref_keys,
+                ruleset,
+                logical_path,
+                &mut type_refs,
+            );
+        }
+
         let mut candidates = Vec::new();
-        collect_file_reference_data(
+        collect_alias_key_candidates(
             &ast.root_children,
             &ast.arena,
             table,
-            &self.type_ref_keys,
-            ruleset,
-            logical_path,
             &self.schema_keys,
-            &mut type_refs,
             &mut candidates,
         );
         let alias_sites = FileAliasSites::new(uri, candidates, &self.type_patterns);
