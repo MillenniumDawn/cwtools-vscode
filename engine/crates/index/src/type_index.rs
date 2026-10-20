@@ -198,6 +198,13 @@ impl FileIndex {
         }
     }
 
+    /// Whether the primary workspace supplies `path`, so `release_workspace` would change
+    /// something. A read-only check lets callers skip the index clone otherwise (#1067).
+    pub fn is_workspace_owned(&self, path: &str) -> bool {
+        self.owned
+            .contains(&path.replace('\\', "/").to_ascii_lowercase())
+    }
+
     /// Whether `path` is already workspace-owned with the spelling a claim keeps, so
     /// `claim_workspace` would change nothing (#1067).
     pub fn is_workspace_claimed(&self, path: &str) -> bool {

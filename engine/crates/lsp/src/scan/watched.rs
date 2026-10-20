@@ -146,9 +146,16 @@ impl Backend {
             changes.into_iter().partition(|uri| is_resource_file(uri));
         let (resource_deletes, deletes): (Vec<String>, Vec<String>) =
             deletes.into_iter().partition(|uri| is_resource_file(uri));
+        // A resource delete only releases the workspace's own file-index entry (#1067). It
+        // runs before the creates claim: the index ignores case, so DELETED Thing.dds plus
+        // CREATED thing.dds in one window must end owned, not released.
+        let resource_rels: Vec<String> = resource_deletes
+            .iter()
+            .filter_map(|uri| self.workspace_rel_for_file_index(uri))
+            .collect();
+        let mut index_changed = self.remove_deleted_rels_from_file_index(resource_rels);
         let resources_changed = self.sync_watched_resources(&resource_changes);
-        let only_resources =
-            changes.is_empty() && deletes.is_empty() && resource_deletes.is_empty();
+        let only_resources = changes.is_empty() && deletes.is_empty();
         let mut lost_scan_cas = false;
         if watched_batch_over_cap(changes.len(), deletes.len()) {
             tracing::info!(
@@ -158,7 +165,10 @@ impl Backend {
             );
             if !self.validate_entire_workspace(true).await {
                 self.state.watched_pending.lock().extend(changes);
-                self.state.watched_deleted.lock().extend(deletes);
+                self.state
+                    .watched_deleted
+                    .lock()
+                    .extend(deletes.into_iter().chain(resource_deletes));
                 lost_scan_cas = true;
             }
         } else {
@@ -167,23 +177,10 @@ impl Backend {
             // not the whole batch (#477).
             // open-doc edit path's job (#90).
             let mut changed_loc_keys: HashSet<String> = HashSet::new();
-            // A delete drops only the workspace's own file-index contribution: an entry a
-            // parent or base-game layer still provides stays visible (#1067).
-            let mut index_changed = false;
             if !deletes.is_empty() {
                 let outcome = self.process_watched_deletes(&deletes).await;
                 changed_loc_keys.extend(outcome.changed_loc_keys);
                 index_changed |= outcome.removed_file_index;
-            }
-            // A resource delete keeps its cleanup to the file index: resources are never
-            // read or indexed, so the delete pass's per-file cleanup would publish empties
-            // pointlessly for every texture a branch switch removes (#1023, #1067).
-            if !resource_deletes.is_empty() {
-                let rels: Vec<String> = resource_deletes
-                    .iter()
-                    .filter_map(|uri| self.workspace_rel_for_file_index(uri))
-                    .collect();
-                index_changed |= self.remove_deleted_rels_from_file_index(rels);
             }
             {
                 let to_insert: Vec<String> = changes
@@ -381,12 +378,18 @@ impl Backend {
             return false;
         }
         let mut info = self.state.info_service.write();
-        if info.type_index.file_index.is_empty() {
+        // Read-only first: a rel the workspace never owned changes nothing, so the index
+        // Arc stays shared with any snapshot holding it.
+        let owned: Vec<&String> = rels
+            .iter()
+            .filter(|rel| info.type_index.file_index.is_workspace_owned(rel))
+            .collect();
+        if owned.is_empty() {
             return false;
         }
         let type_index = Arc::make_mut(&mut info.type_index);
         let mut removed = false;
-        for rel in &rels {
+        for rel in owned {
             removed |= type_index.file_index.release_workspace(rel);
         }
         drop(info);

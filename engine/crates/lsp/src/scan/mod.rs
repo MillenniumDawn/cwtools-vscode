@@ -840,6 +840,34 @@ mod tests {
         ));
     }
 
+    /// An over-cap batch that loses the scan flag to a running scan requeues every
+    /// delete, resource deletes included, instead of dropping them (#1067).
+    #[tokio::test]
+    async fn test_over_cap_batch_requeues_resource_deletes_when_a_scan_runs() {
+        let backend = test_backend();
+        backend.state.scan_in_progress.store(true, Ordering::SeqCst);
+        let uri_of = |tail: String| {
+            tower_lsp::lsp_types::Url::from_file_path(cwtools_test_support::abs_path(&tail))
+                .unwrap()
+                .to_string()
+        };
+        let changes: HashSet<String> = (0..=WATCHED_BULK_CAP)
+            .map(|i| uri_of(format!("ws/common/f{i}.txt")))
+            .collect();
+        let texture = uri_of("ws/gfx/gone.dds".to_string());
+
+        backend
+            .process_watched_batch(changes.clone(), vec![texture.clone()])
+            .await;
+
+        assert_eq!(*backend.state.watched_pending.lock(), changes);
+        assert_eq!(
+            *backend.state.watched_deleted.lock(),
+            HashSet::from([texture]),
+            "the resource delete must wait for the next batch"
+        );
+    }
+
     async fn wait_for_clear(flag: &AtomicBool) -> bool {
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while flag.load(Ordering::SeqCst) {
