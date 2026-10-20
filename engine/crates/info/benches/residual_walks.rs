@@ -69,10 +69,25 @@ fn bench_residual_collection(c: &mut Criterion) {
     assert!(check.merge_collected_file(first, false));
     let signature = format!(
         "bytes={bytes} file_info={} type_refs={} variables={} complex_values={} scripted_guis={}",
-        check.files[URI].type_references.values().map(Vec::len).sum::<usize>(),
-        check.reference_index.references("scripted_effect", "effect_0000").len(),
-        check.files[URI].defined_variables_ns.values().map(Vec::len).sum::<usize>(),
-        check.type_index.complex_enum_values.values("root_scalar").count(),
+        check.files[URI]
+            .type_references
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        check
+            .reference_index
+            .references("scripted_effect", "effect_0000")
+            .len(),
+        check.files[URI]
+            .defined_variables_ns
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        check
+            .type_index
+            .complex_enum_values
+            .values("root_scalar")
+            .count(),
         check.type_index.scripted_gui_index.contains("click_0000"),
     );
     eprintln!("RESIDUAL_WALK_SIGNATURE {signature}");
