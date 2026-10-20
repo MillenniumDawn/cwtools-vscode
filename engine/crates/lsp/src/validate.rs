@@ -2116,18 +2116,12 @@ pub(crate) mod issue_868_measurement {
         backend.state.documents.lock().set_ast(uri, 1, parsed);
     }
 
-    fn summarize(samples: &[u128]) -> (u128, u128, u128, u128, f64) {
+    fn summarize(samples: &[u128]) -> (u128, u128, u128, u128) {
         let mut sorted = samples.to_vec();
         sorted.sort_unstable();
         let median = sorted[sorted.len() / 2];
         let p95 = sorted[((sorted.len() - 1) * 95).div_ceil(100)];
-        let mean = sorted.iter().map(|value| *value as f64).sum::<f64>() / sorted.len() as f64;
-        let variance = sorted
-            .iter()
-            .map(|value| (*value as f64 - mean).powi(2))
-            .sum::<f64>()
-            / (sorted.len() - 1) as f64;
-        (median, p95, sorted[0], *sorted.last().unwrap(), variance.sqrt())
+        (median, p95, sorted[0], *sorted.last().unwrap())
     }
 
     fn diagnostic_signature(diagnostics: &[tower_lsp::lsp_types::Diagnostic]) -> String {
@@ -2219,11 +2213,10 @@ pub(crate) mod issue_868_measurement {
             }
         }
         eprintln!(
-            "CWTOOLS_868 uncontended mode={mode} bytes={} warmups={WARMUPS} samples={SAMPLES} median/p95/min/max/stddev_ns={:?} diagnostics={:?} raw_ns={:?}",
+            "CWTOOLS_868 uncontended mode={mode} bytes={} warmups={WARMUPS} samples={SAMPLES} median/p95/min/max_ns={:?} diagnostics={:?}",
             text.len(),
             summarize(&validate_ns),
-            diag_summaries.first(),
-            validate_ns
+            diag_summaries.first()
         );
 
         let mut contention_ns = Vec::new();
@@ -2301,16 +2294,12 @@ pub(crate) mod issue_868_measurement {
             clear_markers();
         }
         eprintln!(
-            "CWTOOLS_868 contention mode={mode} bytes={} samples={SAMPLES} validate-after-release_ns={:?} writer-call_ns={:?} hover-request_ns={:?} all-complete-after-release_ns={:?} raw_validate={:?} raw_writer={:?} raw_hover={:?} raw_all={:?}",
+            "CWTOOLS_868 contention mode={mode} bytes={} samples={SAMPLES} validate-after-release_ns={:?} writer-call_ns={:?} hover-request_ns={:?} all-complete-after-release_ns={:?}",
             text.len(),
             summarize(&validation_ns),
             summarize(&writer_ns),
             summarize(&hover_ns),
-            summarize(&contention_ns),
-            validation_ns,
-            writer_ns,
-            hover_ns,
-            contention_ns
+            summarize(&contention_ns)
         );
         assert!(
             diag_summaries
