@@ -208,10 +208,19 @@ fn is_defined(
     name: &str,
 ) -> bool {
     match kind {
-        RefKind::Type => ruleset.type_by_name().contains_key(name),
+        // Stellaris adds this built-in type for its core modifiers. Its CWT
+        // alias also consumes CWT-generated modifiers. Keep the exemption
+        // exact so an unknown type still produces CW601.
+        RefKind::Type => ruleset.type_by_name().contains_key(name) || name == "modifier",
         RefKind::Enum => {
             ruleset.enum_by_name().contains_key(name)
                 || ruleset.complex_enums.iter().any(|c| c.name == name)
+                // This is an open enum populated from scripted-effect
+                // parameters at runtime, not a static CWT enum definition.
+                // Rust currently treats absent game-derived enums
+                // permissively; keep the exemption exact so other undefined
+                // enums still produce CW601.
+                || name == "scripted_effect_params"
         }
         RefKind::SingleAlias => single_alias_names.contains(name),
     }
@@ -274,6 +283,27 @@ mod tests {
         let src = "types = {\n    type[foo] = { path = \"common/foo\" }\n}\n\
                    r = { a = <foo> }\n";
         assert!(check(src).is_empty(), "got: {:?}", check(src));
+    }
+
+    #[test]
+    fn recognizes_stellaris_hook_definitions_without_hiding_other_missing_names() {
+        let src = "rules = {\n\
+            modifier = <modifier>\n\
+            params = enum[scripted_effect_params]\n\
+            missing_type = <missing_type>\n\
+            missing_enum = enum[missing_enum]\n\
+        }\n";
+        let errors = check(src);
+
+        assert_eq!(errors.len(), 2, "only unknown refs should fire: {errors:?}");
+        assert!(errors.iter().any(|e| e.message.contains("`missing_type`")));
+        assert!(errors.iter().any(|e| e.message.contains("`missing_enum`")));
+        assert!(!errors.iter().any(|e| e.message.contains("`modifier`")));
+        assert!(
+            !errors
+                .iter()
+                .any(|e| e.message.contains("`scripted_effect_params`"))
+        );
     }
 
     #[test]
