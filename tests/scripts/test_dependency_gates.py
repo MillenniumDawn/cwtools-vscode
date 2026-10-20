@@ -48,6 +48,36 @@ def workflow_step(scope: str, name: str) -> str:
     )[0]
 
 
+def workflow_triggers(workflow: str) -> str:
+    """Return the top-level `on:` block, up to the next top-level key."""
+    match = re.search(r"^on:\n((?:[ \t#].*\n|\n)*)", workflow, flags=re.MULTILINE)
+    assert match is not None
+    return match.group(1)
+
+
+def entry_directories(entry: str) -> list[str]:
+    """Return the `directory` or `directories` one Dependabot entry declares."""
+    single = re.findall(r"^    directory: (\S+)$", entry, flags=re.MULTILINE)
+    block = re.search(
+        r"^    directories:\n((?:      .*\n)+)", entry, flags=re.MULTILINE
+    )
+    listed = (
+        re.findall(r"^      - (\S+)$", block.group(1), flags=re.MULTILINE)
+        if block
+        else []
+    )
+    return single + listed
+
+
+def test_ci_keeps_the_weekly_schedule_the_sweeps_depend_on() -> None:
+    triggers = workflow_triggers(CI.read_text(encoding="utf-8"))
+    assert "\n  schedule:\n" in triggers
+    assert re.search(
+        r'^    - cron: "\S+ \S+ \S+ \S+ \S+"$', triggers, flags=re.MULTILINE
+    )
+    assert "\n  workflow_dispatch:\n" in triggers
+
+
 def test_scheduled_lint_sweeps_cargo_deny_over_engine_and_fuzz_lockfiles() -> None:
     workflow = CI.read_text(encoding="utf-8")
     lint = job_scope(workflow, "lint-rs")
@@ -66,10 +96,15 @@ def test_scheduled_lint_sweeps_cargo_deny_over_engine_and_fuzz_lockfiles() -> No
 def test_npm_audit_runs_on_the_schedule_dependabot_cannot_cover() -> None:
     workflow = CI.read_text(encoding="utf-8")
     audit = job_scope(workflow, "npm-audit")
-    assert "if: github.event_name == 'schedule'" in audit
+    # workflow_dispatch is allowed too, so the job can be run on demand.
+    assert (
+        "    if: github.event_name == 'schedule' || "
+        "github.event_name == 'workflow_dispatch'\n"
+    ) in audit
     assert "npm audit --audit-level=high" in audit
 
-    # The PR path keeps its own gate; the npm sweep is only for the schedule.
+    # The PR path keeps its own gate; the npm sweep is for the schedule and
+    # manual dispatch only.
     review = job_scope(workflow, "dependency-review")
     assert "if: github.event_name == 'pull_request'" in review
 
@@ -84,6 +119,7 @@ def test_fuzz_smoke_pins_the_committed_lockfile_and_never_libfuzzer_args() -> No
     # The only --locked the smoke knows is the cargo metadata query that
     # fails when fuzz/Cargo.lock has drifted.
     assert "cargo +nightly-2026-07-24 metadata --locked" in metadata_step
+    assert "--format-version 1" in metadata_step
     assert "--manifest-path fuzz/Cargo.toml" in metadata_step
 
     # Whole step bodies, continuation lines included: a --locked appended on
@@ -106,7 +142,7 @@ def test_dependabot_places_pip_beside_the_other_ecosystems() -> None:
     assert ecosystems == ["github-actions", "cargo", "npm", "pip"]
 
     pip = next(entry for entry in entries if entry.startswith("pip\n"))
-    assert "directory: /" in pip
+    assert entry_directories(pip) == ["/"]
     # The pip entry follows the shared schedule/security-group contract the
     # other ecosystems use.
     for marker in (
@@ -119,9 +155,9 @@ def test_dependabot_places_pip_beside_the_other_ecosystems() -> None:
     ):
         assert marker in pip
 
-    # The other entries keep their original directories.
+    # The cargo entry covers the fuzz workspace's own lockfile as well.
     cargo = next(entry for entry in entries if entry.startswith("cargo\n"))
-    assert "directory: /engine" in cargo
+    assert entry_directories(cargo) == ["/engine", "/engine/fuzz"]
 
 
 def test_fuzz_manifest_declares_a_license_for_the_deny_sweep() -> None:
@@ -130,12 +166,13 @@ def test_fuzz_manifest_declares_a_license_for_the_deny_sweep() -> None:
     assert manifest["package"]["license"] == "MIT"
 
 
-def test_deny_allowlist_covers_the_lockfile_licences() -> None:
+def test_deny_allows_ncsa_only_for_libfuzzer_sys() -> None:
     with DENY_CONFIG.open("rb") as config_file:
-        config = tomllib.load(config_file)
-    allow = config["licenses"]["allow"]
-    # libfuzzer-sys, the fuzz harness in engine/fuzz/Cargo.lock.
+        licenses = tomllib.load(config_file)["licenses"]
+    # libfuzzer-sys, the fuzz harness in engine/fuzz/Cargo.lock, is
+    # (MIT OR Apache-2.0) AND NCSA.
     assert 'name = "libfuzzer-sys"' in FUZZ_LOCK.read_text(encoding="utf-8")
-    assert "NCSA" in allow
-    assert "MIT" in allow
-    assert "Apache-2.0" in allow
+    assert "NCSA" not in licenses["allow"]
+    assert {"crate": "libfuzzer-sys", "allow": ["NCSA"]} in licenses["exceptions"]
+    assert "MIT" in licenses["allow"]
+    assert "Apache-2.0" in licenses["allow"]

@@ -9,8 +9,9 @@ on:
       - main
   pull_request:
   schedule:
-    # Weekly cargo-deny sweep so a new advisory against an already-merged
-    # crate is not waiting on the next PR. Other jobs skip this event.
+    # Weekly cargo-deny and npm audit sweep so a new advisory against an
+    # already-merged dependency is not waiting on the next PR. Only lint-rs
+    # and npm-audit run on this event; every other job skips it.
     - cron: "0 6 * * 1"
   workflow_dispatch:
 
@@ -134,8 +135,9 @@ jobs:
 
   # npm's weekly advisory sweep for what a merge already shipped; the PR
   # path stays on dependency-review. Same severity floor, dev deps included.
+  # workflow_dispatch runs it too, so it can be exercised on demand.
   npm-audit:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: Scheduled npm audit
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -460,7 +462,7 @@ jobs:
       # same enforcement `cargo build --locked` performs.
       - name: fuzz lockfile matches the committed manifests
         run: >-
-          cargo +nightly-2026-07-24 metadata --locked
+          cargo +nightly-2026-07-24 metadata --locked --format-version 1
           --manifest-path fuzz/Cargo.toml
       - name: Generate pinned rules seed corpus
         run: |

@@ -290,6 +290,11 @@ bored, or bound it with `-- -max_total_time=300`.
 A crash writes the input to `fuzz/artifacts/<target>/` and prints the path.
 Replay it with `cargo +nightly fuzz run <target> <that-file>`.
 
+`fuzz/Cargo.lock` is committed, and CI checks it with `--locked`. After a
+dependency change that reaches the fuzz crate, refresh it from `engine/` with
+`cargo +nightly update --workspace --manifest-path fuzz/Cargo.toml` and commit
+the result.
+
 ### Seeds
 
 `fuzz/seeds/` is committed and holds real `.txt`, `.cwt` and `.yml` files
