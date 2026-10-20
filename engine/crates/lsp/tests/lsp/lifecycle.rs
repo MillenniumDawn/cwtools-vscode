@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
@@ -95,44 +96,10 @@ fn test_lsp_full_lifecycle() {
 }
 
 #[test]
-fn test_workspace_diagnostics_publish_every_closed_file() {
-    // #1070: with the per-scan budget gone, a workspace larger than the old cap
-    // publishes diagnostics for every closed file.
+fn test_workspace_diagnostics_publish_and_clear_every_closed_file() {
+    // #1070: past the old 2,000-file budget, a scan publishes every closed
+    // file, and switching workspace-wide diagnostics off clears every one.
     const CLOSED_FILE_COUNT: usize = 2_001;
-    let mut builder = TestServer::builder();
-    for i in 0..CLOSED_FILE_COUNT {
-        builder = builder.file(&format!("common/things/f{i}.txt"), "thing = yes\n");
-    }
-    let mut server = builder.spawn();
-    server.initialized();
-
-    let mut published: Vec<String> = Vec::new();
-    server.read_until("the workspace validation summary", |frame| {
-        if frame["method"] == "textDocument/publishDiagnostics"
-            && let Some(uri) = frame["params"]["uri"].as_str()
-            && uri.contains("/common/things/f")
-        {
-            published.push(uri.to_string());
-        }
-        frame["method"] == "window/logMessage"
-            && frame["params"]["message"]
-                .as_str()
-                .is_some_and(|message| message.starts_with("Workspace validation complete:"))
-    });
-    published.sort();
-    published.dedup();
-    assert_eq!(
-        published.len(),
-        CLOSED_FILE_COUNT,
-        "every closed file must receive a publishDiagnostics notification, none held back"
-    );
-}
-
-#[test]
-fn test_workspace_diagnostics_disable_clears_every_closed_file() {
-    // #1070: switching workspace-wide diagnostics off must clear every closed
-    // file a previous scan published, not a budgeted remainder.
-    const CLOSED_FILE_COUNT: usize = 5;
     let mut builder = TestServer::builder();
     for i in 0..CLOSED_FILE_COUNT {
         builder = builder.file(&format!("common/things/f{i}.txt"), "thing = {\n");
@@ -140,33 +107,18 @@ fn test_workspace_diagnostics_disable_clears_every_closed_file() {
     let mut server = builder.spawn();
     server.initialized();
 
-    let rel = |i: usize| format!("common/things/f{i}.txt");
-    let publish_counts = |frames: &[Value], rel: &str| -> Vec<usize> {
-        frames
-            .iter()
-            .filter(|frame| {
-                frame["method"] == "textDocument/publishDiagnostics"
-                    && frame["params"]["uri"]
-                        .as_str()
-                        .is_some_and(|uri| uri.ends_with(rel))
-            })
-            .map(|frame| {
-                frame["params"]["diagnostics"]
-                    .as_array()
-                    .map_or(0, |a| a.len())
-            })
-            .collect()
-    };
-    let collects_scan_publishes = |server: &mut TestServer| -> Vec<Value> {
-        let mut publishes: Vec<Value> = Vec::new();
+    let scan_publishes = |server: &mut TestServer| -> HashMap<String, Vec<usize>> {
+        let mut publishes: HashMap<String, Vec<usize>> = HashMap::new();
         // Bounded: the collector stops on the scan's completion log, not on EOF.
-        server.read_until("the scan completion of this phase", |frame| {
+        server.read_until("the workspace validation summary", |frame| {
             if frame["method"] == "textDocument/publishDiagnostics"
-                && frame["params"]["uri"]
-                    .as_str()
-                    .is_some_and(|uri| uri.contains("/common/things/"))
+                && let Some(uri) = frame["params"]["uri"].as_str()
+                && uri.contains("/common/things/f")
             {
-                publishes.push(frame.clone());
+                let count = frame["params"]["diagnostics"]
+                    .as_array()
+                    .map_or(0, Vec::len);
+                publishes.entry(uri.to_string()).or_default().push(count);
             }
             frame["method"] == "window/logMessage"
                 && frame["params"]["message"]
@@ -176,35 +128,39 @@ fn test_workspace_diagnostics_disable_clears_every_closed_file() {
         publishes
     };
 
-    let first = collects_scan_publishes(&mut server);
-    for i in 0..CLOSED_FILE_COUNT {
-        let rel = rel(i);
-        let counts = publish_counts(&first, &rel);
-        assert!(
-            counts.iter().any(|&c| c > 0),
-            "the first scan must publish errors for {rel}",
-        );
-    }
+    let first = scan_publishes(&mut server);
+    assert_eq!(
+        first.len(),
+        CLOSED_FILE_COUNT,
+        "every closed file must be published, none held back"
+    );
+    assert!(
+        first.values().all(|counts| counts.iter().any(|&c| c > 0)),
+        "the first scan must publish each closed file's errors"
+    );
 
     server.notify(
         "workspace/didChangeConfiguration",
         json!({ "settings": { "workspaceWideDiagnostics": false } }),
     );
-    let cleared = collects_scan_publishes(&mut server);
+    let cleared = scan_publishes(&mut server);
     server.stop();
 
-    for i in 0..CLOSED_FILE_COUNT {
-        let rel = rel(i);
-        let counts = publish_counts(&cleared, &rel);
-        assert!(
-            !counts.is_empty(),
-            "every previously published closed file must be cleared, not just files inside the old clear budget: {rel}"
-        );
-        assert!(
-            counts.iter().all(|&c| c == 0),
-            "the clear publishes must be empty diagnostics for {rel}, got: {counts:?}"
-        );
-    }
+    assert_eq!(
+        cleared.len(),
+        CLOSED_FILE_COUNT,
+        "every previously published closed file must be cleared"
+    );
+    let not_one_empty_clear: Vec<_> = cleared
+        .iter()
+        .filter(|(_, counts)| counts.as_slice() != [0])
+        .collect();
+    assert!(
+        not_one_empty_clear.is_empty(),
+        "each closed file must get exactly one empty clear; {} did not, e.g. {:?}",
+        not_one_empty_clear.len(),
+        not_one_empty_clear.first()
+    );
 }
 
 #[test]

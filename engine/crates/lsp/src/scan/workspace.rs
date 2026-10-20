@@ -1126,27 +1126,18 @@ impl Backend {
                 files_with_errors += 1;
             }
 
-            let is_open = open_uris.contains(&uri);
-            if !is_open {
-                if workspace_wide {
-                    // No per-scan cap: publish every closed file (#1070).
-                    if let Ok(uri_obj) = Url::parse(&uri) {
-                        self.publish_if_closed(uri_obj, diagnostics, source_hash)
-                            .await;
-                    }
-                    self.state
-                        .published_workspace_uris
-                        .lock()
-                        .insert(uri.clone());
-                    published_this_scan.insert(uri);
-                } else {
-                    let previously_published =
-                        { self.state.published_workspace_uris.lock().contains(&uri) };
-                    if previously_published && let Ok(uri_obj) = Url::parse(&uri) {
-                        self.publish_if_closed(uri_obj, Vec::new(), source_hash)
-                            .await;
-                    }
+            // No per-scan cap: publish every closed file (#1070). With
+            // workspace-wide off, the stale sweep below clears earlier ones.
+            if workspace_wide && !open_uris.contains(&uri) {
+                if let Ok(uri_obj) = Url::parse(&uri) {
+                    self.publish_if_closed(uri_obj, diagnostics, source_hash)
+                        .await;
                 }
+                self.state
+                    .published_workspace_uris
+                    .lock()
+                    .insert(uri.clone());
+                published_this_scan.insert(uri);
             }
 
             if publish_throttle.should_wait_after(i) {
