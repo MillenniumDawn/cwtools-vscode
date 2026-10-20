@@ -751,6 +751,8 @@ impl Backend {
         {
             return false;
         }
+        #[cfg(test)]
+        issue_868_measurement::mark_info_writer_attempt();
         let mut info = self.state.info_service.write();
         let exports_before = info.export_fingerprint(uri);
         info.begin_file_replacement(uri);
@@ -1935,6 +1937,336 @@ impl Backend {
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
             (diagnostics, Some(parsed))
         })
+    }
+}
+
+/// Opt-in measurement harness for #868. It is test-only and deliberately
+/// reports wall-clock samples rather than asserting timing thresholds.
+#[cfg(test)]
+pub(crate) mod issue_868_measurement {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, OnceLock};
+    use std::time::Instant;
+    use tower_lsp::lsp_types::{
+        HoverParams, Position, TextDocumentIdentifier, TextDocumentPositionParams,
+        WorkDoneProgressParams,
+    };
+
+    static MARKERS: OnceLock<parking_lot::Mutex<HashMap<&'static str, Arc<AtomicBool>>>> =
+        OnceLock::new();
+    static MARKED_AT: OnceLock<parking_lot::Mutex<HashMap<&'static str, Instant>>> =
+        OnceLock::new();
+
+    fn marker(name: &'static str) -> Option<Arc<AtomicBool>> {
+        MARKERS
+            .get_or_init(Default::default)
+            .lock()
+            .get(name)
+            .cloned()
+    }
+
+    pub(crate) fn mark_info_writer_attempt() {
+        if let Some(marker) = marker("writer") {
+            MARKED_AT
+                .get_or_init(Default::default)
+                .lock()
+                .insert("writer", Instant::now());
+            marker.store(true, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn mark_hover_info_read() {
+        if let Some(marker) = marker("hover") {
+            MARKED_AT
+                .get_or_init(Default::default)
+                .lock()
+                .insert("hover", Instant::now());
+            marker.store(true, Ordering::Release);
+        }
+    }
+
+    fn marked_duration(name: &'static str) -> u128 {
+        MARKED_AT
+            .get_or_init(Default::default)
+            .lock()
+            .remove(name)
+            .expect("operation timestamp")
+            .elapsed()
+            .as_nanos()
+    }
+
+    fn set_marker(name: &'static str, marker: Arc<AtomicBool>) {
+        MARKERS
+            .get_or_init(Default::default)
+            .lock()
+            .insert(name, marker);
+    }
+
+    fn clear_markers() {
+        MARKERS.get_or_init(Default::default).lock().clear();
+        MARKED_AT.get_or_init(Default::default).lock().clear();
+    }
+
+    fn make_hover(uri: &str, character: u32) -> HoverParams {
+        HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: uri.parse().unwrap(),
+                },
+                position: Position::new(4, character),
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        }
+    }
+
+    fn fixture_text() -> String {
+        let path =
+            cwtools_test_support::testfiles().join("performancetest2/events/cc_colony_events.txt");
+        let unit = std::fs::read_to_string(path).expect("large Stellaris validation fixture");
+        assert_eq!(
+            unit.len(),
+            165_006,
+            "fixture bytes must be pinned for comparison"
+        );
+        unit
+    }
+
+    fn configure(backend: &Backend) {
+        let table = &backend.state.string_table;
+        let (ruleset, errors) = cwtools_rules::ruleset_loader::load_ruleset_from_dir(
+            cwtools_test_support::stellaris_config(),
+            table,
+            cwtools_file_manager::file_manager::ScanBudget::default(),
+        );
+        assert!(ruleset.types.len() > 0, "pinned Stellaris ruleset loaded");
+        eprintln!("CWTOOLS_868 config_warnings={}", errors.len());
+        backend.state.rules.write().ruleset = Some(Arc::new(ruleset));
+        backend.state.config.write().language = "stellaris".into();
+    }
+
+    fn open_doc(backend: &Backend, uri: &str, text: &str) {
+        let parsed = Arc::new(parse_string(text, &backend.state.string_table));
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.into(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        backend.state.documents.lock().set_ast(uri, 1, parsed);
+    }
+
+    fn summarize(samples: &[u128]) -> (u128, u128, u128, u128) {
+        let mut sorted = samples.to_vec();
+        sorted.sort_unstable();
+        let median = sorted[sorted.len() / 2];
+        let p95 = sorted[((sorted.len() - 1) * 95).div_ceil(100)];
+        (median, p95, sorted[0], *sorted.last().unwrap())
+    }
+
+    fn diagnostic_signature(diagnostics: &[tower_lsp::lsp_types::Diagnostic]) -> String {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&format!("{diagnostics:?}"), &mut hasher);
+        format!(
+            "{}:{:016x}",
+            diagnostics.len(),
+            std::hash::Hasher::finish(&hasher)
+        )
+    }
+
+    async fn wait_marker(marker: &AtomicBool, operation: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !marker.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{operation} reached InfoService acquisition"));
+    }
+
+    async fn wait_gate(gate: &crate::state::HoldGate) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("large validation reached the prepared phase");
+    }
+
+    struct ReleaseHoldGate(Arc<crate::state::HoldGate>);
+
+    impl Drop for ReleaseHoldGate {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    #[ignore = "manual #868 baseline/candidate measurement; requires pinned Stellaris rules"]
+    async fn measure_large_validation_and_queued_writer_hover() {
+        const WARMUPS: usize = 2;
+        const SAMPLES: usize = 10;
+        let mode = std::env::var("CWTOOLS_868_MODE").unwrap_or_else(|_| "baseline".into());
+        let text = fixture_text();
+        let backend = crate::testing::test_backend();
+        configure(&backend);
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(tmp.path());
+        backend.state.config.write().workspace_prefix =
+            Some(crate::paths::workspace_prefix_of(&workspace_uri));
+        let large_uri = crate::paths::path_to_uri(&tmp.path().join("game/events/large.txt"));
+        let seed_uri = crate::paths::path_to_uri(&tmp.path().join("game/events/seed.txt"));
+        let writer_uri = crate::paths::path_to_uri(&tmp.path().join("game/events/writer.txt"));
+        open_doc(&backend, &large_uri, &text);
+        let probe_hover = backend
+            .hover_impl(make_hover(&large_uri, 12))
+            .await
+            .expect("baseline hover request");
+        assert!(
+            probe_hover.is_some(),
+            "the hover fixture position must resolve to an actual rule-backed item"
+        );
+        let seed_ast = parse_string(&text, &backend.state.string_table);
+        backend.index_parsed_file_as(&seed_uri, &seed_ast, None, "game/events/seed.txt", false);
+        let writer_ast = Arc::new(parse_string(
+            "planet_event = { id = writer.1 }",
+            &backend.state.string_table,
+        ));
+
+        let mut validate_ns = Vec::new();
+        let mut diag_summaries = Vec::new();
+        for i in 0..WARMUPS + SAMPLES {
+            let start = std::time::Instant::now();
+            let (diagnostics, parsed) = backend
+                .parse_and_validate(
+                    &large_uri,
+                    &text,
+                    crate::ValidateTrigger::DidChange,
+                    Some(1),
+                )
+                .await;
+            let elapsed = start.elapsed().as_nanos();
+            assert!(parsed.is_some());
+            let summary = diagnostic_signature(&diagnostics);
+            if i >= WARMUPS {
+                validate_ns.push(elapsed);
+                diag_summaries.push(summary);
+            }
+        }
+        eprintln!(
+            "CWTOOLS_868 uncontended mode={mode} bytes={} warmups={WARMUPS} samples={SAMPLES} median/p95/min/max_ns={:?} diagnostics={:?}",
+            text.len(),
+            summarize(&validate_ns),
+            diag_summaries.first()
+        );
+
+        let mut contention_ns = Vec::new();
+        let mut writer_ns = Vec::new();
+        let mut hover_ns = Vec::new();
+        let mut validation_ns = Vec::new();
+        let mut contention_diag_summaries = Vec::new();
+        for _ in 0..SAMPLES {
+            backend.index_parsed_file_as(&seed_uri, &seed_ast, None, "game/events/seed.txt", false);
+            let gate = crate::state::HoldGate::new(crate::state::HoldPoint::ValidatePrepared);
+            let _release_gate = ReleaseHoldGate(gate.clone());
+            *backend.state.hold_gate.lock() = Some(gate.clone());
+            let validate_backend = backend.clone();
+            let validate_text = text.clone();
+            let validate_uri = large_uri.clone();
+            let validation = tokio::spawn(async move {
+                validate_backend
+                    .parse_and_validate(
+                        &validate_uri,
+                        &validate_text,
+                        crate::ValidateTrigger::DidChange,
+                        Some(1),
+                    )
+                    .await
+            });
+            wait_gate(&gate).await;
+            let writer_mark = Arc::new(AtomicBool::new(false));
+            let hover_mark = Arc::new(AtomicBool::new(false));
+            clear_markers();
+            set_marker("writer", writer_mark.clone());
+            set_marker("hover", hover_mark.clone());
+
+            let writer_backend = backend.clone();
+            let writer_uri_owned = writer_uri.clone();
+            let writer_ast = writer_ast.clone();
+            let writer = tokio::task::spawn_blocking(move || {
+                writer_backend.index_parsed_file_as(
+                    &writer_uri_owned,
+                    &writer_ast,
+                    None,
+                    "game/events/writer.txt",
+                    false,
+                );
+                marked_duration("writer")
+            });
+            wait_marker(&writer_mark, "writer").await;
+            // The marker is immediately before the production write-lock call.
+            // This short settle window lets parking_lot enqueue the writer before hover.
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            let hover_backend = backend.clone();
+            let hover_uri = large_uri.clone();
+            let hover_start = std::time::Instant::now();
+            let hover = tokio::spawn(async move {
+                let result = hover_backend.hover_impl(make_hover(&hover_uri, 12)).await;
+                (hover_start.elapsed().as_nanos(), result)
+            });
+            wait_marker(&hover_mark, "hover").await;
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            let release = std::time::Instant::now();
+            gate.release();
+            let (diagnostics, parsed) = validation.await.unwrap();
+            let validate_elapsed = release.elapsed().as_nanos();
+            assert!(parsed.is_some());
+            contention_diag_summaries.push(diagnostic_signature(&diagnostics));
+            let writer_elapsed = writer.await.unwrap();
+            let (hover_elapsed, hover_result) = hover.await.unwrap();
+            assert!(
+                hover_result.unwrap().is_some(),
+                "the timed hover must resolve the real event id"
+            );
+            let all_elapsed = release.elapsed().as_nanos();
+            validation_ns.push(validate_elapsed);
+            writer_ns.push(writer_elapsed);
+            hover_ns.push(hover_elapsed);
+            contention_ns.push(all_elapsed);
+            clear_markers();
+        }
+        eprintln!(
+            "CWTOOLS_868 contention mode={mode} bytes={} samples={SAMPLES} validate-after-release_ns={:?} writer-call_ns={:?} hover-request_ns={:?} all-complete-after-release_ns={:?}",
+            text.len(),
+            summarize(&validation_ns),
+            summarize(&writer_ns),
+            summarize(&hover_ns),
+            summarize(&contention_ns)
+        );
+        assert!(
+            diag_summaries
+                .first()
+                .is_some_and(|expected| contention_diag_summaries
+                    .iter()
+                    .all(|actual| actual == expected)),
+            "contention validation diagnostics must match the uncontended latest result: {contention_diag_summaries:?}"
+        );
+        eprintln!(
+            "CWTOOLS_868 contention_diagnostics={:?}",
+            contention_diag_summaries.first()
+        );
     }
 }
 

@@ -420,6 +420,8 @@ impl Backend {
             |text| crate::paths::lsp_pos_to_source_in_text(text, pos, &position_encoding),
         );
         let table = self.table_for(&ast);
+        #[cfg(test)]
+        crate::validate::issue_868_measurement::mark_hover_info_read();
         let info_guard = self.state.info_service.read();
         let inline_guard = self.state.inline_scripts.read();
         let prepared = crate::validate::make_prepared(
