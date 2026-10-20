@@ -83,10 +83,9 @@ fn test_validate_workspace_command_returns_summary() {
         Some(1),
         "summary must count the one validated file, got: {result:?}"
     );
-    assert_eq!(
-        result["heldBackFiles"].as_u64(),
-        Some(0),
-        "one file is inside the diagnostics budget, got: {result:?}"
+    assert!(
+        result.get("heldBackFiles").is_none(),
+        "the removed diagnostics budget must not reappear in the summary, got: {result:?}"
     );
     assert_eq!(
         result["filesWithErrors"].as_u64(),

@@ -152,7 +152,6 @@ function commandProgressTitle(
 interface WorkspaceValidationSummary {
 	totalFiles: number;
 	validatedFiles: number;
-	heldBackFiles: number;
 	filesWithErrors: number;
 	totalErrors: number;
 	totalWarnings: number;
@@ -168,7 +167,6 @@ function workspaceValidationSummary(value: unknown): WorkspaceValidationSummary 
 	const fields = [
 		"totalFiles",
 		"validatedFiles",
-		"heldBackFiles",
 		"filesWithErrors",
 		"totalErrors",
 		"totalWarnings",
@@ -185,7 +183,7 @@ function workspaceValidationSummary(value: unknown): WorkspaceValidationSummary 
 	) {
 		return undefined;
 	}
-	// SAFETY: fields.some above proved all eight fields are non-negative safe integers, the invariant WorkspaceValidationSummary encodes.
+	// SAFETY: fields.some above proved all seven fields are non-negative safe integers, the invariant WorkspaceValidationSummary encodes.
 	return record as unknown as WorkspaceValidationSummary;
 }
 
@@ -223,7 +221,7 @@ function showWorkspaceValidationResult(
 		summary.totalInfos,
 		summary.totalHints,
 	);
-	// Totals cover the whole workspace; Problems lists less with workspace-wide diagnostics off, or past the server's publish budget.
+	// Totals cover the whole workspace; Problems lists only open files with workspace-wide diagnostics off.
 	const workspaceWide =
 		workspace
 			.getConfiguration("cwtools")
@@ -231,11 +229,6 @@ function showWorkspaceValidationResult(
 	let caveat: string | undefined;
 	if (!workspaceWide) {
 		caveat = l10n.t("Problems only lists open files while workspace-wide diagnostics are off.");
-	} else if (summary.heldBackFiles > 0) {
-		caveat = l10n.t(
-			"Problems leaves out {0} closed files past the workspace diagnostics budget.",
-			summary.heldBackFiles,
-		);
 	}
 	const message =
 		caveat === undefined ? validatedSummary : `${validatedSummary} ${caveat}`;

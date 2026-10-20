@@ -35,16 +35,6 @@ const PASS2_CHUNK_SIZE: usize = 256;
 #[cfg(test)]
 const PASS2_CHUNK_SIZE: usize = 2;
 
-#[cfg(not(test))]
-const WORKSPACE_DIAGNOSTICS_BUDGET: usize = 2_000;
-#[cfg(test)]
-const WORKSPACE_DIAGNOSTICS_BUDGET: usize = 2;
-
-#[cfg(not(test))]
-const WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET: usize = 2_000;
-#[cfg(test)]
-const WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET: usize = 2;
-
 const WORKSPACE_PUBLISH_BATCH_SIZE: usize = 50;
 
 #[derive(Clone)]
@@ -1098,10 +1088,6 @@ impl Backend {
             return false;
         }
         let publish_total = results.len();
-        let closed_files_total = results
-            .iter()
-            .filter(|result| !open_uris.contains(&result.0))
-            .count();
 
         let (workspace_wide, ignored_codes) = {
             let cfg = self.state.config.read();
@@ -1109,11 +1095,6 @@ impl Backend {
                 cfg.workspace_wide_diagnostics,
                 cfg.ignored_error_codes.clone(),
             )
-        };
-        let mut closed_budget_remaining = if workspace_wide {
-            WORKSPACE_DIAGNOSTICS_BUDGET
-        } else {
-            0
         };
         let mut published_this_scan = std::collections::HashSet::with_capacity(publish_total);
 
@@ -1147,11 +1128,8 @@ impl Backend {
 
             let is_open = open_uris.contains(&uri);
             if !is_open {
-                let previously_published =
-                    { self.state.published_workspace_uris.lock().contains(&uri) };
-                let publish_diagnostics = closed_budget_remaining > 0;
-                if publish_diagnostics {
-                    closed_budget_remaining -= 1;
+                if workspace_wide {
+                    // No per-scan cap: publish every closed file (#1070).
                     if let Ok(uri_obj) = Url::parse(&uri) {
                         self.publish_if_closed(uri_obj, diagnostics, source_hash)
                             .await;
@@ -1161,9 +1139,13 @@ impl Backend {
                         .lock()
                         .insert(uri.clone());
                     published_this_scan.insert(uri);
-                } else if previously_published && let Ok(uri_obj) = Url::parse(&uri) {
-                    self.publish_if_closed(uri_obj, Vec::new(), source_hash)
-                        .await;
+                } else {
+                    let previously_published =
+                        { self.state.published_workspace_uris.lock().contains(&uri) };
+                    if previously_published && let Ok(uri_obj) = Url::parse(&uri) {
+                        self.publish_if_closed(uri_obj, Vec::new(), source_hash)
+                            .await;
+                    }
                 }
             }
 
@@ -1176,7 +1158,6 @@ impl Backend {
             }
         }
 
-        let mut clear_budget_remaining = WORKSPACE_DIAGNOSTICS_CLEAR_BUDGET;
         let stale_uris: Vec<String> = {
             let set = self.state.published_workspace_uris.lock();
             set.iter()
@@ -1184,58 +1165,29 @@ impl Backend {
                 .cloned()
                 .collect()
         };
-        let held_back_clears = stale_uris.len().saturating_sub(clear_budget_remaining);
-        for uri in stale_uris {
-            if clear_budget_remaining == 0 {
-                break;
-            }
-            clear_budget_remaining -= 1;
+        for (i, uri) in stale_uris.into_iter().enumerate() {
             self.state.published_workspace_uris.lock().remove(&uri);
             if let Ok(uri_obj) = Url::parse(&uri) {
                 self.publish_if_closed(uri_obj, Vec::new(), None).await;
             }
+            if publish_throttle.should_wait_after(i) {
+                publish_throttle.wait().await;
+                tokio::task::yield_now().await;
+                if cancel.is_cancelled() {
+                    return false;
+                }
+            }
         }
 
-        let held_back = if workspace_wide {
-            closed_files_total.saturating_sub(WORKSPACE_DIAGNOSTICS_BUDGET)
-        } else {
-            0
-        };
         *self.state.last_scan_summary.lock() = Some(ScanSummary {
             total_files,
             validated_files: publish_total,
-            held_back_files: held_back,
             files_with_errors,
             total_errors,
             total_warnings,
             total_infos,
             total_hints,
         });
-
-        if held_back > 0 {
-            tracing::info!(
-                held_back,
-                clear_held_back = held_back_clears,
-                budget = WORKSPACE_DIAGNOSTICS_BUDGET,
-                "workspace diagnostics budget exhausted; held back closed-file notifications"
-            );
-            self.client
-                .log_message(
-                    MessageType::INFO,
-                    format!(
-                        "Workspace diagnostics budget reached: {} files published, {} held back ({} stale clears deferred).",
-                        WORKSPACE_DIAGNOSTICS_BUDGET, held_back, held_back_clears
-                    ),
-                )
-                .await;
-            self.client
-                .send_notification::<crate::WorkspaceDiagnosticsBudgetReached>(serde_json::json!({
-                    "budget": WORKSPACE_DIAGNOSTICS_BUDGET,
-                    "heldBack": held_back,
-                    "heldBackClears": held_back_clears,
-                }))
-                .await;
-        }
 
         drop(parsed_files);
 
@@ -2233,7 +2185,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_workspace_diagnostics_disabled_clears_previous() {
-        let (backend, _tmp) = setup_error_workspace(2);
+        let (backend, _tmp) = setup_error_workspace(5);
         let progress =
             CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
         let outcome = backend
@@ -2242,7 +2194,7 @@ mod tests {
         assert_eq!(outcome, ScanOutcome::Ran);
         assert_eq!(
             backend.state.published_workspace_uris.lock().len(),
-            2,
+            5,
             "closed files should be published when workspace-wide is on"
         );
 
@@ -2277,13 +2229,14 @@ mod tests {
         assert_eq!(outcome3, ScanOutcome::Ran);
         assert_eq!(
             backend.state.published_workspace_uris.lock().len(),
-            2,
+            5,
             "re-enabling workspace-wide diagnostics must republish closed files"
         );
     }
 
+    /// #1070: closed files publish with no per-scan budget; none is held back.
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_workspace_diagnostics_budget_caps_closed_files() {
+    async fn test_workspace_diagnostics_publishes_every_closed_file() {
         let (backend, _tmp) = setup_error_workspace(4);
         let progress =
             CommandProgress::for_tests(backend.state.clone(), Arc::new(AtomicBool::new(false)));
@@ -2294,18 +2247,8 @@ mod tests {
         let published = backend.state.published_workspace_uris.lock();
         assert_eq!(
             published.len(),
-            WORKSPACE_DIAGNOSTICS_BUDGET,
-            "only the budgeted number of closed files should be published"
-        );
-        assert_eq!(
-            backend
-                .state
-                .last_scan_summary
-                .lock()
-                .as_ref()
-                .map(|summary| summary.held_back_files),
-            Some(4 - WORKSPACE_DIAGNOSTICS_BUDGET),
-            "the summary must say how many closed files the budget held back"
+            4,
+            "every closed file must be published, no file may be held back by a budget"
         );
     }
 

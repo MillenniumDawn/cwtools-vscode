@@ -21,7 +21,6 @@
   "CWTools: workspace validation did not return a summary.": "CWTools: لم يُرجع التحقق من مساحة العمل أي ملخص.",
   "CWTools: validated {0} of {1} files; {2} with errors, {3} errors, {4} warnings, {5} infos, {6} hints.": "CWTools: تم التحقق من {0} من أصل {1} ملفًا؛ {2} بها أخطاء، {3} خطأ، {4} تحذيرًا، {5} معلومة، {6} تلميحًا.",
   "Problems only lists open files while workspace-wide diagnostics are off.": "لا تعرض لوحة المشكلات سوى الملفات المفتوحة ما دامت التشخيصات على مستوى مساحة العمل متوقفة.",
-  "Problems leaves out {0} closed files past the workspace diagnostics budget.": "تستثني لوحة المشكلات {0} ملفًا مغلقًا تجاوز حد تشخيصات مساحة العمل.",
   "Show Problems": "عرض المشكلات",
   "CWTools: no missing localisation found.": "CWTools: لا توجد ترجمات ناقصة.",
   "CWTools: Build graph": "CWTools: بناء المخطط",
@@ -53,7 +52,6 @@
   "CWTools: ready": "CWTools: جاهز",
   "CWTools: stopped": "CWTools: متوقف",
   "Restart Server": "إعادة تشغيل الخادم",
-  "CWTools: workspace diagnostics are limited to {0} closed files per scan; {1} more were held back.": "CWTools: تقتصر تشخيصات مساحة العمل على {0} ملفًا مغلقًا لكل فحص؛ وتم تأجيل {1} ملفًا إضافيًا.",
   "Show Output": "عرض المخرجات",
   "CWTools: failed to restart the language server: {0}": "CWTools: تعذّرت إعادة تشغيل خادم اللغة: {0}",
   "CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.": "CWTools: تعطّل خادم اللغة {0} مرات في آخر 3 دقائق ولن تجري إعادة تشغيله. راجع المخرجات لمزيد من التفاصيل."

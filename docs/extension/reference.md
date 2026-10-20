@@ -79,10 +79,10 @@ Source: `extension/package/package.json` `contributes.configuration`.
 
 - `cwtools.diagnostics.workspaceWide` (boolean)
   - Default: `true`
-  - Publish closed-file diagnostics during workspace scans, up to 2,000 files
-    per scan. Set to `false` to keep Problems scoped to open files; workspace
-    indexing and validation summaries still include all files. Applies live
-    without a window reload.
+  - Publish diagnostics for every closed file during workspace scans. Set to
+    `false` to keep Problems scoped to open files; workspace indexing and
+    validation summaries still include all files. Applies live without a
+    window reload.
 
 - `cwtools.ignore_patterns` (array)
   - Default: `["**/99_README**.txt"]`

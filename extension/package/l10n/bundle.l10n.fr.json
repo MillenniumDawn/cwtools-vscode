@@ -21,7 +21,6 @@
   "CWTools: workspace validation did not return a summary.": "CWTools : la validation de l'espace de travail n'a renvoyé aucun résumé.",
   "CWTools: validated {0} of {1} files; {2} with errors, {3} errors, {4} warnings, {5} infos, {6} hints.": "CWTools : {0} fichiers validés sur {1} ; {2} avec des erreurs, {3} erreurs, {4} avertissements, {5} informations, {6} indications.",
   "Problems only lists open files while workspace-wide diagnostics are off.": "Le panneau Problèmes ne liste que les fichiers ouverts tant que les diagnostics sur tout l'espace de travail sont désactivés.",
-  "Problems leaves out {0} closed files past the workspace diagnostics budget.": "Le panneau Problèmes omet {0} fichiers fermés au-delà de la limite des diagnostics de l'espace de travail.",
   "Show Problems": "Afficher les problèmes",
   "CWTools: no missing localisation found.": "CWTools : aucune localisation manquante trouvée.",
   "CWTools: Build graph": "CWTools : construction du graphe",
@@ -53,7 +52,6 @@
   "CWTools: ready": "CWTools : prêt",
   "CWTools: stopped": "CWTools : arrêté",
   "Restart Server": "Redémarrer le serveur",
-  "CWTools: workspace diagnostics are limited to {0} closed files per scan; {1} more were held back.": "CWTools : les diagnostics de l’espace de travail sont limités à {0} fichiers fermés par analyse ; {1} autres ont été mis de côté.",
   "Show Output": "Afficher la sortie",
   "CWTools: failed to restart the language server: {0}": "CWTools : échec du redémarrage du serveur de langage : {0}",
   "CWTools: the language server crashed {0} times in the last 3 minutes and won't be restarted. See the output for details.": "CWTools : le serveur de langage a planté {0} fois au cours des 3 dernières minutes et ne sera pas redémarré. Voir la sortie pour plus de détails."
