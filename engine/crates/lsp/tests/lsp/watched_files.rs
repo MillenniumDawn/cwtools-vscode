@@ -232,25 +232,19 @@ fn test_watched_bulk_flood_uses_rescan_not_per_file() {
     );
 }
 
-const RESOURCE_RULES: &str = r#"
-types = {
-    type[decision] = { path = "game/common/decisions" }
-}
-decision = {
-    ## cardinality = 0..1
-    picture = filepath[gfx/,.dds]
-}
-"#;
-
 const PICTURE_DOC_REL: &str = "common/decisions/d.txt";
 
-/// A started server whose file index holds one texture, with a decision open
-/// whose `picture` names a texture that is not on disk yet (CW113).
-fn resource_server() -> TestServer {
+/// A started server whose file index holds `gfx/present.<ext>`, with a decision open
+/// whose `picture` names a `gfx/new_pic.<ext>` that is not on disk yet (CW113).
+fn picture_server(ext: &str) -> TestServer {
+    let rules = format!(
+        "types = {{\n    type[decision] = {{ path = \"game/common/decisions\" }}\n}}\n\
+         decision = {{\n    ## cardinality = 0..1\n    picture = filepath[gfx/,.{ext}]\n}}\n"
+    );
     let mut server = storm_start(
         storm_base()
-            .rules_file("r.cwt", RESOURCE_RULES)
-            .file("gfx/present.dds", "dds"),
+            .rules_file("r.cwt", &rules)
+            .file(&format!("gfx/present.{ext}"), "present"),
     );
     let text = "adec = {\n    picture = new_pic\n}\n";
     server.write_file(PICTURE_DOC_REL, text);
@@ -258,7 +252,7 @@ fn resource_server() -> TestServer {
     let opened = server.wait_for_diagnostics("d.txt");
     assert!(
         publish_has_code(&opened, "CW113"),
-        "the missing texture must report CW113 before it exists, got: {opened}"
+        "the missing picture must report CW113 before it exists, got: {opened}"
     );
     server
 }
@@ -280,7 +274,7 @@ fn last_picture_publish(frames: &[Value]) -> &Value {
 /// Creates the referenced texture plus `filler` unrelated ones, reports them in
 /// one watched batch, and checks the open decision revalidates in place.
 fn created_textures_clear_cw113(filler: usize) {
-    let mut server = resource_server();
+    let mut server = picture_server("dds");
     let mut uris: Vec<String> = (0..filler)
         .map(|i| server.write_file_uri(&format!("gfx/burst/t{i}.dds"), "dds"))
         .collect();
@@ -324,29 +318,7 @@ fn test_watched_created_texture_clears_cw113_without_a_reindex() {
 
 #[test]
 fn test_watched_created_script_clears_cw113_without_a_reindex() {
-    const RULES: &str = r#"
-types = {
-    type[decision] = { path = "game/common/decisions" }
-}
-decision = {
-    ## cardinality = 0..1
-    picture = filepath[gfx/,.gfx]
-}
-"#;
-    let mut server = storm_start(
-        storm_base()
-            .rules_file("r.cwt", RULES)
-            .file("gfx/present.gfx", "# existing script target\n"),
-    );
-    let text = "adec = {\n    picture = new_pic\n}\n";
-    server.write_file(PICTURE_DOC_REL, text);
-    server.open(PICTURE_DOC_REL, text);
-    let opened = server.wait_for_diagnostics("d.txt");
-    assert!(
-        publish_has_code(&opened, "CW113"),
-        "the missing script target must report CW113 before it exists, got: {opened}"
-    );
-
+    let mut server = picture_server("gfx");
     let target = server.write_file_uri("gfx/new_pic.gfx", "# no exported names\n");
     server.send(&watched_created(std::slice::from_ref(&target)));
 
