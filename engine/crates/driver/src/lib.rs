@@ -1273,11 +1273,19 @@ pub fn build_file_index_with_vanilla_shadow(
         workspace_ignore_dirs,
         DiscoveryPolicy::Workspace,
     );
-    let workspace_logical_paths: Vec<&str> = workspace_paths.iter().map(String::as_str).collect();
-    let parent_paths = visible_parent_files(
+    // The workspace claims its own paths so a watched delete knows what to drop (#1067).
+    for path in &workspace_paths {
+        index.claim_workspace(path);
+    }
+    // A parent file the workspace shadows only by the same path still provides a
+    // fallback; one hidden by a higher `replace_path` is gone for good (#1067).
+    for (kept, shadowed) in walk_parent_layers(
         parent_roots,
         workspace_root,
-        &workspace_logical_paths,
+        &workspace_paths
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         |root| {
             discover_file_index_paths(
                 root,
@@ -1287,22 +1295,31 @@ pub fn build_file_index_with_vanilla_shadow(
             )
         },
         String::as_str,
-    );
-    index.add_paths(workspace_paths);
-    index.add_paths(parent_paths);
+    ) {
+        for path in kept {
+            index.add_paths(std::iter::once(path.clone()));
+            index.record_fallback(&path);
+        }
+        for path in shadowed {
+            index.record_fallback(&path);
+        }
+    }
+    // Base-game paths always add their spelling as fallback: parents were recorded
+    // first, so the highest-priority provider keeps it (#1067).
+    let vanilla_add = |path: String| {
+        index.add_paths(std::iter::once(path.clone()));
+        index.record_fallback(&path);
+    };
     match vanilla {
-        VanillaFiles::Cached(paths) => index.add_paths(
-            paths
-                .into_iter()
-                .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path))),
-        ),
+        VanillaFiles::Cached(paths) => paths
+            .into_iter()
+            .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path)))
+            .for_each(vanilla_add),
         VanillaFiles::Install(dir) => {
-            let paths = discover_file_index_paths(dir, &[], &[], DiscoveryPolicy::Vanilla);
-            index.add_paths(
-                paths
-                    .into_iter()
-                    .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path))),
-            );
+            discover_file_index_paths(dir, &[], &[], DiscoveryPolicy::Vanilla)
+                .into_iter()
+                .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path)))
+                .for_each(vanilla_add)
         }
     }
     index
@@ -1544,10 +1561,35 @@ pub fn visible_parent_files<T>(
     parent_roots: &[PathBuf],
     primary_root: &Path,
     primary_logical_paths: &[&str],
-    mut discover: impl FnMut(&Path) -> Vec<T>,
+    discover: impl FnMut(&Path) -> Vec<T>,
     logical_path: impl Fn(&T) -> &str,
 ) -> Vec<T> {
-    let replace_paths = |root: &Path| {
+    walk_parent_layers(
+        parent_roots,
+        primary_root,
+        primary_logical_paths,
+        discover,
+        logical_path,
+    )
+    .into_iter()
+    .rev()
+    .flat_map(|(kept, _)| kept)
+    .collect()
+}
+
+/// The layer walk behind [`visible_parent_files`] and the file-index builder, so a
+/// watched delete's fallback can't drift from discovery (#1067). Returns one entry per
+/// parent layer from last-loaded down: `kept` are the files that reach the index, and
+/// `same_path_shadowed` are files hidden only by a higher layer's same path — still
+/// lower-layer providers behind a watched delete, unlike `replace_path`-hidden files.
+fn walk_parent_layers<T>(
+    parent_roots: &[PathBuf],
+    primary_root: &Path,
+    primary_logical_paths: &[&str],
+    mut discover: impl FnMut(&Path) -> Vec<T>,
+    logical_path: impl Fn(&T) -> &str,
+) -> Vec<(Vec<T>, Vec<String>)> {
+    let describe = |root: &Path| {
         read_root_descriptor(root)
             .map(|descriptor| descriptor.replace_paths)
             .unwrap_or_default()
@@ -1555,18 +1597,29 @@ pub fn visible_parent_files<T>(
     let mut shadow = LayerShadow::default();
     shadow.claim(
         primary_logical_paths.iter().copied(),
-        &replace_paths(primary_root),
+        &describe(primary_root),
     );
-    let mut layers: Vec<Vec<T>> = Vec::with_capacity(parent_roots.len());
+    let mut layers = Vec::with_capacity(parent_roots.len());
     for root in parent_roots.iter().rev() {
-        let kept: Vec<T> = discover(root)
-            .into_iter()
-            .filter(|file| !shadow.hides(logical_path(file)))
-            .collect();
-        shadow.claim(kept.iter().map(&logical_path), &replace_paths(root));
-        layers.push(kept);
+        let mut kept: Vec<T> = Vec::new();
+        let mut kept_logicals: Vec<String> = Vec::new();
+        let mut shadowed: Vec<String> = Vec::new();
+        for file in discover(root) {
+            let logical = logical_path(&file);
+            if shadow.hides(logical) {
+                if !shadow.is_replaced(logical) {
+                    shadowed.push(logical.to_string());
+                }
+                continue;
+            }
+            kept_logicals.push(logical.to_string());
+            kept.push(file);
+        }
+        // One claim per layer, after it is fully walked, exactly as discovery saw it.
+        shadow.claim(kept_logicals.iter().map(String::as_str), &describe(root));
+        layers.push((kept, shadowed));
     }
-    layers.into_iter().rev().flatten().collect()
+    layers
 }
 
 /// [`visible_parent_files`] over script files, each parent discovered the

@@ -10,6 +10,7 @@
 
 mod common;
 mod discovery;
+mod layered_deletes;
 mod loc;
 mod parse_cache;
 mod session;

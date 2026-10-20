@@ -631,10 +631,12 @@ impl Backend {
             let mut info = self.state.info_service.write();
             let before = info.export_fingerprint(uri);
             info.clear_file(uri);
-            if let Some(rel) = rel
-                && !info.type_index.file_index.is_empty()
-            {
-                Arc::make_mut(&mut info.type_index).file_index.remove(&rel);
+            if let Some(rel) = rel {
+                // A lower layer may still provide the path behind the ignored file; drop
+                // only the workspace's own claim (#1067).
+                Arc::make_mut(&mut info.type_index)
+                    .file_index
+                    .release_workspace(&rel);
             }
             info.export_fingerprint(uri) != before
         };
@@ -3895,7 +3897,7 @@ mod ignored_tests {
             let mut info = backend.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .file_index
-                .insert("common/foo.txt");
+                .claim_workspace("common/foo.txt");
             assert!(info.type_index.file_index.contains("common/foo.txt"));
         }
         backend.state.doc_tokens.write().insert(
@@ -4200,8 +4202,9 @@ mod ignored_tests {
         {
             let mut info = backend.state.info_service.write();
             let type_index = Arc::make_mut(&mut info.type_index);
-            type_index.file_index.insert("ignored.txt");
-            type_index.file_index.insert("kept.txt");
+            // Workspace claims: the config change must drop only the ignored one (#1067).
+            type_index.file_index.claim_workspace("ignored.txt");
+            type_index.file_index.claim_workspace("kept.txt");
         }
         {
             let mut cfg = backend.state.config.write();
@@ -4410,17 +4413,20 @@ mod ignored_tests {
             "re-saving an indexed resource must not touch the index"
         );
 
-        // The index merges workspace, parent and vanilla paths, so a delete must not
-        // remove a key another layer may still provide.
+        // A delete drops only the workspace's own contribution (#1067): nothing else
+        // provides gfx/new.dds here, so the entry must leave and leave a CW113 hole.
         std::fs::remove_file(&texture).unwrap();
         backend
             .process_watched_batch(Default::default(), vec![uri])
             .await;
         assert!(
-            indexed(),
-            "a resource delete must leave the file index alone"
+            !indexed(),
+            "a workspace-only resource delete must drop its file-index entry"
         );
-        assert_eq!(revision(), after_create);
+        assert!(
+            revision() > after_create,
+            "dropping an index entry must bump the info revision"
+        );
 
         let ghost = Url::from_file_path(tmp.path().join("gfx/ghost.dds"))
             .unwrap()
@@ -4438,6 +4444,346 @@ mod ignored_tests {
                 .contains("gfx/ghost.dds"),
             "an event for a file that is gone must not index it"
         );
+    }
+
+    /// A workspace-only watched delete (here of a base texture) must drop the file-index
+    /// entry so an open dependent's filepath reference reports CW113 (#1067).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_workspace_delete_reports_cw113_to_open_dependents() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let primary = tmp.path().join("mod");
+        std::fs::create_dir_all(primary.join("gfx")).unwrap();
+        let texture = primary.join("gfx/thing.dds");
+        std::fs::write(&texture, [0x00]).unwrap();
+        let ws_uri = Url::from_file_path(&primary).unwrap().to_string();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&ws_uri).await;
+        let table = StringTable::new();
+        let parsed = parse_string(
+            "spriteType = {\n    texturefile = filepath[gfx/]\n}\ntypes = {\n    type[spriteType] = {\n        path = \"gfx\"\n    }\n}\n",
+            &table,
+        );
+        let ruleset = cwtools_rules::rules_converter::ast_to_ruleset(&parsed, &table);
+        backend.state.rules.write().ruleset = Some(Arc::new(ruleset));
+        let doc_uri = Url::from_file_path(primary.join("gfx/ref.gfx"))
+            .unwrap()
+            .to_string();
+        let doc_text = "spriteType = { texturefile = \"thing.dds\" }";
+        // Parse like `parse_and_validate` does, so string ids resolve through the shared table.
+        let doc_ast = parse_string(doc_text, &backend.state.string_table);
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                doc_uri.clone(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(doc_text),
+                    ast: Some(Arc::new(doc_ast)),
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        {
+            let mut info = backend.state.info_service.write();
+            let file_index = &mut Arc::make_mut(&mut info.type_index).file_index;
+            // Workspace claims: CW113 is gated on a non-empty index, and the delete must
+            // drop only thing.dds (#1067).
+            file_index.claim_workspace("gfx/other.dds");
+            file_index.claim_workspace("gfx/thing.dds");
+        }
+        let cw113_code =
+            |d: &Diagnostic| matches!(d.code, Some(NumberOrString::String(ref c)) if c == "CW113");
+
+        // The reference resolves while the file exists: no CW113 before the delete.
+        backend.revalidate_open_dependents("", 0, None).await;
+        let clean = socket.next().await.expect("initial dependent publish");
+        assert_eq!(clean.method(), "textDocument/publishDiagnostics");
+        let clean: PublishDiagnosticsParams =
+            serde_json::from_value(clean.params().cloned().unwrap_or_default())
+                .expect("publishDiagnostics params");
+        assert!(
+            !clean.diagnostics.iter().any(cw113_code),
+            "the reference must resolve while the file is indexed: {:?}",
+            clean.diagnostics
+        );
+
+        std::fs::remove_file(&texture).unwrap();
+        let texture_uri = Url::from_file_path(&texture).unwrap().to_string();
+        backend
+            .process_watched_batch(Default::default(), vec![texture_uri.clone()])
+            .await;
+        assert!(
+            !backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("gfx/thing.dds"),
+            "a workspace-only delete must drop its file-index entry"
+        );
+        let published = socket
+            .next()
+            .await
+            .expect("dependent publish after the delete");
+        assert_eq!(published.method(), "textDocument/publishDiagnostics");
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(published.params().cloned().unwrap_or_default())
+                .expect("publishDiagnostics params");
+        assert_eq!(
+            published
+                .diagnostics
+                .iter()
+                .filter(|d| cw113_code(d))
+                .count(),
+            1,
+            "the open dependent must report CW113 after the watched delete: {:?}",
+            published.diagnostics
+        );
+
+        // Re-creating the file restores resolution with no further edit (#1067).
+        std::fs::write(&texture, [0x00]).unwrap();
+        backend
+            .process_watched_batch(
+                std::collections::HashSet::from([texture_uri]),
+                Default::default(),
+            )
+            .await;
+        assert!(
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("gfx/thing.dds"),
+            "a re-created file must re-enter the file index"
+        );
+        let restored = socket
+            .next()
+            .await
+            .expect("dependent publish after re-create");
+        assert_eq!(restored.method(), "textDocument/publishDiagnostics");
+        let restored: PublishDiagnosticsParams =
+            serde_json::from_value(restored.params().cloned().unwrap_or_default())
+                .expect("publishDiagnostics params");
+        assert!(
+            !restored.diagnostics.iter().any(cw113_code),
+            "the reference must resolve again after the re-create: {:?}",
+            restored.diagnostics
+        );
+    }
+
+    /// A watched delete of a file the base game also ships must keep the index entry so
+    /// the override disappears without moving a base-game path out from under a
+    /// reference (#1067).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_vanilla_override_delete_keeps_the_entry() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let primary = tmp.path().join("mod");
+        std::fs::create_dir_all(primary.join("gfx")).unwrap();
+        let texture = primary.join("gfx/thing.dds");
+        std::fs::write(&texture, [0x00]).unwrap();
+        let ws_uri = Url::from_file_path(&primary).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        backend.stage_vanilla_payload(cwtools_info::vanilla_cache::VanillaCacheData {
+            per_type: std::collections::HashMap::new(),
+            aux: cwtools_info::vanilla_cache::VanillaCacheAux {
+                file_paths: vec!["gfx/thing.dds".to_string()],
+                ..Default::default()
+            },
+        });
+        backend.merge_pending_vanilla_index();
+        let indexed = || {
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("gfx/thing.dds")
+        };
+        assert!(indexed(), "setup: the merge populated the shared path");
+
+        std::fs::remove_file(&texture).unwrap();
+        let texture_uri = Url::from_file_path(&texture).unwrap().to_string();
+        backend
+            .process_watched_batch(Default::default(), vec![texture_uri])
+            .await;
+        assert!(
+            indexed(),
+            "the base game still provides the path, so the override delete must keep it"
+        );
+    }
+
+    /// Same contract against a parent mod: deleting the workspace override leaves the
+    /// parent's same-path file as the visible provider (#1067).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_parent_override_delete_keeps_the_entry() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let primary = tmp.path().join("mod");
+        let parent = tmp.path().join("parent");
+        std::fs::create_dir_all(primary.join("gfx")).unwrap();
+        std::fs::create_dir_all(parent.join("gfx")).unwrap();
+        let texture = primary.join("gfx/thing.dds");
+        std::fs::write(&texture, [0x00]).unwrap();
+        std::fs::write(parent.join("gfx/thing.dds"), [0x00]).unwrap();
+        let ws_uri = Url::from_file_path(&primary).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        {
+            let mut cfg = backend.state.config.write();
+            cfg.parent_roots = vec![parent];
+            cfg.refresh_roots();
+        }
+        // Build like the real scan does, so the parent's same-path copy is recorded as
+        // the fallback spelling behind the workspace claim (#1067).
+        backend.stage_vanilla_payload(cwtools_info::vanilla_cache::VanillaCacheData {
+            per_type: std::collections::HashMap::new(),
+            aux: cwtools_info::vanilla_cache::VanillaCacheAux::default(),
+        });
+        backend.merge_pending_vanilla_index();
+
+        std::fs::remove_file(&texture).unwrap();
+        let texture_uri = Url::from_file_path(&texture).unwrap().to_string();
+        backend
+            .process_watched_batch(Default::default(), vec![texture_uri])
+            .await;
+        assert!(
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("gfx/thing.dds"),
+            "the parent still provides the path, so the override delete must keep it"
+        );
+    }
+
+    /// Mixed case: the workspace ships `Foo.dds` while the base game caches `foo.dds`;
+    /// the override delete must keep the entry under the base game's spelling (#1067).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_mixed_case_override_delete_keeps_the_entry() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let primary = tmp.path().join("mod");
+        std::fs::create_dir_all(primary.join("gfx")).unwrap();
+        let texture = primary.join("gfx/Foo.dds");
+        std::fs::write(&texture, [0x00]).unwrap();
+        let ws_uri = Url::from_file_path(&primary).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        backend.stage_vanilla_payload(cwtools_info::vanilla_cache::VanillaCacheData {
+            per_type: std::collections::HashMap::new(),
+            aux: cwtools_info::vanilla_cache::VanillaCacheAux {
+                file_paths: vec!["gfx/foo.dds".to_string()],
+                ..Default::default()
+            },
+        });
+        backend.merge_pending_vanilla_index();
+        let indexed = || {
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .contains("gfx/foo.dds")
+        };
+        assert!(indexed(), "setup: the merge populated the mixed-case path");
+
+        std::fs::remove_file(&texture).unwrap();
+        let texture_uri = Url::from_file_path(&texture).unwrap().to_string();
+        backend
+            .process_watched_batch(Default::default(), vec![texture_uri])
+            .await;
+        assert!(
+            indexed(),
+            "the base game's spelling must stay visible after the override delete"
+        );
+    }
+
+    /// A re-save of an already-owned resource changes nothing, so the InfoService's
+    /// retained Arc keeps its identity instead of cloning the whole index (#1067).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_resource_resave_keeps_the_index_snapshot() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws_uri = Url::from_file_path(tmp.path()).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        let texture = tmp.path().join("gfx/new.dds");
+        std::fs::create_dir_all(texture.parent().unwrap()).unwrap();
+        std::fs::write(&texture, [0xFF, 0xFE, 0x00]).unwrap();
+        let uri = Url::from_file_path(&texture).unwrap().to_string();
+        {
+            let mut info = backend.state.info_service.write();
+            Arc::make_mut(&mut info.type_index)
+                .file_index
+                .insert("dummy.txt");
+        }
+        let revision = || backend.state.info_revision.load(Ordering::Relaxed);
+        let created = std::collections::HashSet::from([uri.clone()]);
+        backend.process_watched_batch(created.clone(), vec![]).await;
+        let snapshot = Arc::clone(&backend.state.info_service.read().type_index);
+        let revision_after_create = revision();
+
+        backend.process_watched_batch(created, vec![]).await;
+
+        assert!(
+            Arc::ptr_eq(&snapshot, &backend.state.info_service.read().type_index),
+            "an unchanged re-save must not clone the index snapshot"
+        );
+        assert_eq!(revision(), revision_after_create);
+    }
+
+    /// A created resource over a path only the base game provides gains workspace
+    /// ownership without adding a key or bumping the revision, and the base game keeps
+    /// the path visible after the override's delete (#1067).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_lower_only_resource_create_claims_ownership() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let primary = tmp.path().join("mod");
+        std::fs::create_dir_all(primary.join("gfx")).unwrap();
+        let ws_uri = Url::from_file_path(&primary).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        backend.stage_vanilla_payload(cwtools_info::vanilla_cache::VanillaCacheData {
+            per_type: std::collections::HashMap::new(),
+            aux: cwtools_info::vanilla_cache::VanillaCacheAux {
+                file_paths: vec!["gfx/base.dds".to_string()],
+                ..Default::default()
+            },
+        });
+        backend.merge_pending_vanilla_index();
+        let texture = primary.join("gfx/Base.dds");
+        std::fs::write(&texture, [0x00]).unwrap();
+        let uri = Url::from_file_path(&texture).unwrap().to_string();
+        let revision = || backend.state.info_revision.load(Ordering::Relaxed);
+        let revision_before = revision();
+
+        backend
+            .process_watched_batch(std::collections::HashSet::from([uri.clone()]), vec![])
+            .await;
+
+        {
+            let index = &backend.state.info_service.read().type_index.file_index;
+            assert!(index.contains("gfx/base.dds"));
+            assert!(
+                index.is_workspace_claimed("gfx/base.dds"),
+                "the create must claim the lower-only path, not just leave the key"
+            );
+        }
+        assert_eq!(revision(), revision_before, "no new key, no revision bump");
+
+        std::fs::remove_file(&texture).unwrap();
+        backend
+            .process_watched_batch(Default::default(), vec![uri])
+            .await;
+        let index = &backend.state.info_service.read().type_index.file_index;
+        assert!(
+            index.contains("gfx/base.dds"),
+            "the base game keeps the path visible"
+        );
+        assert!(!index.is_workspace_claimed("gfx/base.dds"));
     }
 
     #[tokio::test(flavor = "multi_thread")]
