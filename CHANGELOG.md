@@ -1,6 +1,9 @@
 ### Unreleased
 
 * Document per-file keep/migrate decisions for the Node-facing build helpers and tool-native configuration. (#987)
+#### Tooling
+
+* Document the `md_bench` and parser `probe` examples in `docs/engine/PROFILING.md`: how `md_bench` finds its corpus, what each prints, and that neither is a repeatable benchmark. (#915)
 
 ### 4.0.1
 
