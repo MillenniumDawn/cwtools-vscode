@@ -164,23 +164,20 @@ also what keeps `scripts/coverage.py` from shadowing the `coverage` package.
 
 ### Build helper language decisions
 
-The small JavaScript files in the build and test path stay JavaScript. Each
-uses a Node or VS Code test-runner interface directly; moving it to Python
-would add a second interface layer without making the Python toolchain cover
-the behavior that actually runs it.
+The JavaScript and shell files in the build and test path stay as they are.
+Each is an entry point that Node, npm, ESLint, Vitest or `vscode-test` loads
+directly, so a Python version would still need a JavaScript or shell wrapper
+in front of it.
 
 | File | Decision | Reason |
 | ---- | -------- | ------ |
-| `scripts/build/python.mjs` | Stay | npm invokes this Node shim to find the platform's Python command and forward its arguments, standard streams, and exit status. |
-| `scripts/build/host-test-discovery.mjs` | Stay | It imports the real `.vscode-test.mjs` module and checks its test list from Node; reimplementing that config loading in Python would duplicate JavaScript behavior. |
-| `.vscode-test.mjs` | Stay | `vscode-test` discovers this conventional JavaScript config directly; migrating it would require bypassing that runner entry point. |
-| `eslint.config.mjs` | Stay | ESLint's flat config is a native JavaScript module that imports ESLint and TypeScript ESLint configuration objects. |
-| `build.sh` | Stay | The Unix entry point forwards arguments to the shared Node-to-Python launcher, preserving the established `./build.sh <command>` interface. |
-| `build.cmd` | Stay | The Windows entry point forwards arguments to the same launcher, preserving the established `build.cmd <command>` interface. |
-
-The Python implementation and its tests remain covered by the Python
-toolchain described above; these decisions only cover the Node-facing glue
-and tool-native configuration.
+| `scripts/build/python.mjs` | Stay | It finds the Python command that npm scripts run, so it cannot be Python. It forwards arguments, standard streams and the exit status. |
+| `scripts/build/host-test-discovery.mjs` | Stay | It imports the real `.vscode-test.mjs` module and checks its test list from Node; a Python copy would reimplement that config loading. |
+| `scripts/build/hosttest_config.mjs` | Stay | `.vscode-test.mjs` imports it for the launch arguments and the check that a run came through `hosttest.py`; a JavaScript config cannot import Python. |
+| `.vscode-test.mjs` | Stay | `vscode-test` discovers this JavaScript config by convention; migrating it would mean bypassing that runner entry point. |
+| `eslint.config.mjs` | Stay | ESLint's flat config is a JavaScript module that imports the ESLint and TypeScript ESLint config objects. |
+| `vitest.config.mts` | Stay | Vitest loads its config as a native module. |
+| `build.sh`, `build.cmd` | Stay | They are the bootstrap, so they cannot be Python. Each hands its arguments to `python.mjs`, which keeps the Python lookup in one place. |
 
 ### The extension-host window
 
