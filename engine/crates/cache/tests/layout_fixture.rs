@@ -1,6 +1,7 @@
 //! Golden format/layout contract for the `.cwb` rkyv payload.
 
 use cwtools_cache::cache_format::CachedFile;
+use cwtools_cache::io::CacheError;
 use cwtools_cache::{convert, io};
 use cwtools_parser::ast::{Arena, Child, Value};
 use cwtools_parser::parser::parse_string;
@@ -8,7 +9,7 @@ use cwtools_string_table::string_table::StringTable;
 use std::fmt::Write as _;
 
 const MAGIC: &[u8; 4] = b"CWB\0";
-const FORMAT_VERSION: u8 = 5;
+const FORMAT_VERSION: u8 = 6;
 const HEADER_LEN: usize = MAGIC.len() + 1;
 const SOURCE: &str = r#"# issue 520 layout fixture
 alpha = "one"
@@ -20,7 +21,9 @@ rgb = rgb { 255 0 0 }
 hsv = hsv { 0.5 1.0 1.0 }
 hsv_degrees = hsv360 { 340 60 55 }
 "#;
-const FIXTURE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/layout-v5.cwb");
+const FIXTURE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/layout-v6.cwb");
+/// The tracked previous-format fixture, kept as the old-layout rejection case.
+const OLD_FIXTURE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/layout-v5.cwb");
 
 fn canonical(arena: &Arena, roots: &[Child], table: &StringTable) -> String {
     fn canonical_value(value: &Value, table: &StringTable, out: &mut String) {
@@ -70,8 +73,10 @@ fn canonical(arena: &Arena, roots: &[Child], table: &StringTable) -> String {
     for comment in &arena.comments {
         let _ = write!(
             out,
-            "|comment text={:?} pos={:?}",
-            comment.text, comment.pos
+            "|comment text={:?} range={:?} pos={:?}",
+            arena.comment_text(comment).unwrap_or_default(),
+            comment.text,
+            comment.pos
         );
     }
     out
@@ -129,5 +134,30 @@ fn versioned_layout_fixture_has_expected_ast_and_rkyv_payload() {
         payload(&generated),
         payload(&fixture),
         "serialized rkyv payload changed without updating the tagged fixture"
+    );
+}
+
+/// The tracked v5 fixture pins the previous on-disk layout: after the v6 bump
+/// the io load path must reject it as an incompatible header, not reinterpret
+/// it. Same header refusal as `common::is_bad_header` in the corrupt target.
+#[test]
+fn previous_layout_fixture_is_rejected_as_an_incompatible_header() {
+    let previous = std::fs::read(OLD_FIXTURE_PATH).expect("committed previous-layout fixture");
+    let tmp = tempfile::NamedTempFile::with_suffix(".cwb").unwrap();
+    std::fs::write(tmp.path(), &previous).unwrap();
+    let table = StringTable::new();
+    let err = io::with_archived_file(tmp.path(), |archived| {
+        convert::archived_to_arena(archived, &table).map(|_| ())
+    })
+    .expect_err("the previous layout must not load");
+    assert!(
+        matches!(
+            err,
+            CacheError::Deserialize {
+                msg: "incompatible or missing cache header",
+                source: None
+            }
+        ),
+        "got {err:?}"
     );
 }

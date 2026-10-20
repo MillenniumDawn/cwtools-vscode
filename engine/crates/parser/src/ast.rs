@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cwtools_string_table::string_table::{OverlayGuard, StringTokens};
 
 #[derive(Debug, thiserror::Error)]
@@ -91,8 +93,17 @@ pub struct LeafValue {
     pub color_prefix: Option<ColorPrefix>,
 }
 
+/// Byte range of a comment's text in its parse's comment pool
+/// ([`Arena::comment_pool`]); retaining a comment copies no text (#575).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommentRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct Comment {
-    pub text: String,
+    pub text: CommentRange,
     pub pos: SourceRange,
 }
 
@@ -100,6 +111,9 @@ pub struct Arena {
     pub leaves: Vec<Leaf>,
     pub leaf_values: Vec<LeafValue>,
     pub comments: Vec<Comment>,
+    /// Comment texts; arenas sharing comments share the same handle. `None`
+    /// for comment-free files and hand-built arenas.
+    pub comment_pool: Option<Arc<String>>,
 }
 
 impl Default for Arena {
@@ -114,7 +128,16 @@ impl Arena {
             leaves: Vec::new(),
             leaf_values: Vec::new(),
             comments: Vec::new(),
+            comment_pool: None,
         }
+    }
+
+    /// Retained text of a comment, sliced from the comment pool. `None` for
+    /// poolless arenas or unresolvable ranges.
+    pub fn comment_text(&self, comment: &Comment) -> Option<&str> {
+        self.comment_pool
+            .as_deref()?
+            .get(comment.text.start as usize..comment.text.end as usize)
     }
 
     pub fn push_leaf(&mut self, leaf: Leaf) -> LeafIdx {

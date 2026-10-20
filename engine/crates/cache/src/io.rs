@@ -33,7 +33,9 @@ pub const ZSTD_LEVEL: i32 = 3;
 const MAGIC: &[u8; 4] = b"CWB\x00";
 
 /// Bump when the serialized rkyv layout changes so incompatible cache entries miss.
-const FORMAT_VERSION: u8 = 5;
+/// v6: comment texts moved from a per-comment `String` into one pooled buffer
+/// each [`CachedComment`] ranges into (#575).
+const FORMAT_VERSION: u8 = 6;
 
 const ERRORS_MAGIC: &[u8; 4] = b"CWE\x00";
 /// Since v3 the sidecar also carries the source's content hash and inline-ignore codes.

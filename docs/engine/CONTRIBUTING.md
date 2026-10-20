@@ -47,8 +47,10 @@ When parser output changes, bump `CACHE_VERSION` in
 stores diagnostics in `.cwe` sidecars as well as ASTs in `.cwb` files; version 11
 invalidates the speculative unclosed leaf-value quote errors stored by version 10.
 Changes to the serialized AST also require bumping `FORMAT_VERSION` in
-`crates/cache/src/io.rs`. Version 5 records explicit `rgb`, `hsv` and `hsv360`
-clause prefixes; version 4 `.cwb` files are rejected and rebuilt from source.
+`crates/cache/src/io.rs`. Version 6 stores comment text as byte ranges into one
+pooled buffer per file and keeps the explicit `rgb`, `hsv` and `hsv360` clause
+prefixes from version 5; version 5 `.cwb` files are rejected and rebuilt from
+source.
 Changes to the `.cwe` sidecar bump `ERRORS_FORMAT_VERSION` in the same file.
 Version 3 adds the source's content hash and inline-ignore codes; version 2
 sidecars are rejected and rebuilt from source. Because the sidecar stores what

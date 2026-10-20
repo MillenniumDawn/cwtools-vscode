@@ -6,7 +6,8 @@
 //! down over a cache file that a crash, a full disk, or a stale format left behind.
 
 use cwtools_cache::cache_format::{
-    CachedChild, CachedFile, CachedLeaf, CachedLeafValue, CachedOperator, CachedValue,
+    CachedChild, CachedComment, CachedFile, CachedLeaf, CachedLeafValue, CachedOperator,
+    CachedValue,
 };
 use cwtools_cache::convert;
 use cwtools_cache::io::{self, CacheError};
@@ -19,7 +20,7 @@ mod common;
 use common::{is_bad_header, written_bytes};
 
 const MAGIC: [u8; 4] = *b"CWB\x00";
-const FORMAT_VERSION: u8 = 5;
+const FORMAT_VERSION: u8 = 6;
 const BAD_HEADER: &str = "incompatible or missing cache header";
 
 /// A small but structurally complete cache: leaves, a nested clause, a comment.
@@ -79,7 +80,7 @@ fn fingerprint_path(path: &Path) -> Result<Result<String, CacheError>, CacheErro
                 let _ = write!(out, "|V {:?} {:?}", lv.value, lv.pos);
             }
             for c in &arena.comments {
-                let _ = write!(out, "|C {:?} {:?}", c.text, c.pos);
+                let _ = write!(out, "|C {:?} {:?}", arena.comment_text(c), c.pos);
             }
             out
         })
@@ -325,6 +326,104 @@ fn missing_file_is_an_io_error() {
     assert!(matches!(err, CacheError::Io(_)), "got {err:?}");
 }
 
+/// Comment texts pool into one buffer. Out-of-order or off-pool ranges would
+/// make `Arena::comment_text` lose text silently, so the load path rejects them.
+fn comment_entry(pool: &str, ranges: &[(u32, u32)]) -> CachedFile {
+    CachedFile {
+        root_children: (0..ranges.len() as u32).map(CachedChild::Comment).collect(),
+        leaves: vec![],
+        leaf_values: vec![],
+        comments: ranges
+            .iter()
+            .map(|(text_start, text_end)| CachedComment {
+                text_start: *text_start,
+                text_end: *text_end,
+                start_line: 1,
+                start_col: 0,
+                end_line: 1,
+                end_col: 10,
+            })
+            .collect(),
+        comment_text_pool: pool.to_string(),
+    }
+}
+
+#[test]
+fn comment_ranges_off_the_pool_are_rejected() {
+    // Second comment starts inside the first one's range.
+    let err = convert_cached(&comment_entry("ab", &[(0, 2), (1, 2)])).unwrap_err();
+    assert!(
+        is_rejection(
+            &err,
+            "cache comment text range is out of order or past the comment text pool"
+        ),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn comment_ranges_past_the_pool_are_rejected() {
+    let err = convert_cached(&comment_entry("ab", &[(0, 3)])).unwrap_err();
+    assert!(
+        is_rejection(
+            &err,
+            "cache comment text range is out of order or past the comment text pool"
+        ),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn comment_ranges_not_covering_the_pool_are_rejected() {
+    let err = convert_cached(&comment_entry("abc", &[(0, 1)])).unwrap_err();
+    assert!(
+        is_rejection(
+            &err,
+            "cache comment text pool is not fully covered by comment ranges"
+        ),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn empty_comment_ranges_are_rejected() {
+    // Tiles an empty pool; without the check every comment text resolves to
+    // `None` and downstream passes skip the comments silently.
+    let err = convert_cached(&comment_entry("", &[(0, 0), (0, 0)])).unwrap_err();
+    assert!(
+        is_rejection(&err, "cache comment text range is empty"),
+        "got {err:?}"
+    );
+
+    // An empty range between two real ones still tiles the pool in order.
+    let err = convert_cached(&comment_entry("ab", &[(0, 1), (1, 1), (1, 2)])).unwrap_err();
+    assert!(
+        is_rejection(&err, "cache comment text range is empty"),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn comment_ranges_inside_a_multibyte_character_are_rejected() {
+    // "aä" is [a, ä(2 bytes)]; (0, 2) splits the umlaut.
+    let err = convert_cached(&comment_entry("aäb", &[(0, 2)])).unwrap_err();
+    assert!(
+        is_rejection(&err, "cache comment text range is not on a UTF-8 boundary"),
+        "got {err:?}"
+    );
+}
+
+/// The well-formed tile the parser itself writes must still load.
+#[test]
+fn a_pooled_comment_cache_from_the_parser_loads() {
+    let input = "# kept\nfoo = bar\n";
+    let table = StringTable::new();
+    let parsed = parse_string(input, &table);
+    let cached = convert::arena_to_cached(&parsed.arena, &parsed.root_children, &table);
+    assert!(!cached.comment_text_pool.is_empty());
+    convert_cached(&cached).expect("a cache the parser itself wrote must load");
+}
+
 /// Round-trip through a well-formed but semantically impossible archive: the
 /// header and rkyv both accept it, so only the arena bounds check stands
 /// between a corrupt index and a panicking consumer. Complements
@@ -351,6 +450,7 @@ fn out_of_bounds_index_inside_a_clause_is_rejected() {
         }],
         leaf_values: vec![],
         comments: vec![],
+        comment_text_pool: String::new(),
     };
 
     let tmp = tempfile::NamedTempFile::with_suffix(".cwb").unwrap();
@@ -384,6 +484,7 @@ fn a_clause_holding_its_own_leaf_is_rejected() {
         leaves: vec![leaf(CachedValue::Clause(vec![CachedChild::Leaf(0)]))],
         leaf_values: vec![],
         comments: vec![],
+        comment_text_pool: String::new(),
     };
 
     let err = convert_cached(&cached).unwrap_err();
@@ -405,6 +506,7 @@ fn a_forward_reference_inside_a_clause_is_rejected() {
         ],
         leaf_values: vec![],
         comments: vec![],
+        comment_text_pool: String::new(),
     };
 
     let err = convert_cached(&cached).unwrap_err();
@@ -431,6 +533,7 @@ fn a_cycle_across_the_two_vectors_is_rejected() {
             color_prefix: None,
         }],
         comments: vec![],
+        comment_text_pool: String::new(),
     };
 
     let err = convert_cached(&cached).unwrap_err();
@@ -452,6 +555,7 @@ fn clause_chain(depth: u32) -> CachedFile {
         leaves,
         leaf_values: vec![],
         comments: vec![],
+        comment_text_pool: String::new(),
     }
 }
 
