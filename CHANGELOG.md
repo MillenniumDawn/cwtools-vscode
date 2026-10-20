@@ -3,6 +3,7 @@
 #### Engine
 
 * Compare and restore saved scope states in the scope-transition probes instead of cloning the whole `ScopeContext` for each candidate. Probes no longer allocate copies of the scope stacks or compare the scope registry. Transitions are unchanged. (#558)
+* Repair the engine comments #643 cut off mid-sentence, and restore the reasons it deleted along with them, from the pre-#643 text where the code still matches. That covers cache bounds and checksums, file-index case sensitivity, LSP position encodings, Windows path behavior, lock order and the `#NNN` regression notes. Comments only; no code changes. (#908)
 
 #### Tooling
 
