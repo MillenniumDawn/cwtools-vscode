@@ -1,6 +1,5 @@
 ### Unreleased
 
-* Cancel pending and not-yet-started editor-type lookup backoffs when the extension tracker is disposed, so queued editor switches cannot run after teardown. (#877)
 #### Engine
 
 * Compare and restore saved scope states in the scope-transition probes instead of cloning the whole `ScopeContext` for each candidate. Probes no longer allocate copies of the scope stacks or compare the scope registry. Transitions are unchanged. (#558)
@@ -10,6 +9,10 @@
 * Record why the Node-facing build helpers, the host-test config and the ESLint and Vitest configs stay JavaScript, and why `build.sh` and `build.cmd` stay thin launchers. (#987)
 * Document the `md_bench` and parser `probe` examples in `docs/engine/PROFILING.md`: how `md_bench` finds its corpus, what each prints, and that neither is a repeatable benchmark. (#915)
 * Update `ovsx` to 1.3.0, which shares the root `@vscode/vsce` 4 instead of nesting its own `@vscode/vsce` 3.9.2. That drops the nested copy's dependency tree and clears all six high-severity `npm audit` findings. (#1048)
+
+#### Extension
+
+* Leave no editor-type lookup backoff timer behind when the extension is disposed. Disposal cancels a backoff in progress and stops a new one from starting, and classifying the active editor after disposal sends nothing to the server. (#877)
 
 ### 4.0.1
 
