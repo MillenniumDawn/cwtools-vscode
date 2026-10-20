@@ -2087,7 +2087,7 @@ pub(crate) mod issue_868_measurement {
             table,
             cwtools_file_manager::file_manager::ScanBudget::default(),
         );
-        assert!(ruleset.types.len() > 0, "pinned Stellaris ruleset loaded");
+        assert!(!ruleset.types.is_empty(), "pinned Stellaris ruleset loaded");
         eprintln!("CWTOOLS_868 config_warnings={}", errors.len());
         backend.state.rules.write().ruleset = Some(Arc::new(ruleset));
         backend.state.config.write().language = "stellaris".into();
