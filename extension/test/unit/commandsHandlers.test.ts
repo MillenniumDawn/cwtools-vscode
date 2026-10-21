@@ -19,6 +19,8 @@ interface Serializer {
 
 const state = vi.hoisted(() => {
 	const registeredCommands = new Map<string, (...args: never[]) => unknown>();
+	const workspaceStateValues = new Map<string, unknown>();
+	const appSettings = new Map<string, unknown>();
 	const serializers: Serializer[] = [];
 	const initialiseGraph = vi.fn();
 	const token = {
@@ -36,6 +38,20 @@ const state = vi.hoisted(() => {
 	);
 	return {
 		registeredCommands,
+		workspaceStateValues,
+		appSettings,
+		workspaceState: {
+			get: vi.fn((key: string, defaultValue?: unknown) =>
+				workspaceStateValues.has(key)
+					? workspaceStateValues.get(key)
+					: defaultValue,
+			),
+			update: vi.fn((key: string, value: unknown) => {
+				if (value === undefined) workspaceStateValues.delete(key);
+				else workspaceStateValues.set(key, value);
+				return Promise.resolve();
+			}),
+		},
 		serializers,
 		requestType: {},
 		token,
@@ -87,7 +103,9 @@ vi.mock("vscode", async (importOriginal) => {
 		workspace: {
 			...original.workspace,
 			getConfiguration: vi.fn((section?: string) => ({
-				...original.workspace.getConfiguration(section),
+				get: (key: string, defaultValue?: unknown) =>
+					state.appSettings.get(key) ??
+						original.workspace.getConfiguration(section).get(key, defaultValue),
 				update: state.updateConfiguration,
 			})),
 			fs: { writeFile: state.writeFile, readFile: state.readFile },
@@ -97,6 +115,7 @@ vi.mock("vscode", async (importOriginal) => {
 
 vi.mock("vscode-languageclient/node", () => ({
 	ExecuteCommandRequest: { type: state.requestType },
+	State: { Running: 2 },
 }));
 
 import {
@@ -130,10 +149,15 @@ interface FakeClient {
 	};
 	onProgress: LanguageClient["onProgress"];
 	isRunning: ReturnType<typeof vi.fn>;
+	onDidChangeState: ReturnType<typeof vi.fn>;
 	sendRequest: ReturnType<typeof vi.fn>;
+	startupVanilla: unknown;
+	becomeRunning: () => void;
 }
 
 function fakeClient(commands: string[], workDoneProgress = false): FakeClient {
+	let stateListener: ((event: { newState: number }) => void) | undefined;
+	const isRunning = vi.fn(() => true);
 	return {
 		initializeResult: {
 			capabilities: {
@@ -144,14 +168,26 @@ function fakeClient(commands: string[], workDoneProgress = false): FakeClient {
 			},
 		},
 		onProgress: vi.fn(() => ({ dispose: () => undefined })),
-		isRunning: vi.fn(() => true),
+		isRunning,
+		onDidChangeState: vi.fn(
+			(listener: (event: { newState: number }) => void) => {
+				stateListener = listener;
+				return { dispose: vi.fn() };
+			},
+		),
 		sendRequest: vi.fn(),
+		startupVanilla: state.appSettings.get("cache.hoi4"),
+		becomeRunning: () => {
+			isRunning.mockReturnValue(true);
+			stateListener?.({ newState: 2 });
+		},
 	};
 }
 
-function register(client: FakeClient, latestType = ""): void {
+function register(client: FakeClient, latestType = "", activeGame = "hoi4"): void {
 	const context = {
 		extensionPath: "/ext",
+		workspaceState: state.workspaceState,
 		subscriptions: [],
 	} as unknown as ExtensionContext;
 	const tracker = {
@@ -162,6 +198,7 @@ function register(client: FakeClient, latestType = ""): void {
 		client as unknown as LanguageClient,
 		tracker,
 		undefined,
+		activeGame,
 	);
 }
 
@@ -222,29 +259,90 @@ suite("registered workspace commands", () => {
 		state.updateConfiguration.mockReset();
 		state.readFile.mockReset();
 		state.showSaveDialog.mockReset();
+		state.workspaceStateValues.clear();
+		state.appSettings.clear();
 		GraphPanel.currentPanel = undefined;
 		state.registeredCommands.clear();
 	});
 
 	test("saves the selected path without rebuilding against the running server's startup setting", async () => {
-		register(fakeClient([]));
-		let configuredVanilla = "/games/old-hoi4";
-		const runningServerVanilla = configuredVanilla;
+		state.appSettings.set("cache.hoi4", "/games/old-hoi4");
+		const runningClient = fakeClient([]);
+		register(runningClient);
 		state.updateConfiguration.mockImplementation((key: string, value: string) => {
-			if (key === "cache.hoi4") configuredVanilla = value;
+			if (key === "cache.hoi4") state.appSettings.set(key, value);
 		});
 		state.showQuickPick
 			.mockResolvedValueOnce({ label: "Hearts of Iron IV", id: "hoi4" })
 			.mockResolvedValueOnce({ label: "Browse for a game folder…", browse: true });
 		state.showOpenDialog.mockResolvedValue([{ fsPath: "/games/hoi4/game" }]);
+		state.showInformationMessage.mockResolvedValue("Reload Window");
 
 		await handler("cwtools.selectBaseGame")();
 
-		assert.equal(configuredVanilla, "/games/hoi4/game");
-		assert.equal(runningServerVanilla, "/games/old-hoi4");
+		assert.equal(state.appSettings.get("cache.hoi4"), "/games/hoi4/game");
+		assert.equal(runningClient.startupVanilla, "/games/old-hoi4");
 		assert.deepStrictEqual(state.updateConfiguration.mock.calls, [
 			["cache.hoi4", "/games/hoi4/game", 1],
 		]);
+		assert.deepStrictEqual(state.executeCommand.mock.calls, [
+			["workbench.action.reloadWindow"],
+		]);
+		assert.deepStrictEqual(
+			state.workspaceStateValues.get("cwtools.pendingVanillaCache"),
+			{ gameId: "hoi4", folder: "/games/hoi4/game", offerCache: true },
+		);
+	});
+
+	test("offers cache regeneration once the matching reloaded server is ready", async () => {
+		state.appSettings.set("cache.hoi4", "/games/hoi4/game");
+		state.workspaceStateValues.set("cwtools.pendingVanillaCache", {
+			gameId: "hoi4",
+			folder: "/games/hoi4/game",
+			offerCache: true,
+		});
+		state.showInformationMessage.mockResolvedValue("Regenerate vanilla cache");
+
+		const restartedClient = fakeClient([]);
+		restartedClient.isRunning.mockReturnValue(false);
+		register(restartedClient, "", "hoi4");
+		await Promise.resolve();
+		assert.equal(state.showInformationMessage.mock.calls.length, 0);
+		restartedClient.becomeRunning();
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.deepStrictEqual(state.executeCommand.mock.calls, [["cacheVanilla"]]);
+		assert.equal(state.showInformationMessage.mock.calls.length, 1);
+		assert.equal(state.workspaceStateValues.has("cwtools.pendingVanillaCache"), false);
+	});
+
+	test("does not offer the current server's cache rebuild for a different selected game", async () => {
+		register(fakeClient([]), "", "eu4");
+		state.updateConfiguration.mockImplementation((key: string, value: string) => {
+			state.appSettings.set(key, value);
+		});
+		state.showQuickPick
+			.mockResolvedValueOnce({ label: "Hearts of Iron IV", id: "hoi4" })
+			.mockResolvedValueOnce({ label: "Browse for a game folder…", browse: true });
+		state.showOpenDialog.mockResolvedValue([{ fsPath: "/games/hoi4/game" }]);
+		state.showInformationMessage.mockResolvedValue("Reload Window");
+
+		await handler("cwtools.selectBaseGame")();
+
+		assert.deepStrictEqual(
+			state.workspaceStateValues.get("cwtools.pendingVanillaCache"),
+			{ gameId: "hoi4", folder: "/games/hoi4/game", offerCache: false },
+		);
+		assert.ok(
+			String(state.showInformationMessage.mock.calls[0][0]).includes(
+				"The current server is for Europa Universalis IV",
+			),
+		);
+
+		state.executeCommand.mockReset();
+		state.showInformationMessage.mockReset();
+		register(fakeClient([]), "", "eu4");
+		assert.equal(state.workspaceStateValues.has("cwtools.pendingVanillaCache"), false);
+		assert.equal(state.showInformationMessage.mock.calls.length, 0);
 		assert.deepStrictEqual(state.executeCommand.mock.calls, []);
 	});
 

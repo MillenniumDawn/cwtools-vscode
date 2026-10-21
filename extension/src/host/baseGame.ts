@@ -7,12 +7,15 @@ type VdfValue = string | VdfObject;
 interface VdfObject {
 	[key: string]: VdfValue;
 }
+type VdfToken =
+	| { kind: "open" | "close"; value: "{" | "}" }
+	| { kind: "string"; value: string };
 
 // Steam's libraryfolders.vdf is KeyValues text. This small reader handles the
 // quoted strings, braces, escaped backslashes/quotes and comments used by the
 // file without depending on a third-party parser.
-function tokenizeVdf(text: string): string[] {
-	const tokens: string[] = [];
+function tokenizeVdf(text: string): VdfToken[] {
+	const tokens: VdfToken[] = [];
 	for (let i = 0; i < text.length; ) {
 		const ch = text[i];
 		if (/\s/.test(ch)) {
@@ -24,7 +27,7 @@ function tokenizeVdf(text: string): string[] {
 			continue;
 		}
 		if (ch === "{" || ch === "}") {
-			tokens.push(ch);
+			tokens.push({ kind: ch === "{" ? "open" : "close", value: ch });
 			i++;
 			continue;
 		}
@@ -33,7 +36,7 @@ function tokenizeVdf(text: string): string[] {
 			// libraryfolders keys and paths quoted.
 			const start = i;
 			while (i < text.length && !/[\s{}]/.test(text[i])) i++;
-			tokens.push(text.slice(start, i));
+			tokens.push({ kind: "string", value: text.slice(start, i) });
 			continue;
 		}
 		i++;
@@ -50,7 +53,7 @@ function tokenizeVdf(text: string): string[] {
 			value += text[i++];
 		}
 		if (i < text.length) i++;
-		tokens.push(value);
+		tokens.push({ kind: "string", value });
 	}
 	return tokens;
 }
@@ -60,15 +63,16 @@ export function parseSteamLibraryFolders(text: string): string[] {
 	let cursor = 0;
 	const parseObject = (): VdfObject => {
 		const result: VdfObject = {};
-		while (cursor < tokens.length && tokens[cursor] !== "}") {
-			const key = tokens[cursor++];
-			if (key === "{") continue;
-			if (tokens[cursor] === "{") {
+		while (cursor < tokens.length && tokens[cursor].kind !== "close") {
+			const keyToken = tokens[cursor++];
+			if (keyToken.kind !== "string") continue;
+			const key = keyToken.value;
+			if (tokens[cursor]?.kind === "open") {
 				cursor++;
 				result[key] = parseObject();
-				if (tokens[cursor] === "}") cursor++;
-			} else if (cursor < tokens.length && tokens[cursor] !== "}") {
-				result[key] = tokens[cursor++];
+				if (tokens[cursor]?.kind === "close") cursor++;
+			} else if (tokens[cursor]?.kind === "string") {
+				result[key] = tokens[cursor++].value;
 			}
 		}
 		return result;
@@ -79,7 +83,10 @@ export function parseSteamLibraryFolders(text: string): string[] {
 	)?.[1];
 	if (!libraries || typeof libraries === "string") return [];
 	const paths: string[] = [];
-	for (const entry of Object.values(libraries)) {
+	for (const [key, entry] of Object.entries(libraries)) {
+		// Both Steam formats number library entries. Ignore any unrelated
+		// string-valued metadata instead of treating it as a library location.
+		if (!/^\d+$/.test(key)) continue;
 		if (typeof entry === "string") {
 			// Legacy libraryfolders.vdf stores each numbered entry as a path.
 			paths.push(entry);
@@ -124,10 +131,14 @@ export function findVanillaInstallations(
 	directoryNames: (directory: string) => string[] = (directory) =>
 		readdirSync(directory),
 ): string[] {
-	const found = new Set<string>();
+	const found = new Map<string, string>();
+	const windowsPath = (value: string): boolean =>
+		/^(?:[A-Za-z]:[\\/]|\\\\)/.test(value);
+	const installationKey = (value: string): string =>
+		windowsPath(value) ? path.win32.normalize(value).toLowerCase() : value;
 	for (const content of libraryFiles) {
 		for (const library of parseSteamLibraryFolders(content)) {
-			const pathApi = /^[A-Za-z]:[\\/]/.test(library) ? path.win32 : path;
+			const pathApi = windowsPath(library) ? path.win32 : path;
 			const common = pathApi.join(library, "steamapps", "common");
 			let installedFolders: string[];
 			try {
@@ -136,20 +147,28 @@ export function findVanillaInstallations(
 				installedFolders = [];
 			}
 			for (const folder of game.vanillaFolders) {
-				const matchingFolder = installedFolders.find(
+				const matchingFolders = installedFolders.filter(
 					(installed) => installed.toLowerCase() === folder.toLowerCase(),
 				);
-				const install = pathApi.join(common, matchingFolder ?? folder);
-				const candidate = game.vanillaSubdir
-					? pathApi.join(install, game.vanillaSubdir)
-				: install;
-				if ((matchingFolder !== undefined || exists(install)) && exists(candidate)) {
-					found.add(candidate);
+				for (const matchedFolder of matchingFolders.length
+					? matchingFolders
+					: [folder]) {
+					const install = pathApi.join(common, matchedFolder);
+					const candidate = game.vanillaSubdir
+						? pathApi.join(install, game.vanillaSubdir)
+						: install;
+					if (
+						(matchingFolders.length > 0 || exists(install)) &&
+						exists(candidate)
+					) {
+						const key = installationKey(candidate);
+						if (!found.has(key)) found.set(key, candidate);
+					}
 				}
 			}
 		}
 	}
-	return [...found];
+	return [...found.values()];
 }
 
 export function discoverVanillaInstallations(

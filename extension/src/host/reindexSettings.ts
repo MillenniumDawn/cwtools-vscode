@@ -1,6 +1,10 @@
 // Pure helpers for the background-reindex and ignore settings, split out from
 // lspClient.ts (which imports vscode) so the node unit tests can exercise them.
 
+// Stored across a window reload when the base game picker changes a startup-only
+// vanilla path. The matching language client consumes it once it is ready.
+export const PENDING_VANILLA_CACHE_KEY = "cwtools.pendingVanillaCache";
+
 // The server reads remapped keys (ignoreFilePatterns/ignoredErrorCodes); the
 // `cwtools.*` settings use different names. Map them here so both the initial
 // initializationOptions and the live didChangeConfiguration payload agree.

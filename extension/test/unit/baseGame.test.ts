@@ -12,6 +12,8 @@ const fixture = readFileSync(
 	"extension/test/fixtures/steam-libraryfolders.vdf",
 	"utf8",
 );
+const readFixture = (name: string): string =>
+	readFileSync(`extension/test/fixtures/${name}`, "utf8");
 
 suite("Steam base game discovery", () => {
 	test("reads escaped Windows paths from realistic libraryfolders.vdf", () => {
@@ -19,6 +21,32 @@ suite("Steam base game discovery", () => {
 			"C:\\Program Files (x86)\\Steam",
 			"D:\\Games\\SteamLibrary",
 		]);
+	});
+
+	test("reads legacy string entries without treating modern metadata as paths", () => {
+		assert.deepStrictEqual(
+			parseSteamLibraryFolders(readFixture("steam-libraryfolders-legacy.vdf")),
+			[
+				"C:\\Program Files (x86)\\Steam",
+				"D:\\Games\\SteamLibrary",
+			],
+		);
+		assert.deepStrictEqual(parseSteamLibraryFolders(fixture), [
+			"C:\\Program Files (x86)\\Steam",
+			"D:\\Games\\SteamLibrary",
+		]);
+	});
+
+	test("keeps quoted closing braces inside modern metadata strings", () => {
+		assert.deepStrictEqual(
+			parseSteamLibraryFolders(
+				readFixture("steam-libraryfolders-brace-label.vdf"),
+			),
+			[
+				"C:\\Program Files (x86)\\Steam",
+				"D:\\Games\\SteamLibrary",
+			],
+		);
 	});
 
 	test("finds HOI4 in a secondary Steam library", () => {
@@ -51,6 +79,31 @@ suite("Steam base game discovery", () => {
 			),
 			[expected],
 		);
+	});
+
+	test("deduplicates Windows library path aliases case-insensitively", () => {
+		const found = findVanillaInstallations(
+			GAMES.find((game) => game.id === "hoi4")!,
+			[readFixture("steam-libraryfolders-windows-aliases.vdf")],
+			() => true,
+			() => ["Hearts of Iron IV"],
+		);
+		assert.deepStrictEqual(found, [
+			"C:\\Steam\\steamapps\\common\\Hearts of Iron IV",
+		]);
+	});
+
+	test("keeps case-distinct Linux game folders as separate installations", () => {
+		const found = findVanillaInstallations(
+			GAMES.find((game) => game.id === "hoi4")!,
+			[readFixture("steam-libraryfolders-linux-case-distinct.vdf")],
+			() => true,
+			() => ["Hearts of Iron IV", "hearts of iron iv"],
+		);
+		assert.deepStrictEqual(found, [
+			"/mnt/Games/SteamLibrary/steamapps/common/Hearts of Iron IV",
+			"/mnt/Games/SteamLibrary/steamapps/common/hearts of iron iv",
+		]);
 	});
 
 	test("includes common Steam roots for the selected platform", () => {
