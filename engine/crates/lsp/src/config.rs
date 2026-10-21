@@ -612,6 +612,15 @@ impl Backend {
                 .and_then(|c| c.refresh_support),
             &self.state.code_lens_refresh_support,
         );
+        store_client_capability(
+            params
+                .capabilities
+                .workspace
+                .as_ref()
+                .and_then(|w| w.did_change_watched_files.as_ref())
+                .and_then(|c| c.dynamic_registration),
+            &self.state.watched_files_dynamic_registration,
+        );
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {

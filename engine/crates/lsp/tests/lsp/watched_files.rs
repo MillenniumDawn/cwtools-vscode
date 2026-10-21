@@ -37,6 +37,33 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
 }
 
 #[test]
+fn test_watched_files_registers_supported_client() {
+    let capabilities = json!({
+        "workspace": {
+            "didChangeWatchedFiles": { "dynamicRegistration": true }
+        }
+    });
+    let mut server = ServerBuilder::default()
+        .empty_rules()
+        .capabilities(capabilities)
+        .spawn_uninitialized();
+    server.initialize();
+    server.initialized();
+
+    // Clients without the capability are covered by every other test here: the
+    // harness never answers an unexpected request, so the startup scan would stall.
+    let request = server.answer_server_request();
+    assert_eq!(request["method"], "client/registerCapability");
+    let registration = &request["params"]["registrations"][0];
+    assert_eq!(registration["method"], "workspace/didChangeWatchedFiles");
+    assert_eq!(
+        registration["registerOptions"]["watchers"],
+        json!([{ "globPattern": "**/*" }])
+    );
+    server.stop();
+}
+
+#[test]
 fn test_watched_batch_panic_is_recovered_and_retried() {
     // #155: CWTOOLS_WATCHED_BATCH_PANIC_ONCE makes the FIRST watched batch
     // panic before it validates anything. spawn_watched_batch_window's
