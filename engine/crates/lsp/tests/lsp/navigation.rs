@@ -1224,7 +1224,7 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
         "prepared callable: {prepared}"
     );
     assert_eq!(item["range"]["start"]["line"], 0);
-    assert_eq!(item["range"]["end"]["line"], 4);
+    assert_eq!(item["range"]["end"]["line"], 3);
     assert_eq!(item["selectionRange"]["start"]["line"], 0);
     assert_eq!(item["selectionRange"]["start"]["character"], 0);
     assert_eq!(item["selectionRange"]["end"]["character"], 12);
@@ -1323,4 +1323,63 @@ alias[trigger:<scripted_trigger>] = yes
     assert_eq!(outgoing.len(), 1, "trigger call edge: {outgoing:?}");
     assert_eq!(outgoing[0]["to"]["name"], "inner_trigger");
     server.stop();
+}
+
+#[test]
+fn call_hierarchy_prepare_uses_exclusive_definition_end() {
+    let doc = "first_effect = { log = yes }\nsecond_effect = { log = yes }\n";
+    let rel = "game/common/scripted_effects/adjacent.txt";
+    let mut server = editor_server_with_rules(GOTO_RULES, &[(rel, doc)]);
+    let uri = server.uri(rel);
+    let response = server.call(
+        "textDocument/prepareCallHierarchy",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 0 }
+        }),
+    );
+    server.stop();
+    assert_eq!(response["result"][0]["name"], "second_effect", "{response}");
+    assert_eq!(response["result"][0]["selectionRange"]["start"]["line"], 1);
+}
+
+#[test]
+fn call_hierarchy_ranges_use_utf16_columns() {
+    let first =
+        "first_effect = { log = \"😀\" second_effect = yes } second_effect = { log = yes }\n";
+    let first_rel = "game/common/scripted_effects/emoji.txt";
+    let mut server = editor_server_with_rules(GOTO_RULES, &[(first_rel, first)]);
+    let uri = server.uri(first_rel);
+    let prepared = server.call(
+        "textDocument/prepareCallHierarchy",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 2 }
+        }),
+    );
+    let item = prepared["result"][0].clone();
+    assert_eq!(item["name"], "first_effect", "{prepared}");
+    let outgoing = server.call("callHierarchy/outgoingCalls", json!({ "item": item }));
+    let outgoing = outgoing["result"].as_array().expect("outgoing calls");
+    let range = &outgoing[0]["fromRanges"][0];
+    assert_eq!(range["start"]["line"], 0);
+    assert_eq!(range["start"]["character"], 28);
+    assert_eq!(range["end"]["character"], 41);
+
+    let second_definition_char = first[..first.rfind("second_effect = {").unwrap()]
+        .encode_utf16()
+        .count() as u32;
+    let prepared = server.call(
+        "textDocument/prepareCallHierarchy",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": second_definition_char }
+        }),
+    );
+    server.stop();
+    assert_eq!(prepared["result"][0]["name"], "second_effect", "{prepared}");
+    assert_eq!(
+        prepared["result"][0]["selectionRange"]["start"]["character"],
+        second_definition_char
+    );
 }

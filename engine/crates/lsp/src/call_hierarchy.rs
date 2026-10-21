@@ -2,6 +2,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
 use crate::Backend;
+use crate::lines::DocLines;
 use crate::navigation::source_range_without_text;
 use crate::paths::parse_uri;
 
@@ -16,7 +17,7 @@ fn is_callable_type(name: &str) -> bool {
 
 fn in_definition(location: cwtools_info::SourceLocation, line: u32, col: u32) -> bool {
     (line, col) >= (location.line, u32::from(location.col))
-        && (line, col) <= (location.end.0, u32::from(location.end.1))
+        && (line, col) < (location.end.0, u32::from(location.end.1))
 }
 
 impl Backend {
@@ -27,25 +28,69 @@ impl Backend {
         name: &str,
         location: cwtools_info::SourceLocation,
         fallback: &Url,
+        lines: Option<&DocLines<'_>>,
     ) -> CallHierarchyItem {
+        let range = lines.map_or_else(
+            || {
+                Range::new(
+                    Position::new(location.line.saturating_sub(1), u32::from(location.col)),
+                    Position::new(location.end.0.saturating_sub(1), u32::from(location.end.1)),
+                )
+            },
+            |lines| lines.related_range(location.line, location.col, location.end),
+        );
+        let selection_range = lines.map_or_else(
+            || {
+                source_range_without_text(
+                    location.line.saturating_sub(1),
+                    u32::from(location.col),
+                    name,
+                    &self.position_encoding(),
+                )
+            },
+            |lines| {
+                lines.token_range(
+                    location.line.saturating_sub(1),
+                    u32::from(location.col),
+                    name,
+                )
+            },
+        );
         CallHierarchyItem {
             name: name.to_string(),
             kind: SymbolKind::FUNCTION,
             tags: None,
             detail: Some(type_name.to_string()),
             uri: parse_uri(uri, fallback),
-            range: Range::new(
-                Position::new(location.line.saturating_sub(1), u32::from(location.col)),
-                Position::new(location.end.0.saturating_sub(1), u32::from(location.end.1)),
-            ),
-            selection_range: source_range_without_text(
-                location.line.saturating_sub(1),
-                u32::from(location.col),
-                name,
-                &self.position_encoding(),
-            ),
+            range,
+            selection_range,
             data: None,
         }
+    }
+
+    fn call_site_range(
+        &self,
+        location: cwtools_info::SourceLocation,
+        name: &str,
+        lines: Option<&DocLines<'_>>,
+    ) -> Range {
+        lines.map_or_else(
+            || {
+                source_range_without_text(
+                    location.line.saturating_sub(1),
+                    u32::from(location.col),
+                    name,
+                    &self.position_encoding(),
+                )
+            },
+            |lines| {
+                lines.token_range(
+                    location.line.saturating_sub(1),
+                    u32::from(location.col),
+                    name,
+                )
+            },
+        )
     }
 
     pub(crate) async fn prepare_call_hierarchy_impl(
@@ -58,6 +103,14 @@ impl Backend {
         if !is_scripted_path(&uri) {
             return Ok(None);
         }
+        let text = self.file_text_for(&uri).await;
+        let lines = text
+            .as_deref()
+            .map(|text| DocLines::new(text, self.position_encoding()));
+        let source_col = lines
+            .as_ref()
+            .map(|lines| u32::from(lines.source_column(pos)))
+            .unwrap_or(pos.character.min(u16::MAX as u32));
         let found = {
             let info = self.state.info_service.read();
             info.type_index
@@ -65,7 +118,7 @@ impl Backend {
                 .into_iter()
                 .find(|(type_name, inst)| {
                     is_callable_type(type_name)
-                        && in_definition(inst.location, pos.line.saturating_add(1), pos.character)
+                        && in_definition(inst.location, pos.line.saturating_add(1), source_col)
                 })
                 .map(|(type_name, inst)| (type_name.to_string(), inst.name.clone(), inst.location))
         };
@@ -78,6 +131,7 @@ impl Backend {
             &name,
             location,
             &text_doc.uri,
+            lines.as_ref(),
         )]))
     }
 
@@ -90,8 +144,17 @@ impl Backend {
         if target_type.is_empty() {
             return Ok(Some(Vec::new()));
         }
+        let sites = self.collect_use_sites(&target_type, &item.name);
+        let uris = sites
+            .iter()
+            .map(|site| site.file.to_string())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let snapshots = self.file_text_snapshots_for(&uris).await;
+        let lines = crate::lines::index_snapshots(&snapshots, &self.position_encoding());
         let mut calls = Vec::new();
-        for site in self.collect_use_sites(&target_type, &item.name) {
+        for site in sites {
             let owner = {
                 let info = self.state.info_service.read();
                 info.type_index
@@ -112,12 +175,12 @@ impl Backend {
                     &owner.name,
                     owner.location,
                     &item.uri,
+                    lines.get(site.file.as_ref()),
                 ),
-                from_ranges: vec![source_range_without_text(
-                    site.key.line.saturating_sub(1),
-                    u32::from(site.key.col),
+                from_ranges: vec![self.call_site_range(
+                    site.key,
                     &item.name,
-                    &self.position_encoding(),
+                    lines.get(site.file.as_ref()),
                 )],
             });
         }
@@ -155,7 +218,7 @@ impl Backend {
                 })
                 .collect::<Vec<_>>()
         };
-        let mut calls = Vec::new();
+        let mut edges = Vec::new();
         for (target_type, target_uri, target) in targets {
             for site in self.collect_use_sites(&target_type, &target.name) {
                 if site.file.as_ref() != item.uri.as_str()
@@ -163,28 +226,42 @@ impl Backend {
                 {
                     continue;
                 }
-                calls.push(CallHierarchyOutgoingCall {
-                    to: self.call_hierarchy_item(
-                        &target_uri,
-                        &target_type,
-                        &target.name,
-                        target.location,
-                        &item.uri,
-                    ),
-                    from_ranges: vec![source_range_without_text(
-                        site.key.line.saturating_sub(1),
-                        u32::from(site.key.col),
-                        &target.name,
-                        &self.position_encoding(),
-                    )],
-                });
+                edges.push((
+                    target_type.clone(),
+                    target_uri.clone(),
+                    target.name.clone(),
+                    target.location,
+                    site.key,
+                ));
             }
         }
-        calls.sort_by_key(|call| {
-            call.from_ranges
-                .first()
-                .map(|range| (range.start.line, range.start.character))
-        });
+        edges.sort_by_key(|(_, _, _, _, site)| (site.line, site.col));
+        let mut uri_set = edges
+            .iter()
+            .map(|(_, uri, _, _, _)| uri.clone())
+            .collect::<std::collections::HashSet<_>>();
+        uri_set.insert(item.uri.to_string());
+        let uris = uri_set.into_iter().collect::<Vec<_>>();
+        let snapshots = self.file_text_snapshots_for(&uris).await;
+        let lines = crate::lines::index_snapshots(&snapshots, &self.position_encoding());
+        let mut calls = Vec::with_capacity(edges.len());
+        for (target_type, target_uri, target_name, target_location, site) in edges {
+            calls.push(CallHierarchyOutgoingCall {
+                to: self.call_hierarchy_item(
+                    &target_uri,
+                    &target_type,
+                    &target_name,
+                    target_location,
+                    &item.uri,
+                    lines.get(target_uri.as_str()),
+                ),
+                from_ranges: vec![self.call_site_range(
+                    site,
+                    &target_name,
+                    lines.get(item.uri.as_str()),
+                )],
+            });
+        }
         Ok(Some(calls))
     }
 }
