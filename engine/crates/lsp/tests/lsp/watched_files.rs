@@ -3,9 +3,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::common::{
-    STORM_FILE, TestServer, count_publishes, count_validate_log, path_uri, poll_until,
-    publish_has_code, storm_base, storm_builder, storm_server, storm_start, wait_for_scan_release,
-    watched_changes, watched_created,
+    STORM_FILE, ServerBuilder, TestServer, count_publishes, count_validate_log, path_uri,
+    poll_until, publish_has_code, storm_base, storm_builder, storm_server, storm_start,
+    wait_for_scan_release, watched_changes, watched_created, watched_deleted,
 };
 
 #[test]
@@ -234,22 +234,29 @@ fn test_watched_bulk_flood_uses_rescan_not_per_file() {
 
 const PICTURE_DOC_REL: &str = "common/decisions/d.txt";
 
-/// A started server whose file index holds `gfx/present.<ext>`, with a decision open
-/// whose `picture` names a `gfx/new_pic.<ext>` that is not on disk yet (CW113).
-fn picture_server(ext: &str) -> TestServer {
+/// A started server over `builder` with a decision open whose `picture` names
+/// `gfx/<value>.<ext>`, and the diagnostics the open published.
+fn open_picture_doc(builder: ServerBuilder, ext: &str, value: &str) -> (TestServer, Value) {
     let rules = format!(
         "types = {{\n    type[decision] = {{ path = \"game/common/decisions\" }}\n}}\n\
          decision = {{\n    ## cardinality = 0..1\n    picture = filepath[gfx/,.{ext}]\n}}\n"
     );
-    let mut server = storm_start(
-        storm_base()
-            .rules_file("r.cwt", &rules)
-            .file(&format!("gfx/present.{ext}"), "present"),
-    );
-    let text = "adec = {\n    picture = new_pic\n}\n";
-    server.write_file(PICTURE_DOC_REL, text);
-    server.open(PICTURE_DOC_REL, text);
+    let mut server = storm_start(builder.rules_file("r.cwt", &rules));
+    let text = format!("adec = {{\n    picture = {value}\n}}\n");
+    server.write_file(PICTURE_DOC_REL, &text);
+    server.open(PICTURE_DOC_REL, &text);
     let opened = server.wait_for_diagnostics("d.txt");
+    (server, opened)
+}
+
+/// A started server whose file index holds `gfx/present.<ext>`, with a decision open
+/// whose `picture` names a `gfx/new_pic.<ext>` that is not on disk yet (CW113).
+fn picture_server(ext: &str) -> TestServer {
+    let (server, opened) = open_picture_doc(
+        storm_base().file(&format!("gfx/present.{ext}"), "present"),
+        ext,
+        "new_pic",
+    );
     assert!(
         publish_has_code(&opened, "CW113"),
         "the missing picture must report CW113 before it exists, got: {opened}"
@@ -341,6 +348,77 @@ fn test_watched_created_script_clears_cw113_without_a_reindex() {
 fn test_watched_texture_burst_does_not_force_a_rescan() {
     // More events than WATCHED_BULK_CAP (200), all resources: a folder copy.
     created_textures_clear_cw113(205);
+}
+
+/// A started server whose `gfx/pack/` holds a workspace-only texture and a script, with a
+/// decision open on that texture. `gfx/present.dds` keeps the index non-empty once the
+/// folder is gone, which CW113 is gated on.
+fn pack_server() -> TestServer {
+    let (server, opened) = open_picture_doc(
+        storm_base()
+            .file("gfx/present.dds", "present")
+            .file("gfx/pack/pic.dds", "dds")
+            .file("gfx/pack/defs.gfx", "# no exported names\n"),
+        "dds",
+        "pack/pic",
+    );
+    assert!(
+        !publish_has_code(&opened, "CW113"),
+        "the texture exists, so the reference must resolve before the delete, got: {opened}"
+    );
+    server
+}
+
+/// Removes `gfx/pack/` and reports `events(server)` as deleted, the way a client would.
+/// The open decision must report CW113 in place and the folder's script must be cleared.
+fn pack_delete_reports_cw113(events: impl FnOnce(&TestServer) -> Vec<String>) {
+    let mut server = pack_server();
+    let uris = events(&server);
+    std::fs::remove_dir_all(server.path("gfx/pack")).unwrap();
+
+    server.send(&watched_deleted(&uris));
+
+    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let log = server.profiling_log();
+    server.stop();
+
+    assert!(
+        publish_has_code(last_picture_publish(&frames), "CW113"),
+        "CW113 must report once the folder is gone, got: {frames:?}"
+    );
+    assert_eq!(
+        count_publishes(&frames, "defs.gfx"),
+        1,
+        "the script under the folder must be cleared, got: {frames:?}"
+    );
+    assert_eq!(
+        count_publishes(&frames, ".dds"),
+        0,
+        "a resource must never be published, got: {frames:?}"
+    );
+    assert_eq!(
+        count_validate_log(&log, "reindex"),
+        0,
+        "the open decision must revalidate without a reindex, got: {log}"
+    );
+}
+
+#[test]
+fn test_watched_folder_delete_reports_cw113_without_a_reindex() {
+    // VS Code reports a deleted folder as one event and drops its children's.
+    pack_delete_reports_cw113(|server| vec![server.uri("gfx/pack")]);
+}
+
+#[test]
+fn test_watched_deletes_under_a_gone_folder_report_cw113_without_a_reindex() {
+    // The parent directory is gone by the time the server looks, so neither the file
+    // nor its parent canonicalizes.
+    pack_delete_reports_cw113(|server| {
+        vec![
+            server.uri("gfx/pack/pic.dds"),
+            server.uri("gfx/pack/defs.gfx"),
+        ]
+    });
 }
 
 #[test]

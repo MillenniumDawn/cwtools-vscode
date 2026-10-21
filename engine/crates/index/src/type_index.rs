@@ -198,6 +198,35 @@ impl FileIndex {
             .contains(&path.replace('\\', "/").to_ascii_lowercase())
     }
 
+    /// The keys the primary workspace supplies inside any of the folders `dirs`, for a
+    /// folder delete (#1092). Matches whole path segments, so `foo` never reaches
+    /// `foobar/x.dds`; a folder is not a key of its own.
+    pub fn workspace_owned_under(&self, dirs: &[String]) -> Vec<String> {
+        let dirs: FxHashSet<String> = dirs
+            .iter()
+            .map(|dir| {
+                dir.replace('\\', "/")
+                    .trim_matches('/')
+                    .to_ascii_lowercase()
+            })
+            .filter(|dir| !dir.is_empty())
+            .collect();
+        self.owned
+            .iter()
+            .filter(|key| {
+                let mut parent = key.as_str();
+                while let Some((head, _)) = parent.rsplit_once('/') {
+                    if dirs.contains(head) {
+                        return true;
+                    }
+                    parent = head;
+                }
+                false
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Whether `path` is already workspace-owned with the spelling a claim keeps, so
     /// `claim_workspace` would change nothing (#1067).
     pub fn is_workspace_claimed(&self, path: &str) -> bool {
@@ -2445,6 +2474,41 @@ mod tests {
         assert!(!idx.release_workspace("gfx/base.dds"));
         assert!(idx.contains("gfx/base.dds"));
         assert!(!idx.is_workspace_owned("gfx/base.dds"));
+    }
+
+    /// A folder delete reaches every workspace key below it, at any depth, on whole
+    /// path segments, and never a key a lower layer alone provides (#1092).
+    #[test]
+    fn file_index_workspace_owned_under_matches_whole_segments() {
+        let mut idx = FileIndex::new();
+        for key in [
+            "gfx/Pack/a.dds",
+            "gfx/pack/deep/er/b.dds",
+            "gfx/packed/c.dds",
+            "gfx/pack.dds",
+            "gfx/other/d.dds",
+        ] {
+            idx.claim_workspace(key);
+        }
+        idx.add_paths(["gfx/pack/base.dds".to_string()]);
+
+        let mut found = idx.workspace_owned_under(&["GFX\\pack/".to_string()]);
+        found.sort();
+        assert_eq!(found, ["gfx/pack/a.dds", "gfx/pack/deep/er/b.dds"]);
+
+        assert!(
+            idx.workspace_owned_under(&["gfx/pack/a.dds".to_string()])
+                .is_empty()
+        );
+        assert!(
+            idx.workspace_owned_under(&["gfx/pac".to_string()])
+                .is_empty()
+        );
+        assert!(
+            idx.workspace_owned_under(&["".to_string(), "/".to_string()])
+                .is_empty()
+        );
+        assert!(idx.workspace_owned_under(&[]).is_empty());
     }
 
     /// Case-sensitive: the workspace spelling wins while it exists, and the lower
