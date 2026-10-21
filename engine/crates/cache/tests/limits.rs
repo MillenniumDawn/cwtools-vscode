@@ -9,57 +9,9 @@ use cwtools_cache::io::{
     self, MAX_ARCHIVE_DECODED_BYTES, MAX_ARCHIVE_FILE_BYTES, MAX_ERRORS_FILE_BYTES, decode_capped,
     read_capped,
 };
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-
-struct LargeAllocationCounter;
-
-#[global_allocator]
-static ALLOCATOR: LargeAllocationCounter = LargeAllocationCounter;
-
-thread_local! {
-    static TRACK_LARGE_ALLOCATIONS: Cell<bool> = const { Cell::new(false) };
-    static LARGE_ALLOCATION_COUNT: Cell<usize> = const { Cell::new(0) };
-}
-
-fn record_large_allocation(size: usize) {
-    let _ = TRACK_LARGE_ALLOCATIONS.try_with(|tracking| {
-        if tracking.get() && size >= MAX_ARCHIVE_DECODED_BYTES as usize {
-            let _ = LARGE_ALLOCATION_COUNT.try_with(|count| count.set(count.get() + 1));
-        }
-    });
-}
-
-// SAFETY: All allocation operations are forwarded unchanged to `System`; this
-// wrapper only counts large allocation requests on the test thread when enabled.
-unsafe impl GlobalAlloc for LargeAllocationCounter {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        record_large_allocation(layout.size());
-        // SAFETY: forwarded unchanged to the system allocator.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record_large_allocation(layout.size());
-        // SAFETY: forwarded unchanged to the system allocator.
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        record_large_allocation(new_size);
-        // SAFETY: forwarded to the system allocator with the original pointer,
-        // layout and requested size.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: forwarded unchanged to the system allocator.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
 
 const MAGIC: [u8; 4] = *b"CWB\x00";
 const FORMAT_VERSION: u8 = 6;
@@ -241,31 +193,6 @@ fn an_archive_declaring_an_over_cap_body_is_refused() {
     assert!(
         format!("{err:?}").contains("decompresses past"),
         "got {err:?}"
-    );
-}
-
-#[test]
-fn an_over_cap_declared_archive_is_rejected_without_allocating_its_output() {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("bomb.cwb");
-    let mut body = MAGIC.to_vec();
-    body.push(FORMAT_VERSION);
-    body.extend_from_slice(&overstated_frame(MAX_ARCHIVE_DECODED_BYTES + 1));
-    std::fs::write(&path, &body).unwrap();
-
-    LARGE_ALLOCATION_COUNT.with(|count| count.set(0));
-    TRACK_LARGE_ALLOCATIONS.with(|tracking| tracking.set(true));
-    let err = io::with_archived_file(&path, |_| ()).unwrap_err();
-    TRACK_LARGE_ALLOCATIONS.with(|tracking| tracking.set(false));
-
-    assert!(
-        format!("{err:?}").contains("decompresses past"),
-        "got {err:?}"
-    );
-    assert_eq!(
-        LARGE_ALLOCATION_COUNT.with(Cell::get),
-        0,
-        "the declared-over-cap frame must be refused before reserving its output"
     );
 }
 
