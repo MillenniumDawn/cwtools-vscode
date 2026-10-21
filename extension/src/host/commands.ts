@@ -19,6 +19,8 @@ import type { EditorTracker } from "./documentLanguage";
 import { errorMessage, logError, outputChannel } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
+import { GAMES } from "./games";
+import { discoverVanillaInstallations } from "./baseGame";
 // Type-only: the graph panel stays lazily imported (it pulls in the webview
 // plumbing), and `import type` is erased, so naming its shape here doesn't
 // pull it into the activation path.
@@ -190,6 +192,61 @@ export function registerCommands(
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showOutput", () => {
 			outputChannel.show();
+		}),
+	);
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.selectBaseGame", async () => {
+			const game = await window.showQuickPick(
+				GAMES.map((item) => ({ label: item.display, id: item.id })),
+				{ placeHolder: l10n.t("Select the base game to configure") },
+			);
+			if (!game) return;
+
+			const definition = GAMES.find((item) => item.id === game.id);
+			if (!definition) return;
+			const installations = discoverVanillaInstallations(definition);
+			const browse: { label: string; browse?: true; folder?: string } = {
+				label: l10n.t("Browse for a game folder…"),
+				browse: true,
+			};
+			const choices: Array<{ label: string; browse?: true; folder?: string }> = [
+				...installations.map((folder) => ({ label: folder, folder })),
+				browse,
+			];
+			const selection = await window.showQuickPick(
+				choices,
+				{
+					placeHolder: installations.length
+						? l10n.t("Select a {0} installation", definition.display)
+						: l10n.t("No Steam installation found. Browse for the {0} game folder", definition.display),
+				},
+			);
+			if (!selection) return;
+
+			let folder: string | undefined;
+			if (selection.browse === true) {
+				const picked = await window.showOpenDialog({
+					canSelectFiles: false,
+					canSelectFolders: true,
+					canSelectMany: false,
+					openLabel: l10n.t("Select {0} game folder", definition.display),
+				});
+				folder = picked?.[0]?.fsPath;
+			} else {
+				folder = selection.folder;
+			}
+			if (!folder) return;
+
+			await workspace
+				.getConfiguration("cwtools")
+				.update(`cache.${definition.id}`, folder, vscode.ConfigurationTarget.Global);
+			const runCache = await window.showInformationMessage(
+				l10n.t("Base game folder saved for {0}. Regenerate its vanilla cache now?", definition.display),
+				l10n.t("Run cacheVanilla"),
+			);
+			if (runCache) {
+				await commands.executeCommand(serverCommand("cacheVanilla"));
+			}
 		}),
 	);
 	let restartInFlight = false;

@@ -60,6 +60,7 @@ export const Uri = {
 export class CancellationError extends Error {}
 
 export const ProgressLocation = { SourceControl: 1, Window: 10, Notification: 15 };
+export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
 
 export class RelativePattern {
 	constructor(

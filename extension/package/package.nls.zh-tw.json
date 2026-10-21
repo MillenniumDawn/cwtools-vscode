@@ -10,6 +10,7 @@
   "commands.genlocall.title": "為所有檔案產生缺少的本地化",
   "commands.reloadrulesconfig.title": "重新載入設定規則",
   "commands.cacheVanilla.title": "重新產生遊戲原版快取檔",
+  "commands.selectBaseGame.title": "選擇基礎遊戲安裝位置",
   "commands.clearAllCaches.title": "清除所有快取並重新索引",
   "commands.reindexWorkspace.title": "重新索引工作區",
   // Save the language server's timing/memory log to a file, for a bug report

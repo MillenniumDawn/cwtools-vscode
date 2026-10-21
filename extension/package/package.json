@@ -151,6 +151,11 @@
         "category": "cwtools"
       },
       {
+        "command": "cwtools.selectBaseGame",
+        "title": "%commands.selectBaseGame.title%",
+        "category": "cwtools"
+      },
+      {
         "command": "clearAllCaches",
         "title": "%commands.clearAllCaches.title%",
         "category": "cwtools"

@@ -10,6 +10,7 @@
   "commands.genlocall.title": "Genera la localizzazione mancante per tutti i file",
   "commands.reloadrulesconfig.title": "Ricarica la configurazione delle regole",
   "commands.cacheVanilla.title": "Rigenera il file di cache del gioco vanilla",
+  "commands.selectBaseGame.title": "Seleziona l’installazione del gioco base",
   "commands.clearAllCaches.title": "Svuota tutte le cache e reindicizza",
   "commands.reindexWorkspace.title": "Reindicizza l'area di lavoro",
   // Save the language server's timing/memory log to a file, for a bug report

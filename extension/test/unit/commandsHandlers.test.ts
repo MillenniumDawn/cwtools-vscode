@@ -41,6 +41,7 @@ const state = vi.hoisted(() => {
 		token,
 		withProgress,
 		showInformationMessage: vi.fn(),
+		showQuickPick: vi.fn(),
 		showOpenDialog: vi.fn(),
 		executeCommand: vi.fn(),
 		showWarningMessage: vi.fn(),
@@ -49,6 +50,7 @@ const state = vi.hoisted(() => {
 		showInputBox: vi.fn(),
 		showSaveDialog: vi.fn(),
 		writeFile: vi.fn(),
+		updateConfiguration: vi.fn(),
 		initialiseGraph,
 	};
 });
@@ -68,6 +70,7 @@ vi.mock("vscode", async (importOriginal) => {
 			...original.window,
 			withProgress: state.withProgress,
 			showInformationMessage: state.showInformationMessage,
+			showQuickPick: state.showQuickPick,
 			showOpenDialog: state.showOpenDialog,
 			showWarningMessage: state.showWarningMessage,
 			showErrorMessage: state.showErrorMessage,
@@ -83,6 +86,10 @@ vi.mock("vscode", async (importOriginal) => {
 		},
 		workspace: {
 			...original.workspace,
+			getConfiguration: vi.fn((section?: string) => ({
+				...original.workspace.getConfiguration(section),
+				update: state.updateConfiguration,
+			})),
 			fs: { writeFile: state.writeFile, readFile: state.readFile },
 		},
 	};
@@ -208,12 +215,32 @@ const bytes = (text: string) => new TextEncoder().encode(text);
 suite("registered workspace commands", () => {
 	beforeEach(() => {
 		state.executeCommand.mockReset();
+		state.showInformationMessage.mockReset();
 		state.showInputBox.mockReset();
+		state.showQuickPick.mockReset();
 		state.showOpenDialog.mockReset();
+		state.updateConfiguration.mockReset();
 		state.readFile.mockReset();
 		state.showSaveDialog.mockReset();
 		GraphPanel.currentPanel = undefined;
 		state.registeredCommands.clear();
+	});
+
+	test("selects a base game folder through Browse and saves its cache setting", async () => {
+		register(fakeClient([]));
+		state.showQuickPick
+			.mockResolvedValueOnce({ label: "Hearts of Iron IV", id: "hoi4" })
+			.mockResolvedValueOnce({ label: "Browse for a game folder…", browse: true });
+		state.showOpenDialog.mockResolvedValue([{ fsPath: "/games/hoi4/game" }]);
+		state.showInformationMessage.mockResolvedValue("Run cacheVanilla");
+
+		await handler("cwtools.selectBaseGame")();
+
+		assert.deepStrictEqual(state.updateConfiguration.mock.calls, [
+			["cache.hoi4", "/games/hoi4/game", 1],
+		]);
+		assert.deepStrictEqual(state.executeCommand.mock.calls, [["cacheVanilla"]]);
+		assert.equal(state.showInformationMessage.mock.calls[0][1], "Run cacheVanilla");
 	});
 
 	test("clears command availability contexts when the server stops", () => {
