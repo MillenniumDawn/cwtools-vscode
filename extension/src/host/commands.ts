@@ -240,13 +240,9 @@ export function registerCommands(
 			await workspace
 				.getConfiguration("cwtools")
 				.update(`cache.${definition.id}`, folder, vscode.ConfigurationTarget.Global);
-			const runCache = await window.showInformationMessage(
-				l10n.t("Base game folder saved for {0}. Regenerate its vanilla cache now?", definition.display),
-				l10n.t("Run cacheVanilla"),
-			);
-			if (runCache) {
-				await commands.executeCommand(serverCommand("cacheVanilla"));
-			}
+			// cache.<game> is captured in the server's initialization options and
+			// cannot change in the running server. The configuration listener
+			// offers a window reload; cacheVanilla must wait until that restart.
 		}),
 	);
 	let restartInFlight = false;

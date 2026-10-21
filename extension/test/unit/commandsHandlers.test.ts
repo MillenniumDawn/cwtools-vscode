@@ -226,21 +226,26 @@ suite("registered workspace commands", () => {
 		state.registeredCommands.clear();
 	});
 
-	test("selects a base game folder through Browse and saves its cache setting", async () => {
+	test("saves the selected path without rebuilding against the running server's startup setting", async () => {
 		register(fakeClient([]));
+		let configuredVanilla = "/games/old-hoi4";
+		const runningServerVanilla = configuredVanilla;
+		state.updateConfiguration.mockImplementation((key: string, value: string) => {
+			if (key === "cache.hoi4") configuredVanilla = value;
+		});
 		state.showQuickPick
 			.mockResolvedValueOnce({ label: "Hearts of Iron IV", id: "hoi4" })
 			.mockResolvedValueOnce({ label: "Browse for a game folder…", browse: true });
 		state.showOpenDialog.mockResolvedValue([{ fsPath: "/games/hoi4/game" }]);
-		state.showInformationMessage.mockResolvedValue("Run cacheVanilla");
 
 		await handler("cwtools.selectBaseGame")();
 
+		assert.equal(configuredVanilla, "/games/hoi4/game");
+		assert.equal(runningServerVanilla, "/games/old-hoi4");
 		assert.deepStrictEqual(state.updateConfiguration.mock.calls, [
 			["cache.hoi4", "/games/hoi4/game", 1],
 		]);
-		assert.deepStrictEqual(state.executeCommand.mock.calls, [["cacheVanilla"]]);
-		assert.equal(state.showInformationMessage.mock.calls[0][1], "Run cacheVanilla");
+		assert.deepStrictEqual(state.executeCommand.mock.calls, []);
 	});
 
 	test("clears command availability contexts when the server stops", () => {

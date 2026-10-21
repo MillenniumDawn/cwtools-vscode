@@ -37,6 +37,7 @@ import {
 	mapIgnoreOptions,
 	isLiveSettingsChange,
 	isReloadSettingsChange,
+	RELOAD_SETTINGS_KEYS,
 	type FormattingIndentStyle,
 	type HoverScopeDisplay,
 	type LiveServerSettings,
@@ -723,11 +724,17 @@ export function createLanguageClient(
 		workspace.onDidChangeConfiguration((e) => {
 			if (isReloadSettingsChange(e)) {
 				const reloadWindow = l10n.t("Reload Window");
+				const vanillaPathChanged = RELOAD_SETTINGS_KEYS.some(
+					(key) =>
+						key.startsWith("cwtools.cache.") && e.affectsConfiguration(key),
+				);
 				void Promise.resolve(
 					window.showInformationMessage(
-						l10n.t(
-							"CWTools settings changed. Reload the window to apply them.",
-						),
+						vanillaPathChanged
+							? l10n.t("Base game folder changed. Reload the window to apply it, then run 'CWTools: Regenerate game vanilla cache file'.")
+							: l10n.t(
+								"CWTools settings changed. Reload the window to apply them.",
+							),
 						reloadWindow,
 					),
 				)
