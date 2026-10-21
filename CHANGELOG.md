@@ -3,6 +3,7 @@
 #### Engine
 
 * A semantic-token cache hit now updates the cached result id in place under one lock. A full request copies the token list once for its response, and an unchanged delta request copies none. A delta that needs a diff compares against the cached tokens without cloning them first. Responses and result ids are unchanged. (#1093)
+* Register watched-file notifications dynamically when the client advertises support. One recursive glob covers workspace files; the existing server handler classifies resources, ignores excluded paths and skips stray localisation files. Clients without dynamic-registration support can continue sending watched-file notifications directly. (#479)
 * Release what a watched folder delete leaves behind. The client can report a deleted folder as one event, so file-index entries and script, localisation and index state for files inside it stayed until a reindex. References to them kept resolving without CW113. The server now releases everything under the folder, matching whole path segments. A per-file delete also resolves its path when the parent folder is gone. (#1092)
 
 ### 4.0.2

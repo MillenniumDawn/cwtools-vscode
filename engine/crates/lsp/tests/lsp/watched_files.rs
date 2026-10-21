@@ -37,7 +37,7 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
 }
 
 #[test]
-fn test_watched_files_registers_supported_client_for_existing_file_classes() {
+fn test_watched_files_registers_supported_client() {
     let capabilities = json!({
         "workspace": {
             "didChangeWatchedFiles": { "dynamicRegistration": true }
@@ -59,26 +59,9 @@ fn test_watched_files_registers_supported_client_for_existing_file_classes() {
     let watchers = request["params"]["registrations"][0]["registerOptions"]["watchers"]
         .as_array()
         .expect("watched-file registration must include watcher globs");
-    let mut globs: Vec<&str> = watchers
-        .iter()
-        .map(|watcher| {
-            assert_eq!(watcher["kind"], 7, "watch all change kinds");
-            watcher["globPattern"]
-                .as_str()
-                .expect("watcher glob must be a string")
-        })
-        .collect();
-    globs.sort_unstable();
-    assert_eq!(
-        globs,
-        [
-            "**/*",
-            "**/*.cwt",
-            "**/*.{txt,gui,gfx,sfx,asset,map}",
-            "**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
-        ]
-    );
-    server.reply(&request);
+    assert_eq!(watchers.len(), 1, "use one non-overlapping glob");
+    assert_eq!(watchers[0]["kind"], 7, "watch all change kinds");
+    assert_eq!(watchers[0]["globPattern"], "**/*");
     server.stop();
 }
 
