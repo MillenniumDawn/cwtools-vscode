@@ -877,19 +877,13 @@ impl LanguageServer for Backend {
             .watched_files_dynamic_registration
             .load(Ordering::Relaxed)
         {
-            // The extension watches these file classes individually, but its resource glob
-            // already covers every workspace file. One recursive glob is enough here too;
-            // watched-file handling classifies resources, ignores excluded paths and skips
-            // stray localisation files. The pending URI set and stat signatures make overlap
-            // with the extension's existing watchers idempotent.
+            // The watched-file handler sorts and filters paths, and coalesces events that
+            // overlap with the bundled extension's own watchers.
             let registration = Registration {
                 id: "cwtools-watched-files".to_string(),
                 method: "workspace/didChangeWatchedFiles".to_string(),
                 register_options: Some(serde_json::json!({
-                    "watchers": [{
-                        "globPattern": "**/*",
-                        "kind": 7,
-                    }],
+                    "watchers": [{ "globPattern": "**/*" }],
                 })),
             };
             if let Err(error) = self.client.register_capability(vec![registration]).await {
