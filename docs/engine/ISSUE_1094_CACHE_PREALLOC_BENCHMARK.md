@@ -74,12 +74,15 @@ ms. Candidate mean was 848.88 ms, median 848.05 ms, sample standard deviation
 10.40 ms, and range 837.05–862.38 ms. The 4.65 ms median-of-means difference
 is a 0.55% change, with overlapping intervals in all four adjacent
 baseline/candidate comparisons.
-The candidate's mean peak VmHWM was 118,291 KiB versus 117,733 KiB baseline;
-the ranges overlap and show no memory reduction. A permitted declared frame
-could reserve up to the 128 MiB decode cap at once, while the existing growing
-buffer reserves according to decoded output. The observed warm-load archives
-were much smaller on disk, and no stable speedup offset the risk of eager
-reservation.
+For the measured native archives, candidate mean peak VmHWM was 118,291 KiB
+versus 117,733 KiB baseline; the ranges overlap. These timing and RSS
+observations are for undeclared-size native frames and do not measure the
+declared-size preallocation path or its memory impact. No preallocation
+optimization is retained for native caches because their writer emits no
+declared sizes. Preallocation behavior and memory use for declared-size
+external frames remain unmeasured; a permitted frame could reserve up to the
+128 MiB decode cap at once, while the existing growing buffer reserves
+according to decoded output.
 
 ## Reproduction
 
