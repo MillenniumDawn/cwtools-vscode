@@ -104,3 +104,16 @@ pub fn watched_created(uris: &[String]) -> String {
         json!({ "changes": changes }),
     )
 }
+
+/// A `workspace/didChangeWatchedFiles` notification marking the URIs as deleted
+/// (type 3). A deleted folder is one URI here, the way the client reports it.
+pub fn watched_deleted(uris: &[String]) -> String {
+    let changes: Vec<Value> = uris
+        .iter()
+        .map(|u| json!({ "uri": u, "type": 3 }))
+        .collect();
+    jsonrpc_notification(
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": changes }),
+    )
+}

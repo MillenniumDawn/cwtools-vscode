@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Release what a watched folder delete leaves behind. The client can report a deleted folder as one event, so file-index entries and script, localisation and index state for files inside it stayed until a reindex. References to them kept resolving without CW113. The server now releases everything under the folder, matching whole path segments. A per-file delete also resolves its path when the parent folder is gone. (#1092)
+
 ### 4.0.2
 
 #### Engine

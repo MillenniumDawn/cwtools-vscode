@@ -141,6 +141,8 @@ impl Backend {
         changes: HashSet<String>,
         deletes: Vec<String>,
     ) {
+        // Before the partition: a folder URI has no extension, so it lands with the resources.
+        let deletes = self.with_deleted_folder_contents(deletes, &changes);
         // Resources skip the rescan cap, so a texture folder copy stays cheap (#1023).
         let (resource_changes, changes): (HashSet<String>, HashSet<String>) =
             changes.into_iter().partition(|uri| is_resource_file(uri));
@@ -151,7 +153,7 @@ impl Backend {
         // CREATED thing.dds in one window must end owned, not released.
         let resource_rels: Vec<String> = resource_deletes
             .iter()
-            .filter_map(|uri| self.workspace_rel_for_file_index(uri))
+            .filter_map(|uri| self.workspace_rel_for_deleted(uri))
             .collect();
         let mut index_changed = self.remove_deleted_rels_from_file_index(resource_rels);
         let resources_changed = self.sync_watched_resources(&resource_changes);
@@ -348,29 +350,108 @@ impl Backend {
     }
 
     pub(crate) fn workspace_rel_for_file_index(&self, uri: &str) -> Option<String> {
-        // `authorized_path` is canonical (`\\?\` on Windows), so the raw root never matches.
-        let root = self.state.config.read().editable_roots.first().cloned()?;
         let abs = self.authorized_path(uri)?;
-        let rel = abs.strip_prefix(&root).ok()?;
-        rel.to_str().map(|s| s.replace('\\', "/"))
+        self.rel_in_workspace(&abs)
     }
 
-    /// Drop the workspace's own file-index contributions of deleted rels (#1067). A key
-    /// a lower layer still provides stays. Returns whether a key left the index.
-    fn remove_deleted_rels_from_file_index(&self, mut rels: Vec<String>) -> bool {
+    /// The rel of a deleted path. Unlike `authorized_path`, a missing parent folder is no
+    /// obstacle: the nearest existing ancestor is canonicalized and the tail re-joined,
+    /// inside the editable roots only (#1092).
+    fn workspace_rel_for_deleted(&self, uri: &str) -> Option<String> {
+        let roots = self.state.config.read().editable_roots.clone();
+        let abs = crate::access::editable_path(uri, &roots).ok()?;
+        self.rel_in_workspace(&abs)
+    }
+
+    fn rel_in_workspace(&self, abs: &std::path::Path) -> Option<String> {
+        // `abs` is canonical (`\\?\` on Windows), so the raw root never matches.
+        let root = self.state.config.read().editable_roots.first().cloned()?;
+        let rel = abs.strip_prefix(&root).ok()?.to_str()?;
+        (!rel.is_empty()).then(|| rel.replace('\\', "/"))
+    }
+
+    /// A folder delete reaches the server as one event for the folder, because the client
+    /// drops the events of the files inside it (#1092). Adds every URI the per-file delete
+    /// holds state for below such a path, so each is cleared as if it had been reported.
+    fn with_deleted_folder_contents(
+        &self,
+        deletes: Vec<String>,
+        changes: &HashSet<String>,
+    ) -> Vec<String> {
+        let folders: HashSet<String> = {
+            let rels: Vec<(&String, String)> = deletes
+                .iter()
+                .filter_map(|uri| Some((uri, self.workspace_rel_for_deleted(uri)?)))
+                .collect();
+            let info = self.state.info_service.read();
+            // A file the index owns is no folder, which spares the common delete the sweep.
+            rels.into_iter()
+                .filter(|(_, rel)| !info.type_index.file_index.is_workspace_owned(rel))
+                .map(|(uri, _)| uri.trim_end_matches('/').to_string())
+                .collect()
+        };
+        if folders.is_empty() {
+            return deletes;
+        }
+        let mut all: HashSet<String> = deletes.into_iter().collect();
+        let mut note = |uri: &str| {
+            if is_inside(uri, &folders) && !changes.contains(uri) {
+                all.insert(uri.to_string());
+            }
+        };
+        let state = &self.state;
+        state
+            .info_service
+            .read()
+            .files
+            .keys()
+            .for_each(|uri| note(uri));
+        state.type_uses.read().keys().for_each(|uri| note(uri));
+        state.loc_locations.read().uris().for_each(|uri| note(uri));
+        state.loc_text.read().uris().for_each(|uri| note(uri));
+        state
+            .loc_live_overlay
+            .read()
+            .keys()
+            .for_each(|uri| note(uri));
+        state
+            .loc_watched_overlay
+            .read()
+            .keys()
+            .for_each(|uri| note(uri));
+        state
+            .watched_signatures
+            .lock()
+            .keys()
+            .for_each(|uri| note(uri));
+        all.into_iter().collect()
+    }
+
+    /// Drop the workspace's own file-index contributions of deleted rels (#1067) and of
+    /// everything below a deleted folder (#1092). A key a lower layer still provides
+    /// stays. Returns whether a key left the index.
+    fn remove_deleted_rels_from_file_index(&self, rels: Vec<String>) -> bool {
         if rels.is_empty() {
+            return false;
+        }
+        // A rel the workspace never owned changes nothing, so the index Arc stays shared
+        // with any snapshot holding it. The sweep for a folder runs under the read lock.
+        let owned = {
+            let info = self.state.info_service.read();
+            let file_index = &info.type_index.file_index;
+            let (mut owned, folders): (Vec<String>, Vec<String>) = rels
+                .into_iter()
+                .partition(|rel| file_index.is_workspace_owned(rel));
+            owned.extend(file_index.workspace_owned_under(&folders));
+            owned
+        };
+        if owned.is_empty() {
             return false;
         }
         let mut info = self.state.info_service.write();
-        // A rel the workspace never owned changes nothing, so the index Arc stays shared
-        // with any snapshot holding it.
-        rels.retain(|rel| info.type_index.file_index.is_workspace_owned(rel));
-        if rels.is_empty() {
-            return false;
-        }
         let index = &mut Arc::make_mut(&mut info.type_index).file_index;
         let mut removed = false;
-        for rel in &rels {
+        for rel in &owned {
             removed |= index.release_workspace(rel);
         }
         drop(info);
@@ -384,7 +465,7 @@ impl Backend {
     async fn process_watched_deletes(&self, deletes: &[String]) -> WatchedDeleteOutcome {
         let rels: Vec<String> = deletes
             .iter()
-            .filter_map(|uri| self.workspace_rel_for_file_index(uri))
+            .filter_map(|uri| self.workspace_rel_for_deleted(uri))
             .collect();
         let removed_file_index = self.remove_deleted_rels_from_file_index(rels);
         {
@@ -471,4 +552,16 @@ impl Backend {
             changed_loc_keys: removed_loc_keys,
         }
     }
+}
+
+/// Whether `uri` sits inside one of `folders`, on whole path segments.
+fn is_inside(uri: &str, folders: &HashSet<String>) -> bool {
+    let mut parent = uri;
+    while let Some((head, _)) = parent.rsplit_once('/') {
+        if folders.contains(head) {
+            return true;
+        }
+        parent = head;
+    }
+    false
 }
