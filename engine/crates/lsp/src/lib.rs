@@ -31,6 +31,7 @@ mod lines;
 mod loc_locations;
 mod loc_text;
 mod navigation;
+mod parent_mods;
 mod paths;
 mod scan;
 mod semantic;
