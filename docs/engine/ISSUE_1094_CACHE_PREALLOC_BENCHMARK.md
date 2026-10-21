@@ -2,11 +2,12 @@
 
 ## Result
 
-No production preallocation change is retained for #1094. The candidate's
-four-run median was 848.05 ms versus 852.70 ms for the baseline (0.55% faster),
-but the paired intervals overlap and the difference is smaller than variation
-between runs. Peak RSS did not improve. The result does not demonstrate a
-repeatable benefit, so eager allocation is not justified. The cache format and
+No production preallocation change is retained for #1094. The median of the
+four per-run Criterion mean estimates was 848.05 ms for the candidate versus
+852.70 ms for the baseline (0.55% faster), but the paired intervals overlap
+and the difference is smaller than variation between runs. Peak RSS did not
+improve. The result does not demonstrate a repeatable benefit on the native
+warm-load input, so eager allocation is not justified. The cache format and
 production decoder remain unchanged; no format bump is needed. The allocation
 regression test is retained to ensure an over-cap declared frame is rejected
 before a large output allocation.
@@ -20,6 +21,13 @@ bytes (93.91 MiB). A setup run counted the generated compressed `.cwb` entries:
 6,505 files, 67.744 MiB
 total; minimum 48 bytes, median 1,710 bytes, p90 17,497 bytes, p95 38,806
 bytes, maximum 863,993 bytes (0.824 MiB).
+
+The benchmark archives were produced through `io::serialize_to_file`. Its
+streaming zstd encoder does not call `set_pledged_src_size`, so these native
+`warm_load` frames have no declared content size and do not exercise the
+declared-size preallocation path proposed in #1094. The timing result only
+addresses the current writer's undeclared-size archives; it does not establish
+performance for archives with a declared size.
 
 Runs were on Debian GNU/Linux 13, x86_64, kernel `6.18.55`, AMD EPYC 9V45
 (five CPUs available), with 17 GiB RAM and no swap. The toolchain was Rust
@@ -49,7 +57,7 @@ a worktree-only candidate patch, not a commit. The order was ABBA,
 then BAAB. Each run collected 10 Criterion samples after a 2-second warm-up,
 with a 12-second measurement target (40 samples per variant total).
 
-| Order | Variant | Median | 95% Criterion interval | Outliers | Peak VmHWM |
+| Order | Variant | Criterion mean | 95% Criterion interval for mean | Outliers | Peak VmHWM |
 | --- | --- | ---: | ---: | --- | ---: |
 | B1 | Baseline | 850.42 ms | 843.14–857.09 ms | none | 117,896 KiB |
 | C1 | Candidate | 837.05 ms | 828.37–847.41 ms | 1 high mild | 116,384 KiB |
@@ -60,11 +68,12 @@ with a 12-second measurement target (40 samples per variant total).
 | B4 | Baseline | 854.98 ms | 840.99–870.29 ms | none | 116,628 KiB |
 | C4 | Candidate | 848.76 ms | 835.78–864.05 ms | 1 high mild | 119,404 KiB |
 
-Across the four per-run medians, baseline mean was 856.30 ms, median 852.70
-ms, sample standard deviation 14.95 ms, and range 842.46–877.34 ms. Candidate
-mean was 848.88 ms, median 848.05 ms, sample standard deviation 10.40 ms, and
-range 837.05–862.38 ms. The 4.65 ms median difference is a 0.55% change, with
-overlapping intervals in all four adjacent baseline/candidate comparisons.
+Across the four per-run Criterion mean estimates, baseline mean was 856.30 ms,
+median 852.70 ms, sample standard deviation 14.95 ms, and range 842.46–877.34
+ms. Candidate mean was 848.88 ms, median 848.05 ms, sample standard deviation
+10.40 ms, and range 837.05–862.38 ms. The 4.65 ms median-of-means difference
+is a 0.55% change, with overlapping intervals in all four adjacent
+baseline/candidate comparisons.
 The candidate's mean peak VmHWM was 118,291 KiB versus 117,733 KiB baseline;
 the ranges overlap and show no memory reduction. A permitted declared frame
 could reserve up to the 128 MiB decode cap at once, while the existing growing
