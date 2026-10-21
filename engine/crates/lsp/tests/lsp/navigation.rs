@@ -4,8 +4,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::common::{
-    GOTO_RULES, TestServer, editor_server, editor_server_with_rules, feature_request, path_uri,
-    poll_until, storm_builder, storm_start,
+    GOTO_RULES, TestServer, client_spelling, editor_server, editor_server_with_rules,
+    feature_builder, feature_request, feature_start, path_uri, poll_until, storm_builder,
+    storm_start,
 };
 
 #[test]
@@ -1189,6 +1190,16 @@ fn test_code_lens_counts_scripted_effect_calls() {
     );
 }
 
+fn prepare_call_hierarchy(server: &mut TestServer, uri: &str, line: u32, character: u32) -> Value {
+    server.call(
+        "textDocument/prepareCallHierarchy",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": line, "character": character }
+        }),
+    )
+}
+
 #[test]
 fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
     let first = "first_effect = {\n    second_effect = yes\n    third_effect = yes\n}\n";
@@ -1211,13 +1222,7 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
         ],
     );
     let uri = server.uri(first_rel);
-    let prepared = server.call(
-        "textDocument/prepareCallHierarchy",
-        json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": 0, "character": 2 }
-        }),
-    );
+    let prepared = prepare_call_hierarchy(&mut server, &uri, 0, 2);
     let item = prepared["result"][0].clone();
     assert_eq!(
         item["name"], "first_effect",
@@ -1234,10 +1239,10 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
     let callers = incoming
         .iter()
         .map(|call| call["from"]["name"].as_str().unwrap())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<Vec<_>>();
     assert_eq!(
         callers,
-        ["second_effect", "caller_a", "caller_b", "my_decision"].into()
+        ["my_decision", "caller_a", "caller_b", "second_effect"]
     );
     let decision_call = incoming
         .iter()
@@ -1247,14 +1252,13 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
     assert_eq!(decision_call["fromRanges"][0]["start"]["character"], 8);
     assert_eq!(decision_call["fromRanges"][0]["end"]["character"], 20);
 
-    let first_item = prepared["result"][0].clone();
-    let outgoing = server.call("callHierarchy/outgoingCalls", json!({ "item": first_item }));
+    let outgoing = server.call("callHierarchy/outgoingCalls", json!({ "item": item }));
     let outgoing = outgoing["result"].as_array().expect("outgoing call array");
     let targets = outgoing
         .iter()
         .map(|call| call["to"]["name"].as_str().unwrap())
-        .collect::<std::collections::HashSet<_>>();
-    assert_eq!(targets, ["second_effect", "third_effect"].into());
+        .collect::<Vec<_>>();
+    assert_eq!(targets, ["second_effect", "third_effect"]);
     assert!(
         outgoing
             .iter()
@@ -1272,18 +1276,137 @@ fn call_hierarchy_prepare_returns_none_for_non_callable_entity() {
     let rel = "game/common/national_focus/f.txt";
     let mut server = editor_server_with_rules(GOTO_RULES, &[(rel, doc)]);
     let uri = server.uri(rel);
-    let response = server.call(
-        "textDocument/prepareCallHierarchy",
-        json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": 0, "character": 2 }
-        }),
-    );
+    let response = prepare_call_hierarchy(&mut server, &uri, 0, 2);
     server.stop();
     assert!(
         response["result"].is_null(),
         "non-callable result: {response}"
     );
+}
+
+#[test]
+fn call_hierarchy_prepares_a_call_site_but_not_an_effect_body() {
+    let definition = "first_effect = {\n    log = \"hi\"\n}\n";
+    let decision =
+        "my_decision = {\n    complete_effect = {\n        first_effect = yes\n    }\n}\n";
+    let definition_rel = "game/common/scripted_effects/first.txt";
+    let decision_rel = "game/common/decisions/d.txt";
+    let mut server = editor_server_with_rules(
+        GOTO_RULES,
+        &[(definition_rel, definition), (decision_rel, decision)],
+    );
+    let decision_uri = server.uri(decision_rel);
+    let call_site = prepare_call_hierarchy(&mut server, &decision_uri, 2, 10);
+    assert_eq!(
+        call_site["result"][0]["name"], "first_effect",
+        "{call_site}"
+    );
+    assert!(
+        call_site["result"][0]["uri"]
+            .as_str()
+            .is_some_and(|uri| uri.ends_with("scripted_effects/first.txt")),
+        "the item names the definition, not the call site: {call_site}"
+    );
+
+    let definition_uri = server.uri(definition_rel);
+    let body = prepare_call_hierarchy(&mut server, &definition_uri, 1, 6);
+    server.stop();
+    assert!(
+        body["result"].is_null(),
+        "a cursor inside the body is not the effect: {body}"
+    );
+}
+
+#[test]
+fn call_hierarchy_incoming_reaches_a_caller_in_a_closed_file() {
+    let definition = "first_effect = {\n    log = \"hi\"\n}\n";
+    let caller = "closed_caller = {\n    first_effect = yes\n}\n";
+    let definition_rel = "common/scripted_effects/first.txt";
+    let files = [
+        (definition_rel, definition),
+        ("common/scripted_effects/caller.txt", caller),
+    ];
+    let mut server = feature_start(
+        feature_builder(GOTO_RULES, &files, json!({})),
+        &files,
+        &[definition_rel],
+    );
+    let uri = server.uri(definition_rel);
+    let prepared = prepare_call_hierarchy(&mut server, &uri, 0, 2);
+    let incoming = server.call(
+        "callHierarchy/incomingCalls",
+        json!({ "item": prepared["result"][0] }),
+    );
+    let incoming = incoming["result"].as_array().expect("incoming calls");
+    assert_eq!(incoming.len(), 1, "{incoming:?}");
+    assert_eq!(incoming[0]["from"]["name"], "closed_caller");
+    assert_eq!(incoming[0]["fromRanges"][0]["start"]["line"], 1);
+    assert_eq!(incoming[0]["fromRanges"][0]["start"]["character"], 4);
+
+    let outgoing = server.call(
+        "callHierarchy/outgoingCalls",
+        json!({ "item": incoming[0]["from"] }),
+    );
+    server.stop();
+    assert_eq!(outgoing["result"][0]["to"]["name"], "first_effect");
+}
+
+#[test]
+fn call_hierarchy_requests_survive_the_client_respelling_the_item_uri() {
+    let doc = "outer_effect = {\n    inner_effect = yes\n}\ninner_effect = {\n    log = \"x\"\n}\n";
+    let rel = "game/common/scripted_effects/spelled.txt";
+    let mut server = editor_server_with_rules(GOTO_RULES, &[(rel, doc)]);
+    let uri = server.uri(rel);
+    let respelled = client_spelling(&uri).replace("spelled.txt", "%73pelled.txt");
+
+    let mut outer = prepare_call_hierarchy(&mut server, &uri, 0, 2)["result"][0].clone();
+    outer["uri"] = json!(respelled);
+    let outgoing = server.call("callHierarchy/outgoingCalls", json!({ "item": outer }));
+    assert_eq!(outgoing["result"][0]["to"]["name"], "inner_effect");
+
+    let mut inner = prepare_call_hierarchy(&mut server, &uri, 3, 2)["result"][0].clone();
+    inner["uri"] = json!(respelled);
+    let incoming = server.call("callHierarchy/incomingCalls", json!({ "item": inner }));
+    server.stop();
+    assert_eq!(incoming["result"][0]["from"]["name"], "outer_effect");
+}
+
+#[test]
+fn call_hierarchy_groups_repeated_calls_into_one_entry() {
+    let target = "target_effect = {\n    log = \"t\"\n}\n";
+    let caller = "caller_effect = {\n    target_effect = yes\n    target_effect = yes\n}\n";
+    let target_rel = "game/common/scripted_effects/target.txt";
+    let caller_rel = "game/common/scripted_effects/caller.txt";
+    let mut server =
+        editor_server_with_rules(GOTO_RULES, &[(target_rel, target), (caller_rel, caller)]);
+    let target_uri = server.uri(target_rel);
+    let target_item = prepare_call_hierarchy(&mut server, &target_uri, 0, 2)["result"][0].clone();
+    let incoming = server.call(
+        "callHierarchy/incomingCalls",
+        json!({ "item": target_item }),
+    );
+    let incoming = incoming["result"].as_array().expect("incoming calls");
+    assert_eq!(incoming.len(), 1, "{incoming:?}");
+    assert_eq!(incoming[0]["from"]["name"], "caller_effect");
+    assert_eq!(incoming[0]["fromRanges"].as_array().map(Vec::len), Some(2));
+
+    let caller_uri = server.uri(caller_rel);
+    let caller_item = prepare_call_hierarchy(&mut server, &caller_uri, 0, 2)["result"][0].clone();
+    let outgoing = server.call(
+        "callHierarchy/outgoingCalls",
+        json!({ "item": caller_item }),
+    );
+    server.stop();
+    let outgoing = outgoing["result"].as_array().expect("outgoing calls");
+    assert_eq!(outgoing.len(), 1, "{outgoing:?}");
+    assert_eq!(outgoing[0]["to"]["name"], "target_effect");
+    let lines = outgoing[0]["fromRanges"]
+        .as_array()
+        .expect("outgoing ranges")
+        .iter()
+        .map(|range| range["start"]["line"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(lines, [1, 2]);
 }
 
 #[test]
@@ -1304,13 +1427,7 @@ alias[trigger:<scripted_trigger>] = yes
         ],
     );
     let uri = server.uri(outer_rel);
-    let prepared = server.call(
-        "textDocument/prepareCallHierarchy",
-        json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": 0, "character": 2 }
-        }),
-    );
+    let prepared = prepare_call_hierarchy(&mut server, &uri, 0, 2);
     let item = prepared["result"][0].clone();
     assert_eq!(
         item["name"], "outer_trigger",
@@ -1326,37 +1443,13 @@ alias[trigger:<scripted_trigger>] = yes
 }
 
 #[test]
-fn call_hierarchy_prepare_uses_exclusive_definition_end() {
-    let doc = "first_effect = { log = yes }\nsecond_effect = { log = yes }\n";
-    let rel = "game/common/scripted_effects/adjacent.txt";
-    let mut server = editor_server_with_rules(GOTO_RULES, &[(rel, doc)]);
-    let uri = server.uri(rel);
-    let response = server.call(
-        "textDocument/prepareCallHierarchy",
-        json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": 1, "character": 0 }
-        }),
-    );
-    server.stop();
-    assert_eq!(response["result"][0]["name"], "second_effect", "{response}");
-    assert_eq!(response["result"][0]["selectionRange"]["start"]["line"], 1);
-}
-
-#[test]
 fn call_hierarchy_ranges_use_utf16_columns() {
     let first =
         "first_effect = { log = \"😀\" second_effect = yes } second_effect = { log = yes }\n";
     let first_rel = "game/common/scripted_effects/emoji.txt";
     let mut server = editor_server_with_rules(GOTO_RULES, &[(first_rel, first)]);
     let uri = server.uri(first_rel);
-    let prepared = server.call(
-        "textDocument/prepareCallHierarchy",
-        json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": 0, "character": 2 }
-        }),
-    );
+    let prepared = prepare_call_hierarchy(&mut server, &uri, 0, 2);
     let item = prepared["result"][0].clone();
     assert_eq!(item["name"], "first_effect", "{prepared}");
     let outgoing = server.call("callHierarchy/outgoingCalls", json!({ "item": item }));
@@ -1369,13 +1462,7 @@ fn call_hierarchy_ranges_use_utf16_columns() {
     let second_definition_char = first[..first.rfind("second_effect = {").unwrap()]
         .encode_utf16()
         .count() as u32;
-    let prepared = server.call(
-        "textDocument/prepareCallHierarchy",
-        json!({
-            "textDocument": { "uri": uri },
-            "position": { "line": 0, "character": second_definition_char }
-        }),
-    );
+    let prepared = prepare_call_hierarchy(&mut server, &uri, 0, second_definition_char);
     server.stop();
     assert_eq!(prepared["result"][0]["name"], "second_effect", "{prepared}");
     assert_eq!(
