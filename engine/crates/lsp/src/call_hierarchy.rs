@@ -2,6 +2,7 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 
 use crate::Backend;
+use crate::navigation::source_range_without_text;
 use crate::paths::parse_uri;
 
 fn is_scripted_path(uri: &str) -> bool {
@@ -20,6 +21,7 @@ fn in_definition(location: cwtools_info::SourceLocation, line: u32, col: u32) ->
 
 impl Backend {
     fn call_hierarchy_item(
+        &self,
         uri: &str,
         type_name: &str,
         name: &str,
@@ -33,15 +35,14 @@ impl Backend {
             detail: Some(type_name.to_string()),
             uri: parse_uri(uri, fallback),
             range: Range::new(
-                Position::new(location.line, u32::from(location.col)),
-                Position::new(location.end.0, u32::from(location.end.1)),
+                Position::new(location.line.saturating_sub(1), u32::from(location.col)),
+                Position::new(location.end.0.saturating_sub(1), u32::from(location.end.1)),
             ),
-            selection_range: Range::new(
-                Position::new(location.line, u32::from(location.col)),
-                Position::new(
-                    location.line,
-                    u32::from(location.col) + name.chars().count() as u32,
-                ),
+            selection_range: source_range_without_text(
+                location.line.saturating_sub(1),
+                u32::from(location.col),
+                name,
+                &self.position_encoding(),
             ),
             data: None,
         }
@@ -64,19 +65,14 @@ impl Backend {
                 .into_iter()
                 .find(|(type_name, inst)| {
                     is_callable_type(type_name)
-                        && (in_definition(inst.location, pos.line, pos.character)
-                            || in_definition(
-                                inst.location,
-                                pos.line.saturating_add(1),
-                                pos.character,
-                            ))
+                        && in_definition(inst.location, pos.line.saturating_add(1), pos.character)
                 })
                 .map(|(type_name, inst)| (type_name.to_string(), inst.name.clone(), inst.location))
         };
         let Some((type_name, name, location)) = found else {
             return Ok(None);
         };
-        Ok(Some(vec![Self::call_hierarchy_item(
+        Ok(Some(vec![self.call_hierarchy_item(
             &uri,
             &type_name,
             &name,
@@ -101,29 +97,27 @@ impl Backend {
                 info.type_index
                     .instances_in_file(&site.file)
                     .into_iter()
-                    .find(|(owner_type, inst)| {
-                        is_callable_type(owner_type)
-                            && in_definition(inst.location, site.key.line, u32::from(site.key.col))
+                    .find(|(_, inst)| {
+                        in_definition(inst.location, site.key.line, u32::from(site.key.col))
                     })
                     .map(|(owner_type, inst)| (owner_type.to_string(), inst.clone()))
             };
             let Some((owner_type, owner)) = owner else {
                 continue;
             };
-            if !is_scripted_path(&site.file) {
-                continue;
-            }
             calls.push(CallHierarchyIncomingCall {
-                from: Self::call_hierarchy_item(
+                from: self.call_hierarchy_item(
                     &site.file,
                     &owner_type,
                     &owner.name,
                     owner.location,
                     &item.uri,
                 ),
-                from_ranges: vec![Range::new(
-                    Position::new(site.key.line, u32::from(site.key.col)),
-                    Position::new(site.key.end.0, u32::from(site.key.end.1)),
+                from_ranges: vec![source_range_without_text(
+                    site.key.line.saturating_sub(1),
+                    u32::from(site.key.col),
+                    &item.name,
+                    &self.position_encoding(),
                 )],
             });
         }
@@ -170,16 +164,18 @@ impl Backend {
                     continue;
                 }
                 calls.push(CallHierarchyOutgoingCall {
-                    to: Self::call_hierarchy_item(
+                    to: self.call_hierarchy_item(
                         &target_uri,
                         &target_type,
                         &target.name,
                         target.location,
                         &item.uri,
                     ),
-                    from_ranges: vec![Range::new(
-                        Position::new(site.key.line, u32::from(site.key.col)),
-                        Position::new(site.key.end.0, u32::from(site.key.end.1)),
+                    from_ranges: vec![source_range_without_text(
+                        site.key.line.saturating_sub(1),
+                        u32::from(site.key.col),
+                        &target.name,
+                        &self.position_encoding(),
                     )],
                 });
             }

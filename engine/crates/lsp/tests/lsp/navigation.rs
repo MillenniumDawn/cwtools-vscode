@@ -1196,6 +1196,8 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
     let third = "third_effect = {\n    log = \"done\"\n}\n";
     let caller_a = "caller_a = {\n    first_effect = yes\n}\n";
     let caller_b = "caller_b = {\n    first_effect = yes\n}\n";
+    let decision =
+        "my_decision = {\n    complete_effect = {\n        first_effect = yes\n    }\n}\n";
     let first_rel = "game/common/scripted_effects/first.txt";
     let mut server = editor_server_with_rules(
         GOTO_RULES,
@@ -1205,6 +1207,7 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
             ("game/common/scripted_effects/third.txt", third),
             ("game/common/scripted_effects/callers_a.txt", caller_a),
             ("game/common/scripted_effects/callers_b.txt", caller_b),
+            ("game/common/decisions/d.txt", decision),
         ],
     );
     let uri = server.uri(first_rel);
@@ -1220,6 +1223,11 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
         item["name"], "first_effect",
         "prepared callable: {prepared}"
     );
+    assert_eq!(item["range"]["start"]["line"], 0);
+    assert_eq!(item["range"]["end"]["line"], 4);
+    assert_eq!(item["selectionRange"]["start"]["line"], 0);
+    assert_eq!(item["selectionRange"]["start"]["character"], 0);
+    assert_eq!(item["selectionRange"]["end"]["character"], 12);
 
     let incoming = server.call("callHierarchy/incomingCalls", json!({ "item": item }));
     let incoming = incoming["result"].as_array().expect("incoming call array");
@@ -1227,7 +1235,17 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
         .iter()
         .map(|call| call["from"]["name"].as_str().unwrap())
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(callers, ["second_effect", "caller_a", "caller_b"].into());
+    assert_eq!(
+        callers,
+        ["second_effect", "caller_a", "caller_b", "my_decision"].into()
+    );
+    let decision_call = incoming
+        .iter()
+        .find(|call| call["from"]["name"] == "my_decision")
+        .unwrap();
+    assert_eq!(decision_call["fromRanges"][0]["start"]["line"], 2);
+    assert_eq!(decision_call["fromRanges"][0]["start"]["character"], 8);
+    assert_eq!(decision_call["fromRanges"][0]["end"]["character"], 20);
 
     let first_item = prepared["result"][0].clone();
     let outgoing = server.call("callHierarchy/outgoingCalls", json!({ "item": first_item }));
@@ -1242,6 +1260,9 @@ fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
             .iter()
             .all(|call| call["fromRanges"].as_array().unwrap().len() == 1)
     );
+    assert_eq!(outgoing[0]["fromRanges"][0]["start"]["line"], 1);
+    assert_eq!(outgoing[0]["fromRanges"][0]["start"]["character"], 4);
+    assert_eq!(outgoing[0]["fromRanges"][0]["end"]["character"], 17);
     server.stop();
 }
 
