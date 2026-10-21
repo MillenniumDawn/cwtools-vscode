@@ -37,6 +37,75 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
 }
 
 #[test]
+fn test_watched_files_registers_supported_client_for_existing_file_classes() {
+    let capabilities = json!({
+        "workspace": {
+            "didChangeWatchedFiles": { "dynamicRegistration": true }
+        }
+    });
+    let mut server = ServerBuilder::default()
+        .empty_rules()
+        .capabilities(capabilities)
+        .spawn_uninitialized();
+    server.initialize();
+    server.initialized();
+
+    let request = server.answer_server_request();
+    assert_eq!(request["method"], "client/registerCapability");
+    assert_eq!(
+        request["params"]["registrations"][0]["method"],
+        "workspace/didChangeWatchedFiles"
+    );
+    let watchers = request["params"]["registrations"][0]["registerOptions"]["watchers"]
+        .as_array()
+        .expect("watched-file registration must include watcher globs");
+    let mut globs: Vec<&str> = watchers
+        .iter()
+        .map(|watcher| {
+            assert_eq!(watcher["kind"], 7, "watch all change kinds");
+            watcher["globPattern"]
+                .as_str()
+                .expect("watcher glob must be a string")
+        })
+        .collect();
+    globs.sort_unstable();
+    assert_eq!(
+        globs,
+        [
+            "**/*",
+            "**/*.cwt",
+            "**/*.{txt,gui,gfx,sfx,asset,map}",
+            "**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
+        ]
+    );
+    server.reply(&request);
+    server.stop();
+}
+
+#[test]
+fn test_watched_files_without_dynamic_registration_still_processes_events() {
+    // This client advertises no dynamic-registration capability. It can still
+    // send watched-file notifications itself, as the bundled extension does.
+    let mut server = picture_server("dds");
+    let frames = server.drain_until_quiet(Duration::from_millis(100), Duration::from_millis(250));
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| frame["method"] == "client/registerCapability"),
+        "a client without dynamic-registration support must not receive a registration request: {frames:?}"
+    );
+
+    let target = server.write_file_uri("gfx/new_pic.dds", "dds");
+    server.send(&watched_created(std::slice::from_ref(&target)));
+    let events = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    assert!(
+        !publish_has_code(last_picture_publish(&events), "CW113"),
+        "manual watched-file notifications must still update the file index: {events:?}"
+    );
+    server.stop();
+}
+
+#[test]
 fn test_watched_batch_panic_is_recovered_and_retried() {
     // #155: CWTOOLS_WATCHED_BATCH_PANIC_ONCE makes the FIRST watched batch
     // panic before it validates anything. spawn_watched_batch_window's
