@@ -133,6 +133,11 @@ impl LocText {
         })
     }
 
+    /// The uri of every file with live translations.
+    pub(crate) fn uris(&self) -> impl Iterator<Item = &Arc<str>> {
+        self.file_ids.keys()
+    }
+
     /// Live translations.
     pub(crate) fn len(&self) -> usize {
         (self.total_entries - self.dead_entries) as usize

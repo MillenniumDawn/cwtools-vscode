@@ -174,6 +174,11 @@ impl LocLocations {
         })
     }
 
+    /// The uri of every file with live sites.
+    pub(crate) fn uris(&self) -> impl Iterator<Item = &Arc<str>> {
+        self.file_ids.keys()
+    }
+
     /// Drops every site in `uri`, the way a watched change or a close re-reads
     /// that one file before inserting its sites again. The file id is
     /// tombstoned, so the call is O(1) and a re-insert of the same uri gets a

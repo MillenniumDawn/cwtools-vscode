@@ -4764,6 +4764,197 @@ mod ignored_tests {
         );
     }
 
+    fn file_uri(dir: &std::path::Path, rel: &str) -> String {
+        Url::from_file_path(dir.join(rel)).unwrap().to_string()
+    }
+
+    /// A folder delete reaches the server as one event for the folder. The workspace's
+    /// keys below it go on whole path segments, and so does the script, loc and signature
+    /// state of the files the server knew inside it (#1092).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_folder_delete_clears_what_the_server_held_below_it() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws_uri = Url::from_file_path(tmp.path()).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        let pack = tmp.path().join("gfx/pack");
+        std::fs::create_dir_all(pack.join("sub")).unwrap();
+        std::fs::remove_dir_all(&pack).unwrap();
+        let script_in = file_uri(tmp.path(), "gfx/pack/sub/defs.gfx");
+        let script_out = file_uri(tmp.path(), "gfx/packed/defs.gfx");
+        let loc_in = file_uri(tmp.path(), "gfx/pack/localisation/l_english.yml");
+        {
+            let mut info = backend.state.info_service.write();
+            for uri in [&script_in, &script_out] {
+                info.files
+                    .insert(uri.clone(), cwtools_info::FileInfo::default());
+            }
+            let file_index = &mut Arc::make_mut(&mut info.type_index).file_index;
+            for key in [
+                "gfx/pack/a.dds",
+                "gfx/pack/sub/b.dds",
+                "gfx/packed/c.dds",
+                "gfx/other.dds",
+            ] {
+                file_index.claim_workspace(key);
+            }
+            file_index.add_paths(["gfx/pack/base.dds".to_string()]);
+        }
+        backend
+            .state
+            .watched_signatures
+            .lock()
+            .insert(script_in.clone(), (1, 1));
+        backend
+            .loc_watched_overlay_mut()
+            .insert(loc_in.clone(), ["PACK_KEY".to_string()].into());
+        backend.state.loc_locations.write().insert(
+            Arc::from("PACK_KEY"),
+            &Arc::from(loc_in.as_str()),
+            0,
+            true,
+        );
+        backend.state.loc_text.write().insert(
+            Arc::from("PACK_KEY"),
+            &loc_in,
+            cwtools_localization::Lang::English,
+            "Pack".into(),
+        );
+
+        backend
+            .process_watched_batch(Default::default(), vec![file_uri(tmp.path(), "gfx/pack")])
+            .await;
+
+        let info = backend.state.info_service.read();
+        let file_index = &info.type_index.file_index;
+        for gone in ["gfx/pack/a.dds", "gfx/pack/sub/b.dds"] {
+            assert!(!file_index.contains(gone), "{gone} must leave the index");
+        }
+        for kept in ["gfx/packed/c.dds", "gfx/other.dds", "gfx/pack/base.dds"] {
+            assert!(file_index.contains(kept), "{kept} must stay in the index");
+        }
+        assert!(!info.files.contains_key(&script_in));
+        assert!(info.files.contains_key(&script_out));
+        assert!(
+            !backend
+                .state
+                .watched_signatures
+                .lock()
+                .contains_key(&script_in)
+        );
+        assert!(
+            !backend
+                .state
+                .loc_watched_overlay
+                .read()
+                .contains_key(&loc_in)
+        );
+        assert!(!backend.state.loc_locations.read().contains_key("PACK_KEY"));
+        assert!(backend.state.loc_text.read().get("PACK_KEY").is_none());
+    }
+
+    /// A delete that names nothing the server knew leaves the index snapshot alone, as
+    /// a folder, and as a file whose parent folder is gone too (#1092).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_delete_of_an_unknown_folder_keeps_the_index_snapshot() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws_uri = Url::from_file_path(tmp.path()).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        {
+            let mut info = backend.state.info_service.write();
+            Arc::make_mut(&mut info.type_index)
+                .file_index
+                .claim_workspace("gfx/other.dds");
+        }
+        let snapshot = Arc::clone(&backend.state.info_service.read().type_index);
+        let revision = backend.state.info_revision.load(Ordering::Relaxed);
+
+        backend
+            .process_watched_batch(
+                Default::default(),
+                vec![
+                    file_uri(tmp.path(), "gfx/nothing"),
+                    file_uri(tmp.path(), "gfx/nothing/deeper/ghost.dds"),
+                ],
+            )
+            .await;
+
+        assert!(Arc::ptr_eq(
+            &snapshot,
+            &backend.state.info_service.read().type_index
+        ));
+        assert_eq!(
+            backend.state.info_revision.load(Ordering::Relaxed),
+            revision
+        );
+    }
+
+    /// A folder event for a path that still exists is stale: nothing below it is gone.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_delete_of_a_folder_that_exists_releases_nothing() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws_uri = Url::from_file_path(tmp.path()).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        std::fs::create_dir_all(tmp.path().join("gfx/pack")).unwrap();
+        {
+            let mut info = backend.state.info_service.write();
+            let file_index = &mut Arc::make_mut(&mut info.type_index).file_index;
+            file_index.claim_workspace("gfx/pack/a.dds");
+        }
+
+        backend
+            .process_watched_batch(Default::default(), vec![file_uri(tmp.path(), "gfx/pack")])
+            .await;
+
+        let info = backend.state.info_service.read();
+        assert!(info.type_index.file_index.contains("gfx/pack/a.dds"));
+    }
+
+    /// Per-file deletes can outrun their parent folder's removal, so neither the file
+    /// nor its parent canonicalizes. The rel still resolves, and only inside the
+    /// workspace (#1092).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_deletes_resolve_when_the_parent_folder_is_gone() {
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let primary = tmp.path().join("mod");
+        let outside = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&primary).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let ws_uri = Url::from_file_path(&primary).unwrap().to_string();
+        let backend = backend_with_ignore(vec![], Some(&ws_uri));
+        {
+            let mut info = backend.state.info_service.write();
+            let file_index = &mut Arc::make_mut(&mut info.type_index).file_index;
+            file_index.claim_workspace("gfx/deep/er/a.dds");
+            file_index.claim_workspace("gfx/other.dds");
+        }
+        let owned = |rel: &str| {
+            backend
+                .state
+                .info_service
+                .read()
+                .type_index
+                .file_index
+                .is_workspace_owned(rel)
+        };
+
+        backend
+            .process_watched_batch(
+                Default::default(),
+                vec![file_uri(&outside, "gfx/deep/er/a.dds")],
+            )
+            .await;
+        assert!(owned("gfx/deep/er/a.dds"), "outside the workspace");
+
+        backend
+            .process_watched_batch(
+                Default::default(),
+                vec![file_uri(&primary, "gfx/deep/er/a.dds")],
+            )
+            .await;
+        assert!(!owned("gfx/deep/er/a.dds"));
+        assert!(owned("gfx/other.dds"));
+    }
+
     /// Same contract for an ignored file the workspace never indexed: its state clear
     /// runs on every edit event, so it must not clone the index snapshot (#1067).
     #[test]
