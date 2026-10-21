@@ -4,8 +4,9 @@
 
 No production preallocation change is retained for #1094. A follow-up used
 valid declared-size frames derived from the same corpus; the candidate's
-median-of-four-run means were 355.36 ms versus 356.11 ms baseline (0.21%
-faster). Three of four adjacent 95% intervals overlap, the baseline has one
+median of the four per-run declared-frame slope estimates was 355.36 ms
+versus 356.11 ms baseline (0.21% faster). Three of four adjacent slope
+confidence intervals overlap, the baseline has one
 high run, and the undeclared-size control was 0.86% slower with the candidate.
 These results do not demonstrate a repeatable meaningful benefit. The native
 writer also emits undeclared-size frames, which cannot use this optimization.
@@ -127,10 +128,10 @@ Criterion samples per workload, 2 seconds warm-up and a 12-second measurement
 target (40 samples per variant and workload). Criterion warned that 12 seconds
 was below its estimated minimum; it nevertheless collected all 10 samples,
 with estimated collection times between 19.2 and 20.7 seconds per workload.
-The table reports each run's Criterion mean and its 95% interval. Outliers are
-Criterion's classifications.
+The table reports Criterion regression slope estimates and their 95% confidence
+intervals for both workloads. Outliers are Criterion's classifications.
 
-| Order | Variant | Undeclared mean [95% interval] | Outliers | Declared mean [95% interval] | Outliers | VmHWM |
+| Order | Variant | Undeclared slope [95% interval] | Outliers | Declared slope [95% interval] | Outliers | VmHWM |
 | --- | --- | ---: | --- | ---: | --- | ---: |
 | B1 | Baseline | 350.98 [348.82–352.37] ms | none | 355.21 [354.36–356.34] ms | 1 high mild | 25,008 KiB |
 | C1 | Candidate | 354.58 [351.61–356.78] ms | none | 356.59 [355.23–358.23] ms | 1 high severe | 24,432 KiB |
@@ -141,15 +142,17 @@ Criterion's classifications.
 | B4 | Baseline | 351.91 [350.93–352.85] ms | none | 355.78 [354.58–357.36] ms | none | 25,056 KiB |
 | C4 | Candidate | 352.37 [350.48–355.20] ms | none | 356.04 [354.82–357.24] ms | none | 23,548 KiB |
 
-Across the four per-run means, undeclared baseline mean/median/sample SD/range
-were 352.20/351.45/1.95 ms/350.85–355.04 ms; candidate values were
-353.98/354.48/1.07 ms/352.37–354.58 ms. The median-of-means control difference
-was +3.03 ms (+0.86%). For declared frames, baseline values were
+Across the four per-run slope estimates, undeclared baseline mean/median/sample
+SD/range were 352.20/351.45/1.95 ms/350.85–355.04 ms; candidate values were
+353.98/354.48/1.07 ms/352.37–354.58 ms. The median-of-four-run-slope-estimates
+control difference was +3.03 ms (+0.86%). For declared frames, baseline
+per-run slope estimates had mean/median/sample SD/range
 359.33/356.11/7.06 ms/355.21–369.89 ms; candidate values were
-355.43/355.36/1.05 ms/354.43–356.59 ms. The median-of-means difference was
--0.75 ms (-0.21%); three of four adjacent baseline/candidate intervals
-overlap. The B2 baseline result is much slower than its other baseline runs,
-while the declared candidate run means cluster within about 2.2 ms. This is
+355.43/355.36/1.05 ms/354.43–356.59 ms. The difference between the median
+per-run slope estimates was -0.75 ms (-0.21%); three of four adjacent
+baseline/candidate slope confidence intervals overlap. The B2 baseline slope
+estimate is much slower than its other baseline runs, while the declared
+candidate slope estimates cluster within about 2.2 ms. This is
 not enough evidence to claim a repeatable optimization.
 
 VmHWM was sampled from `/proc/<pid>/status` every 50 ms because `/usr/bin/time`
@@ -207,6 +210,7 @@ log:
 /tmp/run-cwtools-issue1094-archive-sample.sh /tmp/cwtools-issue1094-archive-candidate-bench C1
 /tmp/run-cwtools-issue1094-archive-sample.sh /tmp/cwtools-issue1094-archive-candidate-bench C2
 /tmp/run-cwtools-issue1094-archive-sample.sh /tmp/cwtools-issue1094-archive-base-bench B2
+/tmp/run-cwtools-issue1094-archive-sample.sh /tmp/cwtools-issue1094-archive-candidate-bench C3
 /tmp/run-cwtools-issue1094-archive-sample.sh /tmp/cwtools-issue1094-archive-base-bench B3
 /tmp/run-cwtools-issue1094-archive-sample.sh /tmp/cwtools-issue1094-archive-base-bench B4
 /tmp/run-cwtools-issue1094-archive-sample.sh /tmp/cwtools-issue1094-archive-candidate-bench C4
