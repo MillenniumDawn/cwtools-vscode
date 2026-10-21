@@ -652,6 +652,11 @@ impl Backend {
                 }),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                call_hierarchy_provider: Some(CallHierarchyServerCapability::Options(
+                    CallHierarchyOptions {
+                        work_done_progress_options: Default::default(),
+                    },
+                )),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(true),
                 }),

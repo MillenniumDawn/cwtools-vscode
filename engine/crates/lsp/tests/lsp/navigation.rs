@@ -1188,3 +1188,118 @@ fn test_code_lens_counts_scripted_effect_calls() {
         Some(1)
     );
 }
+
+#[test]
+fn call_hierarchy_indexes_scripted_effect_edges_and_recursive_calls() {
+    let first = "first_effect = {\n    second_effect = yes\n    third_effect = yes\n}\n";
+    let second = "second_effect = {\n    first_effect = yes\n}\n";
+    let third = "third_effect = {\n    log = \"done\"\n}\n";
+    let caller_a = "caller_a = {\n    first_effect = yes\n}\n";
+    let caller_b = "caller_b = {\n    first_effect = yes\n}\n";
+    let first_rel = "game/common/scripted_effects/first.txt";
+    let mut server = editor_server_with_rules(
+        GOTO_RULES,
+        &[
+            (first_rel, first),
+            ("game/common/scripted_effects/second.txt", second),
+            ("game/common/scripted_effects/third.txt", third),
+            ("game/common/scripted_effects/callers_a.txt", caller_a),
+            ("game/common/scripted_effects/callers_b.txt", caller_b),
+        ],
+    );
+    let uri = server.uri(first_rel);
+    let prepared = server.call(
+        "textDocument/prepareCallHierarchy",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 2 }
+        }),
+    );
+    let item = prepared["result"][0].clone();
+    assert_eq!(
+        item["name"], "first_effect",
+        "prepared callable: {prepared}"
+    );
+
+    let incoming = server.call("callHierarchy/incomingCalls", json!({ "item": item }));
+    let incoming = incoming["result"].as_array().expect("incoming call array");
+    let callers = incoming
+        .iter()
+        .map(|call| call["from"]["name"].as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(callers, ["second_effect", "caller_a", "caller_b"].into());
+
+    let first_item = prepared["result"][0].clone();
+    let outgoing = server.call("callHierarchy/outgoingCalls", json!({ "item": first_item }));
+    let outgoing = outgoing["result"].as_array().expect("outgoing call array");
+    let targets = outgoing
+        .iter()
+        .map(|call| call["to"]["name"].as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(targets, ["second_effect", "third_effect"].into());
+    assert!(
+        outgoing
+            .iter()
+            .all(|call| call["fromRanges"].as_array().unwrap().len() == 1)
+    );
+    server.stop();
+}
+
+#[test]
+fn call_hierarchy_prepare_returns_none_for_non_callable_entity() {
+    let doc = "my_focus = {\n    id = my_focus\n}\n";
+    let rel = "game/common/national_focus/f.txt";
+    let mut server = editor_server_with_rules(GOTO_RULES, &[(rel, doc)]);
+    let uri = server.uri(rel);
+    let response = server.call(
+        "textDocument/prepareCallHierarchy",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 2 }
+        }),
+    );
+    server.stop();
+    assert!(
+        response["result"].is_null(),
+        "non-callable result: {response}"
+    );
+}
+
+#[test]
+fn call_hierarchy_supports_scripted_triggers() {
+    const RULES: &str = r#"
+types = { type[scripted_trigger] = { path = "game/common/scripted_triggers" } }
+scripted_trigger = { alias_name[trigger] = alias_match_left[trigger] }
+alias[trigger:<scripted_trigger>] = yes
+"#;
+    let outer = "outer_trigger = {\n    inner_trigger = yes\n}\n";
+    let inner = "inner_trigger = {\n    always = yes\n}\n";
+    let outer_rel = "game/common/scripted_triggers/outer.txt";
+    let mut server = editor_server_with_rules(
+        RULES,
+        &[
+            (outer_rel, outer),
+            ("game/common/scripted_triggers/inner.txt", inner),
+        ],
+    );
+    let uri = server.uri(outer_rel);
+    let prepared = server.call(
+        "textDocument/prepareCallHierarchy",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 2 }
+        }),
+    );
+    let item = prepared["result"][0].clone();
+    assert_eq!(
+        item["name"], "outer_trigger",
+        "prepared trigger: {prepared}"
+    );
+    let outgoing = server.call("callHierarchy/outgoingCalls", json!({ "item": item }));
+    let outgoing = outgoing["result"]
+        .as_array()
+        .expect("outgoing trigger calls");
+    assert_eq!(outgoing.len(), 1, "trigger call edge: {outgoing:?}");
+    assert_eq!(outgoing[0]["to"]["name"], "inner_trigger");
+    server.stop();
+}

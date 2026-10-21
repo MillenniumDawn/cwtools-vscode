@@ -1052,6 +1052,34 @@ impl LanguageServer for Backend {
         self.references_impl(params).await
     }
 
+    async fn prepare_call_hierarchy(
+        &self,
+        mut params: CallHierarchyPrepareParams,
+    ) -> Result<Option<Vec<CallHierarchyItem>>> {
+        self.wait_for_notifications().await;
+        self.mark_activity();
+        canonicalize_url(&mut params.text_document_position_params.text_document.uri);
+        self.prepare_call_hierarchy_impl(params).await
+    }
+
+    async fn incoming_calls(
+        &self,
+        params: CallHierarchyIncomingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
+        self.wait_for_notifications().await;
+        self.mark_activity();
+        self.incoming_calls_impl(params).await
+    }
+
+    async fn outgoing_calls(
+        &self,
+        params: CallHierarchyOutgoingCallsParams,
+    ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
+        self.wait_for_notifications().await;
+        self.mark_activity();
+        self.outgoing_calls_impl(params).await
+    }
+
     async fn document_symbol(
         &self,
         mut params: DocumentSymbolParams,
