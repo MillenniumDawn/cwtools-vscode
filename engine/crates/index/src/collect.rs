@@ -6,8 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::dynamic_values;
 use crate::{
-    DefinedVariable, NormalizedPath, SourceLocation, TypeIndex, TypeInstance, check_path_dir_norm,
-    get_string_or_empty, leaf_value_string,
+    DefinedVariable, DerivedNames, DuplicateArchetype, NormalizedPath, SourceLocation, TypeIndex,
+    TypeInstance, check_path_dir_norm, get_string_or_empty, leaf_value_string,
 };
 
 pub fn skip_root_key_matches(srk: &SkipRootKey, key: &str) -> bool {
@@ -159,13 +159,16 @@ pub struct InstanceNode<'a> {
     pub location: SourceLocation,
 }
 
+/// Adds the node's subtype memberships to `subtype_instances`, and to
+/// `derived.inherited` the ones only the finished index can decide.
 pub type SubtypeCollector =
-    fn(&RuleSet, &ParsedFile, &InstanceNode, &StringTable, &mut HashMap<String, Vec<TypeInstance>>);
+    fn(&RuleSet, &ParsedFile, &InstanceNode, &StringTable, &mut CollectedTypeInstances);
 
 #[derive(Default)]
 pub struct CollectedTypeInstances {
     pub instances: HashMap<String, Vec<TypeInstance>>,
     pub subtype_instances: HashMap<String, Vec<TypeInstance>>,
+    pub derived: DerivedNames,
 }
 
 pub fn for_each_instance_node<F>(
@@ -230,19 +233,72 @@ pub fn collect_type_instances_with_subtypes(
     table: &StringTable,
     subtype_hook: SubtypeCollector,
 ) -> CollectedTypeInstances {
-    let mut subtype_instances = HashMap::new();
+    let mut collected = CollectedTypeInstances::default();
     let instances = collect_type_instances_inner(
         ruleset,
         file,
         logical_path,
         table,
         Some(subtype_hook),
-        Some(&mut subtype_instances),
+        Some(&mut collected),
     );
-    CollectedTypeInstances {
-        instances,
-        subtype_instances,
+    collected.instances = instances;
+    collected.derived.duplicates = collect_duplicate_archetypes(ruleset, file, logical_path, table);
+    collected
+}
+
+const DUPLICATE_ARCHETYPES: &str = "duplicate_archetypes";
+
+/// HOI4's `duplicate_archetypes` entries in `file`, for the types whose
+/// instances it holds. The game reads the block itself, so the rules can only
+/// index the copies, not the renamed variants they imply.
+fn collect_duplicate_archetypes(
+    ruleset: &RuleSet,
+    file: &ParsedFile,
+    logical_path: &str,
+    table: &StringTable,
+) -> Vec<DuplicateArchetype> {
+    let arena = &file.arena;
+    let np = NormalizedPath::new(logical_path);
+    let mut out = Vec::new();
+    for td in &ruleset.types {
+        let [head] = td.skip_root_key.as_slice() else {
+            continue;
+        };
+        if !skip_root_key_matches(head, DUPLICATE_ARCHETYPES)
+            || !check_path_dir_norm(&td.path_options, &np)
+        {
+            continue;
+        }
+        for root in file
+            .root_children
+            .iter()
+            .filter_map(|c| arena.keyed_clause(c))
+        {
+            if !get_string_or_empty(table, root.key.normal)
+                .eq_ignore_ascii_case(DUPLICATE_ARCHETYPES)
+            {
+                continue;
+            }
+            for copy in root.children.iter().filter_map(|c| arena.keyed_clause(c)) {
+                if let Some(source) =
+                    field_value_from_children("archetype", copy.children, arena, table)
+                {
+                    out.push(DuplicateArchetype {
+                        type_name: td.name.clone(),
+                        name: unquote(&get_string_or_empty(table, copy.key.normal)).to_string(),
+                        source,
+                        location: SourceLocation {
+                            line: copy.pos.start.line,
+                            col: copy.pos.start.col,
+                            end: (copy.pos.end.line, copy.pos.end.col),
+                        },
+                    });
+                }
+            }
+        }
     }
+    out
 }
 
 const SCRIPTED_LOC_DIRS: [&str; 3] = [
@@ -343,7 +399,7 @@ fn collect_type_instances_inner(
     logical_path: &str,
     table: &StringTable,
     subtype_hook: Option<SubtypeCollector>,
-    mut subtype_instances: Option<&mut HashMap<String, Vec<TypeInstance>>>,
+    mut subtype_out: Option<&mut CollectedTypeInstances>,
 ) -> HashMap<String, Vec<TypeInstance>> {
     let mut result: HashMap<String, Vec<TypeInstance>> = HashMap::new();
 
@@ -402,7 +458,7 @@ fn collect_type_instances_inner(
                         field_value_from_children(field, clause_children, arena, table)
                     })
                     .collect();
-                if let (Some(hook), Some(out)) = (node_hook, subtype_instances.as_deref_mut()) {
+                if let (Some(hook), Some(out)) = (node_hook, subtype_out.as_deref_mut()) {
                     let node = InstanceNode {
                         td,
                         name: &name,
@@ -533,6 +589,7 @@ pub fn index_discovered_files(
         String,                             // path
         HashMap<String, Vec<TypeInstance>>, // base type instances
         HashMap<String, Vec<TypeInstance>>, // subtype membership
+        DerivedNames,                       // names derived from other definitions
         Vec<String>,                        // variable names
         HashMap<String, Vec<String>>,       // complex enum values
         HashMap<String, Vec<String>>,       // value set members
@@ -545,21 +602,18 @@ pub fn index_discovered_files(
             let path = cwtools_file_manager::path_identity(&file.path).into_owned();
             // Workspace-scan files, always parsed on the base table.
             let pf = ParsedFile::new(file.arena, file.root_children, vec![]);
-            let (instances, subtype_instances) = match subtype_collector {
-                Some(hook) => {
-                    let collected = collect_type_instances_with_subtypes(
-                        ruleset,
-                        &pf,
-                        &file.logical_path,
-                        table,
-                        hook,
-                    );
-                    (collected.instances, collected.subtype_instances)
-                }
-                None => (
-                    collect_type_instances(ruleset, &pf, &file.logical_path, table),
-                    HashMap::new(),
+            let collected = match subtype_collector {
+                Some(hook) => collect_type_instances_with_subtypes(
+                    ruleset,
+                    &pf,
+                    &file.logical_path,
+                    table,
+                    hook,
                 ),
+                None => CollectedTypeInstances {
+                    instances: collect_type_instances(ruleset, &pf, &file.logical_path, table),
+                    ..CollectedTypeInstances::default()
+                },
             };
             let CollectedVariablesAndValueSets {
                 variables,
@@ -576,8 +630,9 @@ pub fn index_discovered_files(
             let scripted_guis = collect_scripted_gui_callback_names(&pf, &file.logical_path, table);
             (
                 path,
-                instances,
-                subtype_instances,
+                collected.instances,
+                collected.subtype_instances,
+                collected.derived,
                 var_names,
                 complex,
                 value_sets,
@@ -592,6 +647,7 @@ pub fn index_discovered_files(
         path,
         instances,
         subtype_instances,
+        derived,
         var_names,
         complex,
         value_sets,
@@ -603,6 +659,7 @@ pub fn index_discovered_files(
         if !subtype_instances.is_empty() {
             index.merge(&path, subtype_instances);
         }
+        index.merge_derived(&path, derived);
         for n in &var_names {
             index.var_index.add_name(n);
         }
@@ -611,6 +668,7 @@ pub fn index_discovered_files(
         index.scripted_loc_index.merge_file(&path, scripted_locs);
         index.scripted_gui_index.merge_file(&path, scripted_guis);
     }
+    index.materialize_derived();
     index
 }
 

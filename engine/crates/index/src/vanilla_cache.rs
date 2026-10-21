@@ -15,7 +15,7 @@ const FILE_PREFIX: &str = "vanilla-";
 const FILE_EXT: &str = ".cwv";
 
 // Bump when serialized fields or derived vanilla-index data change; old versions are rejected.
-const CACHE_VERSION: u8 = 14;
+const CACHE_VERSION: u8 = 15;
 
 /// Hard caps on a `.cwv` read and on what its body may decompress to. The path is
 /// client-chosen (#162), so going over reads as a miss and the install is re-indexed.

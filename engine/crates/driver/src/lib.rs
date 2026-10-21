@@ -482,6 +482,7 @@ impl Session {
         type PerFileResult = (
             HashMap<String, Vec<cwtools_index::TypeInstance>>,
             HashMap<String, Vec<cwtools_index::TypeInstance>>,
+            cwtools_index::DerivedNames,
             Vec<String>,
             HashMap<String, Vec<String>>,
             HashMap<String, Vec<String>>,
@@ -528,6 +529,7 @@ impl Session {
                 (
                     collected.instances,
                     collected.subtype_instances,
+                    collected.derived,
                     var_names,
                     value_sets,
                     complex,
@@ -543,6 +545,7 @@ impl Session {
             (
                 instances,
                 subtype_instances,
+                derived,
                 var_names,
                 value_sets,
                 complex,
@@ -565,6 +568,7 @@ impl Session {
                     type_index.merge(&file_uri, subtype_instances);
                 }
             }
+            type_index.merge_derived(&file_uri, derived);
             for n in &var_names {
                 type_index.var_index.add_name(n);
             }

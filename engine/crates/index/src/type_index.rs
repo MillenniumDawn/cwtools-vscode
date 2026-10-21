@@ -4,8 +4,13 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::derived::DerivedIndex;
 use crate::dynamic_values;
-use crate::{SourceLocation, dec_ref, is_subtype_key};
+use crate::{DerivedNames, SourceLocation, dec_ref, is_subtype_key};
+
+/// How many derivations one lookup follows: a renamed copy of a variant that
+/// inherits its subtype is two.
+const DERIVATION_DEPTH: u8 = 4;
 
 #[inline]
 fn ascii_lowercase_if_needed(value: &str) -> Cow<'_, str> {
@@ -607,6 +612,7 @@ pub struct TypeIndex {
     file_replacement: Option<FileReplacementChanges>,
     base_game_uris: FxHashSet<Arc<str>>,
     file_positions: FxHashMap<Arc<str>, FxHashMap<String, Vec<usize>>>,
+    derived: DerivedIndex,
     pub file_index: FileIndex,
     pub var_index: VarIndex,
     pub scripted_loc_index: ScriptedLocIndex,
@@ -647,14 +653,46 @@ impl TypeIndex {
     }
 
     pub fn contains(&self, type_name: &str, instance: &str) -> bool {
-        let Some(names) = self.instance_sets.get(type_name) else {
-            return false;
-        };
-        if instance.bytes().any(|b| b.is_ascii_uppercase()) {
-            let lower = instance.to_ascii_lowercase();
-            names.contains_key(lower.as_str())
-        } else {
-            names.contains_key(instance)
+        self.contains_lower(
+            type_name,
+            &ascii_lowercase_if_needed(instance),
+            DERIVATION_DEPTH,
+        )
+    }
+
+    fn contains_declared(&self, type_name: &str, lower: &str) -> bool {
+        self.instance_sets
+            .get(type_name)
+            .is_some_and(|names| names.contains_key(lower))
+    }
+
+    fn contains_lower(&self, type_name: &str, lower: &str, depth: u8) -> bool {
+        self.contains_declared(type_name, lower)
+            || (depth > 0
+                && !self.derived.is_empty()
+                && self.derived.contains(type_name, lower, |t, n| {
+                    self.contains_lower(t, n, depth - 1)
+                }))
+    }
+
+    /// Store every derived membership as a plain instance, for an index that
+    /// is about to lose its derivation records (the base-game cache keeps only
+    /// instances).
+    pub fn materialize_derived(&mut self) {
+        let type_names: Vec<&str> = self.instance_sets.keys().map(String::as_str).collect();
+        let per_file = self.derived.materialize(
+            &type_names,
+            |type_name| {
+                self.instance_sets
+                    .get(type_name)
+                    .map(|names| names.keys().map(AsRef::as_ref).collect())
+                    .unwrap_or_default()
+            },
+            |type_name, name| self.contains_declared(type_name, name),
+            |type_name, name| self.contains(type_name, name),
+        );
+        for (uri, per_type) in per_file {
+            self.merge(&uri, per_type);
         }
     }
 
@@ -995,6 +1033,10 @@ impl TypeIndex {
         }
     }
 
+    pub fn merge_derived(&mut self, file_uri: &str, names: DerivedNames) {
+        self.derived.merge(file_uri, names);
+    }
+
     pub fn merge_base_game_with_uris(
         &mut self,
         per_type: impl IntoIterator<Item = (String, Vec<(Arc<str>, TypeInstance)>)>,
@@ -1047,6 +1089,7 @@ impl TypeIndex {
         if file_uris.is_empty() {
             return;
         }
+        self.derived.remove_files(|uri| file_uris.contains(uri));
         let mut membership_changes = Vec::new();
         for (type_name, v) in self.map.iter_mut() {
             let subtype_key = is_subtype_key(type_name);
@@ -1104,6 +1147,7 @@ impl TypeIndex {
         self.value_set_values.remove_file(file_uri);
         self.scripted_loc_index.remove_file(file_uri);
         self.scripted_gui_index.remove_file(file_uri);
+        self.derived.remove_files(|uri| uri == file_uri);
         let Some(type_positions) = self.file_positions.remove(file_uri) else {
             return;
         };

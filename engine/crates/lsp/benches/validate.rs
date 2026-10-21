@@ -247,8 +247,7 @@ fn bench_index_parsed_file(c: &mut Criterion) {
                     &table,
                     &ruleset,
                     logical_path,
-                    collected.instances,
-                    collected.subtype_instances,
+                    collected,
                     false,
                 );
                 info.export_fingerprint(&uri)
@@ -380,7 +379,6 @@ fn bench_synthetic_many_type_index_edit(c: &mut Criterion) {
     let parsed = parse_string(&source, &table);
     let uri = "file:///bench/synthetic/common/example.txt";
     let mut info = InfoService::new();
-    let empty_instances = HashMap::new();
     let logical_path = "common/synthetic/example.txt";
 
     let mut group = c.benchmark_group("index_parsed_file/synthetic_many_types");
@@ -393,8 +391,7 @@ fn bench_synthetic_many_type_index_edit(c: &mut Criterion) {
                 &table,
                 &ruleset,
                 logical_path,
-                empty_instances.clone(),
-                HashMap::new(),
+                cwtools_info::CollectedTypeInstances::default(),
                 false,
             );
             black_box(&info);

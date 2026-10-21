@@ -146,14 +146,7 @@ fn serial_reference(root: &std::path::Path, relative: &[String]) -> InfoService 
         info.begin_file_replacement(&uri);
         info.clear_file(&uri);
         info.index_file_with_precomputed_instances(
-            &uri,
-            &parsed,
-            &table,
-            &ruleset,
-            rel,
-            collected.instances,
-            collected.subtype_instances,
-            false,
+            &uri, &parsed, &table, &ruleset, rel, collected, false,
         );
         info.finish_file_replacement(&uri);
     }

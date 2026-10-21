@@ -14,8 +14,7 @@ pub fn collect_subtype_instances(
     logical_path: &str,
     table: &StringTable,
 ) -> std::collections::HashMap<String, Vec<cwtools_index::TypeInstance>> {
-    let mut out: std::collections::HashMap<String, Vec<cwtools_index::TypeInstance>> =
-        Default::default();
+    let mut out = cwtools_index::CollectedTypeInstances::default();
     cwtools_index::for_each_instance_node(
         ruleset,
         file,
@@ -32,7 +31,7 @@ pub fn collect_subtype_instances(
             subtype_membership_for_instance(ruleset, file, &node, table, &mut out);
         },
     );
-    out
+    out.subtype_instances
 }
 
 pub fn subtype_membership_for_instance(
@@ -40,34 +39,76 @@ pub fn subtype_membership_for_instance(
     file: &ParsedFile,
     node: &cwtools_index::InstanceNode,
     table: &StringTable,
-    out: &mut std::collections::HashMap<String, Vec<cwtools_index::TypeInstance>>,
+    out: &mut cwtools_index::CollectedTypeInstances,
 ) {
     let mut key = String::new();
+    let mut unresolved = Vec::new();
     for (subtype_index, st) in node.td.subtypes.iter().enumerate() {
         let match_context = SubtypeMatchContext::for_subtype(ruleset, node.td, st, subtype_index);
-        if subtype_matches(
+        let matched = subtype_matches(
             st,
             node.children,
             file,
             table,
             &match_context,
             Some(node.node_key),
-            None,
-        ) {
-            key.clear();
-            key.push_str(&node.td.name);
-            key.push('.');
-            key.push_str(&st.name);
-            let entry = match out.get_mut(key.as_str()) {
-                Some(v) => v,
-                None => out.entry(key.clone()).or_default(),
-            };
-            entry.push(cwtools_index::TypeInstance {
-                name: node.name.to_string(),
-                location: node.location,
-                primary_loc_key: None,
-                required_loc_keys: Vec::new(),
-            });
+            &mut TypeRefs::Defer(&mut unresolved),
+        );
+        if !matched && unresolved.is_empty() {
+            continue;
+        }
+        key.clear();
+        key.push_str(&node.td.name);
+        key.push('.');
+        key.push_str(&st.name);
+        if !matched {
+            out.derived
+                .inherited
+                .extend(unresolved.drain(..).map(|(via_type, via_name)| {
+                    cwtools_index::InheritedSubtype {
+                        subtype: key.clone(),
+                        name: node.name.to_string(),
+                        location: node.location,
+                        via_type,
+                        via_name,
+                    }
+                }));
+            continue;
+        }
+        let subtypes = &mut out.subtype_instances;
+        let entry = match subtypes.get_mut(key.as_str()) {
+            Some(v) => v,
+            None => subtypes.entry(key.clone()).or_default(),
+        };
+        entry.push(cwtools_index::TypeInstance {
+            name: node.name.to_string(),
+            location: node.location,
+            primary_loc_key: None,
+            required_loc_keys: Vec::new(),
+        });
+    }
+}
+
+/// What subtype matching does with a `<type>` value that would activate it.
+pub(crate) enum TypeRefs<'a> {
+    /// Activate when the index holds the value, and never without one.
+    Check(Option<&'a cwtools_index::TypeIndex>),
+    /// Collect the `(type, name)` pairs for an index that does not exist yet.
+    Defer(&'a mut Vec<(String, String)>),
+}
+
+impl<'a> TypeRefs<'a> {
+    fn discard(&mut self) {
+        if let TypeRefs::Defer(pending) = self {
+            pending.clear();
+        }
+    }
+
+    /// Nested clauses activate only on what is known now.
+    fn nested(&self) -> TypeRefs<'a> {
+        match self {
+            TypeRefs::Check(type_index) => TypeRefs::Check(*type_index),
+            TypeRefs::Defer(_) => TypeRefs::Check(None),
         }
     }
 }
@@ -79,7 +120,7 @@ pub(crate) fn subtype_rules_match(
     table: &StringTable,
     ruleset: &RuleSet,
     precomputed_groups: Option<&[SubtypeRuleKeyGroup]>,
-    type_index: Option<&cwtools_index::TypeIndex>,
+    type_refs: &mut TypeRefs<'_>,
 ) -> bool {
     let fallback_groups;
     let groups = if let Some(groups) = precomputed_groups {
@@ -129,10 +170,19 @@ pub(crate) fn subtype_rules_match(
                         && field_matches_value(right, value, table, ruleset)
                     {
                         any_match = true;
-                        if field_activates_on_presence(right)
-                            || typefield_value_is_instance(right, value, table, type_index)
-                        {
+                        if field_activates_on_presence(right) {
                             activated = true;
+                            continue;
+                        }
+                        match type_refs {
+                            TypeRefs::Check(type_index) => {
+                                if typefield_value_is_instance(right, value, table, *type_index) {
+                                    activated = true;
+                                }
+                            }
+                            TypeRefs::Defer(pending) => {
+                                pending.extend(simple_type_ref(right, value, table));
+                            }
                         }
                     }
                 }
@@ -151,7 +201,7 @@ pub(crate) fn subtype_rules_match(
                                 table,
                                 ruleset,
                                 group.node_rule_groups.get(nested_index).map(Vec::as_slice),
-                                type_index,
+                                &mut type_refs.nested(),
                             )
                         } else {
                             false
@@ -163,6 +213,7 @@ pub(crate) fn subtype_rules_match(
             }
         }
         if count > 0 && !any_match {
+            type_refs.discard();
             return false;
         }
         let min_required = group
@@ -180,6 +231,7 @@ pub(crate) fn subtype_rules_match(
             .min()
             .unwrap_or(i32::MAX);
         if min_required > count || count > max_allowed {
+            type_refs.discard();
             return false;
         }
         if count == 0
@@ -244,8 +296,9 @@ pub(crate) fn subtype_matches(
     table: &StringTable,
     match_context: &SubtypeMatchContext<'_>,
     node_key: Option<&str>,
-    type_index: Option<&cwtools_index::TypeIndex>,
+    type_refs: &mut TypeRefs<'_>,
 ) -> bool {
+    type_refs.discard();
     if !subtype.type_key_filter.is_empty() {
         return node_key.is_some_and(|k| {
             subtype
@@ -266,8 +319,25 @@ pub(crate) fn subtype_matches(
         table,
         match_context.ruleset,
         match_context.precomputed_groups,
-        type_index,
+        type_refs,
     )
+}
+
+/// The `(type, name)` a `<type>` value names, which only an index can confirm.
+fn simple_type_ref(
+    right: &NewField,
+    value: &Value,
+    table: &StringTable,
+) -> Option<(String, String)> {
+    let NewField::TypeField(TypeType::Simple(type_name)) = right else {
+        return None;
+    };
+    match value {
+        Value::String(t) | Value::QString(t) => crate::common::with_match_text(table, t, |name| {
+            Some((type_name.clone(), name.to_string()))
+        }),
+        _ => None,
+    }
 }
 
 pub(crate) fn typefield_value_is_instance(

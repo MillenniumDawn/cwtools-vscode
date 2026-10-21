@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::common::*;
 use crate::ctx::{SubtypeMergeMemoKey, ValidationCtx};
 use crate::scope::seed_root_scope;
-use crate::subtype::{SubtypeMatchContext, subtype_matches};
+use crate::subtype::{SubtypeMatchContext, TypeRefs, subtype_matches};
 
 use super::children::validate_children;
 
@@ -125,7 +125,7 @@ pub(crate) fn merged_rules_for_type<'a>(
             ctx.table,
             &match_context,
             node_key,
-            ctx.type_index,
+            &mut TypeRefs::Check(ctx.type_index),
         ) {
             matched_subtype_indices.push(index);
         }

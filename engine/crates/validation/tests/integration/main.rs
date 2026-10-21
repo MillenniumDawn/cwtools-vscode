@@ -10,6 +10,7 @@ mod basics;
 mod cardinality_keys;
 mod cardinality_position;
 mod default_bool;
+mod derived_equipment;
 mod dispatch_resolution;
 mod duplicate_type_defs;
 mod enum_scope_keys;
