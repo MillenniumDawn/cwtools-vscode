@@ -973,11 +973,6 @@ pub fn read_root_descriptor(root: &Path) -> Option<ModDescriptor> {
     parse_mod_descriptor(&root.join("descriptor.mod")).ok()
 }
 
-/// Read a `.mod` or `descriptor.mod` file, including its name and path fields.
-pub fn read_mod_descriptor(path: &Path) -> Option<ModDescriptor> {
-    parse_mod_descriptor(path).ok()
-}
-
 /// Load-order shadowing across mod layers (#786), highest priority first:
 /// claim the primary mod's files, then walk the parents from last-loaded to
 /// first, keeping only what [`LayerShadow::hides`] lets through and claiming

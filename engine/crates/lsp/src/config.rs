@@ -497,39 +497,23 @@ impl Backend {
                 MAX_PARENT_MODS,
                 MAX_IGNORE_PATTERN_LEN,
             );
-            let (roots, messages, used_dependencies) = {
+            let (roots, dropped) = {
                 let cfg = self.state.config.read();
-                if entries.is_empty() {
-                    if let Some(workspace) = cfg.workspace_roots.first() {
-                        let (roots, messages) = crate::parent_mods::discover_parent_roots(
-                            workspace,
-                            &cfg.language,
-                            cfg.vanilla_dir.as_deref(),
-                        );
-                        (roots, messages, true)
-                    } else {
-                        (Vec::new(), Vec::new(), true)
-                    }
-                } else {
-                    let (roots, messages) = resolve_parent_roots(
-                        &entries,
-                        cfg.workspace_roots.first().map(std::path::PathBuf::as_path),
+                let workspace = cfg.workspace_roots.first().map(std::path::PathBuf::as_path);
+                if !entries.is_empty() {
+                    resolve_parent_roots(&entries, workspace, cfg.vanilla_dir.as_deref())
+                } else if let Some(workspace) = workspace {
+                    crate::parent_mods::discover_parent_roots(
+                        workspace,
+                        &cfg.language,
                         cfg.vanilla_dir.as_deref(),
-                    );
-                    (roots, messages, false)
+                    )
+                } else {
+                    (Vec::new(), Vec::new())
                 }
             };
-            for message in messages {
-                self.client
-                    .log_message(
-                        if used_dependencies && message.starts_with("Parent mod dependency '") {
-                            MessageType::INFO
-                        } else {
-                            MessageType::WARNING
-                        },
-                        message,
-                    )
-                    .await;
+            for message in dropped {
+                self.client.log_message(MessageType::WARNING, message).await;
             }
             if !roots.is_empty() {
                 self.client
@@ -538,8 +522,6 @@ impl Backend {
                         format!("Parent mods (load order): {roots:?}"),
                     )
                     .await;
-            }
-            {
                 let mut cfg = self.state.config.write();
                 cfg.parent_roots = roots;
                 cfg.refresh_roots();

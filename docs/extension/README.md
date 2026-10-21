@@ -102,6 +102,10 @@ path as a parent file, or under a `replace_path` in the submod's
 are indexed but never validated. Edits to a parent mod are picked up on the next
 reindex, not live. Reload the window after changing the setting.
 
+When the setting is empty, the server falls back to the mods named in the
+`dependencies` of the submod's `descriptor.mod`, matched by exact name against
+the launcher's `.mod` files.
+
 The server scans only the first workspace folder, so adding a parent mod as a
 second folder of a multi-root workspace does not make its definitions visible.
 

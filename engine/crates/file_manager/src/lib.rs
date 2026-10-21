@@ -5,6 +5,6 @@ pub use file_manager::{
     FileKind, FileManager, FileManagerConfig, ModDescriptor, ParsedFile, ResolvedMod,
     SCRIPT_EXTENSIONS, ScanBudget, ScanBytes, classify_directory, discover_files_multi_mod,
     discover_paths, discover_paths_multi_mod, expand_multiple_mods, is_excluded_dir,
-    is_excluded_root_dir, is_loc_ext, path_identity, read_mod_descriptor, read_text,
-    read_text_capped, read_text_capped_with_encoding, read_text_with_encoding,
+    is_excluded_root_dir, is_loc_ext, path_identity, read_text, read_text_capped,
+    read_text_capped_with_encoding, read_text_with_encoding,
 };
