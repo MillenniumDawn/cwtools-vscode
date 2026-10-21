@@ -872,6 +872,30 @@ impl LanguageServer for Backend {
             .log_message(MessageType::INFO, "CWTools server initialized!")
             .await;
 
+        if self
+            .state
+            .watched_files_dynamic_registration
+            .load(Ordering::Relaxed)
+        {
+            // The watched-file handler sorts and filters paths, and coalesces events that
+            // overlap with the bundled extension's own watchers.
+            let registration = Registration {
+                id: "cwtools-watched-files".to_string(),
+                method: "workspace/didChangeWatchedFiles".to_string(),
+                register_options: Some(serde_json::json!({
+                    "watchers": [{ "globPattern": "**/*" }],
+                })),
+            };
+            if let Err(error) = self.client.register_capability(vec![registration]).await {
+                self.client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!("Could not register watched-file notifications: {error}"),
+                    )
+                    .await;
+            }
+        }
+
         self.state
             .handshake_complete
             .store(true, std::sync::atomic::Ordering::Relaxed);
