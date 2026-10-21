@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.3
+
 #### Engine
 
 * Resolve HOI4 equipment names the game derives instead of declaring. A variant that is naval only through its `archetype`, like `corvette_hull_1`, now counts as `naval_equip`, and the renamed variants a `duplicate_archetypes` entry implies, like `medium_tank_artillery_chassis_1`, now exist. With the base game loaded, Millennium Dawn's OOBs reported about 4,300 false CW262s for these. The base-game cache now stores the derived names, so existing `.cwv` caches (now v15) rebuild once. (#1108)
