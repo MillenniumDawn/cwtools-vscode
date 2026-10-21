@@ -662,11 +662,10 @@ impl Backend {
             .map(cwtools_cache::workspace::content_hash)
             .unwrap_or(0);
         if text.is_some() {
-            // Bound to a `let` so the probe's guard drops here: the insert below takes the
-            // same non-reentrant mutex, and a guard in the `if let` scrutinee would still be
-            // alive inside the block (#334).
-            let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
-            if let Some(entry) = cached
+            // One guard serves the probe and the result id bump; never lock this mutex again
+            // while it is alive, it is not reentrant (#334).
+            let mut cache = self.state.semantic_tokens_cache.lock();
+            if let Some(entry) = cache.get_mut(&uri)
                 && entry.hash == hash
             {
                 let result_id = self
@@ -674,18 +673,10 @@ impl Backend {
                     .semantic_tokens_seq
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     .to_string();
-                let data = entry.data.clone();
-                self.state.semantic_tokens_cache.lock().insert(
-                    uri.clone(),
-                    crate::SemanticCacheEntry {
-                        result_id: result_id.clone(),
-                        data: data.clone(),
-                        hash,
-                    },
-                );
+                entry.result_id.clone_from(&result_id);
                 return Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
                     result_id: Some(result_id),
-                    data,
+                    data: entry.data.clone(),
                 })));
             }
         }
@@ -726,8 +717,8 @@ impl Backend {
             .map(cwtools_cache::workspace::content_hash)
             .unwrap_or(0);
         if text.is_some() {
-            let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
-            if let Some(entry) = cached
+            let mut cache = self.state.semantic_tokens_cache.lock();
+            if let Some(entry) = cache.get_mut(&uri)
                 && entry.hash == hash
                 && entry.result_id == params.previous_result_id
             {
@@ -736,14 +727,7 @@ impl Backend {
                     .semantic_tokens_seq
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     .to_string();
-                self.state.semantic_tokens_cache.lock().insert(
-                    uri.clone(),
-                    crate::SemanticCacheEntry {
-                        result_id: result_id.clone(),
-                        data: entry.data.clone(),
-                        hash,
-                    },
-                );
+                entry.result_id.clone_from(&result_id);
                 return Ok(Some(SemanticTokensFullDeltaResult::TokensDelta(
                     SemanticTokensDelta {
                         result_id: Some(result_id),
@@ -758,45 +742,38 @@ impl Backend {
         let Some(new_data) = self.tokens_for_text(&uri, text, None).await else {
             return Ok(None);
         };
-        let previous_id = params.previous_result_id;
-        let cached = self.state.semantic_tokens_cache.lock().get(&uri).cloned();
-        if let Some(entry) = cached
-            && entry.result_id == previous_id
+        let result_id = self
+            .state
+            .semantic_tokens_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .to_string();
         {
-            let edits = compute_semantic_delta(&entry.data, &new_data);
-            let result_id = self
-                .state
-                .semantic_tokens_seq
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                .to_string();
-            self.state.semantic_tokens_cache.lock().insert(
-                uri.clone(),
+            let mut cache = self.state.semantic_tokens_cache.lock();
+            if let Some(entry) = cache.get_mut(&uri)
+                && entry.result_id == params.previous_result_id
+            {
+                let edits = compute_semantic_delta(&entry.data, &new_data);
+                *entry = crate::SemanticCacheEntry {
+                    result_id: result_id.clone(),
+                    data: new_data,
+                    hash,
+                };
+                return Ok(Some(SemanticTokensFullDeltaResult::TokensDelta(
+                    SemanticTokensDelta {
+                        result_id: Some(result_id),
+                        edits,
+                    },
+                )));
+            }
+            cache.insert(
+                uri,
                 crate::SemanticCacheEntry {
                     result_id: result_id.clone(),
                     data: new_data.clone(),
                     hash,
                 },
             );
-            return Ok(Some(SemanticTokensFullDeltaResult::TokensDelta(
-                SemanticTokensDelta {
-                    result_id: Some(result_id),
-                    edits,
-                },
-            )));
         }
-        let result_id = self
-            .state
-            .semantic_tokens_seq
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            .to_string();
-        self.state.semantic_tokens_cache.lock().insert(
-            uri.clone(),
-            crate::SemanticCacheEntry {
-                result_id: result_id.clone(),
-                data: new_data.clone(),
-                hash,
-            },
-        );
         Ok(Some(SemanticTokensFullDeltaResult::Tokens(
             SemanticTokens {
                 result_id: Some(result_id),
@@ -1413,6 +1390,105 @@ mod tests {
                     })
                     .await
                     .unwrap();
+            });
+        });
+    }
+
+    #[test]
+    fn full_and_delta_requests_advance_the_cached_result_id() {
+        must_finish("semantic token result ids", || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                let backend = backend_with_open_doc();
+                let cached = || {
+                    let cache = backend.state.semantic_tokens_cache.lock();
+                    let entry = cache.get(DOC_URI).expect("a cached entry");
+                    (entry.result_id.clone(), entry.data.clone())
+                };
+                let seq = |id: &str| id.parse::<u64>().unwrap();
+                let delta = |previous_result_id: String| {
+                    backend.semantic_tokens_full_delta_impl(SemanticTokensDeltaParams {
+                        text_document: TextDocumentIdentifier {
+                            uri: Url::parse(DOC_URI).unwrap(),
+                        },
+                        previous_result_id,
+                        work_done_progress_params: Default::default(),
+                        partial_result_params: Default::default(),
+                    })
+                };
+
+                let Some(SemanticTokensResult::Tokens(first)) = backend
+                    .semantic_tokens_full_impl(full_params())
+                    .await
+                    .unwrap()
+                else {
+                    panic!("expected full tokens");
+                };
+                let first_id = first.result_id.clone().unwrap();
+                assert!(!first.data.is_empty(), "the fixture must produce tokens");
+
+                let Some(SemanticTokensResult::Tokens(hit)) = backend
+                    .semantic_tokens_full_impl(full_params())
+                    .await
+                    .unwrap()
+                else {
+                    panic!("expected full tokens on a cache hit");
+                };
+                let hit_id = hit.result_id.clone().unwrap();
+                assert!(seq(&hit_id) > seq(&first_id));
+                assert_eq!(hit.data, first.data);
+                assert_eq!(cached(), (hit_id.clone(), first.data.clone()));
+
+                let Some(SemanticTokensFullDeltaResult::TokensDelta(unchanged)) =
+                    delta(hit_id.clone()).await.unwrap()
+                else {
+                    panic!("expected a delta on an unchanged document");
+                };
+                let unchanged_id = unchanged.result_id.clone().unwrap();
+                assert!(unchanged.edits.is_empty());
+                assert!(seq(&unchanged_id) > seq(&hit_id));
+                assert_eq!(cached(), (unchanged_id.clone(), first.data.clone()));
+
+                backend
+                    .state
+                    .documents
+                    .lock()
+                    .change(
+                        DOC_URI,
+                        2,
+                        std::sync::Arc::from("idea = { cost = 1 }\nother = { cost = 2 }"),
+                    )
+                    .unwrap();
+                let Some(SemanticTokensFullDeltaResult::TokensDelta(edited)) =
+                    delta(unchanged_id.clone()).await.unwrap()
+                else {
+                    panic!("expected a delta against the previous result id");
+                };
+                let edited_id = edited.result_id.clone().unwrap();
+                assert!(seq(&edited_id) > seq(&unchanged_id));
+                let [edit] = edited.edits.as_slice() else {
+                    panic!("expected one edit, got {:?}", edited.edits);
+                };
+                let mut expected = first.data.clone();
+                let start = edit.start as usize / 5;
+                let end = start + edit.delete_count as usize / 5;
+                expected.splice(start..end, edit.data.clone().unwrap_or_default());
+                assert_ne!(expected, first.data, "the edit must change the tokens");
+                assert_eq!(cached(), (edited_id.clone(), expected.clone()));
+
+                let Some(SemanticTokensFullDeltaResult::Tokens(stale)) =
+                    delta("stale".to_string()).await.unwrap()
+                else {
+                    panic!("expected full tokens for an unknown result id");
+                };
+                let stale_id = stale.result_id.clone().unwrap();
+                assert!(seq(&stale_id) > seq(&edited_id));
+                assert_eq!(stale.data, expected);
+                assert_eq!(cached(), (stale_id, expected));
             });
         });
     }
