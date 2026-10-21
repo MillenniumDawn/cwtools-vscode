@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* A semantic-token cache hit now updates the cached result id in place under one lock. A full request copies the token list once for its response, and an unchanged delta request copies none. A delta that needs a diff compares against the cached tokens without cloning them first. Responses and result ids are unchanged. (#1093)
+
 ### 4.0.2
 
 #### Engine
