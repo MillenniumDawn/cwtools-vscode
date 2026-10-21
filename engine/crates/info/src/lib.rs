@@ -230,6 +230,7 @@ pub struct CollectedFile {
     info: FileInfo,
     instances: HashMap<String, Vec<TypeInstance>>,
     subtype_instances: HashMap<String, Vec<TypeInstance>>,
+    derived: DerivedNames,
     complex_enum_values: HashMap<String, Vec<String>>,
     value_sets: HashMap<String, Vec<String>>,
     scripted_locs: Vec<String>,
@@ -263,6 +264,7 @@ impl FileCollector {
         let CollectedTypeInstances {
             instances,
             subtype_instances,
+            derived,
         } = types;
         let mut info = FileInfo::default();
 
@@ -362,6 +364,7 @@ impl FileCollector {
             info,
             instances,
             subtype_instances,
+            derived,
             complex_enum_values,
             value_sets,
             scripted_locs,
@@ -435,15 +438,17 @@ impl InfoService {
         ruleset: &RuleSet,
         logical_path: &str,
     ) {
-        let instances = collect_type_instances(ruleset, ast, logical_path, table);
+        let types = CollectedTypeInstances {
+            instances: collect_type_instances(ruleset, ast, logical_path, table),
+            ..CollectedTypeInstances::default()
+        };
         self.index_file_with_precomputed_instances(
             uri,
             ast,
             table,
             ruleset,
             logical_path,
-            instances,
-            HashMap::new(),
+            types,
             false,
         );
     }
@@ -459,14 +464,9 @@ impl InfoService {
         table: &StringTable,
         ruleset: &RuleSet,
         logical_path: &str,
-        instances: HashMap<String, Vec<TypeInstance>>,
-        subtype_instances: HashMap<String, Vec<TypeInstance>>,
+        types: CollectedTypeInstances,
         base_game: bool,
     ) {
-        let types = CollectedTypeInstances {
-            instances,
-            subtype_instances,
-        };
         let collected =
             self.file_collector(ruleset)
                 .collect(uri, ast, table, ruleset, logical_path, types);
@@ -509,6 +509,7 @@ impl InfoService {
             info,
             instances,
             subtype_instances,
+            derived,
             complex_enum_values,
             value_sets,
             scripted_locs,
@@ -536,6 +537,7 @@ impl InfoService {
                 type_index.merge(uri, subtype_instances);
             }
         }
+        type_index.merge_derived(uri, derived);
 
         for (type_name, locs) in &info.type_definitions {
             self.all_type_defs
@@ -1832,7 +1834,7 @@ second = {
         let collect = |svc: &InfoService| {
             let types = CollectedTypeInstances {
                 instances: collect_type_instances(&rules, &parsed, logical, &table),
-                subtype_instances: HashMap::new(),
+                ..CollectedTypeInstances::default()
             };
             svc.file_collector(&rules)
                 .collect("d.txt", &parsed, &table, &rules, logical, types)
@@ -1864,7 +1866,10 @@ second = {
         );
         let parsed = parse_string("parent_decision = { }", &table);
         let logical = "common/decisions/parent.txt";
-        let instances = collect_type_instances(&rules, &parsed, logical, &table);
+        let types = CollectedTypeInstances {
+            instances: collect_type_instances(&rules, &parsed, logical, &table),
+            ..CollectedTypeInstances::default()
+        };
         let mut service = InfoService::new();
         service.index_file_with_precomputed_instances(
             "file:///parent/common/decisions/parent.txt",
@@ -1872,8 +1877,7 @@ second = {
             &table,
             &rules,
             logical,
-            instances,
-            HashMap::new(),
+            types,
             true,
         );
         assert!(service.type_index.contains("decision", "parent_decision"));

@@ -6,6 +6,7 @@ pub mod dynamic_values;
 pub mod vanilla_cache;
 
 mod collect;
+mod derived;
 mod path_match;
 mod type_index;
 mod variables;
@@ -17,6 +18,7 @@ pub use collect::{
     hash_instance_exports, index_discovered_files, mix_export_symbol, skip_root_key_matches,
     type_key_matches,
 };
+pub use derived::{DerivedNames, DuplicateArchetype, InheritedSubtype};
 pub use path_match::{
     NormalizedPath, check_path_dir, check_path_dir_norm, dir_matches_pattern, path_contains_segment,
 };

@@ -728,8 +728,7 @@ impl Backend {
                     &self.state.string_table,
                     ruleset,
                     logical_path,
-                    collected.instances,
-                    collected.subtype_instances,
+                    collected,
                     base_game,
                 );
             }
