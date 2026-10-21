@@ -15,6 +15,11 @@ Source: `extension/package/package.json` `contributes.commands`.
 - `cacheVanilla` (`Regenerate game vanilla cache file`)
   - Rebuilds vanilla cache data.
 
+- `cwtools.selectBaseGame` (`Select base game installation`)
+  - Lists the active game's Steam installs from every library in
+    `libraryfolders.vdf`, or browses for a folder, and saves the choice to
+    `cwtools.cache.<game>`. The usual reload prompt applies it.
+
 - `clearAllCaches` (`Clear all caches and reindex`)
   - Clears internal caches and triggers a full reindex.
 

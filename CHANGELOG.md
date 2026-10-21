@@ -1,13 +1,13 @@
 ### Unreleased
 
-#### Client
-
-* Add a base game picker that finds Steam installations across library folders, including secondary drives, and stores the selected path for vanilla cache generation. (#609)
-
 #### Engine
 
 * A semantic-token cache hit now updates the cached result id in place under one lock. A full request copies the token list once for its response, and an unchanged delta request copies none. A delta that needs a diff compares against the cached tokens without cloning them first. Responses and result ids are unchanged. (#1093)
 * Release what a watched folder delete leaves behind. The client can report a deleted folder as one event, so file-index entries and script, localisation and index state for files inside it stayed until a reindex. References to them kept resolving without CW113. The server now releases everything under the folder, matching whole path segments. A per-file delete also resolves its path when the parent folder is gone. (#1092)
+
+#### Extension
+
+* Add "Select base game installation", which lists the active game's Steam installs from every library in `libraryfolders.vdf`, including secondary drives, or lets you browse for a folder. The choice is saved to `cwtools.cache.<game>`, and the usual reload prompt applies it. Games that keep their data under `game/` get that folder stored whichever way you pick. (#609)
 
 ### 4.0.2
 

@@ -37,8 +37,6 @@ import {
 	mapIgnoreOptions,
 	isLiveSettingsChange,
 	isReloadSettingsChange,
-	RELOAD_SETTINGS_KEYS,
-	PENDING_VANILLA_CACHE_KEY,
 	type FormattingIndentStyle,
 	type HoverScopeDisplay,
 	type LiveServerSettings,
@@ -725,43 +723,23 @@ export function createLanguageClient(
 		workspace.onDidChangeConfiguration((e) => {
 			if (isReloadSettingsChange(e)) {
 				const reloadWindow = l10n.t("Reload Window");
-				const vanillaPathChanged = RELOAD_SETTINGS_KEYS.some(
-					(key) =>
-						key.startsWith("cwtools.cache.") && e.affectsConfiguration(key),
-				);
-				const pendingCache = context.workspaceState.get<{
-					gameId?: string;
-					folder?: string;
-				}>(PENDING_VANILLA_CACHE_KEY);
-				const configuredPendingPath = pendingCache?.gameId
-					? workspace
-							.getConfiguration("cwtools")
-							.get<string>(`cache.${pendingCache.gameId}`)
-					: undefined;
-				const pickerOwnsReloadPrompt =
-					vanillaPathChanged &&
-					pendingCache?.gameId !== undefined &&
-					configuredPendingPath === pendingCache.folder &&
-					e.affectsConfiguration(`cwtools.cache.${pendingCache.gameId}`);
-				if (!pickerOwnsReloadPrompt) {
-					void Promise.resolve(
-						window.showInformationMessage(
-							l10n.t(
-								"CWTools settings changed. Reload the window to apply them.",
-							),
-							reloadWindow,
+				void Promise.resolve(
+					window.showInformationMessage(
+						l10n.t(
+							"CWTools settings changed. Reload the window to apply them.",
 						),
-					)
-						.then((action) => {
-							if (action === reloadWindow) {
-								return commands.executeCommand("workbench.action.reloadWindow");
-							}
-							return undefined;
-						})
-						.catch((err: unknown) =>
-							logError("Failed to reload window after settings change", err),
-						);
-				}
+						reloadWindow,
+					),
+				)
+					.then((action) => {
+						if (action === reloadWindow) {
+							return commands.executeCommand("workbench.action.reloadWindow");
+						}
+						return undefined;
+					})
+					.catch((err: unknown) =>
+						logError("Failed to reload window after settings change", err),
+					);
 			}
 			const rulesFolderChanged = e.affectsConfiguration("cwtools.rules_folder");
 			if (!isLiveSettingsChange(e) && !rulesFolderChanged) {

@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import type { Disposable, ExtensionContext } from "vscode";
+import type { ExtensionContext } from "vscode";
 import { workspace, window, commands, l10n } from "vscode";
-import { State, type LanguageClient } from "vscode-languageclient/node";
+import type { LanguageClient } from "vscode-languageclient/node";
 import {
 	getGraphData,
 	type GraphData,
@@ -20,73 +20,13 @@ import { errorMessage, logError, outputChannel } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
 import { GAMES } from "./games";
-import { discoverVanillaInstallations } from "./baseGame";
-import { PENDING_VANILLA_CACHE_KEY } from "./reindexSettings";
+import { findVanillaInstallations, vanillaContentRoot } from "./baseGame";
 // Type-only: the graph panel stays lazily imported (it pulls in the webview
 // plumbing), and `import type` is erased, so naming its shape here doesn't
 // pull it into the activation path.
 import type * as graphPanelModule from "./graphPanel";
 
 type GraphPanelModule = typeof graphPanelModule;
-
-interface PendingVanillaCache {
-	gameId: string;
-	folder: string;
-	offerCache: boolean;
-}
-
-function offerPendingVanillaCacheAfterReady(
-	context: ExtensionContext,
-	client: LanguageClient,
-	activeGame: string,
-): void {
-	const pending = context.workspaceState.get<PendingVanillaCache>(
-		PENDING_VANILLA_CACHE_KEY,
-	);
-	if (!pending) return;
-	if (!pending.offerCache || pending.gameId !== activeGame) {
-		void context.workspaceState.update(PENDING_VANILLA_CACHE_KEY, undefined);
-		return;
-	}
-	const configured = workspace
-		.getConfiguration("cwtools")
-		.get<string>(`cache.${pending.gameId}`);
-	if (configured !== pending.folder) {
-		void context.workspaceState.update(PENDING_VANILLA_CACHE_KEY, undefined);
-		return;
-	}
-	const offer = async (): Promise<void> => {
-		if (!client.isRunning()) return;
-		// Clear before presenting the prompt so reactivation cannot offer it twice.
-		await context.workspaceState.update(PENDING_VANILLA_CACHE_KEY, undefined);
-		const action = await window.showInformationMessage(
-			l10n.t(
-				"The {0} base game folder is active. Regenerate its vanilla cache now?",
-				GAMES.find((game) => game.id === pending.gameId)?.display ??
-					pending.gameId,
-			),
-			l10n.t("Regenerate vanilla cache"),
-		);
-		if (action === l10n.t("Regenerate vanilla cache")) {
-			await commands.executeCommand(serverCommand("cacheVanilla"));
-		}
-	};
-	const reportFailure = (err: unknown): void =>
-		logError("Failed to offer vanilla cache regeneration", err);
-	if (client.isRunning()) {
-		void offer().catch(reportFailure);
-		return;
-	}
-	// The language client exposes this as a VS Code event; its declaration is
-	// typed as `any` in the installed 10.x package under skipLibCheck.
-	// eslint-disable-next-line @typescript-eslint/no-unsafe-call
-	const stateChange = client.onDidChangeState((event: { newState: State }) => {
-		if (event.newState !== State.Running) return;
-		stateChange.dispose();
-		void offer().catch(reportFailure);
-	}) as Disposable;
-	context.subscriptions.push(stateChange);
-}
 
 function serverProvidesGraphData(client: LanguageClient): boolean {
 	return graphDataAvailable(
@@ -257,81 +197,42 @@ export function registerCommands(
 	);
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.selectBaseGame", async () => {
-			const game = await window.showQuickPick(
-				GAMES.map((item) => ({ label: item.display, id: item.id })),
-				{ placeHolder: l10n.t("Select the base game to configure") },
-			);
-			if (!game) return;
-
-			const definition = GAMES.find((item) => item.id === game.id);
-			if (!definition) return;
-			const installations = discoverVanillaInstallations(definition);
-			const browse: { label: string; browse?: true; folder?: string } = {
-				label: l10n.t("Browse for a game folder…"),
-				browse: true,
-			};
-			const choices: Array<{ label: string; browse?: true; folder?: string }> = [
-				...installations.map((folder) => ({ label: folder, folder })),
-				browse,
-			];
+			const game = GAMES.find((item) => item.id === activeGame);
+			if (!game) {
+				void window.showWarningMessage(
+					l10n.t("CWTools could not detect which game this workspace is for."),
+				);
+				return;
+			}
+			const found: Array<{ label: string; folder?: string }> = (
+				await findVanillaInstallations(game)
+			).map((folder) => ({ label: folder, folder }));
 			const selection = await window.showQuickPick(
-				choices,
-				{
-					placeHolder: installations.length
-						? l10n.t("Select a {0} installation", definition.display)
-						: l10n.t("No Steam installation found. Browse for the {0} game folder", definition.display),
-				},
+				[...found, { label: l10n.t("Browse for a game folder…") }],
+				{ placeHolder: l10n.t("Select the {0} base game folder", game.display) },
 			);
 			if (!selection) return;
-
-			let folder: string | undefined;
-			if (selection.browse === true) {
-				const picked = await window.showOpenDialog({
-					canSelectFiles: false,
-					canSelectFolders: true,
-					canSelectMany: false,
-					openLabel: l10n.t("Select {0} game folder", definition.display),
-				});
-				folder = picked?.[0]?.fsPath;
-			} else {
-				folder = selection.folder;
-			}
+			const folder =
+				selection.folder ??
+				(
+					await window.showOpenDialog({
+						canSelectFiles: false,
+						canSelectFolders: true,
+						canSelectMany: false,
+						openLabel: l10n.t("Select {0} game folder", game.display),
+					})
+				)?.[0]?.fsPath;
 			if (!folder) return;
-
-			await context.workspaceState.update(PENDING_VANILLA_CACHE_KEY, {
-				gameId: definition.id,
-				folder,
-				offerCache: definition.id === activeGame,
-			} satisfies PendingVanillaCache);
-			try {
-				await workspace
-					.getConfiguration("cwtools")
-					.update(`cache.${definition.id}`, folder, vscode.ConfigurationTarget.Global);
-			} catch (err) {
-				await context.workspaceState.update(PENDING_VANILLA_CACHE_KEY, undefined);
-				throw err;
-			}
-			const reloadWindow = l10n.t("Reload Window");
-			const reload = await window.showInformationMessage(
-				definition.id === activeGame
-					? l10n.t(
-							"Saved the {0} base game folder. Reload the window to apply it; after the server starts, CWTools will offer to regenerate its vanilla cache.",
-							definition.display,
-						)
-					: l10n.t(
-							"Saved the {0} base game folder. Reload the window to apply it. The current server is for {1}; use the picker in a {0} workspace to regenerate this game's vanilla cache.",
-							definition.display,
-							GAMES.find((game) => game.id === activeGame)?.display ??
-								activeGame,
-						),
-				reloadWindow,
-			);
-			if (reload === reloadWindow) {
-				await commands.executeCommand("workbench.action.reloadWindow");
-			}
+			// The reload prompt for cwtools.cache.* settings is the existing one.
+			await workspace
+				.getConfiguration("cwtools")
+				.update(
+					`cache.${game.id}`,
+					vanillaContentRoot(game, folder),
+					vscode.ConfigurationTarget.Global,
+				);
 		}),
 	);
-	offerPendingVanillaCacheAfterReady(context, client, activeGame);
 	let restartInFlight = false;
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.restartServer", async () => {
