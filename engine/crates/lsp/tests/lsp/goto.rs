@@ -375,6 +375,85 @@ fn test_goto_vanilla_definition_resolves_to_vanilla_file() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn test_goto_ck3_definition_in_nested_game_install_without_cache() {
+    let home = tempfile::tempdir().unwrap();
+    let install = home
+        .path()
+        .join(".steam/steam/steamapps/common/Crusader Kings III/game");
+    let vanilla_file = install.join("common/national_focus/base.txt");
+    std::fs::create_dir_all(vanilla_file.parent().unwrap()).unwrap();
+    std::fs::write(&vanilla_file, "VANILLA_FOCUS = { x = yes }\n").unwrap();
+
+    let decision_rel = "common/decisions/d.txt";
+    let decision_text = "my_dec = {\n    has_focus = VANILLA_FOCUS\n}\n";
+    // The production config converter removes the "game/" prefix from rules
+    // paths. Model the converted paths here so the test exercises the root
+    // expected by the actual game's rules.
+    let converted_rules = GOTO_RULES.replace("game/", "");
+    let mut server = TestServer::builder()
+        .rules(&converted_rules)
+        .file(decision_rel, decision_text)
+        .init_opts(json!({ "language": "ck3" }))
+        .env("HOME", home.path())
+        .env("XDG_CACHE_HOME", home.path())
+        .spawn();
+    server.initialized();
+    server.open_and_wait(decision_rel, decision_text);
+
+    let out = definition_locations(&mut server, decision_rel, 1, 16, 50);
+    server.stop();
+
+    assert!(
+        out.iter()
+            .any(|(u, _)| u.ends_with("national_focus/base.txt")),
+        "CK3 definitions under the install's game/ directory should resolve without a vanilla cache, got: {:?}",
+        out
+    );
+    assert!(
+        !out.iter().any(|(u, _)| u.ends_with("decisions/d.txt")),
+        "goto must resolve to the base game rather than the request document, got: {:?}",
+        out
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_goto_ck3_falls_back_when_nested_game_dir_is_not_a_game_folder() {
+    let home = tempfile::tempdir().unwrap();
+    let install = home
+        .path()
+        .join(".steam/steam/steamapps/common/Crusader Kings III");
+    let vanilla_file = install.join("common/national_focus/base.txt");
+    std::fs::create_dir_all(vanilla_file.parent().unwrap()).unwrap();
+    std::fs::write(&vanilla_file, "VANILLA_FOCUS = { x = yes }\n").unwrap();
+    std::fs::create_dir_all(install.join("game")).unwrap();
+
+    let decision_rel = "common/decisions/d.txt";
+    let decision_text = "my_dec = {\n    has_focus = VANILLA_FOCUS\n}\n";
+    let converted_rules = GOTO_RULES.replace("game/", "");
+    let mut server = TestServer::builder()
+        .rules(&converted_rules)
+        .file(decision_rel, decision_text)
+        .init_opts(json!({ "language": "ck3" }))
+        .env("HOME", home.path())
+        .env("XDG_CACHE_HOME", home.path())
+        .spawn();
+    server.initialized();
+    server.open_and_wait(decision_rel, decision_text);
+
+    let out = definition_locations(&mut server, decision_rel, 1, 16, 50);
+    server.stop();
+
+    assert!(
+        out.iter()
+            .any(|(u, _)| u.ends_with("national_focus/base.txt")),
+        "an empty nested game/ directory must not replace a valid install root, got: {:?}",
+        out
+    );
+}
+
 #[test]
 fn test_cwt_goto_type_reference_jumps_to_definition() {
     // Goto on `<focus>` in an opened .cwt file lands on the `type[focus]`
