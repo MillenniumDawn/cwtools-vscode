@@ -701,10 +701,6 @@ export function createLanguageClient(
 	// Client clears the DiagnosticCollection on stop; drop the cache too or the
 	// re-publish after restart looks unchanged and squiggles don't return.
 	context.subscriptions.push(
-		// onDidChangeState is a lib getter returning Event<StateChangeEvent>;
-		// type-aware lint resolves it as unsafe under skipLibCheck though tsc
-		// types it (client, the handler and the returned Disposable are typed).
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument
 		client.onDidChangeState((e: { oldState: State; newState: State }) => {
 			if (e.oldState === State.Running) {
 				diagnosticsCache.clear();
