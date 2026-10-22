@@ -107,7 +107,7 @@ impl Backend {
             info.type_index
                 .instances(&type_name)
                 .iter()
-                .filter(|(_, instance)| instance.name == name)
+                .filter(|(_, instance)| instance.name.eq_ignore_ascii_case(&name))
                 .map(|(file, instance)| Callable::new(file, &type_name, instance))
                 .collect()
         } else {

@@ -1318,6 +1318,24 @@ fn call_hierarchy_prepares_a_call_site_but_not_an_effect_body() {
 }
 
 #[test]
+fn call_hierarchy_prepares_a_case_variant_call_site() {
+    let definition = "first_effect = {\n}\n";
+    let caller = "caller_effect = {\n    FIRST_EFFECT = yes\n}\n";
+    let caller_rel = "game/common/scripted_effects/caller.txt";
+    let mut server = editor_server_with_rules(
+        GOTO_RULES,
+        &[
+            ("game/common/scripted_effects/first.txt", definition),
+            (caller_rel, caller),
+        ],
+    );
+    let uri = server.uri(caller_rel);
+    let prepared = prepare_call_hierarchy(&mut server, &uri, 1, 6);
+    server.stop();
+    assert_eq!(prepared["result"][0]["name"], "first_effect", "{prepared}");
+}
+
+#[test]
 fn call_hierarchy_incoming_reaches_a_caller_in_a_closed_file() {
     let definition = "first_effect = {\n    log = \"hi\"\n}\n";
     let caller = "closed_caller = {\n    first_effect = yes\n}\n";

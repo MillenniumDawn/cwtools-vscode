@@ -2,14 +2,11 @@
 
 #### Engine
 
-* Scripted effects and triggers answer call hierarchy requests: prepare from a definition or a call site, then incoming and outgoing calls. (#613)
+* Scripted effects and triggers answer call hierarchy requests: prepare from a definition or a call site, including case-variant references, then incoming and outgoing calls. (#613)
 
 #### Tooling
 
 * Build and typecheck the client with TypeScript 7.0. `tsc` comes from the `@typescript/native` alias, and `typescript` now aliases `@typescript/typescript6`, because typescript-eslint still needs the TypeScript 6 API that 7.0 does not ship. `tsconfig.json` drops the `node10` resolution and `baseUrl` that 7.0 removed and resolves through package `exports` with `bundler`, so the `paths` workaround for the language client and its two lint suppressions are gone. It also lists its global `types`, since 7.0 no longer loads every `@types` package, and the webview's CSS import gets a module declaration for the side-effect import check that is now on by default. (#1109)
-#### Engine
-
-* Scripted effects and triggers answer call hierarchy requests: prepare from a definition or a call site, then incoming and outgoing calls. (#613)
 
 ### 4.0.3
 
@@ -18,8 +15,6 @@
 * Resolve HOI4 equipment names the game derives instead of declaring. A variant that is naval only through its `archetype`, like `corvette_hull_1`, now counts as `naval_equip`, and the renamed variants a `duplicate_archetypes` entry implies, like `medium_tank_artillery_chassis_1`, now exist. With the base game loaded, Millennium Dawn's OOBs reported about 4,300 false CW262s for these. The base-game cache now stores the derived names, so existing `.cwv` caches (now v15) rebuild once. (#1108)
 * A semantic-token cache hit now updates the cached result id in place under one lock. A full request copies the token list once for its response, and an unchanged delta request copies none. A delta that needs a diff compares against the cached tokens without cloning them first. Responses and result ids are unchanged. (#1093)
 * The server registers for watched-file notifications when the client supports dynamic registration, so editors other than VS Code get file create, change and delete updates. Clients without that support keep sending their own. (#479)
-* Add scripted-effect and scripted-trigger call hierarchy requests, including indexed incoming and outgoing calls. (#613)
-* Scripted effects and triggers answer call hierarchy requests: prepare from a definition or a call site, then incoming and outgoing calls. (#613)
 * Release what a watched folder delete leaves behind. The client can report a deleted folder as one event, so file-index entries and script, localisation and index state for files inside it stayed until a reindex. References to them kept resolving without CW113. The server now releases everything under the folder, matching whole path segments. A per-file delete also resolves its path when the parent folder is gone. (#1092)
 
 #### Tooling
