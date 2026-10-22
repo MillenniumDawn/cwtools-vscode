@@ -14,6 +14,7 @@ use tower_lsp::{LspService, Server};
 
 mod access;
 mod cache_purge;
+mod call_hierarchy;
 mod code_action;
 mod codelens;
 mod color;
