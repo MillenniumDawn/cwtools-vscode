@@ -91,10 +91,6 @@ export function registerServerNotifications(
 	};
 
 	context.subscriptions.push(
-		// onDidChangeState is a lib getter returning Event<StateChangeEvent>;
-		// type-aware lint resolves it as unsafe under skipLibCheck though tsc
-		// types it (client, the handler and the returned Disposable are typed).
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument
 		client.onDidChangeState((e: StateChangeEvent) => {
 			if (e.newState === State.Starting) {
 				acceptFileList = false;
