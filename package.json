@@ -22,7 +22,7 @@
     "bench:node": "vitest bench --run"
   },
   "dependencies": {
-    "cytoscape": "^3.34.3",
+    "cytoscape": "^3.34.4",
     "cytoscape-elk": "github:jfstephe/cytoscape.js-elk#8cf116841e241626752b6be79053217f9b9e9101",
     "cytoscape-popper": "^2.0.0",
     "merge-images": "2.0.0",
