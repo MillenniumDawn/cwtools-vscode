@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Extension
+
+* Stop sending duplicate script, localisation and resource file events after the server registers its own workspace watcher. Keep client-side `.cwt` watching for rule-file lint and reload. (#1107)
+
 ### 4.0.3
 
 #### Engine
