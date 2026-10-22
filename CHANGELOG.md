@@ -4,27 +4,19 @@
 
 * Add "Select base game installation", which lists the active game's Steam installs from every library in `libraryfolders.vdf`, including secondary drives, or lets you browse for a folder. The choice is saved to `cwtools.cache.<game>`, and the usual reload prompt applies it. Games that keep their data under `game/` get that folder stored whichever way you pick. (#609)
 
+* Stop sending duplicate script, localisation, resource and `.cwt` file events after the server registers its own workspace watcher. The client still watches `.cwt` files to reload the rules. (#1107)
+* Add **Show graph from here** to the script editor context menu and show a notice when a graph build reaches its node or edge cap. Canceling JSON restoration preserves a pending graph's root and depth-redraw state. (#606)
+
 #### Engine
 
 * Scripted effects and triggers answer call hierarchy requests: prepare from a definition or a call site, including case-variant references, then incoming and outgoing calls. (#613)
 * Discover parent mods from descriptor dependencies when `cwtools.parentMods` is empty. Match exact names in launcher descriptors and skip missing or ambiguous names with a warning. Preserve EU5's game identifier in the client handshake so its dependencies resolve too. (#818)
+* Auto-discover the script data root inside `game/` for CK3, Victoria 3, Imperator: Rome and EU5 installs, so vanilla definitions resolve with the converted rules paths. (#1106)
+* Allow graph requests to start from one named entity and follow references from there, while preserving the existing type-wide graph when no root is supplied. (#606)
 
 #### Tooling
 
 * Build and typecheck the client with TypeScript 7.0. `tsc` comes from the `@typescript/native` alias, and `typescript` now aliases `@typescript/typescript6`, because typescript-eslint still needs the TypeScript 6 API that 7.0 does not ship. `tsconfig.json` drops the `node10` resolution and `baseUrl` that 7.0 removed and resolves through package `exports` with `bundler`, so the `paths` workaround for the language client and its two lint suppressions are gone. It also lists its global `types`, since 7.0 no longer loads every `@types` package, and the webview's CSS import gets a module declaration for the side-effect import check that is now on by default. (#1109)
-* Auto-discover the script data root inside `game/` for CK3, Victoria 3, Imperator: Rome and EU5 installs, so vanilla definitions resolve with the converted rules paths. (#1106)
-
-#### Extension
-
-* Stop sending duplicate script, localisation, resource and `.cwt` file events after the server registers its own workspace watcher. The client still watches `.cwt` files to reload the rules. (#1107)
-
-#### Engine
-
-* Allow graph requests to start from one named entity and follow references from there, while preserving the existing type-wide graph when no root is supplied. (#606)
-
-#### Extension
-
-* Add **Show graph from here** to the script editor context menu and show a notice when a graph build reaches its node or edge cap. Canceling JSON restoration preserves a pending graph's root and depth-redraw state. (#606)
 
 ### 4.0.3
 
