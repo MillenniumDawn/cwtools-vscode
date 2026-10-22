@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.4
+
 #### Extension
 
 * Add "Select base game installation", which lists the active game's Steam installs from every library in `libraryfolders.vdf`, including secondary drives, or lets you browse for a folder. The choice is saved to `cwtools.cache.<game>`, and the usual reload prompt applies it. Games that keep their data under `game/` get that folder stored whichever way you pick. (#609)
