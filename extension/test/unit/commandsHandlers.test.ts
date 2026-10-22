@@ -1,9 +1,11 @@
 import * as assert from "assert";
+import * as path from "path";
 import { beforeEach, suite, test, vi } from "vitest";
 import { LSPErrorCodes } from "vscode-languageserver-protocol";
-import { CancellationError } from "vscode";
+import { CancellationError, ConfigurationTarget } from "vscode";
 import type { ExtensionContext, LogOutputChannel, WebviewPanel } from "vscode";
 import type * as VscodeStub from "./_stubs/vscode";
+import type * as BaseGame from "../../src/host/baseGame";
 import type { EditorTracker } from "../../src/host/documentLanguage";
 import type { LanguageClient } from "vscode-languageclient/node";
 
@@ -41,6 +43,7 @@ const state = vi.hoisted(() => {
 		token,
 		withProgress,
 		showInformationMessage: vi.fn(),
+		showQuickPick: vi.fn(),
 		showOpenDialog: vi.fn(),
 		executeCommand: vi.fn(),
 		showWarningMessage: vi.fn(),
@@ -49,6 +52,8 @@ const state = vi.hoisted(() => {
 		showInputBox: vi.fn(),
 		showSaveDialog: vi.fn(),
 		writeFile: vi.fn(),
+		updateConfiguration: vi.fn(),
+		findVanillaInstallations: vi.fn(),
 		initialiseGraph,
 	};
 });
@@ -68,6 +73,7 @@ vi.mock("vscode", async (importOriginal) => {
 			...original.window,
 			withProgress: state.withProgress,
 			showInformationMessage: state.showInformationMessage,
+			showQuickPick: state.showQuickPick,
 			showOpenDialog: state.showOpenDialog,
 			showWarningMessage: state.showWarningMessage,
 			showErrorMessage: state.showErrorMessage,
@@ -83,6 +89,10 @@ vi.mock("vscode", async (importOriginal) => {
 		},
 		workspace: {
 			...original.workspace,
+			getConfiguration: (section?: string) => ({
+				...original.workspace.getConfiguration(section),
+				update: state.updateConfiguration,
+			}),
 			fs: { writeFile: state.writeFile, readFile: state.readFile },
 		},
 	};
@@ -90,6 +100,11 @@ vi.mock("vscode", async (importOriginal) => {
 
 vi.mock("vscode-languageclient/node", () => ({
 	ExecuteCommandRequest: { type: state.requestType },
+}));
+
+vi.mock("../../src/host/baseGame", async (importOriginal) => ({
+	...(await importOriginal<typeof BaseGame>()),
+	findVanillaInstallations: state.findVanillaInstallations,
 }));
 
 import {
@@ -142,7 +157,7 @@ function fakeClient(commands: string[], workDoneProgress = false): FakeClient {
 	};
 }
 
-function register(client: FakeClient, latestType = ""): void {
+function register(client: FakeClient, latestType = "", activeGame = "hoi4"): void {
 	const context = {
 		extensionPath: "/ext",
 		subscriptions: [],
@@ -155,6 +170,7 @@ function register(client: FakeClient, latestType = ""): void {
 		client as unknown as LanguageClient,
 		tracker,
 		undefined,
+		activeGame,
 	);
 }
 
@@ -209,11 +225,47 @@ suite("registered workspace commands", () => {
 	beforeEach(() => {
 		state.executeCommand.mockReset();
 		state.showInputBox.mockReset();
+		state.showQuickPick.mockReset();
 		state.showOpenDialog.mockReset();
+		state.updateConfiguration.mockReset();
+		state.findVanillaInstallations.mockReset();
 		state.readFile.mockReset();
 		state.showSaveDialog.mockReset();
 		GraphPanel.currentPanel = undefined;
 		state.registeredCommands.clear();
+	});
+
+	suite("selectBaseGame", () => {
+		test("writes a discovered installation to the active game's global setting", async () => {
+			const install = path.join("steam", "common", "Hearts of Iron IV");
+			state.findVanillaInstallations.mockResolvedValue([install]);
+			state.showQuickPick.mockImplementation(
+				(items: Array<{ folder?: string }>) => Promise.resolve(items[0]),
+			);
+			register(fakeClient([]), "", "hoi4");
+
+			await handler("cwtools.selectBaseGame")();
+
+			assert.deepStrictEqual(state.updateConfiguration.mock.calls, [
+				["cache.hoi4", install, ConfigurationTarget.Global],
+			]);
+			assert.equal(state.showOpenDialog.mock.calls.length, 0);
+		});
+
+		test("browsing for a game that nests its data stores the game subfolder", async () => {
+			state.findVanillaInstallations.mockResolvedValue([]);
+			state.showQuickPick.mockImplementation(
+				(items: Array<{ folder?: string }>) => Promise.resolve(items[0]),
+			);
+			state.showOpenDialog.mockResolvedValue([{ fsPath: path.join("games", "ck3") }]);
+			register(fakeClient([]), "", "ck3");
+
+			await handler("cwtools.selectBaseGame")();
+
+			assert.deepStrictEqual(state.updateConfiguration.mock.calls, [
+				["cache.ck3", path.join("games", "ck3", "game"), ConfigurationTarget.Global],
+			]);
+		});
 	});
 
 	test("clears command availability contexts when the server stops", () => {

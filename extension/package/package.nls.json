@@ -10,6 +10,7 @@
   "commands.genlocall.title": "Generate missing loc for all files",
   "commands.reloadrulesconfig.title": "Reload config rules",
   "commands.cacheVanilla.title": "Regenerate game vanilla cache file",
+  "commands.selectBaseGame.title": "Select base game installation",
   "commands.clearAllCaches.title": "Clear all caches and reindex",
   "commands.reindexWorkspace.title": "Re-index workspace",
   // Save the language server's timing/memory log to a file, for a bug report

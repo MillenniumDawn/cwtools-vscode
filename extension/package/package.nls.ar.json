@@ -10,6 +10,7 @@
   "commands.genlocall.title": "إنشاء نصوص الترجمة الناقصة لكل الملفات",
   "commands.reloadrulesconfig.title": "إعادة تحميل إعدادات القواعد",
   "commands.cacheVanilla.title": "إعادة إنشاء ملف ذاكرة التخزين المؤقت للعبة الأصلية",
+  "commands.selectBaseGame.title": "اختيار تثبيت اللعبة الأساسية",
   "commands.clearAllCaches.title": "مسح كل ذواكر التخزين المؤقت وإعادة الفهرسة",
   "commands.reindexWorkspace.title": "إعادة فهرسة مساحة العمل",
   // Save the language server's timing/memory log to a file, for a bug report

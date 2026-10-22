@@ -17,6 +17,10 @@
 
 * Record the #1094 cache decode measurement: sizing the buffer from a frame's declared size moved declared-frame decode by -0.21%, inside the run-to-run noise, so it is not kept. (#1094)
 
+#### Extension
+
+* Add "Select base game installation", which lists the active game's Steam installs from every library in `libraryfolders.vdf`, including secondary drives, or lets you browse for a folder. The choice is saved to `cwtools.cache.<game>`, and the usual reload prompt applies it. Games that keep their data under `game/` get that folder stored whichever way you pick. (#609)
+
 ### 4.0.2
 
 #### Engine

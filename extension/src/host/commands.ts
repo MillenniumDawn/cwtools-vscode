@@ -19,6 +19,8 @@ import type { EditorTracker } from "./documentLanguage";
 import { errorMessage, logError, outputChannel } from "./logger";
 import { runCancellableExecuteCommand } from "./commandProgress";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
+import { GAMES } from "./games";
+import { findVanillaInstallations, vanillaContentRoot } from "./baseGame";
 // Type-only: the graph panel stays lazily imported (it pulls in the webview
 // plumbing), and `import type` is erased, so naming its shape here doesn't
 // pull it into the activation path.
@@ -183,6 +185,7 @@ export function registerCommands(
 	client: LanguageClient,
 	tracker: EditorTracker,
 	serverExe: string | undefined,
+	activeGame: string,
 ): void {
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showReferences", showReferences),
@@ -190,6 +193,44 @@ export function registerCommands(
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showOutput", () => {
 			outputChannel.show();
+		}),
+	);
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.selectBaseGame", async () => {
+			const game = GAMES.find((item) => item.id === activeGame);
+			if (!game) {
+				void window.showWarningMessage(
+					l10n.t("CWTools could not detect which game this workspace is for."),
+				);
+				return;
+			}
+			const found: Array<{ label: string; folder?: string }> = (
+				await findVanillaInstallations(game)
+			).map((folder) => ({ label: folder, folder }));
+			const selection = await window.showQuickPick(
+				[...found, { label: l10n.t("Browse for a game folder…") }],
+				{ placeHolder: l10n.t("Select the {0} base game folder", game.display) },
+			);
+			if (!selection) return;
+			const folder =
+				selection.folder ??
+				(
+					await window.showOpenDialog({
+						canSelectFiles: false,
+						canSelectFolders: true,
+						canSelectMany: false,
+						openLabel: l10n.t("Select {0} game folder", game.display),
+					})
+				)?.[0]?.fsPath;
+			if (!folder) return;
+			// The reload prompt for cwtools.cache.* settings is the existing one.
+			await workspace
+				.getConfiguration("cwtools")
+				.update(
+					`cache.${game.id}`,
+					vanillaContentRoot(game, folder),
+					vscode.ConfigurationTarget.Global,
+				);
 		}),
 	);
 	let restartInFlight = false;
