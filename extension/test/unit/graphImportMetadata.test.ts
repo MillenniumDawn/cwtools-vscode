@@ -112,6 +112,33 @@ test("an actual Cytoscape export round-trips with hover and navigation", () => {
 	});
 });
 
+test("capped graph notice clears on new graphs and valid imports, but survives failed imports", () => {
+	send({
+		command: "go",
+		data: [node("capped")],
+		settings: { wheelSensitivity: 1 },
+		notice: "This graph was capped; some nodes or connections are omitted.",
+	});
+	expect(state.graphNotice).toEqual({
+		textContent: "This graph was capped; some nodes or connections are omitted.",
+		hidden: false,
+	});
+
+	send({ command: "importJson", json: "not json", settings: { wheelSensitivity: 1 } });
+	expect(state.graphNotice.hidden).toBe(false);
+	expect(state.graphNotice.textContent).toContain("This graph was capped");
+
+	send({
+		command: "importJson",
+		json: JSON.stringify({ elements: { nodes: [{ data: { id: "imported" } }] } }),
+		settings: { wheelSensitivity: 1 },
+	});
+	expect(state.graphNotice).toEqual({ textContent: "", hidden: true });
+
+	send({ command: "go", data: [node("uncapped")], settings: { wheelSensitivity: 1 } });
+	expect(state.graphNotice).toEqual({ textContent: "", hidden: true });
+});
+
 test("navigation validates coordinates again at the interaction boundary", () => {
 	const cy = importNode({});
 	cy.$id("focus_a").data("location", { filename: "a.txt", line: Infinity, column: NaN });

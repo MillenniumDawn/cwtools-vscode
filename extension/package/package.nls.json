@@ -21,6 +21,7 @@
   "commands.restartServer.title": "Restart Server",
   "commands.showOutput.title": "Show Output",
   "commands.showGraph.title": "Show graph",
+  "commands.showGraphFromHere.title": "Show graph from here",
   // Show a graph previously exported JSON
   "commands.graphFromJson.title": "Recreate graph from json",
   "commands.saveGraphImage.title": "Save graph as image",

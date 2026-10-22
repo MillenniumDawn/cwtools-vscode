@@ -824,6 +824,7 @@ type InboundMessage =
 			data: techNode[];
 			settings: settings;
 			persist?: GraphPanelState;
+			notice?: string;
 	  }
 	| { command: "exportImage" }
 	| { command: "exportJson" }
@@ -846,10 +847,16 @@ function persistState(state: GraphPanelState | undefined) {
 window.addEventListener("message", (event) => {
 	const message = event.data as InboundMessage; // The JSON data our extension sent
 	switch (message.command) {
-		case "go":
+		case "go": {
+			const banner = document.getElementById("graph-notice");
+			if (banner) {
+				banner.textContent = message.notice ?? "";
+				banner.hidden = !message.notice;
+			}
 			go(message.data, message.settings);
 			persistState(message.persist);
 			break;
+		}
 		case "exportImage":
 			void exportImage(1).catch(reportImageExportError);
 			break;
@@ -863,6 +870,11 @@ window.addEventListener("message", (event) => {
 					throw new Error("invalid Cytoscape graph JSON");
 				}
 				validateImportedMetadata(json);
+				const banner = document.getElementById("graph-notice");
+				if (banner) {
+					banner.textContent = "";
+					banner.hidden = true;
+				}
 				tech([], [], message.settings, json);
 				persistState(message.persist);
 			} catch (error) {

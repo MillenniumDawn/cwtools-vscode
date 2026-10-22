@@ -69,6 +69,13 @@
           "group": "navigation"
         }
       ],
+      "editor/context": [
+        {
+          "when": "cwtoolsGraphFromHereAvailable && editorLangId == paradox",
+          "command": "cwtools.showGraphFromHere",
+          "group": "navigation"
+        }
+      ],
       "view/item/context": [
         {
           "when": "view == cwtools-files && viewItem == file",
@@ -200,6 +207,11 @@
         "title": "%commands.showGraph.title%",
         "category": "cwtools",
         "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "cwtools.showGraphFromHere",
+        "title": "%commands.showGraphFromHere.title%",
+        "category": "cwtools"
       },
       {
         "command": "cwtools.graphFromJson",

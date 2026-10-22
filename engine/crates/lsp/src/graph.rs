@@ -150,6 +150,7 @@ pub(crate) struct GraphUseSites {
 #[derive(Debug, Clone)]
 pub(crate) struct GraphRequest {
     pub(crate) entity_type: String,
+    pub(crate) root_instance: Option<String>,
     pub(crate) depth: u32,
     pub(crate) related_types: Vec<String>,
     pub(crate) max_nodes: usize,
@@ -400,12 +401,14 @@ pub(crate) fn build_graph<S: GraphSource + ?Sized>(src: &S, req: &GraphRequest) 
     let seed_budget = req.max_nodes.div_ceil(2).max(1);
 
     let mut seed_types = vec![req.entity_type.clone()];
-    seed_types.extend(
-        req.related_types
-            .iter()
-            .filter(|t| !t.eq_ignore_ascii_case(&req.entity_type))
-            .cloned(),
-    );
+    if req.root_instance.is_none() {
+        seed_types.extend(
+            req.related_types
+                .iter()
+                .filter(|t| !t.eq_ignore_ascii_case(&req.entity_type))
+                .cloned(),
+        );
+    }
 
     for type_name in &seed_types {
         let mut instances = src.instances(type_name);
@@ -417,6 +420,15 @@ pub(crate) fn build_graph<S: GraphSource + ?Sized>(src: &S, req: &GraphRequest) 
                 &b.name,
             ))
         });
+        if type_name.eq_ignore_ascii_case(&req.entity_type)
+            && let Some(root) = &req.root_instance
+        {
+            instances = instances
+                .into_iter()
+                .find(|entity| entity.name.eq_ignore_ascii_case(root))
+                .into_iter()
+                .collect();
+        }
         seed_total += instances.len();
         for entity in instances {
             if let Slot::New(idx) = builder.push(entity, req, seed_budget) {
@@ -595,6 +607,89 @@ impl GraphSource for BackendGraphSource<'_> {
 }
 
 impl Backend {
+    pub(crate) async fn get_graph_entity_at_position(
+        &self,
+        arguments: &[Value],
+    ) -> Result<Option<Value>> {
+        let file_uri = arguments
+            .first()
+            .and_then(Value::as_str)
+            .filter(|uri| !uri.is_empty())
+            .ok_or_else(|| {
+                Error::invalid_params("getGraphEntityAtPosition: missing document URI")
+            })?;
+        let canonical_file_uri = crate::paths::canonical_uri(file_uri);
+        let line = arguments
+            .get(1)
+            .and_then(Value::as_u64)
+            .and_then(|line| u32::try_from(line).ok())
+            .ok_or_else(|| {
+                Error::invalid_params(
+                    "getGraphEntityAtPosition: line must be a non-negative integer",
+                )
+            })?;
+        let column = arguments
+            .get(2)
+            .and_then(Value::as_u64)
+            .and_then(|column| u32::try_from(column).ok())
+            .ok_or_else(|| {
+                Error::invalid_params(
+                    "getGraphEntityAtPosition: character must be a non-negative integer",
+                )
+            })?;
+        let lsp_position = tower_lsp::lsp_types::Position::new(line, column);
+        let position = crate::paths::lsp_pos_to_source(lsp_position);
+        let (source_line, source_column) = if let Some(text) =
+            self.file_text_for(&canonical_file_uri).await
+        {
+            crate::paths::lsp_pos_to_source_in_text(&text, lsp_position, &self.position_encoding())
+        } else {
+            position
+        };
+        let cursor = (source_line, source_column);
+        let entity = {
+            let info = self.state.info_service.read();
+            let instances = info.type_index.instances_in_file(&canonical_file_uri);
+            let mut containing: Vec<_> = instances
+                .iter()
+                .filter(|(_, instance)| {
+                    !(instance.location.line == 1
+                        && instance.location.col == 0
+                        && instance.location.end == (1, 0))
+                        && (instance.location.line, instance.location.col) <= cursor
+                        && cursor <= instance.location.end
+                })
+                .collect();
+            containing.sort_by(|(left_type, left), (right_type, right)| {
+                (right.location.line, right.location.col)
+                    .cmp(&(left.location.line, left.location.col))
+                    .then_with(|| left.location.end.cmp(&right.location.end))
+                    .then_with(|| left_type.cmp(right_type))
+                    .then_with(|| left.name.cmp(&right.name))
+            });
+            containing
+                .first()
+                .copied()
+                .or_else(|| {
+                    instances
+                        .iter()
+                        .filter(|(_, instance)| {
+                            instance.location.line == 1
+                                && instance.location.col == 0
+                                && instance.location.end == (1, 0)
+                        })
+                        .min_by_key(|(type_name, instance)| (*type_name, &instance.name))
+                })
+                .map(|(type_name, instance)| (type_name.to_string(), instance.name.clone()))
+        };
+        let Some((entity_type, name)) = entity else {
+            return Ok(Some(Value::Null));
+        };
+        Ok(Some(
+            serde_json::json!({ "entityType": entity_type, "name": name }),
+        ))
+    }
+
     pub(crate) async fn get_graph_data(&self, arguments: &[Value]) -> Result<Option<Value>> {
         let requested_type = arguments
             .first()
@@ -629,6 +724,21 @@ impl Backend {
                 "getGraphData: depth must be at least 1, got {depth}"
             )));
         }
+        let root_instance = match arguments.get(2) {
+            None => None,
+            Some(value) => Some(
+                value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        Error::invalid_params(
+                            "getGraphData: root instance must be a non-empty string",
+                        )
+                    })?,
+            ),
+        };
 
         if !self.state.index_ready.load(Ordering::Relaxed) {
             return Err(graph_not_ready(
@@ -689,6 +799,7 @@ impl Backend {
 
         let req = GraphRequest {
             entity_type,
+            root_instance,
             depth: u32::try_from(depth).unwrap_or(u32::MAX),
             related_types,
             max_nodes: MAX_GRAPH_NODES,
@@ -703,6 +814,12 @@ impl Backend {
         });
 
         if build.nodes.is_empty() {
+            if let Some(root) = &req.root_instance {
+                return Err(Error::invalid_params(format!(
+                    "getGraphData: no instance named '{root}' of entity type '{}' in the workspace",
+                    req.entity_type
+                )));
+            }
             return Err(Error::invalid_params(format!(
                 "getGraphData: no instances of entity type '{}' in the workspace",
                 req.entity_type
@@ -849,6 +966,7 @@ mod tests {
     fn request(entity_type: &str, depth: u32) -> GraphRequest {
         GraphRequest {
             entity_type: entity_type.to_string(),
+            root_instance: None,
             depth,
             related_types: Vec::new(),
             max_nodes: MAX_GRAPH_NODES,
@@ -937,6 +1055,37 @@ mod tests {
         );
         assert_eq!(build.seed_total, 3);
         assert!(!build.truncated());
+    }
+
+    #[test]
+    fn test_rooted_graph_seeds_one_instance_and_uses_the_full_walk_budget() {
+        let mut src = FakeSource::with_entities(vec![
+            entity("focus", "focus_a", "file:///f.txt", loc(1, 0, 10, 1)),
+            entity("focus", "focus_b", "file:///f.txt", loc(11, 0, 20, 1)),
+            entity("decision", "unrelated", "file:///d.txt", loc(1, 0, 10, 1)),
+        ]);
+        src.add_site("focus", "focus_a", "file:///f.txt", loc(15, 4, 15, 9));
+
+        let mut req = request("focus", 3);
+        req.root_instance = Some("FOCUS_A".to_string());
+        req.related_types = vec!["decision".to_string()];
+        req.max_nodes = 2;
+        let build = build_graph(&src, &req);
+
+        let mut ids: Vec<&str> = build.nodes.iter().map(|node| node.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["focus_a", "focus_b"]);
+        assert_eq!(build.seed_total, 1);
+        assert!(!build.truncated());
+
+        // With a one-node cap, the root consumes the seed budget but traversal
+        // can still reach one node; the disconnected related type is not seeded.
+        req.max_nodes = 1;
+        let capped = build_graph(&src, &req);
+        assert_eq!(capped.nodes.len(), 1);
+        assert_eq!(capped.seed_total, 1);
+        assert_eq!(capped.omitted, 1);
+        assert!(capped.truncated());
     }
 
     #[test]

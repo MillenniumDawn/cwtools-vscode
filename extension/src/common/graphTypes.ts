@@ -74,6 +74,13 @@ export interface GraphNodeDetail {
  */
 export type GraphData = GraphNode[];
 
+/** Return the panel banner for capped server graphs. */
+export function graphTruncationNotice(data: GraphData): string | undefined {
+	return data.some((node) => node.details?.some((detail) => detail.key === "truncated"))
+		? "This graph was capped; some nodes or connections are omitted."
+		: undefined;
+}
+
 /**
  * State the graph webview persists across window reloads via setState.
  * Only the request parameters are kept: the graph data itself is re-requested
@@ -88,6 +95,8 @@ export interface GraphPanelState {
 	entityType?: string;
 	/** Connection depth the graph was requested at. */
 	depth?: number;
+	/** Root instance for a cursor-rooted server graph. */
+	rootInstance?: string;
 }
 
 /**
@@ -99,11 +108,13 @@ export interface GraphPanelState {
 export async function getGraphData(
 	entityType: string,
 	depth: number,
+	rootInstance?: string,
 ): Promise<GraphData> {
 	const result = await commands.executeCommand<unknown[]>(
 		serverCommand("getGraphData"),
 		entityType,
 		depth,
+		...(rootInstance === undefined ? [] : [rootInstance]),
 	);
 	return result as GraphData;
 }

@@ -13,6 +13,14 @@
 
 * Stop sending duplicate script, localisation, resource and `.cwt` file events after the server registers its own workspace watcher. The client still watches `.cwt` files to reload the rules. (#1107)
 
+#### Engine
+
+* Allow graph requests to start from one named entity and follow references from there, while preserving the existing type-wide graph when no root is supplied. (#606)
+
+#### Extension
+
+* Add **Show graph from here** to the script editor context menu and show a notice when a graph build reaches its node or edge cap. Canceling JSON restoration preserves a pending graph's root and depth-redraw state. (#606)
+
 ### 4.0.3
 
 #### Engine
