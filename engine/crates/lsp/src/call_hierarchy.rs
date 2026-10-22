@@ -46,6 +46,31 @@ fn in_definition(location: SourceLocation, line: u32, col: u32) -> bool {
         && (line, col) < (location.end.0, u32::from(location.end.1))
 }
 
+/// `type_per_file` instances carry this empty location and own their whole file.
+fn is_whole_file(location: SourceLocation) -> bool {
+    location.line == 1 && location.col == 0 && location.end == (1, 0)
+}
+
+/// The innermost definition containing a site, as the graph's owner lookup picks it:
+/// a focus inside its focus tree is the focus. A whole-file instance owns the rest.
+fn owner_of<'a>(
+    instances: &[(&'a str, &'a TypeInstance)],
+    site: SourceLocation,
+) -> Option<(&'a str, &'a TypeInstance)> {
+    instances
+        .iter()
+        .filter(|(_, instance)| in_definition(instance.location, site.line, u32::from(site.col)))
+        .max_by_key(|(type_name, instance)| {
+            (instance.location.line, instance.location.col, *type_name)
+        })
+        .or_else(|| {
+            instances
+                .iter()
+                .find(|(_, instance)| is_whole_file(instance.location))
+        })
+        .copied()
+}
+
 /// One entry per distinct callable with every one of its ranges, in definition order.
 fn group_calls(mut edges: Vec<(Callable, Range)>) -> Vec<(Callable, Vec<Range>)> {
     edges.sort_by(|(a, a_range), (b, b_range)| {
@@ -143,10 +168,7 @@ impl Backend {
                 let instances = by_file
                     .entry(&site.file)
                     .or_insert_with(|| info.type_index.instances_in_file(&site.file));
-                let owner = instances.iter().find(|(_, instance)| {
-                    in_definition(instance.location, site.key.line, u32::from(site.key.col))
-                });
-                if let Some((type_name, owner)) = owner {
+                if let Some((type_name, owner)) = owner_of(instances, site.key) {
                     edges.push((Callable::new(&site.file, type_name, owner), site.value));
                 }
             }

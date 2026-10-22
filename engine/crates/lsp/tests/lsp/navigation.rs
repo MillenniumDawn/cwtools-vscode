@@ -1443,6 +1443,66 @@ alias[trigger:<scripted_trigger>] = yes
 }
 
 #[test]
+fn call_hierarchy_incoming_names_the_innermost_and_whole_file_callers() {
+    const RULES: &str = r#"
+types = {
+    type[scripted_effect] = { path = "game/common/scripted_effects" }
+    ## type_key_filter = focus_tree
+    type[focus_tree] = { path = "game/common/national_focus" name_field = "id" }
+    ## type_key_filter = focus
+    type[focus] = {
+        path = "game/common/national_focus"
+        skip_root_key = focus_tree
+        name_field = "id"
+    }
+    type[country_history] = { path = "game/history/countries" type_per_file = yes }
+}
+scripted_effect = { alias_name[effect] = alias_match_left[effect] }
+focus_tree = {
+    id = scalar
+    ## cardinality = 0..inf
+    focus = {
+        id = scalar
+        completion_reward = { alias_name[effect] = alias_match_left[effect] }
+    }
+}
+focus = {
+    id = scalar
+    completion_reward = { alias_name[effect] = alias_match_left[effect] }
+}
+country_history = { alias_name[effect] = alias_match_left[effect] }
+alias[effect:<scripted_effect>] = yes
+"#;
+    let definition = "my_effect = {\n}\n";
+    let tree = "focus_tree = {\n    id = my_tree\n    focus = {\n        id = my_focus\n        completion_reward = {\n            my_effect = yes\n        }\n    }\n}\n";
+    let history = "my_effect = yes\n";
+    let definition_rel = "game/common/scripted_effects/e.txt";
+    let mut server = editor_server_with_rules(
+        RULES,
+        &[
+            (definition_rel, definition),
+            ("game/common/national_focus/tree.txt", tree),
+            ("game/history/countries/TAG.txt", history),
+        ],
+    );
+    let uri = server.uri(definition_rel);
+    let prepared = prepare_call_hierarchy(&mut server, &uri, 0, 2);
+    let incoming = server.call(
+        "callHierarchy/incomingCalls",
+        json!({ "item": prepared["result"][0] }),
+    );
+    server.stop();
+    let mut callers = incoming["result"]
+        .as_array()
+        .expect("incoming calls")
+        .iter()
+        .map(|call| call["from"]["detail"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    callers.sort();
+    assert_eq!(callers, ["country_history", "focus"], "{incoming}");
+}
+
+#[test]
 fn call_hierarchy_ranges_use_utf16_columns() {
     let first =
         "first_effect = { log = \"😀\" second_effect = yes } second_effect = { log = yes }\n";
@@ -1462,7 +1522,9 @@ fn call_hierarchy_ranges_use_utf16_columns() {
     let second_definition_char = first[..first.rfind("second_effect = {").unwrap()]
         .encode_utf16()
         .count() as u32;
-    let prepared = prepare_call_hierarchy(&mut server, &uri, 0, second_definition_char);
+    // At the name's end, an unconverted UTF-16 column lands past the key.
+    let name_end_char = second_definition_char + "second_effect".len() as u32;
+    let prepared = prepare_call_hierarchy(&mut server, &uri, 0, name_end_char);
     server.stop();
     assert_eq!(prepared["result"][0]["name"], "second_effect", "{prepared}");
     assert_eq!(
