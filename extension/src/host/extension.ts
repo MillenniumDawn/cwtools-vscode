@@ -15,7 +15,7 @@ import { serverExe as resolveServerExe } from "./engine";
 import { detectGameAndVanilla } from "./detectGame";
 import type { GameDetection } from "./detectGame";
 import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
-import { createLanguageClient } from "./lspClient";
+import { createLanguageClient, observeWatchedFileEvents } from "./lspClient";
 import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
 import { gameContentRoots } from "./gameContentRoots";
@@ -55,6 +55,11 @@ export interface CwtoolsApi {
 	serverStatusText(): string | undefined;
 	/** PID of the child owned by this client, for lifecycle diagnostics. */
 	serverProcessId(): number | undefined;
+	/** Observe watched-file events for one URI forwarded to LSP in host tests. */
+	observeServerWatchedFileEvents(uri: string): {
+		count: () => number;
+		dispose: () => void;
+	};
 	/** This module's deactivate(), which no VS Code API lets a test call. */
 	deactivate(): Thenable<void> | undefined;
 }
@@ -70,6 +75,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		rulesCacheRoot: () => rulesCacheRoot,
 		serverStatusText: () => statusText?.(),
 		serverProcessId: () => defaultClient?.serverProcess?.pid,
+		observeServerWatchedFileEvents: observeWatchedFileEvents,
 		deactivate,
 	};
 	if (

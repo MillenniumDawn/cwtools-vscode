@@ -10,6 +10,49 @@ const READY_PROBE = "watch-ready.probe";
 
 suite("served-root file watchers", function () {
 	this.timeout(90_000);
+	test("forwards one server event for a script save", async () => {
+		const api = await activate();
+		assert.ok(api);
+		assert.ok(await waitForServerReady(api));
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		assert.ok(root);
+		const file = path.join(root, "events", "open.txt");
+		const original = await fs.readFile(file, "utf8");
+		const readinessObserver = api.observeServerWatchedFileEvents(vscode.Uri.file(file).toString());
+		let saveObserver: ReturnType<typeof api.observeServerWatchedFileEvents> | undefined;
+		try {
+			let lastProbe = 0;
+			assert.ok(
+				await waitUntil(async () => {
+				if (readinessObserver.count() > 0) return true;
+					if (Date.now() - lastProbe >= 500) {
+						lastProbe = Date.now();
+						await fs.writeFile(file, `${original}\n# watcher warmup ${lastProbe}\n`);
+					}
+					return false;
+				}, 20_000),
+				"the server's dynamic watcher never became active",
+			);
+			readinessObserver.dispose();
+			// Let the watched event finish before measuring one isolated save.
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			const serverObserver = api.observeServerWatchedFileEvents(vscode.Uri.file(file).toString());
+			saveObserver = serverObserver;
+			await fs.writeFile(file, `${original}\n# watched-file regression save\n`);
+			assert.ok(
+				await waitUntil(() => serverObserver.count() > 0),
+				"the server did not receive the script save",
+			);
+			// Allow the duplicate host watcher callback to arrive before comparing.
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			assert.strictEqual(serverObserver.count(), 1);
+		} finally {
+			readinessObserver.dispose();
+			saveObserver?.dispose();
+			await fs.writeFile(file, original);
+		}
+	});
+
 	test("tracks external create, change and delete in served roots", async () => {
 		const api = await activate();
 		assert.ok(api);

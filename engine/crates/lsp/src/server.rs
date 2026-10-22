@@ -877,8 +877,8 @@ impl LanguageServer for Backend {
             .watched_files_dynamic_registration
             .load(Ordering::Relaxed)
         {
-            // The watched-file handler sorts and filters paths, and coalesces events that
-            // overlap with the bundled extension's own watchers.
+            // The watched-file handler sorts and filters paths. The bundled extension
+            // relies on this watcher and forwards only rules files outside the workspace.
             let registration = Registration {
                 id: "cwtools-watched-files".to_string(),
                 method: "workspace/didChangeWatchedFiles".to_string(),

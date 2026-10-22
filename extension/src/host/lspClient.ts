@@ -45,9 +45,6 @@ import { DiagnosticsSignatureCache } from "./diagnosticsSignature";
 import type { RulesSetup } from "./rulesSetup";
 import {
 	CWT_WATCH_GLOB,
-	LOCALISATION_WATCH_GLOB,
-	RESOURCE_WATCH_GLOB,
-	SCRIPT_WATCH_GLOB,
 	createWatchedPathExcluder,
 	forwardWatchedFileEvent,
 } from "./watchedFiles";
@@ -70,6 +67,23 @@ export interface ClientConfig {
 	fetchRules?: (client: LanguageClient) => void;
 	/** The descriptor-bearing root the server must initialize and scan. */
 	workspaceFolder: WorkspaceFolder;
+}
+
+let watchedFileEventObserver: { uri: string; count: number } | undefined;
+
+/** Observe events for one URI forwarded to LSP, for extension-host regression tests. */
+export function observeWatchedFileEvents(uri: string): {
+	count: () => number;
+	dispose: () => void;
+} {
+	const observer = { uri, count: 0 };
+	watchedFileEventObserver = observer;
+	return {
+		count: () => observer.count,
+		dispose: () => {
+			if (watchedFileEventObserver === observer) watchedFileEventObserver = undefined;
+		},
+	};
 }
 
 // Settings-to-server mapping lives in reindexSettings.ts (pure, unit-tested);
@@ -340,23 +354,11 @@ export function createLanguageClient(
 		},
 	};
 
-	// One watcher per file class the server actually reads, keyed on extension
-	// rather than a directory list. Its workspace scan walks the whole tree and
-	// filters by SCRIPT_EXTENSIONS (txt, gui, gfx, sfx, asset, map), so a
-	// per-directory glob here is always narrower than what it indexes: .txt
-	// under gfx/, portraits/ or dlc/ went unwatched. Loc keeps its directory
-	// scope, which the server's own loc check requires. The resource watcher is
-	// the exception: it takes every file and the server sorts out textures and
-	// meshes, so a filepath to a new one stops reporting CW113.
-	const fileEvents = [
-		workspace.createFileSystemWatcher(SCRIPT_WATCH_GLOB),
-		workspace.createFileSystemWatcher(LOCALISATION_WATCH_GLOB),
-		workspace.createFileSystemWatcher(RESOURCE_WATCH_GLOB),
-	];
-	// Preserve structural lint for every workspace .cwt.
+	// The server registers its own **/* watcher, which also carries .cwt edits
+	// to it. This one only drives the rules reload below for a rules cache
+	// inside the workspace.
 	const cwtWatcher = workspace.createFileSystemWatcher(CWT_WATCH_GLOB);
-	fileEvents.push(cwtWatcher);
-	context.subscriptions.push(...fileEvents);
+	context.subscriptions.push(cwtWatcher);
 
 	let currentRulesCache = cfg.rulesCache;
 	let rulesWatcher: FileSystemWatcher | undefined;
@@ -498,7 +500,17 @@ export function createLanguageClient(
 					event,
 					isExcludedWatchedPath,
 					(uri) => Uri.parse(uri).fsPath,
-					next,
+					async (acceptedEvent) => {
+						const observer = watchedFileEventObserver;
+						await next(acceptedEvent);
+						if (
+							observer !== undefined &&
+							watchedFileEventObserver === observer &&
+							observer.uri === acceptedEvent.uri
+						) {
+							observer.count++;
+						}
+					},
 				);
 			},
 		},
@@ -620,13 +632,6 @@ export function createLanguageClient(
 					"**/{localisation,localisation_synced,localization}/**/*.{yml,yaml,csv}",
 			},
 		],
-		synchronize: {
-			// The `cwtools.*` settings use different names than the server's init
-			// options (e.g. errors.ignore vs ignoredErrorCodes), so the library's
-			// raw-section push would never deliver the mapped keys. We push the
-			// mapped payload ourselves on change instead (see below).
-			fileEvents: fileEvents,
-		},
 		initializationOptions: () => {
 			startupRoots = readStartupRoots();
 			isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
