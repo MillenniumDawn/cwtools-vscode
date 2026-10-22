@@ -145,8 +145,9 @@ Source: `extension/package/package.json` `contributes.configuration`.
     relative path resolves against the workspace root). Indexed between the
     base game and the workspace; a workspace file at the same path, or under a
     `replace_path` in the workspace's `descriptor.mod`, replaces the parent's
-    copy. Parent files are never validated. Read at server start, so a change
-    needs a reload.
+    copy. Parent files are never validated. When empty, the server falls back
+    to the `dependencies` in the workspace's `descriptor.mod`. Read at server
+    start, so a change needs a reload.
 
 - `cwtools.graph.zoomSensitivity` (number)
   - Default: `1`

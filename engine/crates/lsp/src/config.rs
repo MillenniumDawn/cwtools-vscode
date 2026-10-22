@@ -174,7 +174,7 @@ fn extract_hover_scope_display(opts: &Value) -> Option<bool> {
 /// root, whose files would otherwise be indexed twice. A relative entry is
 /// resolved against the workspace root. Returns the kept roots and one
 /// message per dropped entry.
-fn resolve_parent_roots(
+pub(crate) fn resolve_parent_roots(
     entries: &[String],
     workspace_root: Option<&std::path::Path>,
     vanilla_dir: Option<&std::path::Path>,
@@ -497,26 +497,31 @@ impl Backend {
                 MAX_PARENT_MODS,
                 MAX_IGNORE_PATTERN_LEN,
             );
-            if !entries.is_empty() {
-                let (roots, dropped) = {
-                    let cfg = self.state.config.read();
-                    resolve_parent_roots(
-                        &entries,
-                        cfg.workspace_roots.first().map(std::path::PathBuf::as_path),
+            let (roots, dropped) = {
+                let cfg = self.state.config.read();
+                let workspace = cfg.workspace_roots.first().map(std::path::PathBuf::as_path);
+                if !entries.is_empty() {
+                    resolve_parent_roots(&entries, workspace, cfg.vanilla_dir.as_deref())
+                } else if let Some(workspace) = workspace {
+                    crate::parent_mods::discover_parent_roots(
+                        workspace,
+                        &cfg.language,
                         cfg.vanilla_dir.as_deref(),
                     )
-                };
-                for message in dropped {
-                    self.client.log_message(MessageType::WARNING, message).await;
+                } else {
+                    (Vec::new(), Vec::new())
                 }
-                if !roots.is_empty() {
-                    self.client
-                        .log_message(
-                            MessageType::INFO,
-                            format!("Parent mods (load order): {roots:?}"),
-                        )
-                        .await;
-                }
+            };
+            for message in dropped {
+                self.client.log_message(MessageType::WARNING, message).await;
+            }
+            if !roots.is_empty() {
+                self.client
+                    .log_message(
+                        MessageType::INFO,
+                        format!("Parent mods (load order): {roots:?}"),
+                    )
+                    .await;
                 let mut cfg = self.state.config.write();
                 cfg.parent_roots = roots;
                 cfg.refresh_roots();
