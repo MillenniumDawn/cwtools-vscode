@@ -32,6 +32,12 @@ function serverProvidesGraphData(client: LanguageClient): boolean {
 	);
 }
 
+function serverProvidesGraphEntityAtPosition(client: LanguageClient): boolean {
+	return client.initializeResult?.capabilities.executeCommandProvider?.commands?.includes(
+		serverCommand("getGraphEntityAtPosition"),
+	) ?? false;
+}
+
 function serverProvidesFixAll(client: LanguageClient): boolean {
 	return fixAllWorkspaceAvailable(
 		client.initializeResult?.capabilities.executeCommandProvider?.commands,
@@ -61,6 +67,11 @@ export function publishCommandAvailability(client: LanguageClient): void {
 	);
 	void commands.executeCommand(
 		"setContext",
+		"cwtoolsGraphFromHereAvailable",
+		serverProvidesGraphData(client) && serverProvidesGraphEntityAtPosition(client),
+	);
+	void commands.executeCommand(
+		"setContext",
 		"cwtoolsFixAllAvailable",
 		serverProvidesFixAll(client),
 	);
@@ -78,6 +89,7 @@ export function publishCommandAvailability(client: LanguageClient): void {
 
 export function clearCommandAvailability(): void {
 	void commands.executeCommand("setContext", "cwtoolsGraphAvailable", false);
+	void commands.executeCommand("setContext", "cwtoolsGraphFromHereAvailable", false);
 	void commands.executeCommand("setContext", "cwtoolsFixAllAvailable", false);
 	void commands.executeCommand(
 		"setContext",
@@ -223,6 +235,8 @@ export function registerCommands(
 		}),
 	);
 	let currentGraphDepth = 3;
+	let currentGraphRoot: string | undefined;
+	let currentGraphEntityType: string | undefined;
 	// Show graph, JSON imports and reload restoration share this generation.
 	// Imports commit on file selection, before reading; cancelled dialogs leave
 	// pending work eligible to finish. Only the latest committed request may
@@ -233,7 +247,10 @@ export function registerCommands(
 	const reportNoGraph = (): void => {
 		window.showInformationMessage(l10n.t("CWTools: no graph for this file."));
 	};
-	const showGraph = async function () {
+	const showGraph = async function (
+		rootInstance?: string,
+		rootEntityType?: string,
+	) {
 		if (!requireRunningServer(client)) {
 			return;
 		}
@@ -245,18 +262,20 @@ export function registerCommands(
 			);
 			return;
 		}
-		const entityType = tracker.getLatestType();
+		const entityType = rootEntityType ?? tracker.getLatestType();
 		if (!entityType) {
 			reportNoGraph();
 			return;
 		}
 		const depth = currentGraphDepth;
+		currentGraphRoot = rootInstance;
+		currentGraphEntityType = rootInstance ? entityType : undefined;
 		const requestId = ++latestGraphRequest;
 		let loaded: [GraphPanelModule, GraphData];
 		try {
 			loaded = await Promise.all([
 				import("./graphPanel"),
-				getGraphData(entityType, depth),
+				getGraphData(entityType, depth, currentGraphRoot),
 			]);
 		} catch (err) {
 			if (requestId !== latestGraphRequest) {
@@ -283,11 +302,57 @@ export function registerCommands(
 			source: "server",
 			entityType,
 			depth,
+			...(currentGraphRoot ? { rootInstance: currentGraphRoot } : {}),
 		});
 	};
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showGraph", async () => {
 			await showGraph();
+		}),
+	);
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.showGraphFromHere", async () => {
+			if (!requireRunningServer(client)) return;
+			if (!serverProvidesGraphData(client)) {
+				window.showWarningMessage(
+					l10n.t(
+						"CWTools: this language server doesn't provide graph data, so a graph can only be opened from a saved export. Run 'cwtools: Recreate graph from json'.",
+					),
+				);
+				return;
+			}
+			if (!serverProvidesGraphEntityAtPosition(client)) {
+				window.showWarningMessage(
+					l10n.t("CWTools: this language server doesn't support graphs from the cursor. Update the language server to enable this command."),
+				);
+				return;
+			}
+			const editor = window.activeTextEditor;
+			if (!editor) {
+				reportNoGraph();
+				return;
+			}
+			const position = editor.selection.active;
+			const requestGeneration = ++latestGraphRequest;
+			const entity = await commands.executeCommand<{
+				entityType?: unknown;
+				name?: unknown;
+			}>(
+				serverCommand("getGraphEntityAtPosition"),
+				editor.document.uri.toString(),
+				position.line,
+				position.character,
+			);
+			if (requestGeneration !== latestGraphRequest) return;
+			const root = typeof entity?.name === "string" ? entity.name : undefined;
+			const rootType = typeof entity?.entityType === "string" ? entity.entityType : undefined;
+			if (!root || !rootType) {
+				if (requestGeneration !== latestGraphRequest) return;
+				reportNoGraph();
+				return;
+			}
+			if (requestGeneration !== latestGraphRequest) return;
+			await showGraph(root, rootType);
 		}),
 	);
 	context.subscriptions.push(
@@ -319,7 +384,7 @@ export function registerCommands(
 			const depth = parseGraphDepth(res);
 			if (depth !== undefined) {
 				currentGraphDepth = depth;
-				await showGraph();
+				await showGraph(currentGraphRoot, currentGraphEntityType);
 			}
 		}),
 	);
@@ -338,6 +403,8 @@ export function registerCommands(
 			if (requestId !== latestGraphRequest) {
 				return;
 			}
+			currentGraphRoot = undefined;
+			currentGraphEntityType = undefined;
 			gp.GraphPanel.create(context.extensionPath);
 			gp.GraphPanel.currentPanel!.initialiseGraph(data, wheelSensitivity(), {
 				source: "json",
@@ -372,16 +439,22 @@ export function registerCommands(
 									return;
 								}
 								const depth = persisted.depth ?? currentGraphDepth;
-								const data = await getGraphData(persisted.entityType, depth);
+								const data = await getGraphData(persisted.entityType, depth, persisted.rootInstance);
 								if (requestId !== latestGraphRequest) {
 									return;
 								}
+								currentGraphDepth = depth;
+								currentGraphRoot = persisted.rootInstance;
+								currentGraphEntityType = currentGraphRoot ? persisted.entityType : undefined;
 								panel.initialiseGraph(data, wheelSensitivity(), {
 									source: "server",
 									entityType: persisted.entityType,
 									depth,
+									...(currentGraphRoot ? { rootInstance: currentGraphRoot } : {}),
 								});
 							} else if (persisted?.source === "json") {
+								currentGraphRoot = undefined;
+								currentGraphEntityType = undefined;
 								const uri = await window.showOpenDialog({
 									filters: { Json: ["json"] },
 								});

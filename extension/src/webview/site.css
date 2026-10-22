@@ -35,6 +35,12 @@ text {
 	position: relative;
 	flex: 1;
 }
+#graph-notice:not([hidden]) {
+	padding: 0.5em 0.75em;
+	margin: 0.25em;
+	color: var(--vscode-editorWarning-foreground);
+	background: var(--vscode-editorWarning-background);
+}
 .cy-container {
 	flex: 1;
 	flex-direction: row;

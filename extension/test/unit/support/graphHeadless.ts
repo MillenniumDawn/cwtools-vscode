@@ -24,6 +24,7 @@ const state = vi.hoisted(() => ({
 		offsetWidth: 800, offsetHeight: 600, childNodes: [] as unknown[],
 		appendChild: vi.fn(), replaceChildren: vi.fn(),
 	},
+	graphNotice: { textContent: "", hidden: true },
 	tips: [] as { show: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; setProps: (next: Record<string, unknown>) => void; props: Record<string, unknown> }[],
 }));
 
@@ -116,7 +117,7 @@ vi.mock("tippy.js", () => ({
 export async function installGraph() {
 	vi.stubGlobal("document", {
 		documentElement: { style: { getPropertyValue: () => "#fff" } },
-		getElementById: () => state.container,
+		getElementById: (id: string) => id === "graph-notice" ? state.graphNotice : state.container,
 		createElement: (tag: string) => {
 			const element = {
 				style: {}, textContent: "", className: "", children: [] as unknown[],
@@ -175,6 +176,8 @@ export function resetGraphState() {
 	state.layoutEvents.length = 0;
 	state.postMessage.mockClear();
 	state.tips.length = 0;
+	state.graphNotice.textContent = "";
+	state.graphNotice.hidden = true;
 }
 
 export { state };

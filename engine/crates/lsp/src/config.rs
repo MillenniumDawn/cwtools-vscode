@@ -668,6 +668,7 @@ impl Backend {
                         "reindexWorkspace".to_string(),
                         "validateWorkspace".to_string(),
                         "getGraphData".to_string(),
+                        "getGraphEntityAtPosition".to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: Some(true),
@@ -1269,6 +1270,9 @@ impl Backend {
             "reindexWorkspace" => self.reindex_workspace_command(token).await,
             "validateWorkspace" => self.validate_workspace_command(token).await,
             "getGraphData" => self.get_graph_data(&params.arguments).await,
+            "getGraphEntityAtPosition" => {
+                self.get_graph_entity_at_position(&params.arguments).await
+            }
             other => Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
                 "unknown command: {other}"
             ))),

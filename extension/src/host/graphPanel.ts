@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { writeFile } from "fs/promises";
 import * as crypto from "crypto";
-import type { GraphData, GraphPanelState } from "../common/graphTypes";
+import { graphTruncationNotice, type GraphData, type GraphPanelState } from "../common/graphTypes";
 import { logError, logWarn } from "./logger";
 import { confirmOpen } from "./trustedPaths";
 
@@ -24,6 +24,7 @@ type GraphMessage =
 			data: GraphData;
 			settings: { wheelSensitivity: number };
 			persist?: GraphPanelState;
+			notice?: string;
 	  };
 type WebviewMessage =
 	| { command: "goToFile"; uri: string; line: number; column: number }
@@ -263,7 +264,13 @@ export class GraphPanel {
 		const msg: GraphMessage =
 			typeof data === "string"
 				? { command: "importJson", json: data, settings, persist }
-				: { command: "go", data: data, settings, persist };
+			: {
+					command: "go",
+					data,
+					settings,
+					persist,
+					notice: graphTruncationNotice(data),
+				};
 
 		if (this._state === State.Done) {
 			this._panel.webview.postMessage(msg);
@@ -335,6 +342,7 @@ export class GraphPanel {
     </head>
 <body>
     <div class="vbox viewport body-content">
+        <div id="graph-notice" role="status" hidden></div>
 
         <div class="hbox cy-container">
     <div class="cy-row" id="cy"></div>

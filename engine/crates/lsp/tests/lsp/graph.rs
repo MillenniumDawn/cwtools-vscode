@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::common::{TestServer, storm_base, storm_builder, storm_start};
+use crate::common::{TestServer, client_spelling, storm_base, storm_builder, storm_start};
 
 /// A focus type whose instances reference each other, plus a decision type that
 /// references a focus. Both reference keys sit at depth 1 of a type rule
@@ -154,6 +154,52 @@ fn graph_data_response(files: &[(&str, &str)], arguments: Value) -> Value {
 }
 
 #[test]
+fn test_get_graph_entity_at_position_uses_indexed_entity_identity() {
+    let mut builder = storm_builder().rules_file("r.cwt", GRAPH_RULES);
+    for (rel, content) in GRAPH_FILES {
+        builder = builder.file(rel, *content);
+    }
+    let mut server = storm_start(builder);
+    let focus_uri = server.uri("common/national_focus/tree.txt");
+    let encoded_focus_uri = client_spelling(&focus_uri).replace("tree.txt", "%74ree.txt");
+    let decision_uri = server.uri("common/decisions/d.txt");
+    let focus = server.call(
+        "workspace/executeCommand",
+        json!({
+            "command": "getGraphEntityAtPosition",
+            "arguments": [focus_uri, 6, 8]
+        }),
+    );
+    assert_eq!(
+        focus["result"],
+        json!({ "entityType": "focus", "name": "FOCUS_B" })
+    );
+    let encoded_focus = server.call(
+        "workspace/executeCommand",
+        json!({
+            "command": "getGraphEntityAtPosition",
+            "arguments": [encoded_focus_uri, 6, 8]
+        }),
+    );
+    assert_eq!(encoded_focus["result"], focus["result"]);
+
+    // A keyed definition is resolved from the index even though its AST name
+    // comes from its key rather than an `id` field.
+    let decision = server.call(
+        "workspace/executeCommand",
+        json!({
+            "command": "getGraphEntityAtPosition",
+            "arguments": [decision_uri, 1, 4]
+        }),
+    );
+    assert_eq!(
+        decision["result"],
+        json!({ "entityType": "decision", "name": "my_decision" })
+    );
+    server.stop();
+}
+
+#[test]
 fn test_get_graph_data_is_advertised_in_capabilities() {
     // graphAvailability.ts greys the whole graph feature out unless this exact
     // name is in executeCommandProvider.commands.
@@ -179,6 +225,19 @@ fn test_get_graph_data_returns_client_graph_shape() {
         response["error"]
     );
     assert_graph_data_shape(&response["result"]);
+
+    // Pin the complete legacy payload with no root argument. Normalize only
+    // the temporary workspace prefix so this remains byte-for-byte stable.
+    let mut legacy = response["result"].clone();
+    for node in legacy.as_array_mut().unwrap() {
+        let filename = node["location"]["filename"].as_str().unwrap();
+        let relative = filename.split_once("/common/").unwrap().1;
+        node["location"]["filename"] = format!("/workspace/common/{relative}").into();
+    }
+    assert_eq!(
+        serde_json::to_string(&legacy).unwrap(),
+        r#"[{"abbreviation":"F","details":[{"key":"file","values":["common/national_focus/tree.txt"]}],"entityType":"focus","entityTypeDisplayName":"Focus","id":"FOCUS_A","isPrimary":true,"location":{"column":1,"filename":"/workspace/common/national_focus/tree.txt","line":1},"references":[]},{"abbreviation":"F","details":[{"key":"file","values":["common/national_focus/tree.txt"]}],"entityType":"focus","entityTypeDisplayName":"Focus","id":"FOCUS_B","isPrimary":true,"location":{"column":1,"filename":"/workspace/common/national_focus/tree.txt","line":5},"references":[{"isOutgoing":true,"key":"FOCUS_A"}]},{"abbreviation":"F","details":[{"key":"file","values":["common/national_focus/tree.txt"]}],"entityType":"focus","entityTypeDisplayName":"Focus","id":"FOCUS_C","isPrimary":true,"location":{"column":1,"filename":"/workspace/common/national_focus/tree.txt","line":10},"references":[{"isOutgoing":true,"key":"FOCUS_B"}]},{"abbreviation":"D","details":[{"key":"file","values":["common/decisions/d.txt"]}],"entityType":"decision","entityTypeDisplayName":"Decision","id":"my_decision","isPrimary":false,"location":{"column":1,"filename":"/workspace/common/decisions/d.txt","line":1},"references":[{"isOutgoing":true,"key":"FOCUS_C","label":"focus"}]}]"#
+    );
 
     let nodes = response["result"].as_array().unwrap();
     let mut ids: Vec<&str> = nodes.iter().map(|n| n["id"].as_str().unwrap()).collect();
@@ -253,6 +312,40 @@ fn test_get_graph_data_depth_bounds_the_walk() {
 }
 
 #[test]
+fn test_get_graph_data_optional_root_returns_only_reachable_subset() {
+    let unrooted = graph_data_response(GRAPH_FILES, json!(["focus", 3]));
+    let rooted = graph_data_response(GRAPH_FILES, json!(["focus", 3, "focus_b"]));
+    let all: Vec<&str> = unrooted["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["id"].as_str().unwrap())
+        .collect();
+    let selected: Vec<&str> = rooted["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(all, ["FOCUS_A", "FOCUS_B", "FOCUS_C", "my_decision"]);
+    assert_eq!(selected, ["FOCUS_B", "FOCUS_C", "my_decision"]);
+    assert!(selected.iter().all(|id| all.contains(id)));
+
+    let shallow = graph_data_response(GRAPH_FILES, json!(["focus", 1, "FOCUS_B"]));
+    let shallow_ids: Vec<&str> = shallow["result"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(shallow_ids, ["FOCUS_B", "FOCUS_C"]);
+    assert_eq!(
+        graph_edges(shallow["result"].as_array().unwrap()),
+        [("FOCUS_C".to_string(), "FOCUS_B".to_string()),]
+    );
+}
+
+#[test]
 fn test_get_graph_data_rejects_bad_requests() {
     let mut builder = storm_builder().rules_file("r.cwt", GRAPH_RULES);
     for (rel, content) in GRAPH_FILES {
@@ -261,13 +354,16 @@ fn test_get_graph_data_rejects_bad_requests() {
     let mut server = storm_start(builder);
 
     // (arguments, a phrase the error message must name)
-    let cases: [(Value, &str); 6] = [
+    let cases: [(Value, &str); 9] = [
         (json!([]), "entity type"),
         (json!([42, 3]), "entity type"),
         (json!(["focus"]), "missing depth"),
         (json!(["focus", 0]), "at least 1"),
         (json!(["focus", -2]), "at least 1"),
         (json!(["not_a_type", 3]), "unknown entity type"),
+        (json!(["focus", 3, "NO_SUCH_FOCUS"]), "no instance named"),
+        (json!(["focus", 3, ""]), "non-empty string"),
+        (json!(["focus", 3, 42]), "non-empty string"),
     ];
     for (arguments, phrase) in &cases {
         let resp = server.call(

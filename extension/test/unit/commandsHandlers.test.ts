@@ -48,6 +48,11 @@ const state = vi.hoisted(() => {
 		showErrorMessage: vi.fn(),
 		showInputBox: vi.fn(),
 		showSaveDialog: vi.fn(),
+		activeTextEditor: {
+			selection: { active: { line: 2, character: 12 } },
+			document: { uri: { toString: () => "file:///test.txt" } },
+		},
+		resolvedGraphEntity: undefined as { entityType: string; name: string } | undefined,
 		writeFile: vi.fn(),
 		initialiseGraph,
 	};
@@ -66,6 +71,7 @@ vi.mock("vscode", async (importOriginal) => {
 		},
 		window: {
 			...original.window,
+			get activeTextEditor() { return state.activeTextEditor; },
 			withProgress: state.withProgress,
 			showInformationMessage: state.showInformationMessage,
 			showOpenDialog: state.showOpenDialog,
@@ -183,18 +189,22 @@ function deferred<T>(): Deferred<T> {
 interface GraphRequest {
 	entityType: unknown;
 	depth: unknown;
+	rootInstance: unknown;
 	result: Deferred<unknown[]>;
 }
 
 function mockGraphRequests(): GraphRequest[] {
 	const requests: GraphRequest[] = [];
 	state.executeCommand.mockImplementation(
-		(command: unknown, entityType: unknown, depth: unknown) => {
+		(command: unknown, entityType: unknown, depth: unknown, rootInstance: unknown) => {
+			if (command === "getGraphEntityAtPosition") {
+				return Promise.resolve(state.resolvedGraphEntity);
+			}
 			if (command !== "getGraphData") {
 				return undefined;
 			}
 			const result = deferred<unknown[]>();
-			requests.push({ entityType, depth, result });
+			requests.push({ entityType, depth, rootInstance, result });
 			return result.promise;
 		},
 	);
@@ -208,6 +218,7 @@ const bytes = (text: string) => new TextEncoder().encode(text);
 suite("registered workspace commands", () => {
 	beforeEach(() => {
 		state.executeCommand.mockReset();
+		state.resolvedGraphEntity = undefined;
 		state.showInputBox.mockReset();
 		state.showOpenDialog.mockReset();
 		state.readFile.mockReset();
@@ -221,6 +232,7 @@ suite("registered workspace commands", () => {
 
 		assert.deepStrictEqual(state.executeCommand.mock.calls, [
 			["setContext", "cwtoolsGraphAvailable", false],
+			["setContext", "cwtoolsGraphFromHereAvailable", false],
 			["setContext", "cwtoolsFixAllAvailable", false],
 			["setContext", "cwtoolsFormatWorkspaceAvailable", false],
 			["setContext", "cwtoolsValidateWorkspaceAvailable", false],
@@ -228,6 +240,51 @@ suite("registered workspace commands", () => {
 	});
 
 	suite("graph requests", () => {
+		test("showGraphFromHere resolves the indexed entity at the cursor and preserves it at a new depth", async () => {
+			const requests = mockGraphRequests();
+			state.resolvedGraphEntity = { entityType: "focus", name: "FOCUS_B" };
+			register(fakeClient(["getGraphData", "getGraphEntityAtPosition"]), "focus");
+
+			const pending = handler("cwtools.showGraphFromHere")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			assert.deepStrictEqual(state.executeCommand.mock.calls[0], [
+				"getGraphEntityAtPosition",
+				"file:///test.txt",
+				2,
+				12,
+			]);
+			assert.deepStrictEqual(
+				[requests[0].entityType, requests[0].depth, requests[0].rootInstance],
+				["focus", 3, "FOCUS_B"],
+			);
+			requests[0].result.resolve([{ id: "FOCUS_B" }]);
+			await pending;
+			state.showInputBox.mockResolvedValue("1");
+			const recut = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+			assert.deepStrictEqual(
+				[requests[1].entityType, requests[1].depth, requests[1].rootInstance],
+				["focus", 1, "FOCUS_B"],
+			);
+			requests[1].result.resolve([{ id: "FOCUS_B" }]);
+			await recut;
+		});
+
+		test("uses the indexed type for an arbitrary-key entity in a multi-type file", async () => {
+			const requests = mockGraphRequests();
+			state.resolvedGraphEntity = { entityType: "decision", name: "my_decision" };
+			register(fakeClient(["getGraphData", "getGraphEntityAtPosition"]), "focus");
+
+			const pending = handler("cwtools.showGraphFromHere")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			assert.deepStrictEqual(
+				[requests[0].entityType, requests[0].rootInstance],
+				["decision", "my_decision"],
+			);
+			requests[0].result.resolve([{ id: "my_decision" }]);
+			await pending;
+		});
+
 		test("showGraph reports that the server stopped instead of loading graph data", async () => {
 			const client = fakeClient(["getGraphData"]);
 			client.isRunning.mockReturnValue(false);

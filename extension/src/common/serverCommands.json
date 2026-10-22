@@ -7,6 +7,7 @@
   "genlocall": true,
   "reloadrulesconfig": true,
   "getGraphData": true,
+  "getGraphEntityAtPosition": true,
   "fixAllWorkspace": true,
   "formatWorkspace": true,
   "validateWorkspace": true
