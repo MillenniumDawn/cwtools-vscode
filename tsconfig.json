@@ -5,13 +5,9 @@
 		"noUnusedParameters": true,
 		"target": "es2020",
 		"module": "commonjs",
-		"moduleResolution": "node",
+		"moduleResolution": "bundler",
 		"resolveJsonModule": true,
-		"baseUrl": ".",
-		"paths": {
-			"vscode-languageclient/node": ["node_modules/vscode-languageclient/lib/node/main"],
-			"vscode-languageserver-protocol": ["node_modules/vscode-languageserver-protocol/lib/common/api"]
-		},
+		"types": ["node", "mocha"],
 		"rootDir": "extension",
 		"outDir": "dist/extension/bin/client",
 		"lib": [ "es2020", "dom" ],
