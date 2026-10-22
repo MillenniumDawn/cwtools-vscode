@@ -14,6 +14,7 @@
 * Discover parent mods from descriptor dependencies when `cwtools.parentMods` is empty. Match exact names in launcher descriptors and skip missing or ambiguous names with a warning. Preserve EU5's game identifier in the client handshake so its dependencies resolve too. (#818)
 * Auto-discover the script data root inside `game/` for CK3, Victoria 3, Imperator: Rome and EU5 installs, so vanilla definitions resolve with the converted rules paths. (#1106)
 * Allow graph requests to start from one named entity and follow references from there, while preserving the existing type-wide graph when no root is supplied. (#606)
+* Record the folder-move source trace for #1097. No runtime change is made; folder event counts and CW113 clearance still need a reproduction. (#1097)
 
 #### Tooling
 
