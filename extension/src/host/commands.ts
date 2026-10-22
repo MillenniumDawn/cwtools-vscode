@@ -347,11 +347,9 @@ export function registerCommands(
 			const root = typeof entity?.name === "string" ? entity.name : undefined;
 			const rootType = typeof entity?.entityType === "string" ? entity.entityType : undefined;
 			if (!root || !rootType) {
-				if (requestGeneration !== latestGraphRequest) return;
 				reportNoGraph();
 				return;
 			}
-			if (requestGeneration !== latestGraphRequest) return;
 			await showGraph(root, rootType);
 		}),
 	);
@@ -453,8 +451,6 @@ export function registerCommands(
 									...(currentGraphRoot ? { rootInstance: currentGraphRoot } : {}),
 								});
 							} else if (persisted?.source === "json") {
-								currentGraphRoot = undefined;
-								currentGraphEntityType = undefined;
 								const uri = await window.showOpenDialog({
 									filters: { Json: ["json"] },
 								});
@@ -473,6 +469,8 @@ export function registerCommands(
 								if (requestId !== latestGraphRequest) {
 									return;
 								}
+								currentGraphRoot = undefined;
+								currentGraphEntityType = undefined;
 								// Render in place: create() would reveal the revived panel in
 								// the active editor's column. Use it only once the panel is gone.
 								if (gp.GraphPanel.currentPanel !== panel) {

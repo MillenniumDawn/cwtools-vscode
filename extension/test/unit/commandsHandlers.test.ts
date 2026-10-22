@@ -641,6 +641,32 @@ suite("registered workspace commands", () => {
 			assert.deepStrictEqual(state.initialiseGraph.mock.calls, []);
 		});
 
+		test("preserves a pending rooted graph when JSON restoration is cancelled", async () => {
+			const requests = mockGraphRequests();
+			state.resolvedGraphEntity = { entityType: "focus", name: "FOCUS_B" };
+			const serializer = await serializerFor(
+				fakeClient(["getGraphData", "getGraphEntityAtPosition"]), "focus",
+			);
+			const pending = handler("cwtools.showGraphFromHere")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 1));
+			const selection = deferred<undefined>();
+			state.showOpenDialog.mockReturnValue(selection.promise);
+			const restoring = serializer.deserializeWebviewPanel(webviewPanel, { source: "json" });
+			requests[0].result.resolve([{ id: "FOCUS_B" }]);
+			await pending;
+			assert.deepStrictEqual(state.initialiseGraph.mock.calls[0][2], {
+				source: "server", entityType: "focus", depth: 3, rootInstance: "FOCUS_B",
+			});
+			selection.resolve(undefined);
+			await restoring;
+			state.showInputBox.mockResolvedValue("1");
+			const recut = handler("cwtools.setGraphDepth")();
+			await vi.waitFor(() => assert.strictEqual(requests.length, 2));
+			assert.strictEqual(requests[1].rootInstance, "FOCUS_B");
+			requests[1].result.resolve([]);
+			await recut;
+		});
+
 		test("falls back to the latest entity type and current depth when state is absent", async () => {
 			const requests = mockGraphRequests();
 			const client = fakeClient(["getGraphData"]);
