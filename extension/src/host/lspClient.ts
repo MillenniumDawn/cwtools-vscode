@@ -637,7 +637,7 @@ export function createLanguageClient(
 			isExcludedWatchedPath = createWatchedPathExcluder(startupRoots, currentRulesCache);
 			const ignoreOptions = readIgnoreOptions();
 			return {
-				language: cfg.language === "eu5" ? "paradox" : cfg.language,
+				language: cfg.language,
 				rulesCache: currentRulesCache,
 				...readLiveServerSettings(),
 				// Inlay hints. The server reads both at initialize only — neither key is

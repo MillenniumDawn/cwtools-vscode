@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
-use crate::common::{TestServer, diagnostics_of, path_uri};
+use crate::common::{TestServer, definition_locations, diagnostics_of, path_uri};
 
 const PARENT_MOD_RULES: &str = r#"
 types = {
@@ -105,6 +105,48 @@ fn decision_diagnostics(published: &HashMap<String, Vec<Value>>) -> String {
         .find(|(uri, _)| uri.ends_with("common/decisions/shared.txt"))
         .expect("the submod decision was never published");
     diagnostic_text(diags)
+}
+
+#[test]
+fn test_eu5_descriptor_dependencies_resolve_without_explicit_parents() {
+    let home = tempfile::tempdir().unwrap();
+    let documents = if cfg!(target_os = "linux") {
+        ".local/share"
+    } else {
+        "Documents"
+    };
+    let user = home
+        .path()
+        .join(documents)
+        .join("Paradox Interactive/Europa Universalis V");
+    let effects = user.join("mod/parent/common/scripted_effects");
+    std::fs::create_dir_all(&effects).unwrap();
+    std::fs::write(effects.join("parent.txt"), "parent_eff = { }\n").unwrap();
+    std::fs::write(
+        user.join("mod/parent.mod"),
+        "name=Parent\npath=\"mod/parent\"\n",
+    )
+    .unwrap();
+    let rel = "common/decisions/child.txt";
+    let source = "child = {\n    complete_effect = {\n        parent_eff = yes\n    }\n}\n";
+    let mut server = TestServer::builder()
+        .rules(PARENT_MOD_RULES)
+        .file("descriptor.mod", "name=Child\ndependencies={ Parent }\n")
+        .file(rel, source)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .init_opts(json!({ "language": "eu5" }))
+        .spawn();
+    server.initialized();
+    server.open_and_wait(rel, source);
+    let locations = definition_locations(&mut server, rel, 2, 12, 50);
+    server.stop();
+    assert!(
+        locations
+            .iter()
+            .any(|(uri, _)| uri.ends_with("scripted_effects/parent.txt")),
+        "EU5 dependency should resolve from its launcher descriptor: {locations:?}"
+    );
 }
 
 #[test]
