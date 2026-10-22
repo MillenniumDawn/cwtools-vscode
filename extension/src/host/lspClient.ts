@@ -354,8 +354,9 @@ export function createLanguageClient(
 		},
 	};
 
-	// The server dynamically registers **/* for file changes. Keep a client
-	// watcher for .cwt so changes can reload rules and trigger structural lint.
+	// The server registers its own **/* watcher, which also carries .cwt edits
+	// to it. This one only drives the rules reload below for a rules cache
+	// inside the workspace.
 	const cwtWatcher = workspace.createFileSystemWatcher(CWT_WATCH_GLOB);
 	context.subscriptions.push(cwtWatcher);
 

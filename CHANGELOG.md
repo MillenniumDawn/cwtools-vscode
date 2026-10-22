@@ -2,7 +2,7 @@
 
 #### Extension
 
-* Stop sending duplicate script, localisation and resource file events after the server registers its own workspace watcher. Keep client-side `.cwt` watching for rule-file lint and reload. (#1107)
+* Stop sending duplicate script, localisation, resource and `.cwt` file events after the server registers its own workspace watcher. The client still watches `.cwt` files to reload the rules. (#1107)
 
 ### 4.0.3
 
