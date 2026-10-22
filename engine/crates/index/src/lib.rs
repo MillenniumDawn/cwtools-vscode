@@ -79,6 +79,7 @@ pub fn leaf_value_string(value: &Value, table: &StringTable) -> String {
 /// from the string table (no allocation); numeric/bool values are formatted into
 /// a scratch buffer that is owned by this call. Clauses yield `""`. Internal
 /// allocation-free counterpart to [`leaf_value_string`] for the index collectors.
+/// For string values, `f` runs under the table's read lock and must not re-enter it.
 pub(crate) fn with_leaf_value_str<R>(
     value: &Value,
     table: &StringTable,
