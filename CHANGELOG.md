@@ -9,6 +9,7 @@
 
 #### Engine
 
+* Document the ownership and callback-lock differences behind the four helper pairs reviewed for #914; keep the helpers local where consolidation would add API surface or change callback behavior. (#914)
 * Scripted effects and triggers answer call hierarchy requests: prepare from a definition or a call site, including case-variant references, then incoming and outgoing calls. (#613)
 * Discover parent mods from descriptor dependencies when `cwtools.parentMods` is empty. Match exact names in launcher descriptors and skip missing or ambiguous names with a warning. Preserve EU5's game identifier in the client handshake so its dependencies resolve too. (#818)
 * Auto-discover the script data root inside `game/` for CK3, Victoria 3, Imperator: Rome and EU5 installs, so vanilla definitions resolve with the converted rules paths. (#1106)
