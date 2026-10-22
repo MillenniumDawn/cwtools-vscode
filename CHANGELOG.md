@@ -3,6 +3,7 @@
 #### Tooling
 
 * Build and typecheck the client with TypeScript 7.0. `tsc` comes from the `@typescript/native` alias, and `typescript` now aliases `@typescript/typescript6`, because typescript-eslint still needs the TypeScript 6 API that 7.0 does not ship. `tsconfig.json` drops the `node10` resolution and `baseUrl` that 7.0 removed and resolves through package `exports` with `bundler`, so the `paths` workaround for the language client and its two lint suppressions are gone. It also lists its global `types`, since 7.0 no longer loads every `@types` package, and the webview's CSS import gets a module declaration for the side-effect import check that is now on by default. (#1109)
+* Auto-discover the script data root inside `game/` for CK3, Victoria 3, Imperator: Rome and EU5 installs, so vanilla definitions resolve with the converted rules paths. (#1106)
 
 ### 4.0.3
 

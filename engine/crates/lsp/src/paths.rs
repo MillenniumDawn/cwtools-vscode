@@ -409,10 +409,24 @@ pub(crate) fn discover_vanilla_dir(game: &str) -> Option<std::path::PathBuf> {
         "C:/Program Files/Steam/steamapps/common",
     ));
 
-    roots
+    let install_dir = roots
         .into_iter()
         .map(|r| r.join(folder))
-        .find(|p| p.is_dir())
+        .find(|p| p.is_dir())?;
+
+    // These games keep their script data under `game/`, while the converted
+    // rules paths are relative to that data root (the converter strips a
+    // leading `game/` from paths in the upstream configs).
+    if matches!(game, "ck3" | "vic3" | "ir" | "eu5") {
+        let game_dir = install_dir.join("game");
+        if cwtools_file_manager::classify_directory(&game_dir)
+            == cwtools_file_manager::DirectoryType::Mod
+        {
+            return Some(game_dir);
+        }
+    }
+
+    Some(install_dir)
 }
 
 pub(crate) fn strip_loc_comment(s: &str) -> &str {
