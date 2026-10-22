@@ -9,6 +9,7 @@
 
 #### Engine
 
+* Document the ownership and callback-lock differences behind the four helper pairs reviewed for #914; keep the helpers local where consolidation would add API surface or change callback behavior. (#914)
 * Scripted effects and triggers answer call hierarchy requests: prepare from a definition or a call site, including case-variant references, then incoming and outgoing calls. (#613)
 * Discover parent mods from descriptor dependencies when `cwtools.parentMods` is empty. Match exact names in launcher descriptors and skip missing or ambiguous names with a warning. Preserve EU5's game identifier in the client handshake so its dependencies resolve too. (#818)
 * Auto-discover the script data root inside `game/` for CK3, Victoria 3, Imperator: Rome and EU5 installs, so vanilla definitions resolve with the converted rules paths. (#1106)
@@ -17,9 +18,6 @@
 #### Tooling
 
 * Build and typecheck the client with TypeScript 7.0. `tsc` comes from the `@typescript/native` alias, and `typescript` now aliases `@typescript/typescript6`, because typescript-eslint still needs the TypeScript 6 API that 7.0 does not ship. `tsconfig.json` drops the `node10` resolution and `baseUrl` that 7.0 removed and resolves through package `exports` with `bundler`, so the `paths` workaround for the language client and its two lint suppressions are gone. It also lists its global `types`, since 7.0 no longer loads every `@types` package, and the webview's CSS import gets a module declaration for the side-effect import check that is now on by default. (#1109)
-#### Engine
-
-* Document the ownership and callback-lock differences behind the four helper pairs reviewed for #914; keep the helpers local where consolidation would add API surface or change callback behavior. (#914)
 
 ### 4.0.3
 
