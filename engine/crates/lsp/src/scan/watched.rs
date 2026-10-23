@@ -26,12 +26,31 @@ impl Backend {
     #[tracing::instrument(skip_all)]
     pub(crate) async fn did_change_watched_files_impl(&self, params: DidChangeWatchedFilesParams) {
         let mut enqueued = false;
+        let mut baseline_changed = false;
+        let baseline_files = self.state.baseline.lock().metadata_files();
         for event in params.changes {
+            let event_path = event.uri.to_file_path().ok();
+            if let Some(path) = event_path.as_ref() {
+                let roots = self.state.config.read().editable_roots.clone();
+                if let Some((_, configured)) = baseline_files.iter().find(|(target, _)| {
+                    target.file_name() == path.file_name()
+                        && crate::access::editable_target(path, &roots).ok().as_ref()
+                            == Some(target)
+                }) {
+                    self.state.baseline.lock().invalidate_capture(Some(path));
+                    baseline_changed |= configured;
+                    continue;
+                }
+            }
             let uri = event.uri.to_string();
             if is_stray_loc_file(&uri) {
                 tracing::debug!(%uri, "watched localisation file outside a localisation folder; skipping");
                 continue;
             }
+            self.state
+                .baseline
+                .lock()
+                .invalidate_capture(event_path.as_deref());
             match event.typ {
                 FileChangeType::DELETED => {
                     tracing::debug!(%uri, "watched file deleted; queued");
@@ -52,6 +71,12 @@ impl Backend {
                     enqueued = true;
                 }
                 _ => {}
+            }
+        }
+        if baseline_changed {
+            let setting = self.state.baseline.lock().setting.clone();
+            if self.reload_baseline(setting).await {
+                self.refresh_baseline_diagnostics().await;
             }
         }
         if enqueued {

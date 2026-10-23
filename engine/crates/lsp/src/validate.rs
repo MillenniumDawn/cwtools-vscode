@@ -461,7 +461,7 @@ pub(crate) fn rule_parse_error_to_diagnostic(
 ) -> Diagnostic {
     let line = err.line.saturating_sub(1);
     let col = err.col as u32;
-    diagnostic_at(
+    let mut diagnostic = diagnostic_at(
         line,
         col,
         lines,
@@ -469,7 +469,11 @@ pub(crate) fn rule_parse_error_to_diagnostic(
         "cwtools-rules",
         Some(NumberOrString::String(err.code.to_string())),
         err.message.clone(),
-    )
+    );
+    if err.line == 0 {
+        diagnostic.data = Some(serde_json::json!({"baselineLine": 0}));
+    }
+    diagnostic
 }
 
 pub(crate) fn code_is_suppressed(code: Option<&NumberOrString>, ignored: &[String]) -> bool {
@@ -541,6 +545,10 @@ pub(crate) fn validation_error_to_diagnostic(
     }
     if let Some(fix) = &err.fix {
         diag.data = Some(crate::code_action::fix_to_data(fix));
+    }
+    if err.line == 0 {
+        diag.data.get_or_insert_with(|| serde_json::json!({}))["baselineLine"] =
+            serde_json::json!(0);
     }
     diag
 }
@@ -616,6 +624,12 @@ impl Backend {
     }
 
     pub(crate) fn is_ignored_uri(&self, uri: &str) -> bool {
+        let metadata = self.state.baseline.lock().has_metadata();
+        if metadata
+            && crate::access::file_uri_to_path(uri).is_some_and(|path| self.is_baseline_path(&path))
+        {
+            return true;
+        }
         let cfg = self.state.config.read();
         let logical = logical_path_from_uri(uri, &cfg.workspace_prefix);
         cwtools_file_manager::file_manager::is_ignored_path(
@@ -1077,23 +1091,10 @@ impl Backend {
         source_hash: Option<u64>,
         require_closed: bool,
     ) {
+        let prepared = self
+            .prepare_baseline(&uri, &diagnostics, version, source_hash)
+            .await;
         let _publication = self.state.diagnostic_publication_lock.lock().await;
-        {
-            let cfg = self.state.config.read();
-            if !cfg.ignored_error_codes.is_empty() {
-                diagnostics
-                    .retain(|d| !code_is_suppressed(d.code.as_ref(), &cfg.ignored_error_codes));
-            }
-        }
-        let entries: Vec<(String, cwtools_parser::fix::SpanEdit)> = diagnostics
-            .iter()
-            .flat_map(crate::code_action::fixable_span_edits)
-            .collect();
-        let content_hash = if entries.is_empty() {
-            None
-        } else {
-            source_hash
-        };
         {
             let docs = self.state.documents.lock();
             if require_closed && docs.contains_key(uri.as_str()) {
@@ -1112,20 +1113,34 @@ impl Backend {
                     return;
                 }
             }
-            {
-                let mut store = self.state.fixable_edits.lock();
-                if entries.is_empty() || content_hash.is_none() {
-                    store.remove(uri.as_str());
-                } else {
-                    store.insert(
-                        uri.as_str().to_string(),
-                        crate::FixableEdits {
-                            entries,
-                            version,
-                            content_hash,
-                        },
-                    );
-                }
+        }
+        let codes = self.state.config.read().ignored_error_codes.clone();
+        let Some(count) = self.state.baseline.lock().filter(
+            uri.as_str(),
+            &mut diagnostics,
+            prepared,
+            &codes,
+            true,
+        ) else {
+            return;
+        };
+        let entries: Vec<(String, cwtools_parser::fix::SpanEdit)> = diagnostics
+            .iter()
+            .flat_map(crate::code_action::fixable_span_edits)
+            .collect();
+        {
+            let mut store = self.state.fixable_edits.lock();
+            if entries.is_empty() || source_hash.is_none() {
+                store.remove(uri.as_str());
+            } else {
+                store.insert(
+                    uri.as_str().to_string(),
+                    crate::FixableEdits {
+                        entries,
+                        version,
+                        content_hash: source_hash,
+                    },
+                );
             }
         }
         #[cfg(test)]
@@ -1133,6 +1148,13 @@ impl Backend {
         self.client
             .publish_diagnostics(uri, diagnostics, version)
             .await;
+        if let Some(count) = count {
+            self.client
+                .send_notification::<crate::baseline_runtime::StatusNotification>(
+                    serde_json::json!({"suppressed": count}),
+                )
+                .await;
+        }
     }
 
     pub(crate) async fn publish_gated(

@@ -260,7 +260,7 @@ fn bench_snapshot_clone(c: &mut Criterion) {
 
     let Some(vanilla) = std::env::var_os("CWTOOLS_VANILLA").map(std::path::PathBuf::from) else {
         eprintln!(
-            "snapshot_clone/full_hoi4_md: skipped; set CWTOOLS_VANILLA to a HOI4 install containing common/events/localisation"
+            "snapshot_clone/full_hoi4_md: skipped; set CWTOOLS_VANILLA to a HOI4 install containing common, events and localisation"
         );
         return;
     };
@@ -271,7 +271,7 @@ fn bench_snapshot_clone(c: &mut Criterion) {
         );
         return;
     }
-    for relative in ["common/events", "localisation"] {
+    for relative in ["common", "events", "localisation"] {
         assert!(
             vanilla.join(relative).is_dir(),
             "snapshot_clone/full_hoi4_md: expected HOI4 content directory missing: {}",

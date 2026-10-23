@@ -1,5 +1,19 @@
 ### Unreleased
 
+#### Extension
+
+* Classify script files from automatically discovered parent mods as Paradox files, including files already open when discovery finishes. Keep parent roots separate from base-game roots and clear them when the server stops. (#1104)
+* Add a workspace diagnostics baseline and **Write Diagnostics Baseline** command. Suppress known diagnostics with CLI-compatible hashes, show the suppressed count, and restore diagnostics when the baseline is cleared or changed. Captures include unsaved buffers and reject stale or cancelled scans. (#604)
+
+#### Engine
+
+* Discover parent mods from descriptor dependencies in CLI `validate` and `fix` when neither `--parent` nor TOML `parents` supplies a nonempty list. Explicit parent paths still take precedence. (#1105)
+* Decode CLI diagnostic hash source lines like the engine and ignore a leading BOM in content hashes. Regenerate older baselines for CP1252 files or diagnostics on a BOM's first line. (#604)
+
+#### Tooling
+
+* Add a full HOI4 and Millennium Dawn index tier to the snapshot-clone benchmark and record its first-write copy cost. Keep production validation locks unchanged; the benchmark does not measure editor hover or queued-writer latency. (#868)
+
 ### 4.0.4
 
 #### Extension

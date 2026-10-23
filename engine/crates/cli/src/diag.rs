@@ -31,7 +31,7 @@ impl SourceLines {
 
     fn trimmed_from(&mut self, key: &str, path: &Path, line: u32) -> &str {
         if self.file != key {
-            self.lines = std::fs::read_to_string(path)
+            self.lines = cwtools_file_manager::read_text(path)
                 .map(|text| text.lines().map(|l| l.trim().to_string()).collect())
                 .unwrap_or_default();
             self.file = key.to_string();
@@ -380,6 +380,15 @@ mod tests {
     use cwtools_parser::fix::SuggestedFix;
     use cwtools_test_support::abs;
     use std::path::PathBuf;
+
+    #[test]
+    fn source_lines_decode_cp1252_like_the_engine() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("source.txt");
+        std::fs::write(&file, b"caf\xe9 = no\n").unwrap();
+        let mut lines = SourceLines::default();
+        assert_eq!(lines.trimmed_path("source", &file, 1), "caf\u{e9} = no");
+    }
 
     fn err_base() -> ValidationError {
         ValidationError {

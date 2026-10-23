@@ -547,14 +547,23 @@ impl Backend {
         // are fair, so a queued writer would stall every worker that reads.
         let index_collector = self.index_collector();
         let workspace_prefix = self.state.config.read().workspace_prefix.clone();
+        let baseline_files: HashSet<_> = self
+            .state
+            .baseline
+            .lock()
+            .metadata_files()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
         let finish =
             |file: &ScannedFile, (cache_hit, parsed, source_hash, inline_ignored): LoadedFile| {
                 let logical_path = scan_logical_path(file, &workspace_prefix);
-                let ignored = cwtools_file_manager::file_manager::is_ignored_path(
-                    &logical_path,
-                    &extra_file_globs,
-                    &extra_dir_globs,
-                );
+                let ignored = baseline_files.contains(&file.path)
+                    || cwtools_file_manager::file_manager::is_ignored_path(
+                        &logical_path,
+                        &extra_file_globs,
+                        &extra_dir_globs,
+                    );
                 let collected = index_collector
                     .as_ref()
                     .filter(|_| !ignored)
@@ -1096,6 +1105,7 @@ impl Backend {
                 cfg.ignored_error_codes.clone(),
             )
         };
+        let capture_baseline = self.state.baseline.lock().capturing();
         let mut published_this_scan = std::collections::HashSet::with_capacity(publish_total);
 
         self.enter_phase(&mut phase, progress, quiet, Phase::Publish, publish_total)
@@ -1138,6 +1148,9 @@ impl Backend {
                     .lock()
                     .insert(uri.clone());
                 published_this_scan.insert(uri);
+            } else if capture_baseline && !open_uris.contains(&uri) {
+                self.capture_baseline_only(&uri, diagnostics, source_hash)
+                    .await;
             }
 
             if publish_throttle.should_wait_after(i) {

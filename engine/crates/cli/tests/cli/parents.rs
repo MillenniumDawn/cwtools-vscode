@@ -147,6 +147,7 @@ fn fix_does_not_edit_the_external_parent_directory() {
 }
 
 #[cfg(unix)]
+#[cfg_attr(target_os = "macos", ignore = "macOS rejects non-UTF-8 filenames")]
 #[test]
 fn validate_parent_flag_preserves_a_non_utf8_parent_path() {
     use std::os::unix::ffi::OsStrExt;

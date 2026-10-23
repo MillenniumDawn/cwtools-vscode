@@ -445,6 +445,9 @@ impl Backend {
         }
 
         if let Some(opts) = &params.initialization_options {
+            if let Some(setting) = opts.get("diagnosticsBaseline").and_then(Value::as_str) {
+                self.reload_baseline(setting.to_string()).await;
+            }
             let entries = extract_bounded_string_list(
                 opts,
                 "parentMods",
@@ -632,6 +635,7 @@ impl Backend {
                         "formatWorkspace".to_string(),
                         "reindexWorkspace".to_string(),
                         "validateWorkspace".to_string(),
+                        "writeDiagnosticsBaseline".to_string(),
                         "getGraphData".to_string(),
                         "getGraphEntityAtPosition".to_string(),
                     ],
@@ -1003,6 +1007,8 @@ impl Backend {
                 ),
             )
             .await;
+        let baseline = self.state.baseline.lock().setting.clone();
+        self.reload_baseline(baseline).await;
         if next.is_none() {
             return;
         }
@@ -1026,6 +1032,15 @@ impl Backend {
     }
 
     pub(crate) async fn did_change_configuration_impl(&self, params: DidChangeConfigurationParams) {
+        let baseline_changed = if let Some(setting) = params
+            .settings
+            .get("diagnosticsBaseline")
+            .and_then(Value::as_str)
+        {
+            self.reload_baseline(setting.to_string()).await
+        } else {
+            false
+        };
         let (files, dirs) = extract_ignore_patterns(&params.settings);
         let files = params.settings.get("ignoreFilePatterns").map(|_| files);
         let dirs = params.settings.get("ignoreDirectories").map(|_| dirs);
@@ -1100,7 +1115,8 @@ impl Backend {
             self.state.hover_debug.load(Ordering::Relaxed),
             self.state.hover_resolved_scope.load(Ordering::Relaxed),
         );
-        let unchanged = files.as_ref().is_none_or(|files| files == &current_files)
+        let unchanged = !baseline_changed
+            && files.as_ref().is_none_or(|files| files == &current_files)
             && dirs.as_ref().is_none_or(|dirs| dirs == &current_dirs)
             && codes.as_ref().is_none_or(|codes| codes == &current_codes)
             && reindex_minutes.is_none_or(|minutes| minutes == current_reindex_minutes)
@@ -1155,8 +1171,13 @@ impl Backend {
                 cfg.loc_languages = languages;
             }
         }
-        if let Some(rules_dir) = rules_cache.as_ref() {
-            self.load_rules_config(rules_dir).await;
+        let reload_rules = rules_cache.clone().or_else(|| {
+            baseline_changed
+                .then(|| self.state.config.read().rules_dir.clone())
+                .flatten()
+        });
+        if let Some(rules_dir) = reload_rules {
+            self.load_rules_config(&rules_dir).await;
         }
         if let Some(all) = hover_all_languages {
             self.state
@@ -1186,7 +1207,8 @@ impl Backend {
             reindex_idle_secs = ?reindex_idle_secs,
             "config updated via didChangeConfiguration"
         );
-        if rules_cache_changed
+        if baseline_changed
+            || rules_cache_changed
             || ignore_changed
             || localisation_changed
             || hover_all_changed
@@ -1234,6 +1256,9 @@ impl Backend {
             "formatWorkspace" => Ok(Some(Value::String(self.format_workspace_impl(token).await))),
             "reindexWorkspace" => self.reindex_workspace_command(token).await,
             "validateWorkspace" => self.validate_workspace_command(token).await,
+            "writeDiagnosticsBaseline" => {
+                self.write_baseline_command(&params.arguments, token).await
+            }
             "getGraphData" => self.get_graph_data(&params.arguments).await,
             "getGraphEntityAtPosition" => {
                 self.get_graph_entity_at_position(&params.arguments).await

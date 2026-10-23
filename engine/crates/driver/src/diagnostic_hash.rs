@@ -4,7 +4,7 @@ use cwtools_file_manager::path_identity;
 use std::borrow::Cow;
 use std::path::Path;
 
-/// FNV-1a-64 hex digest of `parts`, joined by `|`.
+/// FNV-1a-64 hex digest of `parts`, joined by `|`, stable across processes.
 fn fnv1a_digest(parts: [&str; 4]) -> String {
     let mut h: u64 = 0xcbf29ce484222325;
     let mut mix = |b: u8| {
@@ -47,8 +47,14 @@ fn drive_letter(path: &str) -> Option<char> {
 
 /// Stable content-based digest of a diagnostic. `line_text` is the trimmed
 /// offending line, and `file` is normalized relative to `root` before hashing.
+/// Identical diagnostics on identical lines intentionally share one digest.
 pub fn diag_hash(root: &Path, file: &str, code: &str, message: &str, line_text: &str) -> String {
-    fnv1a_digest([relative_file(file, root).as_str(), code, message, line_text])
+    fnv1a_digest([
+        relative_file(file, root).as_str(),
+        code,
+        message,
+        line_text.trim_start_matches('\u{feff}'),
+    ])
 }
 
 /// Previous line-number-based digest, retained to match existing baselines.
@@ -84,7 +90,12 @@ pub fn diag_hash_for_native_path(
         return diag_hash(root, file_key, code, message, line_text);
     }
     let identity = relative_native_path_identity(root, native_file);
-    fnv1a_digest([&identity, code, message, line_text])
+    fnv1a_digest([
+        &identity,
+        code,
+        message,
+        line_text.trim_start_matches('\u{feff}'),
+    ])
 }
 
 /// Legacy line-number digest using native path identity for non-UTF-8 paths.
@@ -112,6 +123,16 @@ mod tests {
     #[test]
     fn stable_hash_golden_vector() {
         assert_eq!(
+            diag_hash(
+                Path::new("."),
+                "common/ideas/x.txt",
+                "CW282",
+                "redundant default",
+                "12"
+            ),
+            "8e7fd969bd9ea463"
+        );
+        assert_eq!(
             legacy_diag_hash(
                 Path::new("."),
                 "common/ideas/x.txt",
@@ -120,6 +141,15 @@ mod tests {
                 12
             ),
             "8e7fd969bd9ea463"
+        );
+    }
+
+    #[test]
+    fn content_hash_matches_editor_buffers_without_the_file_bom() {
+        let root = Path::new(".");
+        assert_eq!(
+            diag_hash(root, "source.txt", "CW282", "invalid", "\u{feff}bad = yes"),
+            diag_hash(root, "source.txt", "CW282", "invalid", "bad = yes")
         );
     }
 
@@ -137,6 +167,16 @@ mod tests {
             .map(|file| diag_hash(&root, file, "CW282", "m", "cost = 150"))
             .collect();
         assert!(hashes.iter().all(|hash| hash == &hashes[0]));
+        assert_eq!(
+            diag_hash(
+                &PathBuf::from(abs("repo/mod/")),
+                &spellings[0],
+                "CW282",
+                "m",
+                "cost = 150"
+            ),
+            hashes[0]
+        );
     }
 
     #[test]
@@ -144,6 +184,17 @@ mod tests {
         let root = PathBuf::from(abs("repo/mod"));
         let outside = abs("vanilla/common/x.txt");
         assert_eq!(relative_file(&outside, &root), outside);
+    }
+
+    #[test]
+    fn relative_path_reads_only_a_leading_drive_letter() {
+        let root = PathBuf::from(abs("repo/my:mod"));
+        let outside = abs("vanilla/common/x.txt");
+        assert_eq!(relative_file(&outside, &root), outside);
+        assert_eq!(
+            relative_file(&abs("repo/my:mod/common/x.txt"), &root),
+            "common/x.txt"
+        );
     }
 
     #[test]

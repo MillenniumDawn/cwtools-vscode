@@ -4,10 +4,11 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-const MAX_BASELINE_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_BASELINE_BYTES: u64 = 16 * 1024 * 1024;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) enum BaselineStatus {
+    #[default]
     Disabled,
     Missing {
         file: PathBuf,
@@ -37,7 +38,7 @@ impl BaselineError {
                 file.display()
             ),
             Self::TooLarge { file } => format!(
-                "Diagnostics baseline {} exceeds the 1 MiB limit",
+                "Diagnostics baseline {} exceeds the 16 MiB limit",
                 file.display()
             ),
             Self::Malformed { file, line } => format!(

@@ -13,8 +13,8 @@ use std::sync::Arc;
 use tower_lsp::{LspService, Server};
 
 mod access;
-#[cfg(test)]
 mod baseline;
+mod baseline_runtime;
 mod cache_purge;
 mod call_hierarchy;
 mod code_action;

@@ -223,6 +223,7 @@ pub(crate) struct DocumentState {
     /// validation may finish while didChange is queued, so the version check
     /// and its client send must be one serialized operation.
     pub(crate) diagnostic_publication_lock: tokio::sync::Mutex<()>,
+    pub(crate) baseline: Mutex<crate::baseline_runtime::State>,
     pub(crate) documents: Mutex<DocumentStore>,
     pub(crate) config: parking_lot::RwLock<Config>,
     pub(crate) workspace_roots_generation: AtomicU64,
@@ -1723,6 +1724,7 @@ impl DocumentState {
         cwtools_validation::per_game::seed_comparison_literals(&string_table);
         Self {
             diagnostic_publication_lock: tokio::sync::Mutex::new(()),
+            baseline: Mutex::new(crate::baseline_runtime::State::default()),
             documents: Mutex::new(DocumentStore::new()),
             config: parking_lot::RwLock::new(Config::new()),
             workspace_roots_generation: AtomicU64::new(0),
