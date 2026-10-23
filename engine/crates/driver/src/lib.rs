@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub mod diagnostic_hash;
+
 use cwtools_cache::workspace::{self as workspace_cache, SourceCacheKey};
 use cwtools_file_manager::file_manager::{
     DirectoryType, DiscoveredFile, DiscoveredPath, DiscoveryReport, FileError, FileKind,
