@@ -1,7 +1,4 @@
-//! Test-only baseline primitives for the editor baseline implementation.
-//!
-//! The next integration component removes the `cfg(test)` module gate once these
-//! helpers are wired into configuration and diagnostic publication.
+//! Shared parsing and matching primitives for editor diagnostic baselines.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -245,7 +242,8 @@ mod tests {
     fn target_resolution_rejects_absolute_parent_and_symlink_escape() {
         let root = workspace();
         let outside = workspace();
-        for invalid in ["../outside.txt", "/tmp/outside.txt"] {
+        let absolute_outside = outside.path().join("outside.txt");
+        for invalid in ["../outside.txt", absolute_outside.to_str().unwrap()] {
             assert!(matches!(
                 resolve_target(root.path(), invalid),
                 Err(BaselineError::InvalidTarget(_))
