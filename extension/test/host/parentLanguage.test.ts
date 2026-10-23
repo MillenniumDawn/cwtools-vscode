@@ -14,9 +14,11 @@ suite("resolved parent language roots", function () {
 		);
 		const api = await activate();
 		assert.ok(api, "activation API should be exposed");
+		assert.ok(process.env.HOME, "isolated launcher home should be configured");
 		const parentFile = vscode.Uri.file(
-			path.resolve(
-				"extension/test/workspaces/parent-language/home/.local/share/Paradox Interactive/Hearts of Iron IV/mod/parent-content/common/fixture.txt",
+			path.join(
+				process.env.HOME,
+				".local/share/Paradox Interactive/Hearts of Iron IV/mod/parent-content/common/fixture.txt",
 			),
 		);
 		const document = await vscode.workspace.openTextDocument(parentFile);

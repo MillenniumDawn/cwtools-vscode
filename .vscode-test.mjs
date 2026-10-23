@@ -59,6 +59,7 @@
 // separate workspaces while collecting them in one session; host also exercises
 // graphPanel.ts.
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { defineConfig } from "@vscode/test-cli";
 import { hostTestLaunchArgs } from "./scripts/build/hosttest_config.mjs";
@@ -72,7 +73,12 @@ const parentLanguageWorkspace =
 	"./extension/test/workspaces/parent-language/submod";
 const parentLanguageHome = path.resolve(
 	import.meta.dirname,
-	"extension/test/workspaces/parent-language/home",
+	".vscode-test/parent-language-home",
+);
+fs.cpSync(
+	path.resolve(import.meta.dirname, "extension/test/workspaces/parent-language/home/.local"),
+	path.join(parentLanguageHome, ".local"),
+	{ recursive: true },
 );
 const rulesSyncWorkspace = "./extension/test/workspaces/hoi4";
 const gateDescriptorWorkspace =
