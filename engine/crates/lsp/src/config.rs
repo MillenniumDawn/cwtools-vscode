@@ -168,52 +168,6 @@ fn extract_hover_scope_display(opts: &Value) -> Option<bool> {
     }
 }
 
-/// The `parentMods` init option (#786), in load order. An entry is kept only
-/// when it is a directory distinct from the workspace root, the base game and
-/// every earlier entry, and neither contains nor sits inside the workspace
-/// root, whose files would otherwise be indexed twice. A relative entry is
-/// resolved against the workspace root. Returns the kept roots and one
-/// message per dropped entry.
-pub(crate) fn resolve_parent_roots(
-    entries: &[String],
-    workspace_root: Option<&std::path::Path>,
-    vanilla_dir: Option<&std::path::Path>,
-) -> (Vec<std::path::PathBuf>, Vec<String>) {
-    let canonical = |path: &std::path::Path| std::fs::canonicalize(path).ok();
-    let workspace = workspace_root.and_then(canonical);
-    let vanilla = vanilla_dir.and_then(canonical);
-    let mut kept: Vec<(std::path::PathBuf, std::path::PathBuf)> = Vec::new();
-    let mut dropped = Vec::new();
-    for entry in entries {
-        let raw = std::path::Path::new(entry);
-        let path = match workspace_root {
-            Some(root) if raw.is_relative() => root.join(raw),
-            _ => raw.to_path_buf(),
-        };
-        let Some(real) = canonical(&path).filter(|real| real.is_dir()) else {
-            dropped.push(format!("parent mod is not a directory: {entry}"));
-            continue;
-        };
-        let reason = if workspace
-            .as_ref()
-            .is_some_and(|ws| ws.starts_with(&real) || real.starts_with(ws))
-        {
-            Some("overlaps the workspace root")
-        } else if vanilla.as_ref() == Some(&real) {
-            Some("is the base-game dir")
-        } else if kept.iter().any(|(_, seen)| *seen == real) {
-            Some("is listed twice")
-        } else {
-            None
-        };
-        match reason {
-            Some(reason) => dropped.push(format!("parent mod {reason}: {entry}")),
-            None => kept.push((path, real)),
-        }
-    }
-    (kept.into_iter().map(|(path, _)| path).collect(), dropped)
-}
-
 fn folders_to_paths(uris: &[String]) -> Vec<std::path::PathBuf> {
     uris.iter()
         .filter_map(|uri| crate::access::file_uri_to_path(uri))
@@ -501,12 +455,17 @@ impl Backend {
                 let cfg = self.state.config.read();
                 let workspace = cfg.workspace_roots.first().map(std::path::PathBuf::as_path);
                 if !entries.is_empty() {
-                    resolve_parent_roots(&entries, workspace, cfg.vanilla_dir.as_deref())
+                    cwtools_driver::parent_mods::resolve_parent_roots(
+                        &entries,
+                        workspace,
+                        cfg.vanilla_dir.as_deref(),
+                    )
                 } else if let Some(workspace) = workspace {
-                    crate::parent_mods::discover_parent_roots(
+                    cwtools_driver::parent_mods::discover_parent_roots(
                         workspace,
                         &cfg.language,
                         cfg.vanilla_dir.as_deref(),
+                        None,
                     )
                 } else {
                     (Vec::new(), Vec::new())
@@ -1973,45 +1932,6 @@ mod tests {
             ),
             Some(Some(vec![Lang::English, Lang::French]))
         );
-    }
-
-    #[test]
-    fn resolve_parent_roots_keeps_distinct_dirs_in_load_order() {
-        let tmp = tempfile::TempDir::new().expect("tmpdir");
-        let dir = |name: &str| {
-            let path = tmp.path().join(name);
-            std::fs::create_dir_all(&path).expect("mkdir");
-            path
-        };
-        let workspace = dir("mods/submod");
-        let nested = dir("mods/submod/inner");
-        let vanilla = dir("game");
-        let first = dir("mods/base");
-        let second = dir("mods/compat");
-        let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
-        let entries = vec![
-            text(&second),
-            "../base".to_string(),
-            text(&second),
-            text(&tmp.path().join("mods")),
-            text(&nested),
-            text(&vanilla),
-            text(&tmp.path().join("missing")),
-        ];
-
-        let (kept, dropped) = resolve_parent_roots(&entries, Some(&workspace), Some(&vanilla));
-
-        assert_eq!(kept, vec![second.clone(), workspace.join("../base")]);
-        assert_eq!(
-            std::fs::canonicalize(&kept[1]).unwrap(),
-            std::fs::canonicalize(&first).unwrap()
-        );
-        assert_eq!(dropped.len(), 5, "{dropped:?}");
-        assert!(dropped[0].contains("listed twice"), "{dropped:?}");
-        assert!(dropped[1].contains("overlaps the workspace root"));
-        assert!(dropped[2].contains("overlaps the workspace root"));
-        assert!(dropped[3].contains("base-game"));
-        assert!(dropped[4].contains("not a directory"));
     }
 
     #[test]

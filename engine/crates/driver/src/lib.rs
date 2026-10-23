@@ -1,6 +1,8 @@
 //! Load-and-validate pipeline shared by the CLI and the LSP. `Session` is the CLI's
 //! batch path; the LSP keeps its own incremental state and calls the helpers here.
 
+pub mod parent_mods;
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
