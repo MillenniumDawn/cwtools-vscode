@@ -17,10 +17,13 @@ cargo bench --manifest-path engine/Cargo.toml -p cwtools_driver --bench snapshot
 
 The criterion filter selects the `full_hoi4_md` group. Without `CWTOOLS_VANILLA`, the full tier prints a skip reason; the existing synthetic and mod-only cases remain available. The full-tier Criterion sample count is bounded to 10. Criterion retains its sample data and reports under `target/criterion`.
 
-The full-tier setup prints the three paths and best-effort Git revisions (the game install may not be a Git checkout), primary MD parsed-file count, index type/instance/file-path/value counts, and sample count. It reports `/proc/self/status` VmRSS and VmHWM where available. RSS is whole-process resident memory, VmHWM is a process-lifetime high-water mark, and neither isolates TypeIndex allocations; `/proc` readings are Linux-only. Criterion timings are not raw per-operation logs in stdout.
+The full tier fails closed unless the supplied game root contains `common/events` and `localisation`, the layered Session index is nonempty, and that index contains indexed instances whose source paths are under the vanilla root. The last check uses the existing TypeIndex map entries (source file identities); it reports the count of vanilla-root indexed files and instances rather than treating MD-only index contents as proof of a game index. It also prints the three paths, best-effort Git revisions (a game install may not be a Git checkout), primary MD parsed-file count, and total index shape.
+
+Synthetic and mod-only cases retain the original Criterion sample size of 30. Only the full-index Criterion group uses 10 samples. Its COW benchmark uses `BatchSize::PerIteration`, bounding each measured batch to one full-index COW result instead of retaining multiple giant copies. Criterion sample data/reports are kept under `target/criterion`; they are not printed as raw per-operation lines. The setup prints `/proc/self/status` VmRSS and VmHWM before/after the unshared and retained-snapshot mutable-access cases where available. These are whole-process observations: VmHWM is a process-lifetime high-water mark, and RSS differences are allocator-history/order dependent, not isolated TypeIndex allocations or a production peak-memory measurement. `/proc` readings are Linux-only.
 
 ## Current implementation evidence
 
-- `cargo check --manifest-path engine/Cargo.toml -p cwtools_driver --bench snapshot_clone` passed after the changes.
+- `cargo check --manifest-path engine/Cargo.toml -p cwtools_driver --bench snapshot_clone` passed after the review fixes.
+- `cargo clippy --manifest-path engine/Cargo.toml -p cwtools_driver --bench snapshot_clone -- -D warnings` passed.
 - No timing samples have been run. Wait for an exclusive measurement slot before invoking the command above.
 - Remaining #868 work: measure real LSP hover/writer contention and verify diagnostics equality; this benchmark does not answer those questions.
