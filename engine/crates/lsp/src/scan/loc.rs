@@ -285,6 +285,14 @@ impl Backend {
             crate::validate::loc_extra_valid_refs(&modifier_keys, &info.type_index)
         };
 
+        let baseline_files: HashSet<_> = self
+            .state
+            .baseline
+            .lock()
+            .metadata_files()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
         let (loc_index, mut by_file, loc_text_map, loc_loc_map, source_hashes) =
             tokio::task::block_in_place(|| {
                 // The base game is read once per session and reused; only the workspace
@@ -305,7 +313,10 @@ impl Backend {
                         &ignore_files,
                         &ignore_dirs,
                         cwtools_driver::DiscoveryPolicy::Workspace,
-                    ),
+                    )
+                    .into_iter()
+                    .filter(|path| !baseline_files.contains(path))
+                    .collect(),
                     cwtools_file_manager::file_manager::ScanBudget::default(),
                     parsed_languages,
                 );

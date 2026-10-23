@@ -203,6 +203,11 @@
         "category": "cwtools"
       },
       {
+        "command": "cwtools.writeDiagnosticsBaseline",
+        "title": "%commands.writeDiagnosticsBaseline.title%",
+        "category": "cwtools"
+      },
+      {
         "command": "cwtools.showGraph",
         "title": "%commands.showGraph.title%",
         "category": "cwtools",
@@ -351,6 +356,12 @@
             "type": "boolean",
             "default": true,
             "markdownDescription": "%configuration.cwtools.diagnostics.workspaceWide.description%"
+          },
+          "cwtools.diagnostics.baselineFile": {
+            "scope": "resource",
+            "type": "string",
+            "default": "",
+            "markdownDescription": "%configuration.cwtools.diagnostics.baselineFile.description%"
           },
           "cwtools.ignore_patterns": {
             "scope": "window",

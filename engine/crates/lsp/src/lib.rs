@@ -13,6 +13,8 @@ use std::sync::Arc;
 use tower_lsp::{LspService, Server};
 
 mod access;
+mod baseline;
+mod baseline_runtime;
 mod cache_purge;
 mod call_hierarchy;
 mod code_action;
@@ -31,7 +33,6 @@ mod lines;
 mod loc_locations;
 mod loc_text;
 mod navigation;
-mod parent_mods;
 mod paths;
 mod scan;
 mod semantic;

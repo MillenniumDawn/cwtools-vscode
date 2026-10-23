@@ -371,26 +371,35 @@ impl Backend {
     async fn send_update_file_list(&self, file_list: Vec<serde_json::Value>) {
         // Discovery has already written the install back into config. Share
         // that result so the client does not duplicate Steam path discovery.
-        let vanilla_dir = self.state.config.read().vanilla_dir.clone();
-        let mut vanilla_roots = Vec::new();
-        if let Some(dir) = vanilla_dir {
-            // Definition URIs use canonical paths, while documents opened
-            // directly can retain a symlinked Steam install's alias.
-            for root in [
-                std::path::absolute(&dir).ok(),
-                std::fs::canonicalize(&dir).ok(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                let uri = crate::paths::path_to_uri(&root);
-                if !vanilla_roots.contains(&uri) {
-                    vanilla_roots.push(uri);
+        let (vanilla_dir, parent_dirs) = {
+            let config = self.state.config.read();
+            (config.vanilla_dir.clone(), config.parent_roots.clone())
+        };
+        let root_uris = |dirs: Vec<std::path::PathBuf>| {
+            let mut uris = Vec::new();
+            for dir in dirs {
+                // Definitions use canonical paths, while open documents may
+                // retain an alias (for example, a symlinked mod directory).
+                for root in [
+                    std::path::absolute(&dir).ok(),
+                    std::fs::canonicalize(&dir).ok(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    let uri = crate::paths::path_to_uri(&root);
+                    if !uris.contains(&uri) {
+                        uris.push(uri);
+                    }
                 }
             }
-        }
+            uris
+        };
+        let parent_roots = root_uris(parent_dirs);
+        let vanilla_roots = root_uris(vanilla_dir.into_iter().collect());
         let payload = serde_json::json!({
             "fileList": file_list,
+            "parentRoots": parent_roots,
             "vanillaRoots": vanilla_roots,
         });
         self.client

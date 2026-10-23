@@ -226,12 +226,12 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			"paradox",
 			readContentRoots,
 		);
-		const notifications = registerServerNotifications(context, client, tracker.updateVanillaRoots);
+		const notifications = registerServerNotifications(context, client, tracker.updateServerContentRoots);
 		initialScanDone = notifications.initialScanDone;
 		statusText = notifications.statusText;
 		notifyStopped = notifications.markStopped;
 
-		registerCommands(context, client, tracker, serverExe, language);
+		registerCommands(context, client, tracker, serverExe, language, workspaceFolder);
 
 		// Subscriptions are pushed here so the client is disposed with the extension.
 		context.subscriptions.push(client);

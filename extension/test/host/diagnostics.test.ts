@@ -1,4 +1,5 @@
 import * as assert from "assert";
+import * as fs from "fs/promises";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
@@ -22,9 +23,10 @@ suite("LSP Diagnostics Tests", function () {
 
 	let diagnosticsDocument: vscode.TextDocument;
 	let cleanDocument: vscode.TextDocument;
+	let api: Awaited<ReturnType<typeof activate>>;
 
 	setup(async function () {
-		await activate();
+		api = await activate();
 		const extension = vscode.extensions.getExtension(EXTENSION_ID)!;
 		assert.ok(extension?.isActive, "Extension should be active");
 
@@ -62,6 +64,72 @@ suite("LSP Diagnostics Tests", function () {
 				.includes("unknown_diagnostic_field"),
 			"CW263 should cover unknown_diagnostic_field",
 		);
+	});
+
+	test("writes a baseline, suppresses old errors, and restores them when cleared", async function () {
+		const cfg = vscode.workspace.getConfiguration("cwtools", diagnosticsDocument.uri);
+		const baselineSetting = "diagnostics.baselineFile";
+		const target = ".cwtools-baseline";
+		const originalText = diagnosticsDocument.getText();
+		try {
+			await vscode.commands.executeCommand("cwtools.writeDiagnosticsBaseline", target);
+			assert.ok(
+				await waitUntil(() => vscode.workspace
+					.getConfiguration("cwtools", diagnosticsDocument.uri)
+					.get<string>(baselineSetting) === target, 10_000),
+				"the selected folder should enable the written baseline",
+			);
+			assert.ok(
+				await waitUntil(
+					() => !vscode.languages.getDiagnostics(diagnosticsDocument.uri).some(isCW263),
+					30_000,
+				),
+				"the existing CW263 should be suppressed after writing the baseline",
+			);
+			assert.ok(
+				await waitUntil(() => {
+					return api?.serverStatusText()?.includes("baseline-suppressed") ?? false;
+				}, 30_000),
+				"status should display the baseline suppression count",
+			);
+			const added = "\tunknown_new_baseline_field = yes\n";
+			const edit = new vscode.WorkspaceEdit();
+			edit.insert(diagnosticsDocument.uri, diagnosticsDocument.positionAt(originalText.lastIndexOf("}")), added);
+			assert.ok(await vscode.workspace.applyEdit(edit), "should add a new diagnostic fixture line");
+			assert.ok(
+				await waitUntil(
+					() => vscode.languages.getDiagnostics(diagnosticsDocument.uri).some((diagnostic) =>
+						isCW263(diagnostic) && diagnosticsDocument.getText(diagnostic.range).includes("unknown_new_baseline_field")),
+					30_000,
+				),
+				"a new CW263 should remain visible while the previous one is suppressed",
+			);
+			await cfg.update(baselineSetting, "", vscode.ConfigurationTarget.WorkspaceFolder);
+			assert.ok(
+				await waitUntil(
+					() => vscode.languages.getDiagnostics(diagnosticsDocument.uri).some((diagnostic) =>
+						isCW263(diagnostic) && diagnosticsDocument.getText(diagnostic.range).includes("unknown_diagnostic_field")),
+					30_000,
+				),
+				"clearing the setting should restore the original diagnostic",
+			);
+		} finally {
+			const restore = new vscode.WorkspaceEdit();
+			restore.replace(diagnosticsDocument.uri, new vscode.Range(0, 0, diagnosticsDocument.lineCount, 0), originalText);
+			await vscode.workspace.applyEdit(restore);
+			await cfg.update(baselineSetting, undefined, vscode.ConfigurationTarget.WorkspaceFolder);
+			await fs.rm(path.join(SAMPLE_ROOT, target), { force: true });
+		}
+	});
+
+	test("rejects an absolute baseline target without changing the setting", async function () {
+		const before = vscode.workspace.getConfiguration("cwtools", diagnosticsDocument.uri)
+			.get<string>("diagnostics.baselineFile", "");
+		const target = path.resolve(SAMPLE_ROOT, "outside-baseline");
+		await vscode.commands.executeCommand("cwtools.writeDiagnosticsBaseline", target);
+		assert.strictEqual(vscode.workspace.getConfiguration("cwtools", diagnosticsDocument.uri)
+			.get<string>("diagnostics.baselineFile", ""), before);
+		await assert.rejects(fs.stat(target), { code: "ENOENT" });
 	});
 
 	test("publishes no diagnostics for a clean file", function () {

@@ -120,7 +120,7 @@ function readBackgroundReindexIdleSeconds(): number {
 	);
 }
 
-function readLiveServerSettings(): LiveServerSettings {
+function readLiveServerSettings(workspaceFolder: WorkspaceFolder): LiveServerSettings {
 	const cfg = workspace.getConfiguration("cwtools");
 	const rawScope = cfg.get<string>("hover.scopeDisplay");
 	const hoverScopeDisplay: HoverScopeDisplay =
@@ -129,6 +129,10 @@ function readLiveServerSettings(): LiveServerSettings {
 	const formattingIndentStyle: FormattingIndentStyle =
 		rawIndent === "tab" || rawIndent === "space" ? rawIndent : "space";
 	return {
+		diagnosticsBaseline:
+			workspace
+				.getConfiguration("cwtools", workspaceFolder.uri)
+				.get<string>("diagnostics.baselineFile") ?? "",
 		localisationLanguages: cfg.get<string[]>("localisation.languages") ?? [
 			"English",
 		],
@@ -639,7 +643,7 @@ export function createLanguageClient(
 			return {
 				language: cfg.language,
 				rulesCache: currentRulesCache,
-				...readLiveServerSettings(),
+				...readLiveServerSettings(cfg.workspaceFolder),
 				// Inlay hints. The server reads both at initialize only — neither key is
 				// in its didChangeConfiguration handler — so a change needs a window
 				// reload, which the setting descriptions say.
@@ -763,7 +767,7 @@ export function createLanguageClient(
 						readIgnoreOptions(),
 						readBackgroundReindexMinutes(),
 						readBackgroundReindexIdleSeconds(),
-						readLiveServerSettings(),
+						readLiveServerSettings(cfg.workspaceFolder),
 					),
 					...(rulesSetup ? { rulesCache: rulesSetup.rulesCache } : {}),
 				};

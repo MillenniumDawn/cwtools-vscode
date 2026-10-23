@@ -1,130 +1,9 @@
-use cwtools_file_manager::path_identity;
+use cwtools_driver::diagnostic_hash::{
+    diag_hash, diag_hash_for_native_path, legacy_diag_hash, legacy_diag_hash_for_native_path,
+};
 use cwtools_validation::{ErrorSeverity, ValidationError};
 use std::borrow::Cow;
 use std::path::Path;
-
-/// FNV-1a-64 hex digest of `parts`, joined by `|`. FNV rather than std's
-/// `DefaultHasher` because the seed there is randomized per process: a baseline
-/// file has to mean the same thing on every run and every machine.
-fn fnv1a_digest(parts: [&str; 4]) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    let mut mix = |b: u8| {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    };
-    for (i, part) in parts.iter().enumerate() {
-        if i > 0 {
-            mix(b'|');
-        }
-        for b in part.bytes() {
-            mix(b);
-        }
-    }
-    format!("{:016x}", h)
-}
-
-/// `file` relative to `root` and `/`-separated, for hashing: a baseline must
-/// mean the same thing whether `file` came out absolute or mod-relative.
-/// Falls back to `file` (still `/`-separated) when it isn't under `root` — a
-/// vanilla install path reported alongside mod files, say — rather than
-/// panicking. Lexical only, no filesystem access, so a file that was never
-/// written to disk (as in tests) still hashes. The strip is done via
-/// `Path::strip_prefix`, with a drive-prefix prepended to `file` on Windows
-/// when it has none: a leading-`/`-no-drive path is root-relative there
-/// while a `C:/...` path is drive-absolute, and the two prefix kinds don't
-/// match under `strip_prefix`. We don't want the same logical path spelled
-/// two ways to fall through to the fallback and hash differently.
-fn relative_file(file: &str, root: &Path) -> String {
-    let mut file = file.replace('\\', "/");
-    let root_str = root.to_string_lossy().replace('\\', "/");
-    if let Some(drive) = drive_letter(&root_str)
-        && !file.contains(':')
-        && let Some(rest) = file.strip_prefix('/')
-    {
-        file = format!("{drive}:/{rest}");
-    }
-    match Path::new(&file).strip_prefix(Path::new(&root_str)) {
-        Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
-        Err(_) => file,
-    }
-}
-
-/// The drive letter `path` starts with (`C` in `C:/repo/mod`), or `None`. A
-/// colon anywhere else is part of a directory name, which is legal on Unix,
-/// and reading it as a drive would rewrite paths that have nothing to do with
-/// Windows.
-fn drive_letter(path: &str) -> Option<char> {
-    let mut chars = path.chars();
-    let drive = chars.next().filter(char::is_ascii_alphabetic)?;
-    (chars.next() == Some(':')).then_some(drive)
-}
-
-/// Stable digest of a diagnostic, for baseline/ignore matching. Keyed on the
-/// trimmed text of the offending source line rather than its line number, so
-/// inserting a line above a baselined diagnostic doesn't resurface it as new.
-/// Two identical diagnostics on two identical lines of one file collapse to one
-/// digest, which is the intended trade: baselines track content, not position.
-/// `file` is relativized against `root` first, so the digest doesn't depend on
-/// whether this invocation happened to see an absolute or relative path.
-fn diag_hash(root: &Path, file: &str, code: &str, message: &str, line_text: &str) -> String {
-    fnv1a_digest([relative_file(file, root).as_str(), code, message, line_text])
-}
-
-/// The previous digest, keyed on the line number. Still accepted when matching
-/// `--ignore-hashes` so existing baselines don't all invalidate at once; never
-/// emitted. Remove once the migration window closes.
-fn legacy_diag_hash(root: &Path, file: &str, code: &str, message: &str, line: u32) -> String {
-    fnv1a_digest([
-        relative_file(file, root).as_str(),
-        code,
-        message,
-        &line.to_string(),
-    ])
-}
-
-/// Return a native path's stable identity relative to `root`. This is used
-/// when `file` is a lossless key for a non-UTF-8 path: relativizing that
-/// encoded key as text would leave the absolute root embedded in the hash.
-fn relative_native_path_identity(root: &Path, file: &Path) -> Cow<'static, str> {
-    let absolute_root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
-    let absolute_file = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
-    let relative = absolute_file
-        .strip_prefix(&absolute_root)
-        .unwrap_or(&absolute_file);
-    Cow::Owned(path_identity(relative).into_owned())
-}
-
-fn diag_hash_for_native_path(
-    root: &Path,
-    file_key: &str,
-    native_file: &Path,
-    code: &str,
-    message: &str,
-    line_text: &str,
-) -> String {
-    if native_file.to_str().is_some() {
-        // Keep the existing UTF-8 normalization and digest exactly as-is.
-        return diag_hash(root, file_key, code, message, line_text);
-    }
-    let identity = relative_native_path_identity(root, native_file);
-    fnv1a_digest([&identity, code, message, line_text])
-}
-
-fn legacy_diag_hash_for_native_path(
-    root: &Path,
-    file_key: &str,
-    native_file: &Path,
-    code: &str,
-    message: &str,
-    line: u32,
-) -> String {
-    if native_file.to_str().is_some() {
-        // Keep the existing UTF-8 normalization and digest exactly as-is.
-        return legacy_diag_hash(root, file_key, code, message, line);
-    }
-    let identity = relative_native_path_identity(root, native_file);
-    fnv1a_digest([&identity, code, message, &line.to_string()])
-}
 
 /// One-slot memo of a file's trimmed lines, feeding [`diag_hash`]. Diagnostics
 /// arrive grouped by file from both the validation and loc passes, so a single
@@ -152,7 +31,7 @@ impl SourceLines {
 
     fn trimmed_from(&mut self, key: &str, path: &Path, line: u32) -> &str {
         if self.file != key {
-            self.lines = std::fs::read_to_string(path)
+            self.lines = cwtools_file_manager::read_text(path)
                 .map(|text| text.lines().map(|l| l.trim().to_string()).collect())
                 .unwrap_or_default();
             self.file = key.to_string();
@@ -501,6 +380,15 @@ mod tests {
     use cwtools_test_support::abs;
     use std::path::PathBuf;
 
+    #[test]
+    fn source_lines_decode_cp1252_like_the_engine() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("source.txt");
+        std::fs::write(&file, b"caf\xe9 = no\n").unwrap();
+        let mut lines = SourceLines::default();
+        assert_eq!(lines.trimmed_path("source", &file, 1), "caf\u{e9} = no");
+    }
+
     fn err_base() -> ValidationError {
         ValidationError {
             message: "redundant default, remove it".to_string(),
@@ -554,6 +442,7 @@ mod tests {
     )]
     #[test]
     fn non_utf8_diagnostic_hash_is_stable_across_roots_and_root_spellings() {
+        use cwtools_file_manager::path_identity;
         use std::os::unix::ffi::OsStringExt;
 
         let cwd = std::path::absolute(".").unwrap();
@@ -625,91 +514,6 @@ mod tests {
             "cost = 150",
         );
         assert_eq!(a, b);
-    }
-
-    /// `diag_hash` strips the mod root, regardless of how the file spelling
-    /// and the root spelling disagree.
-    #[test]
-    fn relative_file_strips_the_root_regardless_of_spelling() {
-        let root = PathBuf::from(abs("repo/mod"));
-        let want = "common/x.txt";
-        assert_eq!(relative_file(&abs("repo/mod/common/x.txt"), &root), want);
-        assert_eq!(
-            relative_file("common/x.txt", &root),
-            want,
-            "already relative"
-        );
-        assert_eq!(
-            relative_file(&abs("repo/mod/./common/x.txt"), &root),
-            want,
-            "a `./` component"
-        );
-        let root_trailing = PathBuf::from(abs("repo/mod/"));
-        assert_eq!(
-            relative_file(&abs("repo/mod/common/x.txt"), &root_trailing),
-            want,
-            "trailing separator on the root"
-        );
-        assert_eq!(
-            relative_file(r"\repo\mod\common\x.txt", &root),
-            want,
-            "backslash-separated spelling"
-        );
-    }
-
-    /// A file genuinely outside the root (e.g. a vanilla install path reported
-    /// alongside mod files) falls back to the file string rather than panicking,
-    /// and does so the same way every time.
-    #[test]
-    fn relative_file_falls_back_and_does_not_panic_when_outside_the_root() {
-        let root = PathBuf::from(abs("repo/mod"));
-        let outside = abs("vanilla/common/x.txt");
-        assert_eq!(relative_file(&outside, &root), outside);
-        assert_eq!(
-            relative_file(&outside, &root),
-            relative_file(&outside, &root)
-        );
-    }
-
-    /// A colon in the root names a directory, which is legal on Unix; only a
-    /// leading `X:` is a drive. Reading any colon as one rewrote every file
-    /// outside the root before hashing it, so a vanilla path picked up a
-    /// prefix built from the mod's own name.
-    #[test]
-    fn relative_file_reads_only_a_leading_drive_letter() {
-        let root = PathBuf::from(abs("repo/my:mod"));
-        let outside = abs("vanilla/common/x.txt");
-        assert_eq!(relative_file(&outside, &root), outside, "outside the root");
-        assert_eq!(
-            relative_file(&abs("repo/my:mod/common/x.txt"), &root),
-            "common/x.txt",
-            "under the root"
-        );
-    }
-
-    #[test]
-    fn relative_file_handles_windows_drive_and_backslash() {
-        // Windows drive-letter path and backslashes must still relativize.
-        let root = PathBuf::from(abs("repo/mod"));
-        let win = r"C:\repo\mod\common\x.txt";
-        // On Unix the drive prefix is just part of the string and won't match,
-        // so it falls back — that's correct for the host. On Windows it strips.
-        let got = relative_file(win, &root);
-        if cfg!(windows) {
-            assert_eq!(got, "common/x.txt");
-        } else {
-            assert_eq!(got, win.replace('\\', "/"));
-        }
-        // Backslash-separated spelling of the same file must still hash the same
-        // as the forward-slash absolute on the host's filesystem.
-        let root2 = PathBuf::from(abs("repo/mod"));
-        let fwd = abs("repo/mod/common/x.txt");
-        let bwd = r"\repo\mod\common\x.txt";
-        assert_eq!(
-            relative_file(&fwd, &root2),
-            relative_file(bwd, &root2),
-            "forward vs backslash must relativize identically"
-        );
     }
 
     /// Same diagnostic on the same source text, moved down two lines.

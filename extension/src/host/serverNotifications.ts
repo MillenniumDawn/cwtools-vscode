@@ -23,8 +23,13 @@ interface LoadingBarParams {
 	/** 0-100, sent by servers new enough to know where they are. */
 	percentage?: number;
 }
+interface DiagnosticsBaselineStatus {
+	suppressed: number;
+}
 interface UpdateFileList {
 	fileList: FileListItem[];
+	/** Effective parent roots and canonical spellings, as file URIs. */
+	parentRoots?: string[];
 	/** Configured/discovered and canonical spellings of the install, as file URIs. */
 	vanillaRoots?: string[];
 }
@@ -40,7 +45,10 @@ export interface ServerNotifications {
 export function registerServerNotifications(
 	context: ExtensionContext,
 	client: LanguageClient,
-	updateVanillaRoots?: (roots: readonly string[]) => Promise<void>,
+	updateServerContentRoots?: (
+		parentRoots: readonly string[],
+		vanillaRoots: readonly string[],
+	) => Promise<void>,
 ): ServerNotifications {
 	const loadingBarNotification = "loadingBar";
 	const updateFileList = "updateFileList";
@@ -49,6 +57,8 @@ export function registerServerNotifications(
 	let initialScanStarted = false;
 	let initialScanPending = true;
 	let acceptFileList = true;
+	let suppressedDiagnostics = 0;
+	let ready = false;
 	let resolveInitialScan: () => void;
 	const initialScanDone = new Promise<void>(
 		(resolve) => (resolveInitialScan = resolve),
@@ -78,14 +88,19 @@ export function registerServerNotifications(
 
 	const markStopped = (): void => {
 		acceptFileList = false;
-		setVanillaRoots([]);
+		setServerContentRoots([], []);
+		suppressedDiagnostics = 0;
+		ready = false;
 		status.text = l10n.t("CWTools: stopped");
 		clearCommandAvailability();
 	};
-	const setVanillaRoots = (roots: readonly string[]): void => {
-		if (updateVanillaRoots) {
-			void updateVanillaRoots(roots).catch((err: unknown) =>
-				logError("Failed to classify vanilla documents", err),
+	const setServerContentRoots = (
+		parentRoots: readonly string[],
+		vanillaRoots: readonly string[],
+	): void => {
+		if (updateServerContentRoots) {
+			void updateServerContentRoots(parentRoots, vanillaRoots).catch((err: unknown) =>
+				logError("Failed to classify game-content documents", err),
 			);
 		}
 	};
@@ -94,7 +109,9 @@ export function registerServerNotifications(
 		client.onDidChangeState((e: StateChangeEvent) => {
 			if (e.newState === State.Starting) {
 				acceptFileList = false;
-				setVanillaRoots([]);
+				setServerContentRoots([], []);
+				suppressedDiagnostics = 0;
+				ready = false;
 				status.text = l10n.t("CWTools: starting");
 			} else if (e.newState === State.Running) {
 				acceptFileList = true;
@@ -112,6 +129,7 @@ export function registerServerNotifications(
 
 	client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
 		if (param.enable) {
+			ready = false;
 			if (initialScanPending) {
 				initialScanStarted = true;
 			}
@@ -127,18 +145,31 @@ export function registerServerNotifications(
 					? `${param.value} ${param.percentage}%`
 					: param.value;
 		} else {
-			status.text = l10n.t("CWTools: ready");
+			ready = true;
+			status.text = readyStatusText();
 			if (initialScanPending && initialScanStarted) {
 				initialScanPending = false;
 				resolveInitialScan();
 			}
 		}
 	});
+	const readyStatusText = (): string =>
+		suppressedDiagnostics > 0
+			? l10n.t("CWTools: ready ({0} baseline-suppressed)", suppressedDiagnostics)
+			: l10n.t("CWTools: ready");
+	context.subscriptions.push(client.onNotification("diagnosticsBaselineStatus", (params: DiagnosticsBaselineStatus) => {
+		if (!acceptFileList || typeof params?.suppressed !== "number" || !Number.isSafeInteger(params.suppressed) || params.suppressed < 0) return;
+		suppressedDiagnostics = params.suppressed;
+		if (ready) {
+			status.text = readyStatusText();
+		}
+	}));
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
 		if (!acceptFileList) return;
-		const roots: string[] = [];
-		if (Array.isArray(params.vanillaRoots)) {
-			for (const root of params.vanillaRoots) {
+		const parseRoots = (rootList: unknown): string[] => {
+			const roots: string[] = [];
+			if (!Array.isArray(rootList)) return roots;
+			for (const root of rootList) {
 				// Uri.parse makes empty/relative file paths absolute. Require the
 				// explicit hierarchical path the server produces before parsing.
 				if (typeof root !== "string" || !/^file:\/\/[^/?#]*\//.test(root)) continue;
@@ -149,8 +180,12 @@ export function registerServerNotifications(
 					// Ignore malformed root URIs from incompatible server versions.
 				}
 			}
-		}
-		setVanillaRoots(roots);
+			return roots;
+		};
+		setServerContentRoots(
+			parseRoots(params.parentRoots),
+			parseRoots(params.vanillaRoots),
+		);
 		const signature = fileListSignature(params.fileList);
 		if (!fileExplorer) {
 			fileExplorer = new FileExplorer(context, params.fileList);

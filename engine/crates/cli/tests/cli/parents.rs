@@ -21,6 +21,164 @@ types = { type[spriteType] = { path = "gfx" } }
     tmp
 }
 
+fn launcher_parent_workspace() -> (tempfile::TempDir, tempfile::TempDir) {
+    let tmp = parent_file_reference_workspace();
+    std::fs::write(
+        tmp.path().join("mod/descriptor.mod"),
+        "name = Submod\ndependencies = { \"Parent\" }\n",
+    )
+    .unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let documents = if cfg!(target_os = "linux") {
+        ".local/share"
+    } else {
+        "Documents"
+    };
+    let launcher = home
+        .path()
+        .join(documents)
+        .join("Paradox Interactive/Hearts of Iron IV/mod");
+    std::fs::create_dir_all(&launcher).unwrap();
+    std::fs::write(
+        launcher.join("parent.mod"),
+        format!(
+            "name = \"Parent\"\npath = \"{}\"\n",
+            tmp.path().join("parent").display()
+        ),
+    )
+    .unwrap();
+    (tmp, home)
+}
+
+#[test]
+fn validate_discovers_descriptor_parent_from_launcher_without_parent_option() {
+    let (tmp, home) = launcher_parent_workspace();
+    cwtools()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(tmp.path())
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            "mod",
+            "--rules",
+            "rules",
+            "--vanilla",
+            "vanilla",
+            "--report-type",
+            "cli",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CW113").not());
+}
+
+#[test]
+fn validate_parent_flag_overrides_discovered_descriptor_dependencies() {
+    let (tmp, home) = launcher_parent_workspace();
+    cwtools()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(tmp.path())
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            "mod",
+            "--rules",
+            "rules",
+            "--vanilla",
+            "vanilla",
+            "--parent",
+            "other-parent",
+        ])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("CW113"));
+}
+
+#[test]
+fn validate_config_parents_override_discovered_descriptor_dependencies() {
+    let (tmp, home) = launcher_parent_workspace();
+    let config = tmp.path().join("cwtools.toml");
+    std::fs::write(
+        &config,
+        "game = \"hoi4\"\ndirectory = \"mod\"\nrules = \"rules\"\nvanilla = \"vanilla\"\nparents = [\"other-parent\"]\n",
+    )
+    .unwrap();
+    cwtools()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .args(["validate", "--config", config.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("CW113"));
+}
+
+#[test]
+fn fix_does_not_edit_the_external_parent_directory() {
+    let (tmp, home) = launcher_parent_workspace();
+    let parent_file = tmp.path().join("parent/common/hint.txt");
+    std::fs::create_dir_all(parent_file.parent().unwrap()).unwrap();
+    let original = "x = { if = { } }\n";
+    std::fs::write(&parent_file, original).unwrap();
+    cwtools()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(tmp.path())
+        .args([
+            "fix",
+            "--game",
+            "hoi4",
+            "--directory",
+            "mod",
+            "--rules",
+            "rules",
+            "--vanilla",
+            "vanilla",
+            "--apply",
+        ])
+        .assert()
+        .success();
+    assert_eq!(std::fs::read_to_string(parent_file).unwrap(), original);
+}
+
+#[cfg(unix)]
+#[cfg_attr(target_os = "macos", ignore = "macOS rejects non-UTF-8 filenames")]
+#[test]
+fn validate_parent_flag_preserves_a_non_utf8_parent_path() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let tmp = parent_file_reference_workspace();
+    let parent = tmp.path().join(std::ffi::OsStr::from_bytes(b"parent-\xff"));
+    std::fs::create_dir_all(parent.join("gfx")).unwrap();
+    std::fs::write(parent.join("gfx/parent_icon.dds"), "").unwrap();
+    let mut command = cwtools();
+    command
+        .current_dir(tmp.path())
+        .args([
+            "validate",
+            "--game",
+            "hoi4",
+            "--directory",
+            "mod",
+            "--rules",
+            "rules",
+            "--vanilla",
+            "vanilla",
+        ])
+        .arg("--parent")
+        .arg(parent.as_os_str())
+        .args(["--report-type", "cli"]);
+    command
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("CW113").not());
+}
+
 #[test]
 fn validate_parent_flag_loads_a_relative_parent_from_the_working_directory() {
     let tmp = parent_file_reference_workspace();
@@ -107,8 +265,8 @@ fn validate_rejects_an_empty_parent_path_in_config() {
 }
 
 #[test]
-fn an_explicit_empty_config_parent_list_clears_parent_resolution() {
-    let tmp = parent_file_reference_workspace();
+fn an_empty_config_parent_list_still_discovers_descriptor_parents() {
+    let (tmp, home) = launcher_parent_workspace();
     let config = tmp.path().join("cwtools.toml");
     std::fs::write(
         &config,
@@ -116,6 +274,8 @@ fn an_explicit_empty_config_parent_list_clears_parent_resolution() {
     )
     .unwrap();
     cwtools()
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .args([
             "validate",
             "--config",
@@ -124,8 +284,8 @@ fn an_explicit_empty_config_parent_list_clears_parent_resolution() {
             "cli",
         ])
         .assert()
-        .code(1)
-        .stdout(predicate::str::contains("CW113"))
+        .success()
+        .stdout(predicate::str::contains("CW113").not())
         .stderr(predicate::str::contains("does not read config key `parents`").not());
 }
 

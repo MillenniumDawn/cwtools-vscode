@@ -37,6 +37,46 @@ pub(crate) fn parse_game(game: &str) -> Game {
     })
 }
 
+/// Resolve explicit CLI/config parents first, falling back to launcher
+/// dependencies from the mod descriptor when neither source provides roots.
+pub(crate) fn resolve_parent_roots(
+    explicit_parents: &[PathBuf],
+    workspace: &Path,
+    game: Game,
+    vanilla: Option<&Path>,
+) -> Vec<PathBuf> {
+    let entries = if !explicit_parents.is_empty() {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        explicit_parents
+            .iter()
+            .map(|path| {
+                if path.is_relative() {
+                    cwd.join(path)
+                } else {
+                    path.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        let (roots, warnings) = cwtools_driver::parent_mods::discover_parent_roots(
+            workspace,
+            &game.to_string(),
+            vanilla,
+            None,
+        );
+        for warning in warnings {
+            eprintln!("warn: {warning}");
+        }
+        return roots;
+    };
+    let (roots, warnings) =
+        cwtools_driver::parent_mods::resolve_parent_roots(&entries, Some(workspace), vanilla);
+    for warning in warnings {
+        eprintln!("warn: {warning}");
+    }
+    roots
+}
+
 /// Resolve the run's config file, failing loudly on a broken one. `anchor` is
 /// the directory the upward search starts from when `--config` wasn't given.
 pub(crate) fn load_config(

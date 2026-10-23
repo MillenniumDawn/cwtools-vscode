@@ -46,7 +46,6 @@ pub(super) fn run(args: ValidateArgs) {
         since,
         allow_empty,
     } = args;
-
     let file_cfg = load_config(config.as_deref(), directory.as_deref());
     let mut applied: Vec<&'static str> = Vec::new();
     let fc = file_cfg.as_ref();
@@ -101,6 +100,8 @@ pub(super) fn run(args: ValidateArgs) {
     }
 
     let game_id = parse_game(&game);
+    let parent_roots =
+        crate::run::resolve_parent_roots(&parent_roots, &directory, game_id, vanilla.as_deref());
 
     let rules_label = if rules.is_dir() {
         format!("directory {}", rules.display())
