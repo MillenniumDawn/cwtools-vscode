@@ -375,7 +375,6 @@ pub(crate) fn severity_rank(s: ErrorSeverity) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cwtools_file_manager::path_identity;
     use cwtools_parser::ast::{SourcePos, SourceRange};
     use cwtools_parser::fix::SuggestedFix;
     use cwtools_test_support::abs;
@@ -443,6 +442,7 @@ mod tests {
     )]
     #[test]
     fn non_utf8_diagnostic_hash_is_stable_across_roots_and_root_spellings() {
+        use cwtools_file_manager::path_identity;
         use std::os::unix::ffi::OsStringExt;
 
         let cwd = std::path::absolute(".").unwrap();
