@@ -25,6 +25,8 @@ interface LoadingBarParams {
 }
 interface UpdateFileList {
 	fileList: FileListItem[];
+	/** Effective parent roots and canonical spellings, as file URIs. */
+	parentRoots?: string[];
 	/** Configured/discovered and canonical spellings of the install, as file URIs. */
 	vanillaRoots?: string[];
 }
@@ -40,7 +42,7 @@ export interface ServerNotifications {
 export function registerServerNotifications(
 	context: ExtensionContext,
 	client: LanguageClient,
-	updateVanillaRoots?: (roots: readonly string[]) => Promise<void>,
+	updateServerContentRoots?: (roots: readonly string[]) => Promise<void>,
 ): ServerNotifications {
 	const loadingBarNotification = "loadingBar";
 	const updateFileList = "updateFileList";
@@ -78,14 +80,14 @@ export function registerServerNotifications(
 
 	const markStopped = (): void => {
 		acceptFileList = false;
-		setVanillaRoots([]);
+		setServerContentRoots([]);
 		status.text = l10n.t("CWTools: stopped");
 		clearCommandAvailability();
 	};
-	const setVanillaRoots = (roots: readonly string[]): void => {
-		if (updateVanillaRoots) {
-			void updateVanillaRoots(roots).catch((err: unknown) =>
-				logError("Failed to classify vanilla documents", err),
+	const setServerContentRoots = (roots: readonly string[]): void => {
+		if (updateServerContentRoots) {
+			void updateServerContentRoots(roots).catch((err: unknown) =>
+				logError("Failed to classify game-content documents", err),
 			);
 		}
 	};
@@ -94,7 +96,7 @@ export function registerServerNotifications(
 		client.onDidChangeState((e: StateChangeEvent) => {
 			if (e.newState === State.Starting) {
 				acceptFileList = false;
-				setVanillaRoots([]);
+				setServerContentRoots([]);
 				status.text = l10n.t("CWTools: starting");
 			} else if (e.newState === State.Running) {
 				acceptFileList = true;
@@ -137,8 +139,9 @@ export function registerServerNotifications(
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
 		if (!acceptFileList) return;
 		const roots: string[] = [];
-		if (Array.isArray(params.vanillaRoots)) {
-			for (const root of params.vanillaRoots) {
+		for (const rootList of [params.parentRoots, params.vanillaRoots]) {
+			if (!Array.isArray(rootList)) continue;
+			for (const root of rootList) {
 				// Uri.parse makes empty/relative file paths absolute. Require the
 				// explicit hierarchical path the server produces before parsing.
 				if (typeof root !== "string" || !/^file:\/\/[^/?#]*\//.test(root)) continue;
@@ -150,7 +153,7 @@ export function registerServerNotifications(
 				}
 			}
 		}
-		setVanillaRoots(roots);
+		setServerContentRoots(roots);
 		const signature = fileListSignature(params.fileList);
 		if (!fileExplorer) {
 			fileExplorer = new FileExplorer(context, params.fileList);

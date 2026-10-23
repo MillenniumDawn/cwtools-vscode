@@ -1,4 +1,6 @@
 import * as assert from "assert";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, suite, test, vi } from "vitest";
 import type { ExtensionContext } from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
@@ -11,6 +13,7 @@ const state = vi.hoisted(() => ({
 	logError: vi.fn(),
 	activeEditor: undefined as object | undefined,
 	switchEditor: undefined as ((editor: unknown) => void) | undefined,
+	documents: [] as Array<{ languageId: string; uri: { scheme: string; fsPath: string } }>,
 }));
 
 vi.mock("vscode", async (importOriginal) => {
@@ -35,9 +38,17 @@ vi.mock("vscode", async (importOriginal) => {
 				return { dispose: () => {} };
 			},
 		},
+		languages: {
+			setTextDocumentLanguage: (document: { languageId: string }, languageId: string) => {
+				document.languageId = languageId;
+				return Promise.resolve(document);
+			},
+		},
 		workspace: {
 			...original.workspace,
-			textDocuments: [],
+			get textDocuments() {
+				return state.documents;
+			},
 			onDidOpenTextDocument: () => ({ dispose: () => {} }),
 		},
 	};
@@ -76,7 +87,7 @@ function fakeEditor(name: string) {
 	};
 }
 
-async function startTracker() {
+async function startTracker(workspaceRoot = process.cwd()) {
 	const requests: Request[] = [];
 	const client = {
 		sendNotification: vi.fn().mockResolvedValue(undefined),
@@ -96,7 +107,7 @@ async function startTracker() {
 		context as unknown as ExtensionContext,
 		client as unknown as LanguageClient,
 		"paradox",
-		() => [],
+		() => [workspaceRoot],
 	);
 	return { tracker, requests, context };
 }
@@ -113,6 +124,29 @@ suite("documentLanguage", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
 		state.activeEditor = undefined;
+		state.documents = [];
+	});
+
+	test("server-resolved parent roots classify already-open documents without trusting unrelated roots", async () => {
+		const workspaceRoot = path.join(process.cwd(), "selected-mod");
+		const parentRoot = path.join(process.cwd(), "parent-mod");
+		const parentFile = path.join(parentRoot, "common", "example.txt");
+		const unrelatedFile = path.join(process.cwd(), "outside", "common", "example.txt");
+		const parentDocument = {
+			languageId: "plaintext",
+			uri: { scheme: "file", fsPath: parentFile, toString: () => pathToFileURL(parentFile).toString() },
+		};
+		const unrelatedDocument = {
+			languageId: "plaintext",
+			uri: { scheme: "file", fsPath: unrelatedFile, toString: () => pathToFileURL(unrelatedFile).toString() },
+		};
+		state.documents = [parentDocument, unrelatedDocument];
+		const { tracker } = await startTracker(workspaceRoot);
+
+		await tracker.updateServerContentRoots([parentRoot]);
+
+		assert.strictEqual(parentDocument.languageId, "paradox");
+		assert.strictEqual(unrelatedDocument.languageId, "plaintext");
 	});
 
 	test("a reply for the previous editor does not set the graph file context", async () => {
@@ -271,7 +305,6 @@ suite("documentLanguage", () => {
 
 	test("nothing is written after the tracker is disposed", async () => {
 		const { tracker, requests, context } = await startTracker();
-
 		await focus(fakeEditor("a"));
 		for (const subscription of context.subscriptions) subscription.dispose();
 

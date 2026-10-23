@@ -226,7 +226,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 			"paradox",
 			readContentRoots,
 		);
-		const notifications = registerServerNotifications(context, client, tracker.updateVanillaRoots);
+		const notifications = registerServerNotifications(context, client, tracker.updateServerContentRoots);
 		initialScanDone = notifications.initialScanDone;
 		statusText = notifications.statusText;
 		notifyStopped = notifications.markStopped;
