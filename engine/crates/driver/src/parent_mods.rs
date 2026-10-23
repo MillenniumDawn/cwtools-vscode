@@ -8,8 +8,8 @@ use cwtools_string_table::string_table::StringTable;
 
 /// Resolve configured parent roots in load order, returning a warning for each
 /// entry that cannot be used or is excluded.
-pub fn resolve_parent_roots(
-    entries: &[String],
+pub fn resolve_parent_roots<P: AsRef<Path>>(
+    entries: &[P],
     workspace_root: Option<&Path>,
     vanilla_dir: Option<&Path>,
 ) -> (Vec<PathBuf>, Vec<String>) {
@@ -19,13 +19,13 @@ pub fn resolve_parent_roots(
     let mut kept: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut dropped = Vec::new();
     for entry in entries {
-        let raw = Path::new(entry);
+        let raw = entry.as_ref();
         let path = match workspace_root {
             Some(root) if raw.is_relative() => root.join(raw),
             _ => raw.to_path_buf(),
         };
         let Some(real) = canonical(&path).filter(|real| real.is_dir()) else {
-            dropped.push(format!("parent mod is not a directory: {entry}"));
+            dropped.push(format!("parent mod is not a directory: {}", raw.display()));
             continue;
         };
         let reason = if workspace
@@ -41,7 +41,7 @@ pub fn resolve_parent_roots(
             None
         };
         match reason {
-            Some(reason) => dropped.push(format!("parent mod {reason}: {entry}")),
+            Some(reason) => dropped.push(format!("parent mod {reason}: {}", raw.display())),
             None => kept.push((path, real)),
         }
     }
@@ -132,7 +132,7 @@ fn resolve_dependencies(
     dependencies: &[String],
     launcher_mods: &[ResolvedMod],
 ) -> (Vec<PathBuf>, Vec<String>) {
-    let mut entries = Vec::new();
+    let mut entries: Vec<PathBuf> = Vec::new();
     let mut warnings = Vec::new();
     for name in dependencies {
         // Several launcher entries can point at one directory; they count once.
@@ -149,7 +149,7 @@ fn resolve_dependencies(
         }
         match distinct.as_slice() {
             [] => warnings.push(format!("parent mod dependency not found: {name}")),
-            [(_, root)] => entries.push(root.to_string_lossy().into_owned()),
+            [(_, root)] => entries.push(root.to_path_buf()),
             _ => {
                 let roots = distinct
                     .iter()

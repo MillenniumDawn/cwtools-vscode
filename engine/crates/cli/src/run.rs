@@ -69,10 +69,6 @@ pub(crate) fn resolve_parent_roots(
         }
         return roots;
     };
-    let entries = entries
-        .iter()
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
     let (roots, warnings) =
         cwtools_driver::parent_mods::resolve_parent_roots(&entries, Some(workspace), vanilla);
     for warning in warnings {
