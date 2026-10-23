@@ -67,9 +67,10 @@ async fn wait_for_hold(gate: &crate::state::HoldGate) {
 
 async fn enable(backend: &crate::Backend, uri: &Url, line: &str) {
     let root = backend.state.config.read().workspace_roots[0].clone();
+    let file = std::fs::canonicalize(uri.to_file_path().unwrap()).unwrap();
     let hash = cwtools_driver::diagnostic_hash::diag_hash(
         &root,
-        uri.to_file_path().unwrap().to_str().unwrap(),
+        file.to_str().unwrap(),
         "CW282",
         "redundant default",
         line,
@@ -259,9 +260,15 @@ async fn unsaved_buffers_supply_the_hash_source() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn writer_roundtrips_suppressed_diagnostics_and_can_replace_a_baseline() {
-    let (_root, backend, _uri) = fixture("test = { bad = yes }\n");
-    let _rules = rules(&backend);
+async fn writer_matches_cli_hashes_and_roundtrips_suppressed_diagnostics() {
+    let (workspace, backend, _uri) = fixture("test = { bad = yes }\n");
+    let vanilla = tempfile::tempdir().unwrap();
+    {
+        let mut cfg = backend.state.config.write();
+        cfg.language = "hoi4".to_string();
+        cfg.vanilla_dir = Some(vanilla.path().to_path_buf());
+    }
+    let rules = rules(&backend);
     let result = backend
         .write_baseline_command(&[serde_json::json!("baseline.txt")], None)
         .await
@@ -270,6 +277,41 @@ async fn writer_roundtrips_suppressed_diagnostics_and_can_replace_a_baseline() {
     assert!(result["hashes"].as_u64().unwrap() > 0);
     let root = backend.state.config.read().workspace_roots[0].clone();
     let original = std::fs::read_to_string(root.join("baseline.txt")).unwrap();
+    let session = cwtools_driver::Session::load(cwtools_driver::SessionConfig {
+        game: backend.state.config.read().game().unwrap(),
+        rules: cwtools_driver::RulesInput::from_path(rules.path().to_path_buf()),
+        directory: workspace.path().to_path_buf(),
+        parent_roots: Vec::new(),
+        vanilla: Some(vanilla.path().to_path_buf()),
+        vanilla_cache: None,
+        vanilla_cache_auto: None,
+        ignore_files: &[],
+        ignore_dirs: &[],
+        loc_languages: None,
+        case_sensitive_files: false,
+        on_rules_diagnostic: None,
+    });
+    let mut cli_hashes = HashSet::new();
+    for (file, errors) in session.validate_all() {
+        for error in errors {
+            cli_hashes.insert(cwtools_driver::diagnostic_hash::diag_hash_for_native_path(
+                workspace.path(),
+                &error.file,
+                &file,
+                error.code.unwrap(),
+                &error.message,
+                if error.line == 0 {
+                    ""
+                } else {
+                    "test = { bad = yes }"
+                },
+            ));
+        }
+    }
+    assert_eq!(
+        original.lines().map(String::from).collect::<HashSet<_>>(),
+        cli_hashes
+    );
     backend.reload_baseline("baseline.txt".to_string()).await;
     backend.refresh_baseline_diagnostics().await;
     assert!(backend.state.baseline.lock().total > 0);
