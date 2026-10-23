@@ -198,9 +198,64 @@ export function registerCommands(
 	tracker: EditorTracker,
 	serverExe: string | undefined,
 	activeGame: string,
+	workspaceFolder?: vscode.WorkspaceFolder,
 ): void {
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showReferences", showReferences),
+	);
+	context.subscriptions.push(
+		commands.registerCommand("cwtools.writeDiagnosticsBaseline", async (targetValue?: unknown) => {
+			if (!workspaceFolder) {
+				window.showErrorMessage(l10n.t("CWTools: no descriptor workspace is selected."));
+				return;
+			}
+			if (!requireRunningServer(client)) return;
+			const configured = workspace
+				.getConfiguration("cwtools", workspaceFolder.uri)
+				.get<string>("diagnostics.baselineFile", "");
+			const target = typeof targetValue === "string"
+				? targetValue
+				: configured || ".cwtools-baseline";
+			if (
+				target.length === 0 ||
+				path.isAbsolute(target) ||
+				/^[A-Za-z]:[\\/]/.test(target) ||
+				target.startsWith("\\")
+			) {
+				window.showErrorMessage(l10n.t("CWTools: baseline target must be a workspace-relative path."));
+				return;
+			}
+			try {
+				const args =
+					targetValue !== undefined
+						? [target]
+						: configured
+							? []
+							: [".cwtools-baseline"];
+				const result = await runCancellableExecuteCommand(
+					client,
+					serverCommand("writeDiagnosticsBaseline"),
+					args,
+					l10n.t("CWTools: Write diagnostics baseline"),
+				);
+				if (
+					result === null || typeof result !== "object" ||
+					typeof (result as { file?: unknown }).file !== "string" ||
+					typeof (result as { hashes?: unknown }).hashes !== "number"
+				) {
+					throw new Error(l10n.t("The server returned an invalid baseline result."));
+				}
+				await workspace
+					.getConfiguration("cwtools", workspaceFolder.uri)
+					.update("diagnostics.baselineFile", target, vscode.ConfigurationTarget.WorkspaceFolder);
+				window.showInformationMessage(
+					l10n.t("CWTools: wrote diagnostics baseline ({0} hashes).", (result as { hashes: number }).hashes),
+				);
+			} catch (err) {
+				if (err instanceof vscode.CancellationError) return;
+				window.showErrorMessage(l10n.t("CWTools: failed to write diagnostics baseline: {0}", errorMessage(err)));
+			}
+		}),
 	);
 	context.subscriptions.push(
 		commands.registerCommand("cwtools.showOutput", () => {

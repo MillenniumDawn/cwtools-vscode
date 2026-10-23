@@ -53,6 +53,7 @@ suite("reindexSettings — normalization", () => {
 
 suite("reindexSettings — buildSettingsPayload", () => {
 	const liveSettings: LiveServerSettings = {
+		diagnosticsBaseline: ".cwtools-baseline",
 		localisationLanguages: ["English", "French"],
 		workspaceWideDiagnostics: true,
 		hoverShowAllLanguages: false,

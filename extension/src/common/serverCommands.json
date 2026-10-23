@@ -10,5 +10,6 @@
   "getGraphEntityAtPosition": true,
   "fixAllWorkspace": true,
   "formatWorkspace": true,
-  "validateWorkspace": true
+  "validateWorkspace": true,
+  "writeDiagnosticsBaseline": true
 }

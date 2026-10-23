@@ -20,6 +20,7 @@
   "commands.validateWorkspace.title": "Validate workspace",
   "commands.restartServer.title": "Restart Server",
   "commands.showOutput.title": "Show Output",
+  "commands.writeDiagnosticsBaseline.title": "Write Diagnostics Baseline",
   "commands.showGraph.title": "Show graph",
   "commands.showGraphFromHere.title": "Show graph from here",
   // Show a graph previously exported JSON
@@ -44,6 +45,7 @@
   "configuration.cwtools.errors.ignore.description": "Diagnostic codes to suppress everywhere, e.g. `CW100` (list of error/warning IDs).",
   "configuration.cwtools.errors.ignorefiles.description": "File names to exclude from the workspace (not load into cwtools, so references into them won't resolve), e.g. `README.txt`, `credits.txt`.",
   "configuration.cwtools.diagnostics.workspaceWide.description": "Publish diagnostics for closed files during workspace scans. Disable to keep the Problems panel scoped to open files; workspace indexing and validation summaries still include all files.",
+  "configuration.cwtools.diagnostics.baselineFile.description": "Workspace-relative diagnostics baseline file. Leave empty to disable suppression. Use the CWTools: Write Diagnostics Baseline command to create or refresh it.",
   "configuration.cwtools.rules_folder.description": "A folder containing custom rules to use. Changes apply without reloading the window.",
   "configuration.cwtools.rules.autoReload.description": "Automatically reload rules after `.cwt` files in the selected rules folder change. Disable to reload rules manually.",
   // Glob pattern is a technical term

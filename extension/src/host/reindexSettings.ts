@@ -41,6 +41,7 @@ export type HoverScopeDisplay = "context" | "resolved";
 export type FormattingIndentStyle = "space" | "tab";
 
 export interface LiveServerSettings {
+	diagnosticsBaseline: string;
 	localisationLanguages: string[];
 	workspaceWideDiagnostics: boolean;
 	hoverShowAllLanguages: boolean;
@@ -60,6 +61,7 @@ export const LIVE_SETTINGS_KEYS = [
 	"cwtools.errors.ignore",
 	"cwtools.errors.ignorefiles",
 	"cwtools.diagnostics.workspaceWide",
+	"cwtools.diagnostics.baselineFile",
 	"cwtools.ignore_patterns",
 	"cwtools.backgroundReindex.intervalMinutes",
 	"cwtools.backgroundReindex.idleSeconds",

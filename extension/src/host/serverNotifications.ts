@@ -23,6 +23,9 @@ interface LoadingBarParams {
 	/** 0-100, sent by servers new enough to know where they are. */
 	percentage?: number;
 }
+interface DiagnosticsBaselineStatus {
+	suppressed: number;
+}
 interface UpdateFileList {
 	fileList: FileListItem[];
 	/** Effective parent roots and canonical spellings, as file URIs. */
@@ -54,6 +57,8 @@ export function registerServerNotifications(
 	let initialScanStarted = false;
 	let initialScanPending = true;
 	let acceptFileList = true;
+	let suppressedDiagnostics = 0;
+	let ready = false;
 	let resolveInitialScan: () => void;
 	const initialScanDone = new Promise<void>(
 		(resolve) => (resolveInitialScan = resolve),
@@ -84,6 +89,8 @@ export function registerServerNotifications(
 	const markStopped = (): void => {
 		acceptFileList = false;
 		setServerContentRoots([], []);
+		suppressedDiagnostics = 0;
+		ready = false;
 		status.text = l10n.t("CWTools: stopped");
 		clearCommandAvailability();
 	};
@@ -103,6 +110,8 @@ export function registerServerNotifications(
 			if (e.newState === State.Starting) {
 				acceptFileList = false;
 				setServerContentRoots([], []);
+				suppressedDiagnostics = 0;
+				ready = false;
 				status.text = l10n.t("CWTools: starting");
 			} else if (e.newState === State.Running) {
 				acceptFileList = true;
@@ -120,6 +129,7 @@ export function registerServerNotifications(
 
 	client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
 		if (param.enable) {
+			ready = false;
 			if (initialScanPending) {
 				initialScanStarted = true;
 			}
@@ -135,13 +145,25 @@ export function registerServerNotifications(
 					? `${param.value} ${param.percentage}%`
 					: param.value;
 		} else {
-			status.text = l10n.t("CWTools: ready");
+			ready = true;
+			status.text = readyStatusText();
 			if (initialScanPending && initialScanStarted) {
 				initialScanPending = false;
 				resolveInitialScan();
 			}
 		}
 	});
+	const readyStatusText = (): string =>
+		suppressedDiagnostics > 0
+			? l10n.t("CWTools: ready ({0} baseline-suppressed)", suppressedDiagnostics)
+			: l10n.t("CWTools: ready");
+	context.subscriptions.push(client.onNotification("diagnosticsBaselineStatus", (params: DiagnosticsBaselineStatus) => {
+		if (!acceptFileList || typeof params?.suppressed !== "number" || !Number.isSafeInteger(params.suppressed) || params.suppressed < 0) return;
+		suppressedDiagnostics = params.suppressed;
+		if (ready) {
+			status.text = readyStatusText();
+		}
+	}));
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
 		if (!acceptFileList) return;
 		const parseRoots = (rootList: unknown): string[] => {
