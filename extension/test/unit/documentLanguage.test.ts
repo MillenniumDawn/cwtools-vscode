@@ -143,10 +143,26 @@ suite("documentLanguage", () => {
 		state.documents = [parentDocument, unrelatedDocument];
 		const { tracker } = await startTracker(workspaceRoot);
 
-		await tracker.updateServerContentRoots([parentRoot]);
+		await tracker.updateServerContentRoots([parentRoot], []);
 
 		assert.strictEqual(parentDocument.languageId, "paradox");
 		assert.strictEqual(unrelatedDocument.languageId, "plaintext");
+	});
+
+	test("keeps a vanilla root that contains the selected workspace", async () => {
+		const vanillaRoot = path.join(process.cwd(), "game-install");
+		const workspaceRoot = path.join(vanillaRoot, "mod", "selected");
+		const vanillaFile = path.join(vanillaRoot, "common", "script.txt");
+		const vanillaDocument = {
+			languageId: "plaintext",
+			uri: { scheme: "file", fsPath: vanillaFile, toString: () => pathToFileURL(vanillaFile).toString() },
+		};
+		state.documents = [vanillaDocument];
+		const { tracker } = await startTracker(workspaceRoot);
+
+		await tracker.updateServerContentRoots([], [vanillaRoot]);
+
+		assert.strictEqual(vanillaDocument.languageId, "paradox");
 	});
 
 	test("a reply for the previous editor does not set the graph file context", async () => {

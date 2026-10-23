@@ -14,14 +14,16 @@
 //   rules-sync  activation-triggered rules sync against a local hoi4 fixture
 //               (see below; its own CI step, not part of test:smoke)
 //   host        sample-workspace suites, including smoke, hover and completion;
-//               excludes live, multi-root, restart, rules-sync, watched and the
-//               gate-* labels
+//               excludes live, multi-root, parent-language, restart, rules-sync,
+//               watched and the gate-* labels
+//   parent-language dependency discovery and root-based plaintext promotion, in an isolated home
 //   restart     destructive server-crash/recovery test in an isolated host
 //
 // A label selects exactly one config: @vscode/test-cli resolves `--label x`
 // with config.tests.find(), so a second entry sharing a label is never run.
 // Labels are therefore unique here, and `test:smoke` passes `--label smoke`,
-// `--label live`, `--label multi-root`, `--label watched`, `--label restart`,
+// `--label live`, `--label multi-root`, `--label watched`,
+// `--label parent-language`, `--label restart`,
 // `--label gate-descriptor`, and `--label gate-disabled` to cover the host
 // workspaces and the external-file watcher suite.
 //
@@ -66,6 +68,12 @@ const vscodeCompatibilityFloor = "1.91.0";
 const multiRootWorkspace =
 	"./extension/test/workspaces/multiroot.code-workspace";
 const liveWorkspace = "./extension/test/workspaces/live";
+const parentLanguageWorkspace =
+	"./extension/test/workspaces/parent-language/submod";
+const parentLanguageHome = path.resolve(
+	import.meta.dirname,
+	"extension/test/workspaces/parent-language/home",
+);
 const rulesSyncWorkspace = "./extension/test/workspaces/hoi4";
 const gateDescriptorWorkspace =
 	"./extension/test/workspaces/gate-descriptor/gate-descriptor.code-workspace";
@@ -246,6 +254,22 @@ export default defineConfig({
 				CWTOOLS_TEST_HOI4_REF: "3f03757a6f15565f763434e5752021c3ba8c0c3e",
 				CWTOOLS_TEST_RULES_MANIFEST_URL: "http://127.0.0.1:1/rules-pins.json",
 			},
+		},
+		{
+			...base,
+			label: "parent-language",
+			files: [
+				abortDiagnostics,
+				"./dist/extension/bin/client/test/host/parentLanguage.test.js",
+			],
+			workspaceFolder: parentLanguageWorkspace,
+			launchArgs: [
+				"./extension/test/workspaces/parent-language/submod/common/ai_strategy/selected.txt",
+				softwareRendering,
+				disableCrashReporter,
+				...headless,
+			],
+			env: { HOME: parentLanguageHome, USERPROFILE: parentLanguageHome },
 		},
 		{
 			...base,

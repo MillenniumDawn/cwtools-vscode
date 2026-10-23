@@ -16,8 +16,12 @@ export interface EditorTracker {
 	// type stays unknown until the user switches tabs once. Call it after the
 	// client is running, since it makes a getFileTypes request.
 	classifyActiveEditor(): Promise<void>;
-	/** Recheck open documents when the server reports its effective content roots. */
-	updateServerContentRoots(this: void, roots: readonly string[]): Promise<void>;
+	/** Recheck open documents against the server's effective parent and vanilla roots. */
+	updateServerContentRoots(
+		this: void,
+		parentRoots: readonly string[],
+		vanillaRoots: readonly string[],
+	): Promise<void>;
 }
 
 // Trailing debounce on tab switches: rapid cycling otherwise sends a
@@ -46,7 +50,8 @@ export async function registerDocumentLanguage(
 	const sameRoots = (a: readonly string[], b: readonly string[]) =>
 		a.length === b.length && a.every((root, i) => root === b[i]);
 	let contentRoots = readContentRoots();
-	let serverContentRoots: readonly string[] = [];
+	let serverParentRoots: readonly string[] = [];
+	let serverVanillaRoots: readonly string[] = [];
 
 	// The static filenamePatterns in package.json only match game files under a
 	// folder named like the game ("hearts of iron iv"), so a mod workspace with
@@ -59,7 +64,7 @@ export async function registerDocumentLanguage(
 		/(?:^|[\\/])(events|common|map|map_data|gfx|interface|history|localisation|localisation_synced|localization|music|sound|portraits|prescripted_countries|tutorial|decisions|missions)[\\/]/i;
 	function looksLikeGameScript(doc: vscode.TextDocument): boolean {
 		if (doc.uri.scheme !== "file") return false;
-		const roots = [...contentRoots, ...serverContentRoots];
+		const roots = [...contentRoots, ...serverParentRoots, ...serverVanillaRoots];
 		const root = roots.find((root) =>
 			isTrustedPath(doc.uri.fsPath, [root]),
 		);
@@ -207,9 +212,9 @@ export async function registerDocumentLanguage(
 		getLatestType: () => latestType,
 		classifyActiveEditor: () =>
 			didChangeActiveTextEditor(window.activeTextEditor, ++generation),
-		updateServerContentRoots: async (roots) => {
+		updateServerContentRoots: async (parentRoots, vanillaRoots) => {
 			const workspaceRoot = readContentRoots()[0];
-			const acceptedRoots = roots.filter(
+			const acceptedParentRoots = parentRoots.filter(
 				(root) =>
 					!isTrustedPath(root, [workspaceRoot]) &&
 					!isTrustedPath(workspaceRoot, [root]),
@@ -217,10 +222,12 @@ export async function registerDocumentLanguage(
 			const nextContentRoots = [workspaceRoot];
 			if (
 				sameRoots(contentRoots, nextContentRoots) &&
-				sameRoots(serverContentRoots, acceptedRoots)
+				sameRoots(serverParentRoots, acceptedParentRoots) &&
+				sameRoots(serverVanillaRoots, vanillaRoots)
 			) return;
 			contentRoots = nextContentRoots;
-			serverContentRoots = acceptedRoots;
+			serverParentRoots = acceptedParentRoots;
+			serverVanillaRoots = vanillaRoots;
 			await Promise.all(workspace.textDocuments.map(upgradePlaintextDocument));
 		},
 	};

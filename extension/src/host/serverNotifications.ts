@@ -42,7 +42,10 @@ export interface ServerNotifications {
 export function registerServerNotifications(
 	context: ExtensionContext,
 	client: LanguageClient,
-	updateServerContentRoots?: (roots: readonly string[]) => Promise<void>,
+	updateServerContentRoots?: (
+		parentRoots: readonly string[],
+		vanillaRoots: readonly string[],
+	) => Promise<void>,
 ): ServerNotifications {
 	const loadingBarNotification = "loadingBar";
 	const updateFileList = "updateFileList";
@@ -80,13 +83,16 @@ export function registerServerNotifications(
 
 	const markStopped = (): void => {
 		acceptFileList = false;
-		setServerContentRoots([]);
+		setServerContentRoots([], []);
 		status.text = l10n.t("CWTools: stopped");
 		clearCommandAvailability();
 	};
-	const setServerContentRoots = (roots: readonly string[]): void => {
+	const setServerContentRoots = (
+		parentRoots: readonly string[],
+		vanillaRoots: readonly string[],
+	): void => {
 		if (updateServerContentRoots) {
-			void updateServerContentRoots(roots).catch((err: unknown) =>
+			void updateServerContentRoots(parentRoots, vanillaRoots).catch((err: unknown) =>
 				logError("Failed to classify game-content documents", err),
 			);
 		}
@@ -96,7 +102,7 @@ export function registerServerNotifications(
 		client.onDidChangeState((e: StateChangeEvent) => {
 			if (e.newState === State.Starting) {
 				acceptFileList = false;
-				setServerContentRoots([]);
+				setServerContentRoots([], []);
 				status.text = l10n.t("CWTools: starting");
 			} else if (e.newState === State.Running) {
 				acceptFileList = true;
@@ -138,9 +144,9 @@ export function registerServerNotifications(
 	});
 	client.onNotification(updateFileList, (params: UpdateFileList) => {
 		if (!acceptFileList) return;
-		const roots: string[] = [];
-		for (const rootList of [params.parentRoots, params.vanillaRoots]) {
-			if (!Array.isArray(rootList)) continue;
+		const parseRoots = (rootList: unknown): string[] => {
+			const roots: string[] = [];
+			if (!Array.isArray(rootList)) return roots;
 			for (const root of rootList) {
 				// Uri.parse makes empty/relative file paths absolute. Require the
 				// explicit hierarchical path the server produces before parsing.
@@ -152,8 +158,12 @@ export function registerServerNotifications(
 					// Ignore malformed root URIs from incompatible server versions.
 				}
 			}
-		}
-		setServerContentRoots(roots);
+			return roots;
+		};
+		setServerContentRoots(
+			parseRoots(params.parentRoots),
+			parseRoots(params.vanillaRoots),
+		);
 		const signature = fileListSignature(params.fileList);
 		if (!fileExplorer) {
 			fileExplorer = new FileExplorer(context, params.fileList);
