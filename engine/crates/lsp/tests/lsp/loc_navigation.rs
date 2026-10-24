@@ -348,36 +348,41 @@ focus = { id = localisation }
 idea = { enabled = bool }
 per_file = { enabled = bool }
 "#;
-    for (loc_text, script_path, script, replacement) in [
+    for (loc_text, script_path, script, replacement, expected_reason) in [
         (
             "l_english:\n shared_key:0 \"Display\"\n display_key:0 \"Existing\"\n",
             "common/national_focus/test.txt",
             "focus = { id = shared_key }\n",
             "display_key",
+            "localisation key 'display_key' already exists",
         ),
         (
             "l_english:\n shared_key:0 \"Display\"\n",
             "common/national_focus/test.txt",
             "focus = { id = shared_key }\nfocus = { id = display_key }\n",
             "display_key",
+            "focus 'display_key' already exists",
         ),
         (
             "l_english:\n x_x:0 \"Display\"\n",
             "common/ideas/test.txt",
             "x = { enabled = yes }\n",
             "new_x",
+            "rule-defined prefix and suffix",
         ),
         (
             "l_english:\n shared_key:0 \"Display\"\n",
             "localisation/hidden_l_french.yml",
             "l_french:\n display_key:0 \"Existing\"\n",
             "display_key",
+            "localisation key 'display_key' already exists",
         ),
         (
             "l_english:\n shared_key:0 \"Display\"\n",
             "common/per_file/shared_key.txt",
             "enabled = yes\n",
             "display_key",
+            "filename-derived entities require a file rename",
         ),
     ] {
         let files = [
@@ -400,6 +405,12 @@ per_file = { enabled = bool }
         );
         server.stop();
         assert_eq!(response["error"]["code"], -32803, "{response}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(expected_reason)),
+            "{response}"
+        );
         assert!(response.get("result").is_none(), "{response}");
     }
 }
@@ -609,11 +620,8 @@ decision = { idea = <idea> }
     let builder = feature_builder(rules, &files, json!({}))
         .vanilla_file("common/ideas/test.txt", "shared_key = { enabled = yes }\n");
     let mut server = feature_start(builder, &files, &[files[0].0, files[1].0]);
-    let definition_uri = tower_lsp::lsp_types::Url::from_file_path(
-        server.vanilla_dir().join("common/ideas/test.txt"),
-    )
-    .unwrap()
-    .to_string();
+    let definition_path = std::fs::canonicalize(server.vanilla_dir().join("common/ideas/test.txt"))
+        .expect("the base-game definition exists");
     let reference_uri = server.uri(files[1].0);
     assert!(
         poll_until_attempts(40, Duration::from_millis(25), || {
@@ -626,7 +634,14 @@ decision = { idea = <idea> }
             );
             locations(&result)
                 .iter()
-                .any(|(uri, _)| uri == &definition_uri)
+                .any(|(uri, _)| {
+                    tower_lsp::lsp_types::Url::parse(uri)
+                        .ok()
+                        .and_then(|url| url.to_file_path().ok())
+                        .and_then(|path| std::fs::canonicalize(path).ok())
+                        .as_ref()
+                        == Some(&definition_path)
+                })
                 .then_some(())
         })
         .is_some(),
@@ -643,6 +658,12 @@ decision = { idea = <idea> }
     );
     server.stop();
     assert_eq!(response["error"]["code"], -32803, "{response}");
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("only edits files in the workspace folders")),
+        "{response}"
+    );
     assert!(response.get("result").is_none(), "{response}");
 }
 
