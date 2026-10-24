@@ -984,7 +984,10 @@ fn test_rename_valid_localisation_name_preserves_parseability() {
             "localisation/test_l_english.yml",
             "l_english:\n my_key:0 \"Hello\"\n my_key_desc:0 \"$my_key$\"\n",
         ),
-        ("common/test/a.txt", "x = my_key\n"),
+        (
+            "common/decisions/a.txt",
+            "adec = { localization_key = my_key }\n",
+        ),
     ];
     let result = feature_request(
         GOTO_RULES,
@@ -1000,11 +1003,14 @@ fn test_rename_valid_localisation_name_preserves_parseability() {
         rewritten[files[0].0],
         "l_english:\n new.key_1:0 \"Hello\"\n new.key_1_desc:0 \"$new.key_1$\"\n"
     );
-    assert_eq!(rewritten[files[1].0], "x = new.key_1\n");
+    assert_eq!(
+        rewritten[files[1].0],
+        "adec = { localization_key = new.key_1 }\n"
+    );
 }
 
 /// Apply the wire edits to ASCII fixtures, then parse every changed document.
-fn apply_rename_changes(
+pub(super) fn apply_rename_changes(
     result: &serde_json::Value,
     files: &[(&str, &str)],
 ) -> HashMap<String, String> {

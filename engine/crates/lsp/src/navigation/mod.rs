@@ -18,7 +18,6 @@ pub(crate) use helpers::{
     rename_refused, resolve_file_ref, selection_spans, source_range_without_text, symbol_rank,
     value_col_in_line, value_start_after_eq, word_at_position,
 };
-pub(crate) use references::key_sites;
 pub(crate) use use_sites::{BoundedUseSiteScan, scan_use_sites, scan_use_sites_bounded};
 #[cfg(test)]
 pub(crate) use use_sites::{ast_leaf_visits, reset_ast_leaf_visits};

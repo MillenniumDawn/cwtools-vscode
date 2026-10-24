@@ -22,9 +22,8 @@ use super::{
 };
 
 /// Reduce use sites to the `(uri, key_location)` pairs `resolve_value_sites`
-/// takes. Callers that refine the value column from file text — `references`,
-/// `rename`, the graph — stay on the key position and the text scan; only the
-/// code lens path uses the indexed value position directly (#472).
+/// takes. References and the graph still refine value columns from file text.
+/// Rename and code lenses use the indexed value position directly (#472).
 pub(crate) fn key_sites(
     sites: Vec<cwtools_info::UseSite>,
 ) -> Vec<(String, cwtools_info::SourceLocation)> {

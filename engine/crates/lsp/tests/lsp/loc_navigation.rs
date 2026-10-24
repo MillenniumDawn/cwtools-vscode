@@ -126,6 +126,598 @@ fn test_loc_rename_with_desc_sibling() {
 }
 
 #[test]
+fn test_loc_rename_preserves_unrelated_same_spelling_tokens() {
+    let rules = r#"
+types = {
+    type[decision] = { path = "game/common/decisions" }
+    type[scripted_effect] = { path = "game/common/scripted_effects" }
+}
+decision = {
+    name = localisation
+    literal = scalar
+    effect = <scripted_effect>
+    set_country_flag = scalar
+    set_variable = { var = scalar value = float }
+}
+scripted_effect = { add_political_power = float }
+"#;
+    let files = &[
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n shared_key:0 \"Display\"\n other:0 \"$shared_key$\"\n",
+        ),
+        (
+            "localisation/test_l_french.yml",
+            "l_french:\n shared_key:0 \"Affichage\"\n",
+        ),
+        (
+            "common/decisions/test.txt",
+            "choice = {\n    name = shared_key\n    literal = \"shared_key\"\n    effect = shared_key\n    set_country_flag = shared_key\n    set_variable = { var = shared_key value = 1 }\n}\n",
+        ),
+        (
+            "common/scripted_effects/test.txt",
+            "shared_key = { add_political_power = 1 }\n",
+        ),
+    ];
+    let result = feature_request_once(
+        rules,
+        files,
+        &[files[0].0],
+        json!({}),
+        files[0].0,
+        "textDocument/rename",
+        json!({ "position": { "line": 1, "character": 2 }, "newName": "display_key" }),
+    );
+    let changes = result["changes"].as_object().expect("rename changes");
+    let edits_for = |rel: &str| {
+        changes
+            .iter()
+            .find(|(uri, _)| uri.ends_with(rel))
+            .map(|(_, edits)| edits.as_array().expect("text edits"))
+    };
+    assert_eq!(edits_for(files[0].0).unwrap().len(), 2, "{result}");
+    assert_eq!(edits_for(files[1].0).unwrap().len(), 1, "{result}");
+    let script_edits = edits_for(files[2].0).expect("localisation reference edit");
+    assert!(
+        script_edits.iter().any(|edit| {
+            edit["range"]["start"] == json!({ "line": 1, "character": 11 })
+                && edit["range"]["end"] == json!({ "line": 1, "character": 21 })
+                && edit["newText"] == "display_key"
+        }),
+        "genuine localisation reference must be renamed: {result}"
+    );
+    assert_eq!(
+        script_edits.len(),
+        1,
+        "rename must preserve unrelated strings, effects, flags and variables: {result}"
+    );
+    assert!(
+        edits_for(files[3].0).is_none(),
+        "rename must preserve the unrelated scripted effect definition: {result}"
+    );
+}
+
+#[test]
+fn test_loc_rename_updates_coupled_entity_ids_and_typed_references() {
+    let rules = r#"
+types = {
+    type[focus] = { path = "game/common/national_focus" name_field = id }
+    type[idea] = {
+        path = "game/common/ideas"
+        localisation = {
+            name = "idea_$"
+            desc = "idea_$_desc"
+        }
+    }
+    type[decision] = { path = "game/common/decisions" }
+    type[scripted_effect] = { path = "game/common/scripted_effects" }
+}
+focus = { id = localisation }
+idea = { enabled = bool }
+decision = { has_focus = <focus> has_idea = <idea> effect = <scripted_effect> literal = scalar }
+scripted_effect = { enabled = bool }
+"#;
+    for (key, new_key, definition, reference, expected_definition, expected_reference) in [
+        (
+            "shared_key",
+            "display_key",
+            "common/national_focus/test.txt",
+            "has_focus",
+            "focus = { id = display_key }\n",
+            "display_key",
+        ),
+        (
+            "idea_shared_key_desc",
+            "idea_display_key_desc",
+            "common/ideas/test.txt",
+            "has_idea",
+            "display_key = { enabled = yes }\n",
+            "display_key",
+        ),
+    ] {
+        let en = format!("l_english:\n {key}:0 \"Display\"\n other:0 \"${key}$\"\n");
+        let fr = format!("l_french:\n {key}:0 \"Affichage\"\n");
+        let script = format!(
+            "choice = {{ {reference} = shared_key effect = shared_key literal = \"shared_key\" }}\n"
+        );
+        let files = [
+            ("localisation/test_l_english.yml", en.as_str()),
+            ("localisation/test_l_french.yml", fr.as_str()),
+            (
+                "common/national_focus/test.txt",
+                "focus = { id = shared_key }\n",
+            ),
+            ("common/ideas/test.txt", "shared_key = { enabled = yes }\n"),
+            ("common/decisions/test.txt", script.as_str()),
+            (
+                "common/scripted_effects/test.txt",
+                "shared_key = { enabled = yes }\n",
+            ),
+        ];
+        let result = feature_request_once(
+            rules,
+            &files,
+            &[files[0].0],
+            json!({}),
+            files[0].0,
+            "textDocument/rename",
+            json!({ "position": { "line": 1, "character": 2 }, "newName": new_key }),
+        );
+        let rewritten = crate::navigation::apply_rename_changes(&result, &files);
+        assert_eq!(rewritten[definition], expected_definition, "{result}");
+        assert_eq!(
+            rewritten[files[4].0],
+            format!(
+                "choice = {{ {reference} = {expected_reference} effect = shared_key literal = \"shared_key\" }}\n"
+            ),
+            "{result}"
+        );
+        assert!(!rewritten.contains_key(files[5].0), "{result}");
+        assert_eq!(
+            rewritten[files[0].0],
+            format!("l_english:\n {new_key}:0 \"Display\"\n other:0 \"${new_key}$\"\n"),
+            "{result}"
+        );
+        assert_eq!(
+            rewritten[files[1].0],
+            format!("l_french:\n {new_key}:0 \"Affichage\"\n"),
+            "{result}"
+        );
+    }
+}
+
+#[test]
+fn test_loc_rename_classifies_quoted_list_and_explicit_binding_references() {
+    let rules = r#"
+types = {
+    type[decision] = {
+        path = "game/common/decisions"
+        localisation = { label = title }
+    }
+}
+decision = {
+    title = scalar
+    quoted = localisation
+    names = { localisation }
+    literal = scalar
+}
+"#;
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n shared_key:0 \"Display\"\n",
+        ),
+        (
+            "common/decisions/test.txt",
+            "choice = { title = shared_key quoted = \"SHARED_KEY\" names = { shared_key } literal = \"shared_key\" }\n",
+        ),
+    ];
+    let result = feature_request_once(
+        rules,
+        &files,
+        &[files[0].0],
+        json!({}),
+        files[0].0,
+        "textDocument/rename",
+        json!({ "position": { "line": 1, "character": 2 }, "newName": "display_key" }),
+    );
+    let rewritten = crate::navigation::apply_rename_changes(&result, &files);
+    assert_eq!(
+        rewritten[files[1].0],
+        "choice = { title = display_key quoted = \"display_key\" names = { display_key } literal = \"shared_key\" }\n",
+        "{result}"
+    );
+}
+
+#[test]
+fn test_loc_rename_refuses_conflicting_keys_entities_and_bindings() {
+    let rules = r#"
+types = {
+    type[focus] = { path = "game/common/national_focus" name_field = id }
+    type[idea] = {
+        path = "game/common/ideas"
+        localisation = { first = "$_x" second = "x_$" }
+    }
+    type[per_file] = {
+        path = "game/common/per_file"
+        type_per_file = yes
+        localisation = { name = "$" }
+    }
+}
+focus = { id = localisation }
+idea = { enabled = bool }
+per_file = { enabled = bool }
+"#;
+    for (loc_text, script_path, script, replacement) in [
+        (
+            "l_english:\n shared_key:0 \"Display\"\n display_key:0 \"Existing\"\n",
+            "common/national_focus/test.txt",
+            "focus = { id = shared_key }\n",
+            "display_key",
+        ),
+        (
+            "l_english:\n shared_key:0 \"Display\"\n",
+            "common/national_focus/test.txt",
+            "focus = { id = shared_key }\nfocus = { id = display_key }\n",
+            "display_key",
+        ),
+        (
+            "l_english:\n x_x:0 \"Display\"\n",
+            "common/ideas/test.txt",
+            "x = { enabled = yes }\n",
+            "new_x",
+        ),
+        (
+            "l_english:\n shared_key:0 \"Display\"\n",
+            "localisation/hidden_l_french.yml",
+            "l_french:\n display_key:0 \"Existing\"\n",
+            "display_key",
+        ),
+        (
+            "l_english:\n shared_key:0 \"Display\"\n",
+            "common/per_file/shared_key.txt",
+            "enabled = yes\n",
+            "display_key",
+        ),
+    ] {
+        let files = [
+            ("localisation/test_l_english.yml", loc_text),
+            (script_path, script),
+        ];
+        let mut server = feature_start(
+            feature_builder(rules, &files, json!({})),
+            &files,
+            &[files[0].0],
+        );
+        let uri = server.uri(files[0].0);
+        let response = server.call(
+            "textDocument/rename",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": 1, "character": 2 },
+                "newName": replacement,
+            }),
+        );
+        server.stop();
+        assert_eq!(response["error"]["code"], -32803, "{response}");
+        assert!(response.get("result").is_none(), "{response}");
+    }
+}
+
+#[test]
+fn test_loc_rename_uses_unsaved_coupled_documents_and_negotiated_positions() {
+    let rules = r#"
+types = {
+    type[focus] = { path = "game/common/national_focus" name_field = id }
+    type[decision] = { path = "game/common/decisions" }
+}
+focus = { id = localisation }
+decision = { has_focus = <focus> literal = scalar }
+"#;
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n shared_key:0 \"Display\"\n",
+        ),
+        (
+            "common/national_focus/test.txt",
+            "focus = { id = shared_key }\n",
+        ),
+        (
+            "common/decisions/test.txt",
+            "choice = { has_focus = shared_key }\n",
+        ),
+    ];
+    let prefix = "choice = { literal = \"😀\" has_focus = ";
+    for (encoding, column) in [
+        ("utf-16", prefix.encode_utf16().count()),
+        ("utf-32", prefix.chars().count()),
+    ] {
+        let caps = json!({
+            "general": { "positionEncodings": [encoding] },
+            "workspace": { "workspaceEdit": { "documentChanges": true } },
+        });
+        let mut server = feature_start(
+            feature_builder(rules, &files, caps),
+            &files,
+            &[files[0].0, files[1].0, files[2].0],
+        );
+        server.change(
+            files[1].0,
+            2,
+            "# unsaved\nfocus = { id = \"shared_key\" }\n",
+        );
+        server.change(
+            files[2].0,
+            2,
+            &format!("# unsaved\n{prefix}shared_key }}\n"),
+        );
+        let uri = server.uri(files[0].0);
+        let response = server.call(
+            "textDocument/rename",
+            json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": 1, "character": 2 },
+                "newName": "display_key",
+            }),
+        );
+        server.stop();
+        let docs = response["result"]["documentChanges"]
+            .as_array()
+            .expect("versioned rename edits");
+        assert_eq!(docs.len(), 3, "{response}");
+        for (rel, start, end) in [
+            (files[1].0, 15, 27),
+            (files[2].0, column, column + "shared_key".len()),
+        ] {
+            let doc = docs
+                .iter()
+                .find(|doc| doc["textDocument"]["uri"].as_str().unwrap().ends_with(rel))
+                .unwrap();
+            assert_eq!(doc["textDocument"]["version"], 2, "{response}");
+            assert_eq!(doc["edits"].as_array().unwrap().len(), 1, "{response}");
+            assert_eq!(
+                doc["edits"][0]["range"],
+                json!({
+                    "start": { "line": 1, "character": start },
+                    "end": { "line": 1, "character": end },
+                }),
+                "{response}"
+            );
+            assert_eq!(doc["edits"][0]["newText"], "display_key", "{response}");
+        }
+    }
+}
+
+#[test]
+fn test_loc_rename_coupled_references_respect_nested_rule_context() {
+    let rules = r#"
+types = {
+    type[focus] = { path = "game/common/national_focus" name_field = id }
+    type[decision] = { path = "game/common/decisions" }
+}
+focus = { id = localisation }
+decision = { has_focus = <focus> nested = { has_focus = scalar } }
+"#;
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n shared_key:0 \"Display\"\n",
+        ),
+        (
+            "common/national_focus/test.txt",
+            "focus = { id = shared_key }\n",
+        ),
+        (
+            "common/decisions/test.txt",
+            "choice = { has_focus = shared_key nested = { has_focus = shared_key } }\n",
+        ),
+    ];
+    let result = feature_request_once(
+        rules,
+        &files,
+        &[files[0].0],
+        json!({}),
+        files[0].0,
+        "textDocument/rename",
+        json!({ "position": { "line": 1, "character": 2 }, "newName": "display_key" }),
+    );
+    let rewritten = crate::navigation::apply_rename_changes(&result, &files);
+    assert_eq!(
+        rewritten[files[2].0],
+        "choice = { has_focus = display_key nested = { has_focus = shared_key } }\n",
+        "{result}"
+    );
+}
+
+#[test]
+fn test_loc_rename_follows_active_subtype_bindings_and_alias_key_references() {
+    let rules = r#"
+types = {
+    type[scripted_effect] = {
+        path = "game/common/scripted_effects"
+        subtype[named] = { enabled = yes }
+        localisation = {
+            subtype[named] = { name = "$" }
+        }
+    }
+    type[decision] = { path = "game/common/decisions" }
+}
+scripted_effect = { enabled = bool }
+decision = {
+    effect = <scripted_effect.named>
+    complete_effect = { alias_name[effect] = alias_match_left[effect] }
+    ordinary = scalar
+}
+alias[effect:<scripted_effect.named>] = yes
+"#;
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n shared_key:0 \"Display\"\n",
+        ),
+        (
+            "common/scripted_effects/test.txt",
+            "shared_key = { enabled = yes }\n",
+        ),
+        (
+            "common/decisions/test.txt",
+            "choice = { effect = shared_key complete_effect = { shared_key = yes } ordinary = shared_key }\n",
+        ),
+    ];
+    let result = feature_request_once(
+        rules,
+        &files,
+        &[files[0].0],
+        json!({}),
+        files[0].0,
+        "textDocument/rename",
+        json!({ "position": { "line": 1, "character": 2 }, "newName": "display_key" }),
+    );
+    let rewritten = crate::navigation::apply_rename_changes(&result, &files);
+    assert_eq!(
+        rewritten[files[1].0], "display_key = { enabled = yes }\n",
+        "{result}"
+    );
+    assert_eq!(
+        rewritten[files[2].0],
+        "choice = { effect = display_key complete_effect = { display_key = yes } ordinary = shared_key }\n",
+        "{result}"
+    );
+}
+
+#[test]
+fn test_loc_rename_refuses_a_read_only_coupled_entity() {
+    let rules = r#"
+types = {
+    type[idea] = { path = "game/common/ideas" localisation = { name = "$" } }
+    type[decision] = { path = "game/common/decisions" }
+}
+idea = { enabled = bool }
+decision = { idea = <idea> }
+"#;
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n shared_key:0 \"Display\"\n",
+        ),
+        (
+            "common/decisions/test.txt",
+            "choice = { idea = shared_key }\n",
+        ),
+    ];
+    let builder = feature_builder(rules, &files, json!({}))
+        .vanilla_file("common/ideas/test.txt", "shared_key = { enabled = yes }\n");
+    let mut server = feature_start(builder, &files, &[files[0].0, files[1].0]);
+    let definition_uri = tower_lsp::lsp_types::Url::from_file_path(
+        server.vanilla_dir().join("common/ideas/test.txt"),
+    )
+    .unwrap()
+    .to_string();
+    let reference_uri = server.uri(files[1].0);
+    assert!(
+        poll_until_attempts(40, Duration::from_millis(25), || {
+            let result = server.request(
+                "textDocument/definition",
+                json!({
+                    "textDocument": { "uri": reference_uri },
+                    "position": { "line": 0, "character": 20 },
+                }),
+            );
+            locations(&result)
+                .iter()
+                .any(|(uri, _)| uri == &definition_uri)
+                .then_some(())
+        })
+        .is_some(),
+        "the base-game entity must be indexed before rename"
+    );
+    let uri = server.uri(files[0].0);
+    let response = server.call(
+        "textDocument/rename",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 1, "character": 2 },
+            "newName": "display_key",
+        }),
+    );
+    server.stop();
+    assert_eq!(response["error"]["code"], -32803, "{response}");
+    assert!(response.get("result").is_none(), "{response}");
+}
+
+#[test]
+fn test_loc_rename_expands_rule_defined_localisation_siblings() {
+    let rules = r#"
+types = {
+    type[idea] = {
+        path = "game/common/ideas"
+        localisation = { name = "$" flavour = "prefix_$_flavour" }
+    }
+    type[decision] = { path = "game/common/decisions" }
+}
+idea = { enabled = bool }
+decision = { name = localisation }
+"#;
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n shared_key:0 \"Display\"\n prefix_shared_key_flavour:0 \"$shared_key$\"\n",
+        ),
+        ("common/ideas/test.txt", "shared_key = { enabled = yes }\n"),
+        (
+            "common/decisions/test.txt",
+            "choice = { name = prefix_shared_key_flavour }\n",
+        ),
+    ];
+    let result = feature_request_once(
+        rules,
+        &files,
+        &[files[0].0],
+        json!({}),
+        files[0].0,
+        "textDocument/rename",
+        json!({ "position": { "line": 1, "character": 2 }, "newName": "display_key" }),
+    );
+    let rewritten = crate::navigation::apply_rename_changes(&result, &files);
+    assert_eq!(
+        rewritten[files[0].0],
+        "l_english:\n display_key:0 \"Display\"\n prefix_display_key_flavour:0 \"$display_key$\"\n",
+        "{result}"
+    );
+    assert_eq!(
+        rewritten[files[2].0], "choice = { name = prefix_display_key_flavour }\n",
+        "{result}"
+    );
+}
+
+#[test]
+fn test_loc_rename_does_not_start_from_an_unrelated_literal() {
+    let files = [
+        (
+            "localisation/test_l_english.yml",
+            "l_english:\n shared_key:0 \"Display\"\n",
+        ),
+        (
+            "common/characters/test.txt",
+            "character = { name = \"shared_key\" }\n",
+        ),
+    ];
+    for method in ["textDocument/prepareRename", "textDocument/rename"] {
+        let result = feature_request_once(
+            GOTO_RULES,
+            &files,
+            &[files[1].0],
+            json!({}),
+            files[1].0,
+            method,
+            json!({ "position": { "line": 0, "character": 24 }, "newName": "display_key" }),
+        );
+        assert!(result.is_null(), "{method}: {result}");
+    }
+}
+
+#[test]
 fn test_loc_outline_hierarchical_vs_flat() {
     let yml = "l_english:\n aaa:0 \"A\"\n bbb:0 \"B\"\n";
     let files = &[("localisation/test_l_english.yml", yml)];
