@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.5
+
 #### Extension
 
 * Classify script files from automatically discovered parent mods as Paradox files, including files already open when discovery finishes. Keep parent roots separate from base-game roots and clear them when the server stops. (#1104)
