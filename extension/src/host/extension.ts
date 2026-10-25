@@ -15,7 +15,11 @@ import { serverExe as resolveServerExe } from "./engine";
 import { detectGameAndVanilla } from "./detectGame";
 import type { GameDetection } from "./detectGame";
 import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
-import { createLanguageClient, observeWatchedFileEvents } from "./lspClient";
+import {
+	createLanguageClient,
+	observeRulesFileNotifications,
+	observeWatchedFileEvents,
+} from "./lspClient";
 import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
 import { gameContentRoots } from "./gameContentRoots";
@@ -60,6 +64,8 @@ export interface CwtoolsApi {
 		count: () => number;
 		dispose: () => void;
 	};
+	/** Observe outgoing external-rules notifications for host tests. */
+	observeRulesFileNotifications(): ReturnType<typeof observeRulesFileNotifications>;
 	/** This module's deactivate(), which no VS Code API lets a test call. */
 	deactivate(): Thenable<void> | undefined;
 }
@@ -76,6 +82,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		serverStatusText: () => statusText?.(),
 		serverProcessId: () => defaultClient?.serverProcess?.pid,
 		observeServerWatchedFileEvents: observeWatchedFileEvents,
+		observeRulesFileNotifications,
 		deactivate,
 	};
 	if (
