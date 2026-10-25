@@ -4,10 +4,12 @@ use std::sync::Arc;
 
 use cwtools_index::TypeIndex;
 use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
-use cwtools_rules::rules_types::{NewField, PatternKind, RootRule, RuleSet, RuleType, TypeType};
+use cwtools_rules::rules_types::{
+    NewField, NewRule, PatternKind, RootRule, RuleSet, RuleType, TypeType,
+};
 use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::Prepared;
-use cwtools_validation::position::FilePositionResolver;
+use cwtools_validation::position::{FilePositionResolver, RuleBodyMatcher};
 use rustc_hash::FxHashMap;
 
 use crate::{SourceLocation, check_path_dir};
@@ -515,68 +517,204 @@ pub(crate) fn collect_type_ref_uses(
         scope_checks: false,
         var_checks: false,
     };
-    let resolver = FilePositionResolver::new(logical_path, &prepared);
-    let mut children: Vec<_> = ast.root_children.iter().rev().collect();
-    while let Some(child) = children.pop() {
-        let Child::Leaf(idx) = child else { continue };
-        let leaf = &ast.arena.leaves[*idx as usize];
-        if let Value::Clause(nested) = &leaf.value {
-            children.extend(nested.iter().rev());
-        }
-        let (Value::String(token) | Value::QString(token)) = &leaf.value else {
-            continue;
-        };
-        let key = table.get_string(leaf.key.normal).unwrap_or_default();
-        let mut candidates = matching_type_ref_rules(map, ruleset, &key, logical_path);
+    let mut keys = HashMap::new();
+    for key in map.keys() {
+        let mut candidates = matching_type_ref_rules(map, ruleset, key, logical_path);
         let Some(first) = candidates.next() else {
             continue;
         };
-        let Some(raw) = table.get_string(token.normal) else {
-            continue;
-        };
-        let name = cwtools_parser::unquote(&raw);
-        if name.is_empty() {
-            continue;
-        }
-        let mut push = |ref_type| {
-            out.push(CollectedRef {
-                ref_type,
-                key: SourceLocation {
-                    line: leaf.pos.start.line,
-                    col: leaf.pos.start.col,
-                    end: (leaf.pos.end.line, leaf.pos.end.col),
-                },
-                value: value_location(&leaf.value_pos, name.len() != raw.len()),
-                name: name.to_string(),
-            })
-        };
-        if first.root_type.is_none()
+        let kind = if first.root_type.is_none()
             || candidates.any(|candidate| {
                 candidate.root_type.is_none() || candidate.ref_type != first.ref_type
-            })
-        {
-            // Alias fields need the enclosing rule, not a global key match.
-            let context = resolver.rules_at_pos(
-                ast,
-                &prepared,
-                leaf.value_pos.start.line,
-                leaf.value_pos.start.col,
-                false,
-            );
-            let Some(context) = context else { continue };
-            let mut types = HashSet::new();
-            for (rule, _) in context.value_rules {
-                if let RuleType::LeafRule {
-                    right: NewField::TypeField(TypeType::Simple(kind)),
-                    ..
-                } = rule
-                    && types.insert(kind.clone())
-                {
-                    push(Arc::from(kind));
-                }
-            }
+            }) {
+            TypeRefKind::Contextual
         } else {
-            push(Arc::clone(&first.ref_type));
+            TypeRefKind::Direct(&first.ref_type)
+        };
+        keys.insert(key.as_str(), kind);
+    }
+    let mut contextual = vec![false; ast.arena.leaves.len()];
+    let needs_context = keys
+        .values()
+        .any(|kind| matches!(kind, TypeRefKind::Contextual))
+        && mark_contextual_refs(&ast.root_children, ast, table, &keys, &mut contextual);
+    let collector = TypeRefCollector {
+        ast,
+        prepared: &prepared,
+        resolver: FilePositionResolver::new(logical_path, &prepared),
+        keys,
+        contextual,
+    };
+    collector.collect(&ast.root_children, None, needs_context, out);
+}
+
+#[derive(Clone, Copy)]
+enum TypeRefKind<'a> {
+    Direct(&'a Arc<str>),
+    Contextual,
+}
+
+fn type_ref_kind<'a>(keys: &HashMap<&str, TypeRefKind<'a>>, key: &str) -> Option<TypeRefKind<'a>> {
+    keys.get(key).copied().or_else(|| {
+        key.bytes()
+            .any(|b| b.is_ascii_uppercase())
+            .then(|| keys.get(key.to_ascii_lowercase().as_str()).copied())
+            .flatten()
+    })
+}
+
+fn mark_contextual_refs(
+    children: &[Child],
+    ast: &ParsedFile,
+    table: &StringTable,
+    keys: &HashMap<&str, TypeRefKind<'_>>,
+    contextual: &mut [bool],
+) -> bool {
+    let mut needed = false;
+    for child in children {
+        let Child::Leaf(idx) = child else { continue };
+        let leaf = &ast.arena.leaves[*idx as usize];
+        let inner = match &leaf.value {
+            Value::Clause(nested) => mark_contextual_refs(nested, ast, table, keys, contextual),
+            Value::String(_) | Value::QString(_) => matches!(
+                table
+                    .with_string(leaf.key.normal, |key| type_ref_kind(keys, key))
+                    .flatten(),
+                Some(TypeRefKind::Contextual)
+            ),
+            _ => false,
+        };
+        contextual[*idx as usize] = inner;
+        needed |= inner;
+    }
+    needed
+}
+
+struct TypeRefCollector<'a> {
+    ast: &'a ParsedFile,
+    prepared: &'a Prepared<'a>,
+    resolver: FilePositionResolver<'a>,
+    keys: HashMap<&'a str, TypeRefKind<'a>>,
+    contextual: Vec<bool>,
+}
+
+impl TypeRefCollector<'_> {
+    fn collect(
+        &self,
+        children: &[Child],
+        rules: Option<&[&NewRule]>,
+        needs_context: bool,
+        out: &mut Vec<CollectedRef>,
+    ) {
+        let table = self.prepared.table;
+        let ruleset = self.prepared.ruleset;
+        let owned_rules = if needs_context && rules.is_none() {
+            children
+                .iter()
+                .find_map(|child| {
+                    let Child::Leaf(idx) = child else { return None };
+                    let pos = self.ast.arena.leaves[*idx as usize].pos.start;
+                    Some(self.resolver.rules_at_pos(
+                        self.ast,
+                        self.prepared,
+                        pos.line,
+                        pos.col,
+                        false,
+                    ))
+                })
+                .flatten()
+                .map(|context| context.child_rules)
+        } else {
+            None
+        };
+        let borrowed_rules: Option<Vec<_>> =
+            owned_rules.as_ref().map(|rules| rules.iter().collect());
+        let rules = rules.or(borrowed_rules.as_deref());
+        let matcher = rules.map(RuleBodyMatcher::from_references);
+        for child in children {
+            let Child::Leaf(idx) = child else { continue };
+            let leaf = &self.ast.arena.leaves[*idx as usize];
+            if let Value::Clause(nested) = &leaf.value {
+                let needed = self.contextual[*idx as usize];
+                let inner_rules = matcher.as_ref().filter(|_| needed).map(|matcher| {
+                    let matched = table
+                        .with_string(leaf.key.normal, |key| {
+                            matcher.value_rules_for_key(ruleset, None, cwtools_parser::unquote(key))
+                        })
+                        .unwrap_or_default();
+                    let mut inner = Vec::new();
+                    for (rule, _) in matched {
+                        if let RuleType::NodeRule { rules, .. } = rule {
+                            flatten_type_ref_rules(rules, &mut inner);
+                        }
+                    }
+                    inner
+                });
+                self.collect(nested, inner_rules.as_deref(), needed, out);
+                continue;
+            }
+            let (Value::String(token) | Value::QString(token)) = &leaf.value else {
+                continue;
+            };
+            let Some(kind) = table
+                .with_string(leaf.key.normal, |key| type_ref_kind(&self.keys, key))
+                .flatten()
+            else {
+                continue;
+            };
+            let Some(raw) = table.get_string(token.normal) else {
+                continue;
+            };
+            let name = cwtools_parser::unquote(&raw);
+            if name.is_empty() {
+                continue;
+            }
+            let mut push = |ref_type| {
+                out.push(CollectedRef {
+                    ref_type,
+                    key: SourceLocation {
+                        line: leaf.pos.start.line,
+                        col: leaf.pos.start.col,
+                        end: (leaf.pos.end.line, leaf.pos.end.col),
+                    },
+                    value: value_location(&leaf.value_pos, name.len() != raw.len()),
+                    name: name.to_string(),
+                })
+            };
+            match kind {
+                TypeRefKind::Contextual => {
+                    let Some(matcher) = matcher.as_ref() else {
+                        continue;
+                    };
+                    let matched = table
+                        .with_string(leaf.key.normal, |key| {
+                            matcher.value_rules_for_key(ruleset, None, cwtools_parser::unquote(key))
+                        })
+                        .unwrap_or_default();
+                    let mut types = HashSet::new();
+                    for (rule, _) in matched {
+                        if let RuleType::LeafRule {
+                            right: NewField::TypeField(TypeType::Simple(kind)),
+                            ..
+                        } = rule
+                            && types.insert(kind)
+                        {
+                            push(Arc::from(kind.as_str()));
+                        }
+                    }
+                }
+                TypeRefKind::Direct(kind) => push(Arc::clone(kind)),
+            }
+        }
+    }
+}
+
+fn flatten_type_ref_rules<'a>(rules: &'a [NewRule], out: &mut Vec<&'a NewRule>) {
+    for rule in rules {
+        if let RuleType::SubtypeRule { rules, .. } = &rule.0 {
+            flatten_type_ref_rules(rules, out);
+        } else {
+            out.push(rule);
         }
     }
 }
@@ -913,11 +1051,18 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
+    use cwtools_parser::ast::{Child, Value};
     use cwtools_parser::parser::parse_string;
     use cwtools_rules::rules_converter::ast_to_ruleset;
+    use cwtools_rules::rules_types::{NewField, RuleType, TypeType};
     use cwtools_string_table::string_table::StringTable;
+    use cwtools_validation::Prepared;
+    use cwtools_validation::position::FilePositionResolver;
 
-    use super::{CollectedRef, ReferenceIndex};
+    use super::{
+        CollectedRef, ReferenceIndex, TypeRefKind, build_type_ref_keys, collect_type_ref_uses,
+        mark_contextual_refs, value_location,
+    };
     use crate::{InfoService, SourceLocation, TypeInstance};
 
     fn collected(ref_type: &str, name: &str, line: u32) -> CollectedRef {
@@ -1211,6 +1356,235 @@ mod tests {
                 actual.sort_unstable();
                 assert_eq!(actual, expected);
             }
+        }
+    }
+
+    #[test]
+    fn contextual_markers_exclude_direct_references_and_unrelated_branches() {
+        let table = StringTable::new();
+        let ast = parse_string(
+            "root = { metadata = { base = direct id = 4 } immediate = { country_event = { ID = used } } }",
+            &table,
+        );
+        let direct: Arc<str> = Arc::from("event");
+        let keys = HashMap::from([
+            ("id", TypeRefKind::Contextual),
+            ("base", TypeRefKind::Direct(&direct)),
+        ]);
+        let mut marked = vec![false; ast.arena.leaves.len()];
+        assert!(mark_contextual_refs(
+            &ast.root_children,
+            &ast,
+            &table,
+            &keys,
+            &mut marked
+        ));
+        let names: HashSet<_> = ast
+            .arena
+            .leaves
+            .iter()
+            .zip(&marked)
+            .filter(|(_, marked)| **marked)
+            .map(|(leaf, _)| table.get_string(leaf.key.normal).expect("interned key"))
+            .collect();
+        assert_eq!(
+            names,
+            HashSet::from(["root", "immediate", "country_event", "ID"].map(String::from))
+        );
+        marked.fill(false);
+        assert!(!mark_contextual_refs(
+            &ast.root_children,
+            &ast,
+            &table,
+            &HashMap::new(),
+            &mut marked
+        ));
+        assert!(marked.iter().all(|marked| !marked));
+    }
+
+    #[test]
+    fn contextual_batch_walk_matches_point_resolution_across_entity_layouts() {
+        let cases = [
+            (
+                "siblings",
+                "",
+                "events/a.txt",
+                r#"obj = {
+                id = definition
+                metadata = { id = not_a_reference }
+                immediate = {
+                    country_event = { id = first planet = second }
+                    planet_event = { ID = third }
+                    country_event = { id = "quoted name" }
+                    unknown = { country_event = { id = not_a_reference } }
+                }
+            }"#,
+                4,
+            ),
+            (
+                "recursive alias",
+                "",
+                "events/a.txt",
+                "obj = { immediate = { if = { country_event = { id = one } if = { planet_event = { id = two } } } } }",
+                2,
+            ),
+            (
+                "nested subtype rules",
+                "",
+                "events/a.txt",
+                "obj = { immediate = { nested = { id = one } } }",
+                1,
+            ),
+            (
+                "wrapper",
+                "skip_root_key = wrapper",
+                "events/a.txt",
+                "wrapper = { one = { immediate = { country_event = { id = first } } } two = { immediate = { planet_event = { id = second } } } }",
+                2,
+            ),
+            (
+                "nested wrapper",
+                "skip_root_key = { groups any }",
+                "events/a.txt",
+                "groups = { tier = { one = { immediate = { country_event = { id = first } } } } }",
+                1,
+            ),
+            (
+                "per file",
+                "type_per_file = yes",
+                "events/a.txt",
+                "id = definition\nimmediate = { country_event = { id = first planet = second } }",
+                2,
+            ),
+            (
+                "active subtypes",
+                "subtype[country] = { kind = country } subtype[planet] = { kind = planet }",
+                "events/a.txt",
+                "one = { kind = country typed = { send = { id = first } } } two = { kind = planet typed = { send = { id = second } } }",
+                2,
+            ),
+            (
+                "empty first block",
+                "",
+                "events/a.txt",
+                "obj = { metadata = {} immediate = { country_event = { id = first } } }",
+                1,
+            ),
+            (
+                "outside path",
+                "",
+                "unmatched/a.txt",
+                "obj = { immediate = { country_event = { id = ignored } } }",
+                0,
+            ),
+            ("empty", "", "events/a.txt", "", 0),
+        ];
+        for (case, options, path, source, count) in cases {
+            let table = StringTable::new();
+            let schema = format!(
+                r#"
+                types = {{ type[event] = {{ path = "events" name_field = id {options} }} }}
+                event = {{
+                    id = scalar
+                    kind = scalar
+                    metadata = {{ id = scalar }}
+                    immediate = {{ alias_name[effect] = alias_match_left[effect] }}
+                    subtype[country] = {{ typed = {{ alias_name[country_effect] = alias_match_left[country_effect] }} }}
+                    subtype[planet] = {{ typed = {{ alias_name[planet_effect] = alias_match_left[planet_effect] }} }}
+                }}
+                alias[effect:country_event] = {{ id = <event.country> id = <event.country> planet = <event.planet> }}
+                alias[effect:planet_event] = {{ id = <event.planet> }}
+                alias[effect:if] = {{ alias_name[effect] = alias_match_left[effect] }}
+                alias[effect:nested] = {{ subtype[a] = {{ subtype[b] = {{ id = <event.planet> }} }} }}
+                alias[country_effect:send] = {{ id = <event.country> }}
+                alias[planet_effect:send] = {{ id = <event.planet> }}
+            "#
+            );
+            let rules = ast_to_ruleset(&parse_string(&schema, &table), &table);
+            let ast = parse_string(source, &table);
+            let prepared = Prepared {
+                ruleset: &rules,
+                table: &table,
+                game: None,
+                type_index: None,
+                modifier_keys: None,
+                loc_index: None,
+                extra_loc_keys: None,
+                inline_scripts: None,
+                registry: None,
+                scope_checks: false,
+                var_checks: false,
+            };
+            let resolver = FilePositionResolver::new(path, &prepared);
+            let location = |site: SourceLocation| (site.line, site.col, site.end);
+            let mut expected = Vec::new();
+            let mut children: Vec<_> = ast.root_children.iter().rev().collect();
+            while let Some(child) = children.pop() {
+                let Child::Leaf(idx) = child else { continue };
+                let leaf = &ast.arena.leaves[*idx as usize];
+                if let Value::Clause(nested) = &leaf.value {
+                    children.extend(nested.iter().rev());
+                }
+                let (Value::String(token) | Value::QString(token)) = &leaf.value else {
+                    continue;
+                };
+                let raw = table.get_string(token.normal).expect("interned value");
+                let name = cwtools_parser::unquote(&raw);
+                if name.is_empty() {
+                    continue;
+                }
+                let Some(context) = resolver.rules_at_pos(
+                    &ast,
+                    &prepared,
+                    leaf.value_pos.start.line,
+                    leaf.value_pos.start.col,
+                    false,
+                ) else {
+                    continue;
+                };
+                let mut kinds = HashSet::new();
+                for (rule, _) in context.value_rules {
+                    if let RuleType::LeafRule {
+                        right: NewField::TypeField(TypeType::Simple(kind)),
+                        ..
+                    } = rule
+                        && kinds.insert(kind.clone())
+                    {
+                        expected.push((
+                            kind,
+                            name.to_string(),
+                            location(SourceLocation {
+                                line: leaf.pos.start.line,
+                                col: leaf.pos.start.col,
+                                end: (leaf.pos.end.line, leaf.pos.end.col),
+                            }),
+                            location(value_location(&leaf.value_pos, name.len() != raw.len())),
+                        ));
+                    }
+                }
+            }
+            assert_eq!(expected.len(), count, "point resolver: {case}");
+            let mut actual = Vec::new();
+            collect_type_ref_uses(
+                &ast,
+                &table,
+                &build_type_ref_keys(&rules),
+                &rules,
+                path,
+                &mut actual,
+            );
+            let actual: Vec<_> = actual
+                .into_iter()
+                .map(|site| {
+                    (
+                        site.ref_type.to_string(),
+                        site.name,
+                        location(site.key),
+                        location(site.value),
+                    )
+                })
+                .collect();
+            assert_eq!(actual, expected, "{case}");
         }
     }
 
