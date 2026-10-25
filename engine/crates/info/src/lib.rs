@@ -94,8 +94,7 @@ pub mod bench_support {
         ) -> Refs {
             let mut refs = Vec::new();
             collect_type_ref_uses(
-                &ast.root_children,
-                &ast.arena,
+                ast,
                 table,
                 &self.type_refs,
                 ruleset,
@@ -250,8 +249,8 @@ impl FileCollector {
     }
 
     /// Walk `ast` once for everything the index keeps from a file. `types` are
-    /// the file's type instances, which the caller collects because subtype
-    /// membership comes from a validation hook this crate cannot see.
+    /// the file's type instances, supplied by the caller so indexing shares
+    /// its subtype collection with validation.
     pub fn collect(
         self: &Arc<Self>,
         uri: &str,
@@ -338,8 +337,7 @@ impl FileCollector {
         let mut type_refs = Vec::new();
         if !self.type_ref_keys.is_empty() {
             collect_type_ref_uses(
-                &ast.root_children,
-                &ast.arena,
+                ast,
                 table,
                 &self.type_ref_keys,
                 ruleset,
@@ -751,8 +749,7 @@ impl InfoService {
         let collector = self.file_collector(ruleset);
         let mut type_refs = Vec::new();
         collect_type_ref_uses(
-            &ast.root_children,
-            &ast.arena,
+            ast,
             table,
             &collector.type_ref_keys,
             ruleset,

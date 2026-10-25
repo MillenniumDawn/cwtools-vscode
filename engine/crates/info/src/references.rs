@@ -3,9 +3,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cwtools_index::TypeIndex;
-use cwtools_parser::ast::{Arena, Child, Value};
+use cwtools_parser::ast::{Arena, Child, ParsedFile, Value};
 use cwtools_rules::rules_types::{NewField, PatternKind, RootRule, RuleSet, RuleType, TypeType};
 use cwtools_string_table::string_table::StringTable;
+use cwtools_validation::Prepared;
+use cwtools_validation::position::FilePositionResolver;
 use rustc_hash::FxHashMap;
 
 use crate::{SourceLocation, check_path_dir};
@@ -426,22 +428,26 @@ pub(crate) fn build_type_ref_keys(ruleset: &RuleSet) -> HashMap<String, Vec<Type
 
     // Tests and embedders can construct a RuleSet without calling reindex().
     // Preserve the old scan as a compatibility fallback for that shape.
-    for root_rule in &ruleset.root_rules {
-        let (root_name, is_type_rule, rule) = match root_rule {
-            RootRule::TypeRule(n, r) => (n.as_str(), true, r),
-            RootRule::AliasRule(n, r) => (n.as_str(), false, r),
-            RootRule::SingleAliasRule(n, r) => (n.as_str(), false, r),
-        };
-        let (rule_type, _) = rule;
+    let roots = ruleset
+        .root_rules
+        .iter()
+        .map(|root| match root {
+            RootRule::TypeRule(name, rule) => (Some(name.as_str()), rule),
+            RootRule::AliasRule(_, rule) | RootRule::SingleAliasRule(_, rule) => (None, rule),
+        })
+        .chain(
+            ruleset
+                .aliases
+                .iter()
+                .chain(&ruleset.single_aliases)
+                .map(|(_, rule)| (None, rule)),
+        );
+    for (root_type, (rule_type, _)) in roots {
         let rules = match rule_type {
             RuleType::NodeRule { rules, .. } => rules.as_ref(),
             _ => continue,
         };
-        let root_type: Option<Arc<str>> = if is_type_rule {
-            Some(Arc::from(root_name))
-        } else {
-            None
-        };
+        let root_type: Option<Arc<str>> = root_type.map(Arc::from);
         for (inner, _) in rules {
             if let RuleType::LeafRule {
                 left: NewField::SpecificField(k),
@@ -460,35 +466,28 @@ pub(crate) fn build_type_ref_keys(ruleset: &RuleSet) -> HashMap<String, Vec<Type
     map
 }
 
-/// The type a leaf key references, honouring the owning `TypeRule`'s path
-/// filter, or `None` when the key isn't a type-ref key here. Mirrors
-/// `is_type_ref_leaf`.
-pub(crate) fn classify_type_ref_key(
-    map: &HashMap<String, Vec<TypeRefRule>>,
-    ruleset: &RuleSet,
+fn matching_type_ref_rules<'a>(
+    map: &'a HashMap<String, Vec<TypeRefRule>>,
+    ruleset: &'a RuleSet,
     key: &str,
-    logical_path: &str,
-) -> Option<Arc<str>> {
+    logical_path: &'a str,
+) -> impl Iterator<Item = &'a TypeRefRule> {
     let entries = map.get(key).or_else(|| {
         key.bytes()
             .any(|b| b.is_ascii_uppercase())
             .then(|| map.get(&key.to_ascii_lowercase()))
             .flatten()
-    })?;
-    for e in entries {
-        let ok = match &e.root_type {
+    });
+    entries
+        .into_iter()
+        .flatten()
+        .filter(move |entry| match &entry.root_type {
             None => true,
-            Some(rt) => ruleset
+            Some(root) => ruleset
                 .type_by_name()
-                .get(rt.as_ref())
-                .map(|&idx| check_path_dir(&ruleset.types[idx].path_options, logical_path))
-                .unwrap_or(false),
-        };
-        if ok {
-            return Some(Arc::clone(&e.ref_type));
-        }
-    }
-    None
+                .get(root.as_ref())
+                .is_some_and(|&idx| check_path_dir(&ruleset.types[idx].path_options, logical_path)),
+        })
 }
 
 /// Walk a file's AST recording every type-instance reference (a `key = value`
@@ -496,42 +495,88 @@ pub(crate) fn classify_type_ref_key(
 /// Records the KEY location and the position of the referenced name itself, so
 /// callers never have to re-read the file to recover the value column (#472).
 pub(crate) fn collect_type_ref_uses(
-    children: &[Child],
-    arena: &Arena,
+    ast: &ParsedFile,
     table: &StringTable,
     map: &HashMap<String, Vec<TypeRefRule>>,
     ruleset: &RuleSet,
     logical_path: &str,
     out: &mut Vec<CollectedRef>,
 ) {
-    for child in children {
+    let prepared = Prepared {
+        ruleset,
+        table,
+        game: None,
+        type_index: None,
+        modifier_keys: None,
+        loc_index: None,
+        extra_loc_keys: None,
+        inline_scripts: None,
+        registry: None,
+        scope_checks: false,
+        var_checks: false,
+    };
+    let resolver = FilePositionResolver::new(logical_path, &prepared);
+    let mut children: Vec<_> = ast.root_children.iter().rev().collect();
+    while let Some(child) = children.pop() {
         let Child::Leaf(idx) = child else { continue };
-        let leaf = &arena.leaves[*idx as usize];
-        let key = table.get_string(leaf.key.normal).unwrap_or_default();
-        if !key.is_empty()
-            && let Some(ref_type) = classify_type_ref_key(map, ruleset, &key, logical_path)
-            && let Value::String(t) | Value::QString(t) = &leaf.value
-            && let Some(raw) = table.get_string(t.normal)
-        {
-            let name = raw
-                .strip_prefix('"')
-                .and_then(|x| x.strip_suffix('"'))
-                .unwrap_or(&raw);
-            if !name.is_empty() {
-                out.push(CollectedRef {
-                    ref_type,
-                    key: SourceLocation {
-                        line: leaf.pos.start.line,
-                        col: leaf.pos.start.col,
-                        end: (leaf.pos.end.line, leaf.pos.end.col),
-                    },
-                    value: value_location(&leaf.value_pos, name.len() != raw.len()),
-                    name: name.to_string(),
-                });
-            }
+        let leaf = &ast.arena.leaves[*idx as usize];
+        if let Value::Clause(nested) = &leaf.value {
+            children.extend(nested.iter().rev());
         }
-        if let Value::Clause(ch) = &leaf.value {
-            collect_type_ref_uses(ch, arena, table, map, ruleset, logical_path, out);
+        let (Value::String(token) | Value::QString(token)) = &leaf.value else {
+            continue;
+        };
+        let key = table.get_string(leaf.key.normal).unwrap_or_default();
+        let mut candidates = matching_type_ref_rules(map, ruleset, &key, logical_path);
+        let Some(first) = candidates.next() else {
+            continue;
+        };
+        let Some(raw) = table.get_string(token.normal) else {
+            continue;
+        };
+        let name = cwtools_parser::unquote(&raw);
+        if name.is_empty() {
+            continue;
+        }
+        let mut push = |ref_type| {
+            out.push(CollectedRef {
+                ref_type,
+                key: SourceLocation {
+                    line: leaf.pos.start.line,
+                    col: leaf.pos.start.col,
+                    end: (leaf.pos.end.line, leaf.pos.end.col),
+                },
+                value: value_location(&leaf.value_pos, name.len() != raw.len()),
+                name: name.to_string(),
+            })
+        };
+        if first.root_type.is_none()
+            || candidates.any(|candidate| {
+                candidate.root_type.is_none() || candidate.ref_type != first.ref_type
+            })
+        {
+            // Alias fields need the enclosing rule, not a global key match.
+            let context = resolver.rules_at_pos(
+                ast,
+                &prepared,
+                leaf.value_pos.start.line,
+                leaf.value_pos.start.col,
+                false,
+            );
+            let Some(context) = context else { continue };
+            let mut types = HashSet::new();
+            for (rule, _) in context.value_rules {
+                if let RuleType::LeafRule {
+                    right: NewField::TypeField(TypeType::Simple(kind)),
+                    ..
+                } = rule
+                    && types.insert(kind.clone())
+                {
+                    push(Arc::from(kind));
+                }
+            }
+        } else {
+            push(Arc::clone(&first.ref_type));
         }
     }
 }
@@ -1099,6 +1144,74 @@ mod tests {
         cache.remove_file("no-patterns.txt");
         assert!(cache.file_keys.is_empty());
         assert!(cache.sites.is_empty());
+    }
+
+    #[test]
+    fn shared_reference_keys_follow_the_enclosing_rule_in_either_alias_order() {
+        let table = StringTable::new();
+        let schema = r#"
+            types = { type[event] = { path = "events" name_field = id } }
+            event = {
+                id = scalar
+                metadata = { id = scalar }
+                immediate = { alias_name[effect] = alias_match_left[effect] }
+            }
+        "#;
+        let aliases = [
+            "alias[effect:country_event] = { id = <event.country> id = <event.country> }",
+            "alias[effect:planet_event] = { id = <event.planet> }",
+        ];
+        let source = "country_event = {\n\
+            id = shared\n\
+            metadata = { id = shared }\n\
+            immediate = {\n\
+                country_event = { id = shared }\n\
+                planet_event = { ID = shared }\n\
+            }\n\
+        }";
+        let ast = parse_string(source, &table);
+        let cases = [
+            (
+                aliases.to_vec(),
+                vec![("event.country", 5), ("event.planet", 6)],
+            ),
+            (
+                aliases.into_iter().rev().collect(),
+                vec![("event.country", 5), ("event.planet", 6)],
+            ),
+            (vec![aliases[0]], vec![("event.country", 5)]),
+        ];
+        for (order, expected) in cases {
+            let rules = ast_to_ruleset(
+                &parse_string(&format!("{schema} {}", order.join("\n")), &table),
+                &table,
+            );
+            let mut service = InfoService::new();
+            service.index_file_with_path("events.txt", &ast, &table, &rules, "events/a.txt");
+            for &(kind, line) in &expected {
+                let sites = service.reference_index.references(kind, "shared");
+                assert_eq!(lines(&sites), [("events.txt", line)], "{kind}: {sites:?}");
+            }
+            let indexed = service.file_reference_sites("events.txt");
+            let open = service.file_reference_sites_for_ast(
+                "events.txt",
+                &ast,
+                &table,
+                &rules,
+                "events/a.txt",
+            );
+            for sites in [indexed, open] {
+                let mut actual: Vec<_> = sites
+                    .iter()
+                    .map(|site| {
+                        assert_eq!(site.name, "shared");
+                        (site.type_name.as_str(), site.site.key.line)
+                    })
+                    .collect();
+                actual.sort_unstable();
+                assert_eq!(actual, expected);
+            }
+        }
     }
 
     const RULES: &str = r#"
