@@ -7,12 +7,14 @@
 
 #### Engine
 
+* Count references inside parsed effect aliases in CodeLens. Resolve shared fields such as `id` against their enclosing rules so definitions and unrelated scalar fields do not count as references.
 * Rename localisation keys together with rule-linked entity IDs and their references, without changing unrelated same-spelling effects, flags, variables, or strings. Preserve translated keys and sibling references, and cancel conflicting renames instead of returning partial edits. (#844)
 * Discover parent mods from descriptor dependencies in CLI `validate` and `fix` when neither `--parent` nor TOML `parents` supplies a nonempty list. Explicit parent paths still take precedence. (#1105)
 * Decode CLI diagnostic hash source lines like the engine and ignore a leading BOM in content hashes. Regenerate older baselines for CP1252 files or diagnostics on a BOM's first line. (#604)
 
 #### Tooling
 
+* Run the parent-language integration test in CI, measure base-game discovery and content roots in Node coverage, and exercise CodeLens reference commands through the extension host. Keep graph measurements in the benchmark runner and consolidate repeated listener-scaling checks without dropping their assertions.
 * Add a full HOI4 and Millennium Dawn index tier to the snapshot-clone benchmark and record its first-write copy cost. Keep production validation locks unchanged; the benchmark does not measure editor hover or queued-writer latency. (#868)
 
 ### 4.0.4
