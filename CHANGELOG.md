@@ -13,6 +13,7 @@
 
 #### Tooling
 
+* Analyze Python tooling in CodeQL alongside JavaScript/TypeScript, Rust, and GitHub Actions. (#526)
 * Add a full HOI4 and Millennium Dawn index tier to the snapshot-clone benchmark and record its first-write copy cost. Keep production validation locks unchanged; the benchmark does not measure editor hover or queued-writer latency. (#868)
 
 ### 4.0.4
