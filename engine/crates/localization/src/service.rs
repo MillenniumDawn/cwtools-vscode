@@ -1,11 +1,7 @@
 use crate::commands::{Lang, LocFile};
 use crate::csv_parser::parse_csv_loc_per_lang;
 use crate::yaml_parser::{LocFileParseError, parse_loc_text};
-use cwtools_file_manager::file_manager::{ignore_glob_match, to_slash_path};
-use cwtools_file_manager::{
-    FileEncoding, ScanBudget, ScanBytes, is_excluded_dir, is_excluded_root_dir, is_loc_ext,
-    read_text_capped_with_encoding,
-};
+use cwtools_file_manager::{FileEncoding, ScanBudget, ScanBytes, read_text_capped_with_encoding};
 use std::path::{Path, PathBuf};
 
 pub struct LocService {
@@ -43,36 +39,6 @@ impl LocService {
             files: parsed,
             errors,
         }
-    }
-
-    pub fn from_folder(folder: &Path, budget: ScanBudget) -> Self {
-        Self::from_folders_filtered(&[folder], budget, None, &[], &[])
-    }
-
-    pub fn from_folders_filtered(
-        folders: &[&Path],
-        budget: ScanBudget,
-        langs: Option<&[Lang]>,
-        ignore_files: &[String],
-        ignore_dirs: &[String],
-    ) -> Self {
-        let paths = Self::discover_files_filtered(folders, budget, ignore_files, ignore_dirs);
-        Self::from_paths(paths, budget, langs)
-    }
-
-    /// Discover loc files with user globs applied before ignored paths consume
-    /// the file budget.
-    pub fn discover_files_filtered(
-        folders: &[&Path],
-        budget: ScanBudget,
-        ignore_files: &[String],
-        ignore_dirs: &[String],
-    ) -> Vec<PathBuf> {
-        let mut paths = Vec::new();
-        for folder in folders {
-            paths.extend(walk_folder(folder, budget, ignore_files, ignore_dirs));
-        }
-        paths
     }
 
     pub fn from_paths(paths: Vec<PathBuf>, budget: ScanBudget, langs: Option<&[Lang]>) -> Self {
@@ -179,101 +145,6 @@ pub fn parse_loc_files(
     }
 }
 
-fn is_loc_dir_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower == "localisation" || lower == "localisation_synced" || lower == "localization"
-}
-
-fn is_excluded_loc_dir(name: &str, at_root: bool) -> bool {
-    name.starts_with('.') || is_excluded_dir(name) || (at_root && is_excluded_root_dir(name))
-}
-
-fn walk_folder(
-    folder: &Path,
-    budget: ScanBudget,
-    ignore_files: &[String],
-    ignore_dirs: &[String],
-) -> Vec<PathBuf> {
-    let mut remaining = budget.max_files;
-    walk_folder_inner(
-        folder,
-        folder,
-        false,
-        true,
-        &mut remaining,
-        ignore_files,
-        ignore_dirs,
-    )
-}
-
-fn walk_folder_inner(
-    root: &Path,
-    folder: &Path,
-    in_loc: bool,
-    at_root: bool,
-    remaining_files: &mut usize,
-    ignore_files: &[String],
-    ignore_dirs: &[String],
-) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let Ok(rd) = std::fs::read_dir(folder) else {
-        return files;
-    };
-    let mut entries: Vec<(std::ffi::OsString, PathBuf, std::fs::FileType)> = Vec::new();
-    for entry in rd.flatten() {
-        let Ok(ft) = entry.file_type() else { continue };
-        entries.push((entry.file_name(), entry.path(), ft));
-    }
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-
-    for (name, path, ft) in entries {
-        if *remaining_files == 0 {
-            break;
-        }
-        // Reject symlinks and non-regular files outright (see `file_manager::walk_dir_generic`):
-        // a symlink can point outside the root or into a cycle, and a special file can
-        // report length 0.
-        if ft.is_symlink() || !(ft.is_dir() || ft.is_file()) {
-            continue;
-        }
-        let name = name.to_str().unwrap_or("");
-        let relative = path.strip_prefix(root).unwrap_or(&path);
-        let relative = to_slash_path(relative);
-        if ft.is_dir() {
-            if is_excluded_loc_dir(name, at_root)
-                || ignore_dirs
-                    .iter()
-                    .any(|pattern| ignore_glob_match(pattern, name, &relative))
-            {
-                continue;
-            }
-            let child_in_loc = in_loc || is_loc_dir_name(name);
-            files.extend(walk_folder_inner(
-                root,
-                &path,
-                child_in_loc,
-                false,
-                remaining_files,
-                ignore_files,
-                ignore_dirs,
-            ));
-        } else if in_loc
-            && path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(is_loc_ext)
-            && !ignore_files
-                .iter()
-                .any(|pattern| ignore_glob_match(pattern, name, &relative))
-        {
-            *remaining_files -= 1;
-            files.push(path);
-        }
-    }
-
-    files
-}
-
 fn loc_header_language(text: &str, path: &str) -> Option<Lang> {
     let text = text.trim_start_matches('\u{feff}');
     let mut end = 0;
@@ -290,29 +161,6 @@ fn loc_header_language(text: &str, path: &str) -> Option<Lang> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn excluded_loc_dirs_skip_tooling_not_content() {
-        for skip in [
-            ".claude",
-            ".git",
-            ".vscode",
-            ".idea",
-            "node_modules",
-            "target",
-            "out",
-            "dist",
-            "bin",
-            "obj",
-        ] {
-            assert!(is_excluded_loc_dir(skip, false), "{skip} should be skipped");
-        }
-        for keep in ["localisation", "localization", "common", "english"] {
-            assert!(!is_excluded_loc_dir(keep, false), "{keep} should be walked");
-        }
-        assert!(is_excluded_loc_dir("resources", true));
-        assert!(!is_excluded_loc_dir("resources", false));
-    }
 
     #[test]
     fn from_files_parses_yaml_and_records_language() {
@@ -420,93 +268,6 @@ mod tests {
     }
 
     #[test]
-    fn from_folder_skips_non_localisation_directories() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("not_loc")).unwrap();
-        std::fs::create_dir_all(tmp.path().join("localisation")).unwrap();
-        std::fs::write(
-            tmp.path().join("not_loc").join("bad_l_english.yml"),
-            r#"l_english:
- key:0 "v"
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            tmp.path().join("localisation").join("good_l_english.yml"),
-            r#"l_english:
- key:0 "v"
-"#,
-        )
-        .unwrap();
-
-        let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
-        assert_eq!(svc.files().len(), 1);
-        assert!(
-            svc.files()[0]
-                .path
-                .replace('\\', "/")
-                .ends_with("localisation/good_l_english.yml")
-        );
-    }
-
-    #[test]
-    fn from_folder_loads_the_synced_localisation_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("localisation_synced")).unwrap();
-        std::fs::write(
-            tmp.path()
-                .join("localisation_synced")
-                .join("good_l_english.yml"),
-            r#"l_english:
- key:0 "v"
-"#,
-        )
-        .unwrap();
-
-        let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
-        assert_eq!(svc.files().len(), 1);
-        assert!(
-            svc.files()[0]
-                .path
-                .replace('\\', "/")
-                .ends_with("localisation_synced/good_l_english.yml")
-        );
-    }
-
-    #[test]
-    fn from_folder_skips_excluded_dot_directories() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join(".claude").join("localisation")).unwrap();
-        std::fs::write(
-            tmp.path()
-                .join(".claude")
-                .join("localisation")
-                .join("dup_l_english.yml"),
-            r#"l_english:
- key:0 "v"
-"#,
-        )
-        .unwrap();
-        std::fs::create_dir_all(tmp.path().join("localisation")).unwrap();
-        std::fs::write(
-            tmp.path().join("localisation").join("good_l_english.yml"),
-            r#"l_english:
- key:0 "v"
-"#,
-        )
-        .unwrap();
-
-        let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
-        assert_eq!(svc.files().len(), 1);
-        assert!(
-            svc.files()[0]
-                .path
-                .replace('\\', "/")
-                .ends_with("localisation/good_l_english.yml")
-        );
-    }
-
-    #[test]
     fn from_files_routes_csv_to_csv_parser() {
         let csv = "#CODE;English;French;German;;Spanish\nKEY_A;Hello;Bonjour;Hallo;;Hola\n";
         let svc = LocService::from_files(vec![(
@@ -531,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn from_folders_merges_multiple_roots() {
+    fn from_paths_merges_multiple_roots() {
         let a = tempfile::tempdir().unwrap();
         let b = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(a.path().join("localisation")).unwrap();
@@ -551,12 +312,13 @@ mod tests {
         )
         .unwrap();
 
-        let svc = LocService::from_folders_filtered(
-            &[a.path(), b.path()],
+        let svc = LocService::from_paths(
+            vec![
+                a.path().join("localisation/a_l_english.yml"),
+                b.path().join("localisation/b_l_english.yml"),
+            ],
             ScanBudget::default(),
             None,
-            &[],
-            &[],
         );
         let paths: Vec<&str> = svc.files().iter().map(|f| f.path.as_str()).collect();
         assert!(
@@ -602,67 +364,6 @@ mod tests {
     }
 
     #[test]
-    fn filtered_discovery_prunes_before_the_file_budget() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ignored = tmp.path().join("ignored/localisation");
-        let kept = tmp.path().join("kept/localisation");
-        std::fs::create_dir_all(&ignored).unwrap();
-        for name in ["a.yml", "b.yml", "c.yml"] {
-            std::fs::write(ignored.join(name), "l_english:\n key:0 \"ignored\"\n").unwrap();
-        }
-
-        let mut remaining = 1;
-        let ignore_dirs = ["ignored".to_string()];
-        let ignored_files = walk_folder_inner(
-            tmp.path(),
-            tmp.path(),
-            false,
-            true,
-            &mut remaining,
-            &[],
-            &ignore_dirs,
-        );
-        assert!(ignored_files.is_empty());
-        assert_eq!(remaining, 1);
-
-        std::fs::create_dir_all(&kept).unwrap();
-        std::fs::write(kept.join("keep.yml"), "l_english:\n key:0 \"kept\"\n").unwrap();
-        let kept_files = walk_folder_inner(
-            tmp.path(),
-            &tmp.path().join("kept"),
-            false,
-            false,
-            &mut remaining,
-            &[],
-            &ignore_dirs,
-        );
-        assert_eq!(kept_files, vec![kept.join("keep.yml")]);
-        assert_eq!(remaining, 0);
-    }
-
-    #[test]
-    fn filtered_discovery_matches_root_relative_file_and_directory_globs() {
-        let tmp = tempfile::tempdir().unwrap();
-        for relative in [
-            "localisation/keep.yml",
-            "localisation/skip.yml",
-            "wip/localisation/staged.yml",
-        ] {
-            let path = tmp.path().join(relative);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, "l_english:\n key:0 \"v\"\n").unwrap();
-        }
-
-        let files = LocService::discover_files_filtered(
-            &[tmp.path()],
-            ScanBudget::default(),
-            &["localisation/skip.yml".to_string()],
-            &["wip/localisation".to_string()],
-        );
-        assert_eq!(files, vec![tmp.path().join("localisation/keep.yml")]);
-    }
-
-    #[test]
     fn filtered_load_skips_unselected_yaml_languages_before_parsing() {
         let tmp = tempfile::tempdir().unwrap();
         let loc = tmp.path().join("localisation");
@@ -671,12 +372,14 @@ mod tests {
         std::fs::write(loc.join("fr.yml"), "l_french:\n fr:0 \"French\"\n").unwrap();
         std::fs::write(loc.join("names.csv"), "key;english;french\nname;Name;Nom\n").unwrap();
 
-        let service = LocService::from_folders_filtered(
-            &[tmp.path()],
+        let service = LocService::from_paths(
+            vec![
+                loc.join("en.yml"),
+                loc.join("fr.yml"),
+                loc.join("names.csv"),
+            ],
             ScanBudget::default(),
             Some(&[Lang::English]),
-            &[],
-            &[],
         );
         assert!(
             service
@@ -708,12 +411,10 @@ mod tests {
             ..ScanBudget::default()
         };
 
-        let service = LocService::from_folders_filtered(
-            &[tmp.path()],
+        let service = LocService::from_paths(
+            vec![loc.join("large_french.yml")],
             budget,
             Some(&[Lang::English]),
-            &[],
-            &[],
         );
         assert_eq!(service.errors().len(), 1);
         assert!(
@@ -742,41 +443,8 @@ mod tests {
         }
     }
 
-    // ── symlink / over-limit hardening (#161) ──────────────────────────────────
-
-    /// The loc walker must reject symlinks: a dir symlink can point outside the
-    /// root or into a cycle, and a file symlink can point at a special file.
-    #[cfg(unix)]
     #[test]
-    fn from_folder_rejects_symlinks() {
-        use std::os::unix::fs::symlink;
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("localisation")).unwrap();
-        std::fs::write(
-            tmp.path().join("localisation").join("good_l_english.yml"),
-            r#"l_english:
- key:0 "v"
-"#,
-        )
-        .unwrap();
-        symlink(
-            tmp.path().join("localisation").join("good_l_english.yml"),
-            tmp.path().join("localisation").join("link_l_english.yml"),
-        )
-        .unwrap();
-
-        let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
-        assert_eq!(svc.files().len(), 1, "symlinked loc file must be rejected");
-        assert!(
-            svc.files()[0]
-                .path
-                .replace('\\', "/")
-                .ends_with("good_l_english.yml")
-        );
-    }
-
-    #[test]
-    fn from_folder_skips_over_limit_file() {
+    fn from_paths_skips_over_limit_file() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("localisation")).unwrap();
         std::fs::write(
@@ -796,7 +464,14 @@ mod tests {
             max_file_size: 50,
             ..ScanBudget::default()
         };
-        let svc = LocService::from_folder(tmp.path(), budget);
+        let svc = LocService::from_paths(
+            vec![
+                tmp.path().join("localisation/good_l_english.yml"),
+                tmp.path().join("localisation/huge_l_english.yml"),
+            ],
+            budget,
+            None,
+        );
         assert!(
             svc.files()
                 .iter()
@@ -809,45 +484,5 @@ mod tests {
                 .any(|f| f.path.ends_with("huge_l_english.yml")),
             "over-cap file must not load"
         );
-    }
-
-    #[test]
-    fn discover_files_returns_sorted_order() {
-        let tmp = tempfile::tempdir().unwrap();
-        let loc = tmp.path().join("localisation");
-        std::fs::create_dir_all(loc.join("zebra")).unwrap();
-        std::fs::create_dir_all(loc.join("alpha")).unwrap();
-        std::fs::write(loc.join("middle.yml"), "l_english:\n k:0 \"v\"\n").unwrap();
-        std::fs::write(loc.join("zebra").join("z.yml"), "l_english:\n k:0 \"v\"\n").unwrap();
-        std::fs::write(loc.join("alpha").join("a.yml"), "l_english:\n k:0 \"v\"\n").unwrap();
-
-        let files =
-            LocService::discover_files_filtered(&[tmp.path()], ScanBudget::default(), &[], &[]);
-        let names: Vec<String> = files
-            .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names, vec!["a.yml", "middle.yml", "z.yml"]);
-    }
-
-    #[test]
-    fn discover_files_budget_follows_sorted_order() {
-        let tmp = tempfile::tempdir().unwrap();
-        let loc = tmp.path().join("localisation");
-        std::fs::create_dir_all(&loc).unwrap();
-        for name in ["zebra.yml", "alpha.yml", "middle.yml"] {
-            std::fs::write(loc.join(name), "l_english:\n k:0 \"v\"\n").unwrap();
-        }
-        let files = LocService::discover_files_filtered(
-            &[tmp.path()],
-            ScanBudget {
-                max_files: 1,
-                ..ScanBudget::default()
-            },
-            &[],
-            &[],
-        );
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].file_name().unwrap().to_string_lossy(), "alpha.yml");
     }
 }
