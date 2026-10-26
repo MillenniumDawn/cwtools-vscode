@@ -3,15 +3,11 @@
 import re
 from pathlib import Path
 
+from workflow_helpers import workflow_step
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LIVE_SETTINGS = REPO_ROOT / "extension" / "test" / "host" / "liveSettings.test.ts"
-
-
-def workflow_step(workflow: str, name: str) -> str:
-    return workflow.split(f"      - name: {name}\n", maxsplit=1)[1].split(
-        "\n      - ", maxsplit=1
-    )[0]
 
 
 def test_package_steps_do_not_run_after_cancellation() -> None:

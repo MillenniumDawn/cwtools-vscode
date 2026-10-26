@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from workflow_helpers import workflow_step
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 SETUP_RUST = REPO_ROOT / ".github" / "actions" / "setup-rust" / "action.yml"
@@ -12,12 +14,6 @@ TOOLS = {
     "cargo-fuzz": "0.13.2",
     "cargo-llvm-cov": "0.8.7",
 }
-
-
-def step(workflow: str, name: str) -> str:
-    return workflow.split(f"      - name: {name}\n", maxsplit=1)[1].split(
-        "\n      - ", maxsplit=1
-    )[0]
 
 
 def test_setup_rust_separates_registry_and_versioned_tool_caches() -> None:
@@ -55,7 +51,7 @@ def test_ci_cargo_installs_are_pinned_and_skip_on_exact_tool_cache_hit() -> None
     assert workflow.count("id: rust-setup") == len(TOOLS)
     assert "--force" not in workflow
     for name, install in expected_installs.items():
-        install_step = step(workflow, name)
+        install_step = workflow_step(workflow, name)
         assert CACHE_HIT in install_step
         assert install in install_step
 
