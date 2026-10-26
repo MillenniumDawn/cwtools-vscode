@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::common::{
-    STORM_FILE, ServerBuilder, TestServer, count_publishes, count_validate_log, path_uri,
-    poll_until, publish_has_code, storm_base, storm_builder, storm_server, storm_start,
+    STORM_FILE, ServerBuilder, TestServer, count_publishes, count_validate_log, is_scan_started,
+    path_uri, poll_until, publish_has_code, storm_base, storm_builder, storm_server, storm_start,
     wait_for_scan_release, watched_changes, watched_created, watched_deleted,
 };
 
@@ -351,6 +351,107 @@ fn test_watched_created_texture_clears_cw113_without_a_reindex() {
 }
 
 #[test]
+fn test_watched_created_folder_indexes_texture_and_script_without_a_reindex() {
+    let (mut server, opened) = open_picture_doc(
+        storm_base().file("gfx/present.dds", "present"),
+        "dds",
+        "pack/new_pic",
+    );
+    assert!(
+        publish_has_code(&opened, "CW113"),
+        "the folder texture must start missing, got: {opened}"
+    );
+    server.write_file_uri("gfx/pack/new_pic.dds", "texture");
+    server.write_file_uri("gfx/pack/defs.gfx", "# no exported names\n");
+    server.write_file_uri("gfx/pack/.git/direct.gfx", "invalid = {\n");
+    server.write_file_uri("gfx/pack/.git/child/hidden.gfx", "invalid = {\n");
+    let folders = [
+        server.uri("gfx/pack"),
+        server.uri("gfx/pack/.git"),
+        server.uri("gfx/pack/.git/child"),
+    ];
+
+    server.send(&watched_created(&folders));
+
+    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let log = server.profiling_log();
+    server.stop();
+
+    assert!(
+        !publish_has_code(last_picture_publish(&frames), "CW113"),
+        "CW113 must clear after a directory-only create event indexes its texture, got: {frames:?}"
+    );
+    assert_eq!(
+        count_publishes(&frames, "defs.gfx"),
+        1,
+        "the script under the created folder must be validated, got: {frames:?}"
+    );
+    assert_eq!(
+        count_publishes(&frames, "direct.gfx"),
+        0,
+        "an excluded .git start directory must not be validated, got: {frames:?}"
+    );
+    assert_eq!(
+        count_publishes(&frames, "hidden.gfx"),
+        0,
+        "a directory below excluded .git must not be validated, got: {frames:?}"
+    );
+    assert_eq!(
+        count_publishes(&frames, ".dds"),
+        0,
+        "a resource must never be published, got: {frames:?}"
+    );
+    assert_eq!(
+        count_validate_log(&log, "reindex"),
+        0,
+        "the open decision must revalidate without a reindex, got: {log}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_watched_created_folder_does_not_index_symlinked_resources() {
+    let (mut server, opened) = open_picture_doc(
+        storm_base().file("gfx/present.dds", "present"),
+        "dds",
+        "pack/new_pic",
+    );
+    assert!(
+        publish_has_code(&opened, "CW113"),
+        "the symlink target must start missing, got: {opened}"
+    );
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("new_pic.dds"), "texture").unwrap();
+    let pack = server.path("gfx/pack");
+    std::fs::create_dir_all(&pack).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("new_pic.dds"), pack.join("new_pic.dds"))
+        .unwrap();
+    std::fs::write(pack.join("defs.gfx"), "# no exported names\n").unwrap();
+    let folder = server.uri("gfx/pack");
+
+    server.send(&watched_created(std::slice::from_ref(&folder)));
+
+    let mut frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    assert_eq!(
+        count_publishes(&frames, "defs.gfx"),
+        1,
+        "the real script proves the folder was expanded, got: {frames:?}"
+    );
+    server.change(
+        PICTURE_DOC_REL,
+        2,
+        "adec = {\n    picture = pack/new_pic\n}\n",
+    );
+    frames.extend(server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10)));
+    server.stop();
+
+    assert!(
+        publish_has_code(last_picture_publish(&frames), "CW113"),
+        "folder expansion must not index a symlinked resource, got: {frames:?}"
+    );
+}
+
+#[test]
 fn test_watched_created_script_clears_cw113_without_a_reindex() {
     let mut server = picture_server("gfx");
     let target = server.write_file_uri("gfx/new_pic.gfx", "# no exported names\n");
@@ -484,6 +585,82 @@ fn over_cap_batches(server: &mut TestServer) -> usize {
         .profiling_log()
         .matches("watched batch over cap")
         .count()
+}
+
+#[test]
+fn test_watched_created_folder_over_budget_retries_after_losing_scan_cas() {
+    let signals = tempfile::tempdir().unwrap();
+    let parse_gate = signals.path().join("parse-hold");
+    let rules = r#"
+        types = {
+            type[decision] = { path = "game/common/decisions" }
+        }
+        decision = {
+            ## cardinality = 0..1
+            picture = filepath[gfx/,.dds]
+        }
+    "#;
+    let text = "adec = { picture = large/new_pic }\n";
+    let mut server = storm_start(
+        storm_base()
+            .file("gfx/present.dds", "present")
+            .rules_file("r.cwt", rules)
+            .env("CWTOOLS_PARSE_HOLD_FILE", &parse_gate),
+    );
+    server.write_file(PICTURE_DOC_REL, text);
+    server.open(PICTURE_DOC_REL, text);
+    let initial = server.wait_for_diagnostics("d.txt");
+    assert!(
+        publish_has_code(&initial, "CW113"),
+        "the texture must start missing, got: {initial}"
+    );
+
+    std::fs::write(&parse_gate, b"hold").unwrap();
+    server.reindex_until_scan_starts();
+    server.read_until("the reindex scan's held Parse phase", is_scan_started);
+    let folder_path = server.path("gfx/large");
+    std::fs::create_dir_all(&folder_path).unwrap();
+    std::fs::write(folder_path.join("new_pic.dds"), "texture").unwrap();
+    for index in 0..10_000 {
+        std::fs::write(folder_path.join(format!("f{index}.dds")), "texture").unwrap();
+    }
+    let folder = server.uri("gfx/large");
+    server.send(&watched_created(std::slice::from_ref(&folder)));
+    assert!(
+        poll_until(
+            Instant::now() + Duration::from_secs(30),
+            Duration::from_millis(100),
+            || (over_cap_batches(&mut server) >= 1).then_some(())
+        )
+        .is_some(),
+        "the bounded folder walk did not lose the scan CAS and fall back"
+    );
+
+    std::fs::remove_file(&parse_gate).unwrap();
+    wait_for_scan_release(&server.scan_release_path());
+    assert!(
+        poll_until(
+            Instant::now() + Duration::from_secs(30),
+            Duration::from_millis(100),
+            || (over_cap_batches(&mut server) >= 2).then_some(())
+        )
+        .is_some(),
+        "the requeued folder event did not trigger the fallback scan after the CAS winner finished"
+    );
+    wait_for_scan_release(&server.scan_release_path());
+    server.change(PICTURE_DOC_REL, 2, text);
+    let cleared = server.wait_for_diagnostics("d.txt");
+    assert!(
+        !publish_has_code(&cleared, "CW113"),
+        "the retry must index the moved texture without a reindex, got: {cleared}"
+    );
+    let log = server.profiling_log();
+    server.stop();
+    assert_eq!(
+        log.matches("watched batch over cap").count(),
+        2,
+        "one lost-CAS fallback and one requeued fallback are expected, got: {log}"
+    );
 }
 
 #[test]

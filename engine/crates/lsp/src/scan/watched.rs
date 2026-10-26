@@ -7,6 +7,8 @@ use tower_lsp::lsp_types::*;
 use crate::Backend;
 use crate::paths::{is_resource_file, is_stray_loc_file, uri_to_path_str};
 
+const WATCHED_FOLDER_EXPANSION_MAX_ENTRIES: usize = 10_000;
+
 use super::{
     WATCHED_BATCH_PANIC_ONCE, WATCHED_DEBOUNCE_MS, env_flag, resolve_watched_deletes,
     spawn_logging_panics, watched_batch_over_cap, watched_batch_slot_is_ours, watched_stat_sig,
@@ -166,7 +168,7 @@ impl Backend {
         changes: HashSet<String>,
         deletes: Vec<String>,
     ) {
-        // Before the partition: a folder URI has no extension, so it lands with the resources.
+        let (changes, folder_expansion_over_budget) = self.with_created_folder_contents(changes);
         let deletes = self.with_deleted_folder_contents(deletes, &changes);
         // Resources skip the rescan cap, so a texture folder copy stays cheap (#1023).
         let (resource_changes, changes): (HashSet<String>, HashSet<String>) =
@@ -184,14 +186,18 @@ impl Backend {
         let resources_changed = self.sync_watched_resources(&resource_changes);
         let only_resources = changes.is_empty() && deletes.is_empty();
         let mut lost_scan_cas = false;
-        if watched_batch_over_cap(changes.len(), deletes.len()) {
+        if folder_expansion_over_budget || watched_batch_over_cap(changes.len(), deletes.len()) {
             tracing::info!(
                 changes = changes.len(),
                 deletes = deletes.len(),
                 "watched batch over cap; full rescan"
             );
             if !self.validate_entire_workspace(true).await {
-                self.state.watched_pending.lock().extend(changes);
+                let mut pending = self.state.watched_pending.lock();
+                pending.extend(changes);
+                if folder_expansion_over_budget {
+                    pending.extend(resource_changes);
+                }
                 self.state
                     .watched_deleted
                     .lock()
@@ -331,6 +337,131 @@ impl Backend {
         if pending_more || deleted_more {
             self.arm_watched_batch();
         }
+    }
+
+    /// Expand folder events within the editable root; skip unsafe/excluded descendants and fall back to a workspace scan over budget.
+    fn with_created_folder_contents(&self, changes: HashSet<String>) -> (HashSet<String>, bool) {
+        let Some(workspace_root) = self.state.config.read().editable_roots.first().cloned() else {
+            return (changes, false);
+        };
+        let root = std::fs::canonicalize(&workspace_root).unwrap_or(workspace_root);
+        let mut expanded = HashSet::new();
+        let mut visited_entries = 0usize;
+        for uri in &changes {
+            let Some(path) = crate::access::file_uri_to_path(uri) else {
+                expanded.insert(uri.clone());
+                continue;
+            };
+            let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                expanded.insert(uri.clone());
+                continue;
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                expanded.insert(uri.clone());
+                continue;
+            }
+            let Ok(directory) = std::fs::canonicalize(&path) else {
+                expanded.insert(uri.clone());
+                continue;
+            };
+            let Some(relative) = directory.strip_prefix(&root).ok() else {
+                expanded.insert(uri.clone());
+                continue;
+            };
+            if relative.as_os_str().is_empty() {
+                expanded.insert(uri.clone());
+                continue;
+            }
+            let mut ancestor = path.as_path();
+            let mut inside_root_without_symlinks = false;
+            loop {
+                if std::fs::symlink_metadata(ancestor)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                {
+                    break;
+                }
+                if std::fs::canonicalize(ancestor).ok().as_deref() == Some(root.as_path()) {
+                    inside_root_without_symlinks = true;
+                    break;
+                }
+                let Some(parent) = ancestor.parent() else {
+                    break;
+                };
+                ancestor = parent;
+            }
+            if !inside_root_without_symlinks {
+                expanded.insert(uri.clone());
+                continue;
+            }
+            if relative.components().any(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .is_some_and(cwtools_file_manager::is_excluded_dir)
+            }) || relative
+                .components()
+                .next()
+                .and_then(|component| component.as_os_str().to_str())
+                .is_some_and(cwtools_file_manager::is_excluded_root_dir)
+            {
+                continue;
+            }
+            let Some(directory_uri) = Url::from_file_path(&directory)
+                .ok()
+                .map(|url| url.to_string())
+            else {
+                expanded.insert(uri.clone());
+                continue;
+            };
+            if self.is_ignored_uri(&format!("{directory_uri}/")) {
+                continue;
+            }
+            let mut pending = vec![directory];
+            while let Some(directory) = pending.pop() {
+                let Ok(entries) = std::fs::read_dir(&directory) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    visited_entries = visited_entries.saturating_add(1);
+                    if visited_entries > WATCHED_FOLDER_EXPANSION_MAX_ENTRIES {
+                        return (changes, true);
+                    }
+                    let path = entry.path();
+                    let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+                        continue;
+                    };
+                    if metadata.file_type().is_symlink() {
+                        continue;
+                    }
+                    let Some(uri) = Url::from_file_path(&path).ok().map(|url| url.to_string())
+                    else {
+                        continue;
+                    };
+                    if metadata.is_dir() {
+                        let Some(relative) = path.strip_prefix(&root).ok() else {
+                            continue;
+                        };
+                        if relative.components().any(|component| {
+                            component
+                                .as_os_str()
+                                .to_str()
+                                .is_some_and(cwtools_file_manager::is_excluded_dir)
+                        }) || self.is_ignored_uri(&format!("{uri}/"))
+                        {
+                            continue;
+                        }
+                        pending.push(path);
+                    } else if metadata.is_file()
+                        && !is_stray_loc_file(&uri)
+                        && !self.is_ignored_uri(&uri)
+                        && self.workspace_rel_for_file_index(&uri).is_some()
+                    {
+                        expanded.insert(uri);
+                    }
+                }
+            }
+        }
+        (expanded, false)
     }
 
     /// Resource events update the file index only. True when the index content changed
