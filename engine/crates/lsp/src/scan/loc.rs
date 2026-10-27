@@ -476,7 +476,14 @@ mod tests {
             "l_french:\n my_key:0 \"Bonjour\"\n",
         )
         .unwrap();
-        let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
+        let svc = LocService::from_paths(
+            vec![
+                loc_dir.join("a_l_english.yml"),
+                loc_dir.join("a_l_french.yml"),
+            ],
+            ScanBudget::default(),
+            None,
+        );
         assert_eq!(svc.files().len(), 2);
         let idx = LocIndex::build(&svc);
         let mut text = LocText::default();
@@ -625,7 +632,14 @@ mod tests {
             "l_english:\n dup_key:0 \"Hello\"\n",
         )
         .unwrap();
-        let svc = LocService::from_folder(tmp.path(), ScanBudget::default());
+        let svc = LocService::from_paths(
+            vec![
+                loc_dir.join("a_l_french.yml"),
+                loc_dir.join("b_l_english.yml"),
+            ],
+            ScanBudget::default(),
+            None,
+        );
         let idx = LocIndex::build(&svc);
         let mut text = LocText::default();
         let mut locs = LocLocations::default();

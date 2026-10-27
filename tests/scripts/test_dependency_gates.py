@@ -11,6 +11,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from workflow_helpers import job_scope, workflow_step
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 DEPENDABOT = REPO_ROOT / ".github" / "dependabot.yml"
@@ -29,23 +31,6 @@ FUZZ_RUN_STEPS = (
     "read_errors_from_file over seed corpus",
     "vanilla_cache_load over seed corpus",
 )
-
-
-def job_scope(workflow: str, job: str) -> str:
-    """Return one top-level job's body, up to the next job header."""
-    marker = f"\n  {job}:\n"
-    body = workflow[workflow.index(marker) + len(marker) :]
-    next_job = re.search(r"\n  \S", body)
-    if next_job is None:
-        return body
-    return body[: next_job.start()]
-
-
-def workflow_step(scope: str, name: str) -> str:
-    """Return one step's body, as test_ci_workflow.py scopes steps."""
-    return scope.split(f"      - name: {name}\n", maxsplit=1)[1].split(
-        "\n      - ", maxsplit=1
-    )[0]
 
 
 def workflow_triggers(workflow: str) -> str:

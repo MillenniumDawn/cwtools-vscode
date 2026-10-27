@@ -7,6 +7,7 @@
 
 #### Engine
 
+* Reuse the script parsing pipeline for multi-mod scans and remove the unused localisation folder walker. Keep its discovery regressions with the shared file manager.
 * Rename localisation keys together with rule-linked entity IDs and their references, without changing unrelated same-spelling effects, flags, variables, or strings. Preserve translated keys and sibling references, and cancel conflicting renames instead of returning partial edits. (#844)
 * Discover parent mods from descriptor dependencies in CLI `validate` and `fix` when neither `--parent` nor TOML `parents` supplies a nonempty list. Explicit parent paths still take precedence. (#1105)
 * Decode CLI diagnostic hash source lines like the engine and ignore a leading BOM in content hashes. Regenerate older baselines for CP1252 files or diagnostics on a BOM's first line. (#604)
@@ -14,6 +15,7 @@
 #### Tooling
 
 * Analyze Python tooling in CodeQL alongside JavaScript/TypeScript, Rust, and GitHub Actions. (#526)
+* Share workflow-test block extraction and Git preflight fixtures without dropping regression cases.
 * Add a full HOI4 and Millennium Dawn index tier to the snapshot-clone benchmark and record its first-write copy cost. Keep production validation locks unchanged; the benchmark does not measure editor hover or queued-writer latency. (#868)
 
 ### 4.0.4
