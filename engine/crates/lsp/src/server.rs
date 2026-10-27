@@ -24,8 +24,8 @@ use crate::cursor::{
 use crate::paths::{canonicalize_uri_string, canonicalize_url, logical_path_from_uri};
 use crate::state::{
     AstSnapshot, AstSource, Backend, DebounceTask, DeferredRulesMessage, DiskState,
-    LocOverlayWrite, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_URI_BYTES, ParsedDoc, ValidateTrigger,
-    remove_debounce_task,
+    DocumentRejection, LocOverlayWrite, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_URI_BYTES, ParsedDoc,
+    ValidateTrigger, remove_debounce_task,
 };
 
 pub(crate) enum LoadingBar {}
@@ -41,6 +41,12 @@ impl tower_lsp::lsp_types::notification::Notification for UpdateFileList {
 }
 
 const DEBOUNCE_MS: u64 = 250;
+
+/// The toast for an open or change whose URI is too long to quote; the fixed
+/// sentence doubles as the refusal-record key for that case, since the reason
+/// must not name the URI (#1137).
+const URI_LIMIT_NOTICE: &str =
+    "CWTools ignored a document because its URI exceeds the maximum supported length.";
 
 /// Test-only one-shot panic switch for `CWTOOLS_VALIDATE_PANIC_ONCE` (#182). Fires at most
 /// once per server process so the e2e suite can prove a panicking validation is logged
@@ -489,6 +495,31 @@ impl Backend {
         true
     }
 
+    /// Warn the user once per URI and reason that an open or change was
+    /// refused, so an editor that shows nothing for the document knows why
+    /// without the server loading the refused buffer (#1137).
+    async fn report_document_refusal(&self, uri: &str, reason: &'static str, message: String) {
+        let first = self
+            .state
+            .document_refusal_toasts
+            .lock()
+            .insert((uri.to_string(), reason));
+        if first {
+            self.client
+                .show_message(MessageType::WARNING, message)
+                .await;
+        }
+    }
+
+    /// Drop the refusal record for `uri` once a document was admitted again, so
+    /// a later refusal reports anew (#1137).
+    fn clear_document_refusal(&self, uri: &str) {
+        self.state
+            .document_refusal_toasts
+            .lock()
+            .retain(|(reported, _)| reported != uri);
+    }
+
     #[tracing::instrument(skip_all)]
     pub(crate) async fn did_open_impl(&self, mut params: DidOpenTextDocumentParams) {
         canonicalize_url(&mut params.text_document.uri);
@@ -499,10 +530,15 @@ impl Backend {
 
         if uri.len() > MAX_DOCUMENT_URI_BYTES {
             tracing::warn!(bytes = uri.len(), "ignoring didOpen with an oversized URI");
+            self.report_document_refusal(&uri, URI_LIMIT_NOTICE, URI_LIMIT_NOTICE.to_string())
+                .await;
             return;
         }
         if text.len() > MAX_DOCUMENT_BYTES {
             tracing::warn!(%uri, bytes = text.len(), "ignoring oversized didOpen document");
+            let reason = DocumentRejection::TooLarge.reason();
+            let message = format!("CWTools did not open {uri}: {reason}.");
+            self.report_document_refusal(&uri, reason, message).await;
             return;
         }
         let source_hash = cwtools_cache::workspace::content_hash(&text);
@@ -523,9 +559,14 @@ impl Backend {
         );
         if let Err(rejection) = admission {
             tracing::warn!(%uri, reason = rejection.reason(), "ignoring didOpen");
+            let message = format!("CWTools did not open {uri}: {}.", rejection.reason());
+            drop(publication);
+            self.report_document_refusal(&uri, rejection.reason(), message)
+                .await;
             return;
         }
         drop(publication);
+        self.clear_document_refusal(&uri);
 
         if crate::paths::is_loc_file(&uri) {
             self.loc_watched_overlay_mut().remove(&uri);
@@ -560,6 +601,8 @@ impl Backend {
                 bytes = uri.len(),
                 "ignoring didChange with an oversized URI"
             );
+            self.report_document_refusal(&uri, URI_LIMIT_NOTICE, URI_LIMIT_NOTICE.to_string())
+                .await;
             return;
         }
 
@@ -570,6 +613,9 @@ impl Backend {
         tracing::debug!(%uri, version, bytes = text.len(), "did_change");
         if text.len() > MAX_DOCUMENT_BYTES {
             tracing::warn!(%uri, bytes = text.len(), "ignoring oversized didChange document");
+            let reason = DocumentRejection::TooLarge.reason();
+            let message = format!("CWTools ignored the change to {uri}: {reason}.");
+            self.report_document_refusal(&uri, reason, message).await;
             return;
         }
 
@@ -583,9 +629,17 @@ impl Backend {
         );
         if let Err(rejection) = admission {
             tracing::warn!(%uri, reason = rejection.reason(), "ignoring didChange");
+            let message = format!(
+                "CWTools ignored the change to {uri}: {}.",
+                rejection.reason()
+            );
+            drop(publication);
+            self.report_document_refusal(&uri, rejection.reason(), message)
+                .await;
             return;
         }
         drop(publication);
+        self.clear_document_refusal(&uri);
 
         if self.is_ignored_uri(&uri) {
             self.clear_ignored_file_state(&uri);

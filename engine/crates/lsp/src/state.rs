@@ -286,6 +286,9 @@ pub(crate) struct DocumentState {
     pub(crate) last_rules_toast: parking_lot::Mutex<Option<String>>,
     /// Unclosed-quote format refusals already shown, so format on save does not repeat the toast.
     pub(crate) format_refusal_toasts: parking_lot::Mutex<HashSet<(String, u32)>>,
+    /// Document open/change refusals already warned about, keyed by URI and reason, so one
+    /// refusal toasts once (#1137). An entry is dropped when the URI is admitted again.
+    pub(crate) document_refusal_toasts: parking_lot::Mutex<HashSet<(String, &'static str)>>,
     pub(crate) published_rule_uris: parking_lot::Mutex<HashSet<String>>,
     pub(crate) published_loc_uris: parking_lot::Mutex<HashSet<String>>,
     pub(crate) edit_generation: AtomicU64,
@@ -1765,6 +1768,7 @@ impl DocumentState {
             deferred_rules_messages: parking_lot::Mutex::new(Vec::new()),
             last_rules_toast: parking_lot::Mutex::new(None),
             format_refusal_toasts: parking_lot::Mutex::new(HashSet::new()),
+            document_refusal_toasts: parking_lot::Mutex::new(HashSet::new()),
             published_rule_uris: parking_lot::Mutex::new(HashSet::new()),
             published_loc_uris: parking_lot::Mutex::new(HashSet::new()),
             edit_generation: AtomicU64::new(0),
