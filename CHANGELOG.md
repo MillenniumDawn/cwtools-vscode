@@ -2,6 +2,7 @@
 
 #### Extension
 
+* Dispose the loadingBar and updateFileList notification listeners with the extension instead of leaving them attached until the window closes. (#1139)
 * Classify script files from automatically discovered parent mods as Paradox files, including files already open when discovery finishes. Keep parent roots separate from base-game roots and clear them when the server stops. (#1104)
 * Add a workspace diagnostics baseline and **Write Diagnostics Baseline** command. Suppress known diagnostics with CLI-compatible hashes, show the suppressed count, and restore diagnostics when the baseline is cleared or changed. Captures include unsaved buffers and reject stale or cancelled scans. (#604)
 
