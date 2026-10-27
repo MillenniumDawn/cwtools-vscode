@@ -201,7 +201,32 @@ test("render skips nodes outside the viewport but still draws a node crossing it
 	expect(drawnX).not.toContain(farX);
 });
 
-test("export still draws every node: its cy.nodes() selector keeps what a culled render skips", () => {
+test("a node just past the edge is drawn while its shadow shows and skipped once shadows are off", () => {
+	const cy = render([node("edge")]);
+	const edge = cy.$id("edge");
+	const placeJustPastRightEdge = () => {
+		const extent = cy.extent();
+		const box = edge.boundingBox({ includeLabels: false });
+		// The body starts 5 units past the right edge, inside the 12.5-unit
+		// shadow reach at devicePixelRatio 2.
+		edge.position({ x: extent.x2 + (box.x2 - box.x1) / 2 + 5, y: (extent.y1 + extent.y2) / 2 });
+	};
+	cy.zoom(1);
+	placeJustPastRightEdge();
+	state.ctx.arc.mockClear();
+	cy.emit("render");
+	expect(state.ctx.shadowBlur).toBe(25);
+	expect(state.ctx.arc).toHaveBeenCalledTimes(1);
+
+	cy.zoom(0.2);
+	placeJustPastRightEdge();
+	state.ctx.arc.mockClear();
+	cy.emit("render");
+	expect(state.ctx.shadowBlur).toBe(0);
+	expect(state.ctx.arc).not.toHaveBeenCalled();
+});
+
+test("render culling leaves skipped nodes in the graph and undimmed", () => {
 	const cy = render([node("in"), node("far")]);
 	const extent = cy.extent();
 	const middleY = (extent.y1 + extent.y2) / 2;

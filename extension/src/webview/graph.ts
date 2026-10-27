@@ -52,6 +52,7 @@ const vscodeBg = () =>
 // pass per draw call, so drop it.
 const SHADOW_NODE_LIMIT = 300;
 const SHADOW_MIN_ZOOM = 0.4;
+const SHADOW_BLUR = 25;
 const GRAPH_LAYOUT_TIMEOUT_MS = 60_000;
 
 function drawExtra(
@@ -62,7 +63,7 @@ function drawExtra(
 ) {
 	// Draw shadows under nodes
 	ctx.shadowColor = "black";
-	ctx.shadowBlur = withShadows ? 25 * zoom : 0;
+	ctx.shadowBlur = withShadows ? SHADOW_BLUR * zoom : 0;
 	ctx.font = "16px sans-serif";
 	ctx.textAlign = "center";
 	ctx.textBaseline = "middle";
@@ -550,12 +551,15 @@ function setupInteraction(
 		const zoom = cy.zoom();
 		// Only this pass sees the viewport: skip node bodies whose bounding box
 		// misses cy.extent(), including ones that merely cross its edge. Export
-		// still hands the full cy.nodes() collection to drawExtra.
+		// still hands the full cy.nodes() collection to drawExtra. A shadow reaches
+		// SHADOW_BLUR / devicePixelRatio model units past a body at any zoom, so
+		// pad by that while the zoom allows shadows.
+		const pad = zoom >= SHADOW_MIN_ZOOM ? SHADOW_BLUR / (window.devicePixelRatio || 1) : 0;
 		const extent = cy.extent();
 		const drawn = nodes.filter((node) => {
 			const box = node.boundingBox({ includeLabels: false });
-			return box.x1 <= extent.x2 && box.x2 >= extent.x1 &&
-				box.y1 <= extent.y2 && box.y2 >= extent.y1;
+			return box.x1 <= extent.x2 + pad && box.x2 >= extent.x1 - pad &&
+				box.y1 <= extent.y2 + pad && box.y2 >= extent.y1 - pad;
 		});
 		drawExtra(
 			drawn,
