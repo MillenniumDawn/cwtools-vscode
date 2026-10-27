@@ -199,7 +199,11 @@ function stubManifestFetch(value: RulesManifest | string, etag?: string) {
 }
 
 // One sync against a fake memento and client, recording what each was told.
-function session(cached?: RulesManifest, updateError?: Error, cachedEtag?: string) {
+function session(
+	cached?: RulesManifest,
+	manifestUpdateError?: Error,
+	cachedEtag?: string,
+) {
 	let stored = cached;
 	let etag = cachedEtag;
 	const updates: Array<[string, unknown]> = [];
@@ -212,8 +216,8 @@ function session(cached?: RulesManifest, updateError?: Error, cachedEtag?: strin
 		},
 		update(key: string, value: unknown): Promise<void> {
 			updates.push([key, value]);
-			if (updateError) {
-				return Promise.reject(updateError);
+			if (manifestUpdateError && key === RULES_MANIFEST_CACHE_KEY) {
+				return Promise.reject(manifestUpdateError);
 			}
 			if (key === RULES_MANIFEST_CACHE_KEY) {
 				stored = value as RulesManifest;
@@ -536,6 +540,34 @@ suite("rulesSetup", () => {
 			[RULES_MANIFEST_CACHE_KEY, fetched],
 			[RULES_MANIFEST_ETAG_CACHE_KEY, undefined],
 		]);
+	});
+
+	test("an ETag is not stored for a manifest that could not be cached", async () => {
+		const fetched = manifest(sha("f"), NEXT + 1);
+		const fetch = stubManifestFetch(fetched, '"etag-new"');
+		const { sync, updates } = session(
+			manifest(sha("c")),
+			new Error("disk full"),
+			'"etag-old"',
+		);
+
+		await settle(sync());
+		await settle(sync());
+
+		assert.strictEqual(
+			ifNoneMatchHeader(fetch.mock.calls[1]),
+			undefined,
+			"the next request must fetch the body the cache is missing",
+		);
+		assert.deepStrictEqual(updates, [
+			[RULES_MANIFEST_CACHE_KEY, fetched],
+			[RULES_MANIFEST_ETAG_CACHE_KEY, undefined],
+			[RULES_MANIFEST_CACHE_KEY, fetched],
+		]);
+		assert.deepStrictEqual(
+			state.rulesFetches.map(({ ref }) => ref),
+			[sha("f"), sha("f")],
+		);
 	});
 
 	test("a 304 with no usable cache falls back to the bundled pin", async () => {

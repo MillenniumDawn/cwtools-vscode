@@ -241,18 +241,22 @@ async function reviewedRulesRepo(
 				`Ignoring stale rules manifest revision ${fetched.manifest.revision}; cached revision ${cached.revision} is newer.`,
 			);
 		}
-		if (manifest !== cached) {
+		let manifestCached = manifest === cached;
+		if (!manifestCached) {
 			try {
 				await globalState.update(RULES_MANIFEST_CACHE_KEY, manifest);
+				manifestCached = true;
 			} catch (err) {
 				logWarn(`Could not cache rules manifest: ${errorMessage(err)}`);
 			}
 		}
-		// A 200 without an ETag clears any stored one so the next request fetches
-		// the body again instead of assuming an unmodified cache.
-		if (fetched.etag !== storedEtag) {
+		// A 200 without an ETag, or a manifest that could not be cached, clears any
+		// stored ETag so the next request fetches the body again instead of
+		// assuming an unmodified cache.
+		const nextEtag = manifestCached ? fetched.etag : undefined;
+		if (nextEtag !== storedEtag) {
 			try {
-				await globalState.update(RULES_MANIFEST_ETAG_CACHE_KEY, fetched.etag);
+				await globalState.update(RULES_MANIFEST_ETAG_CACHE_KEY, nextEtag);
 			} catch (err) {
 				logWarn(
 					`Could not cache rules manifest ETag: ${errorMessage(err)}`,
