@@ -8,22 +8,38 @@ import pytest
 import build
 
 Command = list[str]
+StubGit = Callable[[list[int], list[str]], list[Command]]
 release_preflight = cast(Callable[[], None], vars(build)["release_preflight"])
 
 
-def test_refuses_untracked_paths(monkeypatch: pytest.MonkeyPatch) -> None:
-    commands: list[Command] = []
+@pytest.fixture(name="stub_git")
+def stub_git_fixture(monkeypatch: pytest.MonkeyPatch) -> StubGit:
+    def setup(statuses: list[int], outputs: list[str]) -> list[Command]:
+        commands: list[Command] = []
+        status_iter = iter(statuses)
+        output_iter = iter(outputs)
 
-    def run_or_null(cmd: str, args: list[str], **_kwargs: object) -> int:
-        commands.append([cmd, *args])
-        return 0
+        def run_or_null(cmd: str, args: list[str], **_kwargs: object) -> int:
+            commands.append([cmd, *args])
+            return next(status_iter)
 
-    def run_capture(cmd: str, args: list[str], **_kwargs: object) -> str:
-        commands.append([cmd, *args])
-        return "new-file.txt\nassets/new-file.txt\n"
+        def run_capture(cmd: str, args: list[str], **_kwargs: object) -> str:
+            commands.append([cmd, *args])
+            return next(output_iter)
 
-    monkeypatch.setattr(build, "run_or_null", run_or_null)
-    monkeypatch.setattr(build, "run_capture", run_capture)
+        def run(cmd: str, args: list[str], **_kwargs: object) -> None:
+            commands.append([cmd, *args])
+
+        monkeypatch.setattr(build, "run_or_null", run_or_null)
+        monkeypatch.setattr(build, "run_capture", run_capture)
+        monkeypatch.setattr(build, "run", run)
+        return commands
+
+    return setup
+
+
+def test_refuses_untracked_paths(stub_git: StubGit) -> None:
+    commands = stub_git([0], ["new-file.txt\nassets/new-file.txt\n"])
 
     with pytest.raises(RuntimeError) as error:
         release_preflight()
@@ -38,14 +54,8 @@ def test_refuses_untracked_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
-def test_reports_tracked_git_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    commands: list[Command] = []
-
-    def run_or_null(cmd: str, args: list[str], **_kwargs: object) -> int:
-        commands.append([cmd, *args])
-        return 128
-
-    monkeypatch.setattr(build, "run_or_null", run_or_null)
+def test_reports_tracked_git_error(stub_git: StubGit) -> None:
+    commands = stub_git([128], [])
 
     with pytest.raises(RuntimeError, match=r"git diff check failed \(128\)"):
         release_preflight()
@@ -53,27 +63,8 @@ def test_reports_tracked_git_error(monkeypatch: pytest.MonkeyPatch) -> None:
     assert commands == [["git", "diff", "--quiet", "HEAD"]]
 
 
-def test_refuses_head_missing_from_origin_main(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[Command] = []
-    statuses = iter([0, 1])
-    outputs = iter(["", "abc1234\n"])
-
-    def run_or_null(cmd: str, args: list[str], **_kwargs: object) -> int:
-        commands.append([cmd, *args])
-        return next(statuses)
-
-    def run_capture(cmd: str, args: list[str], **_kwargs: object) -> str:
-        commands.append([cmd, *args])
-        return next(outputs)
-
-    def run(cmd: str, args: list[str], **_kwargs: object) -> None:
-        commands.append([cmd, *args])
-
-    monkeypatch.setattr(build, "run_or_null", run_or_null)
-    monkeypatch.setattr(build, "run_capture", run_capture)
-    monkeypatch.setattr(build, "run", run)
+def test_refuses_head_missing_from_origin_main(stub_git: StubGit) -> None:
+    commands = stub_git([0, 1], ["", "abc1234\n"])
 
     with pytest.raises(
         RuntimeError, match="HEAD abc1234 is not present on origin/main"
@@ -89,24 +80,8 @@ def test_refuses_head_missing_from_origin_main(
     ]
 
 
-def test_reports_merge_base_git_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    commands: list[Command] = []
-    statuses = iter([0, 128])
-
-    def run_or_null(cmd: str, args: list[str], **_kwargs: object) -> int:
-        commands.append([cmd, *args])
-        return next(statuses)
-
-    def run_capture(cmd: str, args: list[str], **_kwargs: object) -> str:
-        commands.append([cmd, *args])
-        return ""
-
-    def run(cmd: str, args: list[str], **_kwargs: object) -> None:
-        commands.append([cmd, *args])
-
-    monkeypatch.setattr(build, "run_or_null", run_or_null)
-    monkeypatch.setattr(build, "run_capture", run_capture)
-    monkeypatch.setattr(build, "run", run)
+def test_reports_merge_base_git_error(stub_git: StubGit) -> None:
+    commands = stub_git([0, 128], [""])
 
     with pytest.raises(RuntimeError, match=r"git merge-base check failed \(128\)"):
         release_preflight()
@@ -119,23 +94,8 @@ def test_reports_merge_base_git_error(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
-def test_allows_a_clean_pushed_tree(monkeypatch: pytest.MonkeyPatch) -> None:
-    commands: list[Command] = []
-
-    def run_or_null(cmd: str, args: list[str], **_kwargs: object) -> int:
-        commands.append([cmd, *args])
-        return 0
-
-    def run_capture(cmd: str, args: list[str], **_kwargs: object) -> str:
-        commands.append([cmd, *args])
-        return ""
-
-    def run(cmd: str, args: list[str], **_kwargs: object) -> None:
-        commands.append([cmd, *args])
-
-    monkeypatch.setattr(build, "run_or_null", run_or_null)
-    monkeypatch.setattr(build, "run_capture", run_capture)
-    monkeypatch.setattr(build, "run", run)
+def test_allows_a_clean_pushed_tree(stub_git: StubGit) -> None:
+    commands = stub_git([0, 0], [""])
 
     release_preflight()
 
