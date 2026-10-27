@@ -396,11 +396,10 @@ pub fn value_location(
 }
 
 /// A `leaf_key = <type>` mapping extracted from the ruleset's root rules, used
-/// to classify type-instance references while indexing. Mirrors the depth-1
-/// `SpecificField(key) = TypeField(Simple(type))` rules the LSP's
-/// `is_type_ref_leaf` checks. `root_type` is the owning `TypeRule`'s own name
-/// (for the path filter); `None` for alias roots, which apply regardless of
-/// path.
+/// to classify type-instance references while indexing. Covers the depth-1
+/// `SpecificField(key) = TypeField(Simple(type))` rules. `root_type` is the
+/// owning `TypeRule`'s own name (for the path filter); `None` for alias roots,
+/// which apply regardless of path and are resolved against their enclosing rule.
 #[derive(Debug, Clone)]
 pub(crate) struct TypeRefRule {
     ref_type: Arc<str>,
@@ -546,6 +545,29 @@ pub(crate) fn collect_type_ref_uses(
         contextual,
     };
     collector.collect(&ast.root_children, None, needs_context, out);
+}
+
+/// Key locations of the leaves in `ast` that reference `instance_name` as
+/// `ref_type`, classified the way the reference index classifies them. Use it to
+/// check an open buffer's leaves against the same rules as the index, so a field
+/// name shared between rules, such as `id`, counts only where its enclosing rule
+/// makes it a reference. Builds the key map per call, so it suits a one-off
+/// lookup rather than indexing.
+pub fn type_ref_key_locations(
+    ast: &ParsedFile,
+    table: &StringTable,
+    ruleset: &RuleSet,
+    logical_path: &str,
+    ref_type: &str,
+    instance_name: &str,
+) -> Vec<SourceLocation> {
+    let map = build_type_ref_keys(ruleset);
+    let mut refs = Vec::new();
+    collect_type_ref_uses(ast, table, &map, ruleset, logical_path, &mut refs);
+    refs.into_iter()
+        .filter(|reference| &*reference.ref_type == ref_type && reference.name == instance_name)
+        .map(|reference| reference.key)
+        .collect()
 }
 
 #[derive(Clone, Copy)]

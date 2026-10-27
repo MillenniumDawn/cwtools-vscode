@@ -19,7 +19,7 @@ use references::{
 };
 pub use references::{
     IndexedUseSite, ReferenceIndex, TypePatternAlias, UseSite, build_type_patterns,
-    key_matches_type_pattern, value_location,
+    key_matches_type_pattern, type_ref_key_locations, value_location,
 };
 
 /// Entry points for this crate's `benches/`, which link it as an external crate
