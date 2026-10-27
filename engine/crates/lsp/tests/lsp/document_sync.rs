@@ -155,11 +155,13 @@ fn toasts_and_refused_publishes_before(
     (toasts, refused_publishes)
 }
 
-/// #1137: a refused open or change warns through `window/showMessage` once per
-/// URI until that URI is admitted again, so the editor explains the silent
-/// document without the server loading the refused buffer.
+/// #1137: a refused open warns through `window/showMessage` so the editor
+/// explains the silent document without the server loading the refused buffer.
+/// Every oversized URI shares one warning, and refusals the user cannot act on
+/// (a change to an unopened document, an open outside the workspace) are only
+/// logged.
 #[test]
-fn test_refused_document_warns_once_per_uri_until_admitted() {
+fn test_refused_document_warns_only_when_the_user_can_act() {
     let mut server = storm_server();
 
     // An oversized URI: the open is refused on its face, and the toast carries
@@ -179,64 +181,44 @@ fn test_refused_document_warns_once_per_uri_until_admitted() {
         "the toast must not echo the oversized URI, got: {toast}"
     );
 
-    // The same oversized URI again must not toast again, and the buffer must
-    // not have been opened. Opening `marker.txt` afterwards proves both opens
-    // were handled: its diagnostics cannot publish before the refused open and
-    // its potential toast were processed.
+    // The same oversized URI again, or a different one, must not toast again,
+    // and neither buffer may be opened. Opening `marker.txt` afterwards proves
+    // the opens were handled: its diagnostics cannot publish before the refused
+    // opens and their potential toasts were processed.
+    let other_oversized_uri = server.uri(&format!("{}more/refused.txt", "deep/".repeat(2400)));
     server.open_uri(&oversized_uri, "x = 1\n");
+    server.open_uri(&other_oversized_uri, "x = 1\n");
     server.open("common/decisions/marker.txt", STORM_FILE);
     let (repeat_toasts, refused_publishes) =
         toasts_and_refused_publishes_before(&mut server, "marker.txt");
     assert!(
         repeat_toasts.is_empty(),
-        "a repeated refusal for the same URI must not toast again, got: {repeat_toasts:?}"
+        "a repeated oversized-URI refusal must not toast again, got: {repeat_toasts:?}"
     );
     assert_eq!(
         refused_publishes, 0,
-        "the refused buffer must stay unopened"
+        "the refused buffers must stay unopened"
     );
 
-    // A change for a document that never opened is refused with a reason the
-    // toast can quote, again once per URI.
-    let refused_rel = "common/decisions/refused_change.txt";
-    let change_uri = server.uri(refused_rel);
+    // A change for a document that never opened, and an open outside every
+    // workspace folder (go-to-definition into the base game), are only logged.
+    let change_uri = server.uri("common/decisions/refused_change.txt");
     server.change_uri(&change_uri, 1, "x = 2\n");
-    let change_toast = server.read_until("the refusal toast for the unopened change", |frame| {
-        frame["method"] == "window/showMessage"
-    });
-    assert_eq!(
-        change_toast["params"]["type"], 2,
-        "a refusal must warn, got: {change_toast}"
-    );
-    assert!(
-        change_toast["params"]["message"]
-            .as_str()
-            .is_some_and(|message| {
-                message.contains(&change_uri) && message.contains("not open")
-            }),
-        "the toast must name the document and the reason, got: {change_toast}"
-    );
-
-    server.change_uri(&change_uri, 1, "x = 3\n");
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("refused.txt");
+    std::fs::write(&outside_file, "x = 1\n").unwrap();
+    server.open_uri(&path_uri(&outside_file), "x = 1\n");
     server.open("common/decisions/marker2.txt", STORM_FILE);
-    let (repeat_toasts, _) = toasts_and_refused_publishes_before(&mut server, "marker2.txt");
-    assert!(
-        repeat_toasts.is_empty(),
-        "a repeated refusal for the same URI must not toast again, got: {repeat_toasts:?}"
-    );
-
-    // Admission clears the URI's refusal record, so a later refusal warns
-    // again instead of staying silent forever.
-    server.open_and_wait(refused_rel, "x = 4\n");
-    server.close(refused_rel);
-    server.change_uri(&change_uri, 2, "x = 5\n");
-    let renewed = server.read_until("the toast after the record cleared", |frame| {
-        frame["method"] == "window/showMessage"
-    });
+    let (silent_toasts, refused_publishes) =
+        toasts_and_refused_publishes_before(&mut server, "marker2.txt");
     server.stop();
+    assert!(
+        silent_toasts.is_empty(),
+        "unopened changes and outside-workspace opens must not toast, got: {silent_toasts:?}"
+    );
     assert_eq!(
-        renewed["params"]["type"], 2,
-        "a refusal after admission must warn again, got: {renewed}"
+        refused_publishes, 0,
+        "the outside buffer must stay unopened"
     );
 }
 
@@ -290,6 +272,18 @@ fn test_oversized_document_body_warns_without_opening() {
     );
     assert_eq!(huge_publishes, 0, "the oversized buffer must stay unopened");
 
+    // Closing the refused document drops its record, so reopening warns again.
+    server.close(rel);
+    server.open(rel, &huge);
+    let reopened = server.read_until("the toast after closing the refused document", |frame| {
+        frame["method"] == "window/showMessage"
+    });
+    assert_eq!(
+        reopened["params"]["message"],
+        json!(format!("CWTools did not open {uri}: {size_reason}.")),
+        "a refusal after didClose must warn again, got: {reopened}"
+    );
+
     let open_rel = "common/decisions/open_huge_change.txt";
     let open_uri = server.uri(open_rel);
     server.open_and_wait(open_rel, "x = 1\n");
@@ -297,7 +291,18 @@ fn test_oversized_document_body_warns_without_opening() {
     let change_toast = server.read_until("the refusal toast for the oversized change", |frame| {
         frame["method"] == "window/showMessage"
     });
+
+    // An admitted change drops the record, so the next oversized change warns again.
+    server.change(open_rel, 3, "x = 2\n");
+    server.change(open_rel, 4, &huge);
+    let renewed = server.read_until("the toast after an admitted change", |frame| {
+        frame["method"] == "window/showMessage"
+    });
     server.stop();
+    assert_eq!(
+        renewed["params"]["type"], 2,
+        "an oversized change after an admitted one must warn again, got: {renewed}"
+    );
     assert_eq!(
         change_toast["params"]["type"], 2,
         "an oversized change must warn, got: {change_toast}"

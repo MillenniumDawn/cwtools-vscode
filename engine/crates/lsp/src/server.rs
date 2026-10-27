@@ -42,9 +42,9 @@ impl tower_lsp::lsp_types::notification::Notification for UpdateFileList {
 
 const DEBOUNCE_MS: u64 = 250;
 
-/// The toast for an open or change whose URI is too long to quote; the fixed
-/// sentence doubles as the refusal-record key for that case, since the reason
-/// must not name the URI (#1137).
+/// The toast for an open or change whose URI is too long to quote. Its refusal
+/// record is keyed by this sentence alone, so the record never holds the URI
+/// and every oversized URI shares one toast (#1137).
 const URI_LIMIT_NOTICE: &str =
     "CWTools ignored a document because its URI exceeds the maximum supported length.";
 
@@ -499,25 +499,11 @@ impl Backend {
     /// refused, so an editor that shows nothing for the document knows why
     /// without the server loading the refused buffer (#1137).
     async fn report_document_refusal(&self, uri: &str, reason: &'static str, message: String) {
-        let first = self
-            .state
-            .document_refusal_toasts
-            .lock()
-            .insert((uri.to_string(), reason));
-        if first {
+        if self.state.record_document_refusal(uri, reason) {
             self.client
                 .show_message(MessageType::WARNING, message)
                 .await;
         }
-    }
-
-    /// Drop the refusal record for `uri` once a document was admitted again, so
-    /// a later refusal reports anew (#1137).
-    fn clear_document_refusal(&self, uri: &str) {
-        self.state
-            .document_refusal_toasts
-            .lock()
-            .retain(|(reported, _)| reported != uri);
     }
 
     #[tracing::instrument(skip_all)]
@@ -530,7 +516,7 @@ impl Backend {
 
         if uri.len() > MAX_DOCUMENT_URI_BYTES {
             tracing::warn!(bytes = uri.len(), "ignoring didOpen with an oversized URI");
-            self.report_document_refusal(&uri, URI_LIMIT_NOTICE, URI_LIMIT_NOTICE.to_string())
+            self.report_document_refusal("", URI_LIMIT_NOTICE, URI_LIMIT_NOTICE.to_string())
                 .await;
             return;
         }
@@ -559,14 +545,16 @@ impl Backend {
         );
         if let Err(rejection) = admission {
             tracing::warn!(%uri, reason = rejection.reason(), "ignoring didOpen");
-            let message = format!("CWTools did not open {uri}: {}.", rejection.reason());
             drop(publication);
-            self.report_document_refusal(&uri, rejection.reason(), message)
-                .await;
+            if rejection.warns_user() {
+                let message = format!("CWTools did not open {uri}: {}.", rejection.reason());
+                self.report_document_refusal(&uri, rejection.reason(), message)
+                    .await;
+            }
             return;
         }
         drop(publication);
-        self.clear_document_refusal(&uri);
+        self.state.clear_document_refusal(&uri);
 
         if crate::paths::is_loc_file(&uri) {
             self.loc_watched_overlay_mut().remove(&uri);
@@ -601,7 +589,7 @@ impl Backend {
                 bytes = uri.len(),
                 "ignoring didChange with an oversized URI"
             );
-            self.report_document_refusal(&uri, URI_LIMIT_NOTICE, URI_LIMIT_NOTICE.to_string())
+            self.report_document_refusal("", URI_LIMIT_NOTICE, URI_LIMIT_NOTICE.to_string())
                 .await;
             return;
         }
@@ -629,17 +617,19 @@ impl Backend {
         );
         if let Err(rejection) = admission {
             tracing::warn!(%uri, reason = rejection.reason(), "ignoring didChange");
-            let message = format!(
-                "CWTools ignored the change to {uri}: {}.",
-                rejection.reason()
-            );
             drop(publication);
-            self.report_document_refusal(&uri, rejection.reason(), message)
-                .await;
+            if rejection.warns_user() {
+                let message = format!(
+                    "CWTools ignored the change to {uri}: {}.",
+                    rejection.reason()
+                );
+                self.report_document_refusal(&uri, rejection.reason(), message)
+                    .await;
+            }
             return;
         }
         drop(publication);
-        self.clear_document_refusal(&uri);
+        self.state.clear_document_refusal(&uri);
 
         if self.is_ignored_uri(&uri) {
             self.clear_ignored_file_state(&uri);
@@ -715,6 +705,7 @@ impl Backend {
     pub(crate) async fn did_close_impl(&self, mut params: DidCloseTextDocumentParams) {
         canonicalize_url(&mut params.text_document.uri);
         let uri = params.text_document.uri.to_string();
+        self.state.clear_document_refusal(&uri);
         self.invalidate_semantic_tokens(&uri);
         tracing::debug!(%uri, "did_close");
         let publication = self.state.diagnostic_publication_lock.lock().await;

@@ -7,7 +7,7 @@
 
 #### Engine
 
-* Warn once per document and reason when an open or change is refused, including a body over the per-document limit. Quote the rejection reason, or a fixed sentence for an oversized URI, and warn again only after the document is admitted. The refused buffer is never loaded. (#1137)
+* Warn once per document and reason when an open or change is refused for its size or the open-document limits. Quote the rejection reason, or one fixed sentence shared by every oversized URI, and warn again only after the document is admitted or closed. Opens outside the workspace folders and changes to unopened documents are only logged. The refused buffer is never loaded. (#1137)
 * Reuse the script parsing pipeline for multi-mod scans and remove the unused localisation folder walker. Keep its discovery regressions with the shared file manager.
 * Rename localisation keys together with rule-linked entity IDs and their references, without changing unrelated same-spelling effects, flags, variables, or strings. Preserve translated keys and sibling references, and cancel conflicting renames instead of returning partial edits. (#844)
 * Discover parent mods from descriptor dependencies in CLI `validate` and `fix` when neither `--parent` nor TOML `parents` supplies a nonempty list. Explicit parent paths still take precedence. (#1105)

@@ -175,8 +175,8 @@ mod tests {
 
     use crate::state::{
         Backend, Config, DebounceTask, DocumentRejection, DocumentState, DocumentStore,
-        LocDocumentCache, MAX_DOCUMENT_BYTES, MAX_OPEN_DOCUMENTS, MAX_RETAINED_DOCUMENT_BYTES,
-        ParsedDoc, remove_debounce_task,
+        LocDocumentCache, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_REFUSAL_TOASTS, MAX_OPEN_DOCUMENTS,
+        MAX_RETAINED_DOCUMENT_BYTES, ParsedDoc, remove_debounce_task,
     };
     use crate::testing::test_backend;
     use cwtools_info::{IndexedUseSite, SourceLocation, UseSite};
@@ -698,6 +698,25 @@ mod tests {
 
         assert_eq!(result, Err(DocumentRejection::OutsideWorkspace));
         assert!(state.documents.lock().is_empty());
+    }
+
+    #[test]
+    fn document_refusal_records_dedupe_clear_and_stop_at_the_cap() {
+        let state = DocumentState::new();
+        let reason = DocumentRejection::TooLarge.reason();
+        assert!(state.record_document_refusal("file:///a", reason));
+        assert!(!state.record_document_refusal("file:///a", reason));
+        state.clear_document_refusal("file:///a");
+        assert!(state.record_document_refusal("file:///a", reason));
+
+        for i in 1..MAX_DOCUMENT_REFUSAL_TOASTS {
+            assert!(state.record_document_refusal(&format!("file:///{i}"), reason));
+        }
+        assert!(!state.record_document_refusal("file:///over", reason));
+        assert_eq!(
+            state.document_refusal_toasts.lock().len(),
+            MAX_DOCUMENT_REFUSAL_TOASTS
+        );
     }
 
     /// tower-lsp holds a pending slot per server→client request and `expect`s

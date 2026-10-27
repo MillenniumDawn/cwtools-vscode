@@ -287,7 +287,7 @@ pub(crate) struct DocumentState {
     /// Unclosed-quote format refusals already shown, so format on save does not repeat the toast.
     pub(crate) format_refusal_toasts: parking_lot::Mutex<HashSet<(String, u32)>>,
     /// Document open/change refusals already warned about, keyed by URI and reason, so one
-    /// refusal toasts once (#1137). An entry is dropped when the URI is admitted again.
+    /// refusal toasts once (#1137). An entry is dropped when the URI is admitted or closed.
     pub(crate) document_refusal_toasts: parking_lot::Mutex<HashSet<(String, &'static str)>>,
     pub(crate) published_rule_uris: parking_lot::Mutex<HashSet<String>>,
     pub(crate) published_loc_uris: parking_lot::Mutex<HashSet<String>>,
@@ -382,6 +382,8 @@ pub(crate) const MAX_DOCUMENT_URI_BYTES: usize = 8 * 1024;
 pub(crate) const MAX_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_OPEN_DOCUMENTS: usize = 128;
 pub(crate) const MAX_RETAINED_DOCUMENT_BYTES: usize = 128 * 1024 * 1024;
+/// Refusal records kept at once; past this a refusal is only logged (#1137).
+pub(crate) const MAX_DOCUMENT_REFUSAL_TOASTS: usize = 128;
 /// Slots in `validation_permits`, each held for one file's parse+validate plus
 /// the sweep it triggers (`Backend::validation_permit`). Two is enough to keep
 /// one keystroke validation moving while a bulk path works through its files.
@@ -1083,6 +1085,13 @@ impl DocumentRejection {
             Self::TooManyOpen => "the open-document count limit was reached",
             Self::RetainedTextLimit => "the retained open-document byte limit was reached",
         }
+    }
+
+    /// Opening a base-game or parent-mod file is routine (go-to-definition), and a
+    /// change to a document that is not open follows a refusal already reported,
+    /// so those two are only logged (#1137).
+    pub(crate) fn warns_user(self) -> bool {
+        !matches!(self, Self::NotOpen | Self::OutsideWorkspace)
     }
 }
 
@@ -1832,6 +1841,21 @@ impl DocumentState {
             }
             return documents.open_with_hash(uri, document, content_hash);
         }
+    }
+
+    /// Record a refusal of `key` for `reason`. False when it is already recorded
+    /// or the record is full, so the caller toasts only on true (#1137).
+    pub(crate) fn record_document_refusal(&self, key: &str, reason: &'static str) -> bool {
+        let mut toasts = self.document_refusal_toasts.lock();
+        toasts.len() < MAX_DOCUMENT_REFUSAL_TOASTS && toasts.insert((key.to_string(), reason))
+    }
+
+    /// Drop the refusal records for `uri` once it is admitted or closed, so a
+    /// later refusal reports anew (#1137).
+    pub(crate) fn clear_document_refusal(&self, uri: &str) {
+        self.document_refusal_toasts
+            .lock()
+            .retain(|(reported, _)| reported != uri);
     }
 }
 
