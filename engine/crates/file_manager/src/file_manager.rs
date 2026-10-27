@@ -556,44 +556,7 @@ impl FileManager {
     }
 
     pub fn discover_and_parse_multi_mod(&mut self) -> Result<Vec<ParsedFile>, FileError> {
-        use rayon::prelude::*;
-
-        let table = &self.string_table;
-        let max_file_size = self.config.max_file_size;
-        let max_bytes = self.config.scan_budget.max_bytes;
-        let bytes = ScanBytes::new();
-        let files = self
-            .discover_files_multi_mod()
-            .into_par_iter()
-            .filter_map(|file| {
-                let content = match read_text_capped(&file.path, max_file_size) {
-                    Ok((content, n)) => {
-                        if !bytes.try_reserve(n, max_bytes) {
-                            eprintln!(
-                                "warn: skipping {}: scan byte budget exceeded",
-                                file.path.display()
-                            );
-                            return None;
-                        }
-                        content
-                    }
-                    Err(e) => {
-                        eprintln!("warn: skipping {}: {}", file.path.display(), e);
-                        return None;
-                    }
-                };
-                let parsed = parse_string_without_comments(&content, table);
-                Some(ParsedFile {
-                    path: file.path,
-                    logical_path: file.logical_path,
-                    arena: parsed.arena,
-                    root_children: parsed.root_children,
-                    errors: parsed.errors,
-                })
-            })
-            .collect();
-
-        Ok(files)
+        Ok(self.parse_files(self.discover_files_multi_mod()))
     }
 
     pub fn parse_single_file(&mut self, path: &Path) -> Result<ParsedFile, FileError> {
@@ -761,13 +724,6 @@ fn compute_logical_path_with_root(path: &Path, root_prefix: &str) -> String {
             .unwrap_or("")
             .to_string()
     }
-}
-
-/// The forward-slash spelling of `path`, the form a path glob is written in.
-/// Windows hands back `\` separators, so a match target passes through here
-/// before [`ignore_glob_match`] sees it.
-pub fn to_slash_path(path: &Path) -> String {
-    normalize_slashes(path.to_string_lossy()).into_owned()
 }
 
 /// Convert backslashes to forward slashes, avoiding a full scan/allocation when
@@ -2210,6 +2166,32 @@ replace_path = "COMMON/ideas"
             !by_logical.keys().any(|k| k.ends_with(".yml")),
             "loc files are not script-discovered: {by_logical:?}"
         );
+    }
+
+    #[test]
+    fn multi_mod_parsing_preserves_errors_and_read_limits() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("mod")).unwrap();
+        std::fs::create_dir_all(root.join("alpha/common")).unwrap();
+        std::fs::write(root.join("mod/alpha.mod"), "name = Alpha\npath = alpha\n").unwrap();
+        std::fs::write(root.join("alpha/common/broken.txt"), "x = { # comment\n").unwrap();
+        std::fs::write(root.join("alpha/common/large.txt"), "x".repeat(100)).unwrap();
+        let mut fm = FileManager::new(FileManagerConfig {
+            root: root.to_path_buf(),
+            max_file_size: 50,
+            ..Default::default()
+        });
+
+        let files = fm.discover_and_parse_multi_mod().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, root.join("alpha/common/broken.txt"));
+        assert_eq!(files[0].logical_path, "common/broken.txt");
+        assert!(!files[0].errors.is_empty());
+        assert!(files[0].arena.comments.is_empty());
+
+        fm.config.scan_budget.max_bytes = 1;
+        assert!(fm.discover_and_parse_multi_mod().unwrap().is_empty());
     }
 
     #[test]

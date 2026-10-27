@@ -23,7 +23,7 @@ jobs:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     # Rust extraction over the whole engine workspace is the long pole here;
-    # the other two finish in minutes.
+    # the other three finish in minutes.
     timeout-minutes: 60
     permissions:
       contents: read
@@ -33,11 +33,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both halves of the monorepo, plus the workflows themselves.
+        # Both halves, Python tooling, and the workflow definitions.
         language:
           - javascript-typescript
           - rust
           - actions
+          - python
 
     steps:
     # fetch-depth: 0 so the alert baseline can be attributed to the commit that

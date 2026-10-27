@@ -666,7 +666,14 @@ mod tests {
         std::fs::write(loc.join("bom_l_english.yml"), &bommed).unwrap();
         std::fs::write(loc.join("nobom_l_english.yml"), body).unwrap();
 
-        let svc = LocService::from_folder(tmp.path(), cwtools_file_manager::ScanBudget::default());
+        let svc = LocService::from_paths(
+            vec![
+                loc.join("bom_l_english.yml"),
+                loc.join("nobom_l_english.yml"),
+            ],
+            cwtools_file_manager::ScanBudget::default(),
+            None,
+        );
         assert_eq!(svc.files().len(), 2, "errors: {:?}", svc.errors());
         let flagged: Vec<String> = validate_loc_project(&svc)
             .into_iter()
@@ -691,7 +698,11 @@ mod tests {
         bommed.extend_from_slice(b"l_english:\n key1: \"hi\"\n");
         std::fs::write(loc.join("bom_l_english.yml"), &bommed).unwrap();
 
-        let svc = LocService::from_folder(tmp.path(), cwtools_file_manager::ScanBudget::default());
+        let svc = LocService::from_paths(
+            vec![loc.join("bom_l_english.yml")],
+            cwtools_file_manager::ScanBudget::default(),
+            None,
+        );
         let codes: Vec<&str> = validate_loc_project(&svc).iter().map(|d| d.code).collect();
         assert!(codes.is_empty(), "a well-formed loc file: {codes:?}");
     }
