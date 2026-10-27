@@ -45,9 +45,11 @@ a completed clean validation only for that exact URI/version. Preserve all
 severities, including `Information` and `Hint`.
 
 For graceful shutdown send the `shutdown` request (without a `params` member),
-wait for its response, then send `exit` and wait for process termination. Use
-`workspace/didChangeConfiguration` or the server's documented reload command
-after changing rules; restarting is the simplest reproducible setup.
+wait for its response, then send `exit` and wait for process termination. After
+editing rule files in place, run the `reloadrulesconfig` command
+(`workspace/executeCommand`) or restart the server; restarting is the simplest
+reproducible setup. `workspace/didChangeConfiguration` reloads rules only when
+`rulesCache` names a different directory.
 
 ## Reproduce the standalone contract
 
@@ -103,9 +105,7 @@ UTF-16; the normalized expected records use slash-normalized relative paths and
 validations but still indexes the full directory for cross-file references; the
 LSP keeps incremental workspace state and may publish separate notifications
 per open file. Some checks need a base-game index and therefore cannot be
-compared unless both runs use matching base-game data/cache. The CLI can also
-validate inline scripts that the LSP does not yet track (see
-[Architecture](ARCHITECTURE.md#cli-vs-lsp)).
+compared unless both runs use matching base-game data/cache.
 
 ## Read-only simplification audit
 
