@@ -548,11 +548,20 @@ function setupInteraction(
 		layer.setTransform(ctx);
 		const nodes = cy.nodes();
 		const zoom = cy.zoom();
+		// Only this pass sees the viewport: skip node bodies whose bounding box
+		// misses cy.extent(), including ones that merely cross its edge. Export
+		// still hands the full cy.nodes() collection to drawExtra.
+		const extent = cy.extent();
+		const drawn = nodes.filter((node) => {
+			const box = node.boundingBox({ includeLabels: false });
+			return box.x1 <= extent.x2 && box.x2 >= extent.x1 &&
+				box.y1 <= extent.y2 && box.y2 >= extent.y1;
+		});
 		drawExtra(
-			nodes,
+			drawn,
 			ctx,
 			zoom,
-			nodes.length <= SHADOW_NODE_LIMIT && zoom >= SHADOW_MIN_ZOOM,
+			drawn.length <= SHADOW_NODE_LIMIT && zoom >= SHADOW_MIN_ZOOM,
 		);
 	});
 }

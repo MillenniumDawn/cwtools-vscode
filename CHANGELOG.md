@@ -3,6 +3,7 @@
 #### Extension
 
 * Classify script files from automatically discovered parent mods as Paradox files, including files already open when discovery finishes. Keep parent roots separate from base-game roots and clear them when the server stops. (#1104)
+* Skip drawing graph nodes whose bounding box misses the visible viewport when the graph renders, including nodes that only cross a viewport edge, and still draw every node when exporting an image. (#1138)
 * Add a workspace diagnostics baseline and **Write Diagnostics Baseline** command. Suppress known diagnostics with CLI-compatible hashes, show the suppressed count, and restore diagnostics when the baseline is cleared or changed. Captures include unsaved buffers and reject stale or cancelled scans. (#604)
 
 #### Engine
