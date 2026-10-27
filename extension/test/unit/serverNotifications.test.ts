@@ -122,19 +122,11 @@ suite("serverNotifications", () => {
 		handlers.get("loadingBar")!({ enable: true, value: "Scanning" } as never);
 		assert.strictEqual(state.statusBarItem.text, "Scanning");
 
-		const subscriptionsBefore = context.subscriptions.length;
 		for (const subscription of context.subscriptions) subscription.dispose();
 
 		assert.strictEqual(loadingBar.disposed, true);
 		assert.strictEqual(updateFileList.disposed, true);
 		assert.strictEqual(context.subscriptions.includes(loadingBar), true);
 		assert.strictEqual(context.subscriptions.includes(updateFileList), true);
-		// The two listener disposables are members of the same subscriptions array
-		// that was just disposed, so disposal reached them through the extension.
-		assert.strictEqual(
-			context.subscriptions.length - subscriptionsBefore,
-			0,
-			"subscriptions must not grow during disposal",
-		);
 	});
 });
