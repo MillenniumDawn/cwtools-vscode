@@ -15,7 +15,7 @@ This is an observed Linux/VS Code 1.135.0 result; Windows watcher behavior was n
 
 ## Implementation boundaries
 
-Expansion starts only beneath the canonical editable workspace root. It checks the directory itself and its ancestors for symlinks, does not follow symlink entries, skips ignored/excluded directory descendants, preserves the root-only `resources` exclusion, and has a 10,000-entry limit. If the limit is exceeded while another scan owns the scan slot, the original resource-class folder event is requeued so the existing scan fallback can retry it after the slot is released. Resource-only ordinary batches still bypass the watched batch cap.
+Only a directory that arrived as `CREATED` is expanded; a `CHANGED` directory is not walked. Expansion starts only beneath the canonical editable workspace root, which decides containment alone: descendant URIs keep the spelling of the event's own path, so they match the index and open-document keys when the workspace path is not canonical. It checks the directory itself and its ancestors for symlinks, does not follow symlink entries, skips ignored/excluded directory descendants, preserves the root-only `resources` exclusion, and has a 10,000-entry limit. If the limit is exceeded while another scan owns the scan slot, the original resource-class folder event is requeued so the existing scan fallback can retry it after the slot is released. Resource-only ordinary batches still bypass the watched batch cap.
 
 ## Validation record
 

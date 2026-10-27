@@ -64,6 +64,8 @@ impl Backend {
                 }
                 FileChangeType::CREATED => {
                     tracing::debug!(%uri, "watched file created; queued");
+                    // Marked first, so the batch that drains the URI always finds its marker.
+                    self.state.watched_created.lock().insert(uri.clone());
                     self.state.watched_pending.lock().insert(uri);
                     *self.state.loc_discovery_cache.lock() = None;
                     enqueued = true;
@@ -111,6 +113,14 @@ impl Backend {
                 return;
             }
             let requeue_changes = changes.clone();
+            let requeue_created: HashSet<String> = {
+                let created = state.watched_created.lock();
+                changes
+                    .iter()
+                    .filter(|uri| created.contains(*uri))
+                    .cloned()
+                    .collect()
+            };
             let requeue_deletes = deletes.clone();
             let (batch_client, batch_state) = (client.clone(), state.clone());
             let ok = spawn_logging_panics("watched batch", async move {
@@ -134,6 +144,7 @@ impl Backend {
                 return;
             }
             let (changes_len, deletes_len) = (requeue_changes.len(), requeue_deletes.len());
+            state.watched_created.lock().extend(requeue_created);
             state.watched_pending.lock().extend(requeue_changes);
             state.watched_deleted.lock().extend(requeue_deletes);
             if retried {
@@ -168,7 +179,16 @@ impl Backend {
         changes: HashSet<String>,
         deletes: Vec<String>,
     ) {
-        let (changes, folder_expansion_over_budget) = self.with_created_folder_contents(changes);
+        let created: HashSet<String> = {
+            let mut markers = self.state.watched_created.lock();
+            changes
+                .iter()
+                .filter(|uri| markers.remove(*uri))
+                .cloned()
+                .collect()
+        };
+        let (changes, folder_expansion_over_budget) =
+            self.with_created_folder_contents(changes, &created);
         let deletes = self.with_deleted_folder_contents(deletes, &changes);
         // Resources skip the rescan cap, so a texture folder copy stays cheap (#1023).
         let (resource_changes, changes): (HashSet<String>, HashSet<String>) =
@@ -193,6 +213,10 @@ impl Backend {
                 "watched batch over cap; full rescan"
             );
             if !self.validate_entire_workspace(true).await {
+                if folder_expansion_over_budget {
+                    // The folder is requeued whole, so it must still count as created.
+                    self.state.watched_created.lock().extend(created);
+                }
                 let mut pending = self.state.watched_pending.lock();
                 pending.extend(changes);
                 if folder_expansion_over_budget {
@@ -339,8 +363,14 @@ impl Backend {
         }
     }
 
-    /// Expand folder events within the editable root; skip unsafe/excluded descendants and fall back to a workspace scan over budget.
-    fn with_created_folder_contents(&self, changes: HashSet<String>) -> (HashSet<String>, bool) {
+    /// Expand `created` folder events within the editable root; skip unsafe/excluded descendants and fall back to a workspace scan over budget.
+    /// The canonical paths below only decide containment: URIs keep the event's own spelling,
+    /// which is the one the index and open documents are keyed on.
+    fn with_created_folder_contents(
+        &self,
+        changes: HashSet<String>,
+        created: &HashSet<String>,
+    ) -> (HashSet<String>, bool) {
         let Some(workspace_root) = self.state.config.read().editable_roots.first().cloned() else {
             return (changes, false);
         };
@@ -348,6 +378,10 @@ impl Backend {
         let mut expanded = HashSet::new();
         let mut visited_entries = 0usize;
         for uri in &changes {
+            if !created.contains(uri) {
+                expanded.insert(uri.clone());
+                continue;
+            }
             let Some(path) = crate::access::file_uri_to_path(uri) else {
                 expanded.insert(uri.clone());
                 continue;
@@ -406,17 +440,11 @@ impl Backend {
             {
                 continue;
             }
-            let Some(directory_uri) = Url::from_file_path(&directory)
-                .ok()
-                .map(|url| url.to_string())
-            else {
-                expanded.insert(uri.clone());
-                continue;
-            };
+            let directory_uri = crate::paths::path_to_uri(&path);
             if self.is_ignored_uri(&format!("{directory_uri}/")) {
                 continue;
             }
-            let mut pending = vec![directory];
+            let mut pending = vec![path];
             while let Some(directory) = pending.pop() {
                 let Ok(entries) = std::fs::read_dir(&directory) else {
                     continue;
@@ -433,20 +461,13 @@ impl Backend {
                     if metadata.file_type().is_symlink() {
                         continue;
                     }
-                    let Some(uri) = Url::from_file_path(&path).ok().map(|url| url.to_string())
-                    else {
-                        continue;
-                    };
+                    let uri = crate::paths::path_to_uri(&path);
                     if metadata.is_dir() {
-                        let Some(relative) = path.strip_prefix(&root).ok() else {
-                            continue;
-                        };
-                        if relative.components().any(|component| {
-                            component
-                                .as_os_str()
-                                .to_str()
-                                .is_some_and(cwtools_file_manager::is_excluded_dir)
-                        }) || self.is_ignored_uri(&format!("{uri}/"))
+                        if entry
+                            .file_name()
+                            .to_str()
+                            .is_some_and(cwtools_file_manager::is_excluded_dir)
+                            || self.is_ignored_uri(&format!("{uri}/"))
                         {
                             continue;
                         }

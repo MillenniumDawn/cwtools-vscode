@@ -451,6 +451,70 @@ fn test_watched_created_folder_does_not_index_symlinked_resources() {
     );
 }
 
+// The alias is a symlinked ancestor of the workspace, which needs no privilege on Unix only.
+#[cfg(unix)]
+#[test]
+fn test_watched_created_folder_publishes_descendants_under_the_clients_spelling() {
+    let mut server = storm_builder().spawn_uninitialized();
+    let workspace = server.workspace().to_path_buf();
+    let links = tempfile::tempdir().unwrap();
+    let alias = links.path().join("alias");
+    std::os::unix::fs::symlink(workspace.parent().unwrap(), &alias).unwrap();
+    let aliased = alias.join(workspace.file_name().unwrap());
+    server.initialize_merging(json!({ "rootUri": path_uri(&aliased) }));
+    server.initialized();
+    server.wait_for_scan_done();
+    wait_for_scan_release(&server.scan_release_path());
+    server.write_file("gfx/pack/defs.gfx", "# no exported names\n");
+    let folder = path_uri(aliased.join("gfx/pack"));
+
+    server.send(&watched_created(&[folder]));
+
+    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    server.stop();
+
+    let published: Vec<&str> = frames
+        .iter()
+        .filter(|frame| frame["method"] == "textDocument/publishDiagnostics")
+        .filter_map(|frame| frame["params"]["uri"].as_str())
+        .collect();
+    let expected = path_uri(aliased.join("gfx/pack/defs.gfx"));
+    assert!(
+        published.contains(&expected.as_str()),
+        "a descendant must keep the client's spelling {expected}, got: {published:?}"
+    );
+}
+
+#[test]
+fn test_watched_changed_folder_is_not_expanded() {
+    let mut server = storm_server();
+    server.write_file("gfx/pack/defs.gfx", "# no exported names\n");
+    let folder = server.uri("gfx/pack");
+    let control = server.write_file_uri("common/decisions/a.txt", STORM_FILE);
+
+    server.send(&watched_changes(&[folder, control]));
+
+    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(10));
+    let log = server.profiling_log();
+    server.stop();
+
+    assert_eq!(
+        count_publishes(&frames, "a.txt"),
+        1,
+        "the changed file proves the batch ran, got: {frames:?}"
+    );
+    assert_eq!(
+        count_publishes(&frames, "defs.gfx"),
+        0,
+        "a folder reported changed must not be walked, got: {frames:?}"
+    );
+    assert_eq!(
+        count_validate_log(&log, "watched"),
+        1,
+        "only the changed file may validate, got: {log}"
+    );
+}
+
 #[test]
 fn test_watched_created_script_clears_cw113_without_a_reindex() {
     let mut server = picture_server("gfx");
