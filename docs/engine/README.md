@@ -44,8 +44,11 @@ Code extension in this repo bundles its own copy, so you only need the
 standalone binary to wire cwtools into a different editor.
 
 The extension release bundles `cwtools-server` for each supported platform.
-Build the standalone CLI from source with `cargo build --release` from
-`engine/`. [The build guide](BUILD.md) covers the details.
+Build the standalone CLI and server from source with `cargo build --release`
+from `engine/`. [The build guide](BUILD.md) covers the details. For a complete
+standalone HOI4 LSP initialize/edit/shutdown example, real-server smoke test,
+CLI comparison, and read-only simplification-audit workflow, see
+[Standalone HOI4 LSP](STANDALONE.md).
 
 `cwtools` is the command-line validator:
 

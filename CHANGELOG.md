@@ -2,12 +2,16 @@
 
 #### Extension
 
+* Dispose the loadingBar and updateFileList notification listeners with the extension instead of leaving them attached until the window closes. (#1139)
 * Classify script files from automatically discovered parent mods as Paradox files, including files already open when discovery finishes. Keep parent roots separate from base-game roots and clear them when the server stops. (#1104)
+* Skip drawing graph nodes whose body and shadow miss the visible viewport when the graph renders, and still draw every node when exporting an image. (#1138)
 * Add a workspace diagnostics baseline and **Write Diagnostics Baseline** command. Suppress known diagnostics with CLI-compatible hashes, show the suppressed count, and restore diagnostics when the baseline is cleared or changed. Captures include unsaved buffers and reject stale or cancelled scans. (#604)
+* Test that graph image export reports a rejected image merge or a FileReader error once, posts no image, and succeeds on the next export. (#834)
 
 #### Engine
 
 * Count references inside parsed effect aliases in CodeLens. Resolve shared fields such as `id` against their enclosing rules so definitions and unrelated scalar fields do not count as references. Batch rule traversal through reference-bearing branches instead of resolving each field separately.
+* Document and smoke-test standalone HOI4 LSP initialization, diagnostic completion, CLI comparison, host coverage limits, and read-only simplification audits. (#1126)
 * Reuse the script parsing pipeline for multi-mod scans and remove the unused localisation folder walker. Keep its discovery regressions with the shared file manager.
 * Rename localisation keys together with rule-linked entity IDs and their references, without changing unrelated same-spelling effects, flags, variables, or strings. Preserve translated keys and sibling references, and cancel conflicting renames instead of returning partial edits. (#844)
 * Discover parent mods from descriptor dependencies in CLI `validate` and `fix` when neither `--parent` nor TOML `parents` supplies a nonempty list. Explicit parent paths still take precedence. (#1105)
