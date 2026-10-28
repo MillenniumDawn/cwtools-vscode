@@ -9,6 +9,7 @@
 
 #### Engine
 
+* Document and smoke-test standalone HOI4 LSP initialization, diagnostic completion, CLI comparison, host coverage limits, and read-only simplification audits. (#1126)
 * Reuse the script parsing pipeline for multi-mod scans and remove the unused localisation folder walker. Keep its discovery regressions with the shared file manager.
 * Rename localisation keys together with rule-linked entity IDs and their references, without changing unrelated same-spelling effects, flags, variables, or strings. Preserve translated keys and sibling references, and cancel conflicting renames instead of returning partial edits. (#844)
 * Discover parent mods from descriptor dependencies in CLI `validate` and `fix` when neither `--parent` nor TOML `parents` supplies a nonempty list. Explicit parent paths still take precedence. (#1105)

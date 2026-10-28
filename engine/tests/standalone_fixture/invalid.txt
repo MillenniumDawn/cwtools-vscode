@@ -1,0 +1,1 @@
+foo = { name = example redundant = yes unexpected = 1 }
