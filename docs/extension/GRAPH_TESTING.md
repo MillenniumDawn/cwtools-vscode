@@ -14,9 +14,10 @@ replacement cleanup, the closed neighborhood hover classes, bounded class-update
 work, drawExtra label caching and shadow limits, canvas pixel ratios/resize/
 transforms, lazy tooltip creation, detail expansion, simple/expanded mouseout
 behavior, graph-replacement cleanup and edge building. Import validation is in
-`graphImportMetadata.test.ts` on the same harness, and import/export failures
-run against the real webview in the `host` label
-(`extension/test/host/extension.test.ts`).
+`graphImportMetadata.test.ts` on the same harness. Rejected image merges and
+FileReader export errors are in `graphExport.test.ts` on that harness. Import
+failures and successful image export run against the real webview in the `host`
+label (`extension/test/host/extension.test.ts`).
 
 These tests measure graph correctness and application operations before layout.
 They do not measure Electron rendering, ELK computation, or browser frame time.

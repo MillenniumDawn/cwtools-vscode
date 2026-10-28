@@ -1,63 +1,20 @@
 import type cytoscape from "cytoscape";
-import { writeFileSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { installGraph, node, render, resetGraphState, state } from "./support/graphHeadless";
+import { listenerCounts, scratchCollections, traverseHovers } from "./support/graphMeasurements";
 
 beforeAll(installGraph);
 beforeEach(() => { vi.useFakeTimers(); resetGraphState(); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 afterAll(() => { state.cores.forEach((core) => core.destroy()); vi.unstubAllGlobals(); });
 
-function listenerCounts(size: number) {
-	const prototype = Object.getPrototypeOf(state.cores[0].collection()) as { on: cytoscape.NodeSingular["on"] };
-	const corePrototype = Object.getPrototypeOf(state.cores[0]) as { on: cytoscape.Core["on"] };
-	const nodeOn = vi.spyOn(prototype, "on");
-	const coreOn = vi.spyOn(corePrototype, "on");
-	try {
-		const cy = render(Array.from({ length: size }, (_, i) => node(`n${i}`, [`n${(i + 1) % size}`])));
-		return { cy, perNode: nodeOn.mock.calls.length, core: coreOn.mock.calls.length };
-	} finally { nodeOn.mockRestore(); coreOn.mockRestore(); }
-}
-
-function scratchCollections(cy: cytoscape.Core) {
-	const collectionPrototype = Object.getPrototypeOf(cy.collection()) as object;
-	const collections: { path: string; collection: cytoscape.CollectionReturnValue }[] = [];
-	const visited = new Set<object>();
-	const visit = (value: unknown, path: string) => {
-		if (typeof value !== "object" || value === null) return;
-		if (Object.prototype.isPrototypeOf.call(collectionPrototype, value)) {
-			collections.push({ path, collection: value as cytoscape.CollectionReturnValue });
-			return;
-		}
-		if (visited.has(value)) return;
-		visited.add(value);
-		if (value instanceof Map) {
-			for (const [key, entry] of value) { visit(key, `${path}.key`); visit(entry, `${path}.value`); }
-		} else if (value instanceof Set) {
-			for (const entry of value) visit(entry, `${path}.value`);
-		} else {
-			for (const [key, entry] of Object.entries(value)) visit(entry, `${path}.${key}`);
-		}
-	};
-	visit(cy.scratch(), "core");
-	cy.nodes().forEach((n) => { visit(n.scratch(), n.id()); });
-	return collections;
-}
-
-function traverseHovers(cy: cytoscape.Core) {
-	cy.nodes().forEach((n) => { n.emit("mouseover"); n.emit("mouseout"); });
-}
-
-test.each([10, 100, 500])("tooltip listeners are delegated for %i nodes", (size) => {
-	const counts = listenerCounts(size);
-	expect(counts.perNode).toBe(0);
-	expect(counts.core).toBeLessThanOrEqual(10);
-});
-
-test("listener count remains constant when graph size increases", () => {
-	const small = listenerCounts(10);
-	const large = listenerCounts(500);
-	expect(large.core + large.perNode).toBe(small.core + small.perNode);
+test("tooltip listeners stay delegated and constant across graph sizes", () => {
+	const counts = [10, 100, 500].map(listenerCounts);
+	for (const count of counts) {
+		expect(count.perNode, `${count.cy.nodes().length} nodes`).toBe(0);
+		expect(count.core, `${count.cy.nodes().length} nodes`).toBeLessThanOrEqual(10);
+		expect(count.core + count.perNode).toBe(counts[0].core + counts[0].perNode);
+	}
 });
 
 test("hovering every node leaves scratch collections bounded to the active hood", () => {
@@ -121,16 +78,3 @@ test("repeated hover schedules one expansion and preserves simple/expanded behav
 	cy.$id("a").emit("mouseout");
 	expect(tip.hide).toHaveBeenCalledTimes(1);
 });
-
-test.skipIf(process.env.CWTOOLS_HOVER_BENCH !== "1")("record listener and retained collection counts for 500-node hover traversal", () => {
-	const { cy, perNode, core } = listenerCounts(500);
-	traverseHovers(cy);
-	const retained = scratchCollections(cy);
-	const result = {
-		nodes: 500, edges: 500, perNodeListeners: perNode, coreListeners: core,
-		scratchCollections: retained.length, scratchElements: retained.reduce((sum, entry) => sum + entry.collection.length, 0),
-	};
-	if (process.env.CWTOOLS_HOVER_BENCH_OUTPUT) {
-		writeFileSync(process.env.CWTOOLS_HOVER_BENCH_OUTPUT, JSON.stringify(result, null, 2));
-	}
-}, 60000);

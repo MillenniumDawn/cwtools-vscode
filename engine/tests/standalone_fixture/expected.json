@@ -1,0 +1,23 @@
+[
+  {
+    "file": "common/foo/control.txt",
+    "line": 1,
+    "code": "CW263",
+    "severity": "Error",
+    "message": "Unexpected field 'unexpected'"
+  },
+  {
+    "file": "common/foo/example.txt",
+    "line": 1,
+    "code": "CW263",
+    "severity": "Error",
+    "message": "Unexpected field 'unexpected'"
+  },
+  {
+    "file": "common/foo/example.txt",
+    "line": 1,
+    "code": "CW282",
+    "severity": "Information",
+    "message": "This is the default value (true) and can be omitted"
+  }
+]

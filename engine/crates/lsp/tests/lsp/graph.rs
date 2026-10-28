@@ -7,9 +7,8 @@ use crate::common::{TestServer, client_spelling, storm_base, storm_builder, stor
 /// A focus type whose instances reference each other, plus a decision type that
 /// references a focus. Both reference keys sit at depth 1 of a type rule
 /// (`relative_position_id = <focus>` is copied from the real HOI4
-/// national_focus.cwt): that is the shape `is_type_ref_leaf` /
-/// `build_type_ref_keys` classify, so it is what the workspace reference index
-/// — and therefore the graph — can see.
+/// national_focus.cwt): that is the shape `build_type_ref_keys` classifies, so
+/// it is what the workspace reference index — and therefore the graph — can see.
 const GRAPH_RULES: &str = r#"
 types = {
     type[focus] = {

@@ -8,15 +8,17 @@ one degree filter and one collection difference.
 `graphPartition.test.ts` executes the real graph.ts dispatcher with a real
 headless Cytoscape harness in `support/graphHeadless.ts`. The normal tests
 assert no unions and one degree check per node at sizes 100, 200 and 500, plus
-complete edge/component/self-loop preservation. Timing is optional:
+complete edge/component/self-loop preservation. Timing lives in the separate
+`graphPerf.bench.ts` runner:
 
 ```sh
-CWTOOLS_GRAPH_BENCH=1 CWTOOLS_GRAPH_BENCH_OUTPUT=/tmp/graph-partition.json \
-  npx --no-install vitest run extension/test/unit/graphPartition.test.ts -t 'benchmark 500'
+CWTOOLS_GRAPH_BENCH_OUTPUT=/tmp/graph-partition.json \
+  npm run bench:node -- extension/test/unit/graphPerf.bench.ts -t 'benchmark 500'
 ```
 
-For a comparison, copy the same test and support/graphHeadless.ts into a clean
-worktree of the base revision and run the command there. Each invocation warms
+For a comparison, copy the same benchmark, `support/graphHeadless.ts` and
+`support/graphMeasurements.ts` into a clean worktree of the base revision and
+run the command there. Each invocation warms
 up five renders and measures 30 renders of the identical fixture: 500 nodes,
 490 isolated nodes and a 10-node chain with nine edges. Timing starts after the
 first fit and ends immediately before constructing the ELK layout. Recording

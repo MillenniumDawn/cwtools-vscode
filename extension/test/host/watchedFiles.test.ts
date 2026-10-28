@@ -53,6 +53,139 @@ suite("served-root file watchers", function () {
 		}
 	});
 
+	test("indexes resources after a populated folder is moved into a served root", async () => {
+		const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		assert.ok(root);
+		const openFile = path.join(root, "events", "open.txt");
+		const openUri = vscode.Uri.file(openFile);
+		const original = await fs.readFile(openFile, "utf8");
+		const settings = vscode.workspace.getConfiguration("cwtools");
+		const previousVanilla = settings.get<string>("cache.stellaris");
+		const vanillaRoot = path.resolve(root, "..", "..", "vanilla");
+		const source = path.resolve(root, "..", "..", "..", ".folder-move-source");
+		const destination = path.join(root, "events", "assets");
+		const texture = path.join(destination, "moved.dds");
+		const script = path.join(destination, "moved.txt");
+		const directoryUri = vscode.Uri.file(destination).toString();
+		const textureUri = vscode.Uri.file(texture).toString();
+		const scriptUri = vscode.Uri.file(script).toString();
+		const hostEvents: string[] = [];
+		const watcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(vscode.Uri.file(root), "**"),
+		);
+		watcher.onDidCreate((uri) => { hostEvents.push(`create:${uri.toString()}`); });
+		watcher.onDidChange((uri) => { hostEvents.push(`change:${uri.toString()}`); });
+		watcher.onDidDelete((uri) => { hostEvents.push(`delete:${uri.toString()}`); });
+		let serverObserver: { count(): number; dispose(): void } | undefined;
+		let apiForCleanup: Awaited<ReturnType<typeof activate>> = undefined;
+		try {
+			const api = await activate();
+			assert.ok(api);
+			apiForCleanup = api;
+			assert.ok(await waitForServerReady(api));
+			assert.strictEqual(settings.get<number>("backgroundReindex.intervalMinutes"), 0);
+			let lastProbe = 0;
+			const readyUri = vscode.Uri.file(path.join(root, READY_PROBE)).toString();
+			assert.ok(
+				await waitUntil(async () => {
+					if (hostEvents.some((event) => event.endsWith(`:${readyUri}`))) return true;
+					if (Date.now() - lastProbe >= 500) {
+						lastProbe = Date.now();
+						await fs.writeFile(path.join(root, READY_PROBE), String(lastProbe));
+					}
+					return false;
+				}, 20_000),
+				"VS Code watcher did not become ready",
+			);
+			await fs.rm(path.join(root, READY_PROBE), { force: true });
+
+			const reference = [
+				'spriteType = { texturefile = "events/assets/moved.tga" }',
+				'spriteType = { texturefile = "gfx/interface/watcher-base.tga" }',
+			].join("\n") + "\n";
+			await settings.update("cache.stellaris", vanillaRoot, vscode.ConfigurationTarget.Global);
+			assert.strictEqual(vscode.workspace.getConfiguration("cwtools").get<string>("cache.stellaris"), vanillaRoot);
+			await fs.writeFile(openFile, reference);
+			const previousPid = api.serverProcessId();
+			await vscode.commands.executeCommand("cwtools.restartServer");
+			assert.ok(
+				await waitUntil(() => api.serverProcessId() !== previousPid, 10_000),
+				"server did not restart with synthetic vanilla configuration",
+			);
+			assert.ok(await waitForServerReady(api), "restarted server did not finish its initial scan");
+			const diagnostics = () => vscode.languages.getDiagnostics(openUri);
+			const missingFiles = () => diagnostics().filter((diagnostic) =>
+				(typeof diagnostic.code === "object" ? diagnostic.code.value : diagnostic.code) === "CW113",
+			);
+			const diagnosticSummary = () => diagnostics().map((diagnostic) => ({
+				code: diagnostic.code,
+				message: diagnostic.message,
+				source: diagnostic.source,
+			}));
+			assert.ok(
+				await waitUntil(() => missingFiles().length > 0, 15_000),
+				`restarted server emitted no CW113; configuration and diagnostics: ${JSON.stringify({ workspace: root, vanillaRoot, diagnostics: diagnosticSummary() })}`,
+			);
+			const initialCw113 = missingFiles();
+			const initialEvidence = {
+				workspace: root,
+				gameHint: path.basename(root),
+				vanillaRoot,
+				vanillaFixture: await fs.stat(path.join(vanillaRoot, "gfx", "interface", "watcher-base.dds")).then(() => true, () => false),
+				diagnostics: diagnosticSummary(),
+			};
+			console.log(`initial folder move diagnostics ${JSON.stringify(initialEvidence)}`);
+			assert.strictEqual(initialCw113.length, 1, `only the missing texture should have CW113; diagnostics: ${JSON.stringify(diagnosticSummary())}`);
+			const readinessObserver = api.observeServerWatchedFileEvents(openUri.toString());
+			try {
+				await fs.writeFile(openFile, `${reference}# watcher ready after server restart\n`);
+				assert.ok(await waitUntil(() => readinessObserver.count() > 0), "restarted server watcher did not become ready");
+			} finally {
+				readinessObserver.dispose();
+				await fs.writeFile(openFile, reference);
+			}
+			serverObserver = api.observeServerWatchedFileEvents(directoryUri);
+
+			await fs.mkdir(source, { recursive: true });
+			await fs.writeFile(path.join(source, "moved.dds"), "synthetic texture\n");
+			await fs.writeFile(path.join(source, "moved.txt"), reference);
+			await fs.rename(source, destination);
+			const cw113Cleared = await waitUntil(
+				() => missingFiles().length === 0,
+				15_000,
+			);
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			const observed = (uri: string): string[] => hostEvents.filter((event) => event.endsWith(`:${uri}`));
+			const forwardedDirectoryCount = serverObserver?.count() ?? 0;
+			const eventEvidence = {
+				version: vscode.version,
+				platform: process.platform,
+				hostEventTypes: {
+					directory: observed(directoryUri),
+					texture: observed(textureUri),
+					script: observed(scriptUri),
+				},
+				forwardedDirectoryCount,
+				cw113Cleared,
+			};
+			console.log(`folder move event evidence ${JSON.stringify(eventEvidence)}`);
+			assert.ok(cw113Cleared, "CW113 should clear from the moved texture without a reindex");
+			assert.ok(observed(directoryUri).some((event) => event.startsWith("create:")), `VS Code reported no moved directory create event: ${JSON.stringify(hostEvents)}`);
+			assert.ok(forwardedDirectoryCount > 0, "server received no forwarded event for the moved directory");
+		} finally {
+			watcher.dispose();
+			serverObserver?.dispose();
+			await fs.writeFile(openFile, original);
+			await fs.rm(source, { recursive: true, force: true });
+			await fs.rm(destination, { recursive: true, force: true });
+			await settings.update("cache.stellaris", previousVanilla, vscode.ConfigurationTarget.Global);
+			if (apiForCleanup) {
+				await vscode.commands.executeCommand("cwtools.restartServer");
+				assert.ok(await waitForServerReady(apiForCleanup), "server did not restore its original vanilla configuration");
+			}
+		}
+	});
+
 	test("tracks external create, change and delete in served roots", async () => {
 		const api = await activate();
 		assert.ok(api);

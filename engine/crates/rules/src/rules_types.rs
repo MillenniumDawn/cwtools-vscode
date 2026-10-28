@@ -572,18 +572,28 @@ impl RuleSet {
         self.root_type_rules_idx.clear();
         self.type_reference_rules.clear();
         for (i, root_rule) in self.root_rules.iter().enumerate() {
-            let (root_type, rule) = match root_rule {
-                RootRule::TypeRule(name, rule) => {
-                    self.type_rules_idx.entry(name.clone()).or_insert(i);
-                    self.root_type_rules_idx
-                        .entry(name.clone())
-                        .or_default()
-                        .push(i);
-                    (Some(name.as_str()), rule)
-                }
+            if let RootRule::TypeRule(name, _) = root_rule {
+                self.type_rules_idx.entry(name.clone()).or_insert(i);
+                self.root_type_rules_idx
+                    .entry(name.clone())
+                    .or_default()
+                    .push(i);
+            }
+        }
+        let reference_roots = self
+            .root_rules
+            .iter()
+            .map(|root| match root {
+                RootRule::TypeRule(name, rule) => (Some(name.as_str()), rule),
                 RootRule::AliasRule(_, rule) | RootRule::SingleAliasRule(_, rule) => (None, rule),
-            };
-            let (rule_type, _) = rule;
+            })
+            .chain(
+                self.aliases
+                    .iter()
+                    .chain(&self.single_aliases)
+                    .map(|(_, rule)| (None, rule)),
+            );
+        for (root_type, (rule_type, _)) in reference_roots {
             let RuleType::NodeRule { rules, .. } = rule_type else {
                 continue;
             };
@@ -1057,6 +1067,47 @@ mod tests {
         };
         assert_eq!(nested_body.len(), RULE_BODY_INDEX_MIN_RULES + 1);
         assert!(ruleset.rule_body_candidate_index(nested_body).is_some());
+    }
+
+    #[test]
+    fn reference_rules_include_parsed_aliases_and_single_aliases() {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let parsed = cwtools_parser::parser::parse_string(
+            r#"
+            types = { type[event] = { path = "events" } }
+            event = { parent = <event> }
+            alias[effect:country_event] = { id = <event.country> }
+            single_alias[planet_event] = { ID = <event.planet> }
+        "#,
+            &table,
+        );
+        let rules = crate::rules_converter::ast_to_ruleset(&parsed, &table);
+        assert_eq!(
+            rules.type_reference_rules_for_key("id"),
+            Some(
+                [
+                    TypeReferenceRule {
+                        ref_type: "event.country".to_string(),
+                        root_type: None
+                    },
+                    TypeReferenceRule {
+                        ref_type: "event.planet".to_string(),
+                        root_type: None
+                    },
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            rules.type_reference_rules_for_key("PARENT"),
+            Some(
+                [TypeReferenceRule {
+                    ref_type: "event".to_string(),
+                    root_type: Some("event".to_string())
+                },]
+                .as_slice()
+            )
+        );
     }
 
     #[test]

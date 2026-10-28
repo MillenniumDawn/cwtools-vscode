@@ -201,14 +201,15 @@ jobs:
         id: host-rules-sync
         timeout-minutes: 10
         run: node scripts/build/python.mjs scripts/build/hosttest.py --label rules-sync
-      # Keep the suites with distinct workspace/configuration coverage. The
-      # smoke files are a subset of hostFiles and run once under host coverage.
+      # Keep the suites with distinct workspace/configuration coverage,
+      # including launcher-discovered parents. Smoke runs under host coverage.
       - name: Host tests (multi-root, watched files, activation gate)
         id: host-configurations
         timeout-minutes: 10
         run: >-
           node scripts/build/python.mjs scripts/build/hosttest.py
           --label multi-root --label watched
+          --label parent-language
           --label gate-descriptor --label gate-disabled
       # Host V8 coverage runs the host label (including smoke files) and the
       # isolated live-settings workspace, while the earlier configuration
