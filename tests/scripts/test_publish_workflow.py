@@ -4,8 +4,9 @@ written to fix.
 Text assertions rather than a YAML parse: PyYAML is not a dev dependency.
 """
 
-import re
 from pathlib import Path
+
+from workflow_helpers import job_scope
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
@@ -26,11 +27,6 @@ RELEASE_PATH_JOBS = (
     "open-vsx",
     "github",
 )
-
-
-def _job(workflow: str, job: str) -> str:
-    block = workflow.split(f"\n  {job}:\n", maxsplit=1)[1]
-    return re.split(r"\n  \S", block, maxsplit=1)[0]
 
 
 def test_publish_replaced_the_workflows_it_merged() -> None:
@@ -61,7 +57,7 @@ def test_publish_serializes_per_channel_not_per_workflow() -> None:
 
     channel = "needs.check.outputs.release == 'true' && 'release' || 'pre-release'"
     for job in PUBLISH_JOBS:
-        block = workflow.split(f"\n  {job}:\n", maxsplit=1)[1]
+        block = job_scope(workflow, job)
         header = block.split("    steps:", maxsplit=1)[0]
         assert f"publish-{job}-${{{{\n        {channel} }}}}" in header, job
         assert "cancel-in-progress: false" in header, job
@@ -147,7 +143,7 @@ def test_each_publish_job_gets_the_build_identity() -> None:
     # them once, and every pre-release publish failed the version check.
     workflow = PUBLISH.read_text(encoding="utf-8")
     for job in PUBLISH_JOBS:
-        block = _job(workflow, job)
+        block = job_scope(workflow, job)
         assert "CWTOOLS_BUILD_VERSION: ${{ needs.check.outputs.version }}" in block, job
         assert "CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}" in block, job
 
@@ -157,7 +153,7 @@ def test_registry_tokens_reach_only_the_publish_step() -> None:
     # scripts `npm ci` runs.
     workflow = PUBLISH.read_text(encoding="utf-8")
     for job, secret in (("marketplace", "VSCE_TOKEN"), ("open-vsx", "OPEN_VSX_TOKEN")):
-        block = _job(workflow, job)
+        block = job_scope(workflow, job)
         assert block.count(f"secrets.{secret}") == 1, job
         last_step = block.rsplit("      - name:", maxsplit=1)[1]
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in last_step, job
@@ -166,14 +162,14 @@ def test_registry_tokens_reach_only_the_publish_step() -> None:
 def test_registry_publishers_skip_dependency_scripts_but_keep_optional_clis() -> None:
     workflow = PUBLISH.read_text(encoding="utf-8")
     for job in ("marketplace", "open-vsx"):
-        block = _job(workflow, job)
+        block = job_scope(workflow, job)
         assert "ignore-scripts: true" in block, job
         assert "npx --no-install vsce --version" in block
         assert "npx --no-install ovsx --version" in block
 
     # The shared install action remains full-featured for packaging, where
     # platform-specific optional dependencies such as esbuild are required.
-    package_job = _job(workflow, "package")
+    package_job = job_scope(workflow, "package")
     assert "ignore-scripts" not in package_job
     assert "npm run build -- package-prebuilt" in package_job
     assert "python3 scripts/smoke_test_vsix.py artifacts/vsix" in package_job
@@ -183,11 +179,11 @@ def test_marketplace_verifies_its_download_before_publishing() -> None:
     # This only reads the YAML text; test_smoke_test_vsix.py covers the checks
     # themselves, and the argument order the workflow passes them in.
     workflow = PUBLISH.read_text(encoding="utf-8")
-    package_job = _job(workflow, "package")
+    package_job = job_scope(workflow, "package")
     assert '--expected-version "$CWTOOLS_BUILD_VERSION"' in package_job
     assert "sha256sum *.vsix > SHA256SUMS" in package_job
 
-    marketplace = _job(workflow, "marketplace")
+    marketplace = job_scope(workflow, "marketplace")
     _, verify_and_publish = marketplace.split(
         "- name: Verify downloaded VSIX files", maxsplit=1
     )

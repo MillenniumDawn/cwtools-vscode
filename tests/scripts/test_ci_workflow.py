@@ -3,15 +3,11 @@
 import re
 from pathlib import Path
 
+from workflow_helpers import workflow_step
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 LIVE_SETTINGS = REPO_ROOT / "extension" / "test" / "host" / "liveSettings.test.ts"
-
-
-def workflow_step(workflow: str, name: str) -> str:
-    return workflow.split(f"      - name: {name}\n", maxsplit=1)[1].split(
-        "\n      - ", maxsplit=1
-    )[0]
 
 
 def test_package_steps_do_not_run_after_cancellation() -> None:
@@ -47,6 +43,7 @@ def test_ci_keeps_distinct_host_suites_and_reuses_build_for_coverage() -> None:
         workflow, "Host tests (multi-root, watched files, activation gate)"
     )
     assert "--label multi-root --label watched" in configurations
+    assert "--label parent-language" in configurations
     assert "--label gate-descriptor --label gate-disabled" in configurations
     assert "--label live" not in configurations
     rules_sync = workflow_step(workflow, "Host tests (rules sync)")

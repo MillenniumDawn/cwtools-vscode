@@ -15,6 +15,7 @@ HOST_COVERAGE_SCOPES = (
 # so leaving them in would show a misleadingly low number next to the
 # accurate one already in the "Node unit" section.
 HOST_COVERAGE_DROPS = (
+    "extension/src/host/baseGame.ts",
     "extension/src/host/commandProgress.ts",
     "extension/src/host/commands.ts",
     "extension/src/host/detectGame.ts",
@@ -25,6 +26,7 @@ HOST_COVERAGE_DROPS = (
     "extension/src/host/fileListSignature.ts",
     "extension/src/host/fnv1a.ts",
     "extension/src/host/focusTracking.ts",
+    "extension/src/host/gameContentRoots.ts",
     "extension/src/host/games.ts",
     "extension/src/host/graphAvailability.ts",
     "extension/src/host/reindexSettings.ts",

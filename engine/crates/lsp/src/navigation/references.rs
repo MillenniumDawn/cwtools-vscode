@@ -1200,7 +1200,7 @@ mod tests {
             }
         }
 
-        let open_uri = "file:///open.txt";
+        let open_uri = "file:///events/open.txt";
         let open_text: Arc<str> = Arc::from("foo = { base = my_instance }\n");
         let open_ast = Arc::new(parse_string(&open_text, &state.string_table));
         state

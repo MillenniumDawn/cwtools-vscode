@@ -5,8 +5,8 @@ use serde_json::{Value, json};
 
 use crate::common::{
     GOTO_RULES, TestServer, client_spelling, editor_server, editor_server_with_rules,
-    feature_builder, feature_request, feature_start, path_uri, poll_until, storm_builder,
-    storm_start,
+    feature_builder, feature_request, feature_request_once, feature_start, locations, path_uri,
+    poll_until, storm_builder, storm_start,
 };
 
 #[test]
@@ -408,6 +408,72 @@ fn test_references_exclude_declaration_omits_definition() {
             .ends_with("national_focus/f.txt")),
         "definition must be omitted when includeDeclaration is false, got: {}",
         result
+    );
+}
+
+/// `id` is a plain field of the event and of its `metadata`, and a `<event>`
+/// reference only inside the parsed `country_event` alias. Line 7 is the one
+/// real use of `alpha.1`; lines 1 and 2 spell it under `id` without using it.
+const ALIAS_EVENT_RULES: &str = r#"
+types = { type[event] = { path = "game/events" name_field = id } }
+event = {
+    id = scalar
+    metadata = { id = scalar }
+    immediate = { alias_name[effect] = alias_match_left[effect] }
+}
+alias[effect:country_event] = { id = <event> }
+"#;
+
+const ALIAS_EVENT_FILE: (&str, &str) = (
+    "events/e.txt",
+    "country_event = {\n    id = alpha.1\n    metadata = { id = alpha.1 }\n}\n\
+     country_event = {\n    id = alpha.2\n    immediate = {\n        country_event = { id = alpha.1 }\n    }\n}\n",
+);
+
+#[test]
+fn test_references_in_open_file_follow_parsed_alias_context() {
+    let files = [ALIAS_EVENT_FILE];
+    let result = feature_request_once(
+        ALIAS_EVENT_RULES,
+        &files,
+        &[files[0].0],
+        serde_json::json!({}),
+        files[0].0,
+        "textDocument/references",
+        serde_json::json!({
+            "position": { "line": 7, "character": 33 },
+            "context": { "includeDeclaration": false }
+        }),
+    );
+    let lines: Vec<u32> = locations(&result)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect();
+    assert_eq!(
+        lines,
+        [7],
+        "only the alias use counts, not the definition or metadata `id`: {result}"
+    );
+}
+
+#[test]
+fn test_rename_in_open_file_follows_parsed_alias_context() {
+    let files = [ALIAS_EVENT_FILE];
+    let result = feature_request_once(
+        ALIAS_EVENT_RULES,
+        &files,
+        &[files[0].0],
+        serde_json::json!({}),
+        files[0].0,
+        "textDocument/rename",
+        serde_json::json!({ "position": { "line": 7, "character": 33 }, "newName": "beta.1" }),
+    );
+    let rewritten = apply_rename_changes(&result, &files);
+    assert_eq!(
+        rewritten[files[0].0],
+        "country_event = {\n    id = beta.1\n    metadata = { id = alpha.1 }\n}\n\
+         country_event = {\n    id = alpha.2\n    immediate = {\n        country_event = { id = beta.1 }\n    }\n}\n",
+        "{result}"
     );
 }
 

@@ -127,32 +127,35 @@ export function registerServerNotifications(
 		}),
 	);
 
-	client.onNotification(loadingBarNotification, (param: LoadingBarParams) => {
-		if (param.enable) {
-			ready = false;
-			if (initialScanPending) {
-				initialScanStarted = true;
+	const loadingBarListener = client.onNotification(
+		loadingBarNotification,
+		(param: LoadingBarParams) => {
+			if (param.enable) {
+				ready = false;
+				if (initialScanPending) {
+					initialScanStarted = true;
+				}
+				// A command notification is showing the same phases with a cancel
+				// button attached; a status-bar copy alongside it is the third
+				// indicator for one operation (cwtools-vscode#145). Leave the
+				// persistent item's text as-is rather than duplicating the phase.
+				if (commandProgressActive()) {
+					return;
+				}
+				status.text =
+					typeof param.percentage === "number"
+						? `${param.value} ${param.percentage}%`
+						: param.value;
+			} else {
+				ready = true;
+				status.text = readyStatusText();
+				if (initialScanPending && initialScanStarted) {
+					initialScanPending = false;
+					resolveInitialScan();
+				}
 			}
-			// A command notification is showing the same phases with a cancel
-			// button attached; a status-bar copy alongside it is the third
-			// indicator for one operation (cwtools-vscode#145). Leave the
-			// persistent item's text as-is rather than duplicating the phase.
-			if (commandProgressActive()) {
-				return;
-			}
-			status.text =
-				typeof param.percentage === "number"
-					? `${param.value} ${param.percentage}%`
-					: param.value;
-		} else {
-			ready = true;
-			status.text = readyStatusText();
-			if (initialScanPending && initialScanStarted) {
-				initialScanPending = false;
-				resolveInitialScan();
-			}
-		}
-	});
+		},
+	);
 	const readyStatusText = (): string =>
 		suppressedDiagnostics > 0
 			? l10n.t("CWTools: ready ({0} baseline-suppressed)", suppressedDiagnostics)
@@ -164,7 +167,7 @@ export function registerServerNotifications(
 			status.text = readyStatusText();
 		}
 	}));
-	client.onNotification(updateFileList, (params: UpdateFileList) => {
+	const updateFileListListener = client.onNotification(updateFileList, (params: UpdateFileList) => {
 		if (!acceptFileList) return;
 		const parseRoots = (rootList: unknown): string[] => {
 			const roots: string[] = [];
@@ -198,6 +201,10 @@ export function registerServerNotifications(
 			lastFileListSignature = signature;
 		}
 	});
+	// The library wraps each onNotification in a Disposable; hooking these off
+	// context.subscriptions (like diagnosticsBaselineStatus above) stops the
+	// handlers firing into a disposed extension.
+	context.subscriptions.push(loadingBarListener, updateFileListListener);
 	return {
 		initialScanDone,
 		statusText: () => status.text,

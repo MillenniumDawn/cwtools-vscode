@@ -1,1 +1,9 @@
-types = {}
+spriteType = {
+	texturefile = filepath
+}
+
+types = {
+	type[spriteType] = {
+		path = "events"
+	}
+}

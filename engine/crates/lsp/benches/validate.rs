@@ -260,6 +260,16 @@ fn bench_index_parsed_file(c: &mut Criterion) {
             cwtools_info::collect_type_instances(&ruleset, &parsed, logical_path, &table),
         );
         let mut collectors = cwtools_info::bench_support::FileCollectors::new(&ruleset);
+        let mut reference_check = InfoService::new();
+        cwtools_info::bench_support::merge(
+            &mut reference_check.reference_index,
+            &uri,
+            collectors.type_refs(&parsed, &table, &ruleset, logical_path),
+        );
+        eprintln!(
+            "index_parsed_file/{label}: type-reference fingerprint {:016x}",
+            reference_check.reference_fingerprint(&uri)
+        );
         group.bench_function("collect_type_refs", |b| {
             b.iter(|| black_box(collectors.type_refs(&parsed, &table, &ruleset, logical_path)))
         });
