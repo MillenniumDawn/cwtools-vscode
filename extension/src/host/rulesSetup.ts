@@ -19,6 +19,7 @@ import {
 	parseRulesManifestText,
 	readRulesManifestBody,
 	RULES_MANIFEST_CACHE_KEY,
+	RULES_MANIFEST_ETAG_CACHE_KEY,
 	RULES_MANIFEST_MAX_BYTES,
 	RULES_MANIFEST_TIMEOUT_MS,
 	RULES_MANIFEST_URL,
@@ -150,7 +151,31 @@ function cachedRulesManifest(globalState: Memento): RulesManifest | undefined {
 	}
 }
 
-async function fetchRemoteRulesManifest(): Promise<RulesManifest> {
+// A stored ETag goes back verbatim as a request header, so only short,
+// single-line values are usable; anything else is treated as not stored.
+const RULES_MANIFEST_ETAG_MAX_CHARS = 200;
+
+function usableRulesManifestEtag(value: unknown): string | undefined {
+	if (
+		typeof value !== "string" ||
+		value === "" ||
+		value.length > RULES_MANIFEST_ETAG_MAX_CHARS ||
+		/[\r\n]/.test(value)
+	) {
+		return undefined;
+	}
+	return value;
+}
+
+// "modified" is the only shape that carries a manifest; "unmodified" (HTTP 304,
+// only sent in answer to an If-None-Match we sent) keeps the caller's cache.
+type RemoteRulesManifestResult =
+	| { kind: "unmodified" }
+	| { kind: "modified"; manifest: RulesManifest; etag: string | undefined };
+
+async function fetchRemoteRulesManifest(
+	etag: string | undefined,
+): Promise<RemoteRulesManifestResult> {
 	const controller = new AbortController();
 	const timeout = setTimeout(
 		() => controller.abort(),
@@ -159,7 +184,12 @@ async function fetchRemoteRulesManifest(): Promise<RulesManifest> {
 	try {
 		const response = await fetch(RULES_MANIFEST_URL, {
 			signal: controller.signal,
+			headers: etag ? { "If-None-Match": etag } : undefined,
 		});
+		if (response.status === 304) {
+			// 304 is not response.ok, so this must come before the ok check.
+			return { kind: "unmodified" };
+		}
 		if (!response.ok) {
 			throw new Error(`Rules manifest request failed with ${response.status}.`);
 		}
@@ -170,7 +200,13 @@ async function fetchRemoteRulesManifest(): Promise<RulesManifest> {
 		) {
 			throw new Error("Rules manifest response is too large.");
 		}
-		return parseRulesManifestText(await readRulesManifestBody(response.body));
+		return {
+			kind: "modified",
+			manifest: parseRulesManifestText(
+				await readRulesManifestBody(response.body),
+			),
+			etag: usableRulesManifestEtag(response.headers.get("etag")?.trim()),
+		};
 	} finally {
 		clearTimeout(timeout);
 	}
@@ -181,20 +217,50 @@ async function reviewedRulesRepo(
 	globalState: Memento,
 ): Promise<RulesRepo | undefined> {
 	const cached = cachedRulesManifest(globalState);
+	// If-None-Match is only sent when both sides of the pair are usable; a
+	// manifest with no ETag (or the reverse) must always fetch the full body.
+	const storedEtag = usableRulesManifestEtag(
+		globalState.get(RULES_MANIFEST_ETAG_CACHE_KEY),
+	);
+	const etag = cached && storedEtag ? storedEtag : undefined;
 	let manifest = cached;
 	try {
-		const fetched = await fetchRemoteRulesManifest();
-		manifest = selectRulesManifest(cached, fetched);
-		if (cached && fetched.revision < cached.revision) {
+		const fetched = await fetchRemoteRulesManifest(etag);
+		if (fetched.kind === "unmodified") {
+			if (!cached) {
+				throw new Error(
+					"Rules manifest is unmodified but no usable manifest is cached.",
+				);
+			}
+			// The cache is still current: keep it and write nothing.
+			return rulesRepoForManifest(language, cached);
+		}
+		manifest = selectRulesManifest(cached, fetched.manifest);
+		if (cached && fetched.manifest.revision < cached.revision) {
 			logWarn(
-				`Ignoring stale rules manifest revision ${fetched.revision}; cached revision ${cached.revision} is newer.`,
+				`Ignoring stale rules manifest revision ${fetched.manifest.revision}; cached revision ${cached.revision} is newer.`,
 			);
 		}
-		if (manifest !== cached) {
+		let manifestCached = manifest === cached;
+		if (!manifestCached) {
 			try {
 				await globalState.update(RULES_MANIFEST_CACHE_KEY, manifest);
+				manifestCached = true;
 			} catch (err) {
 				logWarn(`Could not cache rules manifest: ${errorMessage(err)}`);
+			}
+		}
+		// A 200 without an ETag, or a manifest that could not be cached, clears any
+		// stored ETag so the next request fetches the body again instead of
+		// assuming an unmodified cache.
+		const nextEtag = manifestCached ? fetched.etag : undefined;
+		if (nextEtag !== storedEtag) {
+			try {
+				await globalState.update(RULES_MANIFEST_ETAG_CACHE_KEY, nextEtag);
+			} catch (err) {
+				logWarn(
+					`Could not cache rules manifest ETag: ${errorMessage(err)}`,
+				);
 			}
 		}
 	} catch (err) {

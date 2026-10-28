@@ -13,6 +13,7 @@ export const RULES_MANIFEST_URL =
 	process.env.CWTOOLS_TEST_RULES_MANIFEST_URL ||
 	"https://raw.githubusercontent.com/MillenniumDawn/cwtools-vscode/main/rules-pins.json";
 export const RULES_MANIFEST_CACHE_KEY = "rulesManifest";
+export const RULES_MANIFEST_ETAG_CACHE_KEY = "rulesManifestEtag";
 export const RULES_MANIFEST_MAX_BYTES = 64 * 1024;
 export const RULES_MANIFEST_TIMEOUT_MS = 10_000;
 

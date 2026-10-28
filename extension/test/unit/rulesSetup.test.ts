@@ -122,6 +122,7 @@ vi.mock("../../src/host/engine", async () => {
 import { LANGUAGE_REPOS, RULES_MANIFEST_REVISION } from "../../src/host/games";
 import {
 	RULES_MANIFEST_CACHE_KEY,
+	RULES_MANIFEST_ETAG_CACHE_KEY,
 	RULES_MANIFEST_MAX_BYTES,
 	RULES_MANIFEST_TIMEOUT_MS,
 	RULES_MANIFEST_URL,
@@ -149,8 +150,14 @@ function manifest(ref: string, revision = NEXT): RulesManifest {
 	};
 }
 
-function stubManifestFetch(value: RulesManifest | string) {
+function stubManifestFetch(value: RulesManifest | string, etag?: string) {
 	const text = typeof value === "string" ? value : JSON.stringify(value);
+	const headers: Record<string, string> = {
+		"content-length": String(new TextEncoder().encode(text).length),
+	};
+	if (etag) {
+		headers.etag = etag;
+	}
 	const fetch = vi.fn().mockImplementation(() => {
 		if (state.hostileResponse === "declared-oversized") {
 			return Promise.resolve(
@@ -183,9 +190,7 @@ function stubManifestFetch(value: RulesManifest | string) {
 		return Promise.resolve(
 			new Response(text, {
 				status: 200,
-				headers: {
-					"content-length": String(new TextEncoder().encode(text).length),
-				},
+				headers,
 			}),
 		);
 	});
@@ -194,19 +199,31 @@ function stubManifestFetch(value: RulesManifest | string) {
 }
 
 // One sync against a fake memento and client, recording what each was told.
-function session(cached?: RulesManifest, updateError?: Error) {
+function session(
+	cached?: RulesManifest,
+	manifestUpdateError?: Error,
+	cachedEtag?: string,
+) {
 	let stored = cached;
+	let etag = cachedEtag;
 	const updates: Array<[string, unknown]> = [];
 	const requests: unknown[] = [];
 	const globalState = {
-		get: (key: string) =>
-			key === RULES_MANIFEST_CACHE_KEY ? stored : undefined,
+		get: (key: string) => {
+			if (key === RULES_MANIFEST_CACHE_KEY) return stored;
+			if (key === RULES_MANIFEST_ETAG_CACHE_KEY) return etag;
+			return undefined;
+		},
 		update(key: string, value: unknown): Promise<void> {
 			updates.push([key, value]);
-			if (updateError) {
-				return Promise.reject(updateError);
+			if (manifestUpdateError && key === RULES_MANIFEST_CACHE_KEY) {
+				return Promise.reject(manifestUpdateError);
 			}
-			stored = value as RulesManifest;
+			if (key === RULES_MANIFEST_CACHE_KEY) {
+				stored = value as RulesManifest;
+			} else if (key === RULES_MANIFEST_ETAG_CACHE_KEY) {
+				etag = value as string | undefined;
+			}
 			return Promise.resolve();
 		},
 	} as unknown as Memento;
@@ -427,6 +444,148 @@ suite("rulesSetup", () => {
 		assert.deepStrictEqual(updates, []);
 		assert.strictEqual(state.rulesFetches[0]?.ref, expectedRef);
 		assert.deepStrictEqual(logger.logError.mock.calls, []);
+	});
+
+	const ifNoneMatchHeader = (call: unknown[] | undefined): unknown =>
+		(call?.[1] as RequestInit | undefined)?.headers;
+
+	test("a 304 keeps the cached manifest without rewriting it or warning", async () => {
+		const cached = manifest(sha("c"));
+		const etag = '"etag-1"';
+		const fetch = vi
+			.fn()
+			.mockResolvedValue(new Response(null, { status: 304 }));
+		vi.stubGlobal("fetch", fetch);
+		const { sync, updates } = session(cached, undefined, etag);
+
+		await settle(sync());
+
+		assert.strictEqual(fetch.mock.calls[0]?.[0], RULES_MANIFEST_URL);
+		assert.deepStrictEqual(ifNoneMatchHeader(fetch.mock.calls[0]), {
+			"If-None-Match": etag,
+		});
+		assert.deepStrictEqual(updates, [], "a 304 must not rewrite the cache");
+		assert.deepStrictEqual(logger.logWarn.mock.calls, []);
+		assert.strictEqual(state.rulesFetches[0]?.ref, sha("c"));
+	});
+
+	test("a 200 stores its ETag and a later request sends If-None-Match", async () => {
+		const reviewed = manifest(sha("f"));
+		const etag = '"etag-2"';
+		const fetch = vi
+			.fn()
+			.mockImplementationOnce(() =>
+				Promise.resolve(
+					new Response(JSON.stringify(reviewed), {
+						status: 200,
+						headers: {
+							"content-length": String(
+								new TextEncoder().encode(JSON.stringify(reviewed)).length,
+							),
+							etag,
+						},
+					}),
+				),
+			)
+			.mockImplementationOnce(() =>
+				Promise.resolve(new Response(null, { status: 304 })),
+			);
+		vi.stubGlobal("fetch", fetch);
+		const { sync, updates } = session();
+
+		await settle(sync());
+		await settle(sync());
+
+		assert.strictEqual(
+			ifNoneMatchHeader(fetch.mock.calls[0]),
+			undefined,
+			"the first request must fetch the body",
+		);
+		assert.deepStrictEqual(ifNoneMatchHeader(fetch.mock.calls[1]), {
+			"If-None-Match": etag,
+		});
+		assert.deepStrictEqual(updates, [
+			[RULES_MANIFEST_CACHE_KEY, reviewed],
+			[RULES_MANIFEST_ETAG_CACHE_KEY, etag],
+		]);
+		assert.deepStrictEqual(logger.logWarn.mock.calls, []);
+	});
+
+	test("a 200 without an ETag clears any stored one so the body is fetched again", async () => {
+		const fetched = manifest(sha("f"), NEXT + 1);
+		const fetch = stubManifestFetch(fetched);
+		const { sync, updates } = session(
+			manifest(sha("c")),
+			undefined,
+			'"etag-3"',
+		);
+
+		await settle(sync());
+		await settle(sync());
+
+		assert.strictEqual(
+			state.rulesFetches.length,
+			2,
+			"both syncs fetch the body",
+		);
+		assert.deepStrictEqual(ifNoneMatchHeader(fetch.mock.calls[0]), {
+			"If-None-Match": '"etag-3"',
+		});
+		assert.strictEqual(
+			ifNoneMatchHeader(fetch.mock.calls[1]),
+			undefined,
+			"a cleared ETag means the next request fetches the body",
+		);
+		assert.deepStrictEqual(updates, [
+			[RULES_MANIFEST_CACHE_KEY, fetched],
+			[RULES_MANIFEST_ETAG_CACHE_KEY, undefined],
+		]);
+	});
+
+	test("an ETag is not stored for a manifest that could not be cached", async () => {
+		const fetched = manifest(sha("f"), NEXT + 1);
+		const fetch = stubManifestFetch(fetched, '"etag-new"');
+		const { sync, updates } = session(
+			manifest(sha("c")),
+			new Error("disk full"),
+			'"etag-old"',
+		);
+
+		await settle(sync());
+		await settle(sync());
+
+		assert.strictEqual(
+			ifNoneMatchHeader(fetch.mock.calls[1]),
+			undefined,
+			"the next request must fetch the body the cache is missing",
+		);
+		assert.deepStrictEqual(updates, [
+			[RULES_MANIFEST_CACHE_KEY, fetched],
+			[RULES_MANIFEST_ETAG_CACHE_KEY, undefined],
+			[RULES_MANIFEST_CACHE_KEY, fetched],
+		]);
+		assert.deepStrictEqual(
+			state.rulesFetches.map(({ ref }) => ref),
+			[sha("f"), sha("f")],
+		);
+	});
+
+	test("a 304 with no usable cache falls back to the bundled pin", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(new Response(null, { status: 304 })),
+		);
+		const { sync, updates } = session();
+
+		await settle(sync());
+
+		assert.deepStrictEqual(updates, []);
+		assert.strictEqual(state.rulesFetches[0]?.ref, LANGUAGE_REPOS.hoi4.ref);
+		assert.deepStrictEqual(logger.logWarn.mock.calls, [
+			[
+				"Rules manifest refresh failed; using bundled pins: Rules manifest is unmodified but no usable manifest is cached.",
+			],
+		]);
 	});
 
 	test("uses a cached pin after the manifest request times out", async () => {
