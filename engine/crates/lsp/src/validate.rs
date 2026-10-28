@@ -1095,6 +1095,9 @@ impl Backend {
             .prepare_baseline(&uri, &diagnostics, version, source_hash)
             .await;
         let _publication = self.state.diagnostic_publication_lock.lock().await;
+        if self.is_shutting_down() {
+            return;
+        }
         {
             let docs = self.state.documents.lock();
             if require_closed && docs.contains_key(uri.as_str()) {
@@ -3414,6 +3417,34 @@ mod ignored_tests {
         assert!(
             socket.next().now_or_never().is_none(),
             "stale diagnostics publish"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_diagnostics_publish_after_shutdown() {
+        let uri = stale_publication_uri();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&uri).await;
+
+        backend
+            .publish_if_closed(uri.parse().unwrap(), Vec::new(), None)
+            .await;
+        let before = socket
+            .next()
+            .await
+            .expect("diagnostics publish before shutdown");
+        assert_eq!(before.method(), "textDocument/publishDiagnostics");
+
+        backend.state.shutdown.send_replace(true);
+        backend
+            .publish_if_closed(uri.parse().unwrap(), Vec::new(), None)
+            .await;
+        backend
+            .publish_gated(uri.parse().unwrap(), Vec::new(), None, None)
+            .await;
+
+        assert!(
+            socket.next().now_or_never().is_none(),
+            "diagnostics publish after shutdown"
         );
     }
 

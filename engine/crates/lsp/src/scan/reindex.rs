@@ -47,14 +47,25 @@ impl Backend {
     /// Periodic quiet re-scan so a long-running session doesn't accumulate stale index state.
     /// Each cycle re-reads the interval, so toggling it live needs no restart (0 disables).
     /// Each pass runs via `run_reindex_pass`, so a panic is logged and the loop survives (#155).
+    /// It returns once `shutdown` is handled, even mid-sleep (#1146).
     pub(crate) async fn background_reindex_loop(&self) {
         loop {
             let interval_secs = self.effective_reindex_interval_secs();
             if interval_secs == 0 {
-                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                if !self
+                    .sleep_unless_shutdown(std::time::Duration::from_secs(60))
+                    .await
+                {
+                    return;
+                }
                 continue;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+            if !self
+                .sleep_unless_shutdown(std::time::Duration::from_secs(interval_secs))
+                .await
+            {
+                return;
+            }
 
             loop {
                 if self.effective_reindex_interval_secs() == 0 {
@@ -65,12 +76,23 @@ impl Backend {
                     self.run_reindex_pass().await;
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(reindex_wait_tick_ms(
-                    idle_ms,
-                )))
-                .await;
+                if !self
+                    .sleep_unless_shutdown(std::time::Duration::from_millis(reindex_wait_tick_ms(
+                        idle_ms,
+                    )))
+                    .await
+                {
+                    return;
+                }
             }
         }
+    }
+
+    /// Sleeps `duration` and returns `true`, or returns `false` as soon as shutdown is set.
+    async fn sleep_unless_shutdown(&self, duration: std::time::Duration) -> bool {
+        let mut shutdown = self.state.shutdown.subscribe();
+        let _ = tokio::time::timeout(duration, shutdown.wait_for(|down| *down)).await;
+        !self.is_shutting_down()
     }
 
     /// (#155) — `scan_in_progress` already self-heals through `ScanGuard`
@@ -113,6 +135,29 @@ pub(crate) fn reindex_wait_tick_ms(idle_ms: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_reindex_loop_ends_at_shutdown_mid_sleep() {
+        let backend = crate::testing::test_backend();
+        backend
+            .state
+            .config
+            .write()
+            .background_reindex_interval_minutes = 60;
+        let looping = tokio::spawn({
+            let backend = backend.clone();
+            async move { backend.background_reindex_loop().await }
+        });
+        tokio::task::yield_now().await;
+        assert!(!looping.is_finished(), "the loop must be sleeping");
+
+        backend.state.shutdown.send_replace(true);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), looping)
+            .await
+            .expect("the loop must end at shutdown, not after its interval")
+            .expect("the loop must not panic");
+    }
 
     #[test]
     fn test_is_idle_below_threshold_is_false() {

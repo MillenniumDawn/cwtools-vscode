@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::common::{GOTO_RULES, TestServer, diagnostics_of, storm_builder, storm_start};
+use crate::common::{
+    GOTO_RULES, TestServer, diagnostics_of, shutdown_request, storm_builder, storm_start,
+};
 
 const A_REL: &str = "common/scripted_effects/a.txt";
 const A_TEXT: &str = "my_se = { log = \"hi\" }\n";
@@ -265,6 +267,48 @@ fn test_background_reindex_idle_window_from_init_option() {
 
     wait_for_cleared_diag_quiet(&mut server, "b.txt", "CW263", Duration::from_secs(10));
     server.stop();
+}
+
+#[test]
+fn test_shutdown_stops_background_reindex_and_diagnostics() {
+    // #1146: after `shutdown` the periodic pass must not start or publish. Same
+    // setup as test_background_reindex_picks_up_new_file_quietly, but the
+    // watcher-missed definition is written just before `shutdown`, so only a
+    // pass that still runs afterward could clear B's CW263. The window covers
+    // several 1s intervals.
+    let mut server = TestServer::builder()
+        .rules_file("r.cwt", GOTO_RULES)
+        .vanilla() // empty dir -> index marked complete
+        .file(B_REL, B_TEXT)
+        .env("CWTOOLS_REINDEX_INTERVAL_SECS", "1")
+        .env("CWTOOLS_REINDEX_IDLE_SECS", "0")
+        .spawn();
+    server.initialized();
+    server.wait_for_scan_done();
+
+    server.open(B_REL, B_TEXT);
+    let before = server.diag_codes_for("b.txt", 1);
+    assert!(
+        before.contains(&"CW263".to_string()),
+        "expected CW263 before the definition exists, got: {:?}",
+        before
+    );
+
+    server.write_file(A_REL, A_TEXT);
+    server.send(&shutdown_request(2));
+    server.read_response_for_id(2);
+
+    let window = Duration::from_secs(4);
+    let frames = server.drain_until_quiet(window, window);
+    server.stop();
+    let published: Vec<_> = frames
+        .iter()
+        .filter(|frame| frame["method"] == "textDocument/publishDiagnostics")
+        .collect();
+    assert!(
+        published.is_empty(),
+        "no diagnostics may be published after shutdown, got: {published:?}"
+    );
 }
 
 #[test]

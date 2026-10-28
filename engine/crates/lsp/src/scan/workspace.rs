@@ -257,6 +257,9 @@ impl Backend {
         quiet: bool,
         progress: Option<&CommandProgress>,
     ) -> ScanOutcome {
+        if self.is_shutting_down() {
+            return ScanOutcome::Cancelled;
+        }
         if self
             .state
             .scan_in_progress
@@ -2320,6 +2323,20 @@ mod tests {
         );
         collector.abort();
         let _ = collector.await;
+    }
+
+    /// #1146: a scan requested after `shutdown` does not start. With no workspace folder an
+    /// ungated scan would finish at once and mark the index ready, so that flag stays false.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_scan_starts_after_shutdown() {
+        let backend = test_backend();
+        backend.state.shutdown.send_replace(true);
+
+        let outcome = backend.validate_entire_workspace_tracked(false, None).await;
+
+        assert_eq!(outcome, ScanOutcome::Cancelled);
+        assert!(!backend.state.scan_in_progress.load(Ordering::SeqCst));
+        assert!(!backend.state.index_ready.load(Ordering::Relaxed));
     }
 
     /// #221: the startup scan has no client token, and used to get an inert ticker that sat on
