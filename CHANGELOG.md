@@ -10,6 +10,7 @@
 
 #### Engine
 
+* Count references inside parsed effect aliases in CodeLens. Resolve shared fields such as `id` against their enclosing rules so definitions and unrelated scalar fields do not count as references. Batch rule traversal through reference-bearing branches instead of resolving each field separately.
 * Document and smoke-test standalone HOI4 LSP initialization, diagnostic completion, CLI comparison, host coverage limits, and read-only simplification audits. (#1126)
 * Reuse the script parsing pipeline for multi-mod scans and remove the unused localisation folder walker. Keep its discovery regressions with the shared file manager.
 * Rename localisation keys together with rule-linked entity IDs and their references, without changing unrelated same-spelling effects, flags, variables, or strings. Preserve translated keys and sibling references, and cancel conflicting renames instead of returning partial edits. (#844)
@@ -18,6 +19,7 @@
 
 #### Tooling
 
+* Run the parent-language integration test in CI, measure base-game discovery and content roots in Node coverage, and exercise CodeLens reference commands through the extension host. Keep graph measurements in the benchmark runner and consolidate repeated listener-scaling checks without dropping their assertions.
 * Analyze Python tooling in CodeQL alongside JavaScript/TypeScript, Rust, and GitHub Actions. (#526)
 * Share workflow-test block extraction and Git preflight fixtures without dropping regression cases.
 * Add a full HOI4 and Millennium Dawn index tier to the snapshot-clone benchmark and record its first-write copy cost. Keep production validation locks unchanged; the benchmark does not measure editor hover or queued-writer latency. (#868)

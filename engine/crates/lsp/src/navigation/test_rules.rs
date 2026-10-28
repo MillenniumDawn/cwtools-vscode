@@ -88,6 +88,17 @@ pub(crate) fn bool_enum_ruleset() -> RuleSet {
 /// use-site walk and the reference index both classify against.
 pub(crate) fn type_ref_ruleset() -> RuleSet {
     let mut rs = bool_enum_ruleset();
+    let RootRule::TypeRule(_, (RuleType::NodeRule { rules, .. }, _)) = &mut rs.root_rules[0] else {
+        panic!("my_type must have a node rule");
+    };
+    let mut fields = rules.to_vec();
+    fields.push(make_leaf_rule(
+        "base",
+        NewField::TypeField(cwtools_rules::rules_types::TypeType::Simple(
+            "my_type".to_string(),
+        )),
+    ));
+    *rules = fields.into();
     rs.root_rules.push(RootRule::AliasRule(
         "effect:use_type".to_string(),
         (
