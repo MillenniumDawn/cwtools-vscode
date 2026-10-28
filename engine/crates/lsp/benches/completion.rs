@@ -3,6 +3,8 @@
 //! `completion_synthetic` times `completions_from_rules` and `value_completions`
 //! plus the `prepare_context_items` cap that follows them, over a ruleset with
 //! thousands of aliases, modifiers and type instances. It needs no checkout.
+//! `modifier_data/build` is the modifier key and scope build that
+//! `rebuild_modifier_keys` runs after each scan and rules reload.
 //!
 //! `completion_candidate_filtering` isolates typed filepath, icon, and enum
 //! completions over 20k synthetic candidates. It measures candidate construction
@@ -255,6 +257,14 @@ fn bench_completion_synthetic(c: &mut Criterion) {
     });
     group.bench_function("modifier_key/scoped", |b| {
         b.iter(|| key_items(&modifier_rules, ""))
+    });
+    group.bench_function("modifier_data/build", |b| {
+        b.iter(|| {
+            (
+                cwtools_validation::build_modifier_keys(&rs, &info.type_index),
+                expanded_modifier_scopes(&rs, &info.type_index),
+            )
+        })
     });
     group.bench_function("state_value/token_28", |b| {
         b.iter(|| {

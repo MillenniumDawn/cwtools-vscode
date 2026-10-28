@@ -20,6 +20,7 @@
 * Rename localisation keys together with rule-linked entity IDs and their references, without changing unrelated same-spelling effects, flags, variables, or strings. Preserve translated keys and sibling references, and cancel conflicting renames instead of returning partial edits. (#844)
 * Discover parent mods from descriptor dependencies in CLI `validate` and `fix` when neither `--parent` nor TOML `parents` supplies a nonempty list. Explicit parent paths still take precedence. (#1105)
 * Decode CLI diagnostic hash source lines like the engine and ignore a leading BOM in content hashes. Regenerate older baselines for CP1252 files or diagnostics on a BOM's first line. (#604)
+* Build modifier keys and scopes from a ruleset snapshot instead of under the rules write lock, so validation, hover, and completion no longer wait for the build. The write lock now covers only the store, which is skipped when a reload replaced the ruleset mid-build, and rebuilds run one at a time. (#1147)
 
 #### Tooling
 

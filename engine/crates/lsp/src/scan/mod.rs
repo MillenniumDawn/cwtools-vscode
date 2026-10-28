@@ -408,10 +408,11 @@ impl Backend {
     }
 
     pub(crate) fn rebuild_modifier_keys(&self) {
-        // Lock order: rules -> info_service. One `rules` write guard holds the
-        // ruleset we read from and the modifier data we write into.
-        let mut rules = self.state.rules.write();
-        let (keys, scopes) = match rules.ruleset.as_ref() {
+        // Lock order: rebuild lock -> rules -> info_service. The build holds no `rules`
+        // guard; the store skips a ruleset that was replaced mid-build.
+        let _rebuild = self.state.modifier_rebuild_lock.lock();
+        let snapshot = self.state.rules.read().ruleset.clone();
+        let (keys, scopes) = match snapshot.as_deref() {
             Some(rs) => {
                 let info_guard = self.state.info_service.read();
                 (
@@ -421,9 +422,10 @@ impl Backend {
             }
             None => Default::default(),
         };
-        rules.modifier_keys = Arc::new(keys);
-        rules.modifier_scopes = Arc::new(scopes);
-        drop(rules);
+        self.state
+            .rules
+            .write()
+            .store_modifier_data(snapshot.as_ref(), keys, scopes);
         self.bump_info_revision();
     }
 }
@@ -1251,5 +1253,81 @@ mod tests {
             let _ = discover_vanilla_dir(game);
         }
         assert!(discover_vanilla_dir("nexus_games").is_none());
+    }
+
+    fn modifier_ruleset(name: &str) -> Arc<RuleSet> {
+        let mut rs = RuleSet::new();
+        rs.modifiers.push((name.to_string(), "country".to_string()));
+        Arc::new(rs)
+    }
+
+    fn keys_of(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn test_store_modifier_data_skips_keys_from_a_replaced_ruleset() {
+        let old = modifier_ruleset("old_modifier");
+        let new = modifier_ruleset("new_modifier");
+        let mut rules = crate::state::RuleData::new();
+        rules.ruleset = Some(new.clone());
+
+        rules.store_modifier_data(
+            Some(&old),
+            keys_of(&["old_modifier"]),
+            std::collections::HashMap::new(),
+        );
+        assert!(
+            rules.modifier_keys.is_empty(),
+            "keys built from a replaced ruleset must not be stored"
+        );
+
+        rules.store_modifier_data(
+            Some(&new),
+            keys_of(&["new_modifier"]),
+            std::collections::HashMap::new(),
+        );
+        assert_eq!(*rules.modifier_keys, keys_of(&["new_modifier"]));
+    }
+
+    #[test]
+    fn test_store_modifier_data_skips_when_only_one_side_has_a_ruleset() {
+        let rs = modifier_ruleset("a_modifier");
+        let mut rules = crate::state::RuleData::new();
+
+        rules.store_modifier_data(
+            Some(&rs),
+            keys_of(&["a_modifier"]),
+            std::collections::HashMap::new(),
+        );
+        assert!(rules.modifier_keys.is_empty(), "ruleset was cleared");
+
+        rules.ruleset = Some(rs);
+        rules.store_modifier_data(None, keys_of(&["stale"]), std::collections::HashMap::new());
+        assert!(rules.modifier_keys.is_empty(), "ruleset appeared mid-build");
+
+        rules.ruleset = None;
+        rules.store_modifier_data(None, keys_of(&["kept"]), std::collections::HashMap::new());
+        assert_eq!(*rules.modifier_keys, keys_of(&["kept"]));
+    }
+
+    #[test]
+    fn test_rebuild_modifier_keys_follows_a_replaced_ruleset() {
+        let backend = test_backend();
+        backend.state.rules.write().ruleset = Some(modifier_ruleset("old_modifier"));
+        backend.rebuild_modifier_keys();
+        assert_eq!(
+            *backend.state.rules.read().modifier_keys,
+            keys_of(&["old_modifier"])
+        );
+
+        backend.state.rules.write().ruleset = Some(modifier_ruleset("new_modifier"));
+        backend.rebuild_modifier_keys();
+        let rules = backend.state.rules.read();
+        assert_eq!(*rules.modifier_keys, keys_of(&["new_modifier"]));
+        assert_eq!(
+            rules.modifier_scopes.keys().collect::<Vec<_>>(),
+            vec!["new_modifier"]
+        );
     }
 }
