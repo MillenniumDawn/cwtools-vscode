@@ -70,6 +70,9 @@ export interface ClientConfig {
 }
 
 let watchedFileEventObserver: { uri: string; count: number } | undefined;
+let rulesNotificationObserver:
+	| { notifications: Array<Array<{ uri: string; type: 1 | 2 | 3 }>> }
+	| undefined;
 
 /** Observe events for one URI forwarded to LSP, for extension-host regression tests. */
 export function observeWatchedFileEvents(uri: string): {
@@ -82,6 +85,21 @@ export function observeWatchedFileEvents(uri: string): {
 		count: () => observer.count,
 		dispose: () => {
 			if (watchedFileEventObserver === observer) watchedFileEventObserver = undefined;
+		},
+	};
+}
+
+/** Observe external rules notifications forwarded to LSP, for host regression tests. */
+export function observeRulesFileNotifications(): {
+	notifications: () => Array<Array<{ uri: string; type: 1 | 2 | 3 }>>;
+	dispose: () => void;
+} {
+	const observer = { notifications: [] as Array<Array<{ uri: string; type: 1 | 2 | 3 }>> };
+	rulesNotificationObserver = observer;
+	return {
+		notifications: () => observer.notifications.map((changes) => [...changes]),
+		dispose: () => {
+			if (rulesNotificationObserver === observer) rulesNotificationObserver = undefined;
 		},
 	};
 }
@@ -368,6 +386,8 @@ export function createLanguageClient(
 	let rulesWatcher: FileSystemWatcher | undefined;
 	let rulesWatcherSubscriptions: Disposable[] = [];
 	let rulesReloadTimer: ReturnType<typeof setTimeout> | undefined;
+	let rulesChangesTimer: ReturnType<typeof setTimeout> | undefined;
+	let pendingRulesChanges: Array<{ uri: string; type: 1 | 2 | 3 }> = [];
 	let rulesWatcherDisposed = false;
 	let rulesWatcherSuspended = false;
 	let rulesFolderChangeVersion = 0;
@@ -379,8 +399,16 @@ export function createLanguageClient(
 			rulesReloadTimer = undefined;
 		}
 	};
+	const clearRulesChangesTimer = () => {
+		if (rulesChangesTimer !== undefined) {
+			clearTimeout(rulesChangesTimer);
+			rulesChangesTimer = undefined;
+		}
+		pendingRulesChanges = [];
+	};
 	const disposeRulesWatcher = () => {
 		clearRulesReloadTimer();
+		clearRulesChangesTimer();
 		for (const subscription of rulesWatcherSubscriptions) {
 			subscription.dispose();
 		}
@@ -440,18 +468,41 @@ export function createLanguageClient(
 			];
 			return true;
 		}
+		const watcherPath = currentRulesCache;
 		const watcher = workspace.createFileSystemWatcher(
-			new RelativePattern(Uri.file(currentRulesCache), "**/*.cwt"),
+			new RelativePattern(Uri.file(watcherPath), "**/*.cwt"),
 		);
 		rulesWatcher = watcher;
 		const watchRulesFileChange = (uri: Uri, type: 1 | 2 | 3) => {
-			client
-				.sendNotification("workspace/didChangeWatchedFiles", {
-					changes: [{ uri: uri.toString(), type }],
-				})
-				.catch((err) =>
-					logError("Failed to forward a rules-file change to the server", err),
-				);
+			if (
+				rulesWatcherDisposed ||
+				rulesWatcherSuspended ||
+				rulesWatcher !== watcher ||
+				currentRulesCache !== watcherPath
+			) {
+				return;
+			}
+			pendingRulesChanges.push({ uri: uri.toString(), type });
+			if (rulesChangesTimer !== undefined) clearTimeout(rulesChangesTimer);
+			rulesChangesTimer = setTimeout(() => {
+				rulesChangesTimer = undefined;
+				const changes = pendingRulesChanges;
+				pendingRulesChanges = [];
+				if (
+					rulesWatcherDisposed ||
+					rulesWatcherSuspended ||
+					rulesWatcher !== watcher ||
+					currentRulesCache !== watcherPath
+				) {
+					return;
+				}
+				rulesNotificationObserver?.notifications.push(changes);
+				client
+					.sendNotification("workspace/didChangeWatchedFiles", { changes })
+					.catch((err) =>
+						logError("Failed to forward rules-file changes to the server", err),
+					);
+			}, 500);
 			scheduleRulesReload();
 		};
 		rulesWatcherSubscriptions = [

@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -16,7 +17,7 @@ pub(crate) fn ast_leaf_visits() -> usize {
 }
 
 use cwtools_parser::{ast::ParsedFile, unquote};
-use cwtools_rules::rules_types::{NewField, RootRule, RuleSet, RuleType};
+use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringTable;
 
 use crate::paths::logical_path_from_uri;
@@ -105,7 +106,6 @@ pub(crate) fn scan_use_sites(
 
         scan_ast_for_type_ref(
             &ast.root_children,
-            &ast.arena,
             &TypeRefSearch {
                 type_name,
                 instance_name,
@@ -115,6 +115,8 @@ pub(crate) fn scan_use_sites(
                 table: string_table,
                 patterns: &patterns,
                 definitions,
+                ast,
+                references: OnceCell::new(),
             },
             &mut results,
         );
@@ -150,7 +152,6 @@ pub(crate) fn scan_use_sites_bounded(
 
         scan_ast_for_type_ref(
             &ast.root_children,
-            &ast.arena,
             &TypeRefSearch {
                 type_name,
                 instance_name,
@@ -160,6 +161,8 @@ pub(crate) fn scan_use_sites_bounded(
                 table: string_table,
                 patterns: &patterns,
                 definitions,
+                ast,
+                references: OnceCell::new(),
             },
             &mut results,
         );
@@ -180,11 +183,15 @@ struct TypeRefSearch<'a> {
     table: &'a StringTable,
     patterns: &'a [cwtools_info::TypePatternAlias],
     definitions: &'a [(String, cwtools_info::SourceLocation)],
+    ast: &'a ParsedFile,
+    /// Key locations of the file's references to the target, classified as the
+    /// reference index classifies them. Filled by the first leaf whose value
+    /// names the target, so a file that never does costs only the walk.
+    references: OnceCell<Vec<cwtools_info::SourceLocation>>,
 }
 
 fn scan_ast_for_type_ref<S: UseSiteSink>(
     children: &[cwtools_parser::ast::Child],
-    arena: &cwtools_parser::ast::Arena,
     search: &TypeRefSearch,
     out: &mut S,
 ) {
@@ -198,16 +205,23 @@ fn scan_ast_for_type_ref<S: UseSiteSink>(
         table,
         patterns,
         definitions,
+        ast,
+        ref references,
     } = search;
 
     for child in children {
         let Child::Leaf(idx) = child else { continue };
         #[cfg(test)]
         AST_LEAF_VISITS.set(AST_LEAF_VISITS.get() + 1);
-        let leaf = &arena.leaves[*idx as usize];
-        // Value first, key only on a match: `with_string` borrows from the
-        // table instead of allocating a `String` per leaf, and the key is
-        // needed only once the cheap name comparison has passed (#472). An
+        let leaf = &ast.arena.leaves[*idx as usize];
+        let key_loc = cwtools_info::SourceLocation {
+            line: leaf.pos.start.line,
+            col: leaf.pos.start.col,
+            end: (leaf.pos.end.line, leaf.pos.end.col),
+        };
+        // Value first: `with_string` borrows from the table instead of
+        // allocating a `String` per leaf, and the reference check below runs
+        // only once the cheap name comparison has passed (#472). An
         // unresolvable id is no match — no caller passes an empty name.
         let quoted = match &leaf.value {
             Value::String(t) | Value::QString(t) => table
@@ -219,27 +233,26 @@ fn scan_ast_for_type_ref<S: UseSiteSink>(
             _ => None,
         };
         if let Some(quoted) = quoted
-            && table
-                .with_string(leaf.key.normal, |key| {
-                    is_type_ref_leaf(ruleset, key, type_name, logical_path)
+            && references
+                .get_or_init(|| {
+                    cwtools_info::type_ref_key_locations(
+                        ast,
+                        table,
+                        ruleset,
+                        logical_path,
+                        type_name,
+                        instance_name,
+                    )
                 })
-                .unwrap_or(false)
+                .iter()
+                .any(|site| site.line == key_loc.line && site.col == key_loc.col)
         {
             out.push(
                 file_uri,
-                cwtools_info::SourceLocation {
-                    line: leaf.pos.start.line,
-                    col: leaf.pos.start.col,
-                    end: (leaf.pos.end.line, leaf.pos.end.col),
-                },
+                key_loc,
                 cwtools_info::value_location(&leaf.value_pos, quoted),
             );
         }
-        let key_loc = cwtools_info::SourceLocation {
-            line: leaf.pos.start.line,
-            col: leaf.pos.start.col,
-            end: (leaf.pos.end.line, leaf.pos.end.col),
-        };
         let is_definition = definitions.iter().any(|(uri, loc)| {
             uri == file_uri && loc.line == key_loc.line && loc.col == key_loc.col
         });
@@ -253,77 +266,9 @@ fn scan_ast_for_type_ref<S: UseSiteSink>(
             out.push(file_uri, key_loc, key_loc);
         }
         if let Value::Clause(ch) = &leaf.value {
-            scan_ast_for_type_ref(ch, arena, search, out);
+            scan_ast_for_type_ref(ch, search, out);
         }
     }
-}
-
-pub(crate) fn is_type_ref_leaf(
-    ruleset: &RuleSet,
-    leaf_key: &str,
-    type_name: &str,
-    logical_path: &str,
-) -> bool {
-    if !ruleset.type_reference_rules().is_empty() {
-        return ruleset
-            .type_reference_rules_for_key(leaf_key)
-            .is_some_and(|entries| {
-                entries.iter().any(|entry| {
-                    if entry.ref_type != type_name {
-                        return false;
-                    }
-                    match &entry.root_type {
-                        None => true,
-                        Some(root_type) => ruleset
-                            .type_by_name()
-                            .get(root_type)
-                            .map(|&idx| {
-                                cwtools_info::check_path_dir(
-                                    &ruleset.types[idx].path_options,
-                                    logical_path,
-                                )
-                            })
-                            .unwrap_or(true),
-                    }
-                })
-            });
-    }
-
-    for root_rule in &ruleset.root_rules {
-        let (rule_type_name, (rule_type, _)) = match root_rule {
-            RootRule::TypeRule(n, r) => (Some(n.as_str()), r),
-            RootRule::AliasRule(n, r) => (Some(n.as_str()), r),
-            RootRule::SingleAliasRule(n, r) => (Some(n.as_str()), r),
-        };
-
-        if let RootRule::TypeRule(..) = root_rule
-            && let Some(name) = rule_type_name
-            && let Some(&idx) = ruleset.type_by_name().get(name)
-        {
-            let td = &ruleset.types[idx];
-            if !cwtools_info::check_path_dir(&td.path_options, logical_path) {
-                continue;
-            }
-        }
-
-        let rules = match rule_type {
-            RuleType::NodeRule { rules, .. } => rules.as_ref(),
-            _ => continue,
-        };
-
-        for (inner, _) in rules {
-            if let RuleType::LeafRule {
-                left: NewField::SpecificField(k),
-                right: NewField::TypeField(cwtools_rules::rules_types::TypeType::Simple(t)),
-            } = inner
-                && k.eq_ignore_ascii_case(leaf_key)
-                && t == type_name
-            {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -331,54 +276,17 @@ mod tests {
     use std::sync::Arc;
 
     use cwtools_parser::parser::parse_string;
-    use cwtools_rules::rules_types::Options;
 
     use super::*;
-    use crate::navigation::test_rules::{bool_enum_ruleset, type_ref_ruleset};
+    use crate::navigation::test_rules::type_ref_ruleset;
 
-    #[test]
-    fn test_is_type_ref_leaf() {
-        let mut rs = bool_enum_ruleset();
-        rs.root_rules.push(RootRule::TypeRule(
-            "owner_type".to_string(),
-            (
-                RuleType::NodeRule {
-                    left: NewField::SpecificField("owner_type".to_string()),
-                    rules: [(
-                        RuleType::LeafRule {
-                            left: NewField::SpecificField("base".to_string()),
-                            right: NewField::TypeField(
-                                cwtools_rules::rules_types::TypeType::Simple("my_type".to_string()),
-                            ),
-                        },
-                        Options::default(),
-                    )]
-                    .into(),
-                },
-                Options::default(),
-            ),
-        ));
-        rs.reindex();
+    /// `my_type` lives under `events/`, which is where `base` is a reference.
+    const IN_PATH: &str = "file:///events/test.txt";
 
-        assert!(is_type_ref_leaf(&rs, "base", "my_type", "events/test.txt"));
-        assert!(!is_type_ref_leaf(
-            &rs,
-            "base",
-            "other_type",
-            "events/test.txt"
-        ));
-        assert!(!is_type_ref_leaf(
-            &rs,
-            "unrelated",
-            "my_type",
-            "events/test.txt"
-        ));
-    }
-
-    fn scan(source: &str) -> Vec<cwtools_info::UseSite> {
+    fn scan_at(uri: &str, source: &str) -> Vec<cwtools_info::UseSite> {
         let table = StringTable::new();
         let parsed = parse_string(source, &table);
-        let docs = vec![("file:///test.txt".to_string(), Arc::new(parsed))];
+        let docs = vec![(uri.to_string(), Arc::new(parsed))];
         let ws_uri: Option<Arc<str>> = Some("file:///".into());
         scan_use_sites(
             "my_type",
@@ -391,14 +299,59 @@ mod tests {
         )
     }
 
+    fn scan(source: &str) -> Vec<cwtools_info::UseSite> {
+        scan_at(IN_PATH, source)
+    }
+
     #[test]
     fn test_scan_use_sites() {
         let sites = scan("foo = { base = my_instance }\n");
         assert_eq!(sites.len(), 1, "expected one use site");
-        assert_eq!(sites[0].file.as_ref(), "file:///test.txt");
+        assert_eq!(sites[0].file.as_ref(), IN_PATH);
         // The leaf key `base` starts at column 8, the value at column 15.
         assert_eq!((sites[0].key.line, sites[0].key.col), (1, 8));
         assert_eq!((sites[0].value.line, sites[0].value.col), (1, 15));
+    }
+
+    #[test]
+    fn scan_use_sites_ignores_a_key_outside_the_rules_that_make_it_a_reference() {
+        // The alias rule also names `base`, but alias roots do not apply on
+        // their own: an unrelated file has no enclosing rule for the leaf.
+        let sites = scan_at("file:///other/test.txt", "foo = { base = my_instance }\n");
+        assert!(sites.is_empty(), "not a reference here: {sites:?}");
+    }
+
+    #[test]
+    fn scan_use_sites_follows_parsed_alias_context() {
+        let table = StringTable::new();
+        let ruleset = cwtools_rules::rules_converter::ast_to_ruleset(
+            &parse_string(
+                r#"
+types = { type[event] = { path = "game/events" name_field = id } }
+event = {
+    id = scalar
+    metadata = { id = scalar }
+    immediate = { alias_name[effect] = alias_match_left[effect] }
+}
+alias[effect:country_event] = { id = <event> }
+"#,
+                &table,
+            ),
+            &table,
+        );
+        let source = "country_event = {\n\
+            id = alpha\n\
+            metadata = { id = alpha }\n\
+            immediate = { country_event = { id = alpha } }\n\
+        }\n";
+        let docs = vec![(
+            "file:///events/e.txt".to_string(),
+            Arc::new(parse_string(source, &table)),
+        )];
+        let ws_uri: Option<Arc<str>> = Some("file:///".into());
+        let sites = scan_use_sites("event", "alpha", &docs, &ruleset, &ws_uri, &table, &[]);
+        let lines: Vec<u32> = sites.iter().map(|site| site.key.line).collect();
+        assert_eq!(lines, [4], "only the alias use counts: {sites:?}");
     }
 
     #[test]
@@ -408,7 +361,7 @@ mod tests {
             .collect();
         let table = StringTable::new();
         let parsed = parse_string(&source, &table);
-        let docs = vec![("file:///test.txt".to_string(), Arc::new(parsed))];
+        let docs = vec![(IN_PATH.to_string(), Arc::new(parsed))];
         let ws_uri: Option<Arc<str>> = Some("file:///".into());
         let ruleset = type_ref_ruleset();
         let bounded = scan_use_sites_bounded(

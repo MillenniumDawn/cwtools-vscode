@@ -40,7 +40,9 @@ Then, roughly bottom-up:
 - `validation`: the rule engine and per-game validators; emits `ValidationError`s
   (on `error_codes`, `parser`, `rules`, `string_table`, `game`, `index`, `localization`).
 - `info`: the incremental per-file index (`InfoService`) backing LSP hover, goto,
-  and find-references (on `parser`, `string_table`, `rules`, `index`).
+  and find-references (on `parser`, `string_table`, `rules`, `index`, `validation`).
+  Alias reference fields use validation's position resolver to distinguish
+  shared keys such as `id` from definitions and unrelated scalar fields.
 - `driver`: the shared load-and-validate pipeline both front ends call
   (on `validation`, `index`, `localization`, and the layers below).
 - `lsp`: the tower-lsp server, `cwtools-server` (on `driver`, `validation`, `info`,

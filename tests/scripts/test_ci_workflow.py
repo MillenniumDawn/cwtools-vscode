@@ -43,6 +43,7 @@ def test_ci_keeps_distinct_host_suites_and_reuses_build_for_coverage() -> None:
         workflow, "Host tests (multi-root, watched files, activation gate)"
     )
     assert "--label multi-root --label watched" in configurations
+    assert "--label parent-language" in configurations
     assert "--label gate-descriptor --label gate-disabled" in configurations
     assert "--label live" not in configurations
     rules_sync = workflow_step(workflow, "Host tests (rules sync)")

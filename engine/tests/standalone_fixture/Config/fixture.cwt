@@ -1,0 +1,6 @@
+types = { type[foo] = { path = "game/common/foo" } }
+foo = {
+    name = scalar
+    ## default_bool = yes
+    redundant = bool
+}

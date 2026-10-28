@@ -25,6 +25,13 @@ test("drawExtra and the real canvas extension draw and transform a headless grap
 	const cy = render([node("a"), node("b")]);
 	cy.zoom(1);
 	cy.pan({ x: 3, y: 4 });
+	// Place both nodes inside the viewport; the pan shift alone leaves them
+	// above the top edge, where the render cull would skip them.
+	const extent = cy.extent();
+	cy.batch(() => {
+		cy.$id("a").position({ x: extent.x1 + 100, y: extent.y1 + 100 });
+		cy.$id("b").position({ x: extent.x1 + 140, y: extent.y1 + 100 });
+	});
 	cy.emit("render");
 	expect(state.ctx.clearRect).toHaveBeenCalledWith(0, 0, 1600, 1200);
 	expect(state.ctx.translate).toHaveBeenCalledWith(6, 8);
@@ -169,6 +176,72 @@ test("hover class updates touch at most the graph size for a fixed-degree node",
 	} finally {
 		spy.mockRestore();
 	}
+});
+
+test("render skips nodes outside the viewport but still draws a node crossing its edge", () => {
+	const cy = render([node("in"), node("crossing"), node("far")]);
+	const extent = cy.extent();
+	const middleY = (extent.y1 + extent.y2) / 2;
+	const inX = (extent.x1 + extent.x2) / 2;
+	const crossingX = extent.x2 - 10;
+	const farX = extent.x2 + 40;
+	cy.batch(() => {
+		cy.$id("in").position({ x: inX, y: middleY });
+		cy.$id("crossing").position({ x: crossingX, y: middleY });
+		cy.$id("far").position({ x: farX, y: middleY });
+	});
+	// A node body is 30 units wide (radius 15), so "crossing" pokes past the
+	// right viewport edge and "far" clears it entirely.
+	state.ctx.arc.mockClear();
+	cy.emit("render");
+	const drawnX: number[] = state.ctx.arc.mock.calls.map((call) => call[0] as number);
+	expect(drawnX).toHaveLength(2);
+	expect(drawnX).toContain(inX);
+	expect(drawnX).toContain(crossingX);
+	expect(drawnX).not.toContain(farX);
+});
+
+test("a node just past the edge is drawn while its shadow shows and skipped once shadows are off", () => {
+	const cy = render([node("edge")]);
+	const edge = cy.$id("edge");
+	const placeJustPastRightEdge = () => {
+		const extent = cy.extent();
+		const box = edge.boundingBox({ includeLabels: false });
+		// The body starts 5 units past the right edge, inside the 12.5-unit
+		// shadow reach at devicePixelRatio 2.
+		edge.position({ x: extent.x2 + (box.x2 - box.x1) / 2 + 5, y: (extent.y1 + extent.y2) / 2 });
+	};
+	cy.zoom(1);
+	placeJustPastRightEdge();
+	state.ctx.arc.mockClear();
+	cy.emit("render");
+	expect(state.ctx.shadowBlur).toBe(25);
+	expect(state.ctx.arc).toHaveBeenCalledTimes(1);
+
+	cy.zoom(0.2);
+	placeJustPastRightEdge();
+	state.ctx.arc.mockClear();
+	cy.emit("render");
+	expect(state.ctx.shadowBlur).toBe(0);
+	expect(state.ctx.arc).not.toHaveBeenCalled();
+});
+
+test("render culling leaves skipped nodes in the graph and undimmed", () => {
+	const cy = render([node("in"), node("far")]);
+	const extent = cy.extent();
+	const middleY = (extent.y1 + extent.y2) / 2;
+	cy.batch(() => {
+		cy.$id("in").position({ x: (extent.x1 + extent.x2) / 2, y: middleY });
+		cy.$id("far").position({ x: extent.x2 + 40, y: middleY });
+	});
+	state.ctx.arc.mockClear();
+	cy.emit("render");
+	expect(state.ctx.arc).toHaveBeenCalledTimes(1);
+	// exportImage hands drawExtra the unfiltered cy.nodes() collection, so the
+	// render pass must cull by drawing alone: nothing removed, nothing dimmed.
+	expect(cy.nodes()).toHaveLength(2);
+	expect(cy.$id("far").removed()).toBe(false);
+	expect(cy.$id("far").hasClass("semitransp")).toBe(false);
 });
 
 const ref = (key: string, isOutgoing: boolean, label: string) => ({ key, isOutgoing, label });

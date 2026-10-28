@@ -26,6 +26,8 @@ const state = vi.hoisted(() => ({
 	},
 	graphNotice: { textContent: "", hidden: true },
 	tips: [] as { show: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn>; destroy: ReturnType<typeof vi.fn>; setProps: (next: Record<string, unknown>) => void; props: Record<string, unknown> }[],
+	mergeImages: vi.fn(),
+	fileReaderFailure: undefined as Error | undefined,
 }));
 
 vi.mock("cytoscape", async (importOriginal) => {
@@ -98,7 +100,7 @@ vi.mock("cytoscape-elk", () => ({
 	},
 }));
 vi.mock("cytoscape-popper", () => ({ default: () => {} }));
-vi.mock("merge-images", () => ({ default: vi.fn() }));
+vi.mock("merge-images", () => ({ default: state.mergeImages }));
 vi.mock("tippy.js", () => ({
 	default: (_element: unknown, props: Record<string, unknown>) => {
 		(props.content as () => unknown)();
@@ -138,6 +140,27 @@ export async function installGraph() {
 		disconnect() {}
 	});
 	vi.stubGlobal("acquireVsCodeApi", () => ({ postMessage: state.postMessage, setState: state.setState }));
+	// exportImage composites through OffscreenCanvas. This runtime has no renderer.
+	vi.stubGlobal("OffscreenCanvas", class {
+		getContext() { return state.ctx; }
+		convertToBlob() { return Promise.resolve(new Blob(["png"], { type: "image/png" })); }
+	});
+	vi.stubGlobal("FileReader", class {
+		result = "";
+		error: Error | null = null;
+		onloadend: (() => void) | null = null;
+		onerror: (() => void) | null = null;
+		readAsDataURL() {
+			const failure = state.fileReaderFailure;
+			if (failure) {
+				this.error = failure;
+				this.onerror?.();
+				return;
+			}
+			this.result = "data:image/png;base64,b3ZlcmxheQ==";
+			this.onloadend?.();
+		}
+	});
 	await import("../../../src/webview/graph");
 }
 
@@ -175,6 +198,8 @@ export function resetGraphState() {
 	state.layoutFailure = undefined;
 	state.layoutEvents.length = 0;
 	state.postMessage.mockClear();
+	state.mergeImages.mockReset();
+	state.fileReaderFailure = undefined;
 	state.tips.length = 0;
 	state.graphNotice.textContent = "";
 	state.graphNotice.hidden = true;
