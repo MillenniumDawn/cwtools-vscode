@@ -236,6 +236,46 @@ per-file cases use single-file index state, not a full running server workspace.
 These are component timings, not end-to-end editor latency or memory savings.
 Both temporary maps add build-time storage; no memory reduction is claimed.
 
+## Contextual type-reference collection
+
+The reference collector classifies keys for the file's path once, marks branches
+that contain contextual references, and carries borrowed rules down those branches.
+It resolves entity context rather than restarting a position lookup for every
+field. The unambiguous type-owned fields keep their direct classification.
+
+Measured against `d7e9a9e9` on Linux x86-64, i9-12900K, Rust 1.99.0, with the
+existing release profile and Criterion 0.8.2. Inputs were the HOI4 rules at
+`40a563ccfded2f56d32e83d8def1a20c27fcdb1d` and the three corpus files in
+`cwtools_lsp`'s `validate` bench, unchanged at Millennium Dawn `9ebf8682`.
+Two interleaved before/after pairs used CPU 0, warm caches, 20 samples, a two-second
+warmup and a three-second measurement target. Build each revision in its own
+fresh target directory; reusing a worktree's target directory produced an
+inconsistent baseline, which was excluded.
+
+These ranges are the two runs' point estimates for
+`collect_clear_file_index_file`, including collection, removal of the prior
+file index, replacement and output drops. Parsing and rules loading are excluded.
+
+| Workload | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| Iran focus tree | 84.01-85.54 | 12.73-13.52 |
+| France events | 14.27-14.45 | 7.57-7.98 |
+| Plane equipment | 1.589-1.592 | 1.614-1.617 |
+| Synthetic many-type control | 0.07486-0.07579 | 0.07354-0.07415 |
+
+The equipment case did not improve; its estimates were about 2% higher. The
+benchmark's type-reference fingerprints matched before and after for all three
+corpus files. Unit tests compare full ordered reference records with point
+resolution across ten entity layouts. This comparison retains the corrected
+alias references; it is not against the older code that missed them. These are
+component measurements, not end-to-end editor latency or memory measurements.
+
+From `engine/`, with the corpus and rules available under `CWTOOLS_PROJECTS`:
+
+```sh
+cargo bench -p cwtools_lsp --bench validate -- collect_clear_file_index_file
+```
+
 ## Localisation file-record churn (#846)
 
 `LocLocations` releases a removed file's URI immediately and keeps its ID

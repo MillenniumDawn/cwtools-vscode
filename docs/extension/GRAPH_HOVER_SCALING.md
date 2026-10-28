@@ -20,13 +20,13 @@ and asserts constant listener count, no collections in node/core scratch after
 a full hover traversal, exactly one active hood during a hover, lazy tooltip
 lifecycle, cancellation and class cleanup. Nested scratch objects, arrays, Maps
 and Sets are inspected; closure-private caches are not visible to this check.
-To record listener and scratch collection counts on identical inputs, copy that
-test and support/graphHeadless.ts into a clean base worktree and run the same
-command on both revisions:
+To record listener and scratch collection counts on identical inputs, copy
+`graphPerf.bench.ts`, `support/graphHeadless.ts` and `support/graphMeasurements.ts`
+into a clean base worktree and run the same command on both revisions:
 
 ```sh
-CWTOOLS_HOVER_BENCH=1 CWTOOLS_HOVER_BENCH_OUTPUT=/tmp/graph-hover.json \
-  npx --no-install vitest run extension/test/unit/graphHoverScaling.test.ts -t 'record listener'
+CWTOOLS_HOVER_BENCH_OUTPUT=/tmp/graph-hover.json \
+  npm run bench:node -- extension/test/unit/graphPerf.bench.ts -t 'record listener'
 ```
 
 On Linux, Node 26.11.1 and Cytoscape 3.34.3, the base revision

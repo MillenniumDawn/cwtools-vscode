@@ -817,11 +817,11 @@ mod tests {
 
         let mut reloaded = type_ref_ruleset();
         for root in &mut reloaded.root_rules {
-            if let cwtools_rules::rules_types::RootRule::AliasRule(
+            if let cwtools_rules::rules_types::RootRule::TypeRule(
                 name,
                 (RuleType::NodeRule { rules, .. }, _),
             ) = root
-                && name == "effect:use_type"
+                && name == "my_type"
             {
                 let mut children = rules.to_vec();
                 for (rule, _) in &mut children {

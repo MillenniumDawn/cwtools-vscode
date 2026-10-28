@@ -1,0 +1,17 @@
+namespace = irm_codelens
+
+country_event = {
+	id = irm_codelens.target
+	hide_window = yes
+	is_triggered_only = yes
+}
+
+country_event = {
+	id = irm_codelens.caller
+	hide_window = yes
+	is_triggered_only = yes
+	immediate = {
+		country_event = { id = irm_codelens.target }
+		country_event = { id = irm_codelens.target days = 1 }
+	}
+}

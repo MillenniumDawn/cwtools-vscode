@@ -2,12 +2,17 @@
 
 #### Extension
 
+* Dispose the loadingBar and updateFileList notification listeners with the extension instead of leaving them attached until the window closes. (#1139)
 * Classify script files from automatically discovered parent mods as Paradox files, including files already open when discovery finishes. Keep parent roots separate from base-game roots and clear them when the server stops. (#1104)
+* Skip drawing graph nodes whose body and shadow miss the visible viewport when the graph renders, and still draw every node when exporting an image. (#1138)
 * Add a workspace diagnostics baseline and **Write Diagnostics Baseline** command. Suppress known diagnostics with CLI-compatible hashes, show the suppressed count, and restore diagnostics when the baseline is cleared or changed. Captures include unsaved buffers and reject stale or cancelled scans. (#604)
+* Test that graph image export reports a rejected image merge or a FileReader error once, posts no image, and succeeds on the next export. (#834)
 
 #### Engine
 
 * Expand a moved-in folder's watched event into eligible resource and script descendants so dependent filepath diagnostics update without a workspace reindex. Bound expansion, preserve workspace/ignore/symlink boundaries, and retry oversized folders through the existing scan path. (#1097)
+* Count references inside parsed effect aliases in CodeLens. Resolve shared fields such as `id` against their enclosing rules so definitions and unrelated scalar fields do not count as references. Batch rule traversal through reference-bearing branches instead of resolving each field separately.
+* Document and smoke-test standalone HOI4 LSP initialization, diagnostic completion, CLI comparison, host coverage limits, and read-only simplification audits. (#1126)
 * Reuse the script parsing pipeline for multi-mod scans and remove the unused localisation folder walker. Keep its discovery regressions with the shared file manager.
 * Rename localisation keys together with rule-linked entity IDs and their references, without changing unrelated same-spelling effects, flags, variables, or strings. Preserve translated keys and sibling references, and cancel conflicting renames instead of returning partial edits. (#844)
 * Discover parent mods from descriptor dependencies in CLI `validate` and `fix` when neither `--parent` nor TOML `parents` supplies a nonempty list. Explicit parent paths still take precedence. (#1105)
@@ -15,6 +20,7 @@
 
 #### Tooling
 
+* Run the parent-language integration test in CI, measure base-game discovery and content roots in Node coverage, and exercise CodeLens reference commands through the extension host. Keep graph measurements in the benchmark runner and consolidate repeated listener-scaling checks without dropping their assertions.
 * Analyze Python tooling in CodeQL alongside JavaScript/TypeScript, Rust, and GitHub Actions. (#526)
 * Share workflow-test block extraction and Git preflight fixtures without dropping regression cases.
 * Add a full HOI4 and Millennium Dawn index tier to the snapshot-clone benchmark and record its first-write copy cost. Keep production validation locks unchanged; the benchmark does not measure editor hover or queued-writer latency. (#868)
