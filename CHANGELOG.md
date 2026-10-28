@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.5
+
 #### Extension
 
 * Batch external `.cwt` watcher events into one `workspace/didChangeWatchedFiles` notification per 500 ms window, while preserving each event and forwarding it when automatic rules reload is disabled. (#1127)
