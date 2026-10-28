@@ -304,6 +304,8 @@ pub(crate) struct DocumentState {
     pub(crate) type_uses_revision: AtomicU64,
     pub(crate) vanilla_merged: std::sync::atomic::AtomicBool,
     pub(crate) scan_in_progress: AtomicBool,
+    /// Set by `shutdown` (#1146); the watch also wakes the reindex loop's sleeps.
+    pub(crate) shutdown: tokio::sync::watch::Sender<bool>,
     pub(crate) debounce_handles: Mutex<HashMap<String, DebounceTask>>,
     pub(crate) next_debounce_id: AtomicU64,
     pub(crate) validation_permits: tokio::sync::Semaphore,
@@ -1791,6 +1793,7 @@ impl DocumentState {
             type_uses_revision: AtomicU64::new(0),
             vanilla_merged: std::sync::atomic::AtomicBool::new(false),
             scan_in_progress: AtomicBool::new(false),
+            shutdown: tokio::sync::watch::channel(false).0,
             debounce_handles: Mutex::new(HashMap::new()),
             next_debounce_id: AtomicU64::new(0),
             validation_permits: tokio::sync::Semaphore::new(MAX_CONCURRENT_VALIDATIONS),

@@ -145,6 +145,10 @@ impl Backend {
         crate::transport::wait_for_notifications(&self.state.notifications).await;
     }
 
+    pub(crate) fn is_shutting_down(&self) -> bool {
+        *self.state.shutdown.borrow()
+    }
+
     pub(crate) fn bump_info_revision(&self) {
         self.state
             .info_revision
@@ -996,6 +1000,9 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        self.state.shutdown.send_replace(true);
+        // A publish already past the flag check finishes before the response goes out.
+        drop(self.state.diagnostic_publication_lock.lock().await);
         self.wait_for_notifications().await;
         Ok(())
     }
