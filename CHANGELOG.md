@@ -10,6 +10,7 @@
 
 #### Engine
 
+* Expand a moved-in folder's watched event into eligible resource and script descendants so dependent filepath diagnostics update without a workspace reindex. Bound expansion, preserve workspace/ignore/symlink boundaries, and retry oversized folders through the existing scan path. (#1097)
 * Count references inside parsed effect aliases in CodeLens. Resolve shared fields such as `id` against their enclosing rules so definitions and unrelated scalar fields do not count as references. Batch rule traversal through reference-bearing branches instead of resolving each field separately.
 * Document and smoke-test standalone HOI4 LSP initialization, diagnostic completion, CLI comparison, host coverage limits, and read-only simplification audits. (#1126)
 * Reuse the script parsing pipeline for multi-mod scans and remove the unused localisation folder walker. Keep its discovery regressions with the shared file manager.

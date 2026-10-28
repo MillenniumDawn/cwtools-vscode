@@ -329,6 +329,9 @@ pub(crate) struct DocumentState {
     /// URIs of non-open watched files (create/modify) waiting for the next coalescing window,
     /// so a burst of `didChangeWatchedFiles` events collapses into one drain (#90).
     pub(crate) watched_pending: Mutex<HashSet<String>>,
+    /// The `watched_pending` URIs that arrived as CREATED. Only these can be a moved-in
+    /// folder to expand; a folder reported CHANGED is not walked.
+    pub(crate) watched_created: Mutex<HashSet<String>>,
     pub(crate) watched_deleted: Mutex<HashSet<String>>,
     pub(crate) watched_debounce: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub(crate) watched_signatures: Mutex<HashMap<String, (u64, u128)>>,
@@ -1798,6 +1801,7 @@ impl DocumentState {
             start: std::time::Instant::now(),
             last_activity_ms: AtomicU64::new(0),
             watched_pending: Mutex::new(HashSet::new()),
+            watched_created: Mutex::new(HashSet::new()),
             watched_deleted: Mutex::new(HashSet::new()),
             watched_debounce: Mutex::new(None),
             watched_signatures: Mutex::new(HashMap::new()),
