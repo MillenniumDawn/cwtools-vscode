@@ -27,6 +27,7 @@
 * Analyze Python tooling in CodeQL alongside JavaScript/TypeScript, Rust, and GitHub Actions. (#526)
 * Share workflow-test block extraction and Git preflight fixtures without dropping regression cases.
 * Add a full HOI4 and Millennium Dawn index tier to the snapshot-clone benchmark and record its first-write copy cost. Keep production validation locks unchanged; the benchmark does not measure editor hover or queued-writer latency. (#868)
+* Override `@azure/msal-node` to `^7.1.0` and raise the `serialize-javascript` override to `^7.1.3`, clearing the high MSAL and low serialize-javascript audit findings. `@azure/identity` and the mocha under `@vscode/test-cli` still ask for the old majors, so drop each override once they accept the fix. Neither flow is reachable from packaging or tests. (#1129)
 
 ### 4.0.4
 
