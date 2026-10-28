@@ -195,6 +195,19 @@ impl RuleData {
             modifier_scopes: Arc::new(HashMap::new()),
         }
     }
+
+    /// Store modifier data built from `snapshot`, unless the ruleset was replaced since.
+    pub(crate) fn store_modifier_data(
+        &mut self,
+        snapshot: Option<&Arc<RuleSet>>,
+        keys: HashSet<String>,
+        scopes: HashMap<String, Vec<String>>,
+    ) {
+        if self.ruleset.as_ref().map(Arc::as_ptr) == snapshot.map(Arc::as_ptr) {
+            self.modifier_keys = Arc::new(keys);
+            self.modifier_scopes = Arc::new(scopes);
+        }
+    }
 }
 
 /// Mutable base-game payload. Its pieces are staged and consumed at different
@@ -228,6 +241,9 @@ pub(crate) struct DocumentState {
     pub(crate) config: parking_lot::RwLock<Config>,
     pub(crate) workspace_roots_generation: AtomicU64,
     pub(crate) rules: parking_lot::RwLock<RuleData>,
+    /// Held across a whole `rebuild_modifier_keys` so rebuilds store in the order they start.
+    /// Only that function takes it, outside every other lock.
+    pub(crate) modifier_rebuild_lock: parking_lot::Mutex<()>,
     pub(crate) string_table: StringTable,
     pub(crate) info_service: parking_lot::RwLock<cwtools_info::InfoService>,
     pub(crate) vanilla_state: Mutex<VanillaState>,
@@ -1746,6 +1762,7 @@ impl DocumentState {
             config: parking_lot::RwLock::new(Config::new()),
             workspace_roots_generation: AtomicU64::new(0),
             rules: parking_lot::RwLock::new(RuleData::new()),
+            modifier_rebuild_lock: parking_lot::Mutex::new(()),
             string_table,
             info_service: parking_lot::RwLock::new(cwtools_info::InfoService::new()),
             vanilla_state: Mutex::new(VanillaState::default()),
