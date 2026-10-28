@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::common::{
     COMPLETION_RULES, GOTO_RULES, STORM_FILE, TestServer, client_spelling, count_publishes,
@@ -124,6 +124,196 @@ fn test_did_open_burst_stops_at_the_document_count_limit() {
     server.stop();
 
     assert_eq!(validations, MAX_OPEN_DOCUMENTS);
+}
+
+/// Toasts seen, and refuses of the refused buffer, before the diagnostics for
+/// `suffix` publish. The server handles notifications in order, so that publish
+/// proves every toast from the refused opens and changes sent before it was
+/// already on the wire.
+fn toasts_and_refused_publishes_before(
+    server: &mut TestServer,
+    suffix: &str,
+) -> (Vec<Value>, usize) {
+    let mut toasts = Vec::new();
+    let mut refused_publishes = 0;
+    server.read_until(&format!("publishDiagnostics for {suffix}"), |frame| {
+        if frame["method"] == "window/showMessage" {
+            toasts.push(frame["params"].clone());
+        }
+        if frame["method"] == "textDocument/publishDiagnostics"
+            && frame["params"]["uri"]
+                .as_str()
+                .is_some_and(|uri| uri.ends_with("refused.txt"))
+        {
+            refused_publishes += 1;
+        }
+        frame["method"] == "textDocument/publishDiagnostics"
+            && frame["params"]["uri"]
+                .as_str()
+                .is_some_and(|uri| uri.ends_with(suffix))
+    });
+    (toasts, refused_publishes)
+}
+
+/// #1137: a refused open warns through `window/showMessage` so the editor
+/// explains the silent document without the server loading the refused buffer.
+/// Every oversized URI shares one warning, and refusals the user cannot act on
+/// (a change to an unopened document, an open outside the workspace) are only
+/// logged.
+#[test]
+fn test_refused_document_warns_only_when_the_user_can_act() {
+    let mut server = storm_server();
+
+    // An oversized URI: the open is refused on its face, and the toast carries
+    // a fixed sentence because the URI itself must not be quoted.
+    let oversized_uri = server.uri(&format!("{}refused.txt", "deep/".repeat(2400)));
+    server.open_uri(&oversized_uri, "x = 1\n");
+    let toast = server.read_until("the refusal toast for the oversized URI", |frame| {
+        frame["method"] == "window/showMessage"
+    });
+    assert_eq!(
+        toast["params"]["type"], 2,
+        "a refusal must warn, got: {toast}"
+    );
+    assert_eq!(
+        toast["params"]["message"],
+        json!("CWTools ignored a document because its URI exceeds the maximum supported length."),
+        "the toast must not echo the oversized URI, got: {toast}"
+    );
+
+    // The same oversized URI again, or a different one, must not toast again,
+    // and neither buffer may be opened. Opening `marker.txt` afterwards proves
+    // the opens were handled: its diagnostics cannot publish before the refused
+    // opens and their potential toasts were processed.
+    let other_oversized_uri = server.uri(&format!("{}more/refused.txt", "deep/".repeat(2400)));
+    server.open_uri(&oversized_uri, "x = 1\n");
+    server.open_uri(&other_oversized_uri, "x = 1\n");
+    server.open("common/decisions/marker.txt", STORM_FILE);
+    let (repeat_toasts, refused_publishes) =
+        toasts_and_refused_publishes_before(&mut server, "marker.txt");
+    assert!(
+        repeat_toasts.is_empty(),
+        "a repeated oversized-URI refusal must not toast again, got: {repeat_toasts:?}"
+    );
+    assert_eq!(
+        refused_publishes, 0,
+        "the refused buffers must stay unopened"
+    );
+
+    // A change for a document that never opened, and an open outside every
+    // workspace folder (go-to-definition into the base game), are only logged.
+    let change_uri = server.uri("common/decisions/refused_change.txt");
+    server.change_uri(&change_uri, 1, "x = 2\n");
+    let outside = tempfile::tempdir().unwrap();
+    let outside_file = outside.path().join("refused.txt");
+    std::fs::write(&outside_file, "x = 1\n").unwrap();
+    server.open_uri(&path_uri(&outside_file), "x = 1\n");
+    server.open("common/decisions/marker2.txt", STORM_FILE);
+    let (silent_toasts, refused_publishes) =
+        toasts_and_refused_publishes_before(&mut server, "marker2.txt");
+    server.stop();
+    assert!(
+        silent_toasts.is_empty(),
+        "unopened changes and outside-workspace opens must not toast, got: {silent_toasts:?}"
+    );
+    assert_eq!(
+        refused_publishes, 0,
+        "the outside buffer must stay unopened"
+    );
+}
+
+/// #1137: a body over the per-document limit is the same refusal as an
+/// oversized URI. 32 MiB + 1 matches `MAX_DOCUMENT_BYTES` in `state.rs`.
+#[test]
+fn test_oversized_document_body_warns_without_opening() {
+    let mut server = storm_server();
+    let rel = "common/decisions/huge.txt";
+    let uri = server.uri(rel);
+    let huge = "x".repeat(32 * 1024 * 1024 + 1);
+    let size_reason = "the document exceeds the per-document byte limit";
+
+    server.open(rel, &huge);
+    let toast = server.read_until("the refusal toast for the oversized body", |frame| {
+        frame["method"] == "window/showMessage"
+    });
+    assert_eq!(
+        toast["params"]["type"], 2,
+        "a refusal must warn, got: {toast}"
+    );
+    assert_eq!(
+        toast["params"]["message"],
+        json!(format!("CWTools did not open {uri}: {size_reason}.")),
+        "the toast must name the document and the size reason, got: {toast}"
+    );
+
+    server.open(rel, &huge);
+    server.open("common/decisions/huge_marker.txt", STORM_FILE);
+    let mut repeat_toasts = Vec::new();
+    let mut huge_publishes = 0;
+    server.read_until("publishDiagnostics for huge_marker.txt", |frame| {
+        if frame["method"] == "window/showMessage" {
+            repeat_toasts.push(frame["params"].clone());
+        }
+        if frame["method"] == "textDocument/publishDiagnostics"
+            && frame["params"]["uri"]
+                .as_str()
+                .is_some_and(|published| published.ends_with("huge.txt"))
+        {
+            huge_publishes += 1;
+        }
+        frame["method"] == "textDocument/publishDiagnostics"
+            && frame["params"]["uri"]
+                .as_str()
+                .is_some_and(|published| published.ends_with("huge_marker.txt"))
+    });
+    assert!(
+        repeat_toasts.is_empty(),
+        "a repeated oversized open must not toast again, got: {repeat_toasts:?}"
+    );
+    assert_eq!(huge_publishes, 0, "the oversized buffer must stay unopened");
+
+    // Closing the refused document drops its record, so reopening warns again.
+    server.close(rel);
+    server.open(rel, &huge);
+    let reopened = server.read_until("the toast after closing the refused document", |frame| {
+        frame["method"] == "window/showMessage"
+    });
+    assert_eq!(
+        reopened["params"]["message"],
+        json!(format!("CWTools did not open {uri}: {size_reason}.")),
+        "a refusal after didClose must warn again, got: {reopened}"
+    );
+
+    let open_rel = "common/decisions/open_huge_change.txt";
+    let open_uri = server.uri(open_rel);
+    server.open_and_wait(open_rel, "x = 1\n");
+    server.change(open_rel, 2, &huge);
+    let change_toast = server.read_until("the refusal toast for the oversized change", |frame| {
+        frame["method"] == "window/showMessage"
+    });
+
+    // An admitted change drops the record, so the next oversized change warns again.
+    server.change(open_rel, 3, "x = 2\n");
+    server.change(open_rel, 4, &huge);
+    let renewed = server.read_until("the toast after an admitted change", |frame| {
+        frame["method"] == "window/showMessage"
+    });
+    server.stop();
+    assert_eq!(
+        renewed["params"]["type"], 2,
+        "an oversized change after an admitted one must warn again, got: {renewed}"
+    );
+    assert_eq!(
+        change_toast["params"]["type"], 2,
+        "an oversized change must warn, got: {change_toast}"
+    );
+    assert_eq!(
+        change_toast["params"]["message"],
+        json!(format!(
+            "CWTools ignored the change to {open_uri}: {size_reason}."
+        )),
+        "the change toast must name the document and the size reason, got: {change_toast}"
+    );
 }
 
 #[test]

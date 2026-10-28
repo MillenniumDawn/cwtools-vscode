@@ -10,6 +10,7 @@
 
 #### Engine
 
+* Warn once per document and reason when an open or change is refused for its size or the open-document limits. Quote the rejection reason, or one fixed sentence shared by every oversized URI, and warn again only after the document is admitted or closed. Opens outside the workspace folders and changes to unopened documents are only logged. The refused buffer is never loaded. (#1137)
 * Expand a moved-in folder's watched event into eligible resource and script descendants so dependent filepath diagnostics update without a workspace reindex. Bound expansion, preserve workspace/ignore/symlink boundaries, and retry oversized folders through the existing scan path. (#1097)
 * Count references inside parsed effect aliases in CodeLens. Resolve shared fields such as `id` against their enclosing rules so definitions and unrelated scalar fields do not count as references. Batch rule traversal through reference-bearing branches instead of resolving each field separately.
 * Document and smoke-test standalone HOI4 LSP initialization, diagnostic completion, CLI comparison, host coverage limits, and read-only simplification audits. (#1126)
