@@ -24,6 +24,24 @@ const ownerPosition = new vscode.Position(2, 2);
 const rulesText = (...names: string[]) =>
 	`types = { ${names.map((name) => `type[${name}] = { path = "common/${name}" }`).join(" ")} }\n`;
 
+// VS Code drops edits made before a watch is live and signals no readiness, so
+// rewrite the file until one gets through.
+async function writeUntilDelivered(
+	file: string,
+	delivered: () => boolean,
+): Promise<boolean> {
+	let probes = 0;
+	let lastProbe = 0;
+	return waitUntil(async () => {
+		if (delivered()) return true;
+		if (Date.now() - lastProbe >= 2_000) {
+			lastProbe = Date.now();
+			await fs.writeFile(file, rulesText(`probe${probes++}`));
+		}
+		return false;
+	}, 20_000);
+}
+
 async function hoverText(
 	uri: vscode.Uri,
 	position: vscode.Position,
@@ -193,6 +211,8 @@ suite("Live settings", function () {
 		file: string;
 		loads: (types?: number) => string[];
 		sawEvent: (file: string) => boolean;
+		notifications: () => Array<Array<{ uri: string; type: 1 | 2 | 3 }>>;
+		sawWatcher: (root: string) => boolean;
 	}
 
 	// Points rules_folder at a temp folder outside the workspace and returns once
@@ -248,26 +268,25 @@ suite("Live settings", function () {
 				await waitUntil(() => messages.includes(watcherReadyMessage), 15_000),
 				"the external rules watcher should be registered before the file edit",
 			);
-			// VS Code drops edits made before the watch is live and signals no readiness.
-			let probes = 0;
-			let lastProbe = 0;
 			assert.ok(
-				await waitUntil(async () => {
-					if (matchingLoads().length >= 2) return true;
-					if (Date.now() - lastProbe >= 2_000) {
-						lastProbe = Date.now();
-						await fs.writeFile(rulesFile, rulesText(`probe${probes++}`));
-					}
-					return false;
-				}, 20_000),
+				await writeUntilDelivered(rulesFile, () => matchingLoads().length >= 2),
 				"the external rules watcher should deliver an edit once it is live",
 			);
-			await run({
-				root: rulesRoot,
-				file: rulesFile,
-				loads: matchingLoads,
-				sawEvent: (file) => delivered.has(file),
-			});
+			const api = await activate();
+			assert.ok(api, "extension activation should expose the host-test API");
+			const rulesNotifications = api.observeRulesFileNotifications();
+			try {
+				await run({
+					root: rulesRoot,
+					file: rulesFile,
+					loads: matchingLoads,
+					sawEvent: (file) => delivered.has(file),
+					notifications: rulesNotifications.notifications,
+					sawWatcher: (root) => messages.includes(`Watching rules in ${root}`),
+				});
+			} finally {
+				rulesNotifications.dispose();
+			}
 		} finally {
 			process.env.CWTOOLS_TEST_RULES_FOLDER = previousTestFolder;
 			await cfg.update(
@@ -292,17 +311,80 @@ suite("Live settings", function () {
 		});
 	});
 
+	test("does not forward external rules events from the previously selected folder", async function () {
+		this.timeout(90_000);
+		await withExternalRules(async ({ root, notifications, sawWatcher }) => {
+			const cfg = cwtoolsConfig();
+			const replacement = await fs.mkdtemp(
+				path.join(os.tmpdir(), "cwtools-rules-replacement-"),
+			);
+			try {
+				await fs.writeFile(path.join(replacement, "replacement.cwt"), rulesText("replacement"));
+				process.env.CWTOOLS_TEST_RULES_FOLDER = replacement;
+				await cfg.update("rules_folder", replacement, vscode.ConfigurationTarget.Global);
+				assert.ok(
+					await waitUntil(() => sawWatcher(replacement), 15_000),
+					"the replacement folder watcher should be installed",
+				);
+				assert.ok(
+					await writeUntilDelivered(
+						path.join(replacement, "probe.cwt"),
+						() => notifications().length > 0,
+					),
+					"the replacement folder watcher should forward an edit once it is live",
+				);
+				const forwarded = notifications().length;
+				await fs.writeFile(path.join(root, "stale.cwt"), rulesText("stale"));
+				await wait(1_500);
+				assert.deepStrictEqual(
+					notifications().slice(forwarded),
+					[],
+					"events from the previous rules folder must not be forwarded",
+				);
+				await fs.writeFile(path.join(replacement, "current.cwt"), rulesText("current"));
+				assert.ok(
+					await waitUntil(() => notifications().length === forwarded + 1, 5_000),
+					"the current folder should continue forwarding events",
+				);
+				assert.deepStrictEqual(notifications()[forwarded], [
+					{
+						uri: vscode.Uri.file(path.join(replacement, "current.cwt")).toString(),
+						type: 1,
+					},
+				]);
+			} finally {
+				await fs.rm(replacement, { recursive: true, force: true });
+			}
+		});
+	});
+
 	test("collapses a burst of rules-file edits into one reload", async function () {
 		this.timeout(70_000);
-		await withExternalRules(async ({ root, loads }) => {
+		await withExternalRules(async ({ root, loads, notifications }) => {
 			// New files, not rewrites of one: the watcher may coalesce repeated
 			// writes to a single path, which would make the burst a single event.
+			// Span the first 500 ms window while keeping each gap below it.
 			for (let i = 0; i < 6; i++) {
 				await fs.writeFile(path.join(root, `burst${i}.cwt`), rulesText(`burst${i}`));
+				await wait(150);
 			}
 			assert.ok(
 				await waitUntil(() => loads(7).length > 0, 15_000),
 				"the burst should reload the rules",
+			);
+			assert.ok(
+				await waitUntil(() => notifications().length > 0, 5_000),
+				"the burst should forward its watched-file events",
+			);
+			assert.deepStrictEqual(
+				notifications(),
+				[[
+					...Array.from({ length: 6 }, (_, i) => ({
+						uri: vscode.Uri.file(path.join(root, `burst${i}.cwt`)).toString(),
+						type: 1 as const,
+					})),
+				]],
+				"one notification should preserve every create event in order",
 			);
 			// Reloads are logged in order, so once this later edit's reload is in, a
 			// second reload for the burst would be too.
@@ -311,13 +393,17 @@ suite("Live settings", function () {
 				await waitUntil(() => loads(8).length > 0, 15_000),
 				"a later edit should reload again",
 			);
+			assert.ok(
+				await waitUntil(() => notifications().length === 2, 5_000),
+				"a later burst should be forwarded separately",
+			);
 			assert.strictEqual(loads(7).length, 1, "the burst should reload the rules once");
 		});
 	});
 
 	test("leaves rules alone on external edits while rules.autoReload is off", async function () {
 		this.timeout(70_000);
-		await withExternalRules(async ({ root, loads, sawEvent }) => {
+		await withExternalRules(async ({ root, file, loads, sawEvent, notifications }) => {
 			const cfg = cwtoolsConfig();
 			const offFile = path.join(root, "off.cwt");
 			await cfg.update("rules.autoReload", false, vscode.ConfigurationTarget.Global);
@@ -327,9 +413,34 @@ suite("Live settings", function () {
 					await waitUntil(() => sawEvent(offFile), 15_000),
 					"the edit should reach the watchers",
 				);
+				await fs.writeFile(path.join(root, "off-second.cwt"), rulesText("offSecond"));
 				// A negative needs a window: three debounce periods after delivery.
 				await wait(1_500);
 				assert.strictEqual(loads(2).length, 0, "autoReload off should not reload");
+				assert.deepStrictEqual(
+					notifications(),
+					[[
+						{ uri: vscode.Uri.file(offFile).toString(), type: 1 },
+						{ uri: vscode.Uri.file(path.join(root, "off-second.cwt")).toString(), type: 1 },
+					]],
+					"autoReload off should still forward both events in one notification",
+				);
+				await fs.writeFile(file, rulesText("changed"));
+				assert.ok(
+					await waitUntil(() => notifications().length === 2, 5_000),
+					"changes should be forwarded with autoReload off",
+				);
+				assert.deepStrictEqual(notifications()[1], [
+					{ uri: vscode.Uri.file(file).toString(), type: 2 },
+				]);
+				await fs.rm(offFile);
+				assert.ok(
+					await waitUntil(() => notifications().length === 3, 5_000),
+					"deletes should be forwarded with autoReload off",
+				);
+				assert.deepStrictEqual(notifications()[2], [
+					{ uri: vscode.Uri.file(offFile).toString(), type: 3 },
+				]);
 			} finally {
 				await cfg.update("rules.autoReload", undefined, vscode.ConfigurationTarget.Global);
 			}

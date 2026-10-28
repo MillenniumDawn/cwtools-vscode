@@ -2,6 +2,7 @@
 
 #### Extension
 
+* Batch external `.cwt` watcher events into one `workspace/didChangeWatchedFiles` notification per 500 ms window, while preserving each event and forwarding it when automatic rules reload is disabled. (#1127)
 * Dispose the loadingBar and updateFileList notification listeners with the extension instead of leaving them attached until the window closes. (#1139)
 * Classify script files from automatically discovered parent mods as Paradox files, including files already open when discovery finishes. Keep parent roots separate from base-game roots and clear them when the server stops. (#1104)
 * Skip drawing graph nodes whose body and shadow miss the visible viewport when the graph renders, and still draw every node when exporting an image. (#1138)
