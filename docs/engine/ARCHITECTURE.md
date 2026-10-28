@@ -129,11 +129,14 @@ resolves against is built on both sides by `driver::build_file_index`, over the
 workspace root and the base game together, and only when base-game data is
 present. Half an index would flag every reference into vanilla content.
 
-One capability is CLI-only today: `Session` loads the mod's
-`common/inline_scripts` bodies so an `inline_script` call site can be validated
-against what it pulls in (CW274 and the body's own diagnostics). The LSP keeps no
-such registry yet and passes `inline_scripts: None`, which accepts a call site
-without expanding it.
+Both front ends validate an `inline_script` call site against the mod's
+`common/inline_scripts` bodies (CW274 and the body's own diagnostics). `Session`
+loads the bodies once, with the rest of the workspace. The LSP keeps its own
+registry of them. Every full scan rebuilds it, reading an open script from its
+buffer and a closed one from the parse cache. Between scans it updates in place:
+an edit, a watched-file change, or a close that restores the disk text
+re-registers the body, and a delete removes it. Each change queues the script's
+name for the dependent sweep, so open callers revalidate on the same pass.
 
 ### Rename snapshots
 
