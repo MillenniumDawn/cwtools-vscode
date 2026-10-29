@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Take the per-file stat snapshot behind the workspace, localisation and parent-mod scan fingerprints on the rayon pool for large file lists; small lists keep the original streaming stat/hash fold and the digest is unchanged. (#1153)
+
 ### 4.0.5
 
 #### Extension
