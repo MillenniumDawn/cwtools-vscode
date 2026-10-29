@@ -3,6 +3,7 @@
 
 pub mod parent_mods;
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -647,7 +648,7 @@ impl Session {
                 &parent_roots,
                 ignore_files,
                 ignore_dirs,
-                VanillaFiles::Cached(aux.file_paths),
+                VanillaFiles::Cached(Cow::Owned(aux.file_paths)),
                 case_sensitive_files,
                 Some(&vanilla_shadow),
             );
@@ -661,10 +662,10 @@ impl Session {
             );
             type_index
                 .scripted_loc_index
-                .set_vanilla_names(aux.scripted_loc_names);
+                .set_vanilla_names(&aux.scripted_loc_names);
             type_index
                 .scripted_gui_index
-                .set_vanilla_names(aux.scripted_gui_names);
+                .set_vanilla_names(&aux.scripted_gui_names);
             cached_loc_keys = Some(aux.loc_keys);
         } else if let Some(vanilla_dir) = &vanilla {
             let vanilla_index = if let Some(missing_vanilla) = &missing_vanilla {
@@ -715,20 +716,22 @@ impl Session {
                         }
                     }
                     type_index.var_index.merge(&vanilla_index.var_index);
-                    type_index.scripted_loc_index.set_vanilla_names(
-                        vanilla_index
-                            .scripted_loc_index
-                            .names()
-                            .map(str::to_string)
-                            .collect(),
-                    );
-                    type_index.scripted_gui_index.set_vanilla_names(
-                        vanilla_index
-                            .scripted_gui_index
-                            .names()
-                            .map(str::to_string)
-                            .collect(),
-                    );
+                    let scripted_loc_names: Vec<String> = vanilla_index
+                        .scripted_loc_index
+                        .names()
+                        .map(str::to_string)
+                        .collect();
+                    type_index
+                        .scripted_loc_index
+                        .set_vanilla_names(&scripted_loc_names);
+                    let scripted_gui_names: Vec<String> = vanilla_index
+                        .scripted_gui_index
+                        .names()
+                        .map(str::to_string)
+                        .collect();
+                    type_index
+                        .scripted_gui_index
+                        .set_vanilla_names(&scripted_gui_names);
                     let vanilla_per_type = filter_vanilla_index(
                         vanilla_index.into_map(),
                         vanilla_dir,
@@ -1238,7 +1241,10 @@ pub fn default_cache_dir() -> Option<PathBuf> {
 }
 
 pub enum VanillaFiles<'a> {
-    Cached(Vec<String>),
+    /// Ownership is the caller's: owned spellings move straight into the exact-case
+    /// index (the CLI's one-shot cache load), borrowed spellings spare the retaining
+    /// caller a whole-payload copy (#1154).
+    Cached(Cow<'a, [String]>),
     Install(&'a Path),
 }
 
@@ -1284,10 +1290,16 @@ pub fn build_file_index_with_vanilla_shadow(
     );
     index.add_paths(parent_paths);
     match vanilla {
-        VanillaFiles::Cached(paths) => index.add_paths(
+        VanillaFiles::Cached(Cow::Owned(paths)) => index.add_paths(
             paths
                 .into_iter()
                 .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path))),
+        ),
+        VanillaFiles::Cached(Cow::Borrowed(paths)) => index.add_paths(
+            paths
+                .iter()
+                .filter(|path| !shadow.is_some_and(|shadow| shadow.hides(path)))
+                .map(String::as_str),
         ),
         VanillaFiles::Install(dir) => {
             let paths = discover_file_index_paths(dir, &[], &[], DiscoveryPolicy::Vanilla);

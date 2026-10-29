@@ -2,6 +2,7 @@
 //! contribution. Each case checks [`FileIndex::release_workspace`] against a full
 //! rebuild without the file.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use cwtools_driver::{VanillaFiles, build_file_index_with_vanilla_shadow};
@@ -105,7 +106,12 @@ fn build(primary: &Path, parents: &[PathBuf], case: &Case) -> FileIndex {
         parents,
         &ignore_files,
         &[],
-        VanillaFiles::Cached(case.vanilla.iter().map(|s| s.to_string()).collect()),
+        VanillaFiles::Cached(Cow::Owned(
+            case.vanilla
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        )),
         false,
         Some(&cwtools_driver::vanilla_replacement_shadow(
             primary, parents,
@@ -143,10 +149,52 @@ fn case_sensitive_build_keeps_the_workspace_spelling() {
         &[],
         &[],
         &[],
-        VanillaFiles::Cached(vec!["gfx/shared.dds".to_string()]),
+        VanillaFiles::Cached(Cow::Borrowed(&["gfx/shared.dds".to_string()])),
         true,
         None,
     );
     assert!(index.contains("gfx/Shared.DDS"));
     assert!(!index.contains("gfx/shared.dds"));
+}
+
+/// Owned cached spellings must move into the case-sensitive index, as the CLI's
+/// one-shot cache load did before the #1154 borrow split. A copied spelling would
+/// allocate a fresh buffer, so its heap pointer cannot match the original: the
+/// moved original is still alive when a copy would allocate, and each path has a
+/// distinct length so no freed block can be reused for another's copy.
+#[test]
+fn owned_cached_spellings_move_without_copying() {
+    let tmp = write_tree(&[]);
+    let originals: Vec<String> = [41, 81, 161, 321]
+        .into_iter()
+        .map(|len| format!("gfx/owned_{}.dds{}", len, "a".repeat(len)))
+        .collect();
+    let before: std::collections::HashSet<usize> = originals
+        .iter()
+        .map(|path| path.as_ptr() as usize)
+        .collect();
+    let index = build_file_index_with_vanilla_shadow(
+        &tmp.path().join("mod"),
+        &[],
+        &[],
+        &[],
+        VanillaFiles::Cached(Cow::Owned(originals)),
+        true,
+        None,
+    );
+    let after: std::collections::HashSet<usize> = index
+        .paths_exact()
+        .map(|path| path.as_ptr() as usize)
+        .collect();
+    assert_eq!(
+        before, after,
+        "owned cached spellings must move into the exact-case index unmoved-copy-free"
+    );
+    for len in [41usize, 81, 161, 321] {
+        let expected = format!("gfx/owned_{len}.dds{}", "a".repeat(len));
+        assert!(
+            index.contains(&expected),
+            "{expected} must resolve from the owned cache"
+        );
+    }
 }
