@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Extension
+
+* Start the server-binary exec-bit fix-up (stat/chmod outside Windows) and the rules-cache resolve together on activation and wait for both before creating the language client, instead of running them back to back. Windows behavior, the missing-binary early return, logged-and-continued stat/chmod errors, and rules-cache rejection are unchanged. (#1155)
+
 ### 4.0.5
 
 #### Extension
