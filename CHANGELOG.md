@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Fence pass 2's chunked parallel validation and the open-document uses region with `tokio::task::block_in_place`, as pass 1 already does, so their Rayon regions run as blocking sections on the multi-threaded runtime instead of blocking the async worker they start on while unrelated requests wait. Mapping order, chunk yielding, cancellation and diagnostics are unchanged. (#1152)
+
 ### 4.0.5
 
 #### Extension
