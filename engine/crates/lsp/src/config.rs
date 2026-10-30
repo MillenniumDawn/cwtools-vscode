@@ -638,6 +638,7 @@ impl Backend {
                         "writeDiagnosticsBaseline".to_string(),
                         "getGraphData".to_string(),
                         "getGraphEntityAtPosition".to_string(),
+                        "getSetupReport".to_string(),
                     ],
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: Some(true),
@@ -1263,6 +1264,9 @@ impl Backend {
             "getGraphEntityAtPosition" => {
                 self.get_graph_entity_at_position(&params.arguments).await
             }
+            "getSetupReport" => Ok(Some(tokio::task::block_in_place(|| {
+                self.get_setup_report()
+            }))),
             other => Err(tower_lsp::jsonrpc::Error::invalid_params(format!(
                 "unknown command: {other}"
             ))),
@@ -1455,15 +1459,7 @@ impl Backend {
             ScanOutcome::Ran => {
                 let summary = self.state.last_scan_summary.lock().clone();
                 match summary {
-                    Some(s) => serde_json::json!({
-                        "totalFiles": s.total_files,
-                        "validatedFiles": s.validated_files,
-                        "filesWithErrors": s.files_with_errors,
-                        "totalErrors": s.total_errors,
-                        "totalWarnings": s.total_warnings,
-                        "totalInfos": s.total_infos,
-                        "totalHints": s.total_hints,
-                    }),
+                    Some(s) => s.to_json(),
                     None => serde_json::json!({
                         "message": "workspace validation did not complete",
                     }),

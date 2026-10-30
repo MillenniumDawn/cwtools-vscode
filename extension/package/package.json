@@ -108,6 +108,11 @@
           "when": "cwtoolsWebview == true",
           "command": "cwtools.saveGraphJson",
           "group": "navigation"
+        },
+        {
+          "when": "resourceScheme == cwtools-setup-report",
+          "command": "cwtools.copySetupReport",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
@@ -138,6 +143,14 @@
         {
           "command": "validateWorkspace",
           "when": "cwtoolsValidateWorkspaceAvailable"
+        },
+        {
+          "command": "cwtools.showSetupReport",
+          "when": "cwtoolsEnabled"
+        },
+        {
+          "command": "cwtools.copySetupReport",
+          "when": "resourceScheme == cwtools-setup-report"
         }
       ]
     },
@@ -201,6 +214,17 @@
         "command": "cwtools.showOutput",
         "title": "%commands.showOutput.title%",
         "category": "cwtools"
+      },
+      {
+        "command": "cwtools.showSetupReport",
+        "title": "%commands.showSetupReport.title%",
+        "category": "cwtools"
+      },
+      {
+        "command": "cwtools.copySetupReport",
+        "title": "%commands.copySetupReport.title%",
+        "category": "cwtools",
+        "icon": "$(copy)"
       },
       {
         "command": "cwtools.writeDiagnosticsBaseline",

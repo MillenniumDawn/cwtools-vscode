@@ -37,6 +37,7 @@ mod paths;
 mod scan;
 mod semantic;
 mod server;
+mod setup_report;
 mod state;
 #[cfg(test)]
 mod testing;

@@ -2,10 +2,12 @@
 
 #### Extension
 
+* Add **Show Setup Report**, which opens a read-only document for support triage: the detected game and how it was detected, the rules directory in use (the `rules_folder` setting or the managed clone) with its git HEAD, a `rules_folder` that does not exist, the base-game directory and its cache state, index sizes, the last scan, the server binary and version, and the ignore lists. A button in the report's title bar copies it. The report still opens when the server is stopped or missing, with the server's part marked unavailable. (#610)
 * Start the server-binary exec-bit fix-up (stat/chmod outside Windows) and the rules-cache resolve together on activation and wait for both before creating the language client, instead of running them back to back. Windows behavior, the missing-binary early return, logged-and-continued stat/chmod errors, and rules-cache rejection are unchanged. (#1155)
 
 #### Engine
 
+* Add the `getSetupReport` command, which returns the setup the server is running with: game, workspace roots, rules directory, base-game directory, index sizes, the last scan summary and the ignore lists. It reports the base-game cache as present, absent (no cache for the game), stale (only caches for another install or ruleset), version-mismatched or unreadable, which the log never told apart. It reads this when asked and records nothing during scans, validation or edits. (#610)
 * Canonicalize the base-game source paths on the rayon pool when merging the vanilla index, once there are 512 or more distinct files; smaller sets keep the serial loop. Paths that are missing or outside the install root are still dropped, and instance order and the resulting URIs are unchanged. (#1165)
 * Fence pass 2's chunked parallel validation and the open-document uses region with `tokio::task::block_in_place`, as pass 1 already does, so their Rayon regions run as blocking sections on the multi-threaded runtime instead of blocking the async worker they start on while unrelated requests wait. Mapping order, chunk yielding, cancellation and diagnostics are unchanged. (#1152)
 * Merging the base-game index no longer deep-copies its cached auxiliary payload on every workspace scan and re-merge. The payload is file paths, variable names, and scripted loc and scripted GUI name lists. The retained data is shared by reference until each consumer installs it, so repeated scans and file-index rebuilds stop paying a full copy of the base-game payload. (#1154)

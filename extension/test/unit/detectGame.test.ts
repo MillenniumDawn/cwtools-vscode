@@ -54,6 +54,7 @@ suite("detectGameAndVanilla", () => {
 	test("pins generic detection to the discovered game executable", async () => {
 		assert.deepStrictEqual(await detectGameAndVanilla(root), {
 			languageId: "hoi4",
+			source: "executable",
 		});
 		assert.strictEqual(mocks.findFiles.mock.calls.length, GAMES.length);
 	});
@@ -69,7 +70,7 @@ suite("detectGameAndVanilla", () => {
 				mocks.findFiles.mockClear();
 				assert.deepStrictEqual(await detectGameAndVanilla({
 					uri: { fsPath: folder }, name: "Millennium-Dawn", index: 0,
-				} as never), { languageId: "hoi4" });
+				} as never), { languageId: "hoi4", source: "markers" });
 				assert.strictEqual(mocks.findFiles.mock.calls.length, 0);
 			}
 		} finally {
@@ -84,11 +85,20 @@ suite("detectGameAndVanilla", () => {
 		try {
 			assert.deepStrictEqual(await detectGameAndVanilla({
 				uri: { fsPath: folder }, name: "HOI4_Mod", index: 0,
-			} as never), { languageId: "hoi4" });
+			} as never), { languageId: "hoi4", source: "markers" });
 			assert.strictEqual(mocks.findFiles.mock.calls.length, 0);
 		} finally {
 			await fs.rm(temp, { recursive: true, force: true });
 		}
+	});
+
+	test("falls back to the generic language when nothing identifies the game", async () => {
+		mocks.findFiles.mockResolvedValue([]);
+
+		assert.deepStrictEqual(await detectGameAndVanilla(root), {
+			languageId: "paradox",
+			source: "default",
+		});
 	});
 
 	test("searches for executables under the selected workspace root", async () => {

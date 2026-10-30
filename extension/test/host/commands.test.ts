@@ -1,5 +1,6 @@
 import * as assert from "assert";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as sinon from "sinon";
 import * as vscode from "vscode";
@@ -392,5 +393,73 @@ suite("lspClient user-facing results", function () {
 		}
 		assert.ok(await waitUntil(() => prompts().length >= 2), "restoring the setting should prompt again");
 		assert.strictEqual(reload.callCount, 1, "declining the prompt must not reload");
+	});
+});
+
+suite("setup report", function () {
+	this.timeout(120000);
+
+	suiteSetup(async function () {
+		const api = await activate();
+		assert.ok(api, "activation API should be exposed");
+		assert.ok(
+			await waitForServerReady(api),
+			`server never finished its initial scan, last status: ${api.serverStatusText()}`,
+		);
+	});
+
+	teardown(async function () {
+		await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+	});
+
+	async function showReport(): Promise<vscode.TextDocument> {
+		await vscode.commands.executeCommand("cwtools.showSetupReport");
+		const document = vscode.window.activeTextEditor?.document;
+		assert.ok(document, "the report should open in the active editor");
+		assert.strictEqual(document.uri.scheme, "cwtools-setup-report");
+		return document;
+	}
+
+	test("names the resolved rules directory and carries the server's answers", async function () {
+		const api = await activate();
+		const rulesDir = path.join(api!.rulesCacheRoot()!, "stellaris");
+
+		const text = (await showReport()).getText();
+
+		assert.ok(text.includes(`- Directory: \`${rulesDir}\``), text);
+		assert.ok(text.includes("- Source: managed clone"), text);
+		assert.match(text, /- Server: running, version \d+\.\d+\.\d+/);
+		assert.match(text, /## Last scan\n- Validated \d+ of \d+ files/);
+		assert.match(text, /- Cache: (present|absent|stale|version mismatch|unreadable|unavailable)/);
+	});
+
+	test("says so when rules_folder points at a path that does not exist", async function () {
+		const missing = path.join(os.tmpdir(), "cwtools-setup-report-no-such-rules");
+		const previous = process.env.CWTOOLS_TEST_RULES_FOLDER;
+		process.env.CWTOOLS_TEST_RULES_FOLDER = missing;
+		let text: string;
+		try {
+			text = (await showReport()).getText();
+		} finally {
+			if (previous === undefined) {
+				delete process.env.CWTOOLS_TEST_RULES_FOLDER;
+			} else {
+				process.env.CWTOOLS_TEST_RULES_FOLDER = previous;
+			}
+		}
+
+		assert.ok(
+			text.includes(`- rules_folder setting: \`${missing}\` does not exist (tried \`${missing}\`)`),
+			text,
+		);
+	});
+
+	test("cwtools.copySetupReport puts the report text on the clipboard", async function () {
+		const text = (await showReport()).getText();
+		await vscode.env.clipboard.writeText("");
+
+		await vscode.commands.executeCommand("cwtools.copySetupReport");
+
+		assert.strictEqual(await vscode.env.clipboard.readText(), text);
 	});
 });

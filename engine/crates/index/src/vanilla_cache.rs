@@ -216,6 +216,78 @@ pub fn is_cache_file(path: &Path) -> bool {
         && &header == MAGIC
 }
 
+/// What the cache directory holds for one game and the cache file the install and rules
+/// currently expect. Read from the file header only; the body is checked when it loads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheStatus {
+    Present,
+    /// No cache file for this game at all.
+    Absent,
+    /// No file at the expected path, but caches for other fingerprints of this game exist:
+    /// the install or the rules changed since they were written.
+    Stale {
+        others: usize,
+    },
+    /// The expected file was written by another format version.
+    VersionMismatch {
+        found: u8,
+        expected: u8,
+    },
+    /// The expected file exists but is not a readable cache.
+    Unreadable(String),
+}
+
+/// Classify the cache file `expected` (as [`cache_file_name`] names it) for `game`.
+pub fn cache_status(expected: &Path, game: &str) -> CacheStatus {
+    let mut header = [0u8; MAGIC.len() + 1];
+    match std::fs::File::open(expected) {
+        Ok(mut file) => {
+            if let Err(error) = file.read_exact(&mut header) {
+                return CacheStatus::Unreadable(error.to_string());
+            }
+            if &header[..MAGIC.len()] != MAGIC {
+                return CacheStatus::Unreadable("not a vanilla cache file".to_string());
+            }
+            let found = header[MAGIC.len()];
+            if found == CACHE_VERSION {
+                CacheStatus::Present
+            } else {
+                CacheStatus::VersionMismatch {
+                    found,
+                    expected: CACHE_VERSION,
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match other_caches(expected, game) {
+                0 => CacheStatus::Absent,
+                others => CacheStatus::Stale { others },
+            }
+        }
+        Err(error) => CacheStatus::Unreadable(error.to_string()),
+    }
+}
+
+fn other_caches(expected: &Path, game: &str) -> usize {
+    let Some(dir) = expected.parent() else {
+        return 0;
+    };
+    let prefix = cache_file_name(game, "");
+    let prefix = prefix.strip_suffix(FILE_EXT).unwrap_or(&prefix);
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(prefix) && name.ends_with(FILE_EXT))
+                && is_cache_file(&entry.path())
+        })
+        .count()
+}
+
 fn write_cache(
     instances: Vec<CachedInstance>,
     game: &str,
@@ -708,6 +780,96 @@ mod tests {
         let err = load(&path).unwrap_err();
         assert!(err.to_string().contains("unsupported"));
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn save_empty(dir: &Path, game: &str, fingerprint: &str) -> std::path::PathBuf {
+        let path = dir.join(cache_file_name(game, fingerprint));
+        save_per_type(
+            &HashMap::new(),
+            game,
+            fingerprint,
+            &path,
+            VanillaCacheAux::default(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn cache_status_present_for_the_expected_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = save_empty(tmp.path(), "hoi4", "fp-now");
+
+        assert_eq!(cache_status(&path, "hoi4"), CacheStatus::Present);
+    }
+
+    #[test]
+    fn cache_status_absent_without_any_cache_for_the_game() {
+        let tmp = tempfile::tempdir().unwrap();
+        save_empty(tmp.path(), "stellaris", "fp-now");
+        std::fs::write(tmp.path().join("vanilla-hoi4-notes.txt"), MAGIC).unwrap();
+        let expected = tmp.path().join(cache_file_name("hoi4", "fp-now"));
+
+        assert_eq!(cache_status(&expected, "hoi4"), CacheStatus::Absent);
+    }
+
+    #[test]
+    fn cache_status_absent_when_the_directory_does_not_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let expected = tmp
+            .path()
+            .join("missing")
+            .join(cache_file_name("hoi4", "fp"));
+
+        assert_eq!(cache_status(&expected, "hoi4"), CacheStatus::Absent);
+    }
+
+    #[test]
+    fn cache_status_stale_when_only_other_fingerprints_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        save_empty(tmp.path(), "hoi4", "fp-old");
+        save_empty(tmp.path(), "hoi4", "fp-older");
+        save_empty(tmp.path(), "stellaris", "fp-now");
+        let expected = tmp.path().join(cache_file_name("hoi4", "fp-now"));
+
+        assert_eq!(
+            cache_status(&expected, "hoi4"),
+            CacheStatus::Stale { others: 2 }
+        );
+    }
+
+    #[test]
+    fn cache_status_version_mismatch_names_both_versions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = save_empty(tmp.path(), "hoi4", "fp-now");
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[MAGIC.len()] = CACHE_VERSION - 1;
+        std::fs::write(&path, &bytes).unwrap();
+
+        assert_eq!(
+            cache_status(&path, "hoi4"),
+            CacheStatus::VersionMismatch {
+                found: CACHE_VERSION - 1,
+                expected: CACHE_VERSION,
+            }
+        );
+    }
+
+    #[test]
+    fn cache_status_unreadable_for_a_file_that_is_not_a_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(cache_file_name("hoi4", "fp-now"));
+        std::fs::write(&path, b"JPEG, not a cache").unwrap();
+        assert!(matches!(
+            cache_status(&path, "hoi4"),
+            CacheStatus::Unreadable(_)
+        ));
+
+        std::fs::write(&path, b"CW").unwrap();
+        assert!(matches!(
+            cache_status(&path, "hoi4"),
+            CacheStatus::Unreadable(_)
+        ));
     }
 
     fn sample_cache_bytes() -> Vec<u8> {

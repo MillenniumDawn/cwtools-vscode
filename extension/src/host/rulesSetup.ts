@@ -34,6 +34,17 @@ export interface RulesSetup {
 	fetchUpstream: boolean;
 }
 
+// `setting` is the rules_folder value as written, undefined when unset or blank.
+export function readRulesFolderSetting(workspaceRoot: string) {
+	const raw =
+		process.env.CWTOOLS_TEST_RULES_FOLDER ??
+		workspace.getConfiguration("cwtools").get<string>("rules_folder");
+	return {
+		setting: raw !== undefined && raw.trim() !== "" ? raw : undefined,
+		resolved: resolveRulesFolder(raw, { workspaceRoot }),
+	};
+}
+
 // Resolve the rules cache path (after creating the dir). No network access, so
 // activation and the LSP start are never blocked here.
 export async function resolveRulesCache(
@@ -54,11 +65,8 @@ export async function resolveRulesCache(
 	await fsPromises.mkdir(cacheDir, { recursive: true });
 	const languageRulesCache = path.join(cacheDir, language);
 
-	const rawManualRules =
-		process.env.CWTOOLS_TEST_RULES_FOLDER ??
-		workspace.getConfiguration("cwtools").get<string>("rules_folder");
-	const manualRules = resolveRulesFolder(rawManualRules, { workspaceRoot });
-	const hasManualRules = !!(rawManualRules && rawManualRules.trim() !== "");
+	const { setting: rawManualRules, resolved: manualRules } =
+		readRulesFolderSetting(workspaceRoot);
 	const effectiveRulesCache = manualRules.existed
 		? manualRules.path!
 		: languageRulesCache;
@@ -68,7 +76,7 @@ export async function resolveRulesCache(
 	}
 	if (manualRules.existed) {
 		logInfo(`Using manual rules folder: ${manualRules.path}`);
-	} else if (hasManualRules) {
+	} else if (rawManualRules !== undefined) {
 		// rules_folder is set but unusable. Warn loudly instead of silently
 		// cloning upstream, so the user knows their local rules were ignored.
 		logWarn(
@@ -273,7 +281,7 @@ async function reviewedRulesRepo(
 
 // The commit the cached rules sit on, or null when there's nothing usable
 // there, including a half-written clone that the next fetch rebuilds.
-async function currentRulesHead(dir: string): Promise<string | null> {
+export async function currentRulesHead(dir: string): Promise<string | null> {
 	if (!fsExistsSync(path.join(dir, ".git"))) {
 		return null;
 	}

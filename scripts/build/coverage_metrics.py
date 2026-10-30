@@ -34,6 +34,7 @@ HOST_COVERAGE_DROPS = (
     "extension/src/host/rulesManifest.ts",
     "extension/src/host/rulesSetup.ts",
     "extension/src/host/serverBlockedDialog.ts",
+    "extension/src/host/setupReportText.ts",
     "extension/src/host/startupPreparation.ts",
     "extension/src/host/trustedPaths.ts",
     "extension/src/host/watchedFiles.ts",

@@ -89,6 +89,18 @@ pub(crate) struct VanillaLoc {
 
 pub(crate) type VanillaLocKey = (std::path::PathBuf, String, Option<Vec<Lang>>, Lang, bool);
 
+/// The fingerprint the editor keys its base-game cache by, for the install at `dir`.
+pub(crate) fn vanilla_fingerprint(
+    dir: &std::path::Path,
+    ruleset: &RuleSet,
+    shadow: Option<&cwtools_file_manager::file_manager::LayerShadow>,
+) -> String {
+    shadow.map_or_else(
+        || cwtools_info::vanilla_cache::combined_fingerprint(dir, ruleset),
+        |shadow| cwtools_driver::replacement_aware_vanilla_fingerprint(dir, ruleset, shadow),
+    )
+}
+
 impl VanillaLoc {
     pub(crate) fn build(
         service: &cwtools_localization::LocService,
@@ -351,10 +363,7 @@ impl Backend {
             }
         };
 
-        let fingerprint = replacement_shadow.as_ref().map_or_else(
-            || cwtools_info::vanilla_cache::combined_fingerprint(&dir, &ruleset),
-            |shadow| cwtools_driver::replacement_aware_vanilla_fingerprint(&dir, &ruleset, shadow),
-        );
+        let fingerprint = vanilla_fingerprint(&dir, &ruleset, replacement_shadow.as_ref());
         let cache_path = self.vanilla_cache_path(&game, &fingerprint);
 
         if !force_rebuild
