@@ -4,9 +4,11 @@
 //! type's entire instance list per call (#129).
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use cwtools_index::vanilla_cache::{self, VanillaCacheAux};
 use cwtools_index::{SourceLocation, TypeIndex, TypeInstance};
 use std::collections::HashMap;
 use std::hint::black_box;
+use std::sync::Arc;
 
 const FILE_COUNT: usize = 400;
 const TYPES: &[&str] = &["state", "character", "technology"];
@@ -127,12 +129,50 @@ fn bench_build_and_clone(c: &mut Criterion) {
     });
 }
 
+// A base-game sized `.cwv`: the cost under test is the per-instance type and path strings.
+fn bench_vanilla_cache_load(c: &mut Criterion) {
+    const INSTANCES: usize = 100_000;
+    const FILES: usize = 4_000;
+    let uris: Vec<Arc<str>> = (0..FILES)
+        .map(|index| {
+            Arc::from(format!(
+                "C:/Program Files (x86)/Steam/steamapps/common/Hearts of Iron IV/common/{index}.txt"
+            ))
+        })
+        .collect();
+    let mut per_type: HashMap<String, Vec<(Arc<str>, TypeInstance)>> = HashMap::new();
+    for i in 0..INSTANCES {
+        let type_name = TYPES[i % TYPES.len()];
+        let file_index = i % FILES;
+        per_type.entry(type_name.to_string()).or_default().push((
+            Arc::clone(&uris[file_index]),
+            instance(type_name, file_index, i / FILES),
+        ));
+    }
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("vanilla-bench.cwv");
+    let saved = vanilla_cache::save_per_type(
+        &per_type,
+        "hoi4",
+        "bench",
+        &path,
+        VanillaCacheAux::default(),
+    )
+    .expect("save cache");
+    assert_eq!(saved, INSTANCES);
+
+    c.bench_function("vanilla_cache/load/instances_100000", |b| {
+        b.iter_with_large_drop(|| vanilla_cache::load(black_box(&path)).expect("load cache"))
+    });
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(30);
     targets = bench_instances_in_file,
         bench_remove_file,
         bench_name_lookups,
-        bench_build_and_clone
+        bench_build_and_clone,
+        bench_vanilla_cache_load
 }
 criterion_main!(benches);

@@ -12,6 +12,7 @@
 * Take the per-file stat snapshot behind the workspace, localisation and parent-mod scan fingerprints on the rayon pool for large file lists; small lists keep the original streaming stat/hash fold and the digest is unchanged. (#1153)
 * Merge the workspace scan's `<type>` uses outside the `type_uses` write lock, so an edit no longer waits for the whole-workspace merge. The lock now covers only the retain, the inserts and the retained open-buffer entries. The scan also seeds the merged-uses cache at the revision it publishes, so the open-document revalidation that follows reuses it instead of merging the whole workspace again. Unused-instance diagnostics are unchanged. (#1163)
 * List each parse-cache directory once when pruning. A `.cwe` sidecar's size now comes from the same directory listing as its `.cwb` instead of a separate stat per entry, which opened every sidecar on Windows. The global prune reuses the listing of the directory just pruned, and the empty-directory sweep re-lists only a directory that has no entries left. Both entry caps, both byte caps (sidecar bytes included), eviction order and the ownership checks are unchanged. (#1164)
+* Load the base-game cache by validating and reading the archive in place instead of deserializing all of it. Type names and file paths are allocated once per distinct value instead of once per instance, and no deserialized copy of the whole cache is built alongside the index. The `.cwv` format, its version, the instance order and the loaded data are unchanged. (#1166)
 
 ### 4.0.5
 

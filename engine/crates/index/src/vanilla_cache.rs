@@ -22,7 +22,7 @@ const CACHE_VERSION: u8 = 15;
 const MAX_CACHE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_CACHE_DECODED_BYTES: u64 = 512 * 1024 * 1024;
 
-#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(rkyv::Archive, rkyv::Serialize)]
 struct CachedInstance {
     t: String,
     n: String,
@@ -34,7 +34,7 @@ struct CachedInstance {
     p: Option<String>,
 }
 
-#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+#[derive(rkyv::Archive, rkyv::Serialize)]
 struct VanillaCacheFile {
     game: String,
     /// Game-version fingerprint (see [`fingerprint`]). A cache is valid only for
@@ -331,50 +331,66 @@ pub fn load(path: &Path) -> std::io::Result<(String, String, VanillaCacheData)> 
             CACHE_VERSION
         )));
     }
-    let mut bytes = Vec::new();
+    let mut bytes = rkyv::util::AlignedVec::<16>::new();
     decode_capped(
         &data[MAGIC.len() + 1..],
         MAX_CACHE_DECODED_BYTES,
         &mut bytes,
     )?;
-    let cache: VanillaCacheFile = rkyv::from_bytes::<VanillaCacheFile, rkyv::rancor::Error>(&bytes)
+    let archived = rkyv::access::<ArchivedVanillaCacheFile, rkyv::rancor::Error>(&bytes)
         .map_err(std::io::Error::other)?;
-    let mut per_type: HashMap<String, Vec<(Arc<str>, TypeInstance)>> = HashMap::new();
-    let mut file_uris: HashMap<String, Arc<str>> = HashMap::new();
-    for ci in cache.instances {
+
+    // Keyed by archive-borrowed strings so each path and type name is allocated once.
+    let mut per_type: HashMap<&str, Vec<(Arc<str>, TypeInstance)>> = HashMap::new();
+    let mut file_uris: HashMap<&str, Arc<str>> = HashMap::new();
+    for ci in archived.instances.iter() {
         let file_uri = file_uris
-            .entry(ci.f)
-            .or_insert_with_key(|path| Arc::from(path.as_str()));
-        per_type.entry(ci.t).or_default().push((
+            .entry(ci.f.as_str())
+            .or_insert_with_key(|path| Arc::from(*path));
+        per_type.entry(ci.t.as_str()).or_default().push((
             Arc::clone(file_uri),
             TypeInstance {
-                name: ci.n,
+                name: ci.n.as_str().to_owned(),
                 location: SourceLocation {
-                    line: ci.l,
-                    col: ci.c,
-                    end: (ci.el, ci.ec),
+                    line: ci.l.to_native(),
+                    col: ci.c.to_native(),
+                    end: (ci.el.to_native(), ci.ec.to_native()),
                 },
-                primary_loc_key: ci.p,
+                primary_loc_key: ci.p.as_deref().map(str::to_owned),
                 required_loc_keys: Vec::new(),
             },
         ));
     }
+    let per_type = per_type
+        .into_iter()
+        .map(|(type_name, instances)| (type_name.to_owned(), instances))
+        .collect();
+    let aux = restore_aux(archived).map_err(std::io::Error::other)?;
     Ok((
-        cache.game,
-        cache.fingerprint,
-        VanillaCacheData {
-            per_type,
-            aux: VanillaCacheAux {
-                loc_keys: cache.loc_keys,
-                file_paths: cache.file_paths,
-                var_names: cache.var_names,
-                complex_enum_values: cache.complex_enum_values,
-                value_set_values: cache.value_set_values,
-                scripted_loc_names: cache.scripted_loc_names,
-                scripted_gui_names: cache.scripted_gui_names,
-            },
-        },
+        archived.game.as_str().to_owned(),
+        archived.fingerprint.as_str().to_owned(),
+        VanillaCacheData { per_type, aux },
     ))
+}
+
+fn restore_aux(
+    archived: &ArchivedVanillaCacheFile,
+) -> Result<VanillaCacheAux, rkyv::rancor::Error> {
+    Ok(VanillaCacheAux {
+        loc_keys: rkyv::deserialize::<_, rkyv::rancor::Error>(&archived.loc_keys)?,
+        file_paths: rkyv::deserialize::<_, rkyv::rancor::Error>(&archived.file_paths)?,
+        var_names: rkyv::deserialize::<_, rkyv::rancor::Error>(&archived.var_names)?,
+        complex_enum_values: rkyv::deserialize::<_, rkyv::rancor::Error>(
+            &archived.complex_enum_values,
+        )?,
+        value_set_values: rkyv::deserialize::<_, rkyv::rancor::Error>(&archived.value_set_values)?,
+        scripted_loc_names: rkyv::deserialize::<_, rkyv::rancor::Error>(
+            &archived.scripted_loc_names,
+        )?,
+        scripted_gui_names: rkyv::deserialize::<_, rkyv::rancor::Error>(
+            &archived.scripted_gui_names,
+        )?,
+    })
 }
 
 #[cfg(test)]
@@ -937,6 +953,79 @@ mod tests {
         bytes.push(CACHE_VERSION);
         bytes.extend_from_slice(b"this is not a zstd frame, it is prose");
         assert!(load_bytes(&bytes).is_err());
+    }
+
+    /// A mangled archive inside a well-formed zstd frame passes the frame checks, so only
+    /// rkyv's validation stands between it and an out-of-bounds read.
+    #[test]
+    fn a_mangled_archive_in_a_valid_frame_is_a_clean_miss() {
+        let bytes = sample_cache_bytes();
+        let mut raw = Vec::new();
+        decode_capped(&bytes[MAGIC.len() + 1..], MAX_CACHE_DECODED_BYTES, &mut raw).unwrap();
+        let reframe = |body: &[u8]| {
+            let mut file = MAGIC.to_vec();
+            file.push(CACHE_VERSION);
+            file.extend_from_slice(&zstd::encode_all(body, ZSTD_LEVEL).unwrap());
+            file
+        };
+        // The root sits at the end of the archive, so garbage there points it anywhere.
+        let mut bad_root = raw.clone();
+        let tail = bad_root.len() - 16;
+        bad_root[tail..].fill(0xff);
+
+        let cases = [
+            ("empty", Vec::new()),
+            ("all 0xff", vec![0xff; raw.len()]),
+            ("bad root", bad_root),
+            ("half", raw[..raw.len() / 2].to_vec()),
+            ("one byte short", raw[..raw.len() - 1].to_vec()),
+        ];
+        for (name, body) in cases {
+            assert!(
+                load_bytes(&reframe(&body)).is_err(),
+                "{name} archive loaded as valid"
+            );
+        }
+    }
+
+    #[test]
+    fn instances_keep_their_order_and_share_one_path_allocation() {
+        let mut per: HashMap<String, Vec<(Arc<str>, TypeInstance)>> = HashMap::new();
+        let instance = |name: &str, line: u32| TypeInstance {
+            name: name.into(),
+            location: SourceLocation {
+                line,
+                col: 0,
+                end: (line, 1),
+            },
+            primary_loc_key: None,
+            required_loc_keys: Vec::new(),
+        };
+        let shared: Arc<str> = Arc::from("events/shared.txt");
+        let other: Arc<str> = Arc::from("events/other.txt");
+        per.insert(
+            "event".to_string(),
+            vec![
+                (Arc::clone(&shared), instance("e_3", 3)),
+                (Arc::clone(&other), instance("e_1", 1)),
+                (Arc::clone(&shared), instance("e_2", 2)),
+            ],
+        );
+        per.insert(
+            "decision".to_string(),
+            vec![(Arc::clone(&shared), instance("d_1", 1))],
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(cache_file_name("hoi4", "order"));
+        save_per_type(&per, "hoi4", "order", &path, VanillaCacheAux::default()).unwrap();
+
+        let (_, _, loaded) = load(&path).unwrap();
+        let events = &loaded.per_type["event"];
+        let names: Vec<_> = events.iter().map(|(_, i)| i.name.as_str()).collect();
+        assert_eq!(names, ["e_3", "e_1", "e_2"]);
+        assert!(Arc::ptr_eq(&events[0].0, &events[2].0));
+        assert!(!Arc::ptr_eq(&events[0].0, &events[1].0));
+        assert!(Arc::ptr_eq(&events[0].0, &loaded.per_type["decision"][0].0));
     }
 
     #[test]
