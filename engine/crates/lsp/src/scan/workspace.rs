@@ -97,6 +97,7 @@ struct ChunkMapper<F, Before, After> {
 /// Map four lock-step slices in parallel, `chunk` at a time, yielding between chunks so a long
 /// scan stays cancellable. The result is identical for every `chunk` size (#328). `None`
 /// means `cancel` latched: a partial `Vec` would publish empty diagnostics over unvalidated files.
+/// Needs the multi-threaded runtime, because each chunk runs under `block_in_place`.
 async fn chunked_par_filter_map<A, B, C, D, R, F, Before, After>(
     first: &[A],
     second: &[B],
@@ -139,13 +140,15 @@ where
         if cancel.is_cancelled() {
             return None;
         }
-        let mapped: Vec<R> = a
-            .par_iter()
-            .zip(b.par_iter())
-            .zip(c.par_iter())
-            .zip(d.par_iter())
-            .filter_map(|(((a, b), c), d)| map(a, b, c, d))
-            .collect();
+        // Rayon on an async worker blocks its siblings: fence like pass 1 (#1152).
+        let mapped: Vec<R> = tokio::task::block_in_place(|| {
+            a.par_iter()
+                .zip(b.par_iter())
+                .zip(c.par_iter())
+                .zip(d.par_iter())
+                .filter_map(|(((a, b), c), d)| map(a, b, c, d))
+                .collect()
+        });
         out.extend(mapped);
         after_chunk();
         tokio::task::yield_now().await;
@@ -1048,13 +1051,18 @@ impl Backend {
                     .cloned()
                     .collect()
             };
-            let open_uses: Vec<(String, UsedInstances)> = unrecorded
-                .par_iter()
-                .map(|(u, ast)| {
-                    let (_, used) = validate_prepared_tracking_uses(ast, u, prepared);
-                    (u.clone(), used)
-                })
-                .collect();
+            // Rayon on an async worker blocks its siblings: fence like pass 1 (#1152).
+            let open_uses: Vec<(String, UsedInstances)> = tokio::task::block_in_place(|| {
+                unrecorded
+                    .par_iter()
+                    .map(|(u, ast)| {
+                        #[cfg(test)]
+                        self.hold(crate::state::HoldPoint::OpenUses);
+                        let (_, used) = validate_prepared_tracking_uses(ast, u, prepared);
+                        (u.clone(), used)
+                    })
+                    .collect()
+            });
             let merged = {
                 let mut store = self.state.type_uses.write();
                 store.retain(|uri, _| open_uris.contains(uri));
@@ -1454,7 +1462,7 @@ mod tests {
     use cwtools_validation::references::UsedInstances;
 
     use crate::command_progress::CommandProgress;
-    use crate::state::{DocumentState, HoldGate, HoldPoint};
+    use crate::state::{DocumentState, HoldGate, HoldPoint, ParsedDoc};
     use crate::testing::{test_backend, test_backend_with_socket};
 
     const SENTINEL_URI: &str = "sentinel://uses";
@@ -1785,7 +1793,7 @@ mod tests {
 
     const SIZES: [usize; 7] = [0, 1, 255, 256, 257, 300, 512];
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn chunked_walk_matches_unchunked_at_every_boundary() {
         for n in SIZES {
             let (a, b, c, d) = inputs(n);
@@ -1803,7 +1811,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn chunked_walk_is_independent_of_chunk_size() {
         let unchunked = walk(300, usize::MAX).await;
         for chunk in [1, 2, 7, 255, 256, 257, 299, 300, 301] {
@@ -1815,7 +1823,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn cancelled_walk_returns_none_not_a_partial_result() {
         let (a, b, c, d) = inputs(300);
         let cancelled = CancelFlag::cancelled_for_tests();
@@ -1834,6 +1842,170 @@ mod tests {
         )
         .await;
         assert_eq!(out, None);
+    }
+
+    /// OS-side wait, so it never depends on a worker being free to poll it.
+    fn wait_until(predicate: impl Fn() -> bool, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while !predicate() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        predicate()
+    }
+
+    const HOLD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    const SIBLING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// Runs a chunked walk whose mapper parks at `Pass2Mid` until the test releases `gate`,
+    /// so a Rayon region stays open while the test inspects the rest of the runtime (#1152).
+    fn spawn_chunk_holder(
+        rt: &tokio::runtime::Runtime,
+        gate: Arc<HoldGate>,
+    ) -> tokio::task::JoinHandle<Option<Vec<Row>>> {
+        rt.spawn(async move {
+            let (a, b, c, d) = inputs(4);
+            chunked_par_filter_map(
+                &a,
+                &b,
+                &c,
+                &d,
+                PASS2_CHUNK_SIZE,
+                &CancelFlag::inert(),
+                ChunkMapper {
+                    map: move |_a: &usize, _b: &Option<usize>, _c: &Option<u64>, _d: &u32| {
+                        gate.hold(HoldPoint::Pass2Mid);
+                        None
+                    },
+                    before_chunk: || {},
+                    after_chunk: || {},
+                },
+            )
+            .await
+        })
+    }
+
+    /// While a pass 2 chunk's mapping region is held, an unrelated task on the
+    /// same runtime must still progress (#1152). Red before the fence.
+    #[test]
+    fn held_chunk_region_leaves_the_runtime_for_sibling_tasks() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let gate = HoldGate::new(HoldPoint::Pass2Mid);
+        let chunk = spawn_chunk_holder(&rt, gate.clone());
+        // The probe starts only once the region holds the only worker.
+        let arrived = wait_until(|| gate.has_arrived(), HOLD_TIMEOUT);
+        let probe_done = Arc::new(AtomicBool::new(false));
+        let probe = {
+            let done = probe_done.clone();
+            rt.spawn(async move {
+                done.store(true, Ordering::Relaxed);
+            })
+        };
+        let progressed = wait_until(|| probe_done.load(Ordering::Relaxed), SIBLING_TIMEOUT);
+        // Release before asserting so a failing run cannot wedge the runtime drop.
+        gate.release();
+        rt.block_on(async {
+            probe.await.unwrap();
+            assert_eq!(chunk.await.unwrap(), Some(Vec::new()));
+        });
+        rt.shutdown_timeout(SIBLING_TIMEOUT);
+        assert!(
+            arrived,
+            "the chunk region must be held while the probe starts"
+        );
+        assert!(
+            progressed,
+            "sibling async work must progress while the chunked mapping region is held"
+        );
+    }
+
+    /// While the open-uses mapper for the fixture's buffer is held by a real
+    /// scan, an unrelated task on the same runtime must still progress
+    /// (#1152). Red before the fence, green after it.
+    #[test]
+    fn held_open_uses_region_leaves_the_runtime_for_sibling_tasks() {
+        // Needs more fixture files than PASS2_CHUNK_SIZE: the per-chunk yield_now puts the scan
+        // back on the core-holding worker before the open-uses region.
+        let gate = HoldGate::new(HoldPoint::OpenUses);
+        let (backend, tmp) = setup_workspace(Some(gate.clone()));
+        let open_uri = Url::from_file_path(tmp.path().join("open_buffer.txt"))
+            .unwrap()
+            .to_string();
+        let text = "thing_open = { }\n";
+        let ast = Arc::new(cwtools_parser::parser::parse_string(
+            text,
+            &backend.state.string_table,
+        ));
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                open_uri.clone(),
+                ParsedDoc {
+                    version: 0,
+                    text: Arc::from(text),
+                    ast: Some(ast),
+                    ast_version: Some(0),
+                    ast_source_bytes: text.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("open the buffer whose uses the scan must record");
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let scan_backend = clone_backend(&backend);
+        let scan = rt.spawn(async move {
+            let progress = CommandProgress::for_tests(
+                scan_backend.state.clone(),
+                Arc::new(AtomicBool::new(false)),
+            );
+            scan_backend
+                .validate_entire_workspace_inner(
+                    false,
+                    Some(&progress),
+                    DEFAULT_WORKSPACE_PUBLISH_THROTTLE,
+                )
+                .await
+        });
+        let arrived = wait_until(|| gate.has_arrived(), HOLD_TIMEOUT);
+        // The probe starts only once the region holds the only worker.
+        let probe_done = Arc::new(AtomicBool::new(false));
+        let probe = {
+            let done = probe_done.clone();
+            rt.spawn(async move {
+                done.store(true, Ordering::Relaxed);
+            })
+        };
+        let progressed = wait_until(|| probe_done.load(Ordering::Relaxed), SIBLING_TIMEOUT);
+        // Release before asserting so a failing run cannot wedge the runtime drop.
+        gate.release();
+        let completed = rt.block_on(async {
+            let completed = scan.await.unwrap();
+            probe.await.unwrap();
+            completed
+        });
+        rt.shutdown_timeout(SIBLING_TIMEOUT);
+        assert!(completed, "the scan must finish once the gate is released");
+        assert!(
+            backend.state.type_uses.read().contains_key(&open_uri),
+            "the scan must merge the open buffer's uses"
+        );
+        assert!(
+            arrived,
+            "the open-uses mapper must be held while the probe starts"
+        );
+        assert!(
+            progressed,
+            "sibling async work must progress while the open-uses mapping region is held"
+        );
     }
 
     fn setup_error_workspace(n: usize) -> (Backend, tempfile::TempDir) {
@@ -2463,7 +2635,7 @@ mod tests {
     /// Slices out of lock-step must fail loudly. `chunks().zip()` truncates to the
     /// shortest, so without the assert a length-invariant bug upstream would silently
     /// drop the tail's diagnostics.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[should_panic]
     async fn mismatched_lengths_panic_rather_than_truncate() {
         let (a, b, c, d) = inputs(300);
