@@ -160,9 +160,11 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		}
 		logInfo(`Using server: ${serverExe}`);
 
+		const resolveRules = () =>
+			resolveRulesCache(language, cacheDir, workspaceFolder.uri.fsPath);
 		const { rulesCache, fetchUpstream } = await prepareClientStart(
 			serverExe,
-			() => resolveRulesCache(language, cacheDir, workspaceFolder.uri.fsPath),
+			resolveRules,
 		);
 
 		// Where a location the server reports is allowed to point. Anything else
@@ -195,8 +197,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 				serverExe,
 				cacheDir,
 				rulesCache,
-				resolveRulesCache: () =>
-					resolveRulesCache(language, cacheDir, workspaceFolder.uri.fsPath),
+				resolveRulesCache: resolveRules,
 				onRulesCacheChanged: trustedRulesRoots,
 				fetchRules,
 				workspaceFolder,

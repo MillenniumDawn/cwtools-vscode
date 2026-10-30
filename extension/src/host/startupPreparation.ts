@@ -18,7 +18,7 @@ async function prepareServerBinary(serverExe: string): Promise<void> {
 	}
 }
 
-// Both preparations share one combined wait, so neither rejection is left unhandled. (#1155)
+// Waits for both; a rules rejection surfaces without waiting for the binary fix-up. (#1155)
 export async function prepareClientStart(
 	serverExe: string,
 	resolveRules: () => Promise<RulesSetup>,
