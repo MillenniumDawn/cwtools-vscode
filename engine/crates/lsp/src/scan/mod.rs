@@ -519,19 +519,59 @@ pub(crate) async fn hold_for_tests(file_var: &str, ready_var: Option<&str>) {
     }
 }
 
-pub(crate) fn stat_signature_for(files: &[std::path::PathBuf]) -> u64 {
+/// Below this many files the serial fold wins; the `stat_signature` bench sweeps it (#1153).
+const PARALLEL_STAT_MIN_FILES: usize = 512;
+
+/// The per-file stat snapshot [`stat_signature_for`] hashes. `Missing` keeps
+/// the failed-metadata behavior: the file contributes only its path string.
+enum StatEntry {
+    Missing,
+    Stat { len: u64, mtime_nanos: Option<u128> },
+}
+
+fn stat_entry(path: &std::path::Path) -> StatEntry {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return StatEntry::Missing;
+    };
+    let mtime_nanos = meta
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|since_epoch| since_epoch.as_nanos());
+    StatEntry::Stat {
+        len: meta.len(),
+        mtime_nanos,
+    }
+}
+
+fn hash_stat_entry(hasher: &mut std::collections::hash_map::DefaultHasher, entry: StatEntry) {
+    match entry {
+        StatEntry::Missing => {}
+        StatEntry::Stat { len, mtime_nanos } => {
+            len.hash(hasher);
+            if let Some(nanos) = mtime_nanos {
+                nanos.hash(hasher);
+            }
+        }
+    }
+}
+
+pub fn stat_signature_for(files: &[std::path::PathBuf]) -> u64 {
     let mut sorted: Vec<&std::path::Path> = files.iter().map(|p| p.as_path()).collect();
     sorted.sort_unstable();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for path in sorted {
-        path.to_string_lossy().hash(&mut hasher);
-        if let Ok(meta) = std::fs::metadata(path) {
-            meta.len().hash(&mut hasher);
-            if let Ok(modified) = meta.modified()
-                && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
-            {
-                since_epoch.as_nanos().hash(&mut hasher);
-            }
+    if sorted.len() >= PARALLEL_STAT_MIN_FILES {
+        use rayon::prelude::*;
+        // Rayon's `collect` keeps input order, so the digest fold is unchanged.
+        let entries: Vec<StatEntry> = sorted.par_iter().map(|path| stat_entry(path)).collect();
+        for (path, entry) in sorted.iter().zip(entries) {
+            path.to_string_lossy().hash(&mut hasher);
+            hash_stat_entry(&mut hasher, entry);
+        }
+    } else {
+        for path in sorted {
+            path.to_string_lossy().hash(&mut hasher);
+            hash_stat_entry(&mut hasher, stat_entry(path));
         }
     }
     hasher.finish()
@@ -710,6 +750,102 @@ mod tests {
             one_file, two_files,
             "adding a file to the set should change the signature"
         );
+    }
+
+    /// The pre-#1153 serial algorithm, kept beside the tests so every signature
+    /// scenario can be checked against the code the parallel collection
+    /// replaced. Deliberately independent of [`stat_entry`]: it is the spec.
+    fn serial_reference_signature(files: &[std::path::PathBuf]) -> u64 {
+        let mut sorted: Vec<&std::path::Path> = files.iter().map(|p| p.as_path()).collect();
+        sorted.sort_unstable();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for &path in &sorted {
+            path.to_string_lossy().hash(&mut hasher);
+            if let Ok(meta) = std::fs::metadata(path) {
+                meta.len().hash(&mut hasher);
+                if let Ok(modified) = meta.modified()
+                    && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+                {
+                    since_epoch.as_nanos().hash(&mut hasher);
+                }
+            }
+        }
+        hasher.finish()
+    }
+
+    #[test]
+    fn test_stat_signature_matches_the_serial_reference_across_set_mutations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = tmp.path().join("a.yml");
+        let b = tmp.path().join("b.yml");
+        std::fs::write(&a, "l_english:\n key:0 \"value\"\n").unwrap();
+        std::fs::write(&b, "l_english:\n other:0 \"value\"\n").unwrap();
+        let missing = tmp.path().join("never-created.yml");
+        let other_missing = tmp.path().join("also-never-created.yml");
+
+        for files in [
+            vec![a.clone(), b.clone()],
+            vec![b.clone(), a.clone()],
+            vec![a.clone()],
+            vec![a.clone(), a.clone(), b.clone()],
+            vec![a.clone(), missing.clone(), b.clone()],
+            vec![missing.clone()],
+            vec![],
+        ] {
+            assert_eq!(
+                stat_signature_for(&files),
+                serial_reference_signature(&files),
+                "signature diverged from the serial reference for {files:?}"
+            );
+        }
+
+        // A failed stat contributes only its path string, so two missing files
+        // with different names still differ, and the same missing name is
+        // stable across calls.
+        let left = vec![missing.clone()];
+        let right = vec![other_missing];
+        assert_ne!(stat_signature_for(&left), stat_signature_for(&right));
+        assert_eq!(stat_signature_for(&left), stat_signature_for(&left));
+    }
+
+    #[test]
+    fn test_stat_signature_parallel_path_matches_the_serial_reference() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Past the parallel threshold, so Rayon collects the stats while the
+        // reference stays serial; the digest must not be able to tell.
+        let count = PARALLEL_STAT_MIN_FILES + 8;
+        let mut files: Vec<std::path::PathBuf> = (0..count)
+            .map(|i| tmp.path().join(format!("f_{i:05}.yml")))
+            .collect();
+        for file in &files {
+            std::fs::write(file, format!("l_english:\n key_{file:?}:0 \"value\"\n")).unwrap();
+        }
+        // A touched file (both size and mtime move) plus a missing path and a
+        // duplicate, all through the parallel path.
+        std::fs::write(
+            &files[3],
+            "l_english:\n key:0 \"a different, longer value\"\n",
+        )
+        .unwrap();
+        let newer = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        filetime_set(&files[3], newer);
+        files.push(tmp.path().join("missing.yml"));
+        files.push(files[7].clone());
+
+        let reference = serial_reference_signature(&files);
+        assert_eq!(
+            stat_signature_for(&files),
+            reference,
+            "the parallel collection changed the digest"
+        );
+        assert_eq!(
+            stat_signature_for(&files),
+            reference,
+            "must be deterministic"
+        );
+
+        let reversed: Vec<_> = files.iter().rev().cloned().collect();
+        assert_eq!(stat_signature_for(&reversed), reference);
     }
 
     #[test]

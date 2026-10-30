@@ -17,6 +17,7 @@
 //! When either is missing that group prints why and measures nothing.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -410,9 +411,113 @@ fn bench_synthetic_many_type_index_edit(c: &mut Criterion) {
     group.finish();
 }
 
+/// The pre-#1153 implementation of `cwtools_lsp`'s scan stat signature, kept
+/// here so the candidate is measured against the code it replaces. Bench-only.
+fn baseline_stat_signature(files: &[std::path::PathBuf]) -> u64 {
+    let mut sorted: Vec<&std::path::Path> = files.iter().map(|p| p.as_path()).collect();
+    sorted.sort_unstable();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for path in sorted {
+        path.to_string_lossy().hash(&mut hasher);
+        if let Ok(meta) = std::fs::metadata(path) {
+            meta.len().hash(&mut hasher);
+            if let Ok(modified) = meta.modified()
+                && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+            {
+                since_epoch.as_nanos().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
+/// The size sweep doubles as the crossover record for the parallel threshold:
+/// sizes left below it measure serial vs serial and must not move, sizes above
+/// it are where the parallel metadata sweep has to win.
+const STAT_SIGNATURE_SIZES: [usize; 5] = [3, 64, 256, 512, 1024];
+
+/// `size` generated files in a temp dir. The caller holds the dir for as long
+/// as it stats the paths; dropping it removes the files.
+fn generated_stat_signature_files(size: usize) -> (tempfile::TempDir, Vec<std::path::PathBuf>) {
+    let dir = tempfile::TempDir::new().expect("stat_signature tempdir");
+    let paths = (0..size)
+        .map(|i| {
+            let path = dir.path().join(format!("f_{i:05}.yml"));
+            std::fs::write(&path, format!("l_english:\n key_{i:05}:0 \"value\"\n"))
+                .expect("stat_signature fixture file");
+            path
+        })
+        .collect();
+    (dir, paths)
+}
+
+/// The primary files a scan of the Millennium-Dawn checkout fingerprints: the
+/// editor's own discovery, narrowed by the hoi4 rules' `folders`. `None` when a
+/// checkout is missing.
+fn corpus_scan_files() -> Option<Vec<std::path::PathBuf>> {
+    let (Some(rules_dir), Some(corpus)) = (
+        checkout("CWTOOLS_RULES", "cwtools-hoi4-config/Config"),
+        checkout("CWTOOLS_CORPUS", "Millennium-Dawn"),
+    ) else {
+        eprintln!(
+            "stat_signature: no corpus. Set CWTOOLS_RULES to a cwtools-hoi4-config/Config \
+             checkout and CWTOOLS_CORPUS to a Millennium-Dawn checkout (or CWTOOLS_PROJECTS \
+             to the folder holding both)"
+        );
+        return None;
+    };
+    let table = StringTable::new();
+    let (ruleset, _errors) = cwtools_rules::ruleset_loader::load_ruleset_from_dir(
+        &rules_dir,
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+    let config = cwtools_driver::workspace_discovery_config(&corpus, Some(&ruleset));
+    match cwtools_driver::discover_workspace_files(config) {
+        Ok(files) => Some(files.into_iter().map(|file| file.path).collect()),
+        Err(error) => {
+            eprintln!("stat_signature: corpus discovery failed: {error}");
+            None
+        }
+    }
+}
+
+fn bench_stat_signature(c: &mut Criterion) {
+    use cwtools_lsp::bench_support::stat_signature_for;
+
+    let generated: Vec<_> = STAT_SIGNATURE_SIZES
+        .iter()
+        .map(|&size| (size, generated_stat_signature_files(size)))
+        .collect();
+    let corpus = corpus_scan_files();
+
+    let mut group = c.benchmark_group("stat_signature");
+    for (size, (_dir, paths)) in &generated {
+        group.bench_function(format!("n{size}/baseline_serial"), |b| {
+            b.iter(|| baseline_stat_signature(black_box(paths)))
+        });
+        group.bench_function(format!("n{size}/candidate"), |b| {
+            b.iter(|| stat_signature_for(black_box(paths)))
+        });
+    }
+    if let Some(paths) = &corpus {
+        eprintln!(
+            "stat_signature: corpus has {} discovered files",
+            paths.len()
+        );
+        group.bench_function("corpus/baseline_serial", |b| {
+            b.iter(|| baseline_stat_signature(black_box(paths)))
+        });
+        group.bench_function("corpus/candidate", |b| {
+            b.iter(|| stat_signature_for(black_box(paths)))
+        });
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(20);
-    targets = bench_keystroke_validate, bench_loc_edit_parse, bench_loc_ref_names, bench_index_parsed_file, bench_synthetic_many_type_index_edit
+    targets = bench_keystroke_validate, bench_loc_edit_parse, bench_loc_ref_names, bench_index_parsed_file, bench_synthetic_many_type_index_edit, bench_stat_signature
 }
 criterion_main!(benches);
