@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -236,7 +237,7 @@ fn try_validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<
             tracing::debug!(path = %sig_path.display(), "parse cache settings signature miss; clearing");
             clear_cache_dir(&dir)?;
             write_settings_sig(&dir, fingerprint)?;
-            prune_all_cache_dirs(cache_dir, &dir);
+            prune_all_cache_dirs(cache_dir, &dir, Vec::new());
             Ok(false)
         }
         Err(error) => Err(error),
@@ -246,8 +247,8 @@ fn try_validate_or_clear(cache_dir: &Path, fingerprint: u64) -> std::io::Result<
 /// Enforce the per-fingerprint and global cache caps after a batch of writes.
 pub fn prune(cache_dir: &Path, fingerprint: u64) {
     let dir = workspace_cache_dir(cache_dir, fingerprint);
-    prune_cache_dir(&dir);
-    prune_all_cache_dirs(cache_dir, &dir);
+    let entries = prune_cache_dir(&dir);
+    prune_all_cache_dirs(cache_dir, &dir, entries);
 }
 
 #[derive(Debug, Default)]
@@ -391,27 +392,33 @@ const MAX_TOTAL_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024; // 4 GiB
 /// Prune to ~80% of the caps so we don't re-prune on every scan.
 const PRUNE_TARGET_RATIO: f64 = 0.8;
 
+/// A `.cwb` entry: its mtime, its size plus its `.cwe` sidecar's, and its path.
+type CacheEntry = (std::time::SystemTime, u64, PathBuf);
+
 /// If the cache dir exceeds either cap (entry count or total size), delete the
 /// oldest `.cwb` entries by mtime until it's back under ~80% of both caps. One
 /// directory scan; runs at most once per workspace scan. No-op when under cap.
-fn prune_cache_dir(dir: &Path) {
-    prune_cache_dir_with_caps(dir, MAX_CACHE_ENTRIES, MAX_CACHE_BYTES);
+/// Returns the entries left on disk.
+fn prune_cache_dir(dir: &Path) -> Vec<CacheEntry> {
+    prune_cache_dir_with_caps(dir, MAX_CACHE_ENTRIES, MAX_CACHE_BYTES)
 }
 
-fn prune_all_cache_dirs(cache_dir: &Path, current_dir: &Path) {
+fn prune_all_cache_dirs(cache_dir: &Path, current_dir: &Path, current_entries: Vec<CacheEntry>) {
     prune_all_cache_dirs_with_caps(
         cache_dir,
         MAX_TOTAL_CACHE_ENTRIES,
         MAX_TOTAL_CACHE_BYTES,
-        Some(current_dir),
+        Some((current_dir, current_entries)),
     );
 }
 
+/// `current` is the dir just pruned by [`prune_cache_dir`] and what it left, so
+/// the global pass does not list it again.
 fn prune_all_cache_dirs_with_caps(
     cache_dir: &Path,
     max_entries: usize,
     max_bytes: u64,
-    current_dir: Option<&Path>,
+    current: Option<(&Path, Vec<CacheEntry>)>,
 ) {
     let root = cache_dir.join(PARSE_CACHE_DIR);
     let Ok(dirs) = fs::read_dir(root) else {
@@ -425,20 +432,36 @@ fn prune_all_cache_dirs_with_caps(
         .map(|entry| entry.path())
         .filter(|path| is_owned_cache_dir(path))
         .collect();
+    let (current_dir, mut current_entries) = match current {
+        Some((dir, entries)) => (Some(dir), entries),
+        None => (None, Vec::new()),
+    };
+    let mut entries = Vec::new();
     if dirs.len() > 2 {
-        let mut entries = Vec::new();
-        let mut total_bytes = 0u64;
         for dir in &dirs {
-            collect_cache_entries(dir, &mut entries, &mut total_bytes);
+            if current_dir == Some(dir.as_path()) {
+                entries.append(&mut current_entries);
+            } else {
+                entries.extend(collect_cache_entries(dir));
+            }
         }
-        prune_entries(entries, total_bytes, max_entries, max_bytes);
+        prune_entries(&mut entries, max_entries, max_bytes);
     }
-    remove_empty_cache_dirs(&dirs, current_dir);
+    remove_empty_cache_dirs(&dirs, current_dir, &entries);
 }
 
-fn remove_empty_cache_dirs(dirs: &[PathBuf], current_dir: Option<&Path>) {
+/// `kept` is what the global prune left on disk. A dir with none of those is
+/// listed again before the sweep, so a stale list never deletes a live dir.
+fn remove_empty_cache_dirs(dirs: &[PathBuf], current_dir: Option<&Path>, kept: &[CacheEntry]) {
+    let occupied: HashSet<&Path> = kept
+        .iter()
+        .filter_map(|(_, _, path)| path.parent())
+        .collect();
     for dir in dirs {
-        if current_dir.is_some_and(|current| current == dir) || count_cache_entries(dir) != 0 {
+        if current_dir.is_some_and(|current| current == dir)
+            || occupied.contains(dir.as_path())
+            || count_cache_entries(dir) != 0
+        {
             continue;
         }
         let mut removal = Removal::default();
@@ -466,47 +489,53 @@ fn count_cache_entries(dir: &Path) -> usize {
 
 /// Cap-parameterized core of [`prune_cache_dir`] (lets tests use small caps
 /// instead of writing 50k files).
-fn prune_cache_dir_with_caps(dir: &Path, max_entries: usize, max_bytes: u64) {
-    let mut entries = Vec::new();
-    let mut total_bytes = 0u64;
-    collect_cache_entries(dir, &mut entries, &mut total_bytes);
-    prune_entries(entries, total_bytes, max_entries, max_bytes);
+fn prune_cache_dir_with_caps(dir: &Path, max_entries: usize, max_bytes: u64) -> Vec<CacheEntry> {
+    let mut entries = collect_cache_entries(dir);
+    prune_entries(&mut entries, max_entries, max_bytes);
+    entries
 }
 
-fn collect_cache_entries(
-    dir: &Path,
-    entries: &mut Vec<(std::time::SystemTime, u64, PathBuf)>,
-    total_bytes: &mut u64,
-) {
+/// List `dir` once, taking each `.cwe` sidecar size from the same pass as its `.cwb`.
+fn collect_cache_entries(dir: &Path) -> Vec<CacheEntry> {
     let Ok(files) = fs::read_dir(dir) else {
-        return;
+        return Vec::new();
     };
+    let mut entries = Vec::new();
+    let mut sidecar_sizes: HashMap<OsString, u64> = HashMap::new();
     for entry in files.flatten() {
         let path = entry.path();
-        if path.extension().is_none_or(|extension| extension != "cwb") {
-            continue;
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some("cwb") => {
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                let mtime = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+                entries.push((mtime, metadata.len(), path));
+            }
+            Some("cwe") => {
+                if let (Some(stem), Ok(metadata)) = (path.file_stem(), entry.metadata()) {
+                    sidecar_sizes.insert(stem.to_owned(), metadata.len());
+                }
+            }
+            _ => {}
         }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        let sidecar_size = path
-            .with_extension("cwe")
-            .metadata()
-            .map(|metadata| metadata.len())
-            .unwrap_or(0);
-        let size = metadata.len().saturating_add(sidecar_size);
-        let mtime = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
-        *total_bytes = total_bytes.saturating_add(size);
-        entries.push((mtime, size, path));
     }
+    for (_, size, path) in &mut entries {
+        let sidecar_size = path
+            .file_stem()
+            .and_then(|stem| sidecar_sizes.get(stem))
+            .copied()
+            .unwrap_or(0);
+        *size = size.saturating_add(sidecar_size);
+    }
+    entries
 }
 
-fn prune_entries(
-    mut entries: Vec<(std::time::SystemTime, u64, PathBuf)>,
-    total_bytes: u64,
-    max_entries: usize,
-    max_bytes: u64,
-) {
+/// Evict the oldest entries until under ~80% of both caps; `entries` keeps the rest.
+fn prune_entries(entries: &mut Vec<CacheEntry>, max_entries: usize, max_bytes: u64) {
+    let total_bytes = entries
+        .iter()
+        .fold(0u64, |total, (_, size, _)| total.saturating_add(*size));
     if entries.len() <= max_entries && total_bytes <= max_bytes {
         return;
     }
@@ -516,16 +545,18 @@ fn prune_entries(
     let target_bytes = (max_bytes as f64 * PRUNE_TARGET_RATIO) as u64;
     let mut cur_count = entries.len();
     let mut cur_bytes = total_bytes;
-    for (_, size, path) in entries {
+    entries.retain(|(_, size, path)| {
         if cur_count <= target_count && cur_bytes <= target_bytes {
-            break;
+            return true;
         }
-        if fs::remove_file(&path).is_ok() {
-            let _ = fs::remove_file(path.with_extension("cwe"));
-            cur_count -= 1;
-            cur_bytes = cur_bytes.saturating_sub(size);
+        if fs::remove_file(path).is_err() {
+            return true;
         }
-    }
+        let _ = fs::remove_file(path.with_extension("cwe"));
+        cur_count -= 1;
+        cur_bytes = cur_bytes.saturating_sub(*size);
+        false
+    });
 }
 
 fn load_hash(
@@ -1416,6 +1447,53 @@ mod tests {
         assert!(!paths.first().unwrap().exists());
     }
 
+    /// An owned cache dir holding `entries` `.cwb` files, older for lower fingerprints.
+    fn dir_with_entries(root: &Path, fingerprint: u64, entries: u64) -> PathBuf {
+        let dir = workspace_cache_dir(root, fingerprint);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(settings_sig_path(&dir), fingerprint.to_le_bytes()).unwrap();
+        let base = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        for i in 0..entries {
+            let path = dir.join(format!("{i}.cwb"));
+            fs::write(&path, b"x").unwrap();
+            let age = std::time::Duration::from_secs(fingerprint * 10 + i);
+            filetime_set(&path, base + age);
+        }
+        dir
+    }
+
+    #[test]
+    fn global_prune_sweeps_a_dir_it_emptied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = [1u64, 2, 3].map(|fingerprint| dir_with_entries(tmp.path(), fingerprint, 4));
+        let current = collect_cache_entries(&dirs[2]);
+
+        // 12 entries against a cap of 8 evicts the 6 oldest: all of dir 1 and two of dir 2.
+        prune_all_cache_dirs_with_caps(tmp.path(), 8, u64::MAX, Some((&dirs[2], current)));
+
+        assert!(!dirs[0].exists(), "the emptied dir was not swept");
+        assert_eq!(count_cwb(&dirs[1]), 2);
+        assert_eq!(count_cwb(&dirs[2]), 4);
+    }
+
+    #[test]
+    fn global_prune_does_not_count_entries_the_dir_prune_deleted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dirs = [(1u64, 2u64), (2, 2), (3, 6)]
+            .map(|(fingerprint, entries)| dir_with_entries(tmp.path(), fingerprint, entries));
+
+        // A cap of 2 trims the current dir from 6 entries to 1.
+        let current = prune_cache_dir_with_caps(&dirs[2], 2, u64::MAX);
+        assert_eq!(current.len(), 1);
+        // 5 entries are left across the dirs, which fits the cap. The 10 listed before
+        // the dir prune would not, and would evict from the other dirs.
+        prune_all_cache_dirs_with_caps(tmp.path(), 5, u64::MAX, Some((&dirs[2], current)));
+
+        assert_eq!(count_cwb(&dirs[0]), 2);
+        assert_eq!(count_cwb(&dirs[1]), 2);
+        assert_eq!(count_cwb(&dirs[2]), 1);
+    }
+
     // ── Ownership-checked removal (#159) ────────────────────────────────────
 
     /// A per-fingerprint cache dir in the shape `validate_or_clear` + `store`
@@ -1530,6 +1608,50 @@ mod tests {
         }
         prune_cache_dir_with_caps(dir, 50, u64::MAX);
         assert_eq!(count_cwb(dir), 10);
+    }
+
+    #[test]
+    fn prune_cache_dir_counts_sidecar_bytes_against_the_byte_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let n = 10usize;
+        let base = std::time::SystemTime::now() - std::time::Duration::from_secs(n as u64 + 10);
+        let mut paths = Vec::with_capacity(n);
+        for i in 0..n {
+            let p = dir.join(format!("{:016x}.cwb", i as u64));
+            fs::write(&p, b"x").unwrap();
+            fs::write(p.with_extension("cwe"), [0u8; 9]).unwrap();
+            filetime_set(&p, base + std::time::Duration::from_secs(i as u64));
+            paths.push(p);
+        }
+        // The `.cwb` files total 10 bytes, under the cap; with sidecars the dir holds 100.
+        prune_cache_dir_with_caps(dir, 50, 80);
+        // 80% of 80 is 64, so the four oldest 10-byte entries go.
+        assert_eq!(count_cwb(dir), 6);
+        for path in &paths[..4] {
+            assert!(!path.exists(), "oldest entry survived");
+            assert!(!path.with_extension("cwe").exists(), "sidecar survived");
+        }
+        for path in &paths[4..] {
+            assert!(path.exists(), "newer entry was evicted");
+            assert!(path.with_extension("cwe").exists(), "sidecar was evicted");
+        }
+    }
+
+    #[test]
+    fn collect_cache_entries_adds_each_sidecar_to_its_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        fs::write(dir.join("a.cwb"), b"x").unwrap();
+        fs::write(dir.join("a.cwe"), [0u8; 9]).unwrap();
+        fs::write(dir.join("b.cwb"), b"xy").unwrap();
+        fs::write(dir.join("orphan.cwe"), [0u8; 100]).unwrap();
+
+        let mut entries = collect_cache_entries(dir);
+        entries.sort_by(|(_, _, left), (_, _, right)| left.cmp(right));
+
+        let sizes: Vec<u64> = entries.iter().map(|(_, size, _)| *size).collect();
+        assert_eq!(sizes, [10, 2]);
     }
 
     fn count_cwb(dir: &Path) -> usize {

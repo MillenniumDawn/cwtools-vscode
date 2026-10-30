@@ -64,7 +64,7 @@ pub mod bench_support {
     pub use crate::lines::DocLines;
     pub use crate::navigation::build_doc_symbols;
     pub use crate::paths::{logical_path_from_uri, workspace_prefix_of};
-    pub use crate::scan::stat_signature_for;
+    pub use crate::scan::{resolve_source_uris, source_uri, stat_signature_for};
     pub use crate::state::LineIndex;
     pub fn semantic_tokens(
         file: &cwtools_parser::ast::ParsedFile,
