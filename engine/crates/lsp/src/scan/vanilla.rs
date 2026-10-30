@@ -203,30 +203,18 @@ impl Backend {
             // Convert raw source paths to `file://` URIs, as workspace files are keyed, so goto
             // lands in the real base-game file; paths outside the install root are dropped. The
             // old "<vanilla-cache>" sentinel silently fell back to the open document (#62).
-            let mut uri_cache: HashMap<Arc<str>, Option<Arc<str>>> = HashMap::new();
+            let distinct: HashSet<&Arc<str>> =
+                per_type.values().flatten().map(|(path, _)| path).collect();
+            let uri_cache = resolve_source_uris(&distinct, vanilla_root.as_deref());
             let mut converted: HashMap<String, Vec<(Arc<str>, cwtools_info::TypeInstance)>> =
                 HashMap::with_capacity(per_type.len());
             for (type_name, instances) in per_type {
                 let mut out = Vec::with_capacity(instances.len());
                 for (path, inst) in instances {
-                    let uri = uri_cache
-                        .entry(Arc::clone(&path))
-                        .or_insert_with(|| {
-                            let root = vanilla_root.as_ref()?;
-                            let source = std::path::Path::new(path.as_ref());
-                            let Ok(canonical) = std::fs::canonicalize(source) else {
-                                return None;
-                            };
-                            if !canonical.starts_with(root) {
-                                return None;
-                            }
-                            Some(Arc::from(path_to_uri(&canonical).as_str()))
-                        })
-                        .clone();
-                    let Some(uri) = uri else {
+                    let Some(Some(uri)) = uri_cache.get(&path) else {
                         continue;
                     };
-                    out.push((uri, inst));
+                    out.push((Arc::clone(uri), inst));
                 }
                 converted.insert(type_name, out);
             }
@@ -553,6 +541,38 @@ impl Backend {
     }
 }
 
+/// From this many distinct source paths up, canonicalization runs on the rayon pool. The cutoff
+/// matches the scan stat signature's (#1153).
+const PARALLEL_CANONICALIZE_MIN_PATHS: usize = 512;
+
+/// Map each source path to its `file://` URI, or `None` when it is missing, outside `root`, or
+/// there is no `root`.
+pub fn resolve_source_uris(
+    paths: &HashSet<&Arc<str>>,
+    root: Option<&std::path::Path>,
+) -> HashMap<Arc<str>, Option<Arc<str>>> {
+    if paths.len() >= PARALLEL_CANONICALIZE_MIN_PATHS {
+        use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+        paths
+            .par_iter()
+            .map(|&path| (Arc::clone(path), source_uri(path, root)))
+            .collect()
+    } else {
+        paths
+            .iter()
+            .map(|&path| (Arc::clone(path), source_uri(path, root)))
+            .collect()
+    }
+}
+
+pub fn source_uri(path: &str, root: Option<&std::path::Path>) -> Option<Arc<str>> {
+    let root = root?;
+    let canonical = std::fs::canonicalize(path).ok()?;
+    canonical
+        .starts_with(root)
+        .then(|| Arc::from(path_to_uri(&canonical).as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -862,6 +882,149 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1.name, "in_root");
         assert_eq!(entries[0].0.as_ref(), path_to_uri(&canonical_in_root));
+    }
+
+    struct SourceFixture {
+        _tmp: tempfile::TempDir,
+        root: std::path::PathBuf,
+        cases: Vec<(Arc<str>, Option<Arc<str>>)>,
+    }
+
+    /// `count` distinct source paths, each with the URI the merge must give it. The kinds cycle:
+    /// in the root behind a `..` hop, outside the root, missing, and a link in the root whose
+    /// target is outside it (unix only: Windows symlinks need privileges). `root` is canonical.
+    fn source_fixture(count: usize) -> SourceFixture {
+        let tmp = tempfile::tempdir().unwrap();
+        let raw_root = tmp.path().join("vanilla");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(raw_root.join("sub")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let root = std::fs::canonicalize(&raw_root).unwrap();
+        let kinds = if cfg!(unix) { 4 } else { 3 };
+        let cases = (0..count)
+            .map(|i| {
+                let name = format!("f_{i:05}.txt");
+                let (path, expected) = match i % kinds {
+                    0 => {
+                        std::fs::write(raw_root.join(&name), "").unwrap();
+                        let path = raw_root.join("sub").join("..").join(&name);
+                        let uri = path_to_uri(&std::fs::canonicalize(&path).unwrap());
+                        (path, Some(uri))
+                    }
+                    1 => {
+                        let path = outside.join(&name);
+                        std::fs::write(&path, "").unwrap();
+                        (path, None)
+                    }
+                    2 => (raw_root.join(&name), None),
+                    _ => {
+                        let target = outside.join(&name);
+                        std::fs::write(&target, "").unwrap();
+                        let link = raw_root.join(&name);
+                        #[cfg(unix)]
+                        std::os::unix::fs::symlink(&target, &link).unwrap();
+                        (link, None)
+                    }
+                };
+                (
+                    Arc::from(path.to_string_lossy().as_ref()),
+                    expected.map(|uri| Arc::from(uri.as_str())),
+                )
+            })
+            .collect();
+        SourceFixture {
+            _tmp: tmp,
+            root,
+            cases,
+        }
+    }
+
+    #[test]
+    fn source_uris_agree_on_both_sides_of_the_parallel_threshold() {
+        for count in [
+            PARALLEL_CANONICALIZE_MIN_PATHS - 1,
+            PARALLEL_CANONICALIZE_MIN_PATHS,
+        ] {
+            let SourceFixture { _tmp, root, cases } = source_fixture(count);
+            let expected: HashMap<Arc<str>, Option<Arc<str>>> = cases.into_iter().collect();
+            let paths: HashSet<&Arc<str>> = expected.keys().collect();
+            assert_eq!(paths.len(), count);
+
+            let resolved = resolve_source_uris(&paths, Some(&root));
+            let serial: HashMap<Arc<str>, Option<Arc<str>>> = paths
+                .iter()
+                .map(|&path| (Arc::clone(path), source_uri(path, Some(&root))))
+                .collect();
+            assert_eq!(resolved, expected, "{count} paths");
+            assert_eq!(resolved, serial, "{count} paths");
+        }
+    }
+
+    #[test]
+    fn source_uris_without_a_root_drop_every_path() {
+        let SourceFixture { _tmp, cases, .. } = source_fixture(PARALLEL_CANONICALIZE_MIN_PATHS);
+        let paths: HashSet<&Arc<str>> = cases.iter().map(|(path, _)| path).collect();
+        let resolved = resolve_source_uris(&paths, None);
+        assert_eq!(resolved.len(), PARALLEL_CANONICALIZE_MIN_PATHS);
+        assert!(resolved.values().all(Option::is_none));
+    }
+
+    #[test]
+    fn merge_keeps_instance_order_above_the_parallel_threshold() {
+        let backend = test_backend();
+        let fixture = source_fixture(PARALLEL_CANONICALIZE_MIN_PATHS + 8);
+        {
+            let mut config = backend.state.config.write();
+            config.vanilla_dir = Some(fixture.root.clone());
+            config.refresh_roots();
+        }
+        let instance = |name: &str| TypeInstance {
+            name: name.to_string(),
+            location: SourceLocation {
+                line: 0,
+                col: 0,
+                end: (0, 1),
+            },
+            primary_loc_key: None,
+            required_loc_keys: Vec::new(),
+        };
+        let name = |i: usize| format!("inst_{i:05}");
+        let mut instances: Vec<_> = fixture
+            .cases
+            .iter()
+            .enumerate()
+            .map(|(i, (path, _))| (Arc::clone(path), instance(&name(i))))
+            .collect();
+        let mut expected: Vec<(String, Arc<str>)> = fixture
+            .cases
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (_, uri))| uri.as_ref().map(|uri| (name(i), Arc::clone(uri))))
+            .collect();
+        // A second instance in the first (in-root) file is kept, not collapsed with its path.
+        let (first_path, first_uri) = &fixture.cases[0];
+        instances.push((Arc::clone(first_path), instance("repeat")));
+        expected.push((
+            "repeat".to_string(),
+            Arc::clone(first_uri.as_ref().expect("the first case is in the root")),
+        ));
+        let mut data = vanilla_data(Vec::new());
+        data.per_type.insert("foo".to_string(), instances);
+        backend.stage_vanilla_payload(data);
+        backend.merge_pending_vanilla_index();
+
+        let info = backend.state.info_service.read();
+        let merged: Vec<(String, Arc<str>)> = info
+            .type_index
+            .map()
+            .get("foo")
+            .unwrap()
+            .iter()
+            .map(|(uri, inst)| (inst.name.clone(), Arc::clone(uri)))
+            .collect();
+        assert_eq!(merged, expected);
+        let uris: HashSet<Arc<str>> = expected.into_iter().map(|(_, uri)| uri).collect();
+        assert_eq!(backend.state.vanilla_state.lock().merged_uris, uris);
     }
 
     #[test]

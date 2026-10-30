@@ -21,6 +21,7 @@ mod workspace;
 
 pub(crate) use loc::ParentLocKey;
 pub(crate) use vanilla::{VanillaLoc, VanillaLocKey};
+pub use vanilla::{resolve_source_uris, source_uri};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ScanSummary {
