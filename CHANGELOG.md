@@ -9,6 +9,7 @@
 * Fence pass 2's chunked parallel validation and the open-document uses region with `tokio::task::block_in_place`, as pass 1 already does, so their Rayon regions run as blocking sections on the multi-threaded runtime instead of blocking the async worker they start on while unrelated requests wait. Mapping order, chunk yielding, cancellation and diagnostics are unchanged. (#1152)
 * Merging the base-game index no longer deep-copies its cached auxiliary payload on every workspace scan and re-merge. The payload is file paths, variable names, and scripted loc and scripted GUI name lists. The retained data is shared by reference until each consumer installs it, so repeated scans and file-index rebuilds stop paying a full copy of the base-game payload. (#1154)
 * Take the per-file stat snapshot behind the workspace, localisation and parent-mod scan fingerprints on the rayon pool for large file lists; small lists keep the original streaming stat/hash fold and the digest is unchanged. (#1153)
+* Merge the workspace scan's `<type>` uses outside the `type_uses` write lock, so an edit no longer waits for the whole-workspace merge. The lock now covers only the retain, the inserts and the retained open-buffer entries. The scan also seeds the merged-uses cache at the revision it publishes, so the open-document revalidation that follows reuses it instead of merging the whole workspace again. Unused-instance diagnostics are unchanged. (#1163)
 
 ### 4.0.5
 

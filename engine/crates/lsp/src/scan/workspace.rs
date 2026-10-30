@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -1063,24 +1063,39 @@ impl Backend {
                     })
                     .collect()
             });
-            let merged = {
+            // Later entries win: a buffer opened mid-scan replaces its disk entry.
+            let mut owned: HashMap<String, UsedInstances> =
+                HashMap::with_capacity(results.len() + open_uses.len());
+            owned.extend(
+                results
+                    .iter_mut()
+                    .map(|(uri, _, used, _, _)| (uri.clone(), used.take().unwrap_or_default())),
+            );
+            owned.extend(open_uses);
+            #[cfg(test)]
+            self.hold_from_async(crate::state::HoldPoint::TypeUsesMerge);
+            let mut merged = UsedInstances::default();
+            for uses in owned.values() {
+                merged.merge_from(uses);
+            }
+            let (merged, revision) = {
                 let mut store = self.state.type_uses.write();
                 store.retain(|uri, _| open_uris.contains(uri));
-                for (uri, _, used, _, _) in &mut results {
-                    store.insert(uri.clone(), used.take().unwrap_or_default());
+                for (uri, uses) in &*store {
+                    if !owned.contains_key(uri) {
+                        merged.merge_from(uses);
+                    }
                 }
-                for (uri, used) in open_uses {
-                    store.insert(uri, used);
-                }
-                let mut merged = UsedInstances::default();
-                for uses in store.values() {
-                    merged.merge_from(uses);
-                }
-                merged
+                store.extend(owned);
+                // Bumped under the guard, so the seeded revision is exactly this store.
+                let previous = self
+                    .state
+                    .type_uses_revision
+                    .fetch_add(1, Ordering::Release);
+                (merged, previous + 1)
             };
-            self.state
-                .type_uses_revision
-                .fetch_add(1, Ordering::Release);
+            let merged = Arc::new(merged);
+            *self.state.type_uses_merged.lock() = Some((revision, Arc::clone(&merged)));
             let no_lines = DocLines::none();
             for (uri, diagnostics, _, _, _) in &mut results {
                 let file: cwtools_validation::FilePath = uri.as_str().into();
@@ -1630,9 +1645,10 @@ mod tests {
 
     async fn assert_pass2_allows_write(
         lock_name: &str,
+        point: HoldPoint,
         write: impl FnOnce(&DocumentState) + Send + 'static,
     ) -> Backend {
-        let gate = HoldGate::new(HoldPoint::Pass2Before);
+        let gate = HoldGate::new(point);
         let (backend, _tmp) = setup_workspace(Some(gate.clone()));
         let scan_backend = clone_backend(&backend);
         let handle = tokio::spawn(async move {
@@ -1648,7 +1664,7 @@ mod tests {
                 )
                 .await
         });
-        wait_arrived(&gate, HoldPoint::Pass2Before).await;
+        wait_arrived(&gate, point).await;
 
         let state = backend.state.clone();
         let mut writer = tokio::task::spawn_blocking(move || write(&state));
@@ -1677,7 +1693,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pass2_snapshot_preserves_concurrent_info_service_mutation() {
-        let backend = assert_pass2_allows_write("info_service", |state| {
+        let backend = assert_pass2_allows_write("info_service", HoldPoint::Pass2Before, |state| {
             let mut info = state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .file_index
@@ -1699,10 +1715,111 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_pass2_snapshot_allows_loc_index_write() {
-        assert_pass2_allows_write("loc_index", |state| {
+        assert_pass2_allows_write("loc_index", HoldPoint::Pass2Before, |state| {
             drop(state.loc_index.write());
         })
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pass2_type_uses_merge_allows_type_uses_write() {
+        assert_pass2_allows_write("type_uses", HoldPoint::TypeUsesMerge, |state| {
+            drop(state.type_uses.write());
+        })
+        .await;
+    }
+
+    fn open_buffer(backend: &Backend, tmp: &tempfile::TempDir, name: &str, parsed: bool) -> String {
+        let uri = Url::from_file_path(tmp.path().join(name))
+            .unwrap()
+            .to_string();
+        let text = "thing_open = { }\n";
+        let ast = parsed.then(|| {
+            Arc::new(cwtools_parser::parser::parse_string(
+                text,
+                &backend.state.string_table,
+            ))
+        });
+        let ast_version = ast.as_ref().map(|_| 0);
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                ParsedDoc {
+                    version: 0,
+                    text: Arc::from(text),
+                    ast,
+                    ast_version,
+                    ast_source_bytes: text.len(),
+                    loc_cache: None,
+                },
+            )
+            .expect("open the buffer");
+        uri
+    }
+
+    /// The scan is parked in the reparse of the retained buffer, which runs after the merge and
+    /// before that buffer's uses are re-recorded, so the seed is still what the scan published.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_pass2_seeds_merged_type_uses_with_the_stores_union() {
+        let gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        let (backend, tmp) = setup_workspace(Some(gate.clone()));
+        let retained_uri = open_buffer(&backend, &tmp, "retained_buffer.txt", false);
+        let fresh_uri = open_buffer(&backend, &tmp, "fresh_buffer.txt", true);
+        let mut retained = UsedInstances::default();
+        retained.mark("thing", "retained_only");
+        backend
+            .state
+            .type_uses
+            .write()
+            .insert(retained_uri.clone(), retained);
+        let scan_backend = clone_backend(&backend);
+        let scan = tokio::spawn(async move {
+            let progress = CommandProgress::for_tests(
+                scan_backend.state.clone(),
+                Arc::new(AtomicBool::new(false)),
+            );
+            scan_backend
+                .validate_entire_workspace_tracked(false, Some(&progress))
+                .await
+        });
+        wait_arrived(&gate, HoldPoint::ValidatePrepared).await;
+
+        let seeded = backend.state.type_uses_merged.lock().clone();
+        let revision = backend.state.type_uses_revision.load(Ordering::Acquire);
+        let (has_retained, has_fresh, union) = {
+            let store = backend.state.type_uses.read();
+            let mut union = UsedInstances::default();
+            for uses in store.values() {
+                union.merge_from(uses);
+            }
+            (
+                store.contains_key(&retained_uri),
+                store.contains_key(&fresh_uri),
+                union,
+            )
+        };
+        gate.release();
+        assert_eq!(scan.await.expect("scan panicked"), ScanOutcome::Ran);
+
+        let (seeded_revision, seeded) = seeded.expect("a finished pass must seed the merged uses");
+        assert_eq!(
+            seeded_revision, revision,
+            "the seed must carry the revision the scan published"
+        );
+        assert!(has_retained && has_fresh, "both buffers must be recorded");
+        assert_eq!(*seeded, union, "the seed must be the store's union");
+        let names = seeded.changed_names(&UsedInstances::default());
+        assert!(
+            names.contains("retained_only"),
+            "a retained open-buffer entry must stay in the merge"
+        );
+        assert!(
+            !names.contains("sentinel_instance"),
+            "an entry the pass dropped must not reach the merge"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

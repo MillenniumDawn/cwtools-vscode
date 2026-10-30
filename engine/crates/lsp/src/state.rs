@@ -23,7 +23,8 @@ pub(crate) use crate::loc_text::LocText;
 /// the state in between. Pass 2 of the workspace scan has three points; the
 /// watched batch has one at the top of every per-file iteration, outside the
 /// validation permit (#477). Validation has one inside its synchronous phase.
-/// The open-buffer uses of a scan have one inside their rayon region (#1152).
+/// The open-buffer uses of a scan have one inside their rayon region (#1152), and its
+/// type-uses merge has one before it takes the `type_uses` write guard (#1163).
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HoldPoint {
@@ -31,6 +32,7 @@ pub(crate) enum HoldPoint {
     Pass2Mid,
     Pass2After,
     OpenUses,
+    TypeUsesMerge,
     WatchedFile,
     ValidatePrepared,
 }
