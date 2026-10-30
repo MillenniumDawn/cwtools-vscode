@@ -3,6 +3,7 @@
 #### Engine
 
 * Take the per-file stat snapshot behind the workspace, localisation and parent-mod scan fingerprints on the rayon pool for large file lists; small lists keep the original streaming stat/hash fold and the digest is unchanged. (#1153)
+* Merging the base-game index no longer deep-copies its cached auxiliary payload on every workspace scan and re-merge. The payload is file paths, variable names, and scripted loc and scripted GUI name lists. The retained data is shared by reference until each consumer installs it, so repeated scans and file-index rebuilds stop paying a full copy of the base-game payload. (#1154)
 
 ### 4.0.5
 

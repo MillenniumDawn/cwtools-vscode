@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -159,10 +160,10 @@ impl Backend {
             if !loc_keys.is_empty() {
                 vanilla.loc_keys = Some(loc_keys);
             }
-            vanilla.file_paths = Some(file_paths);
-            vanilla.var_names = Some(var_names);
-            vanilla.scripted_loc_names = Some(scripted_loc_names);
-            vanilla.scripted_gui_names = Some(scripted_gui_names);
+            vanilla.file_paths = Some(Arc::new(file_paths));
+            vanilla.var_names = Some(Arc::new(var_names));
+            vanilla.scripted_loc_names = Some(Arc::new(scripted_loc_names));
+            vanilla.scripted_gui_names = Some(Arc::new(scripted_gui_names));
         }
         self.merge_vanilla_dynamic_values(complex_enum_values, value_set_values);
         total
@@ -170,6 +171,7 @@ impl Backend {
 
     pub(crate) fn merge_pending_vanilla_index(&self) {
         let (per_type, var_names, scripted_loc_names, scripted_gui_names, file_paths) = {
+            // One acquisition so a concurrent stage cannot pair this index with newer aux (#283).
             let mut vanilla = self.state.vanilla_state.lock();
             (
                 vanilla.index.take(),
@@ -253,7 +255,7 @@ impl Backend {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .var_index
-                .set_vanilla_names(var_names);
+                .set_vanilla_names(&var_names);
             drop(info);
             self.bump_info_revision();
         }
@@ -264,7 +266,7 @@ impl Backend {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .scripted_loc_index
-                .set_vanilla_names(names);
+                .set_vanilla_names(&names);
             drop(info);
             self.bump_info_revision();
         }
@@ -273,7 +275,7 @@ impl Backend {
             let mut info = self.state.info_service.write();
             Arc::make_mut(&mut info.type_index)
                 .scripted_gui_index
-                .set_vanilla_names(names);
+                .set_vanilla_names(&names);
             drop(info);
             self.bump_info_revision();
         }
@@ -299,7 +301,7 @@ impl Backend {
             &parent_roots,
             &ignore_files,
             &ignore_dirs,
-            cwtools_driver::VanillaFiles::Cached(vanilla_paths),
+            cwtools_driver::VanillaFiles::Cached(Cow::Borrowed(&vanilla_paths)),
             false,
             replacement_shadow.as_ref(),
         );
@@ -709,6 +711,103 @@ mod tests {
                 .var_index
                 .contains("vanilla_var")
         );
+    }
+
+    #[test]
+    fn repeated_merge_without_newly_staged_index_retains_payload() {
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.workspace_roots = vec![tmp.path().to_path_buf()];
+            config.refresh_roots();
+        }
+        let mut data = vanilla_data(vec!["vanilla_var"]);
+        data.aux.file_paths = vec!["common/things/kept.dds".to_string()];
+        backend.stage_vanilla_payload(data);
+        backend.merge_pending_vanilla_index();
+        let retained_file_paths = || backend.state.vanilla_state.lock().file_paths.clone();
+        let before = retained_file_paths().expect("payload retained after the first merge");
+
+        // Nothing is staged this time: the merge must still re-install the retained
+        // payload (replacing, not accumulating) and rebuild the file index from it,
+        // and the payload must survive for yet another merge (#1154).
+        backend.merge_pending_vanilla_index();
+        {
+            let idx = backend.state.info_service.read();
+            assert!(idx.type_index.var_index.contains("vanilla_var"));
+            assert!(idx.type_index.file_index.contains("common/things/kept.dds"));
+        }
+        let after = retained_file_paths().expect("payload retained after the second merge");
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "a merge must share the retained payload, not replace it with a copy"
+        );
+    }
+
+    #[test]
+    fn concurrent_stage_never_pairs_an_old_index_with_new_aux() {
+        // The pending index and the auxiliary payload are read under ONE
+        // vanilla_state acquisition (#283). A merge that split the read could pair
+        // a stale index with a freshly staged auxiliary payload, so which vanilla
+        // name set gets installed must always match which instance snapshot was
+        // merged. The interleave window is scheduler-biased, so this detects the
+        // defect probabilistically and can never fail against a single-read merge.
+        let backend = test_backend();
+        let tmp = tempfile::tempdir().unwrap();
+        let vanilla_root = tmp.path().join("vanilla");
+        std::fs::create_dir_all(vanilla_root.join("loop")).unwrap();
+        std::fs::write(vanilla_root.join("loop/a.txt"), "").unwrap();
+        std::fs::write(vanilla_root.join("loop/b.txt"), "").unwrap();
+        {
+            let mut config = backend.state.config.write();
+            config.vanilla_dir = Some(vanilla_root.clone());
+            config.refresh_roots();
+        }
+        let instance = |name: &str| TypeInstance {
+            name: name.to_string(),
+            location: SourceLocation {
+                line: 0,
+                col: 0,
+                end: (0, 1),
+            },
+            primary_loc_key: None,
+            required_loc_keys: Vec::new(),
+        };
+        let payload = |path: &str, name: &str| {
+            let mut data = vanilla_data(vec![name]);
+            let absolute = vanilla_root.join(path);
+            data.per_type.insert(
+                "scripted_effect".to_string(),
+                vec![(
+                    Arc::from(absolute.to_string_lossy().as_ref()),
+                    instance(name),
+                )],
+            );
+            data
+        };
+        for _ in 0..64 {
+            backend.stage_vanilla_payload(payload("loop/a.txt", "alpha_var"));
+            std::thread::scope(|scope| {
+                scope.spawn(|| backend.merge_pending_vanilla_index());
+                std::thread::yield_now();
+                backend.stage_vanilla_payload(payload("loop/b.txt", "beta_var"));
+            });
+            std::thread::yield_now();
+
+            let names_installed = {
+                let idx = backend.state.info_service.read();
+                idx.type_index.var_index.contains("alpha_var")
+            };
+            let index_merged = {
+                let vanilla = backend.state.vanilla_state.lock();
+                vanilla.merged_uris.iter().any(|uri| uri.contains("a.txt"))
+            };
+            assert_eq!(
+                names_installed, index_merged,
+                "the installed vanilla names and the merged instance provenance must come from the same staged snapshot"
+            );
+        }
     }
 
     #[test]

@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "workspace_load"
 harness = false
+
+[[bench]]
+name = "vanilla_payload"
+harness = false
