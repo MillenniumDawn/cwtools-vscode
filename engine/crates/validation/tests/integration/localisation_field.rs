@@ -676,9 +676,12 @@ fn command_chain_scripted_loc_typo_warns_when_index_populated() {
 fn scoped_loc_codes_with_vanilla(loc: &str, key: &str, vanilla_vars: &[&str]) -> Vec<String> {
     let idx = loc_index(&[("a_l_english.yml", loc)]);
     let mut type_index = cwtools_index::TypeIndex::new();
-    type_index
-        .var_index
-        .set_vanilla_names(vanilla_vars.iter().map(|s| s.to_string()).collect());
+    type_index.var_index.set_vanilla_names(
+        &vanilla_vars
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>(),
+    );
     let script = format!("mytype = {{\n name = {key}\n}}\n");
     codes(
         SCOPED_CWT,
