@@ -519,12 +519,11 @@ pub(crate) async fn hold_for_tests(file_var: &str, ready_var: Option<&str>) {
     }
 }
 
-/// Below this many files the serial stat/hash fold wins; the `stat_signature`
-/// bench holds the crossover record for both a 24-core and a 4-core pool (#1153).
+/// Below this many files the serial fold wins; the `stat_signature` bench sweeps it (#1153).
 const PARALLEL_STAT_MIN_FILES: usize = 512;
 
 /// The per-file stat snapshot [`stat_signature_for`] hashes. `Missing` keeps
-/// the failed-metadata behaviour: the file contributes only its path string.
+/// the failed-metadata behavior: the file contributes only its path string.
 enum StatEntry {
     Missing,
     Stat { len: u64, mtime_nanos: Option<u128> },

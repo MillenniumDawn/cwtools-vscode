@@ -431,218 +431,87 @@ fn baseline_stat_signature(files: &[std::path::PathBuf]) -> u64 {
     hasher.finish()
 }
 
-/// One `stat_signature` workload: either generated files in a temp dir (kept
-/// alive so the stats keep resolving) or paths walked from a real checkout.
-struct StatSignatureFixture {
-    _dir: Option<tempfile::TempDir>,
-    paths: Vec<std::path::PathBuf>,
-    note: String,
-}
-
 /// The size sweep doubles as the crossover record for the parallel threshold:
 /// sizes left below it measure serial vs serial and must not move, sizes above
 /// it are where the parallel metadata sweep has to win.
 const STAT_SIGNATURE_SIZES: [usize; 5] = [3, 64, 256, 512, 1024];
 
-fn stat_signature_fixture(size: usize) -> &'static StatSignatureFixture {
-    static FIXTURES: std::sync::OnceLock<Vec<StatSignatureFixture>> = std::sync::OnceLock::new();
-    FIXTURES
-        .get_or_init(|| {
-            STAT_SIGNATURE_SIZES
-                .iter()
-                .map(|&size| {
-                    let dir = tempfile::TempDir::new().expect("stat_signature tempdir");
-                    let mut paths = Vec::with_capacity(size);
-                    for i in 0..size {
-                        let path = dir.path().join(format!("f_{i:05}.yml"));
-                        std::fs::write(&path, format!("l_english:\n key_{i:05}:0 \"value\"\n"))
-                            .expect("stat_signature fixture file");
-                        paths.push(path);
-                    }
-                    StatSignatureFixture {
-                        note: format!("{size} generated files in a temp dir"),
-                        paths,
-                        _dir: Some(dir),
-                    }
-                })
-                .collect()
+/// `size` generated files in a temp dir. The caller holds the dir for as long
+/// as it stats the paths; dropping it removes the files.
+fn generated_stat_signature_files(size: usize) -> (tempfile::TempDir, Vec<std::path::PathBuf>) {
+    let dir = tempfile::TempDir::new().expect("stat_signature tempdir");
+    let paths = (0..size)
+        .map(|i| {
+            let path = dir.path().join(format!("f_{i:05}.yml"));
+            std::fs::write(&path, format!("l_english:\n key_{i:05}:0 \"value\"\n"))
+                .expect("stat_signature fixture file");
+            path
         })
-        .iter()
-        .find(|fixture| fixture.paths.len() == size)
-        .expect("fixture registered for every sweep size")
-}
-
-fn corpus_stat_signature_fixture(cap: usize) -> &'static StatSignatureFixture {
-    static FIXTURE: std::sync::OnceLock<StatSignatureFixture> = std::sync::OnceLock::new();
-    FIXTURE.get_or_init(|| {
-        let Some(corpus) = checkout("CWTOOLS_CORPUS", "Millennium-Dawn") else {
-            return StatSignatureFixture {
-                note: "no corpus; set CWTOOLS_CORPUS or CWTOOLS_PROJECTS".to_string(),
-                paths: Vec::new(),
-                _dir: None,
-            };
-        };
-        let mut paths = Vec::new();
-        let mut stack = vec![corpus];
-        while let Some(dir) = stack.pop() {
-            if paths.len() >= cap {
-                break;
-            }
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Ok(file_type) = entry.file_type() else {
-                    continue;
-                };
-                if file_type.is_dir() {
-                    let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if !name.starts_with('.') {
-                        stack.push(path);
-                    }
-                } else if paths.len() < cap {
-                    paths.push(path);
-                }
-                if paths.len() >= cap {
-                    break;
-                }
-            }
-        }
-        StatSignatureFixture {
-            note: format!("{} Millennium-Dawn paths (cap {cap})", paths.len()),
-            paths,
-            _dir: None,
-        }
-    })
-}
-
-/// Median without the advisory-`unwrap` partial_cmp sort. Bench-only.
-fn bench_median(mut samples: Vec<f64>) -> f64 {
-    samples.sort_by(f64::total_cmp);
-    let mid = samples.len() / 2;
-    if samples.len().is_multiple_of(2) {
-        (samples[mid - 1] + samples[mid]) / 2.0
-    } else {
-        samples[mid]
-    }
-}
-
-/// True interleaved paired comparison. Criterion's separate bench functions
-/// run strictly one after another, so their per-run medians never interleave
-/// and a load burst can land on just one side. This harness alternates which
-/// strategy is measured first on every pair over the same fixture and reports
-/// the paired results, so order and moment-to-moment load cancel out (#1153).
-/// Bench-only.
-fn paired_stat_signature_comparison(
-    label: &str,
-    paths: &[std::path::PathBuf],
-    pairs: usize,
-    calls_per_sample: usize,
-) {
-    use std::time::Instant;
-
-    use cwtools_lsp::bench_support::stat_signature_for;
-
-    // Warm both strategies so neither pays first-touch costs inside the pairs.
-    for _ in 0..4 {
-        black_box(baseline_stat_signature(paths));
-        black_box(stat_signature_for(paths));
-    }
-    let mut baseline_us: Vec<f64> = Vec::with_capacity(pairs);
-    let mut candidate_us: Vec<f64> = Vec::with_capacity(pairs);
-    let mut baseline_first = true;
-    for _ in 0..pairs {
-        let (baseline, candidate) = if baseline_first {
-            let start = Instant::now();
-            for _ in 0..calls_per_sample {
-                black_box(baseline_stat_signature(paths));
-            }
-            (start.elapsed(), {
-                let start = Instant::now();
-                for _ in 0..calls_per_sample {
-                    black_box(stat_signature_for(paths));
-                }
-                start.elapsed()
-            })
-        } else {
-            let candidate = {
-                let start = Instant::now();
-                for _ in 0..calls_per_sample {
-                    black_box(stat_signature_for(paths));
-                }
-                start.elapsed()
-            };
-            let start = Instant::now();
-            for _ in 0..calls_per_sample {
-                black_box(baseline_stat_signature(paths));
-            }
-            (start.elapsed(), candidate)
-        };
-        baseline_us.push(baseline.as_nanos() as f64 / calls_per_sample as f64 / 1_000.0);
-        candidate_us.push(candidate.as_nanos() as f64 / calls_per_sample as f64 / 1_000.0);
-        baseline_first = !baseline_first;
-    }
-
-    let paired_diffs: Vec<f64> = candidate_us
-        .iter()
-        .zip(&baseline_us)
-        .map(|(candidate, baseline)| candidate - baseline)
         .collect();
-    let wins = paired_diffs.iter().filter(|diff| **diff < 0.0).count();
-    eprintln!(
-        "stat_signature paired ({label}, {pairs} pairs x {calls_per_sample} calls/sample, alternating order): \
-         baseline {:.3} µs/call, candidate {:.3} µs/call, paired diff median {:+.3} µs/call, \
-         candidate faster in {wins}/{pairs} pairs",
-        bench_median(baseline_us.clone()),
-        bench_median(candidate_us.clone()),
-        bench_median(paired_diffs),
-    );
+    (dir, paths)
 }
 
-/// The paired cases: n3 (tiny, serial path), n512 (the threshold boundary,
-/// parallel path) and the 20k-path corpus when a checkout is available.
-fn paired_stat_signature_comparisons() {
-    for (size, pairs, calls_per_sample) in [(3, 64, 400), (512, 48, 20)] {
-        let fixture = stat_signature_fixture(size);
-        paired_stat_signature_comparison(
-            &format!("n{size}: {}", fixture.note),
-            &fixture.paths,
-            pairs,
-            calls_per_sample,
+/// The primary files a scan of the Millennium-Dawn checkout fingerprints: the
+/// editor's own discovery, narrowed by the hoi4 rules' `folders`. `None` when a
+/// checkout is missing.
+fn corpus_scan_files() -> Option<Vec<std::path::PathBuf>> {
+    let (Some(rules_dir), Some(corpus)) = (
+        checkout("CWTOOLS_RULES", "cwtools-hoi4-config/Config"),
+        checkout("CWTOOLS_CORPUS", "Millennium-Dawn"),
+    ) else {
+        eprintln!(
+            "stat_signature: no corpus. Set CWTOOLS_RULES to a cwtools-hoi4-config/Config \
+             checkout and CWTOOLS_CORPUS to a Millennium-Dawn checkout (or CWTOOLS_PROJECTS \
+             to the folder holding both)"
         );
-    }
-    let corpus = corpus_stat_signature_fixture(20_000);
-    if corpus.paths.is_empty() {
-        eprintln!("stat_signature paired (corpus): skipped, {}", corpus.note);
-    } else {
-        paired_stat_signature_comparison(&format!("corpus: {}", corpus.note), &corpus.paths, 40, 1);
+        return None;
+    };
+    let table = StringTable::new();
+    let (ruleset, _errors) = cwtools_rules::ruleset_loader::load_ruleset_from_dir(
+        &rules_dir,
+        &table,
+        cwtools_file_manager::file_manager::ScanBudget::default(),
+    );
+    let config = cwtools_driver::workspace_discovery_config(&corpus, Some(&ruleset));
+    match cwtools_driver::discover_workspace_files(config) {
+        Ok(files) => Some(files.into_iter().map(|file| file.path).collect()),
+        Err(error) => {
+            eprintln!("stat_signature: corpus discovery failed: {error}");
+            None
+        }
     }
 }
 
 fn bench_stat_signature(c: &mut Criterion) {
     use cwtools_lsp::bench_support::stat_signature_for;
 
-    paired_stat_signature_comparisons();
+    let generated: Vec<_> = STAT_SIGNATURE_SIZES
+        .iter()
+        .map(|&size| (size, generated_stat_signature_files(size)))
+        .collect();
+    let corpus = corpus_scan_files();
+
     let mut group = c.benchmark_group("stat_signature");
-    let corpus = corpus_stat_signature_fixture(20_000);
-    eprintln!("stat_signature: corpus fixture uses {}", corpus.note);
-    for size in STAT_SIGNATURE_SIZES {
-        let fixture = stat_signature_fixture(size);
-        eprintln!("stat_signature: {size} files = {}", fixture.note);
+    for (size, (_dir, paths)) in &generated {
         group.bench_function(format!("n{size}/baseline_serial"), |b| {
-            b.iter(|| baseline_stat_signature(black_box(&fixture.paths)))
+            b.iter(|| baseline_stat_signature(black_box(paths)))
         });
         group.bench_function(format!("n{size}/candidate"), |b| {
-            b.iter(|| stat_signature_for(black_box(&fixture.paths)))
+            b.iter(|| stat_signature_for(black_box(paths)))
         });
     }
-    group.bench_function("corpus/baseline_serial", |b| {
-        b.iter(|| baseline_stat_signature(black_box(&corpus.paths)))
-    });
-    group.bench_function("corpus/candidate", |b| {
-        b.iter(|| stat_signature_for(black_box(&corpus.paths)))
-    });
+    if let Some(paths) = &corpus {
+        eprintln!(
+            "stat_signature: corpus has {} discovered files",
+            paths.len()
+        );
+        group.bench_function("corpus/baseline_serial", |b| {
+            b.iter(|| baseline_stat_signature(black_box(paths)))
+        });
+        group.bench_function("corpus/candidate", |b| {
+            b.iter(|| stat_signature_for(black_box(paths)))
+        });
+    }
     group.finish();
 }
 
