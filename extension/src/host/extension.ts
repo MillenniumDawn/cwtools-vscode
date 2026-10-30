@@ -4,8 +4,6 @@
  * ------------------------------------------------------------------------------------------ */
 
 import * as path from "path";
-import * as os from "os";
-import * as fsPromises from "fs/promises";
 import * as vscode from "vscode";
 import type { ExtensionContext, WorkspaceFolder } from "vscode";
 import { workspace, window, commands, l10n } from "vscode";
@@ -15,6 +13,7 @@ import { serverExe as resolveServerExe } from "./engine";
 import { detectGameAndVanilla } from "./detectGame";
 import type { GameDetection } from "./detectGame";
 import { resolveRulesCache, fetchRulesInBackground } from "./rulesSetup";
+import { prepareClientStart } from "./startupPreparation";
 import {
 	createLanguageClient,
 	observeRulesFileNotifications,
@@ -161,21 +160,11 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		}
 		logInfo(`Using server: ${serverExe}`);
 
-		if (os.platform() !== "win32") {
-			try {
-				const stat = await fsPromises.stat(serverExe);
-				if ((stat.mode & 0o111) === 0) {
-					await fsPromises.chmod(serverExe, 0o755);
-				}
-			} catch (e) {
-				logError("stat/chmod error on server binary", e);
-			}
-		}
-
-		const { rulesCache, fetchUpstream } = await resolveRulesCache(
-			language,
-			cacheDir,
-			workspaceFolder.uri.fsPath,
+		const resolveRules = () =>
+			resolveRulesCache(language, cacheDir, workspaceFolder.uri.fsPath);
+		const { rulesCache, fetchUpstream } = await prepareClientStart(
+			serverExe,
+			resolveRules,
 		);
 
 		// Where a location the server reports is allowed to point. Anything else
@@ -208,8 +197,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 				serverExe,
 				cacheDir,
 				rulesCache,
-				resolveRulesCache: () =>
-					resolveRulesCache(language, cacheDir, workspaceFolder.uri.fsPath),
+				resolveRulesCache: resolveRules,
 				onRulesCacheChanged: trustedRulesRoots,
 				fetchRules,
 				workspaceFolder,

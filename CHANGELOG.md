@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Extension
+
+* Start the server-binary exec-bit fix-up (stat/chmod outside Windows) and the rules-cache resolve together on activation and wait for both before creating the language client, instead of running them back to back. Windows behavior, the missing-binary early return, logged-and-continued stat/chmod errors, and rules-cache rejection are unchanged. (#1155)
+
 #### Engine
 
 * Fence pass 2's chunked parallel validation and the open-document uses region with `tokio::task::block_in_place`, as pass 1 already does, so their Rayon regions run as blocking sections on the multi-threaded runtime instead of blocking the async worker they start on while unrelated requests wait. Mapping order, chunk yielding, cancellation and diagnostics are unchanged. (#1152)
