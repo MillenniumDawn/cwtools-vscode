@@ -12,6 +12,9 @@
 //! It is also found under `CWTOOLS_PROJECTS`, or as a sibling of this repo.
 //! When it is missing the case prints why and measures nothing; the `cache`
 //! group always runs.
+//!
+//! `prune` needs no checkout: it builds four fingerprint dirs of 1000 entries each
+//! and times the prune that `validate_or_clear` runs on every cache hit.
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use cwtools_cache::{convert, io, workspace};
@@ -71,6 +74,40 @@ fn bench_cache(c: &mut Criterion) {
             })
             .unwrap()
         })
+    });
+    group.finish();
+}
+
+const PRUNE_FINGERPRINTS: u64 = 4;
+const PRUNE_ENTRIES_PER_DIR: usize = 1000;
+
+fn prune_text(fingerprint: u64, entry: usize) -> String {
+    format!("entry_{fingerprint}_{entry} = {{ value = {entry} }}\n")
+}
+
+/// `validate_or_clear` on a warm cache that is under every cap: the per-scan
+/// prune lists each fingerprint dir, `.cwb` and `.cwe` pairs alike, and evicts nothing.
+fn bench_prune(c: &mut Criterion) {
+    let table = StringTable::new();
+    let cache = tempfile::tempdir().expect("prune benchmark temp directory");
+    for fingerprint in 1..=PRUNE_FINGERPRINTS {
+        workspace::validate_or_clear(cache.path(), fingerprint).expect("fresh prune cache");
+        for entry in 0..PRUNE_ENTRIES_PER_DIR {
+            let text = prune_text(fingerprint, entry);
+            let parsed = parse_string(&text, &table);
+            workspace::store(cache.path(), fingerprint, &text, &parsed, &table);
+        }
+    }
+    let last = prune_text(PRUNE_FINGERPRINTS, PRUNE_ENTRIES_PER_DIR - 1);
+    assert!(
+        workspace::load(cache.path(), PRUNE_FINGERPRINTS, &last, &table).is_some(),
+        "the synthetic cache should hold its last entry"
+    );
+    assert!(workspace::validate_or_clear(cache.path(), 1).expect("warm prune cache"));
+
+    let mut group = c.benchmark_group("prune");
+    group.bench_function("validate_or_clear_hit", |b| {
+        b.iter(|| workspace::validate_or_clear(black_box(cache.path()), 1))
     });
     group.finish();
 }
@@ -156,5 +193,5 @@ fn bench_parse_cache(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cache, bench_parse_cache);
+criterion_group!(benches, bench_cache, bench_prune, bench_parse_cache);
 criterion_main!(benches);
