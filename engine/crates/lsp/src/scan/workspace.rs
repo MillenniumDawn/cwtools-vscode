@@ -3,14 +3,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-#[cfg(test)]
-use std::sync::OnceLock;
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-
-#[cfg(test)]
-use parking_lot::{Condvar, Mutex};
-
 use tower_lsp::lsp_types::*;
 
 use cwtools_cache::workspace as workspace_cache;
@@ -105,6 +97,7 @@ struct ChunkMapper<F, Before, After> {
 /// Map four lock-step slices in parallel, `chunk` at a time, yielding between chunks so a long
 /// scan stays cancellable. The result is identical for every `chunk` size (#328). `None`
 /// means `cancel` latched: a partial `Vec` would publish empty diagnostics over unvalidated files.
+/// Needs the multi-threaded runtime, because each chunk runs under `block_in_place`.
 async fn chunked_par_filter_map<A, B, C, D, R, F, Before, After>(
     first: &[A],
     second: &[B],
@@ -164,89 +157,6 @@ where
         }
     }
     Some(out)
-}
-
-/// Test gate that parks the open-uses mapper for one URI (#1152). A test
-/// opens the gate for its fixture's unique URI and reads `entered` to see that
-/// the mapper parked; every other backends' URIs pass straight through.
-#[cfg(test)]
-struct OpenUsesRegionGate {
-    held: Mutex<Option<Box<str>>>,
-    released: Condvar,
-    entered: AtomicUsize,
-}
-
-#[cfg(test)]
-static OPEN_USES_REGION: OnceLock<OpenUsesRegionGate> = OnceLock::new();
-
-#[cfg(test)]
-impl OpenUsesRegionGate {
-    fn new() -> Self {
-        Self {
-            held: Mutex::new(None),
-            released: Condvar::new(),
-            entered: AtomicUsize::new(0),
-        }
-    }
-
-    fn open_for_tests(&'static self, uri: &str) -> OpenUsesRegionGateGuard {
-        let mut held = self.held.lock();
-        assert!(
-            held.is_none(),
-            "only one test may hold the open-uses gate at a time"
-        );
-        *held = Some(uri.into());
-        self.entered.store(0, Ordering::Relaxed);
-        OpenUsesRegionGateGuard
-    }
-
-    fn entered_for_tests(&self) -> usize {
-        self.entered.load(Ordering::Relaxed)
-    }
-}
-
-#[cfg(test)]
-fn hold_open_uses_region_for_tests(uri: &str) {
-    let gate = OPEN_USES_REGION.get_or_init(OpenUsesRegionGate::new);
-    let mut held = gate.held.lock();
-    if held.as_deref() != Some(uri) {
-        return;
-    }
-    gate.entered.fetch_add(1, Ordering::Relaxed);
-    while held.as_deref() == Some(uri) {
-        gate.released.wait(&mut held);
-    }
-}
-
-/// Disarms the gate on drop, so the mapper also frees a test that panics
-/// while it is parked.
-#[cfg(test)]
-struct OpenUsesRegionGateGuard;
-
-#[cfg(test)]
-impl Drop for OpenUsesRegionGateGuard {
-    fn drop(&mut self) {
-        if let Some(gate) = OPEN_USES_REGION.get() {
-            let mut held = gate.held.lock();
-            if held.take().is_some() {
-                gate.released.notify_all();
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-fn open_uses_region_gate_for_tests(uri: &str) -> OpenUsesRegionGateGuard {
-    OPEN_USES_REGION
-        .get_or_init(OpenUsesRegionGate::new)
-        .open_for_tests(uri)
-}
-
-#[cfg(test)]
-fn open_uses_region_entered_for_tests() -> usize {
-    OPEN_USES_REGION
-        .get()
-        .map_or(0, OpenUsesRegionGate::entered_for_tests)
 }
 
 /// What pass 1 of a scan hands the serial merge for one file.
@@ -1147,7 +1057,7 @@ impl Backend {
                     .par_iter()
                     .map(|(u, ast)| {
                         #[cfg(test)]
-                        hold_open_uses_region_for_tests(u);
+                        self.hold(crate::state::HoldPoint::OpenUses);
                         let (_, used) = validate_prepared_tracking_uses(ast, u, prepared);
                         (u.clone(), used)
                     })
@@ -1934,31 +1844,6 @@ mod tests {
         assert_eq!(out, None);
     }
 
-    /// Blocks the calling thread until released, so a mapper can hold a Rayon
-    /// region open while the test inspects the rest of the runtime (#1152).
-    #[derive(Clone)]
-    struct MapperHold(Arc<(Mutex<bool>, Condvar)>);
-
-    impl MapperHold {
-        fn new() -> Self {
-            Self(Arc::new((Mutex::new(true), Condvar::new())))
-        }
-
-        fn park(&self) {
-            let (held, released) = &*self.0;
-            let mut held = held.lock();
-            while *held {
-                released.wait(&mut held);
-            }
-        }
-
-        fn release(&self) {
-            let (held, released) = &*self.0;
-            *held.lock() = false;
-            released.notify_all();
-        }
-    }
-
     /// OS-side wait, so it never depends on a worker being free to poll it.
     fn wait_until(predicate: impl Fn() -> bool, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
@@ -1971,10 +1856,11 @@ mod tests {
     const HOLD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
     const SIBLING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+    /// Runs a chunked walk whose mapper parks at `Pass2Mid` until the test releases `gate`,
+    /// so a Rayon region stays open while the test inspects the rest of the runtime (#1152).
     fn spawn_chunk_holder(
         rt: &tokio::runtime::Runtime,
-        hold: MapperHold,
-        entered: Arc<AtomicUsize>,
+        gate: Arc<HoldGate>,
     ) -> tokio::task::JoinHandle<Option<Vec<Row>>> {
         rt.spawn(async move {
             let (a, b, c, d) = inputs(4);
@@ -1987,8 +1873,7 @@ mod tests {
                 &CancelFlag::inert(),
                 ChunkMapper {
                     map: move |_a: &usize, _b: &Option<usize>, _c: &Option<u64>, _d: &u32| {
-                        entered.fetch_add(1, Ordering::Relaxed);
-                        hold.park();
+                        gate.hold(HoldPoint::Pass2Mid);
                         None
                     },
                     before_chunk: || {},
@@ -1998,6 +1883,7 @@ mod tests {
             .await
         })
     }
+
     /// While a pass 2 chunk's mapping region is held, an unrelated task on the
     /// same runtime must still progress (#1152). Red before the fence.
     #[test]
@@ -2007,11 +1893,10 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let hold = MapperHold::new();
-        let entered = Arc::new(AtomicUsize::new(0));
-        let chunk = spawn_chunk_holder(&rt, hold.clone(), entered.clone());
+        let gate = HoldGate::new(HoldPoint::Pass2Mid);
+        let chunk = spawn_chunk_holder(&rt, gate.clone());
         // The probe starts only once the region holds the only worker.
-        let arrived = wait_until(|| entered.load(Ordering::Relaxed) > 0, HOLD_TIMEOUT);
+        let arrived = wait_until(|| gate.has_arrived(), HOLD_TIMEOUT);
         let probe_done = Arc::new(AtomicBool::new(false));
         let probe = {
             let done = probe_done.clone();
@@ -2021,7 +1906,7 @@ mod tests {
         };
         let progressed = wait_until(|| probe_done.load(Ordering::Relaxed), SIBLING_TIMEOUT);
         // Release before asserting so a failing run cannot wedge the runtime drop.
-        hold.release();
+        gate.release();
         rt.block_on(async {
             probe.await.unwrap();
             assert_eq!(chunk.await.unwrap(), Some(Vec::new()));
@@ -2042,7 +1927,10 @@ mod tests {
     /// (#1152). Red before the fence, green after it.
     #[test]
     fn held_open_uses_region_leaves_the_runtime_for_sibling_tasks() {
-        let (backend, tmp) = setup_workspace(None);
+        // Needs more fixture files than PASS2_CHUNK_SIZE: the per-chunk yield_now puts the scan
+        // back on the core-holding worker before the open-uses region.
+        let gate = HoldGate::new(HoldPoint::OpenUses);
+        let (backend, tmp) = setup_workspace(Some(gate.clone()));
         let open_uri = Url::from_file_path(tmp.path().join("open_buffer.txt"))
             .unwrap()
             .to_string();
@@ -2073,8 +1961,6 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        // Armed before the scan starts, so only the fixture's mapper parks.
-        let gate = open_uses_region_gate_for_tests(&open_uri);
         let scan_backend = clone_backend(&backend);
         let scan = rt.spawn(async move {
             let progress = CommandProgress::for_tests(
@@ -2089,7 +1975,7 @@ mod tests {
                 )
                 .await
         });
-        let arrived = wait_until(|| open_uses_region_entered_for_tests() > 0, HOLD_TIMEOUT);
+        let arrived = wait_until(|| gate.has_arrived(), HOLD_TIMEOUT);
         // The probe starts only once the region holds the only worker.
         let probe_done = Arc::new(AtomicBool::new(false));
         let probe = {
@@ -2100,7 +1986,7 @@ mod tests {
         };
         let progressed = wait_until(|| probe_done.load(Ordering::Relaxed), SIBLING_TIMEOUT);
         // Release before asserting so a failing run cannot wedge the runtime drop.
-        drop(gate);
+        gate.release();
         let completed = rt.block_on(async {
             let completed = scan.await.unwrap();
             probe.await.unwrap();
@@ -2749,7 +2635,7 @@ mod tests {
     /// Slices out of lock-step must fail loudly. `chunks().zip()` truncates to the
     /// shortest, so without the assert a length-invariant bug upstream would silently
     /// drop the tail's diagnostics.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[should_panic]
     async fn mismatched_lengths_panic_rather_than_truncate() {
         let (a, b, c, d) = inputs(300);
