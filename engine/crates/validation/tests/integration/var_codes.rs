@@ -29,7 +29,7 @@ fn vars(names: &[&str]) -> TypeIndex {
 fn vanilla_vars(vanilla: &[&str], names: &[&str]) -> TypeIndex {
     let mut idx = TypeIndex::new();
     idx.var_index
-        .set_vanilla_names(vanilla.iter().map(|s| s.to_string()).collect());
+        .set_vanilla_names(&vanilla.iter().map(|s| s.to_string()).collect::<Vec<_>>());
     for name in names {
         idx.var_index.add_name(name);
     }

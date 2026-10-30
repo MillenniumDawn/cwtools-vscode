@@ -262,14 +262,18 @@ impl FileIndex {
 
     /// Add paths a parent mod or the base game provides, after the workspace's claims.
     /// A claimed key keeps the workspace spelling and survives its release (#1067).
-    pub fn add_paths<I: IntoIterator<Item = String>>(&mut self, paths: I) {
-        for p in paths {
-            let ci = p.to_ascii_lowercase();
+    /// A borrowed spelling is copied only when a new exact spelling is inserted (#1154).
+    pub fn add_paths<'a, I: IntoIterator<Item: Into<Cow<'a, str>>>>(&mut self, paths: I) {
+        for path in paths {
+            let path = path.into();
+            let ci = path.as_ref().to_ascii_lowercase();
             if self.owned.contains(&ci) {
                 self.overridden.insert(ci.clone());
             }
             if self.case_sensitive {
-                self.files_exact.entry(ci.clone()).or_insert(p);
+                self.files_exact
+                    .entry(ci.clone())
+                    .or_insert_with(move || path.into_owned());
             }
             self.files.insert(ci);
         }
@@ -392,10 +396,10 @@ impl VarIndex {
 
     /// Replace the base-game contribution with `names` (normalized). A re-merge drops
     /// the previous set, and a name the mod also defines survives a `clear_file` (#306).
-    pub fn set_vanilla_names(&mut self, names: Vec<String>) {
+    pub fn set_vanilla_names(&mut self, names: &[String]) {
         self.vanilla_names.clear();
         for raw in names {
-            let n = Self::normalize(&raw);
+            let n = Self::normalize(raw);
             if !n.is_empty() {
                 self.vanilla_names.insert(n);
             }
@@ -464,9 +468,9 @@ impl ScriptedLocIndex {
         }
     }
 
-    pub fn set_vanilla_names(&mut self, names: Vec<String>) {
+    pub fn set_vanilla_names(&mut self, names: &[String]) {
         self.vanilla_names = names
-            .into_iter()
+            .iter()
             .filter(|n| !n.is_empty())
             .map(|n| Arc::from(n.to_ascii_lowercase().as_str()))
             .collect();
@@ -517,9 +521,9 @@ impl ScriptedGuiIndex {
         }
     }
 
-    pub fn set_vanilla_names(&mut self, names: Vec<String>) {
+    pub fn set_vanilla_names(&mut self, names: &[String]) {
         self.vanilla_names = names
-            .into_iter()
+            .iter()
             .filter(|name| !name.is_empty())
             .map(|name| Arc::from(name.to_ascii_lowercase().as_str()))
             .collect();
@@ -2003,7 +2007,7 @@ mod tests {
     #[test]
     fn scripted_loc_vanilla_survives_a_mod_file_clear() {
         let mut idx = scripted_loc_index_with("a.txt", &["Shared"]);
-        idx.set_vanilla_names(vec!["Shared".into(), "VanillaOnly".into()]);
+        idx.set_vanilla_names(&["Shared".into(), "VanillaOnly".into()]);
         idx.remove_file("a.txt");
         assert!(idx.contains("Shared"), "the base-game definition stays");
         assert!(idx.contains("VanillaOnly"));
@@ -2012,8 +2016,8 @@ mod tests {
     #[test]
     fn scripted_loc_vanilla_remerge_replaces_not_accumulates() {
         let mut idx = ScriptedLocIndex::default();
-        idx.set_vanilla_names(vec!["First".into()]);
-        idx.set_vanilla_names(vec!["Second".into()]);
+        idx.set_vanilla_names(&["First".into()]);
+        idx.set_vanilla_names(&["Second".into()]);
         assert!(!idx.contains("First"));
         assert!(idx.contains("Second"));
     }
@@ -2021,7 +2025,7 @@ mod tests {
     #[test]
     fn scripted_loc_names_are_the_workspace_half_only() {
         let mut idx = scripted_loc_index_with("a.txt", &["ModOne"]);
-        idx.set_vanilla_names(vec!["VanillaOne".into()]);
+        idx.set_vanilla_names(&["VanillaOne".into()]);
         let names: Vec<&str> = idx.names().collect();
         assert_eq!(names, vec!["modone"], "the cache stores vanilla separately");
     }
@@ -2063,7 +2067,7 @@ mod tests {
     fn scripted_gui_vanilla_survives_workspace_removal() {
         let mut idx = ScriptedGuiIndex::default();
         idx.merge_file("a.txt", vec!["Shared".into()]);
-        idx.set_vanilla_names(vec!["Shared".into(), "VanillaOnly".into()]);
+        idx.set_vanilla_names(&["Shared".into(), "VanillaOnly".into()]);
         idx.remove_file("a.txt");
         assert!(idx.contains("Shared"));
         assert!(idx.contains("VanillaOnly"));
@@ -2084,14 +2088,14 @@ mod tests {
     #[test]
     fn var_index_vanilla_set_makes_contains_true() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["vanilla_var".to_string()]);
+        vi.set_vanilla_names(&["vanilla_var".to_string()]);
         assert!(vi.contains("vanilla_var"));
     }
 
     #[test]
     fn var_index_vanilla_set_case_insensitive() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["vanilla_var".to_string()]);
+        vi.set_vanilla_names(&["vanilla_var".to_string()]);
         assert!(vi.contains("VANILLA_VAR"));
     }
 
@@ -2099,7 +2103,7 @@ mod tests {
     fn var_index_vanilla_set_is_empty_and_len() {
         let mut vi = VarIndex::new();
         assert!(vi.is_empty());
-        vi.set_vanilla_names(vec!["vanilla_var".to_string()]);
+        vi.set_vanilla_names(&["vanilla_var".to_string()]);
         assert!(!vi.is_empty());
         assert_eq!(vi.len(), 1);
     }
@@ -2107,21 +2111,21 @@ mod tests {
     #[test]
     fn var_index_vanilla_quoted_trim_normalized() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["\"quoted_var\"".to_string()]);
+        vi.set_vanilla_names(&["\"quoted_var\"".to_string()]);
         assert!(vi.contains("quoted_var"));
     }
 
     #[test]
     fn var_index_vanilla_dot_last_segment() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["foo.bar^2".to_string()]);
+        vi.set_vanilla_names(&["foo.bar^2".to_string()]);
         assert!(vi.contains("bar"));
     }
 
     #[test]
     fn var_index_vanilla_suffix_stripping() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["my_var?100".to_string(), "my_var@GER".to_string()]);
+        vi.set_vanilla_names(&["my_var?100".to_string(), "my_var@GER".to_string()]);
         assert!(vi.contains("my_var"));
         assert_eq!(vi.len(), 1, "? and @ suffixes collapse to same key");
     }
@@ -2129,7 +2133,7 @@ mod tests {
     #[test]
     fn var_index_vanilla_empty_and_whitespace_skipped() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["   ".to_string(), "".to_string()]);
+        vi.set_vanilla_names(&["   ".to_string(), "".to_string()]);
         assert!(vi.is_empty());
         assert_eq!(vi.len(), 0);
     }
@@ -2138,7 +2142,7 @@ mod tests {
     fn var_index_vanilla_len_union_does_not_double_count_shared() {
         let mut vi = VarIndex::new();
         vi.add_name("shared_var");
-        vi.set_vanilla_names(vec!["shared_var".to_string(), "vanilla_only".to_string()]);
+        vi.set_vanilla_names(&["shared_var".to_string(), "vanilla_only".to_string()]);
         assert!(vi.contains("shared_var"));
         assert!(vi.contains("vanilla_only"));
         assert_eq!(vi.len(), 2, "shared name counts once");
@@ -2149,7 +2153,7 @@ mod tests {
     fn var_index_vanilla_loc_bindable_includes_vanilla() {
         let mut idx = TypeIndex::new();
         idx.var_index
-            .set_vanilla_names(vec!["vanilla_loc_var".to_string()]);
+            .set_vanilla_names(&["vanilla_loc_var".to_string()]);
         let names: HashSet<String> = idx.loc_bindable_names().collect();
         assert!(
             names.contains("vanilla_loc_var"),
@@ -2166,7 +2170,7 @@ mod tests {
     fn var_index_vanilla_survives_clear_file_on_shared_name() {
         let mut vi = VarIndex::new();
         vi.add_name("shared_var");
-        vi.set_vanilla_names(vec!["shared_var".to_string()]);
+        vi.set_vanilla_names(&["shared_var".to_string()]);
         vi.remove_name("shared_var");
         assert!(
             vi.contains("shared_var"),
@@ -2178,9 +2182,9 @@ mod tests {
     #[test]
     fn var_index_vanilla_remerge_replaces_not_accumulates() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["old_var".to_string()]);
+        vi.set_vanilla_names(&["old_var".to_string()]);
         assert!(vi.contains("old_var"));
-        vi.set_vanilla_names(vec!["new_var".to_string()]);
+        vi.set_vanilla_names(&["new_var".to_string()]);
         assert!(
             !vi.contains("old_var"),
             "re-merge must replace, not accumulate"
@@ -2193,7 +2197,7 @@ mod tests {
     fn var_index_vanilla_clear_drops_vanilla_retains_mod() {
         let mut vi = VarIndex::new();
         vi.add_name("mod_var");
-        vi.set_vanilla_names(vec!["vanilla_var".to_string()]);
+        vi.set_vanilla_names(&["vanilla_var".to_string()]);
         vi.clear_vanilla_names();
         assert!(!vi.contains("vanilla_var"));
         assert!(vi.contains("mod_var"));
@@ -2204,7 +2208,7 @@ mod tests {
     fn var_index_vanilla_second_clear_idempotent() {
         let mut vi = VarIndex::new();
         vi.add_name("mod_var");
-        vi.set_vanilla_names(vec!["vanilla_var".to_string()]);
+        vi.set_vanilla_names(&["vanilla_var".to_string()]);
         vi.clear_vanilla_names();
         vi.clear_vanilla_names();
         assert!(vi.contains("mod_var"));
@@ -2214,8 +2218,8 @@ mod tests {
     #[test]
     fn var_index_vanilla_empty_vector_clears_previous() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["a".to_string()]);
-        vi.set_vanilla_names(vec![]);
+        vi.set_vanilla_names(&["a".to_string()]);
+        vi.set_vanilla_names(&[]);
         assert!(!vi.contains("a"));
         assert!(vi.is_empty());
     }
@@ -2223,7 +2227,7 @@ mod tests {
     #[test]
     fn var_index_merge_does_not_copy_vanilla_names() {
         let mut vanilla = VarIndex::new();
-        vanilla.set_vanilla_names(vec!["vanilla_only".to_string()]);
+        vanilla.set_vanilla_names(&["vanilla_only".to_string()]);
         let mut mod_idx = VarIndex::new();
         mod_idx.merge(&vanilla);
         assert!(
@@ -2236,7 +2240,7 @@ mod tests {
     fn var_index_all_names_dedups_shared() {
         let mut vi = VarIndex::new();
         vi.add_name("shared");
-        vi.set_vanilla_names(vec!["shared".to_string(), "vanilla".to_string()]);
+        vi.set_vanilla_names(&["shared".to_string(), "vanilla".to_string()]);
         assert_eq!(vi.all_names().count(), vi.len());
         assert_eq!(vi.len(), 2);
     }
@@ -2245,7 +2249,7 @@ mod tests {
     fn var_index_all_names_count_equals_len_when_shared_cross_form() {
         let mut vi = VarIndex::new();
         vi.add_name("SHARED_VAR");
-        vi.set_vanilla_names(vec![
+        vi.set_vanilla_names(&[
             "shared_var".to_string(),
             "My_Var@GER".to_string(),
             "foo.bar".to_string(),
@@ -2259,7 +2263,7 @@ mod tests {
     #[test]
     fn vanilla_names_iter_returns_staged() {
         let mut vi = VarIndex::new();
-        vi.set_vanilla_names(vec!["b".to_string(), "a".to_string()]);
+        vi.set_vanilla_names(&["b".to_string(), "a".to_string()]);
         let mut v: Vec<_> = vi.vanilla_names_iter().cloned().collect();
         v.sort();
         assert_eq!(v, vec!["a", "b"]);
@@ -2339,12 +2343,12 @@ mod tests {
     fn clone_var_index_vanilla_is_independent() {
         let mut idx = TypeIndex::new();
         idx.var_index
-            .set_vanilla_names(vec!["Vanilla_Var".to_string()]);
+            .set_vanilla_names(&["Vanilla_Var".to_string()]);
         let snap = idx.clone();
         let mut mutated = snap.clone();
         mutated
             .var_index
-            .set_vanilla_names(vec!["Other_Vanilla".to_string()]);
+            .set_vanilla_names(&["Other_Vanilla".to_string()]);
         assert!(mutated.var_index.contains("other_vanilla"));
         assert!(snap.var_index.contains("vanilla_var"));
         assert!(!snap.var_index.contains("other_vanilla"));
