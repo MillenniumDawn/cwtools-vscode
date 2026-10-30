@@ -1287,8 +1287,8 @@ impl Backend {
             let mut info = self.state.info_service.write();
             let type_index = Arc::make_mut(&mut info.type_index);
             type_index.var_index.clear_vanilla_names();
-            type_index.scripted_loc_index.set_vanilla_names(Vec::new());
-            type_index.scripted_gui_index.set_vanilla_names(Vec::new());
+            type_index.scripted_loc_index.set_vanilla_names(&[]);
+            type_index.scripted_gui_index.set_vanilla_names(&[]);
         }
         self.bump_info_revision();
     }

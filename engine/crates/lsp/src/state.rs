@@ -214,7 +214,8 @@ impl RuleData {
 
 /// Mutable base-game payload. Its pieces are staged and consumed at different
 /// times, so a merge takes only the pending index while retaining the auxiliary
-/// data for later workspace and localization rebuilds.
+/// data for later workspace and localization rebuilds. Retained payloads are
+/// shared through `Arc` so merges consume them without deep clones (#1154).
 #[derive(Default)]
 pub(crate) struct VanillaState {
     #[allow(clippy::type_complexity)]
@@ -224,10 +225,10 @@ pub(crate) struct VanillaState {
     pub(crate) merged_uris: HashSet<Arc<str>>,
     #[allow(clippy::type_complexity)]
     pub(crate) loc_keys: Option<Vec<(String, Vec<String>)>>,
-    pub(crate) file_paths: Option<Vec<String>>,
-    pub(crate) var_names: Option<Vec<String>>,
-    pub(crate) scripted_loc_names: Option<Vec<String>>,
-    pub(crate) scripted_gui_names: Option<Vec<String>>,
+    pub(crate) file_paths: Option<Arc<Vec<String>>>,
+    pub(crate) var_names: Option<Arc<Vec<String>>>,
+    pub(crate) scripted_loc_names: Option<Arc<Vec<String>>>,
+    pub(crate) scripted_gui_names: Option<Arc<Vec<String>>>,
 }
 
 /// LOCK ORDER: snapshot or take `vanilla_state` under its short-lived guard,
