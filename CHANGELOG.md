@@ -3,6 +3,7 @@
 #### Extension
 
 * Start the server-binary exec-bit fix-up (stat/chmod outside Windows) and the rules-cache resolve together on activation and wait for both before creating the language client, instead of running them back to back. Windows behavior, the missing-binary early return, logged-and-continued stat/chmod errors, and rules-cache rejection are unchanged. (#1155)
+
 #### Engine
 
 * Merging the base-game index no longer deep-copies its cached auxiliary payload on every workspace scan and re-merge. The payload is file paths, variable names, and scripted loc and scripted GUI name lists. The retained data is shared by reference until each consumer installs it, so repeated scans and file-index rebuilds stop paying a full copy of the base-game payload. (#1154)
