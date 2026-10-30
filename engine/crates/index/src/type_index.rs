@@ -262,10 +262,7 @@ impl FileIndex {
 
     /// Add paths a parent mod or the base game provides, after the workspace's claims.
     /// A claimed key keeps the workspace spelling and survives its release (#1067).
-    /// Accepts owned or borrowed spellings, so a caller holding a payload it must
-    /// retain for later re-merges does not have to copy it per lookup rebuild (#1154).
-    /// Owned spellings keep moving straight into the case-sensitive map; a borrowed
-    /// spelling is copied only when a new exact spelling is actually inserted.
+    /// A borrowed spelling is copied only when a new exact spelling is inserted (#1154).
     pub fn add_paths<'a, I: IntoIterator<Item: Into<Cow<'a, str>>>>(&mut self, paths: I) {
         for path in paths {
             let path = path.into();
@@ -399,7 +396,6 @@ impl VarIndex {
 
     /// Replace the base-game contribution with `names` (normalized). A re-merge drops
     /// the previous set, and a name the mod also defines survives a `clear_file` (#306).
-    /// Borrows so a caller holding the payload for later re-merges need not copy it (#1154).
     pub fn set_vanilla_names(&mut self, names: &[String]) {
         self.vanilla_names.clear();
         for raw in names {
@@ -472,7 +468,6 @@ impl ScriptedLocIndex {
         }
     }
 
-    /// Borrows so a caller holding the payload for later re-merges need not copy it (#1154).
     pub fn set_vanilla_names(&mut self, names: &[String]) {
         self.vanilla_names = names
             .iter()
@@ -526,7 +521,6 @@ impl ScriptedGuiIndex {
         }
     }
 
-    /// Borrows so a caller holding the payload for later re-merges need not copy it (#1154).
     pub fn set_vanilla_names(&mut self, names: &[String]) {
         self.vanilla_names = names
             .iter()

@@ -1241,9 +1241,7 @@ pub fn default_cache_dir() -> Option<PathBuf> {
 }
 
 pub enum VanillaFiles<'a> {
-    /// Ownership is the caller's: owned spellings move straight into the exact-case
-    /// index (the CLI's one-shot cache load), borrowed spellings spare the retaining
-    /// caller a whole-payload copy (#1154).
+    /// Owned moves into the index; borrowed spares a retaining caller a copy (#1154).
     Cached(Cow<'a, [String]>),
     Install(&'a Path),
 }

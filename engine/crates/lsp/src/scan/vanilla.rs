@@ -170,13 +170,8 @@ impl Backend {
     }
 
     pub(crate) fn merge_pending_vanilla_index(&self) {
-        // The retained auxiliary payload is shared behind an `Arc`, so a merge reads
-        // the four vectors by reference instead of deep-cloning them. The payloads
-        // must outlive this call: later re-merges and file-index rebuilds re-read
-        // the same retained copy (#1154).
         let (per_type, var_names, scripted_loc_names, scripted_gui_names, file_paths) = {
-            // One acquisition: a concurrent stage must never pair this pending index
-            // with a newer auxiliary payload (#283). The Arc clones keep it brief.
+            // One acquisition so a concurrent stage cannot pair this index with newer aux (#283).
             let mut vanilla = self.state.vanilla_state.lock();
             (
                 vanilla.index.take(),
@@ -297,8 +292,9 @@ impl Backend {
                 config.ignore_dir_patterns.clone(),
             )
         };
-        let Some(vanilla_paths) = file_paths else {
-            return;
+        let vanilla_paths = match file_paths {
+            Some(p) => p,
+            None => return,
         };
         let file_index = cwtools_driver::build_file_index_with_vanilla_shadow(
             &workspace_root,
@@ -721,7 +717,6 @@ mod tests {
     fn repeated_merge_without_newly_staged_index_retains_payload() {
         let backend = test_backend();
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(&tmp).unwrap();
         {
             let mut config = backend.state.config.write();
             config.workspace_roots = vec![tmp.path().to_path_buf()];
@@ -731,6 +726,8 @@ mod tests {
         data.aux.file_paths = vec!["common/things/kept.dds".to_string()];
         backend.stage_vanilla_payload(data);
         backend.merge_pending_vanilla_index();
+        let retained_file_paths = || backend.state.vanilla_state.lock().file_paths.clone();
+        let before = retained_file_paths().expect("payload retained after the first merge");
 
         // Nothing is staged this time: the merge must still re-install the retained
         // payload (replacing, not accumulating) and rebuild the file index from it,
@@ -741,15 +738,10 @@ mod tests {
             assert!(idx.type_index.var_index.contains("vanilla_var"));
             assert!(idx.type_index.file_index.contains("common/things/kept.dds"));
         }
+        let after = retained_file_paths().expect("payload retained after the second merge");
         assert!(
-            backend
-                .state
-                .vanilla_state
-                .lock()
-                .file_paths
-                .as_ref()
-                .is_some_and(|paths| paths.iter().any(|path| path == "common/things/kept.dds")),
-            "the retained payload must survive repeated merges"
+            Arc::ptr_eq(&before, &after),
+            "a merge must share the retained payload, not replace it with a copy"
         );
     }
 

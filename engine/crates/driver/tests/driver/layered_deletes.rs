@@ -3,6 +3,7 @@
 //! rebuild without the file.
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use cwtools_driver::{VanillaFiles, build_file_index_with_vanilla_shadow};
@@ -21,6 +22,9 @@ struct Case {
 }
 
 const REPLACE_GFX: &str = "name = \"Layer\"\nreplace_path = \"gfx\"\n";
+
+/// Distinct spelling lengths for `owned_cached_spellings_move_without_copying`.
+const OWNED_SPELLING_LENGTHS: [usize; 4] = [41, 81, 161, 321];
 
 const CASES: &[Case] = &[
     Case {
@@ -165,11 +169,11 @@ fn case_sensitive_build_keeps_the_workspace_spelling() {
 #[test]
 fn owned_cached_spellings_move_without_copying() {
     let tmp = write_tree(&[]);
-    let originals: Vec<String> = [41, 81, 161, 321]
+    let originals: Vec<String> = OWNED_SPELLING_LENGTHS
         .into_iter()
         .map(|len| format!("gfx/owned_{}.dds{}", len, "a".repeat(len)))
         .collect();
-    let before: std::collections::HashSet<usize> = originals
+    let before: HashSet<usize> = originals
         .iter()
         .map(|path| path.as_ptr() as usize)
         .collect();
@@ -182,15 +186,15 @@ fn owned_cached_spellings_move_without_copying() {
         true,
         None,
     );
-    let after: std::collections::HashSet<usize> = index
+    let after: HashSet<usize> = index
         .paths_exact()
         .map(|path| path.as_ptr() as usize)
         .collect();
     assert_eq!(
         before, after,
-        "owned cached spellings must move into the exact-case index unmoved-copy-free"
+        "owned cached spellings must move into the exact-case index, not be copied"
     );
-    for len in [41usize, 81, 161, 321] {
+    for len in OWNED_SPELLING_LENGTHS {
         let expected = format!("gfx/owned_{len}.dds{}", "a".repeat(len));
         assert!(
             index.contains(&expected),
