@@ -24,7 +24,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use cwtools_info::InfoService;
 use cwtools_lsp::bench_support::{
     collect_doc_tokens, loc_extra_valid_refs, logical_path_from_uri, parse_loc_buffer,
-    workspace_prefix_of,
+    resolve_source_uris, source_uri, workspace_prefix_of,
 };
 use cwtools_parser::parser::parse_string;
 use cwtools_rules::rules_types::{
@@ -515,9 +515,63 @@ fn bench_stat_signature(c: &mut Criterion) {
     group.finish();
 }
 
+/// The pre-#1165 serial canonicalize loop over the distinct source paths, kept
+/// here so the candidate is measured against the code it replaces. Bench-only.
+fn baseline_vanilla_uris(
+    paths: &HashSet<&Arc<str>>,
+    root: &std::path::Path,
+) -> HashMap<Arc<str>, Option<Arc<str>>> {
+    paths
+        .iter()
+        .map(|&path| (Arc::clone(path), source_uri(path, Some(root))))
+        .collect()
+}
+
+/// Sizes straddling the parallel cutoff: 256 stays serial in the candidate, 512
+/// is the first parallel size, and 4096 is a base-game-sized set.
+const VANILLA_CANONICALIZE_SIZES: [usize; 4] = [256, 512, 1024, 4096];
+
+/// `size` generated files spread over 32 folders under a canonical root in a
+/// temp dir. The caller holds the dir for as long as it resolves the paths.
+fn generated_vanilla_sources(
+    size: usize,
+) -> (tempfile::TempDir, std::path::PathBuf, Vec<Arc<str>>) {
+    let dir = tempfile::TempDir::new().expect("vanilla_canonicalize tempdir");
+    let root = std::fs::canonicalize(dir.path()).expect("vanilla_canonicalize root");
+    let paths = (0..size)
+        .map(|i| {
+            let folder = root.join("common").join(format!("dir_{:02}", i % 32));
+            std::fs::create_dir_all(&folder).expect("vanilla_canonicalize fixture folder");
+            let path = folder.join(format!("f_{i:05}.txt"));
+            std::fs::write(&path, "").expect("vanilla_canonicalize fixture file");
+            Arc::from(path.to_string_lossy().as_ref())
+        })
+        .collect();
+    (dir, root, paths)
+}
+
+fn bench_vanilla_canonicalize(c: &mut Criterion) {
+    let generated: Vec<_> = VANILLA_CANONICALIZE_SIZES
+        .iter()
+        .map(|&size| (size, generated_vanilla_sources(size)))
+        .collect();
+
+    let mut group = c.benchmark_group("vanilla_canonicalize");
+    for (size, (_dir, root, paths)) in &generated {
+        let distinct: HashSet<&Arc<str>> = paths.iter().collect();
+        group.bench_function(format!("n{size}/baseline_serial"), |b| {
+            b.iter(|| baseline_vanilla_uris(black_box(&distinct), root))
+        });
+        group.bench_function(format!("n{size}/candidate"), |b| {
+            b.iter(|| resolve_source_uris(black_box(&distinct), Some(root)))
+        });
+    }
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(20);
-    targets = bench_keystroke_validate, bench_loc_edit_parse, bench_loc_ref_names, bench_index_parsed_file, bench_synthetic_many_type_index_edit, bench_stat_signature
+    targets = bench_keystroke_validate, bench_loc_edit_parse, bench_loc_ref_names, bench_index_parsed_file, bench_synthetic_many_type_index_edit, bench_stat_signature, bench_vanilla_canonicalize
 }
 criterion_main!(benches);
