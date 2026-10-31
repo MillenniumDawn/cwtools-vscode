@@ -47,6 +47,7 @@ async function detectLanguageId(root: WorkspaceFolder): Promise<string | null> {
 
 export interface GameDetection {
 	languageId: string;
+	source: "markers" | "executable" | "default";
 }
 
 export async function detectGameAndVanilla(
@@ -56,7 +57,7 @@ export async function detectGameAndVanilla(
 	// Folder and content markers are enough to classify recognized workspaces.
 	// Avoid a recursive executable search during activation; scan only when the
 	// workspace gives us no game hint.
-	if (hintedLanguageId) return { languageId: hintedLanguageId };
+	if (hintedLanguageId) return { languageId: hintedLanguageId, source: "markers" };
 
 	const gamesToCheck = GAMES;
 	const promises = gamesToCheck.map(({ exeName, binariesPrefix }) =>
@@ -65,12 +66,14 @@ export async function detectGameAndVanilla(
 	const results = await Promise.all(promises);
 
 	let languageId = "paradox";
+	let source: GameDetection["source"] = "default";
 	for (let i = 0; i < results.length; i++) {
 		const { id } = gamesToCheck[i];
 		if (results[i].length > 0) {
 			languageId = id;
+			source = "executable";
 		}
 	}
 
-	return { languageId };
+	return { languageId, source };
 }

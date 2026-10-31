@@ -41,6 +41,8 @@ suite("Activation", function () {
 		const required = [
 			"cwtools.showReferences",
 			"cwtools.showOutput",
+			"cwtools.showSetupReport",
+			"cwtools.copySetupReport",
 			"cwtools.restartServer",
 			"cwtools.showGraph",
 			"cwtools.setGraphDepth",

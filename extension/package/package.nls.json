@@ -20,6 +20,9 @@
   "commands.validateWorkspace.title": "Validate workspace",
   "commands.restartServer.title": "Restart Server",
   "commands.showOutput.title": "Show Output",
+  // Opens a read-only document listing the detected game, rules folder, base-game cache and last scan, for bug reports
+  "commands.showSetupReport.title": "Show Setup Report",
+  "commands.copySetupReport.title": "Copy Setup Report",
   "commands.writeDiagnosticsBaseline.title": "Write Diagnostics Baseline",
   "commands.showGraph.title": "Show graph",
   "commands.showGraphFromHere.title": "Show graph from here",

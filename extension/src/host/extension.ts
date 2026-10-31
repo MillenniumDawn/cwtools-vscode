@@ -23,6 +23,7 @@ import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
 import { gameContentRoots } from "./gameContentRoots";
 import { registerCommands } from "./commands";
+import { registerSetupReport } from "./setupReport";
 import { setTrustedRoots } from "./trustedPaths";
 import { initializeLogger, logInfo, logError, errorMessage } from "./logger";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
@@ -134,6 +135,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 	const init = async function (
 		language: string,
 		workspaceFolder: WorkspaceFolder,
+		detectedBy: GameDetection["source"],
 	) {
 		// Include `.` in the word pattern so a dotted event/decision id
 		// (`namespace.1`) selects whole on double-click and resolves via
@@ -147,6 +149,13 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		// The Rust language server, bundled per-platform. Resolve the binary for
 		// this platform or bail with a clear message.
 		const serverExe = resolveServerExe(context);
+		registerSetupReport(context, () => defaultClient, {
+			language,
+			detectedBy,
+			serverExe,
+			cacheDir,
+			workspaceFolder,
+		});
 		if (!serverExe) {
 			// Not awaited: an error notification stays up until it is dismissed, so
 			// awaiting it parks activation forever wherever nobody can click it,
@@ -251,9 +260,9 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		}
 	};
 
-	const { languageId } = await detectGameAndVanilla(root);
+	const { languageId, source } = await detectGameAndVanilla(root);
 
-	await init(languageId, root);
+	await init(languageId, root, source);
 
 	return api;
 }

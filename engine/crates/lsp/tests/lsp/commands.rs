@@ -98,6 +98,82 @@ fn test_validate_workspace_command_returns_summary() {
     );
 }
 
+#[test]
+fn test_get_setup_report_describes_the_running_setup() {
+    let cache = tempfile::tempdir().unwrap();
+    let mut server = storm_start(
+        storm_builder()
+            .file("common/decisions/bad.txt", "bad_dec = {\n")
+            .init_opts(json!({
+                "cacheDir": cache.path().to_string_lossy(),
+                "ignoreFilePatterns": ["*.bak"],
+                "ignoreDirectories": ["scratch"],
+                "ignoredErrorCodes": ["CW100"],
+            })),
+    );
+    let advertised =
+        server.init_response()["result"]["capabilities"]["executeCommandProvider"]["commands"]
+            .clone();
+    let rules_dir = server.rules_dir().display().to_string();
+    let vanilla_dir = server.vanilla_dir().display().to_string();
+    let mut report = || {
+        server.request(
+            "workspace/executeCommand",
+            json!({ "command": "getSetupReport", "arguments": [] }),
+        )
+    };
+
+    let first = report();
+    assert!(
+        advertised
+            .as_array()
+            .is_some_and(|commands| commands.contains(&json!("getSetupReport"))),
+        "getSetupReport must be advertised, got: {advertised}"
+    );
+    assert_eq!(first["game"]["language"], "hoi4", "{first}");
+    assert_eq!(first["server"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(first["state"]["indexReady"], true, "{first}");
+    assert_eq!(first["rules"]["dir"], rules_dir, "{first}");
+    assert_eq!(first["rules"]["loaded"], true, "{first}");
+    assert_eq!(first["rules"]["dirExists"], true, "{first}");
+    assert_eq!(first["lastScan"]["totalFiles"], 1, "{first}");
+    assert_eq!(first["lastScan"]["filesWithErrors"], 1, "{first}");
+    assert_eq!(first["ignore"]["filePatterns"], json!(["*.bak"]));
+    assert_eq!(first["ignore"]["directories"], json!(["scratch"]));
+    assert_eq!(first["ignore"]["errorCodes"], json!(["cw100"]));
+    assert_eq!(first["vanilla"]["dir"], vanilla_dir, "{first}");
+    assert_eq!(first["vanilla"]["dirExists"], true, "{first}");
+    assert_eq!(first["vanilla"]["cache"]["status"], "present", "{first}");
+
+    let cache_file = first["vanilla"]["cache"]["path"]
+        .as_str()
+        .map(std::path::PathBuf::from)
+        .expect("the report names the cache file");
+    assert!(cache_file.starts_with(cache.path()), "{first}");
+    let moved = cache_file.with_file_name("vanilla-hoi4-an-older-install.cwv");
+    std::fs::rename(&cache_file, &moved).unwrap();
+    let stale = report();
+    assert_eq!(stale["vanilla"]["cache"]["status"], "stale", "{stale}");
+
+    std::fs::remove_file(&moved).unwrap();
+    let absent = report();
+    assert_eq!(absent["vanilla"]["cache"]["status"], "absent", "{absent}");
+    server.stop();
+}
+
+#[test]
+fn test_get_setup_report_before_any_scan_has_no_scan_summary() {
+    let mut server = storm_builder().spawn();
+    let report = server.request(
+        "workspace/executeCommand",
+        json!({ "command": "getSetupReport", "arguments": [] }),
+    );
+    server.stop();
+
+    assert_eq!(report["lastScan"], serde_json::Value::Null, "{report}");
+    assert_eq!(report["state"]["indexReady"], false, "{report}");
+}
+
 /// #223: `validateWorkspace` retries while another scan holds the guard, then
 /// answers `{ "busy": true }` if it never wins. A regression in the deadline,
 /// the CAS `Busy` result, or the JSON mapping could hang the command or return

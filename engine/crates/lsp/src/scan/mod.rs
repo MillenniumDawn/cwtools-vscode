@@ -20,7 +20,7 @@ mod watched;
 mod workspace;
 
 pub(crate) use loc::ParentLocKey;
-pub(crate) use vanilla::{VanillaLoc, VanillaLocKey};
+pub(crate) use vanilla::{VanillaLoc, VanillaLocKey, vanilla_fingerprint};
 pub use vanilla::{resolve_source_uris, source_uri};
 
 #[derive(Debug, Clone, Default)]
@@ -32,6 +32,20 @@ pub(crate) struct ScanSummary {
     pub total_warnings: usize,
     pub total_infos: usize,
     pub total_hints: usize,
+}
+
+impl ScanSummary {
+    pub(crate) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "totalFiles": self.total_files,
+            "validatedFiles": self.validated_files,
+            "filesWithErrors": self.files_with_errors,
+            "totalErrors": self.total_errors,
+            "totalWarnings": self.total_warnings,
+            "totalInfos": self.total_infos,
+            "totalHints": self.total_hints,
+        })
+    }
 }
 
 const WATCHED_DEBOUNCE_MS: u64 = 500;

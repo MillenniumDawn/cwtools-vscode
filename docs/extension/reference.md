@@ -34,6 +34,16 @@ Source: `extension/package/package.json` `contributes.commands`.
 - `cwtools.exportProfilingLog` (`Export profiling log`)
   - Exports the language server profiling buffer to a chosen file.
 
+- `cwtools.showSetupReport` (`Show Setup Report`)
+  - Opens a read-only document describing the setup: detected game, rules
+    directory and git HEAD, base-game directory and cache state, index sizes,
+    last scan, server binary and version, and ignore lists. It also opens when
+    the server is stopped, with the server's part marked unavailable.
+
+- `cwtools.copySetupReport` (`Copy Setup Report`)
+  - Copies the open setup report to the clipboard. It is a button in the
+    report's title bar and is hidden everywhere else.
+
 - `cwtools.showGraph` (`Show graph`)
   - Opens the dependency graph panel for the current file type. Needs the
     server's `getGraphData` command, so the command is hidden from the palette

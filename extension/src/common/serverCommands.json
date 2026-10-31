@@ -11,5 +11,6 @@
   "fixAllWorkspace": true,
   "formatWorkspace": true,
   "validateWorkspace": true,
-  "writeDiagnosticsBaseline": true
+  "writeDiagnosticsBaseline": true,
+  "getSetupReport": true
 }
