@@ -76,6 +76,15 @@ export async function assertGateRefused(): Promise<void> {
 	assert.deepStrictEqual(api.serverCommands(), [], "server commands");
 }
 
+/** Open the setup report in a workspace the activation gate refused. */
+export async function showNotStartedReport(): Promise<string> {
+	await vscode.commands.executeCommand("cwtools.showSetupReport");
+	const document = vscode.window.activeTextEditor?.document;
+	assert.ok(document, "the report should open in the active editor");
+	assert.strictEqual(document.uri.scheme, "cwtools-setup-report");
+	return document.getText();
+}
+
 /**
  * The graphPanel module the running extension uses, taken from its activation
  * API. Importing '../../src/host/graphPanel' here instead would load a second

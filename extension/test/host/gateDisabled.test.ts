@@ -2,7 +2,7 @@ import * as assert from "assert";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { assertGateRefused } from "../support/utils";
+import { assertGateRefused, showNotStartedReport } from "../support/utils";
 
 suite("Activation gate cwtools.enable refusal", function () {
 	this.timeout(60 * 1000);
@@ -20,6 +20,13 @@ suite("Activation gate cwtools.enable refusal", function () {
 			"the workspace setting should reach the host",
 		);
 
+		await assertGateRefused();
+	});
+
+	test("the setup report says why CWTools did not start", async function () {
+		const text = await showNotStartedReport();
+
+		assert.ok(text.includes("- Reason: the cwtools.enable setting is false"), text);
 		await assertGateRefused();
 	});
 });

@@ -58,9 +58,12 @@ export type ServerOutcome =
 	| { kind: "report"; report: ServerSetupReport }
 	| { kind: "unavailable"; reason: string };
 
-export interface ClientFacts {
+export interface VersionFacts {
 	extensionVersion: string;
 	vscodeVersion: string;
+}
+
+export interface ClientFacts extends VersionFacts {
 	language: string;
 	detectedBy: GameDetection["source"];
 	serverExe: string | undefined;
@@ -216,16 +219,39 @@ function serverLines(client: ClientFacts, report: ServerSetupReport): string[] {
 	return lines;
 }
 
+function reportHeader(facts: VersionFacts): string[] {
+	return [
+		"# CWTools setup report",
+		"",
+		"## Extension",
+		`- CWTools: ${facts.extensionVersion}`,
+		`- VS Code: ${facts.vscodeVersion}`,
+	];
+}
+
+// For a workspace where activation stopped before it chose a game or a server.
+export function renderNotStartedReport(
+	facts: VersionFacts,
+	reason: string,
+	folders: readonly string[],
+): string {
+	const lines = [
+		...reportHeader(facts),
+		"",
+		"## Not started",
+		`- Reason: ${reason}`,
+		`- Workspace folders: ${codeList(folders)}`,
+	];
+	return `${lines.join("\n")}\n`;
+}
+
 export function renderSetupReport(
 	client: ClientFacts,
 	server: ServerOutcome,
 ): string {
 	const { rules } = client;
-	const lines: string[] = ["# CWTools setup report", ""];
+	const lines = reportHeader(client);
 
-	lines.push("## Extension");
-	lines.push(`- CWTools: ${client.extensionVersion}`);
-	lines.push(`- VS Code: ${client.vscodeVersion}`);
 	lines.push(
 		`- Server binary: ${client.serverExe === undefined ? "not found" : code(client.serverExe)}`,
 	);

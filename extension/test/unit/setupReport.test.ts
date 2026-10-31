@@ -3,6 +3,7 @@ import * as assert from "assert";
 import * as fs from "fs";
 import * as path from "path";
 import {
+	renderNotStartedReport,
 	renderSetupReport,
 	SETUP_REPORT_SCHEME,
 	type ClientFacts,
@@ -210,6 +211,28 @@ suite("setup report text", () => {
 		assert.doesNotMatch(text, /## Index|## Last scan|## Ignore lists/);
 	});
 
+	test("names why CWTools did not start and which folders it looked at", () => {
+		const text = renderNotStartedReport(
+			{ extensionVersion: "4.0.5", vscodeVersion: "1.95.0" },
+			"the cwtools.enable setting is false",
+			["/mods/a", "/mods/b"],
+		);
+		assert.match(text, /- CWTools: 4\.0\.5/);
+		assert.match(text, /- Reason: the cwtools\.enable setting is false/);
+		assert.match(text, /- Workspace folders: `\/mods\/a`, `\/mods\/b`/);
+		assert.doesNotMatch(text, /## Game|## Rules/);
+	});
+
+	test("says none when no folder is open", () => {
+		assert.match(
+			renderNotStartedReport(
+				{ extensionVersion: "4.0.5", vscodeVersion: "1.95.0" },
+				"no workspace folder has a descriptor.mod file at its root",
+				[],
+			),
+			/- Workspace folders: none/,
+		);
+	});
 });
 
 suite("setup report manifest", () => {
@@ -236,13 +259,13 @@ suite("setup report manifest", () => {
 		assert.ok(copy?.icon, "a title button needs an icon");
 	});
 
-	test("both commands are contributed and gated in the palette", () => {
+	test("show is in the palette even where CWTools did not start, copy only on a report", () => {
 		const contributed = manifest.contributes.commands.map((entry) => entry.command);
 		assert.ok(contributed.includes("cwtools.showSetupReport"));
 		const palette = manifest.contributes.menus.commandPalette;
 		assert.strictEqual(
 			palette.find((entry) => entry.command === "cwtools.showSetupReport")?.when,
-			"cwtoolsEnabled",
+			undefined,
 		);
 		assert.strictEqual(
 			palette.find((entry) => entry.command === "cwtools.copySetupReport")?.when,

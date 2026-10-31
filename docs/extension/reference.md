@@ -38,7 +38,9 @@ Source: `extension/package/package.json` `contributes.commands`.
   - Opens a read-only document describing the setup: detected game, rules
     directory and git HEAD, base-game directory and cache state, index sizes,
     last scan, server binary and version, and ignore lists. It also opens when
-    the server is stopped, with the server's part marked unavailable.
+    the server is stopped, with the server's part marked unavailable. Where
+    CWTools did not start (`cwtools.enable` is false, or no folder has a root
+    `descriptor.mod`), it says why and starts no server.
 
 - `cwtools.copySetupReport` (`Copy Setup Report`)
   - Copies the open setup report to the clipboard. It is a button in the

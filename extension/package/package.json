@@ -145,10 +145,6 @@
           "when": "cwtoolsValidateWorkspaceAvailable"
         },
         {
-          "command": "cwtools.showSetupReport",
-          "when": "cwtoolsEnabled"
-        },
-        {
           "command": "cwtools.copySetupReport",
           "when": "resourceScheme == cwtools-setup-report"
         }

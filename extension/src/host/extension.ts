@@ -23,7 +23,7 @@ import { registerServerNotifications } from "./serverNotifications";
 import { registerDocumentLanguage } from "./documentLanguage";
 import { gameContentRoots } from "./gameContentRoots";
 import { registerCommands } from "./commands";
-import { registerSetupReport } from "./setupReport";
+import { registerNotStartedReport, registerSetupReport } from "./setupReport";
 import { setTrustedRoots } from "./trustedPaths";
 import { initializeLogger, logInfo, logError, errorMessage } from "./logger";
 import { showServerBlockedDialog } from "./serverBlockedDialog";
@@ -88,6 +88,7 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 	if (
 		workspace.getConfiguration("cwtools").get<boolean>("enable", true) === false
 	) {
+		registerNotStartedReport(context, "the cwtools.enable setting is false");
 		return api;
 	}
 	// The first workspace folder containing a root descriptor is the one CWTools
@@ -114,6 +115,10 @@ export async function activate(context: ExtensionContext): Promise<CwtoolsApi> {
 		selectedRoot !== undefined,
 	);
 	if (!selectedRoot) {
+		registerNotStartedReport(
+			context,
+			"no workspace folder has a descriptor.mod file at its root",
+		);
 		return api;
 	}
 	const root = selectedRoot;
