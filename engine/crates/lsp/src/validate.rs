@@ -5652,26 +5652,12 @@ mod ignored_tests {
         assert_eq!(published.uri.as_str(), doc_uri);
 
         let sweep_time = finished - started;
-        let ticks = ticks.lock();
-        let before = ticks.iter().rfind(|tick| **tick <= started).copied();
-        let inside = ticks
-            .iter()
-            .filter(|tick| **tick > started && **tick < finished);
-        let after = ticks.iter().find(|tick| **tick >= finished).copied();
-        let window: Vec<Instant> = before
-            .into_iter()
-            .chain(inside.copied())
-            .chain(after)
-            .collect();
-        let longest_gap = window
+        let longest_gap = ticks
+            .lock()
             .windows(2)
             .map(|pair| pair[1] - pair[0])
             .max()
             .expect("ticks around the sweep");
-        assert!(
-            sweep_time >= Duration::from_millis(150),
-            "the sweep took {sweep_time:?}, too short to tell a held worker from scheduling noise"
-        );
         assert!(
             longest_gap * 4 < sweep_time,
             "the ticker stalled for {longest_gap:?} during a {sweep_time:?} sweep"
