@@ -368,6 +368,18 @@ impl Backend {
 
         if !force_rebuild
             && let Some(cp) = &cache_path
+            && !cp.exists()
+        {
+            self.client
+                .log_message(
+                    MessageType::INFO,
+                    format!("No base-game cache at {}; building one", cp.display()),
+                )
+                .await;
+        }
+
+        if !force_rebuild
+            && let Some(cp) = &cache_path
             && cp.exists()
         {
             match cwtools_info::vanilla_cache::load(cp) {
