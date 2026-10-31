@@ -1,7 +1,28 @@
 import * as assert from "assert";
+import * as fs from "node:fs";
 import * as vscode from "vscode";
 import sinon from "sinon";
 import { activate, waitUntil, waitForServerReady, SAMPLE_ROOT } from "../support/utils";
+
+// Kills the server with requests queued behind the kill, then blocks the event
+// loop until it is a zombie (pipes closed, exit not yet seen). The queued
+// writes then fail against the dead pipe, and enough of them can land before
+// the pipe's close event to stop the client for good (#1160). Loop timing
+// decides that race, so unfixed code fails on some runs only. Linux only, like
+// the host runner.
+function crashWithQueuedWrites(pid: number): Promise<unknown> {
+	const queued = Promise.allSettled(
+		Array.from({ length: 64 }, () =>
+			vscode.commands.executeCommand("getFileTypes", vscode.Uri.file(SAMPLE_ROOT).toString()),
+		),
+	);
+	process.kill(pid, "SIGKILL");
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline && !/^\d+ \(.*\) Z/.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"))) {
+		// busy-wait: nothing else may run until the server is gone
+	}
+	return queued;
+}
 
 suite("automatic server restart", function () {
 	this.timeout(180_000);
@@ -14,11 +35,12 @@ suite("automatic server restart", function () {
 		const sandbox = sinon.createSandbox();
 		const execute = sandbox.stub(vscode.commands, "executeCommand").callThrough();
 		try {
-			process.kill(pid, "SIGKILL");
+			const queued = crashWithQueuedWrites(pid);
 			assert.ok(await waitUntil(() => {
 				const nextPid = api.serverProcessId();
 				return nextPid !== undefined && nextPid !== pid && api.serverCommands().length > 0;
 			}, 30_000), "client did not automatically start a new server");
+			await queued;
 			assert.ok(await waitForServerReady(api));
 			for (const key of ["cwtoolsGraphAvailable", "cwtoolsFixAllAvailable", "cwtoolsFormatWorkspaceAvailable"]) {
 				const values = execute.getCalls().filter((call) => call.args[0] === "setContext" && call.args[1] === key).map((call): unknown => call.args[2]);
