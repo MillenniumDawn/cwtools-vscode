@@ -1,5 +1,7 @@
 ### Unreleased
 
+### 4.0.6
+
 #### Extension
 
 * Add **Show Setup Report**, which opens a read-only document for support triage: the detected game and how it was detected, the rules directory in use (the `rules_folder` setting or the managed clone) with its git HEAD, a `rules_folder` that does not exist, the base-game directory and its cache state, index sizes, the last scan, the server binary and version, and the ignore lists. A button in the report's title bar copies it. The report still opens when the server is stopped or missing, with the server's part marked unavailable. (#610)
