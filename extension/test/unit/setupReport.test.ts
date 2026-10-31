@@ -7,6 +7,7 @@ import {
 	SETUP_REPORT_SCHEME,
 	type ClientFacts,
 	type ServerSetupReport,
+	type VanillaCacheReport,
 } from "../../src/host/setupReportText";
 
 const managedDir = "/cache/.cwtools/hoi4";
@@ -65,7 +66,9 @@ function render(
 	return renderSetupReport(client, { kind: "report", report });
 }
 
-function withCache(cache: NonNullable<ServerSetupReport["vanilla"]>["cache"]): string {
+const cacheFile = { path: "/cache/vanilla-hoi4-x.cwv", fingerprint: "fp" };
+
+function withCache(cache: VanillaCacheReport): string {
 	return render(facts(), {
 		...serverReport,
 		vanilla: { ...serverReport.vanilla, cache },
@@ -120,23 +123,23 @@ suite("setup report text", () => {
 	test("flags a server that loaded rules from another directory", () => {
 		const text = render(facts(), {
 			...serverReport,
-			rules: { dir: "/elsewhere", dirExists: false, loaded: false },
+			rules: { dir: "/elsewhere", dirExists: false, loaded: false, types: 0 },
 		});
 		assert.match(text, /- Directory: `\/elsewhere` \(does not exist\)/);
 		assert.match(text, /- Loaded: no/);
 		assert.match(text, /Differs from the directory the extension chose/);
 	});
 
-	const cacheLines: Array<[string, NonNullable<ServerSetupReport["vanilla"]>["cache"], RegExp]> = [
-		["present", { status: "present" }, /- Cache: present$/m],
-		["absent", { status: "absent" }, /- Cache: absent \(no cache file/m],
-		["stale", { status: "stale", otherCaches: 2 }, /- Cache: stale \(2 cache file\(s\)/m],
+	const cacheLines: Array<[string, VanillaCacheReport, RegExp]> = [
+		["present", { ...cacheFile, status: "present" }, /- Cache: present$/m],
+		["absent", { ...cacheFile, status: "absent" }, /- Cache: absent \(no cache file/m],
+		["stale", { ...cacheFile, status: "stale", otherCaches: 2 }, /- Cache: stale \(2 cache file\(s\)/m],
 		[
 			"version mismatched",
-			{ status: "versionMismatch", fileVersion: 14, expectedVersion: 15 },
+			{ ...cacheFile, status: "versionMismatch", fileVersion: 14, expectedVersion: 15 },
 			/- Cache: version mismatch \(file is format 14, this server reads 15\)/m,
 		],
-		["unreadable", { status: "unreadable", reason: "denied" }, /- Cache: unreadable \(denied\)/m],
+		["unreadable", { ...cacheFile, status: "unreadable", reason: "denied" }, /- Cache: unreadable \(denied\)/m],
 		[
 			"unavailable",
 			{ status: "unavailable", reason: "no base-game directory is set or found" },
@@ -151,8 +154,8 @@ suite("setup report text", () => {
 
 	test("never prints absent and stale as the same state", () => {
 		assert.notStrictEqual(
-			withCache({ status: "absent" }),
-			withCache({ status: "stale", otherCaches: 1 }),
+			withCache({ ...cacheFile, status: "absent" }),
+			withCache({ ...cacheFile, status: "stale", otherCaches: 1 }),
 		);
 	});
 
@@ -214,12 +217,6 @@ suite("setup report text", () => {
 		assert.doesNotMatch(text, /## Index|## Last scan|## Ignore lists/);
 	});
 
-	test("renders a sparse server report without throwing", () => {
-		const text = render(facts(), {});
-		assert.match(text, /- Server: running, version unknown/);
-		assert.match(text, /- Index ready: unknown/);
-		assert.match(text, /- Parent mods: none/);
-	});
 });
 
 suite("setup report manifest", () => {

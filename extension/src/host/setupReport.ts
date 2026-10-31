@@ -13,6 +13,7 @@ import {
 	SETUP_REPORT_SCHEME,
 	type ClientFacts,
 	type ServerOutcome,
+	type ServerSetupReport,
 } from "./setupReportText";
 import { errorMessage } from "./logger";
 
@@ -38,7 +39,7 @@ async function fetchServerReport(
 			serverCommand("getSetupReport"),
 		);
 		if (result !== null && typeof result === "object") {
-			return { kind: "report", report: result };
+			return { kind: "report", report: result as ServerSetupReport };
 		}
 		return { kind: "unavailable", reason: "the server returned no report" };
 	} catch (err) {

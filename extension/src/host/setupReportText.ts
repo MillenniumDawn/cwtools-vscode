@@ -1,14 +1,13 @@
 export const SETUP_REPORT_SCHEME = "cwtools-setup-report";
 
-export interface VanillaCacheReport {
-	status?: string;
-	path?: string;
-	fingerprint?: string;
-	otherCaches?: number;
-	fileVersion?: number;
-	expectedVersion?: number;
-	reason?: string;
-}
+export type VanillaCacheReport =
+	| { status: "unavailable"; reason: string }
+	| ({ path: string; fingerprint: string } & (
+			| { status: "present" | "absent" }
+			| { status: "stale"; otherCaches: number }
+			| { status: "versionMismatch"; fileVersion: number; expectedVersion: number }
+			| { status: "unreadable"; reason: string }
+	  ));
 
 export interface ScanReport {
 	totalFiles: number;
@@ -20,37 +19,36 @@ export interface ScanReport {
 	totalHints: number;
 }
 
-// The server's getSetupReport result. Every part is optional so a report from
-// an older or newer server still renders what it has.
+// The server's getSetupReport result, from engine/crates/lsp/src/setup_report.rs.
 export interface ServerSetupReport {
-	server?: { version?: string };
-	state?: { indexReady?: boolean; scanInProgress?: boolean };
-	game?: { language?: string; known?: boolean };
-	workspace?: { roots?: string[]; parentMods?: string[] };
-	rules?: {
-		dir?: string | null;
-		dirExists?: boolean;
-		loaded?: boolean;
-		types?: number;
+	server: { version: string };
+	state: { indexReady: boolean; scanInProgress: boolean };
+	game: { language: string; known: boolean };
+	workspace: { roots: string[]; parentMods: string[] };
+	rules: {
+		dir: string | null;
+		dirExists: boolean;
+		loaded: boolean;
+		types: number;
 	};
-	vanilla?: {
-		dir?: string | null;
-		dirExists?: boolean;
-		merged?: boolean;
-		cache?: VanillaCacheReport;
+	vanilla: {
+		dir: string | null;
+		dirExists: boolean;
+		merged: boolean;
+		cache: VanillaCacheReport;
 	};
-	index?: {
-		typeInstances?: number;
-		types?: number;
-		files?: number;
-		variables?: number;
+	index: {
+		typeInstances: number;
+		types: number;
+		files: number;
+		variables: number;
 	};
-	localisation?: { keys?: number; languages?: number };
-	lastScan?: ScanReport | null;
-	ignore?: {
-		filePatterns?: string[];
-		directories?: string[];
-		errorCodes?: string[];
+	localisation: { keys: number; languages: number };
+	lastScan: ScanReport | null;
+	ignore: {
+		filePatterns: string[];
+		directories: string[];
+		errorCodes: string[];
 	};
 }
 
@@ -88,8 +86,8 @@ const DETECTED_BY: Record<ClientFacts["detectedBy"], string> = {
 
 const code = (value: string): string => `\`${value}\``;
 
-const codeList = (items: readonly string[] | undefined): string =>
-	items && items.length > 0 ? items.map(code).join(", ") : "none";
+const codeList = (items: readonly string[]): string =>
+	items.length > 0 ? items.map(code).join(", ") : "none";
 
 function rulesFolderLine(rules: ClientFacts["rules"]): string {
 	if (rules.setting === undefined) {
@@ -108,15 +106,13 @@ function cacheLine(cache: VanillaCacheReport): string {
 		case "absent":
 			return "absent (no cache file for this game in the cache directory)";
 		case "stale":
-			return `stale (${cache.otherCaches ?? 0} cache file(s) for other installs or rules, none for this one)`;
+			return `stale (${cache.otherCaches} cache file(s) for other installs or rules, none for this one)`;
 		case "versionMismatch":
 			return `version mismatch (file is format ${cache.fileVersion}, this server reads ${cache.expectedVersion})`;
 		case "unreadable":
-			return `unreadable (${cache.reason ?? "unknown reason"})`;
+			return `unreadable (${cache.reason})`;
 		case "unavailable":
-			return `unavailable (${cache.reason ?? "unknown reason"})`;
-		default:
-			return `unknown (${cache.status ?? "no status"})`;
+			return `unavailable (${cache.reason})`;
 	}
 }
 
@@ -130,7 +126,7 @@ function vanillaSettingLine(client: ClientFacts): string {
 
 function vanillaDirNote(
 	client: ClientFacts,
-	vanilla: NonNullable<ServerSetupReport["vanilla"]>,
+	vanilla: ServerSetupReport["vanilla"],
 ): string {
 	const notes: string[] = [];
 	if (client.vanillaSetting === undefined) {
@@ -138,14 +134,14 @@ function vanillaDirNote(
 	} else if (client.vanillaSetting !== vanilla.dir) {
 		notes.push("differs from the setting");
 	}
-	if (vanilla.dirExists === false) {
+	if (!vanilla.dirExists) {
 		notes.push("does not exist");
 	}
 	return notes.length > 0 ? ` (${notes.join(", ")})` : "";
 }
 
-function yesNo(value: boolean | undefined): string {
-	return value === undefined ? "unknown" : value ? "yes" : "no";
+function yesNo(value: boolean): string {
+	return value ? "yes" : "no";
 }
 
 function serverLines(client: ClientFacts, report: ServerSetupReport): string[] {
@@ -153,62 +149,52 @@ function serverLines(client: ClientFacts, report: ServerSetupReport): string[] {
 	const { rules, vanilla, index, localisation, lastScan, ignore } = report;
 
 	lines.push("", "## Server state");
-	lines.push(`- Index ready: ${yesNo(report.state?.indexReady)}`);
-	lines.push(`- Scan in progress: ${yesNo(report.state?.scanInProgress)}`);
-	if (report.game?.language !== undefined) {
-		lines.push(
-			`- Game the server runs: ${report.game.language}${report.game.known === false ? " (not a known game)" : ""}`,
-		);
-	}
+	lines.push(`- Index ready: ${yesNo(report.state.indexReady)}`);
+	lines.push(`- Scan in progress: ${yesNo(report.state.scanInProgress)}`);
+	lines.push(
+		`- Game the server runs: ${report.game.language}${report.game.known ? "" : " (not a known game)"}`,
+	);
 
 	lines.push("", "## Workspace");
-	for (const root of report.workspace?.roots ?? []) {
+	for (const root of report.workspace.roots) {
 		lines.push(`- Root: ${code(root)}`);
 	}
-	lines.push(`- Parent mods: ${codeList(report.workspace?.parentMods)}`);
+	lines.push(`- Parent mods: ${codeList(report.workspace.parentMods)}`);
 
 	lines.push("", "## Rules loaded by the server");
-	if (rules?.dir) {
+	if (rules.dir) {
 		lines.push(
-			`- Directory: ${code(rules.dir)}${rules.dirExists === false ? " (does not exist)" : ""}`,
+			`- Directory: ${code(rules.dir)}${rules.dirExists ? "" : " (does not exist)"}`,
 		);
 	} else {
 		lines.push("- Directory: none given to the server");
 	}
-	lines.push(
-		`- Loaded: ${rules?.loaded ? `yes, ${rules.types ?? 0} types` : "no"}`,
-	);
-	if (rules?.dir && rules.dir !== client.rules.dir) {
+	lines.push(`- Loaded: ${rules.loaded ? `yes, ${rules.types} types` : "no"}`);
+	if (rules.dir && rules.dir !== client.rules.dir) {
 		lines.push(
 			`- Differs from the directory the extension chose (${code(client.rules.dir)})`,
 		);
 	}
 
 	lines.push("", "## Base game", vanillaSettingLine(client));
-	if (vanilla?.dir) {
+	if (vanilla.dir) {
 		lines.push(`- Directory: ${code(vanilla.dir)}${vanillaDirNote(client, vanilla)}`);
 	} else {
 		lines.push("- Directory: none set or found");
 	}
-	lines.push(`- Index merged: ${yesNo(vanilla?.merged)}`);
-	if (vanilla?.cache) {
-		lines.push(`- Cache: ${cacheLine(vanilla.cache)}`);
-		if (vanilla.cache.path) {
-			lines.push(`- Cache file: ${code(vanilla.cache.path)}`);
-		}
-		if (vanilla.cache.fingerprint) {
-			lines.push(`- Cache fingerprint: ${code(vanilla.cache.fingerprint)}`);
-		}
+	lines.push(`- Index merged: ${yesNo(vanilla.merged)}`);
+	lines.push(`- Cache: ${cacheLine(vanilla.cache)}`);
+	if (vanilla.cache.status !== "unavailable") {
+		lines.push(`- Cache file: ${code(vanilla.cache.path)}`);
+		lines.push(`- Cache fingerprint: ${code(vanilla.cache.fingerprint)}`);
 	}
 
 	lines.push("", "## Index");
+	lines.push(`- Type instances: ${index.typeInstances} across ${index.types} types`);
+	lines.push(`- Indexed files: ${index.files}`);
+	lines.push(`- Variables: ${index.variables}`);
 	lines.push(
-		`- Type instances: ${index?.typeInstances ?? "unknown"} across ${index?.types ?? "unknown"} types`,
-	);
-	lines.push(`- Indexed files: ${index?.files ?? "unknown"}`);
-	lines.push(`- Variables: ${index?.variables ?? "unknown"}`);
-	lines.push(
-		`- Localisation keys: ${localisation?.keys ?? "unknown"} in ${localisation?.languages ?? "unknown"} languages`,
+		`- Localisation keys: ${localisation.keys} in ${localisation.languages} languages`,
 	);
 
 	lines.push("", "## Last scan");
@@ -222,9 +208,9 @@ function serverLines(client: ClientFacts, report: ServerSetupReport): string[] {
 	}
 
 	lines.push("", "## Ignore lists", "- Engine defaults apply as well");
-	lines.push(`- File patterns: ${codeList(ignore?.filePatterns)}`);
-	lines.push(`- Directories: ${codeList(ignore?.directories)}`);
-	lines.push(`- Error codes: ${codeList(ignore?.errorCodes)}`);
+	lines.push(`- File patterns: ${codeList(ignore.filePatterns)}`);
+	lines.push(`- Directories: ${codeList(ignore.directories)}`);
+	lines.push(`- Error codes: ${codeList(ignore.errorCodes)}`);
 	return lines;
 }
 
@@ -243,7 +229,7 @@ export function renderSetupReport(
 	);
 	if (server.kind === "report") {
 		lines.push(
-			`- Server: running, version ${server.report.server?.version ?? "unknown"}`,
+			`- Server: running, version ${server.report.server.version}`,
 		);
 	} else {
 		lines.push(`- Server: not available (${server.reason})`);

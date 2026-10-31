@@ -433,13 +433,11 @@ suite("setup report", function () {
 		assert.match(text, /- Cache: (present|absent|stale|version mismatch|unreadable|unavailable)/);
 	});
 
-	test("says so when rules_folder points at a path that does not exist", async function () {
-		const missing = path.join(os.tmpdir(), "cwtools-setup-report-no-such-rules");
+	async function reportWithRulesFolder(folder: string): Promise<string> {
 		const previous = process.env.CWTOOLS_TEST_RULES_FOLDER;
-		process.env.CWTOOLS_TEST_RULES_FOLDER = missing;
-		let text: string;
+		process.env.CWTOOLS_TEST_RULES_FOLDER = folder;
 		try {
-			text = (await showReport()).getText();
+			return (await showReport()).getText();
 		} finally {
 			if (previous === undefined) {
 				delete process.env.CWTOOLS_TEST_RULES_FOLDER;
@@ -447,11 +445,24 @@ suite("setup report", function () {
 				process.env.CWTOOLS_TEST_RULES_FOLDER = previous;
 			}
 		}
+	}
+
+	test("says so when rules_folder points at a path that does not exist", async function () {
+		const missing = path.join(os.tmpdir(), "cwtools-setup-report-no-such-rules");
+
+		const text = await reportWithRulesFolder(missing);
 
 		assert.ok(
 			text.includes(`- rules_folder setting: \`${missing}\` does not exist (tried \`${missing}\`)`),
 			text,
 		);
+	});
+
+	test("reads the git HEAD of a rules_folder inside a checkout", async function () {
+		const text = await reportWithRulesFolder(SAMPLE_ROOT);
+
+		assert.ok(text.includes("- Source: rules_folder setting"), text);
+		assert.match(text, /- Git HEAD: [0-9a-f]{40}/);
 	});
 
 	test("cwtools.copySetupReport puts the report text on the clipboard", async function () {
