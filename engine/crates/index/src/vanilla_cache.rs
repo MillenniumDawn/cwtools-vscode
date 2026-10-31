@@ -218,7 +218,7 @@ pub fn is_cache_file(path: &Path) -> bool {
 
 /// What the cache directory holds for one game and the cache file the install and rules
 /// currently expect. Read from the file header only; the body is checked when it loads.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum CacheStatus {
     Present,
     /// No cache file for this game at all.

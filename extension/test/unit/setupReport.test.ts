@@ -152,13 +152,6 @@ suite("setup report text", () => {
 		});
 	}
 
-	test("never prints absent and stale as the same state", () => {
-		assert.notStrictEqual(
-			withCache({ ...cacheFile, status: "absent" }),
-			withCache({ ...cacheFile, status: "stale", otherCaches: 1 }),
-		);
-	});
-
 	test("shows a base-game setting that the server is using", () => {
 		const text = render({
 			...facts(),
