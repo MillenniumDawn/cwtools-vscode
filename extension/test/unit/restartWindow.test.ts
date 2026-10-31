@@ -1,6 +1,10 @@
 import * as assert from "assert";
 import { suite, test } from "vitest";
-import { MAX_RESTARTS, recordCrash } from "../../src/host/restartWindow";
+import {
+	MAX_RESTARTS,
+	recordCrash,
+	shouldShutdownOnWriteErrors,
+} from "../../src/host/restartWindow";
 
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
@@ -40,5 +44,17 @@ suite("restartWindow", () => {
 			true,
 			false,
 		]);
+	});
+
+	test("write errors give up on the fourth failure, and only while the pipe is open", () => {
+		const counts = [undefined, 1, 3, 4, 64];
+		assert.deepStrictEqual(
+			counts.map((count) => shouldShutdownOnWriteErrors(count, true)),
+			[false, false, false, true, true],
+		);
+		assert.deepStrictEqual(
+			counts.map((count) => shouldShutdownOnWriteErrors(count, false)),
+			[false, false, false, false, false],
+		);
 	});
 });

@@ -48,7 +48,11 @@ import {
 	createWatchedPathExcluder,
 	forwardWatchedFileEvent,
 } from "./watchedFiles";
-import { MAX_RESTARTS, recordCrash } from "./restartWindow";
+import {
+	MAX_RESTARTS,
+	recordCrash,
+	shouldShutdownOnWriteErrors,
+} from "./restartWindow";
 import { logError, logInfo, errorMessage, outputChannel } from "./logger";
 import {
 	isServerCommand,
@@ -315,6 +319,7 @@ async function openGeneratedLoc(result: unknown): Promise<void> {
 // status bar item can say so instead of just going quiet.
 function createRestartLimitingErrorHandler(
 	onStopped: () => void,
+	serverPipeOpen: () => boolean,
 ): ErrorHandler {
 	const restarts: number[] = [];
 	return {
@@ -327,10 +332,12 @@ function createRestartLimitingErrorHandler(
 		// first occurrence and the restart budget below never applied (#675).
 		// Defer to closed() instead; it owns that budget. Repeated failures on a
 		// still-open connection are the one case worth giving up on outright.
+		// Writes queued behind a dead server fail against its destroyed stdin
+		// before the close event lands, so those never count as still open (#1160).
 		error: (_error, _message, count) =>
-			count === undefined || count <= 3
-				? { action: ErrorAction.Continue }
-				: { action: ErrorAction.Shutdown },
+			shouldShutdownOnWriteErrors(count, serverPipeOpen())
+				? { action: ErrorAction.Shutdown }
+				: { action: ErrorAction.Continue },
 		closed: () => {
 			if (recordCrash(restarts, Date.now())) {
 				return { action: CloseAction.Restart };
@@ -741,7 +748,10 @@ export function createLanguageClient(
 		// activation. This makes initialize.rootUri/workspaceFolders contain only
 		// that root, so the server's first-root scan cannot drift to another folder.
 		workspaceFolder: cfg.workspaceFolder,
-		errorHandler: createRestartLimitingErrorHandler(onStopped),
+		errorHandler: createRestartLimitingErrorHandler(
+			onStopped,
+			() => client.serverProcess?.stdin?.destroyed === false,
+		),
 	};
 
 	const client = new LanguageClient(
