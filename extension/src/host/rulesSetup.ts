@@ -35,13 +35,17 @@ export interface RulesSetup {
 }
 
 // `setting` is the rules_folder value as written, undefined when unset or blank.
-export function readRulesFolderSetting(workspaceRoot: string) {
+// `dir` is the directory handed to the server: the setting when it exists, else
+// the managed clone.
+export function readRulesFolderSetting(workspaceRoot: string, managedDir: string) {
 	const raw =
 		process.env.CWTOOLS_TEST_RULES_FOLDER ??
 		workspace.getConfiguration("cwtools").get<string>("rules_folder");
+	const resolved = resolveRulesFolder(raw, { workspaceRoot });
 	return {
 		setting: raw !== undefined && raw.trim() !== "" ? raw : undefined,
-		resolved: resolveRulesFolder(raw, { workspaceRoot }),
+		resolved,
+		dir: resolved.existed ? resolved.path! : managedDir,
 	};
 }
 
@@ -65,11 +69,11 @@ export async function resolveRulesCache(
 	await fsPromises.mkdir(cacheDir, { recursive: true });
 	const languageRulesCache = path.join(cacheDir, language);
 
-	const { setting: rawManualRules, resolved: manualRules } =
-		readRulesFolderSetting(workspaceRoot);
-	const effectiveRulesCache = manualRules.existed
-		? manualRules.path!
-		: languageRulesCache;
+	const {
+		setting: rawManualRules,
+		resolved: manualRules,
+		dir: effectiveRulesCache,
+	} = readRulesFolderSetting(workspaceRoot, languageRulesCache);
 	if (!manualRules.existed) {
 		// LSP configuration only accepts an existing rules cache directory.
 		await fsPromises.mkdir(languageRulesCache, { recursive: true });
@@ -281,7 +285,7 @@ async function reviewedRulesRepo(
 
 // The commit the cached rules sit on, or null when there's nothing usable
 // there, including a half-written clone that the next fetch rebuilds.
-export async function currentRulesHead(dir: string): Promise<string | null> {
+async function currentRulesHead(dir: string): Promise<string | null> {
 	if (!fsExistsSync(path.join(dir, ".git"))) {
 		return null;
 	}

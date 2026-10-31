@@ -412,19 +412,21 @@ suite("setup report", function () {
 		await vscode.commands.executeCommand("workbench.action.closeAllEditors");
 	});
 
-	async function showReport(): Promise<vscode.TextDocument> {
+	// An already open report refreshes just after the command returns.
+	async function showReport(expected: string): Promise<string> {
 		await vscode.commands.executeCommand("cwtools.showSetupReport");
 		const document = vscode.window.activeTextEditor?.document;
 		assert.ok(document, "the report should open in the active editor");
 		assert.strictEqual(document.uri.scheme, "cwtools-setup-report");
-		return document;
+		await waitUntil(() => document.getText().includes(expected));
+		return document.getText();
 	}
 
 	test("names the resolved rules directory and carries the server's answers", async function () {
 		const api = await activate();
 		const rulesDir = path.join(api!.rulesCacheRoot()!, "stellaris");
 
-		const text = (await showReport()).getText();
+		const text = await showReport("- Source: managed clone");
 
 		assert.ok(text.includes(`- Directory: \`${rulesDir}\``), text);
 		assert.ok(text.includes("- Source: managed clone"), text);
@@ -433,11 +435,11 @@ suite("setup report", function () {
 		assert.match(text, /- Cache: (present|absent|stale|version mismatch|unreadable|unavailable)/);
 	});
 
-	async function reportWithRulesFolder(folder: string): Promise<string> {
+	async function reportWithRulesFolder(folder: string, expected: string): Promise<string> {
 		const previous = process.env.CWTOOLS_TEST_RULES_FOLDER;
 		process.env.CWTOOLS_TEST_RULES_FOLDER = folder;
 		try {
-			return (await showReport()).getText();
+			return await showReport(expected);
 		} finally {
 			if (previous === undefined) {
 				delete process.env.CWTOOLS_TEST_RULES_FOLDER;
@@ -450,23 +452,22 @@ suite("setup report", function () {
 	test("says so when rules_folder points at a path that does not exist", async function () {
 		const missing = path.join(os.tmpdir(), "cwtools-setup-report-no-such-rules");
 
-		const text = await reportWithRulesFolder(missing);
+		const expected = `- rules_folder setting: \`${missing}\` does not exist (tried \`${missing}\`)`;
 
-		assert.ok(
-			text.includes(`- rules_folder setting: \`${missing}\` does not exist (tried \`${missing}\`)`),
-			text,
-		);
+		const text = await reportWithRulesFolder(missing, expected);
+
+		assert.ok(text.includes(expected), text);
 	});
 
 	test("reads the git HEAD of a rules_folder inside a checkout", async function () {
-		const text = await reportWithRulesFolder(SAMPLE_ROOT);
+		const text = await reportWithRulesFolder(SAMPLE_ROOT, "- Source: rules_folder setting");
 
 		assert.ok(text.includes("- Source: rules_folder setting"), text);
 		assert.match(text, /- Git HEAD: [0-9a-f]{40}/);
 	});
 
 	test("cwtools.copySetupReport puts the report text on the clipboard", async function () {
-		const text = (await showReport()).getText();
+		const text = await showReport("- Source: managed clone");
 		await vscode.env.clipboard.writeText("");
 
 		await vscode.commands.executeCommand("cwtools.copySetupReport");

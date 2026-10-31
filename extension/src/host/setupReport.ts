@@ -7,7 +7,7 @@ import type { LanguageClient } from "vscode-languageclient/node";
 import { serverCommand } from "../common/serverCommandContract";
 import type { GameDetection } from "./detectGame";
 import { runGit } from "./engine";
-import { currentRulesHead, readRulesFolderSetting } from "./rulesSetup";
+import { readRulesFolderSetting } from "./rulesSetup";
 import {
 	renderSetupReport,
 	SETUP_REPORT_SCHEME,
@@ -17,7 +17,7 @@ import {
 } from "./setupReportText";
 import { errorMessage } from "./logger";
 
-export interface SetupReportContext {
+interface SetupReportContext {
 	language: string;
 	detectedBy: GameDetection["source"];
 	serverExe: string | undefined;
@@ -47,8 +47,7 @@ async function fetchServerReport(
 	}
 }
 
-// A rules_folder is often a subfolder of a checkout (its Config directory), which
-// the managed clone's own ".git must sit here" check would call "not a checkout".
+// With -C, since a rules_folder is often a subfolder of a checkout (its Config directory).
 async function gitHead(dir: string): Promise<string | null> {
 	try {
 		return (await runGit(["-C", dir, "rev-parse", "HEAD"])).trim();
@@ -61,11 +60,11 @@ async function clientFacts(
 	context: ExtensionContext,
 	setup: SetupReportContext,
 ): Promise<ClientFacts> {
-	const { setting, resolved } = readRulesFolderSetting(
-		setup.workspaceFolder.uri.fsPath,
-	);
 	const managedDir = path.join(setup.cacheDir, setup.language);
-	const dir = resolved.existed ? resolved.path! : managedDir;
+	const { setting, resolved, dir } = readRulesFolderSetting(
+		setup.workspaceFolder.uri.fsPath,
+		managedDir,
+	);
 	const vanilla = workspace
 		.getConfiguration("cwtools")
 		.get<string>(`cache.${setup.language}`)
@@ -84,37 +83,11 @@ async function clientFacts(
 			settingExists: resolved.existed,
 			managedDir,
 			dir,
-			head: resolved.existed
-				? await gitHead(dir)
-				: await currentRulesHead(dir),
+			head: await gitHead(dir),
 		},
 		vanillaSetting: vanilla || undefined,
 		vanillaSettingExists: vanilla ? existsSync(vanilla) : false,
 	};
-}
-
-// openTextDocument hands back a document that is already open without waiting
-// for the provider's refresh, so wait (bounded) for the new text to arrive.
-async function untilShows(
-	document: vscode.TextDocument,
-	text: string,
-): Promise<void> {
-	if (document.getText() === text) {
-		return;
-	}
-	await new Promise<void>((resolve) => {
-		const finish = () => {
-			clearTimeout(timer);
-			listener.dispose();
-			resolve();
-		};
-		const timer = setTimeout(finish, 2000);
-		const listener = workspace.onDidChangeTextDocument((event) => {
-			if (event.document === document && document.getText() === text) {
-				finish();
-			}
-		});
-	});
 }
 
 // Registered before the server binary is looked up, so a setup that cannot start
@@ -128,27 +101,21 @@ export function registerSetupReport(
 		scheme: SETUP_REPORT_SCHEME,
 		path: "/CWTools setup report.md",
 	});
-	let text: string | undefined;
-	const build = async (): Promise<string> => {
-		text = renderSetupReport(
-			await clientFacts(context, setup),
-			await fetchServerReport(getClient()),
-		);
-		return text;
-	};
 	const changed = new vscode.EventEmitter<vscode.Uri>();
 	context.subscriptions.push(
 		changed,
-		// A restored tab asks for its content before the command has run.
 		workspace.registerTextDocumentContentProvider(SETUP_REPORT_SCHEME, {
 			onDidChange: changed.event,
-			provideTextDocumentContent: () => text ?? build(),
+			provideTextDocumentContent: async () =>
+				renderSetupReport(
+					await clientFacts(context, setup),
+					await fetchServerReport(getClient()),
+				),
 		}),
 		commands.registerCommand("cwtools.showSetupReport", async () => {
-			const fresh = await build();
+			// An open report refreshes when the provider answers, just after it shows.
 			changed.fire(uri);
 			const document = await workspace.openTextDocument(uri);
-			await untilShows(document, fresh);
 			await window.showTextDocument(document, { preview: false });
 		}),
 		commands.registerCommand("cwtools.copySetupReport", async () => {

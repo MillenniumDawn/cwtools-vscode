@@ -1,3 +1,5 @@
+import type { GameDetection } from "./detectGame";
+
 export const SETUP_REPORT_SCHEME = "cwtools-setup-report";
 
 export type VanillaCacheReport =
@@ -9,7 +11,7 @@ export type VanillaCacheReport =
 			| { status: "unreadable"; reason: string }
 	  ));
 
-export interface ScanReport {
+interface ScanReport {
 	totalFiles: number;
 	validatedFiles: number;
 	filesWithErrors: number;
@@ -60,7 +62,7 @@ export interface ClientFacts {
 	extensionVersion: string;
 	vscodeVersion: string;
 	language: string;
-	detectedBy: "markers" | "executable" | "default";
+	detectedBy: GameDetection["source"];
 	serverExe: string | undefined;
 	rules: {
 		/** The `rules_folder` setting as written, undefined when unset or blank. */
