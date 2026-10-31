@@ -9,11 +9,13 @@ import type { GameDetection } from "./detectGame";
 import { runGit } from "./engine";
 import { readRulesFolderSetting } from "./rulesSetup";
 import {
+	renderNotStartedReport,
 	renderSetupReport,
 	SETUP_REPORT_SCHEME,
 	type ClientFacts,
 	type ServerOutcome,
 	type ServerSetupReport,
+	type VersionFacts,
 } from "./setupReportText";
 import { errorMessage } from "./logger";
 
@@ -56,6 +58,15 @@ async function gitHead(dir: string): Promise<string | null> {
 	}
 }
 
+function versionFacts(context: ExtensionContext): VersionFacts {
+	return {
+		extensionVersion:
+			(context.extension.packageJSON as { version?: string }).version ??
+			"unknown",
+		vscodeVersion: vscode.version,
+	};
+}
+
 async function clientFacts(
 	context: ExtensionContext,
 	setup: SetupReportContext,
@@ -70,10 +81,7 @@ async function clientFacts(
 		.get<string>(`cache.${setup.language}`)
 		?.trim();
 	return {
-		extensionVersion:
-			(context.extension.packageJSON as { version?: string }).version ??
-			"unknown",
-		vscodeVersion: vscode.version,
+		...versionFacts(context),
 		language: setup.language,
 		detectedBy: setup.detectedBy,
 		serverExe: setup.serverExe,
@@ -97,6 +105,32 @@ export function registerSetupReport(
 	getClient: () => LanguageClient | undefined,
 	setup: SetupReportContext,
 ): void {
+	registerReportCommands(context, async () =>
+		renderSetupReport(
+			await clientFacts(context, setup),
+			await fetchServerReport(getClient()),
+		),
+	);
+}
+
+// For the activation gate's early returns, where no game or server was chosen.
+export function registerNotStartedReport(
+	context: ExtensionContext,
+	reason: string,
+): void {
+	registerReportCommands(context, () =>
+		renderNotStartedReport(
+			versionFacts(context),
+			reason,
+			(workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+		),
+	);
+}
+
+function registerReportCommands(
+	context: ExtensionContext,
+	render: () => string | Promise<string>,
+): void {
 	const uri = vscode.Uri.from({
 		scheme: SETUP_REPORT_SCHEME,
 		path: "/CWTools setup report.md",
@@ -106,11 +140,7 @@ export function registerSetupReport(
 		changed,
 		workspace.registerTextDocumentContentProvider(SETUP_REPORT_SCHEME, {
 			onDidChange: changed.event,
-			provideTextDocumentContent: async () =>
-				renderSetupReport(
-					await clientFacts(context, setup),
-					await fetchServerReport(getClient()),
-				),
+			provideTextDocumentContent: render,
 		}),
 		commands.registerCommand("cwtools.showSetupReport", async () => {
 			// An open report refreshes when the provider answers, just after it shows.
