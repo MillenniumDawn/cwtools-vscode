@@ -115,6 +115,66 @@ fn test_clear_all_caches_only_deletes_cwtools_caches() {
     assert!(!owned_cwv.exists(), "the real vanilla cache survived");
 }
 
+/// Read until the base-game index finishes, returning the log lines that say no
+/// cache was found.
+fn absent_cache_logs_until_indexed(server: &mut TestServer) -> Vec<String> {
+    let mut absent = Vec::new();
+    server.read_until("the base-game index to finish", |v| {
+        let message = v["params"]["message"].as_str().unwrap_or_default();
+        if v["method"] != "window/logMessage" {
+            return false;
+        }
+        if message.starts_with("No base-game cache at ") {
+            absent.push(message.to_string());
+        }
+        message.starts_with("Indexed ")
+    });
+    absent
+}
+
+#[test]
+fn test_absent_vanilla_cache_is_logged_unless_the_rebuild_is_forced() {
+    // #1175: a missing cache used to fall through to a rebuild with no log line.
+    let cache_dir = tempfile::tempdir().unwrap();
+    let mut server = TestServer::builder()
+        .rules_file("r.cwt", GOTO_RULES)
+        .vanilla()
+        .init_opts(json!({ "cacheDir": cache_dir.path().to_string_lossy() }))
+        .file("a.txt", "my_dec = { }\n")
+        .spawn();
+    server.initialized();
+
+    let startup = absent_cache_logs_until_indexed(&mut server);
+
+    let written: Vec<_> = std::fs::read_dir(cache_dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "cwv"))
+        .collect();
+    assert_eq!(
+        written.len(),
+        1,
+        "expected one base-game cache: {written:?}"
+    );
+    assert_eq!(startup.len(), 1, "{startup:?}");
+    assert!(
+        startup[0].contains(&written[0].display().to_string()),
+        "the log line must name the expected path: {startup:?}"
+    );
+
+    // A rebuild the user asked for is not news, even with the cache gone.
+    std::fs::remove_file(&written[0]).unwrap();
+    server.send_request(
+        2,
+        "workspace/executeCommand",
+        json!({"command": "cacheVanilla", "arguments": []}),
+    );
+    let forced = absent_cache_logs_until_indexed(&mut server);
+    server.stop();
+    assert!(forced.is_empty(), "{forced:?}");
+}
+
 /// Read until a `publishDiagnostics` for a URI ending in `suffix` arrives whose
 /// codes no longer include `missing_code`. Fails immediately if a `loadingBar`
 /// notification is observed along the way — a quiet background pass must never
