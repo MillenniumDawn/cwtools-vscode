@@ -4,12 +4,9 @@ import * as vscode from "vscode";
 import sinon from "sinon";
 import { activate, waitUntil, waitForServerReady, SAMPLE_ROOT } from "../support/utils";
 
-// Kills the server with requests queued behind the kill, then blocks the event
-// loop until it is a zombie (pipes closed, exit not yet seen). The queued
-// writes then fail against the dead pipe, and enough of them can land before
-// the pipe's close event to stop the client for good (#1160). Loop timing
-// decides that race, so unfixed code fails on some runs only. Linux only, like
-// the host runner.
+// Blocks the loop until the killed server is a zombie, so queued writes hit its
+// dead pipe before the close event (#1160). The race fails unfixed code on some
+// runs only. Linux only, like the host runner.
 function crashWithQueuedWrites(pid: number): Promise<unknown> {
 	const queued = Promise.allSettled(
 		Array.from({ length: 64 }, () =>

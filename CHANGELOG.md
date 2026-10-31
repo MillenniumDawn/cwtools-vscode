@@ -2,8 +2,8 @@
 
 #### Extension
 
-* Restart the server after a crash even when several queued writes fail against its dead pipe before the close event arrives. Those failures used to count toward the give-up limit, which stopped the client without using the restart budget, so no replacement started. The error handler now gives up on repeated write failures only while the server's stdin is open, and leaves the restart to the close handler otherwise. (#1160)
 * Start the server-binary exec-bit fix-up (stat/chmod outside Windows) and the rules-cache resolve together on activation and wait for both before creating the language client, instead of running them back to back. Windows behavior, the missing-binary early return, logged-and-continued stat/chmod errors, and rules-cache rejection are unchanged. (#1155)
+* Restart the server after a crash even when several queued writes fail against its dead pipe before the close event arrives. Those failures used to count toward the give-up limit, which stopped the client without using the restart budget, so no replacement started. The error handler now gives up on repeated write failures only while the server's stdin is open, and leaves the restart to the close handler otherwise. (#1160)
 
 #### Engine
 
