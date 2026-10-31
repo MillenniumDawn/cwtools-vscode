@@ -1352,40 +1352,41 @@ impl Backend {
             let cfg = self.state.config.read();
             (cfg.game(), cfg.position_encoding.clone())
         };
-        let validated: Vec<(String, i32, Vec<Diagnostic>, u64)> = {
-            let rules_guard = self.state.rules.read();
-            let mut out = Vec::with_capacity(others.len());
-            for (uri, snapshot_version, ast, text) in others {
-                if self.state.edit_generation.load(Ordering::Relaxed) != generation {
-                    tracing::debug!(generation, "revalidate_open_dependents superseded");
-                    if let Some(names) = changed_names {
-                        let mut pending = self.state.pending_changed_names.lock();
-                        pending.extend(names.iter().cloned());
+        let validated: Vec<(String, i32, Vec<Diagnostic>, u64)> =
+            tokio::task::block_in_place(|| {
+                let rules_guard = self.state.rules.read();
+                let mut out = Vec::with_capacity(others.len());
+                for (uri, snapshot_version, ast, text) in others {
+                    if self.state.edit_generation.load(Ordering::Relaxed) != generation {
+                        tracing::debug!(generation, "revalidate_open_dependents superseded");
+                        if let Some(names) = changed_names {
+                            let mut pending = self.state.pending_changed_names.lock();
+                            pending.extend(names.iter().cloned());
+                        }
+                        break;
                     }
-                    break;
+                    let lines = DocLines::new(&text, encoding.clone());
+                    let diagnostics = match rules_guard.ruleset.as_ref() {
+                        Some(ruleset) => self.validate_parsed_prebuilt(
+                            &uri,
+                            &ast,
+                            &rules_guard.modifier_keys,
+                            ruleset,
+                            game,
+                            rules_guard.scope_registry.as_ref(),
+                            &lines,
+                        ),
+                        None => parse_errors_to_diagnostics(&ast.errors, &lines),
+                    };
+                    out.push((
+                        uri,
+                        snapshot_version,
+                        diagnostics,
+                        cwtools_cache::workspace::content_hash(&text),
+                    ));
                 }
-                let lines = DocLines::new(&text, encoding.clone());
-                let diagnostics = match rules_guard.ruleset.as_ref() {
-                    Some(ruleset) => self.validate_parsed_prebuilt(
-                        &uri,
-                        &ast,
-                        &rules_guard.modifier_keys,
-                        ruleset,
-                        game,
-                        rules_guard.scope_registry.as_ref(),
-                        &lines,
-                    ),
-                    None => parse_errors_to_diagnostics(&ast.errors, &lines),
-                };
-                out.push((
-                    uri,
-                    snapshot_version,
-                    diagnostics,
-                    cwtools_cache::workspace::content_hash(&text),
-                ));
-            }
-            out
-        };
+                out
+            });
         let to_publish: Vec<(String, i32, Vec<Diagnostic>, u64)> = validated
             .into_iter()
             .filter(|(uri, snapshot_version, _, _)| {
@@ -4508,6 +4509,16 @@ mod ignored_tests {
         workspace: &std::path::Path,
         value: &str,
     ) -> String {
+        let doc_text = format!("spriteType = {{ texturefile = \"{value}\" }}");
+        open_filepath_document(backend, workspace, doc_text)
+    }
+
+    /// Like `open_filepath_dependent`, with the document body supplied by the caller.
+    fn open_filepath_document(
+        backend: &Backend,
+        workspace: &std::path::Path,
+        doc_text: String,
+    ) -> String {
         let table = StringTable::new();
         let parsed = parse_string(
             "spriteType = {\n    texturefile = filepath[gfx/]\n}\ntypes = {\n    type[spriteType] = {\n        path = \"gfx\"\n    }\n}\n",
@@ -4518,7 +4529,6 @@ mod ignored_tests {
         let doc_uri = Url::from_file_path(workspace.join("gfx/ref.gfx"))
             .unwrap()
             .to_string();
-        let doc_text = format!("spriteType = {{ texturefile = \"{value}\" }}");
         // Parse like `parse_and_validate` does, so string ids resolve through the shared table.
         let doc_ast = parse_string(&doc_text, &backend.state.string_table);
         backend
@@ -5584,6 +5594,74 @@ mod ignored_tests {
         keystroke.await.expect("keystroke validation task");
         batch.await.expect("watched batch task");
         drain.abort();
+    }
+
+    /// #1171: the dependent sweep is sync CPU work, so it must not pin an async worker. With
+    /// one worker, a held worker shows up as one long gap in an unrelated ticking task.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn dependent_sweep_does_not_hold_the_async_worker() {
+        use std::time::{Duration, Instant};
+
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let primary = tmp.path().join("mod");
+        std::fs::create_dir_all(&primary).unwrap();
+        let ws_uri = Url::from_file_path(&primary).unwrap().to_string();
+        let (backend, mut socket) = handshaken_backend_with_workspace(&ws_uri).await;
+        let text = "spriteType = { texturefile = \"thing.dds\" }\n".repeat(100_000);
+        let doc_uri = open_filepath_document(&backend, &primary, text);
+        {
+            let mut info = backend.state.info_service.write();
+            let file_index = &mut Arc::make_mut(&mut info.type_index).file_index;
+            file_index.claim_workspace("gfx/thing.dds");
+        }
+
+        let ticks = Arc::new(Mutex::new(Vec::<Instant>::new()));
+        let ticker = tokio::spawn({
+            let ticks = ticks.clone();
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                    ticks.lock().push(Instant::now());
+                }
+            }
+        });
+        while ticks.lock().len() < 5 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        let sweeper = Backend {
+            client: backend.client.clone(),
+            state: backend.state.clone(),
+        };
+        let sweep = tokio::spawn(async move {
+            let started = Instant::now();
+            sweeper.revalidate_open_dependents("", 0, None).await;
+            (started, Instant::now())
+        });
+        let (started, finished) = sweep.await.expect("sweep task");
+        while ticks.lock().last().is_none_or(|tick| *tick < finished) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        ticker.abort();
+
+        let published = socket.next().await.expect("dependent publish");
+        assert_eq!(published.method(), "textDocument/publishDiagnostics");
+        let published: PublishDiagnosticsParams =
+            serde_json::from_value(published.params().cloned().unwrap_or_default())
+                .expect("publishDiagnostics params");
+        assert_eq!(published.uri.as_str(), doc_uri);
+
+        let sweep_time = finished - started;
+        let longest_gap = ticks
+            .lock()
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .max()
+            .expect("ticks around the sweep");
+        assert!(
+            longest_gap * 4 < sweep_time,
+            "the ticker stalled for {longest_gap:?} during a {sweep_time:?} sweep"
+        );
     }
 }
 
