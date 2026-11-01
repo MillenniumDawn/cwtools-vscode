@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Fence semantic-token hashing, cache copies, delta diffing and encoding without changing token results or cache behavior. (#1181)
+
 ### 4.0.6
 
 #### Extension
