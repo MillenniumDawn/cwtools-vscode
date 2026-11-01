@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
+
 ### 4.0.6
 
 #### Extension
