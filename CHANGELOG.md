@@ -1,5 +1,9 @@
 ### Unreleased
 
+#### Engine
+
+* Fence synchronous script, localisation and post-lookup CWT hover resolution and markdown work so it does not hold an async worker; asynchronous CWT document reads remain outside. Hover contents, debug and scope behavior are unchanged. (#1183)
+
 ### 4.0.6
 
 #### Extension

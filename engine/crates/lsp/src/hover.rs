@@ -19,7 +19,9 @@ impl Backend {
         let pos = params.text_document_position_params.position;
 
         if crate::paths::is_loc_file(&uri) {
-            return Ok(self.loc_ref_hover(&uri, pos));
+            return Ok(tokio::task::block_in_place(|| {
+                self.loc_ref_hover(&uri, pos)
+            }));
         }
 
         if crate::paths::is_cwt_file(&uri) {
@@ -29,157 +31,162 @@ impl Backend {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(&uri, &ws_prefix);
 
-        if let Some(RuleCursorInfo {
-            element,
-            hint,
-            category,
-            description: desc,
-            required_scopes: scopes,
-            current_scope,
-            root_scope,
-            prev_scope,
-            from_scopes,
-            resolved_scope,
-        }) = self.rule_info_at_cursor(&uri, pos, &logical_path)
-        {
-            let debug = self
-                .state
-                .hover_debug
-                .load(std::sync::atomic::Ordering::Relaxed);
-            // Lock order: rules -> info_service -> loc_text.
-            let rules_guard = self.state.rules.read();
-            let mut md = build_hover_markdown(
-                &element,
-                &hint,
-                category.as_deref(),
-                desc.as_deref(),
-                &scopes,
-                ScopeTable {
-                    current: current_scope.as_deref(),
-                    root: root_scope.as_deref(),
-                    prev: prev_scope.as_deref(),
-                    from: &from_scopes,
-                    resolved: resolved_scope.as_deref(),
-                },
-                debug,
-                rules_guard.ruleset.as_deref(),
-            );
-            if let ReferenceHint::Variable { name, .. } = &hint {
-                let info_guard = self.state.info_service.read();
-                let (values, more) = info_guard.variable_values(name, 5);
-                if !values.is_empty() {
-                    let joined = values
-                        .iter()
-                        .map(|v| format!("`{}`", v))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let suffix = if more { ", +more" } else { "" };
-                    md.push_str(&format!("\n\nSet to: {}{}", joined, suffix));
+        tokio::task::block_in_place(|| {
+            if let Some(RuleCursorInfo {
+                element,
+                hint,
+                category,
+                description: desc,
+                required_scopes: scopes,
+                current_scope,
+                root_scope,
+                prev_scope,
+                from_scopes,
+                resolved_scope,
+            }) = self.rule_info_at_cursor(&uri, pos, &logical_path)
+            {
+                let debug = self
+                    .state
+                    .hover_debug
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                // Lock order: rules -> info_service -> loc_text.
+                let rules_guard = self.state.rules.read();
+                let mut md = build_hover_markdown(
+                    &element,
+                    &hint,
+                    category.as_deref(),
+                    desc.as_deref(),
+                    &scopes,
+                    ScopeTable {
+                        current: current_scope.as_deref(),
+                        root: root_scope.as_deref(),
+                        prev: prev_scope.as_deref(),
+                        from: &from_scopes,
+                        resolved: resolved_scope.as_deref(),
+                    },
+                    debug,
+                    rules_guard.ruleset.as_deref(),
+                );
+                if let ReferenceHint::Variable { name, .. } = &hint {
+                    let info_guard = self.state.info_service.read();
+                    let (values, more) = info_guard.variable_values(name, 5);
+                    if !values.is_empty() {
+                        let joined = values
+                            .iter()
+                            .map(|v| format!("`{}`", v))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let suffix = if more { ", +more" } else { "" };
+                        md.push_str(&format!("\n\nSet to: {}{}", joined, suffix));
+                    }
+                }
+                append_localisation(&mut md, &element, &self.state.loc_text.read());
+                // A reference to a type with a primary loc key (an event id, …) shows the
+                // localized title, from the captured explicit-field key or a name-derived key (#40).
+                if let ReferenceHint::TypeRef { type_name, value } = &hint {
+                    let info_guard = self.state.info_service.read();
+                    let loc_text = self.state.loc_text.read();
+                    if let Some(ruleset) = rules_guard.ruleset.as_ref() {
+                        append_type_localisation(
+                            &mut md,
+                            type_name,
+                            value,
+                            &info_guard.type_index,
+                            ruleset,
+                            &loc_text,
+                        );
+                    }
+                }
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: md,
+                    }),
+                    range: None,
+                }));
+            }
+
+            if let Some(element) = self.element_at_cursor(&uri, pos) {
+                let debug = self
+                    .state
+                    .hover_debug
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                let mut contents = if debug {
+                    match &element {
+                        PositionElement::Leaf { key, value } => {
+                            format!("**Field**: `{} = {}`", key, value)
+                        }
+                        PositionElement::LeafValue { value } => {
+                            format!("**Value**: `{}`", value)
+                        }
+                    }
+                } else {
+                    String::new()
+                };
+                append_localisation(&mut contents, &element, &self.state.loc_text.read());
+                if !contents.trim().is_empty() {
+                    return Ok(Some(Hover {
+                        contents: HoverContents::Markup(MarkupContent {
+                            kind: MarkupKind::Markdown,
+                            value: contents,
+                        }),
+                        range: None,
+                    }));
                 }
             }
-            append_localisation(&mut md, &element, &self.state.loc_text.read());
-            // A reference to a type with a primary loc key (an event id, …) shows the
-            // localized title, from the captured explicit-field key or a name-derived key (#40).
-            if let ReferenceHint::TypeRef { type_name, value } = &hint {
-                let info_guard = self.state.info_service.read();
-                let loc_text = self.state.loc_text.read();
-                if let Some(ruleset) = rules_guard.ruleset.as_ref() {
-                    append_type_localisation(
-                        &mut md,
-                        type_name,
-                        value,
-                        &info_guard.type_index,
-                        ruleset,
-                        &loc_text,
-                    );
+            Ok(None)
+        })
+    }
+
+    async fn cwt_hover(&self, uri: &str, pos: Position) -> Option<Hover> {
+        use cwtools_rules::rules_types::CwtDefKind;
+        // Keep asynchronous CWT document lookup outside the blocking section.
+        let (kind, name) = self.cwt_ref_at_cursor(uri, pos).await?;
+        tokio::task::block_in_place(|| {
+            let rules = self.state.rules.read();
+            let rs = rules.ruleset.as_ref()?;
+            let mut md = match kind {
+                CwtDefKind::Type => {
+                    let mut s = format!("**type** `{}`", name);
+                    if let Some(&idx) = rs.type_by_name().get(&name) {
+                        let paths = rs.types[idx].path_options.paths.join(", ");
+                        if !paths.is_empty() {
+                            s.push_str(&format!("\n\npath: {}", paths));
+                        }
+                    }
+                    s
                 }
+                CwtDefKind::Enum => {
+                    let mut s = format!("**enum** `{}`", name);
+                    if let Some(&idx) = rs.enum_by_name().get(&name) {
+                        let values = &rs.enums[idx].values;
+                        let shown = values.iter().take(5).cloned().collect::<Vec<_>>();
+                        let more = if values.len() > 5 { ", …" } else { "" };
+                        s.push_str(&format!(
+                            "\n\n{} values: {}{}",
+                            values.len(),
+                            shown.join(", "),
+                            more
+                        ));
+                    }
+                    s
+                }
+                CwtDefKind::SingleAlias => format!("**single_alias** `{}`", name),
+            };
+            if let Some(def) = rs
+                .def_positions
+                .iter()
+                .find(|d| d.kind == kind && d.name == name)
+            {
+                md.push_str(&format!("\n\ndefined in `{}`", def.file.display()));
             }
-            return Ok(Some(Hover {
+            Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
                     value: md,
                 }),
                 range: None,
-            }));
-        }
-
-        if let Some(element) = self.element_at_cursor(&uri, pos) {
-            let debug = self
-                .state
-                .hover_debug
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let mut contents = if debug {
-                match &element {
-                    PositionElement::Leaf { key, value } => {
-                        format!("**Field**: `{} = {}`", key, value)
-                    }
-                    PositionElement::LeafValue { value } => {
-                        format!("**Value**: `{}`", value)
-                    }
-                }
-            } else {
-                String::new()
-            };
-            append_localisation(&mut contents, &element, &self.state.loc_text.read());
-            if !contents.trim().is_empty() {
-                return Ok(Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: contents,
-                    }),
-                    range: None,
-                }));
-            }
-        }
-        Ok(None)
-    }
-
-    async fn cwt_hover(&self, uri: &str, pos: Position) -> Option<Hover> {
-        use cwtools_rules::rules_types::CwtDefKind;
-        let (kind, name) = self.cwt_ref_at_cursor(uri, pos).await?;
-        let rules = self.state.rules.read();
-        let rs = rules.ruleset.as_ref()?;
-        let mut md = match kind {
-            CwtDefKind::Type => {
-                let mut s = format!("**type** `{}`", name);
-                if let Some(&idx) = rs.type_by_name().get(&name) {
-                    let paths = rs.types[idx].path_options.paths.join(", ");
-                    if !paths.is_empty() {
-                        s.push_str(&format!("\n\npath: {}", paths));
-                    }
-                }
-                s
-            }
-            CwtDefKind::Enum => {
-                let mut s = format!("**enum** `{}`", name);
-                if let Some(&idx) = rs.enum_by_name().get(&name) {
-                    let values = &rs.enums[idx].values;
-                    let shown = values.iter().take(5).cloned().collect::<Vec<_>>();
-                    let more = if values.len() > 5 { ", …" } else { "" };
-                    s.push_str(&format!(
-                        "\n\n{} values: {}{}",
-                        values.len(),
-                        shown.join(", "),
-                        more
-                    ));
-                }
-                s
-            }
-            CwtDefKind::SingleAlias => format!("**single_alias** `{}`", name),
-        };
-        if let Some(def) = rs
-            .def_positions
-            .iter()
-            .find(|d| d.kind == kind && d.name == name)
-        {
-            md.push_str(&format!("\n\ndefined in `{}`", def.file.display()));
-        }
-        Some(Hover {
-            contents: HoverContents::Markup(MarkupContent {
-                kind: MarkupKind::Markdown,
-                value: md,
-            }),
-            range: None,
+            })
         })
     }
 
@@ -454,6 +461,87 @@ pub(crate) fn append_type_localisation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn script_hover_does_not_hold_the_async_worker() {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        use tower_lsp::lsp_types::{TextDocumentIdentifier, TextDocumentPositionParams, Url};
+
+        let backend = crate::testing::test_backend();
+        backend.state.hover_debug.store(true, Ordering::Relaxed);
+        let text = "spriteType = { texturefile = \"thing.dds\" }\n";
+        let uri = Url::from_file_path(cwtools_test_support::abs("mod/gfx/hover.gfx"))
+            .expect("document uri");
+        let ast = cwtools_parser::parser::parse_string(text, &backend.state.string_table);
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.to_string(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: Some(Arc::new(ast)),
+                    ast_version: Some(1),
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let state = Arc::clone(&backend.state);
+        let holder = std::thread::spawn(move || {
+            let _guard = state.loc_text.write();
+            locked_tx.send(()).expect("lock-ready receiver");
+            // The timeout releases a broken request without relying on its blocked runtime.
+            release_rx.recv_timeout(Duration::from_secs(5))
+        });
+        locked_rx.await.expect("localisation lock held");
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let hover = tokio::spawn(async move {
+            started_tx.send(()).expect("request-start receiver");
+            backend
+                .hover_impl(HoverParams {
+                    text_document_position_params: TextDocumentPositionParams {
+                        text_document: TextDocumentIdentifier { uri },
+                        position: Position::new(0, 34),
+                    },
+                    work_done_progress_params: Default::default(),
+                })
+                .await
+        });
+        started_rx.await.expect("hover started");
+        let progress = tokio::spawn(async move { release_tx.send(()) });
+        let result = hover.await.expect("hover task");
+        assert!(
+            holder.join().expect("lock holder").is_ok(),
+            "the async worker could not release the lock while hover was running"
+        );
+        progress
+            .await
+            .expect("progress task")
+            .expect("lock release");
+
+        let hover = result
+            .expect("hover request")
+            .expect("a hover on a script leaf");
+        let HoverContents::Markup(content) = hover.contents else {
+            panic!("expected Markdown hover");
+        };
+        assert!(
+            content.value.contains("thing.dds"),
+            "resolved hover markdown: {}",
+            content.value
+        );
+    }
 
     #[test]
     fn test_hover_type_ref() {
