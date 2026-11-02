@@ -243,7 +243,9 @@ impl Backend {
         }
         if !merged {
             let logical_path = scan_logical_path(file, workspace_prefix);
-            refresh |= self.index_parsed_file_as(&file.uri, parsed, None, &logical_path, base_game);
+            refresh |= self
+                .index_parsed_file_as(&file.uri, parsed, None, &logical_path, base_game)
+                .0;
         }
         refresh
     }

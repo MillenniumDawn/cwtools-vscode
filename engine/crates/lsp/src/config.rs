@@ -1144,6 +1144,13 @@ impl Backend {
         let hover_all_changed = hover_all_languages.is_some_and(|all| all != current_hover_all);
         let workspace_wide_changed =
             workspace_wide_diagnostics.is_some_and(|wide| wide != current_workspace_wide);
+        let codes_changed = codes.as_ref().is_some_and(|codes| codes != &current_codes);
+        let rescan = baseline_changed
+            || rules_cache_changed
+            || ignore_changed
+            || localisation_changed
+            || hover_all_changed
+            || workspace_wide_changed;
         {
             let mut cfg = self.state.config.write();
             if let Some(files) = files {
@@ -1196,9 +1203,11 @@ impl Backend {
         if ignore_changed {
             *self.state.loc_discovery_cache.lock() = None;
         }
-        self.state
-            .settings_generation
-            .fetch_add(1, Ordering::SeqCst);
+        if rescan || codes_changed {
+            self.state
+                .settings_generation
+                .fetch_add(1, Ordering::SeqCst);
+        }
         let (n_files, n_dirs, n_codes) = counts;
         tracing::info!(
             file_globs = ?n_files,
@@ -1208,17 +1217,11 @@ impl Backend {
             reindex_idle_secs = ?reindex_idle_secs,
             "config updated via didChangeConfiguration"
         );
-        if baseline_changed
-            || rules_cache_changed
-            || ignore_changed
-            || localisation_changed
-            || hover_all_changed
-            || workspace_wide_changed
-        {
+        if rescan {
             if !self.validate_entire_workspace(false).await {
                 self.spawn_deferred_revalidation("didChangeConfiguration");
             }
-        } else if self.state.index_ready.load(Ordering::Relaxed) {
+        } else if codes_changed && self.state.index_ready.load(Ordering::Relaxed) {
             self.revalidate_all_open_docs(crate::ValidateTrigger::ConfigChange)
                 .await;
         }
