@@ -418,6 +418,7 @@ const MAX_CONCURRENT_VALIDATIONS: usize = 2;
 pub(crate) struct DocumentStore {
     documents: HashMap<String, ParsedDoc>,
     content_hashes: HashMap<String, u64>,
+    validated: HashSet<String>,
     open_use_sites: OpenUseSiteIndex,
     line_indices: HashMap<String, Arc<LineIndex>>,
     pub(crate) retained_text_bytes: usize,
@@ -725,6 +726,7 @@ impl DocumentStore {
         Self {
             documents: HashMap::new(),
             content_hashes: HashMap::new(),
+            validated: HashSet::new(),
             open_use_sites: OpenUseSiteIndex::default(),
             line_indices: HashMap::new(),
             retained_text_bytes: 0,
@@ -733,6 +735,20 @@ impl DocumentStore {
 
     pub(crate) fn content_hash(&self, uri: &str) -> Option<u64> {
         self.content_hashes.get(uri).copied()
+    }
+
+    pub(crate) fn is_validated(&self, uri: &str) -> bool {
+        self.validated.contains(uri)
+    }
+
+    pub(crate) fn mark_validated(&mut self, uri: &str, version: i32, text: &Arc<str>) -> bool {
+        if !self.documents.get(uri).is_some_and(|document| {
+            document.version == version && Arc::ptr_eq(&document.text, text)
+        }) {
+            return false;
+        }
+        self.validated.insert(uri.to_string());
+        true
     }
 
     /// The open buffer's text as a refcount clone. `ParsedDoc.text` is an
@@ -816,6 +832,7 @@ impl DocumentStore {
         )?;
         self.open_use_sites.remove_file(&uri);
         let new_index_bytes = self.open_use_sites.capacity_bytes();
+        self.validated.remove(&uri);
         self.documents.insert(uri.clone(), document);
         self.line_indices.insert(uri.clone(), line_index);
         self.content_hashes.insert(uri, content_hash);
@@ -868,6 +885,7 @@ impl DocumentStore {
         document.version = version;
         document.text = text;
         document.loc_cache = None;
+        self.validated.remove(uri);
         self.line_indices.insert(uri.to_string(), line_index);
         self.content_hashes.insert(uri.to_string(), content_hash);
         self.retained_text_bytes = self
@@ -1037,6 +1055,7 @@ impl DocumentStore {
         self.open_use_sites.remove_file(uri);
         let new_index_bytes = self.open_use_sites.capacity_bytes();
         self.content_hashes.remove(uri);
+        self.validated.remove(uri);
         let line_index_bytes = self
             .line_indices
             .remove(uri)
@@ -1151,6 +1170,35 @@ mod semantic_line_index_tests {
                 assert_eq!(index.line(text, text.lines().count() as u32), "");
             }
         }
+    }
+
+    #[test]
+    fn validation_marker_belongs_to_one_open_buffer_snapshot() {
+        let mut docs = DocumentStore::new();
+        let uri = "file:///workspace/test.txt";
+        docs.open(uri.into(), document("same text")).unwrap();
+        let first = docs.text_of(uri).unwrap();
+        assert!(!docs.is_validated(uri));
+        assert!(!docs.mark_validated(uri, 2, &first));
+        assert!(docs.mark_validated(uri, 1, &first));
+        assert!(docs.is_validated(uri));
+
+        docs.change(uri, 2, Arc::from("new text")).unwrap();
+        assert!(!docs.is_validated(uri));
+        assert!(!docs.mark_validated(uri, 1, &first));
+        let changed = docs.text_of(uri).unwrap();
+        assert!(docs.mark_validated(uri, 2, &changed));
+        docs.remove(uri).unwrap();
+        assert!(!docs.is_validated(uri));
+        assert!(!docs.mark_validated(uri, 2, &changed));
+
+        docs.open(uri.into(), document("same text")).unwrap();
+        assert!(!docs.mark_validated(uri, 1, &first));
+        let reopened = docs.text_of(uri).unwrap();
+        assert!(docs.mark_validated(uri, 1, &reopened));
+        docs.open(uri.into(), document("same text")).unwrap();
+        assert!(!docs.is_validated(uri));
+        assert!(!docs.mark_validated(uri, 1, &reopened));
     }
 
     #[test]

@@ -255,6 +255,57 @@ fn bench_index_parsed_file(c: &mut Criterion) {
             })
         });
 
+        info.clear_file(&uri);
+        info.index_file_with_path(&uri, &parsed, &table, &ruleset, logical_path);
+        for shared_files in [1, 32] {
+            if shared_files > 1 {
+                for other in 1..shared_files {
+                    info.index_file_with_path(
+                        &format!("file:///bench/shared_{other}.txt"),
+                        &parsed,
+                        &table,
+                        &ruleset,
+                        logical_path,
+                    );
+                }
+            }
+            let records = |sites: Vec<cwtools_info::IndexedUseSite>| {
+                let mut records: Vec<_> = sites.iter().map(|site| format!("{site:?}")).collect();
+                records.sort();
+                records
+            };
+            assert_eq!(
+                records(info.file_reference_sites(&uri)),
+                records(info.file_reference_sites_for_ast(
+                    &uri,
+                    &parsed,
+                    &table,
+                    &ruleset,
+                    logical_path
+                )),
+            );
+            for pass in 0..2 {
+                group.bench_function(
+                    format!("open_references/{shared_files}/{pass}/before"),
+                    |b| {
+                        b.iter(|| {
+                            black_box(info.file_reference_sites_for_ast(
+                                &uri,
+                                &parsed,
+                                &table,
+                                &ruleset,
+                                logical_path,
+                            ))
+                        })
+                    },
+                );
+                group.bench_function(
+                    format!("open_references/{shared_files}/{pass}/after"),
+                    |b| b.iter(|| black_box(info.file_reference_sites(&uri))),
+                );
+            }
+        }
+
         let mut type_index = cwtools_info::TypeIndex::new();
         type_index.merge(
             &uri,

@@ -1,5 +1,12 @@
 ### Unreleased
 
+#### Engine
+
+* Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.
+* Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
+* Skip global highlighting and CodeLens refreshes when a file-watcher batch only contains open or unchanged files.
+* Apply hover debug, hover scope display, and background-reindex timing changes without revalidating open documents or invalidating the workspace scan fingerprint.
+
 ### 4.0.6
 
 #### Extension
@@ -1114,7 +1121,7 @@ This is the first release with the engine in-repo under `engine/`. The extension
 * A tagged release now fails instead of silently shipping `--generate-notes` when `CHANGELOG.md` has no section matching the tag's version. `releaseNotes()` throws rather than returning an empty body, so a typo'd or missing CHANGELOG entry can no longer reach GitHub as generic auto-generated release notes. The `release` command checks it before pushing the tag, not after the build. The parsing moved into a pure `build/changelog.ts` module under vitest, and `build/` is now type-checked by `npm run check` (it previously ran under tsx with no typecheck, which let a `FileCoverage` cast bug in `coverage-summary.ts` slip through). `setReleaseVersion` also names the file it failed to parse instead of raising a bare `JSON.parse` error. (#138)
 
 * Cleaned up the client. One `errorMessage` helper replaces the six copies of `err instanceof Error ? err.message : String(err)` (and the near-twin inside `logError`). The activation test asserts the `graphPanel` API is present instead of `assert.ok(true)`, the `currentEngine()` test helper that always returned `'rust'` is gone with its guards folded in, the file explorer's change emitter is disposed with the extension, `fnv1a` gains a unit test, the diagnostics-signature cache stops growing past 1000 entries, and game detection checks content hints with async fs instead of blocking activation on `existsSync`.
-* The bundled themes now paint the language server's semantic tokens, which resolve the TextMate ambiguity a static grammar can't (a CK2 define key vs a scope keyword, `capital` as a keyword vs a field). Each theme opts in via `semanticHighlighting` and carries a small `semanticTokenColors` block for the structurally-classified tokens (`type`, `enumMember`, `variable`, `namespace`, `function`); the rest fall back to their scope colors. `editor.semanticHighlighting.enabled` defaults on for `paradox` files. Added [a themes guide](release/docs/themes.md) covering the semantic token legend and how to add a theme.
+* The bundled themes now paint the language server's semantic tokens, which resolve the TextMate ambiguity a static grammar can't (a CK2 define key vs a scope keyword, `capital` as a keyword vs a field). Each theme opts in via `semanticHighlighting` and carries a small `semanticTokenColors` block for the structurally-classified tokens (`type`, `enumMember`, `variable`, `namespace`, `function`); the rest fall back to their scope colors. `editor.semanticHighlighting.enabled` defaults on for `paradox` files. Added [a themes guide](docs/extension/themes.md) covering the semantic token legend and how to add a theme.
 
 * `npm run test:watch` now starts both watchers on Windows. The script ran `tsc -w` and the test watcher joined with `&`, which npm executes sequentially through cmd.exe, so the never-exiting compiler watcher starved the test watcher; it worked on Linux only because `&` backgrounds there. The two now run under `concurrently`, and `-k` stops the test watcher when the compiler dies rather than rerunning stale output. (#132)
 * A failed language-server start no longer causes an unhandled rejection whenever the active tab changes. The failed focus notification is logged instead. (#130)

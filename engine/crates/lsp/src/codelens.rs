@@ -719,6 +719,104 @@ mod tests {
         ));
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn validation_reuses_references_from_its_own_index_replacement() {
+        use cwtools_rules::rules_types::{NewField, Options, RuleType, ValueType};
+
+        let fixture = fixture();
+        let backend = &fixture.backend;
+        let uri = &fixture.reference_uri;
+        let mut ruleset = type_ref_ruleset();
+        ruleset.aliases.push((
+            "effect:use_<my_type>_ref".into(),
+            (
+                RuleType::LeafRule {
+                    left: NewField::SpecificField("yes".into()),
+                    right: NewField::ValueField(ValueType::Bool),
+                },
+                Options::default(),
+            ),
+        ));
+        ruleset.reindex();
+        backend.set_ruleset(ruleset);
+        let text = "use_type = { base = \"my_instance\" use_MY_INSTANCE_ref = yes }\n";
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                uri.clone(),
+                ParsedDoc {
+                    version: 1,
+                    text: Arc::from(text),
+                    ast: None,
+                    ast_version: None,
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .unwrap();
+        let (_, script) = backend
+            .parse_and_validate(uri, text, crate::ValidateTrigger::DidChange, Some(1))
+            .await;
+        let script = script.unwrap();
+        let expected = backend
+            .reference_sites_for_open_ast(uri, &script.ast)
+            .unwrap();
+        let records = |sites: &[cwtools_info::IndexedUseSite]| {
+            let mut records: Vec<_> = sites.iter().map(|site| format!("{site:?}")).collect();
+            records.sort();
+            records
+        };
+        assert_eq!(script.use_sites.len(), 2);
+        assert_eq!(records(&script.use_sites), records(&expected));
+
+        let disk_ast = parse_string(
+            "use_type = { base = disk_only }",
+            &backend.state.string_table,
+        );
+        assert!(backend.index_parsed_file(uri, &disk_ast, None).is_empty());
+        assert_eq!(
+            backend.state.info_service.read().file_reference_sites(uri)[0].name,
+            "disk_only"
+        );
+        assert!(backend.state.documents.lock().set_ast_with_use_sites(
+            uri,
+            1,
+            Arc::new(script.ast),
+            script.use_sites,
+        ));
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .reference_sites("my_type", "my_instance")
+                .len(),
+            2
+        );
+        assert!(
+            backend
+                .state
+                .documents
+                .lock()
+                .reference_sites("my_type", "disk_only")
+                .is_empty()
+        );
+
+        backend
+            .state
+            .documents
+            .lock()
+            .change(uri, 2, Arc::from("new = yes"))
+            .unwrap();
+        assert!(
+            backend
+                .index_parsed_file(uri, &disk_ast, Some(1))
+                .is_empty()
+        );
+    }
+
     #[tokio::test]
     async fn post_scan_refresh_reclassifies_the_accepted_open_ast_not_disk_index() {
         let fixture = fixture();

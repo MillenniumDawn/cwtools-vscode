@@ -81,36 +81,33 @@ fn test_config_no_op_skips_revalidate_then_real_change_runs() {
 }
 
 #[test]
-fn test_config_idle_only_change_passes_noop_guard() {
-    // A didChangeConfiguration mutating ONLY backgroundReindexIdleSeconds must
-    // count as a change (the no-op guard compares every field the handler
-    // writes); an identical re-send must then hit the guard.
+fn test_config_idle_only_change_applies_without_revalidation() {
     let mut server = config_server();
     let quiet = Duration::from_millis(700);
     let budget = Duration::from_secs(5);
+    let update_log = "config updated via didChangeConfiguration";
+    let updates = server.profiling_log().matches(update_log).count();
 
-    // Cumulative `(configChange)` counts over the non-draining profiling buffer.
-
-    // 5 differs from the 15s default → one configChange pass.
     change_config(&mut server, json!({ "backgroundReindexIdleSeconds": 5 }));
-    server.drain_after_first(quiet, budget);
+    server.drain_until_quiet(quiet, budget);
     let log1 = server.profiling_log();
+    assert_eq!(log1.matches(update_log).count(), updates + 1);
     assert_eq!(
         count_validate_log(&log1, "configChange"),
-        1,
-        "an idle-only config change must not be swallowed by the no-op guard"
+        0,
+        "an idle-only config change must apply without revalidation"
     );
 
-    // Identical payload → no-op guard skips the revalidate (total stays 1).
     change_config(&mut server, json!({ "backgroundReindexIdleSeconds": 5 }));
     server.drain_until_quiet(quiet, budget);
     let log2 = server.profiling_log();
     server.stop();
     assert_eq!(
-        count_validate_log(&log2, "configChange"),
-        1,
-        "an identical idle re-send must not revalidate"
+        log2.matches(update_log).count(),
+        updates + 1,
+        "the updated idle value must make an identical payload a no-op"
     );
+    assert_eq!(count_validate_log(&log2, "configChange"), 0);
 }
 
 #[test]
@@ -141,15 +138,19 @@ fn test_config_partial_payload_keeps_ignore_lists() {
         "setting the ignore lists should run one full scan"
     );
 
-    // Idle-only partial payload → revalidates (idle changed) but must keep
-    // the ignore lists.
     change_config(&mut server, json!({ "backgroundReindexIdleSeconds": 5 }));
-    server.drain_after_first(quiet, budget);
+    server.drain_until_quiet(quiet, budget);
+    let report = server.request(
+        "workspace/executeCommand",
+        json!({ "command": "getSetupReport", "arguments": [] }),
+    );
+    assert_eq!(report["ignore"]["errorCodes"], json!(["cw999"]));
+    assert_eq!(report["ignore"]["filePatterns"], json!(["**/skip.txt"]));
     let log2 = server.profiling_log();
     assert_eq!(
         count_validate_log(&log2, "configChange"),
-        1,
-        "an idle-only change should revalidate the open document once"
+        0,
+        "an idle-only change must not revalidate the open document"
     );
     assert_eq!(
         log2.matches("workspace_scan_start").count(),
@@ -173,7 +174,7 @@ fn test_config_partial_payload_keeps_ignore_lists() {
     server.stop();
     assert_eq!(
         count_validate_log(&log3, "configChange"),
-        1,
+        0,
         "the partial payload must not have wiped the ignore lists"
     );
     assert_eq!(
