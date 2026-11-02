@@ -328,3 +328,44 @@ Build processes were excluded. RSS includes the test harness and allocator
 behavior, and the baseline exits with the expected failing assertion. These
 small synthetic process measurements are not a heap-allocation profile or an
 estimate of a real editing session's RSS. No timing improvement is claimed.
+
+## Open-document reference snapshots
+
+Edit validation now captures reference sites from its index replacement under
+that same write lock. It no longer collects the references from the AST again
+after validation. The returned snapshot belongs to the parsed buffer even if
+a workspace scan replaces the shared index before the buffer is accepted.
+Rules reloads and alias-membership refreshes still reclassify open ASTs.
+
+The `validate` bench compares the previous AST collection with the indexed
+snapshot on the same prebuilt state. Each fixture runs twice in before/after
+order, first alone and then with 31 other files sharing its reference buckets.
+Both paths include output destruction and must produce identical full reference
+records before timing starts. Parsing, indexing, validation, lock contention,
+and editor round trips are excluded.
+
+On Linux x86-64, i9-12900K, Rust 1.99.0 and Criterion 0.8.2, the two point
+estimates below used ten samples with one-second warmup and measurement targets.
+The inputs were Millennium Dawn `7895d78153fdeb147a8dcc2ff3137f7a998783f1`
+and HOI4 rules `40a563ccfded2f56d32e83d8def1a20c27fcdb1d`. No CPU affinity
+was set; the spread includes shared-machine noise. An initial run timed out
+after compilation and is excluded.
+
+| Fixture | Indexed files | Before (ms) | After (ms) |
+| --- | ---: | ---: | ---: |
+| Iran focus tree | 1 | 5.96-6.15 | 0.376-0.384 |
+| Iran focus tree | 32 | 6.32-6.90 | 1.15-1.24 |
+| France events | 1 | 4.75-9.40 | 0.084-0.095 |
+| France events | 32 | 5.23-5.82 | 0.139-0.160 |
+| Plane equipment | 1 | 0.739-0.854 | 0.0020-0.0022 |
+| Plane equipment | 32 | 0.736-0.743 | 0.0024-0.0025 |
+
+These are snapshot-collection measurements, not total edit latency or a full
+workspace benchmark. The 32-file case deliberately shares every reference
+bucket; it does not represent the distribution of a real mod.
+
+From `engine/`:
+
+```sh
+cargo bench -p cwtools_lsp --bench validate -- open_references --warm-up-time 1 --measurement-time 1 --sample-size 10 --noplot
+```

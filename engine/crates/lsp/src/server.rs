@@ -685,13 +685,13 @@ impl Backend {
         // A save isn't an edit, so don't bump the edit counter. Offload the validation like
         // did_change (#90); the entry version guard in `debounced_validate` makes a racing
         // did_change safe.
-        let Some((version, ast_version)) = ({
+        let Some((version, validated)) = ({
             let docs = self.state.documents.lock();
-            docs.get(&uri).map(|d| (d.version, d.ast_version))
+            docs.get(&uri).map(|d| (d.version, docs.is_validated(&uri)))
         }) else {
             return;
         };
-        if ast_version == Some(version) {
+        if validated {
             tracing::debug!(%uri, version, "didSave already validated at this version");
             return;
         }
