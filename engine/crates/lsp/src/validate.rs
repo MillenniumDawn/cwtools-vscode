@@ -18,6 +18,11 @@ use crate::lines::DocLines;
 use crate::paths::{logical_path_from_uri, uri_to_path_str};
 use crate::state::LocDocumentCache;
 
+pub(crate) struct ValidatedScript {
+    pub(crate) ast: ParsedFile,
+    pub(crate) use_sites: Vec<cwtools_info::IndexedUseSite>,
+}
+
 pub(crate) fn code_lens_refresh_needed(
     first_accepted_ast: bool,
     exports_changed: bool,
@@ -691,18 +696,21 @@ impl Backend {
         uri: &str,
         parsed: &ParsedFile,
         parsed_version: Option<i32>,
-    ) {
+    ) -> Vec<cwtools_info::IndexedUseSite> {
         let ws_prefix = self.state.config.read().workspace_prefix.clone();
         let logical_path = logical_path_from_uri(uri, &ws_prefix);
-        if self.index_parsed_file_as(uri, parsed, parsed_version, &logical_path, false) {
+        let (refresh, use_sites) =
+            self.index_parsed_file_as(uri, parsed, parsed_version, &logical_path, false);
+        if refresh {
             self.refresh_open_reference_sites();
         }
+        use_sites
     }
 
     /// Index a file under an explicit root-relative `logical_path`: a parent
     /// mod's file sits outside the workspace root, and `base_game` keeps its
     /// definitions out of the workspace's own counts (#786).
-    /// Returns whether alias publication requires an unlocked overlay refresh.
+    /// Returns the overlay-refresh flag and references from this versioned replacement.
     #[tracing::instrument(skip_all, fields(uri = %uri))]
     pub(crate) fn index_parsed_file_as(
         &self,
@@ -711,7 +719,7 @@ impl Backend {
         parsed_version: Option<i32>,
         logical_path: &str,
         base_game: bool,
-    ) -> bool {
+    ) -> (bool, Vec<cwtools_info::IndexedUseSite>) {
         let ignored = {
             let cfg = self.state.config.read();
             cwtools_file_manager::file_manager::is_ignored_path(
@@ -722,7 +730,7 @@ impl Backend {
         };
         if ignored {
             self.clear_ignored_file_state(uri);
-            return false;
+            return (false, Vec::new());
         }
         let ruleset = self.state.rules.read().ruleset.clone();
         let collected = ruleset.as_ref().map(|ruleset| {
@@ -734,7 +742,8 @@ impl Backend {
                 cwtools_validation::subtype_membership_for_instance,
             )
         });
-        self.replace_indexed_file(uri, parsed_version, |info| {
+        let mut use_sites = Vec::new();
+        let refresh = self.replace_indexed_file(uri, parsed_version, |info| {
             if let (Some(ruleset), Some(collected)) = (ruleset.as_ref(), collected) {
                 info.index_file_with_precomputed_instances(
                     uri,
@@ -745,8 +754,12 @@ impl Backend {
                     collected,
                     base_game,
                 );
+                if parsed_version.is_some() {
+                    use_sites = info.file_reference_sites(uri);
+                }
             }
-        })
+        });
+        (refresh, use_sites)
     }
 
     /// Swap `uri`'s index entry for whatever `index` puts back, under one
@@ -1221,13 +1234,10 @@ impl Backend {
         let (diagnostics, parsed) = self
             .parse_and_validate(&uri, &text, trigger, Some(expected_version))
             .await;
-        let parsed = parsed.map(Arc::new);
-        // Derive references from the just-parsed buffer. The workspace index
-        // may concurrently contain a disk parse for this URI, which is not
-        // necessarily the text that was accepted by this validation.
-        let open_use_sites = parsed
-            .as_ref()
-            .and_then(|ast| self.reference_sites_for_open_ast(&uri, ast));
+        let (parsed, open_use_sites) = match parsed {
+            Some(script) => (Some(Arc::new(script.ast)), script.use_sites),
+            None => (None, Vec::new()),
+        };
         let mut first_accepted_ast = false;
         {
             // Update tokens before taking the documents lock: `doc_tokens` is acquired before
@@ -1235,22 +1245,15 @@ impl Backend {
             // which takes doc_tokens then documents.
             self.update_doc_tokens(&uri, parsed.as_ref());
             let mut docs = self.state.documents.lock();
-            let still_current = docs
-                .get(&uri)
-                .is_some_and(|document| document.version == expected_version);
-            if !still_current {
+            if !docs.mark_validated(&uri, expected_version, &text) {
                 return;
             }
             if let Some(ast) = parsed {
                 let had_no_ast = docs
                     .get(&uri)
                     .is_some_and(|document| document.ast.is_none());
-                let accepted = docs.set_ast_with_use_sites(
-                    &uri,
-                    expected_version,
-                    ast,
-                    open_use_sites.unwrap_or_default(),
-                );
+                let accepted =
+                    docs.set_ast_with_use_sites(&uri, expected_version, ast, open_use_sites);
                 first_accepted_ast = had_no_ast && accepted;
             }
         }
@@ -1732,7 +1735,7 @@ impl Backend {
         text: &str,
         trigger: crate::ValidateTrigger,
         parsed_version: Option<i32>,
-    ) -> (Vec<Diagnostic>, Option<ParsedFile>) {
+    ) -> (Vec<Diagnostic>, Option<ValidatedScript>) {
         if self.is_ignored_uri(uri) {
             self.clear_ignored_file_state(uri);
             self.update_doc_tokens(uri, None);
@@ -1880,7 +1883,7 @@ impl Backend {
             let parsed = parse_string(text, &table);
             diagnostics.extend(parse_errors_to_diagnostics(&parsed.errors, &lines));
 
-            self.index_parsed_file(uri, &parsed, parsed_version);
+            let use_sites = self.index_parsed_file(uri, &parsed, parsed_version);
 
             // Keep the inline-script registry current: re-register a `common/inline_scripts`
             // body under its call name so the NEXT validate of any caller sees the new
@@ -1962,7 +1965,13 @@ impl Backend {
                 diagnostics.push(validation_error_to_diagnostic(err, &lines));
             }
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
-            (diagnostics, Some(parsed))
+            (
+                diagnostics,
+                Some(ValidatedScript {
+                    ast: parsed,
+                    use_sites,
+                }),
+            )
         })
     }
 }
@@ -2081,7 +2090,7 @@ mod info_revision_tests {
             .parse_and_validate(uri, text, crate::ValidateTrigger::DidChange, Some(version))
             .await;
         if let Some(parsed) = parsed {
-            let ast = Arc::new(parsed);
+            let ast = Arc::new(parsed.ast);
             backend.update_doc_tokens(uri, Some(&ast));
             backend.state.documents.lock().set_ast(uri, version, ast);
         }
@@ -2105,7 +2114,7 @@ mod info_revision_tests {
                 .state
                 .documents
                 .lock()
-                .set_ast(&uri, 1, Arc::new(parsed));
+                .set_ast(&uri, 1, Arc::new(parsed.ast));
         }
 
         let before = backend.state.string_table.stats().entries;
@@ -5408,24 +5417,65 @@ mod ignored_tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn did_save_skips_a_version_that_was_already_validated() {
-        let workspace = tempfile::tempdir().unwrap();
-        let workspace_uri = crate::paths::path_to_uri(workspace.path());
-        let uri = crate::paths::path_to_uri(&workspace.path().join("common/ideas/edit.txt"));
-        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
-        backend.state.index_ready.store(true, Ordering::Relaxed);
-        open_stale_publication_doc(&backend, &uri, "current = { cost = 1 }");
-        tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            backend.debounced_validate(uri.clone(), 1, 0, crate::ValidateTrigger::DidOpen),
-        )
-        .await
-        .expect("the open's validation must finish");
-        assert_eq!(drain_publication_versions(&mut socket), [Some(1)]);
+        for (path, text, has_ast) in [
+            ("common/ideas/edit.txt", "current = { cost = 1 }", true),
+            (
+                "localisation/edit_l_english.yml",
+                "l_english:\n key:0 \"Text\"",
+                false,
+            ),
+            ("rules/edit.cwt", "types = {", false),
+        ] {
+            let workspace = tempfile::tempdir().unwrap();
+            let workspace_uri = crate::paths::path_to_uri(workspace.path());
+            let uri = crate::paths::path_to_uri(&workspace.path().join(path));
+            let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+            backend.state.index_ready.store(true, Ordering::Relaxed);
+            open_stale_publication_doc(&backend, &uri, text);
+            backend
+                .debounced_validate(uri.clone(), 1, 0, crate::ValidateTrigger::DidOpen)
+                .await;
+            assert_eq!(drain_publication_versions(&mut socket), [Some(1)], "{path}");
+            assert_eq!(
+                backend
+                    .state
+                    .documents
+                    .lock()
+                    .get(&uri)
+                    .unwrap()
+                    .ast
+                    .is_some(),
+                has_ast
+            );
+            backend.state.semantic_tokens_cache.lock().insert(
+                uri.clone(),
+                crate::SemanticCacheEntry {
+                    result_id: "saved".into(),
+                    data: Vec::new(),
+                    hash: 1,
+                },
+            );
 
-        let started = save_and_settle(&backend, &uri).await;
+            assert_eq!(save_and_settle(&backend, &uri).await, 0, "{path}");
+            assert!(drain_publication_versions(&mut socket).is_empty(), "{path}");
+            assert!(
+                !backend
+                    .state
+                    .semantic_tokens_cache
+                    .lock()
+                    .contains_key(&uri)
+            );
 
-        assert_eq!(started, 0, "a validated version needs no save validation");
-        assert!(drain_publication_versions(&mut socket).is_empty());
+            backend
+                .state
+                .documents
+                .lock()
+                .change(&uri, 2, Arc::from(format!("{text}\n")))
+                .unwrap();
+            assert_eq!(save_and_settle(&backend, &uri).await, 1, "changed {path}");
+            assert_eq!(drain_publication_versions(&mut socket), [Some(2)], "{path}");
+            assert_eq!(save_and_settle(&backend, &uri).await, 0, "settled {path}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5464,6 +5514,134 @@ mod ignored_tests {
                 .ast_version,
             Some(2)
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn presentation_and_reindex_settings_do_not_schedule_validation() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("events/test.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        open_stale_publication_doc(&backend, &uri, "root = {");
+        backend
+            .debounced_validate(uri, 1, 0, crate::ValidateTrigger::DidOpen)
+            .await;
+        assert_eq!(drain_publication_versions(&mut socket), [Some(1)]);
+        let generation = backend.state.settings_generation.load(Ordering::SeqCst);
+        let permits = backend
+            .state
+            .validation_permits
+            .acquire_many(2)
+            .await
+            .unwrap();
+        for settings in [
+            serde_json::json!({"hoverDebug": true}),
+            serde_json::json!({"hoverScopeDisplay": "resolved"}),
+            serde_json::json!({"backgroundReindexIntervalMinutes": 45}),
+            serde_json::json!({"backgroundReindexIdleSeconds": 30}),
+        ] {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                backend.did_change_configuration_impl(DidChangeConfigurationParams { settings }),
+            )
+            .await
+            .expect("presentation and scheduling must not wait for validation permits");
+            assert_eq!(
+                backend.state.settings_generation.load(Ordering::SeqCst),
+                generation
+            );
+            assert!(drain_publication_versions(&mut socket).is_empty());
+        }
+        drop(permits);
+        assert!(backend.state.hover_debug.load(Ordering::Relaxed));
+        assert!(backend.state.hover_resolved_scope.load(Ordering::Relaxed));
+        assert_eq!(
+            backend
+                .state
+                .config
+                .read()
+                .background_reindex_interval_minutes,
+            45
+        );
+        assert_eq!(
+            backend.state.config.read().background_reindex_idle_seconds,
+            30
+        );
+        backend
+            .did_change_configuration_impl(DidChangeConfigurationParams {
+                settings: serde_json::json!({"ignoredErrorCodes": ["CW100"]}),
+            })
+            .await;
+        assert_eq!(
+            backend.state.settings_generation.load(Ordering::SeqCst),
+            generation + 1
+        );
+        assert_eq!(drain_publication_versions(&mut socket), [Some(1)]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn watched_skipped_files_keep_semantic_cache_but_real_changes_invalidate_it() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let path = workspace.path().join("events/test.txt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "test = yes").unwrap();
+        let uri = crate::paths::path_to_uri(&path);
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        let changes = HashSet::from([uri.clone()]);
+        backend
+            .process_watched_batch(changes.clone(), Vec::new())
+            .await;
+        drain_publication_versions(&mut socket);
+        backend.state.semantic_tokens_cache.lock().insert(
+            uri.clone(),
+            crate::SemanticCacheEntry {
+                result_id: "keep".into(),
+                data: Vec::new(),
+                hash: 1,
+            },
+        );
+
+        backend
+            .process_watched_batch(changes.clone(), Vec::new())
+            .await;
+        assert_eq!(
+            backend.state.semantic_tokens_cache.lock()[&uri].result_id,
+            "keep"
+        );
+        assert!(drain_publication_versions(&mut socket).is_empty());
+
+        open_stale_publication_doc(&backend, &uri, "test = no");
+        std::fs::write(&path, "changed_on_disk = yes").unwrap();
+        backend
+            .process_watched_batch(changes.clone(), Vec::new())
+            .await;
+        assert_eq!(
+            backend.state.semantic_tokens_cache.lock()[&uri].result_id,
+            "keep"
+        );
+        assert!(drain_publication_versions(&mut socket).is_empty());
+
+        backend.state.documents.lock().remove(&uri);
+        backend.process_watched_batch(changes, Vec::new()).await;
+        assert!(backend.state.semantic_tokens_cache.lock().is_empty());
+        assert_eq!(drain_publication_versions(&mut socket), [None]);
+        backend.state.semantic_tokens_cache.lock().insert(
+            uri.clone(),
+            crate::SemanticCacheEntry {
+                result_id: "delete".into(),
+                data: Vec::new(),
+                hash: 2,
+            },
+        );
+        std::fs::remove_file(path).unwrap();
+        backend
+            .process_watched_batch(HashSet::new(), vec![uri])
+            .await;
+        assert!(backend.state.semantic_tokens_cache.lock().is_empty());
+        assert_eq!(drain_publication_versions(&mut socket), [None]);
     }
 
     /// #477: a watched batch must take a validation slot per file, not per
