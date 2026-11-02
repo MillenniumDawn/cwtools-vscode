@@ -6,6 +6,7 @@
 * Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
 * Skip global highlighting and CodeLens refreshes when a file-watcher batch only contains open or unchanged files.
 * Apply hover debug, hover scope display, and background-reindex timing changes without revalidating open documents or invalidating the workspace scan fingerprint.
+* Fence synchronous script, localisation and post-lookup CWT hover resolution and markdown work so it does not hold an async worker; asynchronous CWT document reads remain outside. Hover contents, debug and scope behavior are unchanged. (#1183)
 
 ### 4.0.6
 
