@@ -204,7 +204,6 @@ impl Backend {
             .collect();
         let mut index_changed = self.remove_deleted_rels_from_file_index(resource_rels);
         let resources_changed = self.sync_watched_resources(&resource_changes);
-        let only_resources = changes.is_empty() && deletes.is_empty();
         let mut lost_scan_cas = false;
         if folder_expansion_over_budget || watched_batch_over_cap(changes.len(), deletes.len()) {
             tracing::info!(
@@ -234,6 +233,7 @@ impl Backend {
             // not the whole batch (#477).
             // open-doc edit path's job (#90).
             let mut changed_loc_keys: HashSet<String> = HashSet::new();
+            let mut refresh_features = !deletes.is_empty();
             if !deletes.is_empty() {
                 let outcome = self.process_watched_deletes(&deletes).await;
                 changed_loc_keys.extend(outcome.changed_loc_keys);
@@ -251,7 +251,9 @@ impl Backend {
                         let type_index = Arc::make_mut(&mut info.type_index);
                         for rel in to_insert {
                             // A changed/created file claims workspace membership (#1067).
-                            index_changed |= type_index.file_index.claim_workspace(&rel);
+                            let claimed = type_index.file_index.claim_workspace(&rel);
+                            index_changed |= claimed;
+                            refresh_features |= claimed;
                         }
                     }
                 }
@@ -260,6 +262,7 @@ impl Backend {
                 #[cfg(test)]
                 self.hold_from_async(crate::state::HoldPoint::WatchedFile);
                 if self.is_ignored_uri(&uri) {
+                    refresh_features = true;
                     self.clear_ignored_file_state(&uri);
                     if let Ok(uri_obj) = Url::parse(&uri) {
                         self.publish_if_closed(uri_obj, Vec::new(), None).await;
@@ -297,6 +300,7 @@ impl Backend {
                         let (diagnostics, _) = self
                             .parse_and_validate(&uri, &text, crate::ValidateTrigger::Watched, None)
                             .await;
+                        refresh_features = true;
                         if let Some(sig) = sig {
                             self.state
                                 .watched_signatures
@@ -343,7 +347,7 @@ impl Backend {
                     self.revalidate_open_dependents("", generation, scope).await;
                 }
             }
-            if !only_resources {
+            if refresh_features {
                 self.invalidate_all_semantic_tokens();
                 self.request_semantic_refresh().await;
                 self.request_code_lens_refresh().await;
