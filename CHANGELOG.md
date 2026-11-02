@@ -2,6 +2,7 @@
 
 #### Engine
 
+* Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
 * Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.
 * Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
 * Skip global highlighting and CodeLens refreshes when a file-watcher batch only contains open or unchanged files.

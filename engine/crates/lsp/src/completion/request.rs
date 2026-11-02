@@ -134,6 +134,10 @@ impl Backend {
         &self,
         params: CompletionParams,
     ) -> Result<Option<CompletionResponse>> {
+        tokio::task::block_in_place(|| self.completion_impl_sync(params))
+    }
+
+    fn completion_impl_sync(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         self.mark_activity();
         let t_start = Instant::now();
         let mut ast_dur = Duration::ZERO;
@@ -691,6 +695,12 @@ impl Backend {
 mod tests {
     use std::collections::HashMap;
 
+    use cwtools_parser::parser::parse_string;
+    use cwtools_string_table::string_table::StringTable;
+    use tower_lsp::lsp_types::{
+        CompletionParams, Position, TextDocumentIdentifier, TextDocumentPositionParams,
+    };
+
     use super::*;
 
     #[test]
@@ -714,5 +724,110 @@ mod tests {
             "file:///doc",
             1
         ));
+    }
+
+    fn completion_list_items(
+        response: tower_lsp::jsonrpc::Result<Option<CompletionResponse>>,
+    ) -> Vec<CompletionItem> {
+        match response.expect("completion request failed") {
+            Some(CompletionResponse::List(list)) => list.items,
+            other => panic!("expected a completion list, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn completion_does_not_hold_the_async_worker() {
+        use std::sync::mpsc;
+
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let ws_uri = Url::from_file_path(tmp.path())
+            .expect("workspace url")
+            .to_string();
+        let backend = crate::testing::test_backend();
+        backend.state.config.write().workspace_prefix =
+            Some(crate::paths::workspace_prefix_of(&ws_uri));
+
+        const CHILDREN: usize = 3;
+        let mut rules_text = String::from(
+            "types = {\n    type[idea] = {\n        path = \"common/ideas\"\n    }\n}\nidea = {\n",
+        );
+        for i in 0..CHILDREN {
+            rules_text.push_str(&format!("    field_{i} = scalar\n"));
+        }
+        rules_text.push_str("}\n");
+        let table = StringTable::new();
+        let parsed = parse_string(&rules_text, &table);
+        assert!(parsed.errors.is_empty(), "rules fixture must parse");
+        backend.state.rules.write().ruleset = Some(Arc::new(
+            cwtools_rules::rules_converter::ast_to_ruleset(&parsed, &table),
+        ));
+
+        let doc_text = "idea = {\n\t\n}\n";
+        let doc_ast = parse_string(doc_text, &backend.state.string_table);
+        let doc_url = Url::from_file_path(tmp.path().join("common/ideas/fixtures.txt"))
+            .expect("document url");
+        backend
+            .state
+            .documents
+            .lock()
+            .open(
+                doc_url.to_string(),
+                crate::state::ParsedDoc {
+                    version: 1,
+                    text: doc_text.into(),
+                    ast: Some(Arc::new(doc_ast)),
+                    ast_version: Some(1),
+                    ast_source_bytes: 0,
+                    loc_cache: None,
+                },
+            )
+            .expect("open document");
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: doc_url },
+                position: Position {
+                    line: 1,
+                    character: 1,
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let state = Arc::clone(&backend.state);
+        let holder = std::thread::spawn(move || {
+            // Rule traversal reads this lock, so the request parks inside that section.
+            let _guard = state.info_service.write();
+            locked_tx.send(()).expect("lock-ready receiver");
+            // The timeout releases a broken request without relying on its blocked runtime.
+            release_rx.recv_timeout(Duration::from_secs(5))
+        });
+        locked_rx.await.expect("info service lock held");
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let completer = tokio::spawn(async move {
+            started_tx.send(()).expect("request-start receiver");
+            backend.completion_impl(params).await
+        });
+        started_rx.await.expect("completion started");
+        let progress = tokio::spawn(async move { release_tx.send(()) });
+        let response = completer.await.expect("completion task");
+        assert!(
+            holder.join().expect("lock holder").is_ok(),
+            "the async worker could not release the lock while completion was running"
+        );
+        progress
+            .await
+            .expect("progress task")
+            .expect("lock release");
+
+        assert_eq!(
+            completion_list_items(response).len(),
+            CHILDREN,
+            "the request must still answer from the rule traversal"
+        );
     }
 }
