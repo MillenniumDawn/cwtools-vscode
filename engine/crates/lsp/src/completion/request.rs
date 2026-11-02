@@ -737,7 +737,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn completion_does_not_hold_the_async_worker() {
-        use std::sync::Mutex;
+        use std::sync::mpsc;
 
         let tmp = tempfile::TempDir::new().expect("tmpdir");
         let ws_uri = Url::from_file_path(tmp.path())
@@ -747,7 +747,7 @@ mod tests {
         backend.state.config.write().workspace_prefix =
             Some(crate::paths::workspace_prefix_of(&ws_uri));
 
-        const CHILDREN: usize = 50_000;
+        const CHILDREN: usize = 3;
         let mut rules_text = String::from(
             "types = {\n    type[idea] = {\n        path = \"common/ideas\"\n    }\n}\nidea = {\n",
         );
@@ -782,9 +782,9 @@ mod tests {
                 },
             )
             .expect("open document");
-        let params_for = |url: &Url| CompletionParams {
+        let params = CompletionParams {
             text_document_position: TextDocumentPositionParams {
-                text_document: TextDocumentIdentifier { uri: url.clone() },
+                text_document: TextDocumentIdentifier { uri: doc_url },
                 position: Position {
                     line: 1,
                     character: 1,
@@ -795,64 +795,39 @@ mod tests {
             context: None,
         };
 
-        let warm = completion_list_items(backend.completion_impl(params_for(&doc_url)).await);
-        assert_eq!(
-            warm.len(),
-            CHILDREN.min(CONTEXT_CAP),
-            "the traversal fixture must produce its expected capped completion list"
-        );
-
-        let ticks = Arc::new(Mutex::new(Vec::<Instant>::new()));
-        let ticker = tokio::spawn({
-            let ticks = ticks.clone();
-            async move {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                    ticks
-                        .lock()
-                        .expect("ticks mutex poisoned")
-                        .push(Instant::now());
-                }
-            }
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let state = Arc::clone(&backend.state);
+        let holder = std::thread::spawn(move || {
+            // Rule traversal reads this lock, so the request parks inside that section.
+            let _guard = state.info_service.write();
+            locked_tx.send(()).expect("lock-ready receiver");
+            // The timeout releases a broken request without relying on its blocked runtime.
+            release_rx.recv_timeout(Duration::from_secs(5))
         });
-        while ticks.lock().expect("ticks mutex poisoned").len() < 5 {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
+        locked_rx.await.expect("info service lock held");
 
-        let doc_url_for_task = doc_url.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let completer = tokio::spawn(async move {
-            let started = Instant::now();
-            let response = backend.completion_impl(params_for(&doc_url_for_task)).await;
-            (started, Instant::now(), response)
+            started_tx.send(()).expect("request-start receiver");
+            backend.completion_impl(params).await
         });
-        let (started, finished, response) = completer.await.expect("completion task");
-        let items = completion_list_items(response);
-        assert_eq!(
-            items.len(),
-            CHILDREN.min(CONTEXT_CAP),
-            "the measured completion must do the same substantial traverse"
-        );
-        let span = finished - started;
-        while ticks
-            .lock()
-            .expect("ticks mutex poisoned")
-            .last()
-            .is_none_or(|tick| *tick < finished)
-        {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-        ticker.abort();
-
-        let longest_gap = ticks
-            .lock()
-            .expect("ticks mutex poisoned")
-            .windows(2)
-            .map(|pair| pair[1] - pair[0])
-            .max()
-            .expect("ticks around the completion");
+        started_rx.await.expect("completion started");
+        let progress = tokio::spawn(async move { release_tx.send(()) });
+        let response = completer.await.expect("completion task");
         assert!(
-            longest_gap * 4 < span,
-            "the ticker stalled for {longest_gap:?} during a {span:?} completion"
+            holder.join().expect("lock holder").is_ok(),
+            "the async worker could not release the lock while completion was running"
+        );
+        progress
+            .await
+            .expect("progress task")
+            .expect("lock release");
+
+        assert_eq!(
+            completion_list_items(response).len(),
+            CHILDREN,
+            "the request must still answer from the rule traversal"
         );
     }
 }
