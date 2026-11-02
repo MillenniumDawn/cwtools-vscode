@@ -1305,7 +1305,7 @@ mod tests {
         "file:///ws/common/ideas/00_ideas.txt"
     };
 
-    fn backend_with_open_doc_text(text: &str) -> Backend {
+    fn backend_with_open_doc() -> Backend {
         let backend = crate::testing::test_backend();
         backend
             .state
@@ -1315,7 +1315,7 @@ mod tests {
                 DOC_URI.to_string(),
                 crate::state::ParsedDoc {
                     version: 1,
-                    text: std::sync::Arc::from(text),
+                    text: std::sync::Arc::from("idea = { cost = 1 }"),
                     ast: None,
                     ast_version: None,
                     ast_source_bytes: 0,
@@ -1324,10 +1324,6 @@ mod tests {
             )
             .unwrap();
         backend
-    }
-
-    fn backend_with_open_doc() -> Backend {
-        backend_with_open_doc_text("idea = { cost = 1 }")
     }
 
     fn full_params() -> SemanticTokensParams {
@@ -1510,11 +1506,12 @@ mod tests {
         });
     }
 
-    /// A large cache-hit request must not keep the runtime's only async worker busy (#1181).
-    #[test]
-    fn cache_hit_full_request_leaves_the_async_worker_free() {
-        // A 16 MB document and 3M-token cache make the synchronous work measurable.
-        let text = "idea = { cost = 1 }\n".repeat(800_000);
+    /// A cache-hit request must not keep the runtime's only async worker busy (#1181).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn cache_hit_full_request_leaves_the_async_worker_free() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
         let stream = vec![
             SemanticToken {
                 delta_line: 0,
@@ -1523,10 +1520,10 @@ mod tests {
                 token_type: TY_PROPERTY,
                 token_modifiers_bitset: MOD_NONE,
             };
-            3_000_000
+            3
         ];
-        let backend = backend_with_open_doc_text(&text);
-        let hash = cwtools_cache::workspace::content_hash(&text);
+        let backend = backend_with_open_doc();
+        let hash = cwtools_cache::workspace::content_hash("idea = { cost = 1 }");
         backend.state.semantic_tokens_cache.lock().insert(
             DOC_URI.to_string(),
             crate::SemanticCacheEntry {
@@ -1535,82 +1532,59 @@ mod tests {
                 hash,
             },
         );
-        // Baseline for the time-relative ticker assertion.
-        let phase_time = {
-            let started = std::time::Instant::now();
-            std::hint::black_box(cwtools_cache::workspace::content_hash(&text));
-            std::hint::black_box(stream.clone());
-            started.elapsed()
-        };
 
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let ticks = Arc::new(parking_lot::Mutex::new(Vec::<std::time::Instant>::new()));
-            let ticker = {
-                let ticks = ticks.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-                        ticks.lock().push(std::time::Instant::now());
-                    }
-                })
-            };
-            while ticks.lock().len() < 5 {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-            let state = Arc::clone(&backend.state);
-            let request = tokio::spawn(async move {
-                let started = std::time::Instant::now();
-                let response = backend
-                    .semantic_tokens_full_impl(full_params())
-                    .await
-                    .unwrap();
-                (started, std::time::Instant::now(), response)
-            });
-            let (started, finished, response) = request.await.expect("cache-hit request task");
-            let request_time = finished - started;
-            while ticks.lock().last().is_none_or(|tick| *tick < finished) {
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-            }
-            ticker.abort();
-
-            let Some(SemanticTokensResult::Tokens(tokens)) = response else {
-                panic!("a cache hit answers with full tokens");
-            };
-            assert_eq!(
-                tokens.data, stream,
-                "the hit answers with the cached full stream unchanged"
-            );
-            let cache = state.semantic_tokens_cache.lock();
-            let entry = cache.get(DOC_URI).expect("the hit keeps its cache entry");
-            assert_eq!(entry.hash, hash, "the cached hash is unchanged");
-            assert_eq!(
-                entry.result_id,
-                tokens
-                    .result_id
-                    .clone()
-                    .expect("a full hit has a result id"),
-                "the hit still bumps the cached result id"
-            );
-            assert_eq!(entry.data, stream, "the cached stream is unchanged");
-
-            let longest_gap = ticks
-                .lock()
-                .windows(2)
-                .map(|pair| pair[1] - pair[0])
-                .max()
-                .expect("ticks around the request");
-            assert!(
-                longest_gap * 2 < phase_time,
-                "the ticker stalled for {longest_gap:?} during a {request_time:?} cache-hit \
-                 request; hashing the text and copying the cached stream belong on the \
-                 blocking pool"
-            );
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let state = Arc::clone(&backend.state);
+        let holder_state = Arc::clone(&backend.state);
+        let holder = std::thread::spawn(move || {
+            // The cache probe and stream copy run under this lock, after hashing.
+            let _guard = holder_state.semantic_tokens_cache.lock();
+            locked_tx.send(()).expect("lock-ready receiver");
+            // The timeout releases a broken request without relying on its blocked runtime.
+            release_rx.recv_timeout(Duration::from_secs(5))
         });
+        locked_rx.await.expect("cache lock held");
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let request = tokio::spawn(async move {
+            started_tx.send(()).expect("request-start receiver");
+            backend.semantic_tokens_full_impl(full_params()).await
+        });
+        started_rx.await.expect("request started");
+        let progress = tokio::spawn(async move { release_tx.send(()) });
+        let response = request
+            .await
+            .expect("cache-hit request task")
+            .expect("cache-hit request");
+        assert!(
+            holder.join().expect("lock holder").is_ok(),
+            "the async worker could not release the lock while the request was running"
+        );
+        progress
+            .await
+            .expect("progress task")
+            .expect("lock release");
+
+        let Some(SemanticTokensResult::Tokens(tokens)) = response else {
+            panic!("a cache hit answers with full tokens");
+        };
+        assert_eq!(
+            tokens.data, stream,
+            "the hit answers with the cached full stream unchanged"
+        );
+        let cache = state.semantic_tokens_cache.lock();
+        let entry = cache.get(DOC_URI).expect("the hit keeps its cache entry");
+        assert_eq!(entry.hash, hash, "the cached hash is unchanged");
+        assert_eq!(
+            entry.result_id,
+            tokens
+                .result_id
+                .clone()
+                .expect("a full hit has a result id"),
+            "the hit still bumps the cached result id"
+        );
+        assert_eq!(entry.data, stream, "the cached stream is unchanged");
     }
 
     #[test]
