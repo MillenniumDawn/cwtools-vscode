@@ -5,6 +5,7 @@
 * Fence synchronous completion rule traversal and item building with `block_in_place` so large completion requests do not stall other Tokio worker tasks. (#1180)
 * Reuse the references collected while indexing an edited script instead of walking the same AST again for its open-document reference snapshot.
 * Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
+* Fence semantic-token hashing, cache copies, delta diffing and encoding without changing token results or cache behavior. (#1181)
 * Skip global highlighting and CodeLens refreshes when a file-watcher batch only contains open or unchanged files.
 * Apply hover debug, hover scope display, and background-reindex timing changes without revalidating open documents or invalidating the workspace scan fingerprint.
 * Fence synchronous script, localisation and post-lookup CWT hover resolution and markdown work so it does not hold an async worker; asynchronous CWT document reads remain outside. Hover contents, debug and scope behavior are unchanged. (#1183)

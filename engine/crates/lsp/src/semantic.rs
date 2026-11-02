@@ -657,32 +657,33 @@ impl Backend {
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri.to_string();
         let text = self.file_text_for(&uri).await;
-        let hash = text
-            .as_deref()
-            .map(cwtools_cache::workspace::content_hash)
-            .unwrap_or(0);
-        if text.is_some() {
-            // One guard serves the probe and the result id bump; never lock this mutex again
-            // while it is alive, it is not reentrant (#334).
-            let mut cache = self.state.semantic_tokens_cache.lock();
-            if let Some(entry) = cache.get_mut(&uri)
-                && entry.hash == hash
-            {
-                let result_id = self
-                    .state
-                    .semantic_tokens_seq
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    .to_string();
-                entry.result_id.clone_from(&result_id);
-                return Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
-                    result_id: Some(result_id),
-                    data: entry.data.clone(),
-                })));
-            }
-        }
         let Some(text) = text else {
             return Ok(None);
         };
+        // Hashing and a cache-hit stream copy can both be substantial (#1181).
+        let (hash, hit) = tokio::task::block_in_place(|| {
+            let hash = cwtools_cache::workspace::content_hash(&text);
+            let mut cache = self.state.semantic_tokens_cache.lock();
+            let hit = match cache.get_mut(&uri) {
+                Some(entry) if entry.hash == hash => {
+                    let result_id = self
+                        .state
+                        .semantic_tokens_seq
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        .to_string();
+                    entry.result_id.clone_from(&result_id);
+                    Some((result_id, entry.data.clone()))
+                }
+                _ => None,
+            };
+            (hash, hit)
+        });
+        if let Some((result_id, data)) = hit {
+            return Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+                result_id: Some(result_id),
+                data,
+            })));
+        }
         let Some(data) = self.tokens_for_text(&uri, text, None).await else {
             return Ok(None);
         };
@@ -691,14 +692,16 @@ impl Backend {
             .semantic_tokens_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             .to_string();
-        self.state.semantic_tokens_cache.lock().insert(
-            uri.clone(),
-            crate::SemanticCacheEntry {
-                result_id: result_id.clone(),
-                data: data.clone(),
-                hash,
-            },
-        );
+        tokio::task::block_in_place(|| {
+            self.state.semantic_tokens_cache.lock().insert(
+                uri.clone(),
+                crate::SemanticCacheEntry {
+                    result_id: result_id.clone(),
+                    data: data.clone(),
+                    hash,
+                },
+            );
+        });
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: Some(result_id),
             data,
@@ -712,33 +715,35 @@ impl Backend {
     ) -> Result<Option<SemanticTokensFullDeltaResult>> {
         let uri = params.text_document.uri.to_string();
         let text = self.file_text_for(&uri).await;
-        let hash = text
-            .as_deref()
-            .map(cwtools_cache::workspace::content_hash)
-            .unwrap_or(0);
-        if text.is_some() {
-            let mut cache = self.state.semantic_tokens_cache.lock();
-            if let Some(entry) = cache.get_mut(&uri)
-                && entry.hash == hash
-                && entry.result_id == params.previous_result_id
-            {
-                let result_id = self
-                    .state
-                    .semantic_tokens_seq
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    .to_string();
-                entry.result_id.clone_from(&result_id);
-                return Ok(Some(SemanticTokensFullDeltaResult::TokensDelta(
-                    SemanticTokensDelta {
-                        result_id: Some(result_id),
-                        edits: Vec::new(),
-                    },
-                )));
-            }
-        }
+        let previous_result_id = params.previous_result_id;
         let Some(text) = text else {
             return Ok(None);
         };
+        let (hash, unchanged_id) = tokio::task::block_in_place(|| {
+            let hash = cwtools_cache::workspace::content_hash(&text);
+            let mut cache = self.state.semantic_tokens_cache.lock();
+            let unchanged_id = match cache.get_mut(&uri) {
+                Some(entry) if entry.hash == hash && entry.result_id == previous_result_id => {
+                    let result_id = self
+                        .state
+                        .semantic_tokens_seq
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        .to_string();
+                    entry.result_id.clone_from(&result_id);
+                    Some(result_id)
+                }
+                _ => None,
+            };
+            (hash, unchanged_id)
+        });
+        if let Some(result_id) = unchanged_id {
+            return Ok(Some(SemanticTokensFullDeltaResult::TokensDelta(
+                SemanticTokensDelta {
+                    result_id: Some(result_id),
+                    edits: Vec::new(),
+                },
+            )));
+        }
         let Some(new_data) = self.tokens_for_text(&uri, text, None).await else {
             return Ok(None);
         };
@@ -747,10 +752,10 @@ impl Backend {
             .semantic_tokens_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             .to_string();
-        {
+        let response = tokio::task::block_in_place(|| {
             let mut cache = self.state.semantic_tokens_cache.lock();
             if let Some(entry) = cache.get_mut(&uri)
-                && entry.result_id == params.previous_result_id
+                && entry.result_id == previous_result_id
             {
                 let edits = compute_semantic_delta(&entry.data, &new_data);
                 *entry = crate::SemanticCacheEntry {
@@ -758,12 +763,10 @@ impl Backend {
                     data: new_data,
                     hash,
                 };
-                return Ok(Some(SemanticTokensFullDeltaResult::TokensDelta(
-                    SemanticTokensDelta {
-                        result_id: Some(result_id),
-                        edits,
-                    },
-                )));
+                return SemanticTokensFullDeltaResult::TokensDelta(SemanticTokensDelta {
+                    result_id: Some(result_id),
+                    edits,
+                });
             }
             cache.insert(
                 uri,
@@ -773,13 +776,12 @@ impl Backend {
                     hash,
                 },
             );
-        }
-        Ok(Some(SemanticTokensFullDeltaResult::Tokens(
-            SemanticTokens {
+            SemanticTokensFullDeltaResult::Tokens(SemanticTokens {
                 result_id: Some(result_id),
                 data: new_data,
-            },
-        )))
+            })
+        });
+        Ok(Some(response))
     }
 
     #[tracing::instrument(skip_all)]
@@ -849,32 +851,43 @@ impl Backend {
             Some(ruleset) => {
                 let info = state.info_service.read();
                 let inline_guard = state.inline_scripts.read();
-                let prepared = crate::validate::make_prepared(
-                    &ruleset,
-                    &table,
-                    game,
-                    &info.type_index,
-                    &modifier_keys,
-                    None,
-                    None,
-                    Some(&inline_guard),
-                    scope_registry.as_ref(),
-                    scope_checks,
-                    var_checks,
-                );
-                semantic_tokens_indexed(
-                    &ast,
-                    &table,
-                    &text,
-                    &encoding,
-                    Some((&prepared, logical_path.as_str())),
-                    span,
-                    &line_index,
-                )
+                let tokens = {
+                    let prepared = crate::validate::make_prepared(
+                        &ruleset,
+                        &table,
+                        game,
+                        &info.type_index,
+                        &modifier_keys,
+                        None,
+                        None,
+                        Some(&inline_guard),
+                        scope_registry.as_ref(),
+                        scope_checks,
+                        var_checks,
+                    );
+                    semantic_tokens_indexed(
+                        &ast,
+                        &table,
+                        &text,
+                        &encoding,
+                        Some((&prepared, logical_path.as_str())),
+                        span,
+                        &line_index,
+                    )
+                };
+                drop(inline_guard);
+                drop(info);
+                encode(tokens)
             }
-            None => {
-                semantic_tokens_indexed(&ast, &table, &text, &encoding, None, span, &line_index)
-            }
+            None => encode(semantic_tokens_indexed(
+                &ast,
+                &table,
+                &text,
+                &encoding,
+                None,
+                span,
+                &line_index,
+            )),
         })
         .await
         {
@@ -885,7 +898,7 @@ impl Backend {
             }
         };
 
-        Some(encode(tokens))
+        Some(tokens)
     }
 }
 
@@ -1491,6 +1504,87 @@ mod tests {
                 assert_eq!(cached(), (stale_id, expected));
             });
         });
+    }
+
+    /// A cache-hit request must not keep the runtime's only async worker busy (#1181).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn cache_hit_full_request_leaves_the_async_worker_free() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let stream = vec![
+            SemanticToken {
+                delta_line: 0,
+                delta_start: 1,
+                length: 2,
+                token_type: TY_PROPERTY,
+                token_modifiers_bitset: MOD_NONE,
+            };
+            3
+        ];
+        let backend = backend_with_open_doc();
+        let hash = cwtools_cache::workspace::content_hash("idea = { cost = 1 }");
+        backend.state.semantic_tokens_cache.lock().insert(
+            DOC_URI.to_string(),
+            crate::SemanticCacheEntry {
+                result_id: "warm".to_string(),
+                data: stream.clone(),
+                hash,
+            },
+        );
+
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let state = Arc::clone(&backend.state);
+        let holder_state = Arc::clone(&backend.state);
+        let holder = std::thread::spawn(move || {
+            // The cache probe and stream copy run under this lock, after hashing.
+            let _guard = holder_state.semantic_tokens_cache.lock();
+            locked_tx.send(()).expect("lock-ready receiver");
+            // The timeout releases a broken request without relying on its blocked runtime.
+            release_rx.recv_timeout(Duration::from_secs(5))
+        });
+        locked_rx.await.expect("cache lock held");
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let request = tokio::spawn(async move {
+            started_tx.send(()).expect("request-start receiver");
+            backend.semantic_tokens_full_impl(full_params()).await
+        });
+        started_rx.await.expect("request started");
+        let progress = tokio::spawn(async move { release_tx.send(()) });
+        let response = request
+            .await
+            .expect("cache-hit request task")
+            .expect("cache-hit request");
+        assert!(
+            holder.join().expect("lock holder").is_ok(),
+            "the async worker could not release the lock while the request was running"
+        );
+        progress
+            .await
+            .expect("progress task")
+            .expect("lock release");
+
+        let Some(SemanticTokensResult::Tokens(tokens)) = response else {
+            panic!("a cache hit answers with full tokens");
+        };
+        assert_eq!(
+            tokens.data, stream,
+            "the hit answers with the cached full stream unchanged"
+        );
+        let cache = state.semantic_tokens_cache.lock();
+        let entry = cache.get(DOC_URI).expect("the hit keeps its cache entry");
+        assert_eq!(entry.hash, hash, "the cached hash is unchanged");
+        assert_eq!(
+            entry.result_id,
+            tokens
+                .result_id
+                .clone()
+                .expect("a full hit has a result id"),
+            "the hit still bumps the cached result id"
+        );
+        assert_eq!(entry.data, stream, "the cached stream is unchanged");
     }
 
     #[test]
