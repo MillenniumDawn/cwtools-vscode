@@ -39,8 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-node-npm
@@ -59,8 +58,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install virtual display test dependencies
@@ -69,17 +67,17 @@ jobs:
           sudo apt-get install --yes xvfb xauth
           command -v xvfb-run
           command -v xauth
-      # v6.3.0. Pinned to the floor pyproject.toml targets rather than the
+      # Python is pinned to the floor pyproject.toml targets rather than the
       # newest release, so syntax past that floor fails here instead of on a
       # contributor's older interpreter.
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-dev.txt
-      # v7.0.0. No npm cache: this job only installs esbuild, and a cache saved
+      # No npm cache: this job only installs esbuild, and a cache saved
       # from here would claim the key the check and build jobs share.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
       - name: Install esbuild for the release-define smoke
@@ -121,13 +119,10 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # v5.0.0
-      - uses: >-
-          actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
           fail-on-scopes: runtime, development
@@ -142,12 +137,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # v7.0.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26"
       - name: npm audit
@@ -166,8 +159,7 @@ jobs:
     env:
       CWTOOLS_TEST_DISPLAY: xvfb
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-node-npm
@@ -228,8 +220,7 @@ jobs:
           --host-only
       - name: Upload host coverage
         if: always()
-        # v7.0.1
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-html
           path: coverage
@@ -254,15 +245,13 @@ jobs:
         run: npm run test:node:coverage
       - name: Upload node coverage
         if: always()
-        # v7.0.1
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-node
           path: coverage-node
           retention-days: 5
       - name: Upload VSIX
-        # v7.0.1
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cwtools-vscode-pipeline.vsix
           path: artifacts/vsix/*.vsix
@@ -276,8 +265,7 @@ jobs:
       run:
         working-directory: engine
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
@@ -301,17 +289,13 @@ jobs:
       # this catches what a published advisory turns an already-merged crate
       # into. Runs on the weekly schedule as well as every PR.
       - name: cargo-deny
-        # v2.1.1
-        uses: >-
-          EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           manifest-path: engine/Cargo.toml
       # The fuzz workspace is a separate root whose Cargo.lock the engine
       # run above never scans.
       - name: cargo-deny (fuzz lockfile)
-        # v2.1.1
-        uses: >-
-          EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           manifest-path: engine/fuzz/Cargo.toml
       # Keeps the engine's inheritance posture (repository, [lints], shared
@@ -337,8 +321,7 @@ jobs:
       run:
         working-directory: engine
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
@@ -357,8 +340,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-node-npm
@@ -378,8 +360,7 @@ jobs:
       run:
         working-directory: engine
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Read the version out of Cargo.toml rather than repeating it here, so
@@ -432,8 +413,7 @@ jobs:
       run:
         working-directory: engine
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # cargo-fuzz needs nightly. Pinned to a date for the same reason every
@@ -520,8 +500,7 @@ jobs:
       run:
         working-directory: engine
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
@@ -539,8 +518,7 @@ jobs:
           COVERAGE_THRESHOLD: 94.4
         run: python3 ../scripts/coverage.py
       - name: Upload rust coverage
-        # v7.0.1
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: rust-coverage
@@ -566,8 +544,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-rust
@@ -600,8 +577,7 @@ jobs:
       md_rev: ${{ steps.pins.outputs.md_rev }}
       rules_rev: ${{ steps.pins.outputs.rules_rev }}
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # An empty ref is not an error to actions/checkout, it is the default
@@ -624,8 +600,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Restore-only, and not via setup-rust: that composite also contains
@@ -636,8 +611,7 @@ jobs:
         # stable branch, 2026-03-27
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
       - name: Restore cargo registry
-        # v6.1.0
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -647,8 +621,7 @@ jobs:
             ${{ runner.os }}-cargo-registry-${{
             hashFiles('engine/Cargo.lock') }}
       - name: Restore cargo release target
-        # v6.1.0
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: engine/target
           key: >-
@@ -665,8 +638,7 @@ jobs:
       # here than on a developer's machine would report the difference as
       # drift.
       - name: Check out Millennium Dawn at the pinned revision
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: MillenniumDawn/Millennium-Dawn
           ref: ${{ needs.pins.outputs.md_rev }}
@@ -674,8 +646,7 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Check out ruleset at the pinned revision
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Kaiserreich/cwtools-hoi4-config
           ref: ${{ needs.pins.outputs.rules_rev }}
@@ -697,8 +668,7 @@ jobs:
             --rules "$INPUTS/cwtools-hoi4-config/Config"
       - name: Upload drift diff
         if: failure()
-        # v7.0.1
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: md-guard-drift
           path: |
@@ -723,28 +693,24 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      # v7.0.1
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Download host coverage
         if: needs.build.result == 'success'
-        # v8.0.1
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-html
           path: coverage
       - name: Download node coverage
         if: needs.build.result == 'success'
-        # v8.0.1
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: coverage-node
           path: coverage-node
       - name: Download rust coverage
         if: needs.coverage-rs.result == 'success'
-        # v8.0.1
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: rust-coverage
           path: engine/target/coverage
@@ -752,9 +718,7 @@ jobs:
         run: python3 scripts/build/coverage_summary.py
       - name: Coverage PR comment
         if: github.event_name == 'pull_request'
-        # v3.0.5
-        uses: >-
-          marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: coverage
           path: coverage/summary.md

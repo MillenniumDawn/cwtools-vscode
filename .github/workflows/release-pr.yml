@@ -52,8 +52,7 @@ jobs:
       # unlike a PAT it leaves no person as the author of the release PR.
       - name: Mint a GitHub App token
         id: app-token
-        # v3.2.0
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           # `app-id` is deprecated; GitHub accepts the App ID as a client id
           # too, so the old secret stays as the fallback.
@@ -62,8 +61,7 @@ jobs:
             secrets.RELEASE_PR_APP_ID }}
           private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
       - name: Checkout
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           # Credentials are kept on purpose: this job pushes the release branch.

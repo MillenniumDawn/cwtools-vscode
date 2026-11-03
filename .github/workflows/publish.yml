@@ -41,8 +41,7 @@ jobs:
       tag: ${{ steps.check.outputs.tag }}
     steps:
       - name: Checkout
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history so the existing tags are present to check against.
           fetch-depth: 0
@@ -180,8 +179,7 @@ jobs:
       # The engine lives in-repo at engine/, so one checkout names both halves:
       # the commit being published is the engine being bundled.
       - name: Checkout
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup Rust
@@ -190,16 +188,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Cache Rust build
-        # v2.9.1
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: engine
       - name: Build server
         working-directory: engine
         run: cargo build --release -p cwtools_lsp --target ${{ matrix.target }}
       - name: Upload binary
-        # v7.0.1
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: server-${{ matrix.platform }}
           path: >-
@@ -221,13 +217,11 @@ jobs:
       CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}
     steps:
       - name: Checkout
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Download server binaries
-        # v8.0.1
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: server-*
           path: artifacts/server
@@ -258,8 +252,7 @@ jobs:
       # bytes, so a failed target can be re-run from the artifact rather than
       # rebuilt -- and every target ships identical files.
       - name: Upload the packaged VSIX files
-        # v7.0.1
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: vsix-${{ needs.check.outputs.tag }}
           path: artifacts/vsix/*
@@ -287,8 +280,7 @@ jobs:
       TAG_RELEASE: ${{ needs.check.outputs.release }}
     steps:
       - name: Checkout
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # @vscode/vsce is a devDependency, so `npx --no-install` needs the tree.
@@ -302,8 +294,7 @@ jobs:
           npx --no-install vsce --version
           npx --no-install ovsx --version
       - name: Download the packaged VSIX files
-        # v8.0.1
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vsix-${{ needs.check.outputs.tag }}
           path: artifacts/vsix
@@ -339,8 +330,7 @@ jobs:
       CWTOOLS_RELEASE_TAG: ${{ needs.check.outputs.tag }}
     steps:
       - name: Checkout
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # ovsx is a devDependency, so `npx --no-install` needs the tree.
@@ -354,8 +344,7 @@ jobs:
           npx --no-install vsce --version
           npx --no-install ovsx --version
       - name: Download the packaged VSIX files
-        # v8.0.1
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vsix-${{ needs.check.outputs.tag }}
           path: artifacts/vsix
@@ -383,14 +372,12 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # publish-github reads CHANGELOG.md for a release's notes.
           persist-credentials: false
       - name: Download the packaged VSIX files
-        # v8.0.1
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vsix-${{ needs.check.outputs.tag }}
           path: artifacts/vsix
@@ -442,8 +429,7 @@ jobs:
       # where GITHUB_TOKEN does not, so the fix PR gets real checks.
       - name: Mint a GitHub App token
         id: app-token
-        # v3.2.0
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           # `app-id` is deprecated; GitHub accepts the App ID as a client id
           # too, so the old secret stays as the fallback.
@@ -452,8 +438,7 @@ jobs:
             secrets.RELEASE_PR_APP_ID }}
           private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
       - name: Checkout
-        # v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           # Credentials are kept on purpose: this job pushes the fix branch.
