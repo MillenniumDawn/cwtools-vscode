@@ -1,9 +1,10 @@
 //! The per-edit work behind diagnostics: what a keystroke pays in a script
 //! buffer or a localisation buffer, and what indexing a parsed file costs.
 //!
-//! `keystroke_validate`, `loc_edit_parse` and `loc_ref_names` run on fixtures
-//! and need no checkout. `loc_edit_parse` and `loc_ref_names` keep a `before`
-//! and `after` pair for the change (#87) that made them cheaper.
+//! `keystroke_validate`, `loc_edit_parse`, `export_name_snapshot` and `loc_ref_names`
+//! run on fixtures and need no checkout. `loc_edit_parse`, `export_name_snapshot` and
+//! `loc_ref_names` keep a `before` and `after` pair for the change (#87, #1182) that made
+//! them cheaper.
 //!
 //! `index_parsed_file` indexes three large Millennium-Dawn files (a focus
 //! tree, an events file and an equipment file) against the real hoi4 rules.
@@ -23,8 +24,8 @@ use std::hint::black_box;
 use criterion::{Criterion, criterion_group, criterion_main};
 use cwtools_info::InfoService;
 use cwtools_lsp::bench_support::{
-    collect_doc_tokens, loc_extra_valid_refs, logical_path_from_uri, parse_loc_buffer,
-    resolve_source_uris, source_uri, workspace_prefix_of,
+    collect_doc_tokens, export_name_tokens, loc_extra_valid_refs, logical_path_from_uri,
+    parse_loc_buffer, resolve_source_uris, source_uri, workspace_prefix_of,
 };
 use cwtools_parser::parser::parse_string;
 use cwtools_rules::rules_types::{
@@ -90,6 +91,85 @@ fn bench_loc_edit_parse(c: &mut Criterion) {
             let owned = text.to_string();
             let third = parse_loc_buffer(&owned, path);
             first.len() + second.len() + third.len()
+        })
+    });
+    group.finish();
+}
+
+/// The old `InfoService::export_names`: every name copied and lowercased into an owned set.
+fn owned_export_names(info: &InfoService, uri: &str) -> HashSet<String> {
+    let mut names = HashSet::new();
+    if let Some(file) = info.files.get(uri) {
+        names.extend(file.export_instance_names.iter().cloned());
+        for variables in file.defined_variables_ns.values() {
+            for variable in variables {
+                names.insert(variable.name.to_ascii_lowercase());
+            }
+        }
+        for target in &file.saved_event_targets {
+            names.insert(target.to_ascii_lowercase());
+        }
+    }
+    names
+}
+
+/// The snapshot `debounced_validate` takes before and after each edit, on an edit that leaves
+/// the file's exports alone (#1182).
+fn bench_export_name_snapshot(c: &mut Criterion) {
+    const INSTANCES: usize = 500;
+    const VARIABLES: usize = 4_000;
+    const TARGETS: usize = 200;
+    let uri = "file:///bench/common/scripted_effects/exports.txt";
+    let at = cwtools_info::SourceLocation {
+        line: 1,
+        col: 0,
+        end: (1, 0),
+    };
+    let mut file = cwtools_info::FileInfo {
+        export_instance_names: (0..INSTANCES)
+            .map(|i| format!("instance_name_{i:05}"))
+            .collect(),
+        saved_event_targets: (0..TARGETS)
+            .map(|i| format!("Event_Target_{i:05}"))
+            .collect(),
+        ..Default::default()
+    };
+    for i in 0..VARIABLES {
+        let name = if i % 10 == 0 {
+            format!("Mixed_Variable_{i:05}")
+        } else {
+            format!("variable_name_{i:05}")
+        };
+        let namespace = if i % 3 == 0 { "global" } else { "variable" };
+        file.defined_variables_ns
+            .entry(namespace.to_string())
+            .or_default()
+            .push(cwtools_info::DefinedVariable {
+                name,
+                namespace: None,
+                location: at,
+                value: None,
+            });
+    }
+    let mut info = InfoService::new();
+    info.files.insert(uri.to_string(), file);
+    eprintln!(
+        "export_name_snapshot: {INSTANCES} instances, {VARIABLES} variables, {TARGETS} event targets"
+    );
+
+    let mut group = c.benchmark_group("export_name_snapshot");
+    group.bench_function("before_owned_names_x2_and_diff", |b| {
+        b.iter(|| {
+            let before = owned_export_names(black_box(&info), uri);
+            let after = owned_export_names(black_box(&info), uri);
+            before.symmetric_difference(&after).count()
+        })
+    });
+    group.bench_function("after_tokens_x2_and_diff", |b| {
+        b.iter(|| {
+            let before = export_name_tokens(black_box(&info), uri);
+            let after = export_name_tokens(black_box(&info), uri);
+            before.symmetric_difference(&after).count()
         })
     });
     group.finish();
@@ -623,6 +703,6 @@ fn bench_vanilla_canonicalize(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(20);
-    targets = bench_keystroke_validate, bench_loc_edit_parse, bench_loc_ref_names, bench_index_parsed_file, bench_synthetic_many_type_index_edit, bench_stat_signature, bench_vanilla_canonicalize
+    targets = bench_keystroke_validate, bench_loc_edit_parse, bench_export_name_snapshot, bench_loc_ref_names, bench_index_parsed_file, bench_synthetic_many_type_index_edit, bench_stat_signature, bench_vanilla_canonicalize
 }
 criterion_main!(benches);

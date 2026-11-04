@@ -793,20 +793,25 @@ impl InfoService {
         sites
     }
 
-    pub fn export_names(&self, uri: &str) -> HashSet<String> {
-        let mut names = HashSet::new();
-        if let Some(fi) = self.files.get(uri) {
-            names.extend(fi.export_instance_names.iter().cloned());
-            for vars in fi.defined_variables_ns.values() {
-                for v in vars {
-                    names.insert(v.name.to_ascii_lowercase());
-                }
-            }
-            for et in &fi.saved_event_targets {
-                names.insert(et.to_ascii_lowercase());
-            }
-        }
-        names
+    /// Every instance, variable and saved event target name `uri` exports, as stored and with
+    /// repeats. Instance names are already lowercase; the others keep their spelling, so fold
+    /// case before comparing. Borrows the index so a before/after snapshot allocates no names.
+    pub fn export_names<'src>(
+        &'src self,
+        uri: &str,
+    ) -> impl Iterator<Item = &'src str> + use<'src> {
+        self.files.get(uri).into_iter().flat_map(|fi| {
+            let variables = fi
+                .defined_variables_ns
+                .values()
+                .flatten()
+                .map(|v| v.name.as_str());
+            fi.export_instance_names
+                .iter()
+                .map(String::as_str)
+                .chain(variables)
+                .chain(fi.saved_event_targets.iter().map(String::as_str))
+        })
     }
 
     pub fn clear_file(&mut self, uri: &str) {
@@ -1984,6 +1989,69 @@ alias[effect:set_variable] = {
         );
     }
 
+    fn export_names_sorted(svc: &InfoService, uri: &str) -> Vec<String> {
+        let mut names: Vec<String> = svc.export_names(uri).map(str::to_string).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn export_names_follow_an_indexed_variable_through_reindex_and_clear() {
+        let table = StringTable::new();
+        let ruleset = set_variable_ruleset(&table);
+        let mut svc = InfoService::new();
+        svc.update_ruleset_data(variable_defining_effects(&ruleset));
+        assert!(export_names_sorted(&svc, "f.txt").is_empty());
+
+        // The script is also a `foo` type instance, so it exports that name too.
+        index_set_variable(&mut svc, "f.txt", "My_Var", &table, &ruleset);
+        let before = svc.export_fingerprint("f.txt");
+        assert_eq!(export_names_sorted(&svc, "f.txt"), ["My_Var", "foo"]);
+
+        svc.clear_file("f.txt");
+        index_set_variable(&mut svc, "f.txt", "other_var", &table, &ruleset);
+        assert_ne!(svc.export_fingerprint("f.txt"), before);
+        assert_eq!(export_names_sorted(&svc, "f.txt"), ["foo", "other_var"]);
+
+        svc.clear_file("f.txt");
+        assert!(export_names_sorted(&svc, "f.txt").is_empty());
+    }
+
+    #[test]
+    fn export_names_cover_instances_variables_and_event_targets_as_stored() {
+        let at = cwtools_index::SourceLocation {
+            line: 1,
+            col: 0,
+            end: (1, 0),
+        };
+        let var = |name: &str| cwtools_index::DefinedVariable {
+            name: name.to_string(),
+            namespace: None,
+            location: at,
+            value: None,
+        };
+        let mut file_info = FileInfo::default();
+        file_info.export_instance_names.insert("idea_a".to_string());
+        file_info
+            .defined_variables_ns
+            .insert("variable".to_string(), vec![var("Foo_Var")]);
+        file_info
+            .defined_variables_ns
+            .insert("global".to_string(), vec![var("Foo_Var"), var("@scale")]);
+        file_info
+            .saved_event_targets
+            .insert("My_Target".to_string());
+        let mut svc = InfoService::new();
+        svc.files.insert("f.txt".to_string(), file_info);
+
+        assert_eq!(
+            export_names_sorted(&svc, "f.txt"),
+            ["@scale", "Foo_Var", "Foo_Var", "My_Target", "idea_a"],
+            "names keep their spelling, and a name in two namespaces repeats"
+        );
+        assert!(export_names_sorted(&svc, "other.txt").is_empty());
+    }
+
     #[test]
     fn variable_definitions_are_keyed_case_insensitively_and_cleared_per_file() {
         let table = StringTable::new();
@@ -2244,7 +2312,7 @@ alias[effect:set_variable] = {
         assert!(svc.type_index.scripted_gui_index.contains("old_click"));
         let old_fingerprint = svc.export_fingerprint("f.txt");
         assert_ne!(old_fingerprint, 0);
-        assert!(svc.export_names("f.txt").is_empty());
+        assert_eq!(svc.export_names("f.txt").count(), 0);
 
         svc.clear_file("f.txt");
         svc.index_file_with_path(
@@ -2260,7 +2328,7 @@ alias[effect:set_variable] = {
         assert!(!svc.type_index.scripted_gui_index.contains("old_click"));
         assert!(svc.type_index.scripted_gui_index.contains("new_enabled"));
         assert_ne!(svc.export_fingerprint("f.txt"), old_fingerprint);
-        assert!(svc.export_names("f.txt").is_empty());
+        assert_eq!(svc.export_names("f.txt").count(), 0);
 
         svc.clear_file("f.txt");
         assert!(svc.type_index.scripted_gui_index.is_empty());

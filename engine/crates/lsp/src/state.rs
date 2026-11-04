@@ -15,6 +15,7 @@ use cwtools_string_table::string_table::StringTable;
 use cwtools_validation::{InlineScripts, references};
 
 use crate::scan::ScanSummary;
+use crate::validate::NameTokens;
 
 pub(crate) use crate::loc_locations::LocLocations;
 pub(crate) use crate::loc_text::LocText;
@@ -318,7 +319,9 @@ pub(crate) struct DocumentState {
     /// are different ids, so the dependent sweep would silently skip the document
     /// (#475).
     pub(crate) doc_tokens: parking_lot::RwLock<HashMap<String, HashSet<u64>>>,
-    pub(crate) pending_changed_names: Mutex<HashSet<String>>,
+    /// Tokens of names whose open dependents still need a sweep: queued by paths that do
+    /// not sweep themselves, re-queued when a sweep is superseded.
+    pub(crate) pending_changed_names: Mutex<NameTokens>,
     pub(crate) type_uses: parking_lot::RwLock<HashMap<String, references::UsedInstances>>,
     #[allow(clippy::type_complexity)]
     pub(crate) type_uses_merged: parking_lot::Mutex<Option<(u64, Arc<references::UsedInstances>)>>,
@@ -1857,7 +1860,7 @@ impl DocumentState {
             published_loc_uris: parking_lot::Mutex::new(HashSet::new()),
             edit_generation: AtomicU64::new(0),
             doc_tokens: parking_lot::RwLock::new(HashMap::new()),
-            pending_changed_names: Mutex::new(HashSet::new()),
+            pending_changed_names: Mutex::new(NameTokens::default()),
             type_uses: parking_lot::RwLock::new(HashMap::new()),
             type_uses_merged: parking_lot::Mutex::new(None),
             type_uses_revision: AtomicU64::new(0),

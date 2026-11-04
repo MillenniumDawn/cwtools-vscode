@@ -568,6 +568,37 @@ pub(crate) fn doc_token_hash(lowered: &str) -> u64 {
     hasher.finish()
 }
 
+/// Names whose open dependents need a sweep, as the token hashes `doc_tokens` is keyed by,
+/// so the sweep tests membership without resolving or comparing a name (#1182).
+pub(crate) type NameTokens = rustc_hash::FxHashSet<u64>;
+
+/// [`doc_token_hash`] of `name` after the case folding the string table applies to the tokens
+/// `doc_tokens` is built from. Lowercase ASCII, which is nearly every name, hashes uncopied.
+pub(crate) fn name_token_hash(name: &str) -> u64 {
+    if name
+        .bytes()
+        .all(|b| b.is_ascii() && !b.is_ascii_uppercase())
+    {
+        doc_token_hash(name)
+    } else {
+        doc_token_hash(&name.to_lowercase())
+    }
+}
+
+/// [`name_token_hash`] of each of the `names`.
+pub(crate) fn name_tokens<S: AsRef<str>>(
+    names: impl IntoIterator<Item = S>,
+) -> impl Iterator<Item = u64> {
+    names.into_iter().map(|name| name_token_hash(name.as_ref()))
+}
+
+/// The snapshot `debounced_validate` and `did_close` take around a reindex of `uri`: the token
+/// of every name it exports. It holds the names `InfoService::export_names` lists as hashes,
+/// so it keeps no strings.
+pub fn export_name_tokens(info: &cwtools_info::InfoService, uri: &str) -> NameTokens {
+    name_tokens(info.export_names(uri)).collect()
+}
+
 pub fn collect_doc_tokens(
     ast: &ParsedFile,
     table: &cwtools_string_table::string_table::StringTable,
@@ -677,7 +708,10 @@ impl Backend {
             self.state
                 .type_uses_revision
                 .fetch_add(1, std::sync::atomic::Ordering::Release);
-            self.state.pending_changed_names.lock().extend(dropped);
+            self.state
+                .pending_changed_names
+                .lock()
+                .extend(name_tokens(&dropped));
         }
         if self.state.loc_live_overlay.read().contains_key(uri) {
             self.loc_live_overlay_mut().remove(uri);
@@ -1023,7 +1057,10 @@ impl Backend {
         drop(rules_guard);
         let changed = self.refresh_type_uses(uri, used);
         if !changed.is_empty() {
-            self.state.pending_changed_names.lock().extend(changed);
+            self.state
+                .pending_changed_names
+                .lock()
+                .extend(name_tokens(&changed));
         }
     }
 
@@ -1061,7 +1098,10 @@ impl Backend {
     ) -> Vec<ValidationError> {
         let changed = self.refresh_type_uses(uri, uses);
         if !changed.is_empty() {
-            self.state.pending_changed_names.lock().extend(changed);
+            self.state
+                .pending_changed_names
+                .lock()
+                .extend(name_tokens(&changed));
         }
         if !self
             .state
@@ -1226,7 +1266,7 @@ impl Backend {
             let info = self.state.info_service.read();
             (
                 info.export_fingerprint(&uri),
-                info.export_names(&uri),
+                export_name_tokens(&info, &uri),
                 info.reference_fingerprint(&uri),
             )
         };
@@ -1272,7 +1312,7 @@ impl Backend {
             let info = self.state.info_service.read();
             (
                 info.export_fingerprint(&uri),
-                info.export_names(&uri),
+                export_name_tokens(&info, &uri),
                 info.reference_fingerprint(&uri),
             )
         };
@@ -1283,9 +1323,9 @@ impl Backend {
             references_before,
             references_after,
         );
-        let mut changed_names: HashSet<String> = names_before
+        let mut changed_names: NameTokens = names_before
             .symmetric_difference(&names_after)
-            .cloned()
+            .copied()
             .collect();
         {
             let mut pending = self.state.pending_changed_names.lock();
@@ -1313,22 +1353,16 @@ impl Backend {
         &self,
         changed_uri: &str,
         generation: u64,
-        changed_names: Option<&HashSet<String>>,
+        changed_names: Option<&NameTokens>,
     ) {
         use std::sync::atomic::Ordering;
 
-        let changed_ids: Option<Vec<u64>> = changed_names.map(|names| {
-            names
-                .iter()
-                .map(|n| doc_token_hash(&n.to_lowercase()))
-                .collect()
-        });
         let mut others: Vec<(String, i32, Arc<ParsedFile>, Arc<str>)> = {
             let tokens = self.state.doc_tokens.read();
             let docs = self.state.documents.lock();
             docs.iter()
                 .filter(|(u, _)| u.as_str() != changed_uri)
-                .filter(|(u, _)| match &changed_ids {
+                .filter(|(u, _)| match changed_names {
                     None => true,
                     Some(ids) => match tokens.get(u.as_str()) {
                         None => true,
@@ -1364,7 +1398,7 @@ impl Backend {
                         tracing::debug!(generation, "revalidate_open_dependents superseded");
                         if let Some(names) = changed_names {
                             let mut pending = self.state.pending_changed_names.lock();
-                            pending.extend(names.iter().cloned());
+                            pending.extend(names.iter().copied());
                         }
                         break;
                     }
@@ -1720,9 +1754,13 @@ impl Backend {
             .state
             .edit_generation
             .load(std::sync::atomic::Ordering::Relaxed);
-        let scope = {
+        let scope: NameTokens = {
             let rules_guard = self.state.rules.read();
-            loc_change_candidate_names(rules_guard.ruleset.as_deref(), changed_keys)
+            name_tokens(loc_change_candidate_names(
+                rules_guard.ruleset.as_deref(),
+                changed_keys,
+            ))
+            .collect()
         };
         self.revalidate_open_dependents("", generation, Some(&scope))
             .await;
@@ -1829,9 +1867,13 @@ impl Backend {
                     .state
                     .edit_generation
                     .load(std::sync::atomic::Ordering::Relaxed);
-                let scope = {
+                let scope: NameTokens = {
                     let rules_guard = self.state.rules.read();
-                    loc_change_candidate_names(rules_guard.ruleset.as_deref(), &changed_keys)
+                    name_tokens(loc_change_candidate_names(
+                        rules_guard.ruleset.as_deref(),
+                        &changed_keys,
+                    ))
+                    .collect()
                 };
                 self.revalidate_open_dependents(uri, generation, Some(&scope))
                     .await;
@@ -1889,7 +1931,10 @@ impl Backend {
             // body under its call name so the NEXT validate of any caller sees the new
             // content. Queued for the dependent sweep so open callers see it on THIS pass (#259).
             if let Some(name) = self.refresh_inline_script(uri, text) {
-                self.state.pending_changed_names.lock().insert(name);
+                self.state
+                    .pending_changed_names
+                    .lock()
+                    .insert(name_token_hash(&name));
             }
 
             // Validation. Lock order: rules -> info_service -> loc_index -> inline_scripts.
@@ -2522,6 +2567,239 @@ mod info_revision_tests {
         assert_eq!(revision(&backend), before);
         index(&backend, &uri, "country_event = {\n\tid = test.2\n}\n");
         assert_eq!(revision(&backend), before);
+    }
+
+    fn exports(
+        instances: &[&str],
+        variables: &[(&str, &str)],
+        targets: &[&str],
+    ) -> cwtools_info::FileInfo {
+        let location = cwtools_info::SourceLocation {
+            line: 1,
+            col: 0,
+            end: (1, 0),
+        };
+        let mut file = cwtools_info::FileInfo {
+            export_instances_hash: instances.iter().fold(0, |hash: u64, name| {
+                hash.wrapping_add(cwtools_info::mix_export_symbol(&["t", "idea", name]))
+            }),
+            export_instance_names: instances.iter().map(|name| name.to_string()).collect(),
+            saved_event_targets: targets.iter().map(|name| name.to_string()).collect(),
+            ..Default::default()
+        };
+        for (namespace, name) in variables {
+            file.defined_variables_ns
+                .entry(namespace.to_string())
+                .or_default()
+                .push(cwtools_info::DefinedVariable {
+                    name: name.to_string(),
+                    namespace: None,
+                    location,
+                    value: None,
+                });
+        }
+        file
+    }
+
+    /// The tokens `debounced_validate` would sweep for when `before` is reindexed as `after`,
+    /// and whether the export fingerprint moved with them.
+    fn changed_tokens(
+        before: cwtools_info::FileInfo,
+        after: cwtools_info::FileInfo,
+    ) -> (NameTokens, bool) {
+        let mut info = cwtools_info::InfoService::new();
+        info.files.insert("f.txt".to_string(), before);
+        let exports_before = info.export_fingerprint("f.txt");
+        let names_before = export_name_tokens(&info, "f.txt");
+        info.files.insert("f.txt".to_string(), after);
+        let exports_after = info.export_fingerprint("f.txt");
+        let names_after = export_name_tokens(&info, "f.txt");
+        let changed = names_before
+            .symmetric_difference(&names_after)
+            .copied()
+            .collect();
+        (changed, exports_before != exports_after)
+    }
+
+    #[test]
+    fn unchanged_exports_have_no_changed_names() {
+        let file = || {
+            exports(
+                &["idea_a"],
+                &[("variable", "v1"), ("global", "v2")],
+                &["t1"],
+            )
+        };
+        let (changed, moved) = changed_tokens(file(), file());
+        assert!(changed.is_empty());
+        assert!(!moved);
+    }
+
+    #[test]
+    fn added_and_removed_names_of_every_kind_are_the_changed_names() {
+        let small = || exports(&["keep_i"], &[("variable", "keep_v")], &["keep_t"]);
+        let large = || {
+            exports(
+                &["keep_i", "new_i"],
+                &[("variable", "keep_v"), ("global", "new_v")],
+                &["keep_t", "new_t"],
+            )
+        };
+        let expected: NameTokens = name_tokens(["new_i", "new_v", "new_t"]).collect();
+
+        let (added, moved) = changed_tokens(small(), large());
+        assert_eq!(added, expected);
+        assert!(moved);
+
+        let (removed, moved) = changed_tokens(large(), small());
+        assert_eq!(removed, expected);
+        assert!(moved);
+    }
+
+    /// The export fingerprint sees spelling, the names do not: a case-only edit moves the
+    /// fingerprint with no changed name, which `debounced_validate` answers with a full sweep.
+    #[test]
+    fn a_case_only_edit_changes_no_name_but_moves_the_fingerprint() {
+        for (before, after) in [
+            ("Foo_Var", "FOO_VAR"),
+            ("\u{c9}cole", "\u{c9}COLE"),
+            (
+                "\u{3a9}\u{394}\u{39f}\u{3a3}",
+                "\u{3a9}\u{3b4}\u{3bf}\u{3c2}",
+            ),
+        ] {
+            let (changed, moved) = changed_tokens(
+                exports(&[], &[("variable", before)], &[]),
+                exports(&[], &[("variable", after)], &[]),
+            );
+            assert!(changed.is_empty(), "{before} vs {after}");
+            assert!(moved, "{before} vs {after}");
+        }
+    }
+
+    #[test]
+    fn a_variable_changing_namespace_moves_the_fingerprint_but_no_name() {
+        let (changed, moved) = changed_tokens(
+            exports(&[], &[("variable", "shared")], &[]),
+            exports(&[], &[("global", "shared")], &[]),
+        );
+        assert!(changed.is_empty());
+        assert!(moved);
+    }
+
+    /// `doc_tokens` holds the string table's case fold of each document token. An export
+    /// that hashed differently would never be found in the documents that mention it.
+    #[test]
+    fn export_tokens_equal_the_tokens_a_document_stores_for_the_name() {
+        let backend = idea_backend();
+        for (in_document, exported_as) in [
+            ("plain_name", "plain_name"),
+            ("Mixed_Case", "MIXED_case"),
+            ("\u{c9}COLE_\u{dc}N\u{cf}", "\u{e9}cole_\u{dc}n\u{ef}"),
+            (
+                "\u{3a9}\u{394}\u{39f}\u{3a3}",
+                "\u{3a9}\u{3b4}\u{3bf}\u{3c2}",
+            ),
+            ("\u{130}stanbul", "\u{130}STANBUL"),
+            (
+                "\u{422}\u{415}\u{421}\u{422}_\u{418}\u{43c}\u{44f}",
+                "\u{442}\u{435}\u{441}\u{442}_\u{438}\u{43c}\u{44f}",
+            ),
+        ] {
+            let parsed = parse_string(
+                &format!("key = {{ ref = {in_document} }}"),
+                &backend.state.string_table,
+            );
+            let document = collect_doc_tokens(&parsed, &backend.state.string_table);
+            let mut info = cwtools_info::InfoService::new();
+            info.files.insert(
+                "f.txt".to_string(),
+                exports(&[], &[("variable", exported_as)], &[]),
+            );
+            let exported = export_name_tokens(&info, "f.txt");
+            assert_eq!(exported.len(), 1);
+            assert!(
+                exported.iter().all(|token| document.contains(token)),
+                "{exported_as} must be found in a document that spells it {in_document}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reindexing_a_file_changes_exactly_the_names_that_were_edited() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        let snapshot = || export_name_tokens(&backend.state.info_service.read(), &uri);
+        let diff = |before: &NameTokens, after: &NameTokens| -> NameTokens {
+            before.symmetric_difference(after).copied().collect()
+        };
+
+        index(
+            &backend,
+            &uri,
+            "@Scale = 3\nIdea_A = {\n\tsave_event_target_as = My_Target\n}\n",
+        );
+        let first = snapshot();
+        assert!(!first.is_empty());
+
+        index(
+            &backend,
+            &uri,
+            "@Scale = 3\nIdea_A = {\n\tsave_event_target_as = My_Target\n\tcost = 1\n}\n",
+        );
+        let unchanged = snapshot();
+        assert!(diff(&first, &unchanged).is_empty());
+
+        index(
+            &backend,
+            &uri,
+            "@scale = 3\nidea_a = {\n\tsave_event_target_as = MY_TARGET\n}\n",
+        );
+        let recased = snapshot();
+        assert!(diff(&unchanged, &recased).is_empty());
+
+        index(
+            &backend,
+            &uri,
+            "@scale = 3\nidea_b = {\n\tsave_event_target_as = other_target\n}\n",
+        );
+        let renamed = snapshot();
+        assert_eq!(
+            diff(&recased, &renamed),
+            name_tokens(["idea_a", "idea_b", "my_target", "other_target"]).collect::<NameTokens>()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_superseded_sweep_queues_its_names_for_the_next_one() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        open_loc_doc(&backend, &uri, "idea_a = { }");
+        type_one_edit(&backend, &uri, 2, "idea_a = { ref = Shared_Name }").await;
+        backend.state.edit_generation.store(1, Ordering::Relaxed);
+
+        // An older generation stops at its first document and hands the scope back.
+        let scope: NameTokens = name_tokens(["SHARED_NAME"]).collect();
+        backend
+            .revalidate_open_dependents("", 0, Some(&scope))
+            .await;
+        assert_eq!(*backend.state.pending_changed_names.lock(), scope);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_scoped_sweep_leaves_documents_that_do_not_mention_the_names() {
+        let backend = idea_backend();
+        let uri = ideas_uri();
+        open_loc_doc(&backend, &uri, "idea_a = { }");
+        type_one_edit(&backend, &uri, 2, "idea_a = { ref = Shared_Name }").await;
+        backend.state.edit_generation.store(1, Ordering::Relaxed);
+
+        // No open document mentions the name, so there is nothing to sweep or hand back.
+        let scope: NameTokens = name_tokens(["unrelated_name"]).collect();
+        backend
+            .revalidate_open_dependents("", 0, Some(&scope))
+            .await;
+        assert!(backend.state.pending_changed_names.lock().is_empty());
     }
 }
 
@@ -4020,7 +4298,11 @@ mod ignored_tests {
             "file_index entry must be removed"
         );
         assert!(
-            backend.state.pending_changed_names.lock().contains("foo"),
+            backend
+                .state
+                .pending_changed_names
+                .lock()
+                .contains(&name_token_hash("foo")),
             "clear must queue dropped type uses for dependent sweep"
         );
         assert!(
@@ -4364,7 +4646,6 @@ mod ignored_tests {
             ignored_uri.clone(),
             collect_doc_tokens(&ignored_parsed, &backend.state.string_table),
         );
-        let mut changed = std::collections::HashSet::new();
         let token = ignored_parsed
             .arena
             .leaves
@@ -4372,7 +4653,7 @@ mod ignored_tests {
             .and_then(|l| table.get_string(l.key.lower))
             .map(|s| s.to_ascii_lowercase())
             .unwrap_or_else(|| "ignored".into());
-        changed.insert(token);
+        let changed: NameTokens = name_tokens([token]).collect();
         backend
             .revalidate_open_dependents(&kept_uri, 1, Some(&changed))
             .await;
