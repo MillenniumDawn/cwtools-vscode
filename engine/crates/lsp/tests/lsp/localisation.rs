@@ -3,8 +3,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::common::{
-    GOTO_RULES, TestServer, count_publishes, definition_locations, diagnostics_of, loc,
-    storm_builder, storm_start, watched_changes,
+    GOTO_RULES, TestServer, WATCHED_QUIET, count_publishes, definition_locations, diagnostics_of,
+    loc, storm_builder, storm_start, watched_changes,
 };
 
 /// Codes of every publish for `suffix` in `frames`, in arrival order.
@@ -28,6 +28,10 @@ fn publish_codes_for(frames: &[Value], suffix: &str) -> Vec<Vec<String>> {
 
 fn drain(server: &mut TestServer) -> Vec<Value> {
     server.drain_after_first(Duration::from_millis(900), Duration::from_secs(8))
+}
+
+fn drain_watched(server: &mut TestServer) -> Vec<Value> {
+    server.drain_after_first(WATCHED_QUIET, Duration::from_secs(8))
 }
 
 #[test]
@@ -131,7 +135,7 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
     // Round 1: first sight seeds the watched overlay (one batch sweep allowed).
     server.write_file(watched_rel, loc(" W_KEY:0 \"two\"\n"));
     server.send(&watched_changes(std::slice::from_ref(&watched_uri)));
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     assert_eq!(
         count_publishes(&frames, "watched_l_english.yml"),
         1,
@@ -141,7 +145,7 @@ fn test_watched_loc_value_change_does_not_sweep_open_loc_files() {
     // Round 2: same keys again, new value — no sweep, no open-file republish.
     server.write_file(watched_rel, loc(" W_KEY:0 \"three\"\n"));
     server.send(&watched_changes(std::slice::from_ref(&watched_uri)));
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     server.stop();
 
     assert_eq!(
@@ -319,7 +323,7 @@ fn test_watched_loc_new_keys_revalidate_only_referencing_open_files() {
     server.write_file(c_rel, loc(" C_KEY:0 \"c\"\n NEW_KEY2:0 \"n2\"\n"));
     server.send(&watched_changes(&[b_uri, c_uri]));
 
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     server.stop();
 
     let open_publishes: Vec<&Value> = frames
@@ -380,7 +384,7 @@ fn test_watched_loc_keys_survive_scan_index_install() {
     // The watched change adds the key; the batch records it and sweeps.
     server.write_file(b_rel, loc(" B_KEY:0 \"b\"\n NEW_KEY:0 \"n1\"\n"));
     server.send(&watched_changes(std::slice::from_ref(&b_uri)));
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     let opens = publish_codes_for(&frames, "open_l_english.yml");
     assert!(
         opens
@@ -431,7 +435,7 @@ fn test_watched_loc_removed_key_stops_resolving() {
     // Round 1: the key appears; the open file's ref resolves.
     server.write_file(b_rel, loc(" B_KEY:0 \"b\"\n NEW_KEY:0 \"n1\"\n"));
     server.send(&watched_changes(std::slice::from_ref(&b_uri)));
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     let opens = publish_codes_for(&frames, "open_l_english.yml");
     assert!(
         opens
@@ -443,7 +447,7 @@ fn test_watched_loc_removed_key_stops_resolving() {
     // Round 2: the key is removed again; the ref must go back to unresolved.
     server.write_file(b_rel, loc(" B_KEY:0 \"b\"\n"));
     server.send(&watched_changes(std::slice::from_ref(&b_uri)));
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     server.stop();
 
     let opens = publish_codes_for(&frames, "open_l_english.yml");
@@ -496,7 +500,7 @@ fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
         loc(" WATCHED_KEY:0 \"watched\"\n NEW_THING:0 \"New thing\"\n NEW_THING_DESC:0 \"Description\"\n"),
     );
     server.send(&watched_changes(std::slice::from_ref(&watched_uri)));
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     let loc_codes = publish_codes_for(&frames, "dependent_l_english.yml");
     assert!(
         loc_codes
@@ -517,7 +521,7 @@ fn test_watched_loc_delete_revalidates_open_loc_and_game_dependents() {
         "workspace/didChangeWatchedFiles",
         json!({ "changes": [{ "uri": watched_uri, "type": 3 }] }),
     );
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     server.stop();
 
     let loc_codes = publish_codes_for(&frames, "dependent_l_english.yml");
@@ -571,7 +575,7 @@ fn test_watched_loc_delete_revalidates_live_overlay_dependents() {
         "workspace/didChangeWatchedFiles",
         json!({ "changes": [{ "uri": source_uri, "type": 3 }] }),
     );
-    let frames = drain(&mut server);
+    let frames = drain_watched(&mut server);
     server.stop();
 
     let codes = publish_codes_for(&frames, "dependent_l_english.yml");

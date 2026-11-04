@@ -11,6 +11,7 @@
 * Fence synchronous script, localisation and post-lookup CWT hover resolution and markdown work so it does not hold an async worker; asynchronous CWT document reads remain outside. Hover contents, debug and scope behavior are unchanged. (#1183)
 * Add `cwtools validate --watch`. After the first report it re-validates on each change to the rules or the mod and prints only the diagnostics that appeared or went away, with guard-style per-code counts, or `no change`. Ctrl-C exits 0. (#612)
 * Stop copying every exported name into two owned sets on each edit. The before and after snapshots now hold the token hashes the open-document sweep already matches on. (#1182)
+* Read the watched-file debounce from `CWTOOLS_WATCHED_DEBOUNCE_MS`, in milliseconds. The default stays 500 ms when the variable is unset or not a number. The `lsp` test harness sets 50 ms and its watched-file drains wait 500 ms instead of 900 ms. (#1199)
 
 ### 4.0.6
 

@@ -48,7 +48,7 @@ impl ScanSummary {
     }
 }
 
-const WATCHED_DEBOUNCE_MS: u64 = 500;
+const WATCHED_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
 const WATCHED_BULK_CAP: usize = 200;
 const SCAN_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -63,6 +63,13 @@ pub(crate) fn retry_deadline(default: std::time::Duration) -> std::time::Instant
             std::env::var("CWTOOLS_RETRY_DEADLINE_MS").ok().as_deref(),
             default,
         )
+}
+
+pub(crate) fn watched_debounce() -> std::time::Duration {
+    retry_duration(
+        std::env::var("CWTOOLS_WATCHED_DEBOUNCE_MS").ok().as_deref(),
+        WATCHED_DEBOUNCE,
+    )
 }
 
 /// Test-only one-shot panic switch for `CWTOOLS_WATCHED_BATCH_PANIC_ONCE` (#155): fires at
