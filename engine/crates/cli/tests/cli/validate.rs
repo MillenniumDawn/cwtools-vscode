@@ -479,6 +479,82 @@ fn test_validate_help_lists_watch() {
         .stdout(predicate::str::contains("--watch"));
 }
 
+/// The watch loop end to end: an added file prints its delta, and Ctrl-C exits 0.
+/// Each wait is for an output line, bounded by one deadline, never a fixed sleep.
+#[cfg(unix)]
+#[test]
+fn test_validate_watch_prints_the_delta_for_an_added_file_and_exits_zero_on_interrupt() {
+    use crate::common::{INHERITED_GIT_ENV, fixture_text, write_tree};
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    fn wait_for_line(lines: &mpsc::Receiver<String>, needle: &str, deadline: Instant) -> bool {
+        while let Ok(line) = lines.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        {
+            if line.contains(needle) {
+                return true;
+            }
+        }
+        false
+    }
+
+    let event = fixture_text("discover/mod_a/events/test.txt");
+    let mod_dir = write_tree(&[("events/test.txt", &event)]);
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cwtools"));
+    command
+        .env("RUST_LOG", "")
+        .envs(cwtools_test_support::scratch_home_env());
+    for key in INHERITED_GIT_ENV {
+        command.env_remove(key);
+    }
+    let mut child = command
+        .args(["validate", "--game", "stellaris", "--watch", "--directory"])
+        .arg(mod_dir.path())
+        .arg("--rules")
+        .arg(fixtures_dir().join("rules"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let (tx, lines) = mpsc::channel();
+    let streams: [Box<dyn Read + Send>; 2] = [
+        Box::new(child.stdout.take().unwrap()),
+        Box::new(child.stderr.take().unwrap()),
+    ];
+    for stream in streams {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        });
+    }
+    drop(tx);
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let watching = wait_for_line(&lines, "Watching for changes", deadline);
+    if watching {
+        std::fs::write(
+            mod_dir.path().join("events").join("second.txt"),
+            event.replace("test.1", "test.2"),
+        )
+        .unwrap();
+    }
+    let delta = watching && wait_for_line(&lines, "CW107      -0 +1", deadline);
+    // SAFETY: sends SIGINT to the child this test spawned.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, libc::SIGINT);
+    }
+    let status = child.wait().unwrap();
+
+    assert!(watching, "the watch never started");
+    assert!(delta, "no CW107 delta after adding an event file");
+    assert_eq!(status.code(), Some(0), "unexpected exit status: {status:?}");
+}
+
 /// `--watch` prints text deltas for the whole mod, so the flags that fix the
 /// report's format, destination or scope are refused before anything loads.
 /// These runs end at argument parsing; a real watch never returns on its own.
