@@ -9,6 +9,9 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 cwtools_cache = { workspace = true }
 cwtools_parser = { workspace = true }
