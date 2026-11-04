@@ -10,7 +10,9 @@ use cwtools_rules::ruleset_loader::RuleParseError;
 use cwtools_string_table::string_table::StringId;
 use cwtools_validation::references::{UsedInstances, check_unused_instances, needs_use_tracking};
 use cwtools_validation::{
-    InlineScripts, Prepared, ValidationError, validate_prepared, validate_prepared_tracking_uses,
+    CancelFlag, InlineScripts, Prepared, ValidationError, validate_prepared,
+    validate_prepared_cancellable, validate_prepared_tracking_uses,
+    validate_prepared_tracking_uses_cancellable,
 };
 
 use crate::Backend;
@@ -1250,6 +1252,7 @@ impl Backend {
         expected_version: i32,
         generation: u64,
         trigger: crate::ValidateTrigger,
+        cancel: &CancelFlag,
     ) {
         let Some(_permit) = self.validation_permit().await else {
             return;
@@ -1271,9 +1274,17 @@ impl Backend {
             )
         };
 
-        let (diagnostics, parsed) = self
-            .parse_and_validate(&uri, &text, trigger, Some(expected_version))
-            .await;
+        let (diagnostics, parsed) = match self
+            .parse_and_validate_cancellable(&uri, &text, trigger, Some(expected_version), cancel)
+            .await
+        {
+            Some(outcome) => outcome,
+            None => {
+                // Superseded or closed: the newer edit's debounce validates instead (#1196).
+                tracing::debug!(%uri, "debounced validation cancelled before completion");
+                return;
+            }
+        };
         let (parsed, open_use_sites) = match parsed {
             Some(script) => (Some(Arc::new(script.ast)), script.use_sites),
             None => (None, Vec::new()),
@@ -1774,10 +1785,40 @@ impl Backend {
         trigger: crate::ValidateTrigger,
         parsed_version: Option<i32>,
     ) -> (Vec<Diagnostic>, Option<ValidatedScript>) {
+        // No cancel signal: the traversal always reaches the end of its blocks.
+        self.parse_and_validate_inner(uri, text, trigger, parsed_version, None)
+            .await
+            .unwrap_or_default()
+    }
+
+    /// Debounced keystroke entry point (#1196): `None` means cancelled mid-run,
+    /// distinct from a complete run with no diagnostics.
+    pub(crate) async fn parse_and_validate_cancellable(
+        &self,
+        uri: &str,
+        text: &str,
+        trigger: crate::ValidateTrigger,
+        parsed_version: Option<i32>,
+        cancel: &CancelFlag,
+    ) -> Option<(Vec<Diagnostic>, Option<ValidatedScript>)> {
+        let outcome = self
+            .parse_and_validate_inner(uri, text, trigger, parsed_version, Some(cancel))
+            .await?;
+        (!cancel.is_cancelled()).then_some(outcome)
+    }
+
+    async fn parse_and_validate_inner(
+        &self,
+        uri: &str,
+        text: &str,
+        trigger: crate::ValidateTrigger,
+        parsed_version: Option<i32>,
+        cancel: Option<&CancelFlag>,
+    ) -> Option<(Vec<Diagnostic>, Option<ValidatedScript>)> {
         if self.is_ignored_uri(uri) {
             self.clear_ignored_file_state(uri);
             self.update_doc_tokens(uri, None);
-            return (Vec::new(), None);
+            return Some((Vec::new(), None));
         }
         let mut diagnostics = Vec::new();
         // Per-line text + negotiated encoding, so every squiggle spans the whole statement
@@ -1881,11 +1922,11 @@ impl Backend {
             let mut diagnostics = diagnostics;
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
             truncate_diagnostics(&mut diagnostics, &lines);
-            return (diagnostics, None);
+            return Some((diagnostics, None));
         }
 
         if crate::paths::has_loc_ext(uri) {
-            return (diagnostics, None);
+            return Some((diagnostics, None));
         }
 
         // `.cwt` rule-config files are the schema the engine is built from, not game content.
@@ -1910,7 +1951,7 @@ impl Backend {
             }
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
             truncate_diagnostics(&mut diagnostics, &lines);
-            return (diagnostics, None);
+            return Some((diagnostics, None));
         }
 
         tracing::debug!(%uri, "[validate] parsing");
@@ -1971,11 +2012,30 @@ impl Backend {
                     #[cfg(test)]
                     self.hold(crate::state::HoldPoint::ValidatePrepared);
                     let track = needs_use_tracking(ruleset, game);
-                    let (mut errs, used) = if track {
-                        let (errs, used) = validate_prepared_tracking_uses(&parsed, uri, &prepared);
-                        (errs, Some(used))
+                    let run = if track {
+                        match cancel {
+                            Some(flag) => validate_prepared_tracking_uses_cancellable(
+                                &parsed, uri, &prepared, flag,
+                            )
+                            .map(|(errs, used)| (errs, Some(used))),
+                            None => {
+                                let (errs, used) =
+                                    validate_prepared_tracking_uses(&parsed, uri, &prepared);
+                                Some((errs, Some(used)))
+                            }
+                        }
                     } else {
-                        (validate_prepared(&parsed, uri, &prepared), None)
+                        match cancel {
+                            Some(flag) => {
+                                validate_prepared_cancellable(&parsed, uri, &prepared, flag)
+                                    .map(|errs| (errs, None))
+                            }
+                            None => Some((validate_prepared(&parsed, uri, &prepared), None)),
+                        }
+                    };
+                    let Some((mut errs, used)) = run else {
+                        // Partial errors and tracked uses die here (#1196).
+                        return None;
                     };
                     if let Some(used) = used {
                         errs.extend(
@@ -2010,13 +2070,13 @@ impl Backend {
                 diagnostics.push(validation_error_to_diagnostic(err, &lines));
             }
             drop_inline_suppressed(&mut diagnostics, &inline_ignored);
-            (
+            Some((
                 diagnostics,
                 Some(ValidatedScript {
                     ast: parsed,
                     use_sites,
                 }),
-            )
+            ))
         })
     }
 }
@@ -5501,8 +5561,14 @@ mod ignored_tests {
             .acquire_many(2)
             .await
             .unwrap();
-        let stale =
-            backend.debounced_validate(uri.clone(), 1, 0, crate::ValidateTrigger::DidChange);
+        let never_cancelled = CancelFlag::default();
+        let stale = backend.debounced_validate(
+            uri.clone(),
+            1,
+            0,
+            crate::ValidateTrigger::DidChange,
+            &never_cancelled,
+        );
         tokio::pin!(stale);
         assert!(futures_util::poll!(&mut stale).is_pending());
 
@@ -5529,7 +5595,13 @@ mod ignored_tests {
 
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            backend.debounced_validate(uri.clone(), 2, 0, crate::ValidateTrigger::DidChange),
+            backend.debounced_validate(
+                uri.clone(),
+                2,
+                0,
+                crate::ValidateTrigger::DidChange,
+                &never_cancelled,
+            ),
         )
         .await
         .expect("the current validation must finish");
@@ -5662,6 +5734,314 @@ mod ignored_tests {
         assert_eq!(backend.state.validation_permits.available_permits(), 2);
     }
 
+    /// A `should_be_used` type, so validation installs tracked `<thing>` uses.
+    const TRACKING_RULES: &str = r#"
+types = {
+    type[thing] = { path = "game/common/things" should_be_used = yes }
+    type[user] = { path = "game/common/users" }
+}
+thing = { x = scalar }
+user = { uses = <thing> }
+"#;
+
+    fn tracking_ruleset() -> RuleSet {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        cwtools_rules::rules_converter::ast_to_ruleset(
+            &parse_string(TRACKING_RULES, &table),
+            &table,
+        )
+    }
+
+    /// The tracked type uses installed for `uri`, by instance name.
+    fn installed_use_names(backend: &Backend, uri: &str) -> Vec<String> {
+        let store = backend.state.type_uses.read();
+        let Some(uses) = store.get(uri) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = uses
+            .changed_names(&UsedInstances::default())
+            .into_iter()
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A newer edit of the same document cancels the in-flight rule traversal
+    /// without installing its partial work, and the latest buffer completes (#1196).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn superseded_rule_validation_cancels_instead_of_completing() {
+        use crate::state::{HoldGate, HoldPoint};
+
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let first_gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        *backend.state.hold_gate.lock() = Some(first_gate.clone());
+        backend
+            .did_open_impl(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: Url::parse(&uri).unwrap(),
+                    language_id: "paradox".into(),
+                    version: 1,
+                    text: "u1 = { uses = t1 }".into(),
+                },
+            })
+            .await;
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !first_gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            first_gate.release();
+            panic!("the first validation must reach its synchronous phase");
+        }
+        let first_task = {
+            let tasks = backend.state.debounce_handles.lock();
+            let task = tasks.get(&uri).unwrap();
+            (task.abort.clone(), task.cancel_flag.clone())
+        };
+
+        // Park the superseding run first so the assertions see the cancelled run's leftovers.
+        let second_gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        *backend.state.hold_gate.lock() = Some(second_gate.clone());
+        let change = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.did_change_impl(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: Url::parse(&uri).unwrap(),
+                    version: 2,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: "u2 = { uses = t2 }".into(),
+                }],
+            }),
+        )
+        .await;
+        change.expect("accepting a new edit must not wait for synchronous validation");
+        if !first_task.1.is_cancelled() {
+            first_gate.release();
+            second_gate.release();
+            panic!("superseding must set the in-flight run's cancel signal");
+        }
+        first_gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !first_task.0.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the cancelled run must finish promptly");
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !second_gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            second_gate.release();
+            panic!("the latest edit's validation must reach its synchronous phase");
+        }
+        let stale_uses = installed_use_names(&backend, &uri);
+        if !stale_uses.is_empty() {
+            second_gate.release();
+            panic!("a cancelled run must not install partial tracked type uses: {stale_uses:?}");
+        }
+
+        second_gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !backend.state.debounce_handles.lock().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the latest edit's validation must finish");
+
+        // The latest buffer completes normally.
+        assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
+        let mut publications = Vec::new();
+        while let Some(Some(message)) = socket.next().now_or_never() {
+            if message.method() == "textDocument/publishDiagnostics" {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(message.params().cloned().unwrap()).unwrap();
+                publications.push(params);
+            }
+        }
+        assert_eq!(publications.len(), 1);
+        assert_eq!(publications[0].version, Some(2));
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .unwrap()
+                .ast_version,
+            Some(2)
+        );
+    }
+
+    /// Closing the document cancels the in-flight rule traversal the same way (#1196).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn closing_the_document_cancels_the_in_flight_rule_validation() {
+        use crate::state::{HoldGate, HoldPoint};
+
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        backend
+            .did_open_impl(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: Url::parse(&uri).unwrap(),
+                    language_id: "paradox".into(),
+                    version: 1,
+                    text: "u1 = { uses = t1 }".into(),
+                },
+            })
+            .await;
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("the in-flight validation must reach its synchronous phase");
+        }
+        let in_flight_task = {
+            let tasks = backend.state.debounce_handles.lock();
+            let task = tasks.get(&uri).unwrap();
+            (task.abort.clone(), task.cancel_flag.clone())
+        };
+
+        let closing = {
+            let backend = backend.clone();
+            let uri = Url::parse(&uri).unwrap();
+            tokio::spawn(async move {
+                backend
+                    .did_close_impl(DidCloseTextDocumentParams {
+                        text_document: TextDocumentIdentifier { uri },
+                    })
+                    .await;
+            })
+        };
+        // The close signals cancellation before it waits for the task to end.
+        let signalled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !in_flight_task.1.is_cancelled() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if signalled.is_err() {
+            gate.release();
+            panic!("closing must set the in-flight run's cancel signal");
+        }
+        gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(5), closing)
+            .await
+            .expect("the close must finish once the cancelled run exits")
+            .expect("the close task must not panic");
+        assert!(in_flight_task.0.is_finished());
+        assert_eq!(
+            backend.state.type_uses_revision.load(Ordering::Acquire),
+            0,
+            "a cancelled run must not install tracked type uses"
+        );
+        let versions = drain_publication_versions(&mut socket);
+        assert!(
+            !versions.contains(&Some(1)),
+            "the cancelled run must not publish: {versions:?}"
+        );
+    }
+
+    /// The signal is per-debounce: an edit to another document must not cancel this run (#1196).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn an_unrelated_document_edit_does_not_cancel_the_in_flight_validation() {
+        use crate::state::{HoldGate, HoldPoint};
+
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let other_uri = crate::paths::path_to_uri(&workspace.path().join("common/users/other.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        // The client channel holds one message; drain while both validations publish.
+        let drain = tokio::spawn(async move { while socket.next().await.is_some() {} });
+        let gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        *backend.state.hold_gate.lock() = Some(gate.clone());
+        backend
+            .did_open_impl(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: Url::parse(&uri).unwrap(),
+                    language_id: "paradox".into(),
+                    version: 1,
+                    text: "u1 = { uses = t1 }".into(),
+                },
+            })
+            .await;
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            gate.release();
+            panic!("the in-flight validation must reach its synchronous phase");
+        }
+        let in_flight_cancel = backend
+            .state
+            .debounce_handles
+            .lock()
+            .get(&uri)
+            .unwrap()
+            .cancel_flag
+            .clone();
+
+        backend
+            .did_open_impl(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: Url::parse(&other_uri).unwrap(),
+                    language_id: "paradox".into(),
+                    version: 1,
+                    text: "u3 = { uses = t3 }".into(),
+                },
+            })
+            .await;
+        if in_flight_cancel.is_cancelled() {
+            gate.release();
+            panic!("an edit to another document must not cancel this run");
+        }
+        gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !backend.state.debounce_handles.lock().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("both validations must finish");
+
+        assert_eq!(installed_use_names(&backend, &uri), ["t1".to_string()]);
+        assert!(
+            backend.state.documents.lock().is_validated(&uri),
+            "the untouched run must complete and mark its version validated"
+        );
+        drain.abort();
+    }
+
     /// Sends `didSave` for `uri`, waits out the validation it started, if any,
     /// and returns how many validations the save started.
     async fn save_and_settle(backend: &Backend, uri: &str) -> u64 {
@@ -5714,7 +6094,13 @@ mod ignored_tests {
             backend.state.index_ready.store(true, Ordering::Relaxed);
             open_stale_publication_doc(&backend, &uri, text);
             backend
-                .debounced_validate(uri.clone(), 1, 0, crate::ValidateTrigger::DidOpen)
+                .debounced_validate(
+                    uri.clone(),
+                    1,
+                    0,
+                    crate::ValidateTrigger::DidOpen,
+                    &CancelFlag::default(),
+                )
                 .await;
             assert_eq!(drain_publication_versions(&mut socket), [Some(1)], "{path}");
             assert_eq!(
@@ -5806,7 +6192,13 @@ mod ignored_tests {
         backend.state.index_ready.store(true, Ordering::Relaxed);
         open_stale_publication_doc(&backend, &uri, "root = {");
         backend
-            .debounced_validate(uri, 1, 0, crate::ValidateTrigger::DidOpen)
+            .debounced_validate(
+                uri,
+                1,
+                0,
+                crate::ValidateTrigger::DidOpen,
+                &CancelFlag::default(),
+            )
             .await;
         assert_eq!(drain_publication_versions(&mut socket), [Some(1)]);
         let generation = backend.state.settings_generation.load(Ordering::SeqCst);
@@ -6016,6 +6408,7 @@ mod ignored_tests {
                     1,
                     generation,
                     crate::ValidateTrigger::DidChange,
+                    &CancelFlag::default(),
                 )
                 .await;
         });

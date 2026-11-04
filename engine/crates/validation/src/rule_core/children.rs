@@ -45,7 +45,7 @@ fn validate_leaf_against_rule(
     scope_context: &mut Option<ScopeContext>,
     errors: &mut Vec<ValidationError>,
 ) {
-    if ctx.alias_branch_budget_exhausted() {
+    if ctx.stop_traversal() {
         return;
     }
     if rule_left_is_ignore(rule_type) {
@@ -192,12 +192,12 @@ fn pick_best_candidate<F, G>(
     let mut only_match: Option<ValidationError> = None;
     let mut temp: Vec<ValidationError> = Vec::new();
     for i in 0..n {
-        if ctx.alias_branch_budget_exhausted() {
+        if ctx.stop_traversal() {
             return;
         }
         temp.clear();
         validate_one(i, &mut temp);
-        if ctx.alias_branch_budget_exhausted() {
+        if ctx.stop_traversal() {
             return;
         }
         if temp.is_empty() {
@@ -231,7 +231,7 @@ pub(crate) fn validate_children(
     block_pos: (u32, u16),
     errors: &mut Vec<ValidationError>,
 ) {
-    if ctx.alias_branch_budget_exhausted() {
+    if ctx.stop_traversal() {
         return;
     }
     let flattened;
@@ -249,7 +249,7 @@ pub(crate) fn validate_children(
 
     let (leafvalue_counts, valueclause_counts) =
         count_and_validate_children(ctx, children, rules, &mut block, scope_context, errors);
-    if ctx.alias_branch_budget_exhausted() {
+    if ctx.stop_traversal() {
         return;
     }
 
@@ -522,7 +522,7 @@ fn count_and_validate_children<'r>(
     };
 
     for child in children {
-        if ctx.alias_branch_budget_exhausted() {
+        if ctx.stop_traversal() {
             break;
         }
         match child {

@@ -12,7 +12,7 @@ use cwtools_info::{IndexedUseSite, TypeInstance, UseSite};
 use cwtools_parser::ast::ParsedFile;
 use cwtools_rules::rules_types::RuleSet;
 use cwtools_string_table::string_table::StringTable;
-use cwtools_validation::{InlineScripts, references};
+use cwtools_validation::{CancelFlag, InlineScripts, references};
 
 use crate::scan::ScanSummary;
 use crate::validate::NameTokens;
@@ -1356,6 +1356,17 @@ pub(crate) struct DebounceTask {
     pub(crate) id: u64,
     pub(crate) abort: tokio::task::AbortHandle,
     pub(crate) finished: tokio::sync::oneshot::Receiver<()>,
+    /// The sync traversal's cancel signal, which the task abort cannot reach
+    /// inside `block_in_place` (#1196).
+    pub(crate) cancel_flag: Arc<CancelFlag>,
+}
+
+impl DebounceTask {
+    /// Stops the rule traversal at its next block boundary and aborts the task (#1196).
+    pub(crate) fn cancel(&self) {
+        self.cancel_flag.cancel();
+        self.abort.abort();
+    }
 }
 
 pub(crate) fn remove_debounce_task(

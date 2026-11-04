@@ -11,6 +11,7 @@
 * Fence synchronous script, localisation and post-lookup CWT hover resolution and markdown work so it does not hold an async worker; asynchronous CWT document reads remain outside. Hover contents, debug and scope behavior are unchanged. (#1183)
 * Add `cwtools validate --watch`. After the first report it re-validates on each change to the rules or the mod and prints only the diagnostics that appeared or went away, with guard-style per-code counts, or `no change`. Ctrl-C exits 0. (#612)
 * Stop copying every exported name into two owned sets on each edit. The before and after snapshots now hold the token hashes the open-document sweep already matches on. (#1182)
+* Cancel a superseded or closed document's in-flight debounced rule validation at AST block boundaries, including inside alias and inline-script expansion, instead of letting the aborted task run its synchronous traversal to completion; a cancelled run never publishes diagnostics, marks its version validated, or installs partial tracked type uses. (#1196)
 
 ### 4.0.6
 

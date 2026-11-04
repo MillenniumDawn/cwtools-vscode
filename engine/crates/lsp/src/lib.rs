@@ -830,6 +830,7 @@ mod tests {
                 id: 2,
                 abort,
                 finished,
+                cancel_flag: std::sync::Arc::new(cwtools_validation::CancelFlag::default()),
             },
         )]);
 
@@ -927,6 +928,7 @@ mod tests {
                 id: 7,
                 abort: pending.abort_handle(),
                 finished,
+                cancel_flag: std::sync::Arc::new(cwtools_validation::CancelFlag::default()),
             },
         );
 
