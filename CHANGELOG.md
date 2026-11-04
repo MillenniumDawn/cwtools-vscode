@@ -9,6 +9,7 @@
 * Skip global highlighting and CodeLens refreshes when a file-watcher batch only contains open or unchanged files.
 * Apply hover debug, hover scope display, and background-reindex timing changes without revalidating open documents or invalidating the workspace scan fingerprint.
 * Fence synchronous script, localisation and post-lookup CWT hover resolution and markdown work so it does not hold an async worker; asynchronous CWT document reads remain outside. Hover contents, debug and scope behavior are unchanged. (#1183)
+* Add `cwtools validate --watch`. After the first report it re-validates on each change to the rules or the mod and prints only the diagnostics that appeared or went away, with guard-style per-code counts, or `no change`. Ctrl-C exits 0. (#612)
 * Stop copying every exported name into two owned sets on each edit. The before and after snapshots now hold the token hashes the open-document sweep already matches on. (#1182)
 
 ### 4.0.6

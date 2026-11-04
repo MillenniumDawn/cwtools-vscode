@@ -61,6 +61,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 rkyv = "0.8"
 zstd = "0.14"
 tower-lsp = "0.20"
