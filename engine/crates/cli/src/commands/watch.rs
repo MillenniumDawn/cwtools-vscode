@@ -8,12 +8,12 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::diag::{Diag, severity_rank};
 use crate::run::note;
 
-/// How often the inputs are stat-ed. A change must hold still for one more
+/// The shortest pause between polls. A change must hold still for one more
 /// poll before it counts, so a save that touches many files reloads once.
 const POLL: Duration = Duration::from_millis(500);
 
@@ -36,9 +36,13 @@ impl Poller {
     /// changing, then adopt the new state as the snapshot.
     fn wait(&mut self) {
         let mut last = self.seen;
+        let mut pause = POLL;
         loop {
-            thread::sleep(POLL);
+            thread::sleep(pause);
+            let started = Instant::now();
             let now = fingerprint(&self.roots);
+            // Ten times the walk keeps an idle watch of a large mod near a tenth of a core.
+            pause = POLL.max(started.elapsed() * 10);
             if now != self.seen && now == last {
                 self.seen = now;
                 return;
