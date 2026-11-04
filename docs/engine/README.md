@@ -33,6 +33,7 @@ Both binaries drive the same pipeline.
 - `explain CWxxx` prints what one code means, `list-codes` prints the whole catalog, and `completions <shell>` writes a completion script.
 - Reports as text, CSV, JSON, GitHub Actions annotations or SARIF, with severity and code filters, hash baselines, and settings from a `cwtools.toml`.
 - `validate --file` and `--since <git-ref>` scope the report to the files you touched, for a pre-commit hook or a PR job.
+- `validate --watch` prints the report once, then re-validates on each change to the rules or the mod and prints only the diagnostics that appeared or went away, or `no change`. It reports as text, so it cannot combine with `--report-type`, `--output-file`, `--output-hashes` or `--since`.
 
 Both reuse the on-disk caches: parsed ASTs (`.cwb`) and the base game index,
 each kept until its inputs change.

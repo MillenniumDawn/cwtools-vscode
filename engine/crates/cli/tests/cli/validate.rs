@@ -467,3 +467,34 @@ fn test_validate_default_run_has_no_code_filter() {
         .success()
         .stdout(predicate::str::contains(",CW107,"));
 }
+
+// ── Watch ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_validate_help_lists_watch() {
+    cwtools()
+        .args(["validate", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--watch"));
+}
+
+/// `--watch` prints text deltas for the whole mod, so the flags that fix the
+/// report's format, destination or scope are refused before anything loads.
+/// These runs end at argument parsing; a real watch never returns on its own.
+#[test]
+fn test_validate_watch_conflicts_with_ci_and_scope_flags() {
+    let mod_dir = fixtures_dir().join("discover").join("mod_a");
+    for flags in [
+        ["--report-type", "csv"],
+        ["--output-file", "report.txt"],
+        ["--output-hashes", "hashes.txt"],
+        ["--since", "HEAD"],
+    ] {
+        validate_dir(&mod_dir, &["--watch", flags[0], flags[1]])
+            .failure()
+            .code(2)
+            .stderr(predicate::str::contains("--watch"))
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+}

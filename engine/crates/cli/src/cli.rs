@@ -249,6 +249,18 @@ pub(crate) struct ValidateArgs {
     /// (exit 4) instead of a silent "0 errors".
     #[arg(long)]
     pub(crate) allow_empty: bool,
+    /// Print the report once, then keep watching the rules, the mod and its
+    /// parents. On each change, re-validate and print only the diagnostics that
+    /// appeared or went away, with per-code counts in the shape `guard.py`
+    /// uses, or `no change`. Polls file metadata; every pass is a full load and
+    /// validate, with unchanged files read from the parse cache. Ctrl-C exits 0.
+    /// Reports as text, so it cannot be combined with --report-type,
+    /// --output-file, --output-hashes or --since.
+    #[arg(
+        long,
+        conflicts_with_all = ["report_type", "output_file", "output_hashes", "since"]
+    )]
+    pub(crate) watch: bool,
 }
 
 // See the note on `ValidateArgs`.

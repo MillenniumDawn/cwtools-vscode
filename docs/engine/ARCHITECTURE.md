@@ -93,7 +93,9 @@ files catch up on the next scan.
 
 `Session` (in `driver`) bundles the primitives into the CLI's batch model: load
 everything from disk once into immutable-after-load state, then validate the whole
-set (`validate_all`). One `Session` per CLI run.
+set (`validate_all`). One `Session` per CLI run. `validate --watch` loads a fresh
+`Session` per pass and diffs the diagnostics against the last pass, rather than
+updating one.
 
 `validate --file`/`--since` scope the report, not the load: the directory is still
 indexed whole, because the cross-file checks need it. `validate_selected` then

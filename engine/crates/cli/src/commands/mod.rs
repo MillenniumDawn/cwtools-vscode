@@ -13,6 +13,7 @@ mod loc;
 mod parse;
 mod rules;
 mod validate;
+mod watch;
 
 /// Route a parsed subcommand to its module.
 pub(crate) fn dispatch(command: Commands) {
