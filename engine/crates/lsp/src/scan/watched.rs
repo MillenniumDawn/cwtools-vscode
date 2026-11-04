@@ -6,6 +6,7 @@ use tower_lsp::lsp_types::*;
 
 use crate::Backend;
 use crate::paths::{is_resource_file, is_stray_loc_file, uri_to_path_str};
+use crate::validate::{NameTokens, name_tokens};
 
 const WATCHED_FOLDER_EXPANSION_MAX_ENTRIES: usize = 10_000;
 
@@ -337,7 +338,7 @@ impl Backend {
                     self.refresh_after_watched_loc_changes(&changed_loc_keys)
                         .await;
                 }
-                let queued: HashSet<String> =
+                let queued: NameTokens =
                     { self.state.pending_changed_names.lock().drain().collect() };
                 if resources_changed || index_changed || !queued.is_empty() {
                     let generation = self.state.edit_generation.load(Ordering::Relaxed);
@@ -702,7 +703,7 @@ impl Backend {
                 self.state
                     .pending_changed_names
                     .lock()
-                    .extend(removed_scripts);
+                    .extend(name_tokens(&removed_scripts));
             }
         }
         {
@@ -719,7 +720,10 @@ impl Backend {
                 self.state
                     .type_uses_revision
                     .fetch_add(1, Ordering::Release);
-                self.state.pending_changed_names.lock().extend(dropped);
+                self.state
+                    .pending_changed_names
+                    .lock()
+                    .extend(name_tokens(&dropped));
             }
         }
         self.bump_info_revision();

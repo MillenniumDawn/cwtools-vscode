@@ -110,7 +110,9 @@ pub mod bench_support {
             index,
         ))
     }
-    pub use crate::validate::{collect_doc_tokens, loc_extra_valid_refs, parse_loc_buffer};
+    pub use crate::validate::{
+        collect_doc_tokens, export_name_tokens, loc_extra_valid_refs, parse_loc_buffer,
+    };
 }
 
 /// Serve LSP over stdin/stdout until the client closes stdin. `src/main.rs`

@@ -4,7 +4,6 @@
 // (#662). Tests live alongside it in lib.rs so they can stay as
 // `#[cfg(test)] mod tests` against the crate root.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -27,6 +26,7 @@ use crate::state::{
     DocumentRejection, LocOverlayWrite, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_URI_BYTES, ParsedDoc,
     ValidateTrigger, remove_debounce_task,
 };
+use crate::validate::{NameTokens, export_name_tokens, name_token_hash, name_tokens};
 
 pub(crate) enum LoadingBar {}
 impl tower_lsp::lsp_types::notification::Notification for LoadingBar {
@@ -767,7 +767,10 @@ impl Backend {
 
         let (exports_before, names_before) = {
             let info = self.state.info_service.read();
-            (info.export_fingerprint(&uri), info.export_names(&uri))
+            (
+                info.export_fingerprint(&uri),
+                export_name_tokens(&info, &uri),
+            )
         };
         let disk_ast = if !crate::paths::has_loc_ext(&uri) && !crate::paths::is_cwt_file(&uri) {
             let roots = self.state.config.read().authorized_roots.clone();
@@ -805,7 +808,10 @@ impl Backend {
                     self.index_parsed_file_as(&uri, parsed, None, &logical_path, false);
                     // (#259).
                     if let Some(name) = self.refresh_inline_script(&uri, text) {
-                        self.state.pending_changed_names.lock().insert(name);
+                        self.state
+                            .pending_changed_names
+                            .lock()
+                            .insert(name_token_hash(&name));
                     }
                 }
                 DiskState::Absent => {
@@ -814,7 +820,10 @@ impl Backend {
                     // Gone from disk too, so it can no longer expand at its callers; queue
                     // its name for the sweep below (#259).
                     if let Some(name) = self.remove_inline_script(&uri) {
-                        self.state.pending_changed_names.lock().insert(name);
+                        self.state
+                            .pending_changed_names
+                            .lock()
+                            .insert(name_token_hash(&name));
                     }
                     if let Some(uses) = self.state.type_uses.write().remove(&uri) {
                         let dropped = uses.changed_names(&Default::default());
@@ -822,7 +831,10 @@ impl Backend {
                             self.state
                                 .type_uses_revision
                                 .fetch_add(1, Ordering::Release);
-                            self.state.pending_changed_names.lock().extend(dropped);
+                            self.state
+                                .pending_changed_names
+                                .lock()
+                                .extend(name_tokens(&dropped));
                         }
                     }
                 }
@@ -840,7 +852,7 @@ impl Backend {
             let info = self.state.info_service.read();
             (
                 info.export_fingerprint(&uri),
-                info.export_names(&uri),
+                export_name_tokens(&info, &uri),
                 self.state.edit_generation.fetch_add(1, Ordering::Relaxed) + 1,
             )
         };
@@ -892,9 +904,9 @@ impl Backend {
             }
         }
 
-        let mut changed_names: HashSet<String> = names_before
+        let mut changed_names: NameTokens = names_before
             .symmetric_difference(&names_after)
-            .cloned()
+            .copied()
             .collect();
         changed_names.extend(self.state.pending_changed_names.lock().drain());
         if exports_before != exports_after || !changed_names.is_empty() {
