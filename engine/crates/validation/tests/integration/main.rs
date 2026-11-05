@@ -25,6 +25,7 @@ mod mathexpr_codes;
 mod objecttypes_disambiguation;
 mod position_resolver;
 mod rules_engine_codes;
+mod scripted_effect_params;
 mod seg_codes;
 mod stellaris_config;
 mod structural_codes;
