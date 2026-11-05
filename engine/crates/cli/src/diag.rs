@@ -74,7 +74,7 @@ impl SourceLines {
 
 /// Escape a field for CSV output.
 fn csv_escape(s: &str) -> Cow<'_, str> {
-    if s.contains([',', '"', '\n']) {
+    if s.contains([',', '"', '\n', '\r']) {
         Cow::Owned(format!("\"{}\"", s.replace('"', "\"\"")))
     } else {
         Cow::Borrowed(s)
@@ -379,6 +379,42 @@ mod tests {
     use cwtools_parser::fix::SuggestedFix;
     use cwtools_test_support::abs;
     use std::path::PathBuf;
+
+    #[test]
+    fn csv_escape_and_rows_quote_csv_special_characters_in_file_and_message() {
+        let cases = [
+            ("plain", "plain", false),
+            ("carriage\rreturn", "\"carriage\rreturn\"", true),
+            ("line\nfeed", "\"line\nfeed\"", true),
+            ("line\r\nending", "\"line\r\nending\"", true),
+            ("a\"b", "\"a\"\"b\"", true),
+            ("a,b", "\"a,b\"", true),
+        ];
+
+        for (value, expected_field, is_owned) in cases {
+            let escaped = csv_escape(value);
+            assert_eq!(escaped, expected_field, "helper input: {value:?}");
+            assert_eq!(matches!(escaped, Cow::Owned(_)), is_owned, "{value:?}");
+
+            let d = Diag {
+                file: value.into(),
+                severity: ErrorSeverity::Information,
+                code: "CW282",
+                message: value.to_string(),
+                line: 12,
+                col: 5,
+                hash: "hash".to_string(),
+                legacy_hash: String::new(),
+                end: None,
+                related: Vec::new(),
+            };
+            assert_eq!(
+                csv_row(&d),
+                format!("{expected_field},12,Information,CW282,{expected_field},hash\n"),
+                "rendered row input: {value:?}"
+            );
+        }
+    }
 
     #[test]
     fn source_lines_decode_cp1252_like_the_engine() {
