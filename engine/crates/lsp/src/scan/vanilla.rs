@@ -133,9 +133,7 @@ impl Backend {
         complex_enums: Vec<(String, Vec<String>)>,
         value_sets: Vec<(String, Vec<String>)>,
     ) {
-        if complex_enums.is_empty() && value_sets.is_empty() {
-            return;
-        }
+        // Merged even when empty, so a rebuild that finds no members drops the old build's.
         let mut info = self.state.info_service.write();
         let type_index = Arc::make_mut(&mut info.type_index);
         type_index
@@ -176,9 +174,38 @@ impl Backend {
             vanilla.var_names = Some(Arc::new(var_names));
             vanilla.scripted_loc_names = Some(Arc::new(scripted_loc_names));
             vanilla.scripted_gui_names = Some(Arc::new(scripted_gui_names));
+            vanilla.rules_shape = None;
         }
         self.merge_vanilla_dynamic_values(complex_enum_values, value_set_values);
         total
+    }
+
+    /// Stage a payload built under `rules_shape`, so a later scan can tell a reload made it stale.
+    fn stage_vanilla_payload_under(
+        &self,
+        data: cwtools_info::vanilla_cache::VanillaCacheData,
+        rules_shape: &str,
+    ) -> usize {
+        let total = self.stage_vanilla_payload(data);
+        self.state.vanilla_state.lock().rules_shape = Some(rules_shape.to_owned());
+        total
+    }
+
+    /// Whether the held base-game data exists and was not built under another ruleset shape.
+    fn base_game_is_current(&self, ruleset: Option<&RuleSet>) -> bool {
+        let built_shape = {
+            let vanilla = self.state.vanilla_state.lock();
+            if vanilla.index.is_none() && !self.state.vanilla_merged.load(Ordering::SeqCst) {
+                return false;
+            }
+            vanilla.rules_shape.clone()
+        };
+        match (built_shape, ruleset) {
+            (Some(built), Some(ruleset)) => {
+                built == cwtools_info::vanilla_cache::ruleset_shape_hash(ruleset)
+            }
+            _ => true,
+        }
     }
 
     pub(crate) fn merge_pending_vanilla_index(&self) {
@@ -318,10 +345,8 @@ impl Backend {
         force_rebuild: bool,
         quiet: bool,
     ) {
-        if !force_rebuild
-            && (self.state.vanilla_state.lock().index.is_some()
-                || self.state.vanilla_merged.load(Ordering::SeqCst))
-        {
+        let ruleset_opt = self.state.rules.read().ruleset.clone();
+        if !force_rebuild && self.base_game_is_current(ruleset_opt.as_deref()) {
             return;
         }
         let (explicit_dir, game, replacement_shadow) = {
@@ -349,7 +374,6 @@ impl Backend {
             cfg.refresh_roots();
         }
 
-        let ruleset_opt = self.state.rules.read().ruleset.clone();
         let ruleset = match ruleset_opt {
             Some(rs) => rs,
             None => {
@@ -363,6 +387,7 @@ impl Backend {
             }
         };
 
+        let rules_shape = cwtools_info::vanilla_cache::ruleset_shape_hash(&ruleset);
         let fingerprint = vanilla_fingerprint(&dir, &ruleset, replacement_shadow.as_ref());
         let cache_path = self.vanilla_cache_path(&game, &fingerprint);
 
@@ -386,7 +411,7 @@ impl Backend {
                 Ok((cache_game, cache_fp, data))
                     if cache_game == game && cache_fp == fingerprint =>
                 {
-                    let total = self.stage_vanilla_payload(data);
+                    let total = self.stage_vanilla_payload_under(data, &rules_shape);
                     self.client
                         .log_message(
                             MessageType::INFO,
@@ -533,8 +558,10 @@ impl Backend {
             }
         }
 
-        let total = self
-            .stage_vanilla_payload(cwtools_info::vanilla_cache::VanillaCacheData { per_type, aux });
+        let total = self.stage_vanilla_payload_under(
+            cwtools_info::vanilla_cache::VanillaCacheData { per_type, aux },
+            &rules_shape,
+        );
         self.client
             .log_message(
                 MessageType::INFO,
@@ -1444,5 +1471,127 @@ replace_path = "gfx/replaced"
             .loc_bindable_names()
             .collect();
         assert!(names.contains("vanilla_var"));
+    }
+
+    #[test]
+    fn restaging_without_dynamic_values_removes_the_previous_ones() {
+        let backend = test_backend();
+        let mut old = vanilla_data(Vec::new());
+        old.aux.complex_enum_values = vec![("stats".into(), vec!["OLD_STAT".into()])];
+        old.aux.value_set_values = vec![("country_flag".into(), vec!["old_flag".into()])];
+        backend.stage_vanilla_payload(old);
+        {
+            let info = backend.state.info_service.read();
+            assert!(
+                info.type_index
+                    .complex_enum_values
+                    .contains("stats", "OLD_STAT")
+            );
+            assert!(
+                info.type_index
+                    .value_set_values
+                    .contains("country_flag", "old_flag")
+            );
+        }
+
+        backend.stage_vanilla_payload(vanilla_data(Vec::new()));
+
+        let info = backend.state.info_service.read();
+        assert!(info.type_index.complex_enum_values.is_empty());
+        assert!(info.type_index.value_set_values.is_empty());
+    }
+
+    fn ruleset_from(cwt: &str) -> RuleSet {
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let parsed = cwtools_parser::parser::parse_string(cwt, &table);
+        cwtools_rules::rules_converter::ast_to_ruleset(&parsed, &table)
+    }
+
+    /// Rules whose complex enum `stats` reads the member names under `common/<dir>`.
+    fn stats_rules(dir: &str) -> RuleSet {
+        ruleset_from(&format!(
+            "enums = {{ complex_enum[stats] = {{ path = \"game/common/{dir}\" \
+             start_from_root = yes name = {{ enum_name = scalar }} }} }}"
+        ))
+    }
+
+    /// A backend with an installed base game holding `VALUE_ALPHA` under `common/alpha`
+    /// and `VALUE_BETA` under `common/beta`, and a cache directory of its own.
+    fn base_game_backend(root: &std::path::Path) -> Backend {
+        let backend = test_backend();
+        let vanilla_root = root.join("vanilla");
+        for (dir, member) in [("alpha", "VALUE_ALPHA"), ("beta", "VALUE_BETA")] {
+            let file = vanilla_root.join("common").join(dir).join("x.txt");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, format!("{member} = 1\n")).unwrap();
+        }
+        {
+            let mut config = backend.state.config.write();
+            config.language = "hoi4".into();
+            config.vanilla_dir = Some(vanilla_root);
+            config.cache_dir = Some(root.join("cache"));
+            config.refresh_roots();
+        }
+        backend
+    }
+
+    async fn scan_base_game(backend: &Backend) {
+        backend.ensure_vanilla_index(None, false, true).await;
+        backend.merge_pending_vanilla_index();
+    }
+
+    fn stats_members(backend: &Backend) -> Vec<String> {
+        let info = backend.state.info_service.read();
+        let mut members: Vec<String> = info
+            .type_index
+            .complex_enum_values
+            .values("stats")
+            .map(str::to_string)
+            .collect();
+        members.sort_unstable();
+        members
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rules_reload_rebuilds_the_base_game_only_when_its_shape_changed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = base_game_backend(tmp.path());
+        backend.set_ruleset(stats_rules("alpha"));
+        scan_base_game(&backend).await;
+        assert_eq!(stats_members(&backend), ["VALUE_ALPHA"]);
+
+        backend.set_ruleset(stats_rules("alpha"));
+        backend.ensure_vanilla_index(None, false, true).await;
+        assert!(
+            backend.state.vanilla_state.lock().index.is_none(),
+            "a reload that keeps the shape must keep the merged base game"
+        );
+        assert_eq!(stats_members(&backend), ["VALUE_ALPHA"]);
+
+        backend.set_ruleset(stats_rules("beta"));
+        scan_base_game(&backend).await;
+        assert_eq!(stats_members(&backend), ["VALUE_BETA"]);
+
+        backend.set_ruleset(ruleset_from(""));
+        scan_base_game(&backend).await;
+        assert!(
+            stats_members(&backend).is_empty(),
+            "a removed complex enum must not leave the old build's members behind"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn base_game_of_unknown_origin_survives_a_rules_reload() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = base_game_backend(tmp.path());
+        backend.stage_vanilla_payload(vanilla_data(vec!["supplied_var"]));
+
+        backend.set_ruleset(stats_rules("alpha"));
+        backend.ensure_vanilla_index(None, false, true).await;
+
+        assert!(
+            stats_members(&backend).is_empty(),
+            "a client-supplied cache has no known shape and must not be rebuilt"
+        );
     }
 }

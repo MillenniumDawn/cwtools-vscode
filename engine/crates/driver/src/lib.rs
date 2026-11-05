@@ -724,6 +724,14 @@ impl Session {
                             .into_iter()
                             .collect(),
                     );
+                    type_index.value_set_values.merge_file(
+                        "<vanilla-dynamic>",
+                        vanilla_index
+                            .value_set_values
+                            .export()
+                            .into_iter()
+                            .collect(),
+                    );
                     let scripted_loc_names: Vec<String> = vanilla_index
                         .scripted_loc_index
                         .names()
