@@ -1,11 +1,13 @@
 import * as assert from "assert";
 import * as fsPromises from "fs/promises";
+import type * as Fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { afterEach, beforeEach, suite, test, vi } from "vitest";
 import type { Memento } from "vscode";
 import type * as VscodeStub from "./_stubs/vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
+import type * as Engine from "../../src/host/engine";
 
 // The rules-sync host label clones the pinned commit for real. These cover the
 // decisions around it that need a failing git or a hostile manifest: which pin
@@ -43,9 +45,16 @@ const vscode = vi.hoisted(() => ({
 	showInformationMessage: vi.fn(),
 }));
 
-vi.mock("fs", () => ({
-	existsSync: () => state.hasGitDirectory,
-}));
+vi.mock("fs", async (importOriginal) => {
+	const original = await importOriginal<typeof Fs>();
+	return {
+		...original,
+		existsSync: (candidate: Fs.PathLike) =>
+			typeof candidate === "string" && path.basename(candidate) === ".git"
+				? state.hasGitDirectory
+				: original.existsSync(candidate),
+	};
+});
 
 vi.mock("vscode", async (importOriginal) => {
 	const original = await importOriginal<typeof VscodeStub>();
@@ -76,8 +85,9 @@ vi.mock("../../src/host/logger", async () =>
 	(await import("./support/loggerMock")).mockLogger(logger),
 );
 
-vi.mock("../../src/host/engine", async () => {
-	const { LANGUAGE_REPOS } = await import("../../src/host/games");
+vi.mock("../../src/host/engine", async (importOriginal) => {
+	const { LANGUAGE_REPOS, resolveRulesFolder } =
+		await importOriginal<typeof Engine>();
 	class GitNotFoundError extends Error {
 		constructor() {
 			super("git was not found on your PATH; install Git or add it to PATH");
@@ -87,10 +97,7 @@ vi.mock("../../src/host/engine", async () => {
 	return {
 		LANGUAGE_REPOS,
 		GitNotFoundError,
-		resolveRulesFolder: (raw: string | undefined) => ({
-			path: raw?.trim() || undefined,
-			existed: false,
-		}),
+		resolveRulesFolder,
 		rulesFetchCommands: (
 			cacheDir: string,
 			rules: { repo: string; ref: string },
@@ -292,6 +299,46 @@ suite("rulesSetup", () => {
 			assert.deepStrictEqual(warnings(), [
 				`CWTools: the rules_folder "${invalidRules}" could not be found (tried "${invalidRules}"). Falling back to the bundled/upstream rules.`,
 			]);
+		} finally {
+			vi.unstubAllEnvs();
+			await fsPromises.rm(temporaryRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("regular-file rules_folder warns and falls back to upstream cache", async () => {
+		const temporaryRoot = await fsPromises.mkdtemp(
+			path.join(os.tmpdir(), "cwtools-file-rules-"),
+		);
+		const cacheDir = path.join(temporaryRoot, "cache");
+		const invalidRules = path.join(temporaryRoot, "rules.txt");
+		await fsPromises.writeFile(invalidRules, "not a directory");
+		vi.stubEnv("CWTOOLS_TEST_RULES_FOLDER", invalidRules);
+		try {
+			const setup = await resolveRulesCache("hoi4", cacheDir, temporaryRoot);
+			assert.strictEqual(setup.rulesCache, path.join(cacheDir, "hoi4"));
+			assert.strictEqual(setup.fetchUpstream, true);
+			assert.deepStrictEqual(warnings(), [
+				`CWTools: the rules_folder "${invalidRules}" could not be found (tried "${invalidRules}"). Falling back to the bundled/upstream rules.`,
+			]);
+		} finally {
+			vi.unstubAllEnvs();
+			await fsPromises.rm(temporaryRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("an existing directory rules_folder is selected without upstream fetching", async () => {
+		const temporaryRoot = await fsPromises.mkdtemp(
+			path.join(os.tmpdir(), "cwtools-directory-rules-"),
+		);
+		const cacheDir = path.join(temporaryRoot, "cache");
+		const rulesDirectory = path.join(temporaryRoot, "rules");
+		await fsPromises.mkdir(rulesDirectory);
+		vi.stubEnv("CWTOOLS_TEST_RULES_FOLDER", rulesDirectory);
+		try {
+			const setup = await resolveRulesCache("hoi4", cacheDir, temporaryRoot);
+			assert.strictEqual(setup.rulesCache, rulesDirectory);
+			assert.strictEqual(setup.fetchUpstream, false);
+			assert.deepStrictEqual(warnings(), []);
 		} finally {
 			vi.unstubAllEnvs();
 			await fsPromises.rm(temporaryRoot, { recursive: true, force: true });

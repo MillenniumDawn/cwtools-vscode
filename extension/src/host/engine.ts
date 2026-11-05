@@ -2,7 +2,7 @@ import * as os from "os";
 import * as path from "path";
 import { spawn } from "child_process";
 import type { ExtensionContext } from "vscode";
-import { existsSync as fsExistsSync } from "fs";
+import { existsSync as fsExistsSync, statSync } from "fs";
 import { logInfo, logWarn, logError } from "./logger";
 import { GAMES, FOLDER_HINTS, CONTENT_HINTS } from "./games";
 import type { RulesRepo } from "./games";
@@ -99,7 +99,7 @@ export interface ResolveRulesFolderOpts {
 	platform?: NodeJS.Platform;
 	home?: string;
 	env?: Record<string, string | undefined>;
-	exists?: (p: string) => boolean;
+	isDirectory?: (p: string) => boolean;
 }
 
 export interface ResolvedRulesFolder {
@@ -110,14 +110,14 @@ export interface ResolvedRulesFolder {
 /**
  * Resolve the user's `cwtools.rules_folder` setting to a usable on-disk path.
  *
- * The raw setting value is tried first and, if it already exists, returned
+ * The raw setting value is tried first and, if it is a directory, returned
  * UNCHANGED — so every configuration that works today short-circuits before any
- * normalization runs.  Only when the raw value does not exist do we try
+ * normalization runs.  Only when the raw value is not a directory do we try
  * progressively normalized candidates (trim/unquote, ~, env vars, separator
  * normalization, workspace-relative).  Separator/`%VAR%` handling is gated on
  * win32 because a backslash is a legal filename char on Linux.
  *
- * Returns the first candidate that `exists()`.  If none exist, returns a
+ * Returns the first candidate that is a directory. If none is usable, returns a
  * best-effort normalized path with `existed:false` so the caller can report
  * what it tried.
  */
@@ -125,7 +125,15 @@ export function resolveRulesFolder(
 	raw: string | undefined,
 	opts: ResolveRulesFolderOpts = {},
 ): ResolvedRulesFolder {
-	const exists = opts.exists ?? fsExistsSync;
+	const isDirectory =
+		opts.isDirectory ??
+		((candidate: string) => {
+			try {
+				return statSync(candidate).isDirectory();
+			} catch {
+				return false;
+			}
+		});
 	const platform = opts.platform ?? os.platform();
 	const isWin = platform === "win32";
 	const home = opts.home ?? os.homedir();
@@ -137,7 +145,7 @@ export function resolveRulesFolder(
 	}
 
 	// (a) raw value as-is — regression-safe first try.
-	if (exists(raw)) return { path: raw, existed: true };
+	if (isDirectory(raw)) return { path: raw, existed: true };
 
 	const candidates: string[] = [];
 	const add = (c: string) => {
@@ -178,10 +186,10 @@ export function resolveRulesFolder(
 	}
 
 	for (const c of candidates) {
-		if (exists(c)) return { path: c, existed: true };
+		if (isDirectory(c)) return { path: c, existed: true };
 	}
 
-	// Nothing exists — hand back the best-effort normalized form so the caller
+	// No directory matched; hand back the best-effort normalized form so the caller
 	// can name what it tried in a warning.
 	return { path: candidates[candidates.length - 1] ?? value, existed: false };
 }
