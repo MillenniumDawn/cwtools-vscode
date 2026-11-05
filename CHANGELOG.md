@@ -8,6 +8,7 @@
 * Skip repeat validation when saving an already validated localisation or rules file, while still validating new edits and reopened buffers.
 * Read the watched-file debounce from `CWTOOLS_WATCHED_DEBOUNCE_MS`, in milliseconds. The default stays 500 ms when the variable is unset or not a number. The `lsp` test harness sets 50 ms and its watched-file drains wait 500 ms instead of 900 ms. (#1199)
 * Fence semantic-token hashing, cache copies, delta diffing and encoding without changing token results or cache behavior. (#1181)
+* Ignore trailing localization comments when collecting references and commands. (#1262)
 * Skip global highlighting and CodeLens refreshes when a file-watcher batch only contains open or unchanged files.
 * Apply hover debug, hover scope display, and background-reindex timing changes without revalidating open documents or invalidating the workspace scan fingerprint.
 * Read the core modifiers from a config's `logs/modifiers.log` when it has one, as the F# engine did. The Stellaris config has no `modifiers` section and lists them only there, so every core modifier in a `modifier` block was reported as an unexpected field (CW263). The `- name, Category: X` lines are merged with any `modifiers` section, which wins on a name both define, and other lines are ignored. On the Stellaris test corpus 274 of the 692 CW263 findings go away and nothing new appears. The block's values are still not checked as numbers, because `alias[modifier:<modifier>]` has no instances to match. (#1203)

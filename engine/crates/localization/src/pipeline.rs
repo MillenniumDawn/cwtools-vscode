@@ -648,6 +648,20 @@ mod tests {
     }
 
     #[test]
+    fn trailing_comment_reference_does_not_emit_cw225() {
+        let svc = service_from(&[(
+            "a_l_english.yml",
+            "l_english:\n outside:0 \"Okay\" # $not_a_reference$ [GetName]\n inside:0 \"# $missing_key$\"\n",
+        )]);
+        let refs: Vec<_> = validate_loc_project(&svc)
+            .into_iter()
+            .filter(|d| d.code == "CW225")
+            .collect();
+        assert_eq!(refs.len(), 1, "{refs:?}");
+        assert!(refs[0].message.contains("missing_key"));
+    }
+
+    #[test]
     fn unknown_encoding_no_cw254() {
         let svc =
             service_with_encoding(&[("a_l_english.yml", "l_english:\n key1: \"hi\"\n", None)]);
