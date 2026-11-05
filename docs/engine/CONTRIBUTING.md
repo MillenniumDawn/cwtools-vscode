@@ -63,6 +63,11 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
 
+Most library crates set `doctest = false` under `[lib]`, so `cargo test` skips
+their doc-test pass. Only `error_codes` and `i18n` have Rust doc examples. A
+crate that gains a doc example has to drop that line, or the example never runs.
+`scripts/workspace_manifest.py` fails CI when one is left behind.
+
 Coverage is optional while we build history, with an 85% line target. It needs
 `cargo install cargo-llvm-cov` (CI pins 0.8.7); the script says so and stops if
 it isn't there:

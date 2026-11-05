@@ -16,6 +16,21 @@ REPO_ROOT = SCRIPT_DIR.parent
 SHARED_DEPS = ("tempfile", "assert_cmd", "predicates")
 DEP_LINE = re.compile(r"^(tempfile|assert_cmd|predicates)\s*=")
 DEP_WORKSPACE = re.compile(r"^(tempfile|assert_cmd|predicates) = \{ workspace = true")
+DOCTEST_OFF = re.compile(r"^doctest = false$", re.MULTILINE)
+DOC_FENCE = re.compile(r"^\s*//[/!]\s?(?:```|~~~)(.*)$")
+RUSTDOC_TOKENS = {
+    "",
+    "rust",
+    "should_panic",
+    "no_run",
+    "compile_fail",
+    "standalone_crate",
+    "test_harness",
+    "edition2015",
+    "edition2018",
+    "edition2021",
+    "edition2024",
+}
 
 
 def die(message: str) -> NoReturn:
@@ -40,6 +55,24 @@ def has_lints_workspace(text: str) -> bool:
         if in_lints and line == "workspace = true":
             return True
     return False
+
+
+def rust_doc_examples(src_dir: Path) -> list[str]:
+    found: list[str] = []
+    for path in sorted(src_dir.rglob("*.rs")):
+        in_block = False
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for number, line in enumerate(lines, start=1):
+            fence = DOC_FENCE.match(line)
+            if fence is None:
+                continue
+            if in_block:
+                in_block = False
+                continue
+            in_block = True
+            if set(re.split(r"[\s,]+", fence.group(1).strip())) <= RUSTDOC_TOKENS:
+                found.append(f"{path.relative_to(src_dir.parent).as_posix()}:{number}")
+    return found
 
 
 def main() -> int:
@@ -75,6 +108,9 @@ def main() -> int:
                 f"{crate}: tempfile/assert_cmd/predicates must use "
                 "{ workspace = true }"
             )
+        if DOCTEST_OFF.search(text):
+            for example in rust_doc_examples(manifest.parent / "src"):
+                note(f"{crate}: doctest = false skips the doc example at {example}")
 
     meta = subprocess.run(
         [
