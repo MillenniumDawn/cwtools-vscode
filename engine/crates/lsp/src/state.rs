@@ -36,6 +36,7 @@ pub(crate) enum HoldPoint {
     TypeUsesMerge,
     WatchedFile,
     ValidatePrepared,
+    ValidateBeforeAcceptance,
 }
 
 /// A one-shot condvar gate: the first `hold` at the configured point blocks

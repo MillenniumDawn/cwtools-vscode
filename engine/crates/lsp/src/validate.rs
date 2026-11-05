@@ -23,6 +23,7 @@ use crate::state::LocDocumentCache;
 pub(crate) struct ValidatedScript {
     pub(crate) ast: ParsedFile,
     pub(crate) use_sites: Vec<cwtools_info::IndexedUseSite>,
+    pub(crate) tracked_uses: Option<UsedInstances>,
 }
 
 pub(crate) fn code_lens_refresh_needed(
@@ -1285,9 +1286,17 @@ impl Backend {
                 return;
             }
         };
-        let (parsed, open_use_sites) = match parsed {
-            Some(script) => (Some(Arc::new(script.ast)), script.use_sites),
-            None => (None, Vec::new()),
+        #[cfg(test)]
+        tokio::task::block_in_place(|| {
+            self.hold(crate::state::HoldPoint::ValidateBeforeAcceptance)
+        });
+        let (parsed, open_use_sites, tracked_uses) = match parsed {
+            Some(script) => (
+                Some(Arc::new(script.ast)),
+                script.use_sites,
+                script.tracked_uses,
+            ),
+            None => (None, Vec::new(), None),
         };
         let mut first_accepted_ast = false;
         {
@@ -1298,6 +1307,13 @@ impl Backend {
             let mut docs = self.state.documents.lock();
             if !docs.mark_validated(&uri, expected_version, &text) {
                 return;
+            }
+            if let Some(used) = tracked_uses {
+                let changed = self.refresh_type_uses(&uri, used);
+                self.state
+                    .pending_changed_names
+                    .lock()
+                    .extend(name_tokens(&changed));
             }
             if let Some(ast) = parsed {
                 let had_no_ast = docs
@@ -1979,6 +1995,7 @@ impl Backend {
             }
 
             // Validation. Lock order: rules -> info_service -> loc_index -> inline_scripts.
+            let mut tracked_uses = None;
             let (errors, log_msg) = {
                 let game = self.state.config.read().game();
                 // Live overlay of unsaved loc keys in open `.yml` files, so a key just added
@@ -2038,9 +2055,33 @@ impl Backend {
                         return None;
                     };
                     if let Some(used) = used {
-                        errs.extend(
-                            self.unused_instance_errors(uri, used, ruleset, game, type_index),
-                        );
+                        if cancel.is_some() {
+                            let mut merged = UsedInstances::default();
+                            for (other_uri, other) in self.state.type_uses.read().iter() {
+                                if other_uri != uri {
+                                    merged.merge_from(other);
+                                }
+                            }
+                            merged.merge_from(&used);
+                            if self
+                                .state
+                                .index_ready
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                            {
+                                errs.extend(check_unused_instances(
+                                    ruleset,
+                                    game,
+                                    &type_index.instances_in_file(uri),
+                                    &merged,
+                                    &uri.into(),
+                                ));
+                            }
+                            tracked_uses = Some(used);
+                        } else {
+                            errs.extend(
+                                self.unused_instance_errors(uri, used, ruleset, game, type_index),
+                            );
+                        }
                     }
                     append_missing_loc_errors(uri, &prepared, &mut errs);
                     drop(loc_guard);
@@ -2075,6 +2116,7 @@ impl Backend {
                 Some(ValidatedScript {
                     ast: parsed,
                     use_sites,
+                    tracked_uses,
                 }),
             ))
         })
@@ -5766,6 +5808,49 @@ user = { uses = <thing> }
         names
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn candidate_uses_replace_previous_uses_for_unused_diagnostics() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/things/t.txt"));
+        let (backend, _) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        let table = cwtools_string_table::string_table::StringTable::new();
+        let rules = TRACKING_RULES.replace("thing = { x = scalar }", "thing = { uses = <thing> }");
+        backend.state.rules.write().ruleset = Some(Arc::new(
+            cwtools_rules::rules_converter::ast_to_ruleset(&parse_string(&rules, &table), &table),
+        ));
+        let mut previous = UsedInstances::default();
+        previous.mark("thing", "t2");
+        backend
+            .state
+            .type_uses
+            .write()
+            .insert(uri.clone(), previous);
+        let cancel = CancelFlag::default();
+        let (diagnostics, _) = backend
+            .parse_and_validate_cancellable(
+                &uri,
+                "t1 = { uses = t1 }\nt2 = {}",
+                crate::ValidateTrigger::DidChange,
+                None,
+                &cancel,
+            )
+            .await
+            .unwrap();
+        let unused: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| {
+                d.code
+                    .as_ref()
+                    .is_some_and(|c| matches!(c, tower_lsp::lsp_types::NumberOrString::String(code) if code == "CW239"))
+            })
+            .collect();
+        assert_eq!(unused.len(), 1, "{diagnostics:?}");
+        assert!(unused[0].message.contains("t2"), "{unused:?}");
+        assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
+    }
+
     /// A newer edit of the same document cancels the in-flight rule traversal
     /// without installing its partial work, and the latest buffer completes (#1196).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5808,6 +5893,126 @@ user = { uses = <thing> }
 
         // Park the superseding run first so the assertions see the cancelled run's leftovers.
         let second_gate = HoldGate::new(HoldPoint::ValidatePrepared);
+        *backend.state.hold_gate.lock() = Some(second_gate.clone());
+        let change = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.did_change_impl(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: Url::parse(&uri).unwrap(),
+                    version: 2,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: "u2 = { uses = t2 }".into(),
+                }],
+            }),
+        )
+        .await;
+        change.expect("accepting a new edit must not wait for synchronous validation");
+        if !first_task.1.is_cancelled() {
+            first_gate.release();
+            second_gate.release();
+            panic!("superseding must set the in-flight run's cancel signal");
+        }
+        first_gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !first_task.0.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the cancelled run must finish promptly");
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !second_gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            second_gate.release();
+            panic!("the latest edit's validation must reach its synchronous phase");
+        }
+        let stale_uses = installed_use_names(&backend, &uri);
+        if !stale_uses.is_empty() {
+            second_gate.release();
+            panic!("a cancelled run must not install partial tracked type uses: {stale_uses:?}");
+        }
+
+        second_gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !backend.state.debounce_handles.lock().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the latest edit's validation must finish");
+
+        // The latest buffer completes normally.
+        assert_eq!(installed_use_names(&backend, &uri), ["t2".to_string()]);
+        let mut publications = Vec::new();
+        while let Some(Some(message)) = socket.next().now_or_never() {
+            if message.method() == "textDocument/publishDiagnostics" {
+                let params: PublishDiagnosticsParams =
+                    serde_json::from_value(message.params().cloned().unwrap()).unwrap();
+                publications.push(params);
+            }
+        }
+        assert_eq!(publications.len(), 1);
+        assert_eq!(publications[0].version, Some(2));
+        assert_eq!(
+            backend
+                .state
+                .documents
+                .lock()
+                .get(&uri)
+                .unwrap()
+                .ast_version,
+            Some(2)
+        );
+    }
+
+    /// A completed obsolete traversal cannot install tracked uses before version acceptance.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn completed_obsolete_validation_does_not_install_tracked_uses() {
+        use crate::state::{HoldGate, HoldPoint};
+
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_uri = crate::paths::path_to_uri(workspace.path());
+        let uri = crate::paths::path_to_uri(&workspace.path().join("common/users/u.txt"));
+        let (backend, mut socket) = handshaken_backend_with_workspace(&workspace_uri).await;
+        backend.state.index_ready.store(true, Ordering::Relaxed);
+        backend.state.rules.write().ruleset = Some(Arc::new(tracking_ruleset()));
+        let first_gate = HoldGate::new(HoldPoint::ValidateBeforeAcceptance);
+        *backend.state.hold_gate.lock() = Some(first_gate.clone());
+        backend
+            .did_open_impl(DidOpenTextDocumentParams {
+                text_document: TextDocumentItem {
+                    uri: Url::parse(&uri).unwrap(),
+                    language_id: "paradox".into(),
+                    version: 1,
+                    text: "u1 = { uses = t1 }".into(),
+                },
+            })
+            .await;
+        let arrived = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !first_gate.has_arrived() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if arrived.is_err() {
+            first_gate.release();
+            panic!("the first validation must reach its synchronous phase");
+        }
+        let first_task = {
+            let tasks = backend.state.debounce_handles.lock();
+            let task = tasks.get(&uri).unwrap();
+            (task.abort.clone(), task.cancel_flag.clone())
+        };
+
+        // Park the superseding run first so the assertions see the cancelled run's leftovers.
+        let second_gate = HoldGate::new(HoldPoint::ValidateBeforeAcceptance);
         *backend.state.hold_gate.lock() = Some(second_gate.clone());
         let change = tokio::time::timeout(
             std::time::Duration::from_secs(5),
