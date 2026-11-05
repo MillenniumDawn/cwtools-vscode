@@ -74,7 +74,7 @@ impl SourceLines {
 
 /// Escape a field for CSV output.
 fn csv_escape(s: &str) -> Cow<'_, str> {
-    if s.contains([',', '"', '\n']) {
+    if s.contains([',', '"', '\r', '\n']) {
         Cow::Owned(format!("\"{}\"", s.replace('"', "\"\"")))
     } else {
         Cow::Borrowed(s)
@@ -401,6 +401,36 @@ mod tests {
             end: None,
             related: Vec::new(),
         }
+    }
+
+    #[test]
+    fn csv_escape_quotes_record_separators_and_special_fields() {
+        for (input, expected) in [
+            ("plain", "plain"),
+            ("a\rb", "\"a\rb\""),
+            ("a\nb", "\"a\nb\""),
+            ("a\r\nb", "\"a\r\nb\""),
+            ("a,b", "\"a,b\""),
+            ("a\"b", "\"a\"\"b\""),
+        ] {
+            assert_eq!(csv_escape(input), expected, "field: {input:?}");
+        }
+    }
+
+    #[test]
+    fn csv_row_quotes_carriage_returns_in_path_and_message() {
+        let root = Path::new(".");
+        let mut err = err_base();
+        err.file = "common/a\rb.txt".into();
+        err.message = "first\rsecond".to_string();
+        let diag = validation_to_diag(root, err, "x", false);
+        assert_eq!(
+            csv_row(&diag),
+            format!(
+                "\"common/a\rb.txt\",12,Information,CW282,\"first\rsecond\",{}\n",
+                diag.hash
+            )
+        );
     }
 
     /// Bug: the digest used to be keyed on whatever path string an invocation
