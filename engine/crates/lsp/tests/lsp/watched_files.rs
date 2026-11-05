@@ -14,15 +14,14 @@ fn test_watched_repeated_change_coalesces_to_one_validate() {
     // Ten CHANGED events for the same non-open file, each in its own
     // notification, must collapse into exactly one `(watched)` validation and
     // one publish — the 1:1 amplification that drove the #90 storm is gone.
-    // Pin the production window so the debounce, not the stat skip, coalesces them.
-    let mut server = storm_start(storm_builder().env("CWTOOLS_WATCHED_DEBOUNCE_MS", "500"));
+    let mut server = storm_server();
     let uri = server.write_file_uri("common/decisions/a.txt", STORM_FILE);
 
     for _ in 0..10 {
         server.send(&watched_changes(std::slice::from_ref(&uri)));
     }
 
-    let frames = server.drain_after_first(Duration::from_millis(900), Duration::from_secs(8));
+    let frames = server.drain_after_first(WATCHED_QUIET, Duration::from_secs(8));
     let log = server.profiling_log();
     server.stop();
 
